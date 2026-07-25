@@ -120,6 +120,18 @@ thesis generalized: **dangerous defaults become compile errors.**
   headline achievement); Burxt designs toward it (value semantics and
   immutability-by-default are the right substrate) but commits no date.
 
+### Known interim measures — working, but not the final answer
+
+Listed so they are not mistaken for finished work:
+
+- **Compiler stack depth.** A 512 MB-stack thread holds ~30,000-node
+  expression trees; deeper input aborts. The real fix is iterative AST
+  walkers (see v0.0.11). Bounded by heap, not stack, is the goal.
+- **Scale ceiling 18.** A scaled i64 carries at most 18 fractional digits.
+  Arithmetic intermediates are already i128; widening the STORED
+  representation is a separate, deliberate decision (it changes the ABI and
+  the FFI story), not an oversight.
+
 ### Open tradeoff — deliberately undecided, eyes open
 
 - **Memory management.** GC (pauses — bad for "predictable"), ownership
@@ -591,10 +603,23 @@ headroom than values do.**
   overflow-checked, and negated literals stay literals. Previously the only
   way to negate was `0 - x`, and the test suite carried throwaway zero
   bindings to do it — the language telling on itself.
-- **Deep nesting no longer aborts the compiler.** Compilation runs on a
-  512 MB-stack thread: 5000-term expressions and 2000-deep parens compile
-  fine (1500 terms used to abort). Machine-generated Burxt is the point —
-  self-hosting depends on it.
+- **Deep nesting no longer aborts the compiler — INTERIM MEASURE.**
+  Compilation runs on a 512 MB-stack thread. Measured ceiling: ~30,000
+  operator terms compile, ~40,000 abort (SIGABRT, exit 134 — loud, but it is
+  still an abort); nested parens survive 50,000+. Before this, 1,500 terms
+  died.
+
+  This buys headroom; it does not remove the limit, so it must not be
+  mistaken for the answer. **TODO: make the AST WALKERS iterative** —
+  explicit work-stack in `typeck::check_expr` and `codegen::gen_expr`, plus a
+  manual `Drop` for `Expr`/`TypedExpr`. Note where the recursion actually
+  is: the parser is already iterative for operator chains
+  (`parse_additive`/`parse_term` are loops), and parens create no AST nodes
+  at all — which is why 50,000 parens are fine. What overflows is walking a
+  50,000-deep left-nested `Binary` tree, so a "make the parser iterative"
+  fix would be aimed at the wrong stage. Depth should ultimately be bounded
+  by heap, not stack, because generated code (and the self-hosted compiler's
+  own output) will not respect a 30,000-node budget.
 - **Errors read as English.** Token names come from a `describe()` table
   (`expected \`;\`, found the end of the file`), never Rust `Debug` dumps,
   and chained comparisons get their own message instead of mentioning
