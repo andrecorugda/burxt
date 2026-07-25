@@ -1,0 +1,4 @@
+// Adding decimals of different scales must be a compile error.
+let a: Decimal<2> = 1.00;
+let b: Decimal<3> = 1.000;
+print(a + b);

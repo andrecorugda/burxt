@@ -1,0 +1,5 @@
+// Same-scale decimal addition and subtraction stay exact.
+let a: Decimal<2> = 10.00;
+let b: Decimal<2> = 3.50;
+print(a + b);
+print(a - b);

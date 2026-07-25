@@ -1,0 +1,4 @@
+// Mixing Int and Decimal in +/- is a compile error.
+let a: Decimal<2> = 1.00;
+let n: Int = 1;
+print(a + n);

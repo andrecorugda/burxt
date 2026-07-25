@@ -1,0 +1,6 @@
+// Integer arithmetic with real precedence and left associativity.
+print(1 + 2 * 3);
+print((1 + 2) * 3);
+print(10 - 2 - 3);
+let n: Int = 6 * 7;
+print(n);

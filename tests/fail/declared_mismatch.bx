@@ -1,0 +1,3 @@
+// No silent Int -> Decimal coercion, even for a bare literal.
+let x: Decimal<2> = 5;
+print(x);

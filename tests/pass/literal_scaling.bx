@@ -1,0 +1,6 @@
+// Literals normalize to the declared scale when exact:
+// widening always works; narrowing only when no digits are lost.
+let w: Decimal<3> = 1.5;
+print(w);
+let n: Decimal<2> = 1.500;
+print(n);

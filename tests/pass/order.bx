@@ -1,0 +1,7 @@
+let subtotal: Decimal<2> = 49.95;
+let shipping: Decimal<2> = 5.00;
+let total: Decimal<2> = subtotal + shipping;
+print(total);
+let items: Int = 7;
+let unit: Decimal<2> = 3.33;
+print(unit * items);

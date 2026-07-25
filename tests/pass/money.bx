@@ -1,0 +1,5 @@
+// The thesis program: exact decimal money math.
+let price: Decimal<2> = 19.99;
+let qty: Int = 3;
+let total: Decimal<2> = price * qty;
+print(total);

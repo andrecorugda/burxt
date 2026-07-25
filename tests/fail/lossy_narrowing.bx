@@ -1,0 +1,3 @@
+// A literal with more fractional digits than the declared scale is refused.
+let x: Decimal<2> = 1.999;
+print(x);
