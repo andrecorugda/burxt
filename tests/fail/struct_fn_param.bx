@@ -1,5 +1,0 @@
-struct LineItem { price: Decimal<2>, qty: Int }
-fn total(x: LineItem) -> Decimal<2> {
-    return x.price;
-}
-print(total(LineItem { price: 1.00, qty: 1 }));

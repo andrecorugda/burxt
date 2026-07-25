@@ -49,7 +49,7 @@ use inkwell::types::StructType;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
+use inkwell::types::{AnyType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use std::collections::HashMap;
@@ -74,6 +74,11 @@ pub struct CodeGen<'ctx> {
     index_check_fn: Option<FunctionValue<'ctx>>,
     /// lazily created i128 -> i64 checked narrowing helper
     narrow_check_fn: Option<FunctionValue<'ctx>>,
+    /// user fn name -> (param types, return type), for aggregate call lowering
+    fn_sigs: HashMap<String, (Vec<Type>, Type)>,
+    /// the hidden sret pointer of the function being generated, if it returns
+    /// an aggregate
+    current_sret: Option<PointerValue<'ctx>>,
     /// struct name -> its LLVM struct type (named `bx.<name>`)
     struct_types: HashMap<String, StructType<'ctx>>,
     /// struct name -> field types in declaration order (for GEP walks)
@@ -104,6 +109,8 @@ impl<'ctx> CodeGen<'ctx> {
             cint_fn: None,
             index_check_fn: None,
             narrow_check_fn: None,
+            fn_sigs: HashMap::new(),
+            current_sret: None,
             struct_types: HashMap::new(),
             struct_fields: HashMap::new(),
             printf: None,
@@ -147,11 +154,10 @@ impl<'ctx> CodeGen<'ctx> {
 
         // Declare every user function up front (mutual recursion, any order).
         for f in &prog.fns {
-            let param_tys: Vec<BasicMetadataTypeEnum> =
-                f.params.iter().map(|(_, t)| self.llvm_type(t).into()).collect();
-            let fn_ty = self.llvm_type(&f.ret).fn_type(&param_tys, false);
-            let llf = self.module.add_function(&format!("bx.{}", f.name), fn_ty, None);
+            let param_tys: Vec<Type> = f.params.iter().map(|(_, t)| t.clone()).collect();
+            let llf = self.declare_fn(&format!("bx.{}", f.name), &param_tys, &f.ret);
             self.user_fns.insert(f.name.clone(), llf);
+            self.fn_sigs.insert(f.name.clone(), (param_tys, f.ret.clone()));
         }
 
         // Define their bodies.
@@ -189,17 +195,34 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.position_at_end(entry);
         self.vars.clear();
 
-        // Spill each parameter to a stack slot so it behaves like any binding.
+        // An aggregate return arrives as a hidden sret pointer in slot 0.
+        let ret_is_agg = is_aggregate(&f.ret);
+        self.current_sret = if ret_is_agg {
+            Some(llf.get_nth_param(0).unwrap().into_pointer_value())
+        } else {
+            None
+        };
+        let offset = if ret_is_agg { 1 } else { 0 };
+
         for (i, (name, ty)) in f.params.iter().enumerate() {
-            let slot = self.create_entry_alloca(name, ty)?;
-            let arg = llf.get_nth_param(i as u32).unwrap();
-            self.builder.build_store(slot, arg).map_err(|e| e.to_string())?;
-            self.vars.insert(name.clone(), (slot, ty.clone()));
+            let arg = llf.get_nth_param((i + offset) as u32).unwrap();
+            if is_aggregate(ty) {
+                // byval already gave us a pointer to our OWN copy, so it is
+                // the variable's slot directly — no second copy needed, and
+                // writing through it cannot touch the caller's value.
+                self.vars.insert(name.clone(), (arg.into_pointer_value(), ty.clone()));
+            } else {
+                // Spill scalars so they behave like any other binding.
+                let slot = self.create_entry_alloca(name, ty)?;
+                self.builder.build_store(slot, arg).map_err(|e| e.to_string())?;
+                self.vars.insert(name.clone(), (slot, ty.clone()));
+            }
         }
 
         for stmt in &f.body {
             self.gen_stmt(stmt)?;
         }
+        self.current_sret = None;
         // The typechecker proved every path ends in `return`, so the current
         // block is already terminated — no fallthrough ret is needed.
         Ok(())
@@ -211,21 +234,7 @@ impl<'ctx> CodeGen<'ctx> {
                 // An array is built in place: alloca once, store per element.
                 if let TypedExprKind::ArrayLit(elems) = &value.kind {
                     let slot = self.create_entry_alloca(name, ty)?;
-                    let arr_ty = self.llvm_type(ty);
-                    for (i, e) in elems.iter().enumerate() {
-                        let v = self.gen_expr(e)?;
-                        let idx = self.ctx.i64_type().const_int(i as u64, false);
-                        let ptr = unsafe {
-                            self.builder.build_in_bounds_gep(
-                                arr_ty,
-                                slot,
-                                &[self.ctx.i64_type().const_zero(), idx],
-                                "elem_init",
-                            )
-                        }
-                        .map_err(|e| e.to_string())?;
-                        self.builder.build_store(ptr, v).map_err(|e| e.to_string())?;
-                    }
+                    self.store_array_elements(slot, ty, elems)?;
                     self.vars.insert(name.clone(), (slot, ty.clone()));
                     return Ok(());
                 }
@@ -284,8 +293,17 @@ impl<'ctx> CodeGen<'ctx> {
             TypedStmt::While { cond, body } => self.gen_while(cond, body),
             TypedStmt::Print(e) => self.gen_print(e),
             TypedStmt::Return(e) => {
-                let val = self.gen_expr(e)?;
-                self.builder.build_return(Some(&val)).map_err(|e| e.to_string())?;
+                if let Some(sret) = self.current_sret {
+                    // Build the result directly in the caller's space, then
+                    // return nothing: no aliasing question, no copy-elision
+                    // subtlety.
+                    let val = self.gen_expr(e)?;
+                    self.builder.build_store(sret, val).map_err(|e| e.to_string())?;
+                    self.builder.build_return(None).map_err(|e| e.to_string())?;
+                } else {
+                    let val = self.gen_expr(e)?;
+                    self.builder.build_return(Some(&val)).map_err(|e| e.to_string())?;
+                }
                 Ok(())
             }
             TypedStmt::If { cond, then_block, else_block } => {
@@ -386,6 +404,105 @@ impl<'ctx> CodeGen<'ctx> {
 
         self.builder.position_at_end(end_bb);
         Ok(())
+    }
+
+    /// Declare a function under the aggregate ABI:
+    ///   * scalars pass and return in registers, as before;
+    ///   * aggregate PARAMETERS pass as `byval(T)` — a pointer to a
+    ///     caller-owned copy, so the callee can never alias caller storage
+    ///     (LLVM guarantees the copy; hand-rolling it is where the aliasing
+    ///     bugs live);
+    ///   * aggregate RETURNS use an `sret(T)` hidden first pointer — one code
+    ///     path on every target, and the only shape wasm can express.
+    fn declare_fn(&self, name: &str, params: &[Type], ret: &Type) -> FunctionValue<'ctx> {
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+        let mut ll_params: Vec<BasicMetadataTypeEnum> = Vec::new();
+        let ret_is_agg = is_aggregate(ret);
+        if ret_is_agg {
+            ll_params.push(ptr.into());
+        }
+        for p in params {
+            if is_aggregate(p) {
+                ll_params.push(ptr.into());
+            } else {
+                ll_params.push(self.llvm_type(p).into());
+            }
+        }
+        let fn_ty = if ret_is_agg {
+            self.ctx.void_type().fn_type(&ll_params, false)
+        } else {
+            self.llvm_type(ret).fn_type(&ll_params, false)
+        };
+        let f = self.module.add_function(name, fn_ty, None);
+
+        // Attach the attributes that carry the ABI contract.
+        use inkwell::attributes::AttributeLoc;
+        if ret_is_agg {
+            let attr = self.ctx.create_type_attribute(
+                inkwell::attributes::Attribute::get_named_enum_kind_id("sret"),
+                self.llvm_type(ret).as_any_type_enum(),
+            );
+            f.add_attribute(AttributeLoc::Param(0), attr);
+        }
+        let offset = if ret_is_agg { 1 } else { 0 };
+        for (i, p) in params.iter().enumerate() {
+            if is_aggregate(p) {
+                let attr = self.ctx.create_type_attribute(
+                    inkwell::attributes::Attribute::get_named_enum_kind_id("byval"),
+                    self.llvm_type(p).as_any_type_enum(),
+                );
+                f.add_attribute(AttributeLoc::Param((i + offset) as u32), attr);
+            }
+        }
+        f
+    }
+
+    /// Compute the layout of a Burxt type per the no-hidden-header guarantee.
+    /// Scalar alignments come from the target; field ORDER and logical shape
+    /// are identical everywhere, so "field N" means the same field on every
+    /// target.
+    pub fn layout_of(&self, ty: &Type) -> Layout {
+        match ty {
+            Type::Named(name) => {
+                let fields = &self.struct_fields[name];
+                let mut offsets = Vec::with_capacity(fields.len());
+                let mut size = 0u64;
+                let mut align = 1u64;
+                for f in fields {
+                    let fl = self.layout_of(f);
+                    // pad up to this field's natural alignment
+                    size = (size + fl.align - 1) / fl.align * fl.align;
+                    offsets.push(size);
+                    size += fl.size;
+                    align = align.max(fl.align);
+                }
+                // round the whole aggregate up to its own alignment
+                size = (size + align - 1) / align * align;
+                Layout { size, align, field_offsets: offsets }
+            }
+            Type::Array { elem, len } => {
+                let el = self.layout_of(elem);
+                let stride = (el.size + el.align - 1) / el.align * el.align;
+                Layout {
+                    size: stride * (*len as u64),
+                    align: el.align,
+                    // an array's "fields" are its elements, evenly strided
+                    field_offsets: (0..*len as u64).map(|i| i * stride).collect(),
+                }
+            }
+            // Scalars: i64-shaped, or a target-width pointer for String.
+            Type::String => {
+                let w = self.ctx.ptr_sized_int_type(&self.target_data(), None).get_bit_width() as u64 / 8;
+                Layout { size: w, align: w, field_offsets: vec![] }
+            }
+            Type::CInt => Layout { size: 4, align: 4, field_offsets: vec![] },
+            _ => Layout { size: 8, align: 8, field_offsets: vec![] },
+        }
+    }
+
+    /// Target data for the host — the authority on pointer width.
+    fn target_data(&self) -> inkwell::targets::TargetData {
+        inkwell::targets::TargetData::create(&self.module.get_triple().as_str().to_string_lossy())
     }
 
     /// The LLVM type for a Burxt type. All scalars are i64; String is an
@@ -659,8 +776,28 @@ impl<'ctx> CodeGen<'ctx> {
                     .get(name)
                     .ok_or_else(|| format!("codegen bug: unknown function {}", name))?;
                 let extern_sig = self.extern_sigs.get(name).cloned();
+                let user_sig = self.fn_sigs.get(name).cloned();
                 let mut vals: Vec<BasicMetadataValueEnum> = Vec::new();
+
+                // An aggregate result is written into space we own, then read
+                // back as a value.
+                let sret_slot = match &user_sig {
+                    Some((_, ret)) if is_aggregate(ret) => {
+                        let slot = self.create_entry_alloca("ret_tmp", ret)?;
+                        vals.push(slot.into());
+                        Some((slot, ret.clone()))
+                    }
+                    _ => None,
+                };
+
                 for (i, a) in args.iter().enumerate() {
+                    // Aggregate arguments pass as an address; LLVM's byval
+                    // makes the callee's copy.
+                    if is_aggregate(&a.ty) {
+                        let addr = self.gen_aggregate_addr(a)?;
+                        vals.push(addr.into());
+                        continue;
+                    }
                     let mut v = self.gen_expr(a)?;
                     // A CInt parameter is 32-bit on the C side: range-check
                     // and truncate — a value that doesn't fit is a loud
@@ -676,6 +813,35 @@ impl<'ctx> CodeGen<'ctx> {
                     .builder
                     .build_call(f, &vals, "call")
                     .map_err(|e| e.to_string())?;
+
+                // Mirror the declared ABI attributes onto the call site.
+                use inkwell::attributes::{Attribute, AttributeLoc};
+                if let Some((_, ret)) = &sret_slot {
+                    let attr = self.ctx.create_type_attribute(
+                        Attribute::get_named_enum_kind_id("sret"),
+                        self.llvm_type(ret).as_any_type_enum(),
+                    );
+                    call.add_attribute(AttributeLoc::Param(0), attr);
+                }
+                if let Some((ptys, ret)) = &user_sig {
+                    let offset = if is_aggregate(ret) { 1 } else { 0 };
+                    for (i, p) in ptys.iter().enumerate() {
+                        if is_aggregate(p) {
+                            let attr = self.ctx.create_type_attribute(
+                                Attribute::get_named_enum_kind_id("byval"),
+                                self.llvm_type(p).as_any_type_enum(),
+                            );
+                            call.add_attribute(AttributeLoc::Param((i + offset) as u32), attr);
+                        }
+                    }
+                }
+
+                if let Some((slot, ret)) = sret_slot {
+                    return self
+                        .builder
+                        .build_load(self.llvm_type(&ret), slot, "ret_val")
+                        .map_err(|e| e.to_string());
+                }
                 let result = match call.try_as_basic_value() {
                     inkwell::values::ValueKind::Basic(v) => v,
                     _ => return Err(format!("codegen bug: call to {} returned void", name)),
@@ -731,6 +897,58 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(|e| e.to_string())
             }
         }
+    }
+
+    /// The address of an aggregate value, for passing it by `byval`. A named
+    /// binding lends its own slot (LLVM inserts the callee's copy); anything
+    /// else is materialized into a temporary first.
+    fn gen_aggregate_addr(&mut self, e: &TypedExpr) -> Result<PointerValue<'ctx>, String> {
+        match &e.kind {
+            TypedExprKind::Var(name) => {
+                if let Some((slot, _)) = self.vars.get(name) {
+                    return Ok(*slot);
+                }
+                Err(format!("codegen: unknown variable {}", name))
+            }
+            // An array literal has no home yet — build it in a temporary.
+            TypedExprKind::ArrayLit(elems) => {
+                let tmp = self.create_entry_alloca("arr_tmp", &e.ty)?;
+                self.store_array_elements(tmp, &e.ty, elems)?;
+                Ok(tmp)
+            }
+            _ => {
+                let v = self.gen_expr(e)?;
+                let tmp = self.create_entry_alloca("agg_tmp", &e.ty)?;
+                self.builder.build_store(tmp, v).map_err(|e| e.to_string())?;
+                Ok(tmp)
+            }
+        }
+    }
+
+    /// Store an array literal's elements into `slot`, one GEP per element.
+    fn store_array_elements(
+        &mut self,
+        slot: PointerValue<'ctx>,
+        ty: &Type,
+        elems: &[TypedExpr],
+    ) -> Result<(), String> {
+        let arr_ty = self.llvm_type(ty);
+        let i64t = self.ctx.i64_type();
+        for (i, e) in elems.iter().enumerate() {
+            let v = self.gen_expr(e)?;
+            let idx = i64t.const_int(i as u64, false);
+            let ptr = unsafe {
+                self.builder.build_in_bounds_gep(
+                    arr_ty,
+                    slot,
+                    &[i64t.const_zero(), idx],
+                    "elem_init",
+                )
+            }
+            .map_err(|e| e.to_string())?;
+            self.builder.build_store(ptr, v).map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 
     /// Bounds-check `index` against `len`, then GEP to the element. Every
@@ -1268,6 +1486,30 @@ impl<'ctx> CodeGen<'ctx> {
 
     // (rounding helpers above; printing/IO below)
 
+    /// Report every declared struct's layout: size, alignment and field
+    /// offsets. This makes the no-hidden-header guarantee OBSERVABLE — the
+    /// object model depends on it, so it is worth being able to check.
+    pub fn layout_report(&self, prog: &TypedProgram) -> String {
+        let mut out = String::new();
+        for s in &prog.structs {
+            let ty = Type::Named(s.name.clone());
+            let l = self.layout_of(&ty);
+            out.push_str(&format!(
+                "{}: size {} align {}\n",
+                s.name, l.size, l.align
+            ));
+            for (i, ft) in s.fields.iter().enumerate() {
+                out.push_str(&format!(
+                    "  +{} {} ({} bytes)\n",
+                    l.field_offsets[i],
+                    ft,
+                    self.layout_of(ft).size
+                ));
+            }
+        }
+        out
+    }
+
     /// Write the LLVM IR to a file (for inspection / debugging).
     pub fn write_ir(&self, path: &str) -> Result<(), String> {
         self.module.print_to_file(path).map_err(|e| e.to_string())
@@ -1301,6 +1543,27 @@ impl<'ctx> CodeGen<'ctx> {
         tm.write_to_file(&self.module, FileType::Object, std::path::Path::new(path))
             .map_err(|e| e.to_string())
     }
+}
+
+/// Is this type an aggregate (multi-field or multi-element)?
+/// The boundary is decided by the TYPE, never by size, so it is identical on
+/// every target.
+pub fn is_aggregate(ty: &Type) -> bool {
+    matches!(ty, Type::Named(_) | Type::Array { .. })
+}
+
+/// The memory layout of an aggregate: exactly its declared fields, in
+/// declaration order, standard alignment padding between them, and NOTHING
+/// else — no type tag, no vtable pointer, no refcount, no hidden header.
+///
+/// This is the forward guarantee the object model depends on: a field's offset
+/// is a pure function of the declared field types and order, so adding a trait
+/// implementation later can never move a field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Layout {
+    pub size: u64,
+    pub align: u64,
+    pub field_offsets: Vec<u64>,
 }
 
 /// 10^scale as the 64-bit words LLVM wants for an i128 constant.

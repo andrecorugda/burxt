@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.11)
+# Burxt — Design Notes (v0.0.12)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -131,6 +131,15 @@ Listed so they are not mistaken for finished work:
   Arithmetic intermediates are already i128; widening the STORED
   representation is a separate, deliberate decision (it changes the ABI and
   the FFI story), not an oversight.
+- **Register-pair aggregate returns: superseded by `sret` for now** (v0.0.12).
+  A deliberate simplicity-and-uniformity choice over peak performance,
+  reversible later as a pure optimization behind unchanged semantics.
+- **Field reordering / padding minimization: not done, on purpose.**
+  Declaration-order layout keeps offsets obvious and FFI predictable.
+  Revisit only as an opt-in optimization, never as a silent default.
+- **Array returns.** Array PARAMETERS work (v0.0.12); returning one needs
+  whole-array binding at the call site, which is the copy question deferred
+  with collections.
 
 ### Open tradeoff — deliberately undecided, eyes open
 
@@ -625,6 +634,53 @@ headroom than values do.**
   and chained comparisons get their own message instead of mentioning
   `RParen`.
 
+### v0.0.12: the aggregate ABI (A4.5)
+
+How multi-field values cross function boundaries. Unglamorous plumbing, but
+it is the substrate the object model sits on, so it is settled BEFORE the OOP
+grammar rather than rewritten underneath it.
+
+**The principle that decides everything else:** semantics are defined at the
+value level; the ABI is a mechanism that must be invisible to them. Passing,
+returning and assigning an aggregate are value-copy operations on every
+target. Whether the machine uses registers or a pointer to a temporary is a
+target detail the program can never observe — if a program could tell the
+difference, the ABI is wrong, not the program.
+
+- **Parameters.** Scalars in registers, as before. Aggregates as LLVM
+  `byval(T)`: a pointer to a caller-owned copy, so the callee's pointer never
+  aliases the caller's live storage. LLVM guarantees the copy — hand-rolling
+  by-value-through-pointer is exactly where aliasing bugs live, so we don't.
+  Inside the callee the incoming pointer IS the binding's slot; writing
+  through it is safe by construction.
+- **Returns.** Aggregates always use an `sret(T)` hidden first pointer — one
+  code path on every target, and the only shape wasm can express. A
+  register-pair fast path is deliberately NOT implemented: it is a per-target
+  size-classification problem, LLVM often recovers the cost anyway, and it
+  can be added later as a pure optimization behind unchanged semantics. The
+  scalar/aggregate boundary is decided by the TYPE, never by size, so it is
+  target-independent.
+- **Layout is exactly the declared fields** — declaration order, standard
+  alignment padding, and NOTHING else: no type tag, no vtable pointer, no
+  refcount, no hidden header. A field's offset is a pure function of the
+  declared types and order, so adding a trait implementation later cannot
+  move a field. `burxt layout <file>` prints size/align/offsets, and a test
+  asserts them, so this guarantee is machine-checked rather than promised.
+- **Arrays pass as a pointer plus a static length** — N lives in the type, so
+  it costs no runtime argument and `len()` stays a compile-time constant.
+  Semantically still a value copy.
+- **The correctness test that keeps this honest:** a callee scribbles over its
+  aggregate parameter and the caller's value is verified unchanged, for a
+  one-field struct AND an eight-field struct — i.e. across both plausible
+  mechanisms. Identical behavior either way is the property; if switching
+  mechanism ever changes observable behavior, that is the bug.
+
+What A4.6 may assume, and no more: layout is the declared fields; dispatch
+data lives OUTSIDE the value (fat pointer / dictionary); pass/return/assign
+is a value copy on every target; `field N` denotes the same field everywhere.
+Needing to violate one of those is a signal to revisit this milestone
+deliberately and record it — not to bolt a hidden header onto the layout.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -677,9 +733,10 @@ it travels.
   platform APIs on every target. — DONE for Int signatures (v0.0.6);
   String params (v0.0.7); widens further with A4's types.
 - A4. Strings (v0.0.7), structs (v0.0.8), arrays (v0.0.10) — DONE
-- A4.5. The aggregate ABI: by-pointer struct/array params and returns <- NEXT
+- A4.5. The aggregate ABI: `byval` params, `sret` returns, layout guarantee
+  — DONE (v0.0.12)
 - A4.6. Composition-first OOP: `class`, `trait`, receiver methods, `open`
-  single inheritance, dictionary dispatch (see "The OOP model")
+  single inheritance, dictionary dispatch (see "The OOP model") <- NEXT
 - A4.7. Signature grammar: money/unit literals (`$19.99`, `8.25%`, `5.km`),
   string interpolation, pipelines
 - A4+. OOP by default, SOLID-aligned: by-pointer ABI + receiver methods,

@@ -207,24 +207,17 @@ impl TypeChecker {
             }
             for p in &f.params {
                 self.validate_type(&p.ty)?;
-                if matches!(p.ty, Type::Named(_) | Type::Array { .. }) {
-                    return Err(format!(
-                        "in fn `{}`: functions cannot take or return {} yet — \
-                         the aggregate ABI arrives in a later milestone. Pass the \
-                         parts individually for now.",
-                        f.name,
-                        if matches!(p.ty, Type::Named(_)) { "structs" } else { "arrays" }
-                    ));
-                }
             }
             self.validate_type(&f.ret)?;
-            if matches!(f.ret, Type::Named(_) | Type::Array { .. }) {
+            // Returning an array would need array-valued expressions to be
+            // bindable (`let a: [Int; 3] = f();`), which is the whole-array
+            // copy question deferred with collections. Parameters are fine.
+            if matches!(f.ret, Type::Array { .. }) {
                 return Err(format!(
-                    "in fn `{}`: functions cannot take or return {} yet — \
-                     the aggregate ABI arrives in a later milestone. Return the \
-                     parts individually for now.",
-                    f.name,
-                    if matches!(f.ret, Type::Named(_)) { "structs" } else { "arrays" }
+                    "fn `{}` cannot return an array yet — returning one needs \
+                     whole-array binding, which arrives with collections. Return \
+                     a struct, or fill an array the caller owns.",
+                    f.name
                 ));
             }
             let param_tys = f.params.iter().map(|p| p.ty.clone()).collect();

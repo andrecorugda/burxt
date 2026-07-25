@@ -41,6 +41,7 @@ fn compile_main() {
         eprintln!("  burxt build   <file.bx>   compile to a native executable");
         eprintln!("  burxt run     <file.bx>   compile then run");
         eprintln!("  burxt emit-ir <file.bx>   print LLVM IR");
+        eprintln!("  burxt layout  <file.bx>   print struct layouts (size/align/offsets)");
         std::process::exit(2);
     }
     let cmd = &args[1];
@@ -71,6 +72,10 @@ fn run(cmd: &str, path: &str) -> Result<(), String> {
     cg.compile(&typed)?;
 
     match cmd {
+        "layout" => {
+            print!("{}", cg.layout_report(&typed));
+            Ok(())
+        }
         "emit-ir" => {
             let ir_path = format!("{}.ll", stem);
             cg.write_ir(&ir_path)?;

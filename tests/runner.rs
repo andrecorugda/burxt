@@ -100,6 +100,46 @@ fn panic_programs_die_cleanly_at_runtime() {
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }
 
+/// The forward guarantee the object model depends on: an aggregate's layout is
+/// EXACTLY its declared fields, in order, standard alignment — no type tag, no
+/// vtable pointer, no refcount, no hidden header word. If this ever fails,
+/// adding a trait implementation could move a field, and codegen written
+/// against these offsets would break.
+#[test]
+fn struct_layout_has_no_hidden_header() {
+    let scratch = scratch_dir("layout");
+    fs::create_dir_all(&scratch).unwrap();
+    let program = scratch.join("layout_probe.bx");
+    fs::write(
+        &program,
+        "struct Money { amount: Decimal<2> }\n\
+         struct LineItem { price: Decimal<2>, qty: Int }\n\
+         struct Order { total: Money, items: Int, label: String }\n\
+         print(1);\n",
+    )
+    .unwrap();
+
+    let out = burxt("layout", &program, &scratch);
+    let report = String::from_utf8_lossy(&out.stdout);
+    let expected = "\
+Money: size 8 align 8
+  +0 Decimal<2> (8 bytes)
+LineItem: size 16 align 8
+  +0 Decimal<2> (8 bytes)
+  +8 Int (8 bytes)
+Order: size 24 align 8
+  +0 Money (8 bytes)
+  +8 Int (8 bytes)
+  +16 String (8 bytes)
+";
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(out.status.success(), "layout command failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        report, expected,
+        "layout drifted — a hidden header or reordering would break the object model"
+    );
+}
+
 #[test]
 fn fail_programs_are_rejected_with_expected_error() {
     let scratch = scratch_dir("fail");

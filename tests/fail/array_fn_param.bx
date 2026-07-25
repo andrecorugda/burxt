@@ -1,4 +1,0 @@
-fn total(xs: [Decimal<2>; 3]) -> Decimal<2> {
-    return xs[0];
-}
-print(total([1.00, 2.00, 3.00]));
