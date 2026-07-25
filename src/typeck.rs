@@ -59,8 +59,10 @@ pub enum TypedExprKind {
 #[derive(Debug, Clone)]
 pub enum TypedStmt {
     Let { name: String, ty: Type, value: TypedExpr },
+    Assign { name: String, value: TypedExpr },
     Print(TypedExpr),
     Return(TypedExpr),
+    While { cond: TypedExpr, body: Vec<TypedStmt> },
     If {
         cond: TypedExpr,
         then_block: Vec<TypedStmt>,
@@ -83,7 +85,8 @@ pub struct TypedProgram {
 }
 
 pub struct TypeChecker {
-    env: HashMap<String, Type>,
+    /// variable name -> (type, is mutable)
+    env: HashMap<String, (Type, bool)>,
     /// function name -> (parameter types, return type); collected up front so
     /// functions may be defined in any order and call each other.
     fns: HashMap<String, (Vec<Type>, Type)>,
@@ -124,7 +127,7 @@ impl TypeChecker {
         self.env.clear();
         let mut params = Vec::new();
         for p in &f.params {
-            if self.env.insert(p.name.clone(), p.ty.clone()).is_some() {
+            if self.env.insert(p.name.clone(), (p.ty.clone(), false)).is_some() {
                 return Err(format!(
                     "function `{}` has two parameters named `{}`",
                     f.name, p.name
@@ -175,7 +178,7 @@ impl TypeChecker {
 
     fn check_stmt(&mut self, s: &Stmt) -> Result<TypedStmt, String> {
         match s {
-            Stmt::Let { name, declared, value } => {
+            Stmt::Let { name, mutable, declared, value } => {
                 let typed = self.check_expr(value, Some(declared))?;
                 if &typed.ty != declared {
                     return Err(format!(
@@ -183,8 +186,42 @@ impl TypeChecker {
                         name, declared, typed.ty
                     ));
                 }
-                self.env.insert(name.clone(), declared.clone());
+                self.env.insert(name.clone(), (declared.clone(), *mutable));
                 Ok(TypedStmt::Let { name: name.clone(), ty: declared.clone(), value: typed })
+            }
+            Stmt::Assign { name, value } => {
+                let (declared, mutable) = self
+                    .env
+                    .get(name)
+                    .ok_or_else(|| format!("unknown variable: {}", name))?
+                    .clone();
+                if !mutable {
+                    return Err(format!(
+                        "cannot assign to `{}`: it was declared immutable. \
+                         Declare it `let mut {}: {}` to allow reassignment.",
+                        name, name, declared
+                    ));
+                }
+                let typed = self.check_expr(value, Some(&declared))?;
+                if typed.ty != declared {
+                    return Err(format!(
+                        "cannot assign a {} to `{}`, which was declared {}",
+                        typed.ty, name, declared
+                    ));
+                }
+                Ok(TypedStmt::Assign { name: name.clone(), value: typed })
+            }
+            Stmt::While { cond, body } => {
+                let cond = self.check_expr(cond, None)?;
+                if cond.ty != Type::Bool {
+                    return Err(format!(
+                        "a `while` condition must be a Bool (e.g. a comparison), \
+                         but this one has type {}",
+                        cond.ty
+                    ));
+                }
+                let body = self.check_block(body)?;
+                Ok(TypedStmt::While { cond, body })
             }
             Stmt::Print(e) => {
                 let typed = self.check_expr(e, None)?;
@@ -247,7 +284,7 @@ impl TypeChecker {
             }
 
             Expr::Var(name) => {
-                let ty = self
+                let (ty, _) = self
                     .env
                     .get(name)
                     .ok_or_else(|| format!("unknown variable: {}", name))?

@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.3)
+# Burxt — Design Notes (v0.0.4)
 
 ## Grammar principle
 The grammar must be eloquent and easy to understand, without compromising the
@@ -109,8 +109,26 @@ Rules:
 - Codegen: all values are i64 (Bool holds 0/1, i1 only at branches); user
   functions are mangled `bx.<name>` so they can never collide with libc.
 
-## Roadmap after v0.0.3
-- mutation + loops (`let mut`, `while`)
+## v0.0.4: mutation and loops
+Immutable is the default; mutation is opt-in and visible at the declaration:
+
+    let mut b: Decimal<2, RoundHalfEven> = 1000.00;
+    let mut m: Int = 0;
+    while m < 12 {
+        b = b * 1.01;      // contract applies at every step
+        m = m + 1;
+    }
+
+Rules:
+- `name = value;` only compiles for a `let mut` binding, and the value's type
+  must match the declaration exactly. Parameters are immutable.
+- `while` needs a Bool condition and braces, like `if`. A loop body never
+  counts as "returns on every path" (the condition may be false at entry).
+- Codegen: every alloca goes in the function's entry block, so a `let`
+  inside a loop body cannot grow the stack per iteration.
+
+## Roadmap after v0.0.4
 - overflow-checked arithmetic (or a wider decimal representation)
 - refinement types ("balance >= 0", "splits sum to total")
+- strings, arrays/records
 - self-hosting

@@ -134,12 +134,19 @@ pub enum Expr {
 /// Statements. A Burxt v0.0.1 program is just a sequence of these.
 #[derive(Debug, Clone)]
 pub enum Stmt {
-    /// `let name: Type = value;`
+    /// `let name: Type = value;` — or `let mut name: ...` to allow
+    /// reassignment. Immutable is the default; mutation is opt-in and visible.
     Let {
         name: String,
+        mutable: bool,
         declared: Type,
         value: Expr,
     },
+    /// `name = value;` — only valid for a `let mut` binding, and the value's
+    /// type must match the declaration exactly.
+    Assign { name: String, value: Expr },
+    /// `while cond { ... }` — the condition must be a Bool; braces required.
+    While { cond: Expr, body: Vec<Stmt> },
     /// `print(expr);`
     Print(Expr),
     /// `return expr;` — only valid inside a function.

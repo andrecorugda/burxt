@@ -1,0 +1,1 @@
+cannot assign a Decimal<2> to `x`, which was declared Int

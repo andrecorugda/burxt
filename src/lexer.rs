@@ -14,11 +14,13 @@ pub enum Token {
     // identifiers & keywords
     Ident(String),
     Let,
+    Mut,
     Print,
     Fn,
     Return,
     If,
     Else,
+    While,
     True,
     False,
     // type keywords
@@ -218,7 +220,9 @@ impl<'a> Lexer<'a> {
         }
         match s.as_str() {
             "let" => Token::Let,
+            "mut" => Token::Mut,
             "print" => Token::Print,
+            "while" => Token::While,
             "fn" => Token::Fn,
             "return" => Token::Return,
             "if" => Token::If,

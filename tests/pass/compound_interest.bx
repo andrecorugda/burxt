@@ -1,0 +1,12 @@
+// The showcase: 1% monthly interest on $1000 for a year, with the rounding
+// contract applied at every step — bit-for-bit reproducible money math.
+fn grow(balance: Decimal<2, RoundHalfEven>, months: Int) -> Decimal<2, RoundHalfEven> {
+    let mut b: Decimal<2, RoundHalfEven> = balance;
+    let mut m: Int = 0;
+    while m < months {
+        b = b * 1.01;
+        m = m + 1;
+    }
+    return b;
+}
+print(grow(1000.00, 12));

@@ -5,10 +5,12 @@
 //!   fn      := "fn" IDENT "(" (param ("," param)*)? ")" "->" type block
 //!   param   := IDENT ":" type
 //!   block   := "{" stmt* "}"
-//!   stmt    := "let" IDENT ":" type "=" expr ";"
+//!   stmt    := "let" "mut"? IDENT ":" type "=" expr ";"
+//!            | IDENT "=" expr ";"
 //!            | "print" "(" expr ")" ";"
 //!            | "return" expr ";"
 //!            | "if" expr block ("else" (block | if-stmt))?
+//!            | "while" expr block
 //!   type    := "Int" | "Bool" | "Decimal" "<" INT ("," rounding)? ">"
 //!   rounding:= "RoundHalfEven" | "RoundHalfUp"
 //!   expr    := additive (cmp additive)?          -- comparisons don't chain
@@ -133,8 +135,28 @@ impl Parser {
             Token::Print => self.parse_print(),
             Token::Return => self.parse_return(),
             Token::If => self.parse_if(),
+            Token::While => self.parse_while(),
+            Token::Ident(_) => self.parse_assign(),
             other => Err(format!("expected statement, found {:?}", other)),
         }
+    }
+
+    fn parse_assign(&mut self) -> Result<Stmt, String> {
+        let name = match self.bump() {
+            Token::Ident(s) => s,
+            other => return Err(format!("expected identifier, found {:?}", other)),
+        };
+        self.expect(&Token::Equals)?;
+        let value = self.parse_expr()?;
+        self.expect(&Token::Semicolon)?;
+        Ok(Stmt::Assign { name, value })
+    }
+
+    fn parse_while(&mut self) -> Result<Stmt, String> {
+        self.expect(&Token::While)?;
+        let cond = self.parse_expr()?;
+        let body = self.parse_block()?;
+        Ok(Stmt::While { cond, body })
     }
 
     fn parse_return(&mut self) -> Result<Stmt, String> {
@@ -164,6 +186,12 @@ impl Parser {
 
     fn parse_let(&mut self) -> Result<Stmt, String> {
         self.expect(&Token::Let)?;
+        let mutable = if self.at(&Token::Mut) {
+            self.bump();
+            true
+        } else {
+            false
+        };
         let name = match self.bump() {
             Token::Ident(s) => s,
             other => return Err(format!("expected identifier after 'let', found {:?}", other)),
@@ -173,7 +201,7 @@ impl Parser {
         self.expect(&Token::Equals)?;
         let value = self.parse_expr()?;
         self.expect(&Token::Semicolon)?;
-        Ok(Stmt::Let { name, declared, value })
+        Ok(Stmt::Let { name, mutable, declared, value })
     }
 
     fn parse_print(&mut self) -> Result<Stmt, String> {

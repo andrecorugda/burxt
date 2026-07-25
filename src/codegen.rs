@@ -123,10 +123,7 @@ impl<'ctx> CodeGen<'ctx> {
 
         // Spill each parameter to a stack slot so it behaves like any binding.
         for (i, (name, ty)) in f.params.iter().enumerate() {
-            let slot = self
-                .builder
-                .build_alloca(self.ctx.i64_type(), name)
-                .map_err(|e| e.to_string())?;
+            let slot = self.create_entry_alloca(name)?;
             let arg = llf.get_nth_param(i as u32).unwrap();
             self.builder.build_store(slot, arg).map_err(|e| e.to_string())?;
             self.vars.insert(name.clone(), (slot, ty.clone()));
@@ -144,14 +141,21 @@ impl<'ctx> CodeGen<'ctx> {
         match stmt {
             TypedStmt::Let { name, ty, value } => {
                 let val = self.gen_expr(value)?;
-                let slot = self
-                    .builder
-                    .build_alloca(self.ctx.i64_type(), name)
-                    .map_err(|e| e.to_string())?;
+                let slot = self.create_entry_alloca(name)?;
                 self.builder.build_store(slot, val).map_err(|e| e.to_string())?;
                 self.vars.insert(name.clone(), (slot, ty.clone()));
                 Ok(())
             }
+            TypedStmt::Assign { name, value } => {
+                let val = self.gen_expr(value)?;
+                let (slot, _) = *self
+                    .vars
+                    .get(name)
+                    .ok_or_else(|| format!("codegen: unknown variable {}", name))?;
+                self.builder.build_store(slot, val).map_err(|e| e.to_string())?;
+                Ok(())
+            }
+            TypedStmt::While { cond, body } => self.gen_while(cond, body),
             TypedStmt::Print(e) => self.gen_print(e),
             TypedStmt::Return(e) => {
                 let val = self.gen_expr(e)?;
@@ -218,6 +222,64 @@ impl<'ctx> CodeGen<'ctx> {
             self.builder.build_unreachable().map_err(err)?;
         }
         Ok(())
+    }
+
+    fn gen_while(&mut self, cond: &TypedExpr, body: &[TypedStmt]) -> Result<(), String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_parent())
+            .ok_or("codegen bug: `while` outside a function")?;
+        let cond_bb = self.ctx.append_basic_block(function, "while.cond");
+        let body_bb = self.ctx.append_basic_block(function, "while.body");
+        let end_bb = self.ctx.append_basic_block(function, "while.end");
+
+        self.builder.build_unconditional_branch(cond_bb).map_err(err)?;
+
+        self.builder.position_at_end(cond_bb);
+        let cond_val = self.gen_expr(cond)?;
+        let cond_i1 = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                cond_val,
+                self.ctx.i64_type().const_zero(),
+                "whilecond",
+            )
+            .map_err(err)?;
+        self.builder
+            .build_conditional_branch(cond_i1, body_bb, end_bb)
+            .map_err(err)?;
+
+        self.builder.position_at_end(body_bb);
+        self.gen_block(body)?;
+        if self.current_block_open() {
+            self.builder.build_unconditional_branch(cond_bb).map_err(err)?;
+        }
+
+        self.builder.position_at_end(end_bb);
+        Ok(())
+    }
+
+    /// Put every alloca in the function's ENTRY block, not wherever the
+    /// builder happens to be: an alloca inside a loop body would otherwise
+    /// grow the stack on every iteration.
+    fn create_entry_alloca(&self, name: &str) -> Result<PointerValue<'ctx>, String> {
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_parent())
+            .ok_or("codegen bug: alloca outside a function")?;
+        let entry = function
+            .get_first_basic_block()
+            .ok_or("codegen bug: function has no entry block")?;
+        let tmp = self.ctx.create_builder();
+        match entry.get_first_instruction() {
+            Some(first) => tmp.position_before(&first),
+            None => tmp.position_at_end(entry),
+        }
+        tmp.build_alloca(self.ctx.i64_type(), name).map_err(|e| e.to_string())
     }
 
     /// Generate a block's statements in a child scope, mirroring the
