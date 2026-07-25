@@ -1,6 +1,20 @@
 # Burxt — Design Notes (v0.0.5)
 
+**Burxt** is a typed, compiled programming language: exact decimals for money,
+correctness by construction, native code through LLVM.
+
+## Thesis (what makes Burxt worth existing)
+
+1. **Exact decimal is the DEFAULT numeric type for money.** No silent
+   binary-float representation of currency. `Decimal<S, R>` carries scale and
+   rounding contract in the type.
+2. **Correctness by construction.** Rounding must be explicit; float↔decimal
+   mixing is a compile error. (Refinement types come later.)
+3. **Native, no runtime baggage.** Compiles through LLVM to a native binary.
+   No VM, no GC (yet).
+
 ## Grammar principle
+
 The grammar must be eloquent and easy to understand, without compromising the
 thesis. Types read as plain English (`Decimal<2, RoundHalfEven>` = "two
 decimal places, rounding half to even"), there is one obvious way to write
@@ -8,54 +22,56 @@ each construct, and every compile error reads like advice — it names the rule
 and shows the syntax that fixes it. When brevity and clarity conflict,
 clarity wins; exactness and explicitness are never traded for either.
 
-**Burxt** is a typed, compiled, native-Linux programming language.
-
-## Thesis (what makes Burxt worth existing)
-1. **Exact decimal is the DEFAULT numeric type for money.** No silent binary-float
-   representation of currency. `Decimal<P,S>` carries precision + scale in the type.
-2. **Correctness by construction.** Rounding must be explicit; float↔decimal mixing is a
-   compile error. (Refinement types come later.)
-3. **Native, no runtime baggage.** Compiles through LLVM to a native binary. No VM, no GC (yet).
-
 ## Compiler architecture (backend-independent front end)
+
+```text
 Source (.bx)
   -> Lexer      (src/lexer.rs)      : text -> tokens
   -> Parser     (src/parser.rs)     : tokens -> AST (src/ast.rs)
   -> Typecheck  (src/typeck.rs)     : AST -> typed AST + errors
   -> Codegen    (src/codegen.rs)    : typed AST -> LLVM IR -> native object
   -> link       (cc)                : object -> executable
+```
 
-The front end (lexer/parser/typeck) knows NOTHING about LLVM. If we ever swap to
-Cranelift or add an interpreter, only codegen.rs changes.
+The front end (lexer/parser/typeck) knows NOTHING about LLVM. If we ever swap
+to Cranelift or add an interpreter, only codegen.rs changes.
 
 ## Bootstrap plan
-- Stage 0: this compiler, written in **Rust**, emitting via **LLVM 18** (inkwell).
-- Stage 1 (future): rewrite the Burxt compiler in Burxt; compile it with stage 0.
-  The day "Burxt compiles Burxt" = self-hosting = the language is real.
 
-## v0.0.1 scope (the first vertical slice)
+- Stage 0: this compiler, written in **Rust**, emitting via **LLVM 18**
+  (inkwell).
+- Stage 1 (future): rewrite the Burxt compiler in Burxt; compile it with
+  stage 0. The day "Burxt compiles Burxt" = self-hosting = the language is
+  real.
+
+## Milestone log
+
+### v0.0.1: the first vertical slice
+
 The smallest program that proves the thesis: exact decimal arithmetic with a
-declared scale, printed exactly. Integers supported too, as the simplest path to
-"it runs". Decimals are represented as scaled i64 (value * 10^scale) — exact, no float.
+declared scale, printed exactly. Integers supported too, as the simplest path
+to "it runs". Decimals are represented as scaled i64 (value * 10^scale) —
+exact, no float.
 
-Example program (money.bx):
-    let price: Decimal<2> = 19.99;
-    let qty: Int = 3;
-    let total: Decimal<2> = price * qty;
-    print(total);        // 59.97  — exact, never 59.970000000001
+```text
+let price: Decimal<2> = 19.99;
+let qty: Int = 3;
+let total: Decimal<2> = price * qty;
+print(total);        // 59.97  — exact, never 59.970000000001
+```
 
-## v0.0.2: rounding contracts
+### v0.0.2: rounding contracts
+
 A rounding contract is an optional second type argument:
 
-    Decimal<2>                 // no contract: only exact arithmetic
-    Decimal<2, RoundHalfEven>  // ties to the even neighbor (banker's)
-    Decimal<2, RoundHalfUp>    // ties away from zero (commercial)
-
-Grammar principle: the type reads as plain English — "two decimal places,
-rounding half to even" — and every rejection message shows the exact syntax
-that fixes it.
+```text
+Decimal<2>                 // no contract: only exact arithmetic
+Decimal<2, RoundHalfEven>  // ties to the even neighbor (banker's)
+Decimal<2, RoundHalfUp>    // ties away from zero (commercial)
+```
 
 Rules:
+
 - `+`, `-`, `* Int` are always exact, so they never require a contract.
 - `Decimal * Decimal` and division produce digits beyond scale S, so they are
   compile errors unless the operands carry a contract saying how the result
@@ -68,29 +84,23 @@ Rules:
   return with explicit semantics.
 - Codegen: each mode becomes one tiny generated IR function
   (`@burxt.round.<mode>`: sdiv/srem + tie adjustment), called where needed.
-- Division by zero traps at runtime (SIGFPE), like C — a checked story comes
-  later; a silently wrong number is not an option.
+- Division by zero and i64 overflow were unchecked here; both became named
+  runtime errors in v0.0.5.
 
-Known i64 limits (until a wider representation lands): the double-scale
-product `A*B` and the pre-scaled dividend `A*10^S` can overflow for values
-near the top of the i64 range.
+### v0.0.3: functions, control flow, Bool
 
-## Testing
-`cargo test` runs a data-driven suite:
-- tests/pass/NAME.bx + NAME.stdout — must compile & run with exactly that output.
-- tests/fail/NAME.bx + NAME.stderr — must be rejected with an error containing that text.
-Adding a test = dropping two files in the right directory.
-
-## v0.0.3: functions, control flow, Bool
 Burxt is now a real programming language: recursion makes it computationally
 complete without needing mutation yet.
 
-    fn total(price: Decimal<2>, qty: Int) -> Decimal<2> {
-        return price * qty;
-    }
-    print(total(19.99, 3));    // 59.97
+```text
+fn total(price: Decimal<2>, qty: Int) -> Decimal<2> {
+    return price * qty;
+}
+print(total(19.99, 3));    // 59.97
+```
 
 Rules:
+
 - Every function declares parameter types and a return type, and the
   typechecker PROVES it returns on every path (last statement is a `return`,
   or an if/else where both branches return). Code after a returning statement
@@ -109,17 +119,21 @@ Rules:
 - Codegen: all values are i64 (Bool holds 0/1, i1 only at branches); user
   functions are mangled `bx.<name>` so they can never collide with libc.
 
-## v0.0.4: mutation and loops
+### v0.0.4: mutation and loops
+
 Immutable is the default; mutation is opt-in and visible at the declaration:
 
-    let mut b: Decimal<2, RoundHalfEven> = 1000.00;
-    let mut m: Int = 0;
-    while m < 12 {
-        b = b * 1.01;      // contract applies at every step
-        m = m + 1;
-    }
+```text
+let mut b: Decimal<2, RoundHalfEven> = 1000.00;
+let mut m: Int = 0;
+while m < 12 {
+    b = b * 1.01;      // contract applies at every step
+    m = m + 1;
+}
+```
 
 Rules:
+
 - `name = value;` only compiles for a `let mut` binding, and the value's type
   must match the declaration exactly. Parameters are immutable.
 - `while` needs a Bool condition and braces, like `if`. A loop body never
@@ -127,14 +141,17 @@ Rules:
 - Codegen: every alloca goes in the function's entry block, so a `let`
   inside a loop body cannot grow the stack per iteration.
 
-## v0.0.5: checked arithmetic — no silently wrong numbers, ever
+### v0.0.5: checked arithmetic — no silently wrong numbers, ever
+
 Every `+`, `-`, `*` (including the internal double-scale products behind
 Decimal*Decimal and division) goes through `@burxt.checked.<op>`, built on
 LLVM's `llvm.s{add,sub,mul}.with.overflow` intrinsics. On overflow the
 program prints
 
-    burxt runtime error: arithmetic overflow — the exact result no longer
-    fits in the value range
+```text
+burxt runtime error: arithmetic overflow — the exact result no longer
+fits in the value range
+```
 
 to stderr and exits with code 70. Division by zero (and the lone
 i64::MIN / -1 quotient) gets the same treatment — a named error instead of a
@@ -142,8 +159,18 @@ raw SIGFPE. This closes the last "silently wrong number" hole in the i64
 representation; a wider representation can come later, but wraparound was
 never acceptable.
 
-The test suite gained a third category for this: tests/panic/*.bx must
-compile but die at runtime with the expected message and a nonzero exit.
+## Testing
+
+`cargo test` runs a data-driven suite:
+
+- tests/pass/NAME.bx + NAME.stdout — must compile & run with exactly that
+  output.
+- tests/fail/NAME.bx + NAME.stderr — must be rejected with an error
+  containing that text.
+- tests/panic/NAME.bx + NAME.stderr — must compile, but die at runtime with
+  a nonzero exit and that text on stderr.
+
+Adding a test = dropping two files in the right directory.
 
 ## Roadmap: write once, run native everywhere
 
@@ -161,6 +188,7 @@ platform's linking/packaging — affecting only codegen plus a thin packaging
 layer, never the front end.
 
 Target triples to support:
+
 - x86_64 / aarch64 Linux
 - x86_64 / aarch64 macOS (darwin)
 - x86_64 Windows (msvc)
@@ -170,10 +198,12 @@ Target triples to support:
 - wasm32-wasi (edge/server)
 
 ### Sequence: capability BEFORE reach
+
 A cross-platform print is worthless. The language becomes real first, then
 it travels.
 
-**Phase A — real language (Linux only)**
+#### Phase A — real language (Linux only)
+
 - A1. Rounding contracts `Decimal<Scale, Rounding>` — DONE (v0.0.2)
 - A2. Functions + control flow — DONE (v0.0.3, v0.0.4; checked arithmetic
   v0.0.5)
@@ -182,20 +212,26 @@ it travels.
 - A4. Strings, structs, collections
 - A5. Refinement types ("balance >= 0", "splits sum to total")
 
-**Phase B — cross-compilation and desktop**
+#### Phase B — cross-compilation and desktop
+
 - B1. `burxt build --target <triple>`
 - B2/B3. Desktop matrix first: Linux, macOS, Windows
 
-**Phase C — mobile**
+#### Phase C — mobile
+
 - Android: NDK, .so + thin Kotlin/JNI app shell
 - iOS: Mach-O, Xcode signing
 
-**Phase D — web**
+#### Phase D — web
+
 - wasm32 + JS host glue; then wasm32-wasi for edge/server
 
-**Ongoing** — self-hosting: the day Burxt compiles Burxt, the language is real.
+#### Ongoing
+
+- Self-hosting: the day Burxt compiles Burxt, the language is real.
 
 ### Design rules (platform)
+
 - The front end NEVER assumes a platform. All platform differences live
   behind the target triple + the packaging layer.
 - I/O and platform APIs go through FFI — never hardcoded into the language.
