@@ -1257,24 +1257,6 @@ impl<'ctx> CodeGen<'ctx> {
             .into_int_value())
     }
 
-    /// abs(x) for i64 via select — keeps fractional digits positive when the
-    /// whole value is negative. The negation is overflow-checked: abs(i64::MIN)
-    /// does not exist, and pretending it does would print a wrong number.
-    fn build_abs(&mut self, x: IntValue<'ctx>) -> Result<IntValue<'ctx>, String> {
-        let i64t = self.ctx.i64_type();
-        let zero = i64t.const_zero();
-        let neg = self.build_checked(BinOp::Sub, zero, x)?;
-        let is_neg = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::SLT, x, zero, "is_neg")
-            .map_err(|e| e.to_string())?;
-        let sel = self
-            .builder
-            .build_select(is_neg, neg, x, "abs")
-            .map_err(|e| e.to_string())?;
-        Ok(sel.into_int_value())
-    }
-
     /// Create a global null-terminated string constant and return an i8* to it.
     fn global_str(&self, s: &str, name: &str) -> PointerValue<'ctx> {
         let gv = self
