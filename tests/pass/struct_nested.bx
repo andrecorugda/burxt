@@ -1,0 +1,9 @@
+// Structs nest; the copy is naturally deep because the layout is flat.
+struct Money { amount: Decimal<2> }
+struct Order { total: Money, items: Int }
+let mut o: Order = Order { total: Money { amount: 10.00 }, items: 1 };
+print(o.total.amount);
+o.total.amount = 25.50;
+o.items = o.items + 1;
+print(o.total.amount);
+print(o.items);

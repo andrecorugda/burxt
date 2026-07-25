@@ -46,6 +46,10 @@ pub enum Type {
     /// Decimal with a fixed scale S (digits after the decimal point).
     /// Represented at runtime as a scaled i64: stored = value * 10^scale.
     Decimal { scale: u32, rounding: Option<Rounding> },
+    /// A struct type, by name. Typing is NOMINAL: two structs with identical
+    /// fields are different types — the name is a contract, exactly as
+    /// Decimal<2> and Decimal<2, RoundHalfEven> are kept apart.
+    Named(String),
 }
 
 impl std::fmt::Display for Type {
@@ -56,6 +60,7 @@ impl std::fmt::Display for Type {
             Type::String => write!(f, "String"),
             Type::Decimal { scale, rounding: None } => write!(f, "Decimal<{}>", scale),
             Type::Decimal { scale, rounding: Some(r) } => write!(f, "Decimal<{}, {}>", scale, r),
+            Type::Named(name) => write!(f, "{}", name),
         }
     }
 }
@@ -136,6 +141,11 @@ pub enum Expr {
     },
     /// A function call, e.g. `total(19.99, 3)`.
     Call { name: String, args: Vec<Expr> },
+    /// Struct construction: `LineItem { price: 19.99, qty: 3 }`.
+    /// Every field must be given by name; any order.
+    StructLit { name: String, fields: Vec<(String, Expr)> },
+    /// Field access: `item.price` (chains for nested structs).
+    Field { base: Box<Expr>, field: String },
 }
 
 /// Statements. A Burxt v0.0.1 program is just a sequence of these.
@@ -152,6 +162,9 @@ pub enum Stmt {
     /// `name = value;` — only valid for a `let mut` binding, and the value's
     /// type must match the declaration exactly.
     Assign { name: String, value: Expr },
+    /// `name.field(.field)* = value;` — field assignment through a `let mut`
+    /// binding. Mutability is per-binding, not per-field.
+    AssignField { name: String, path: Vec<String>, value: Expr },
     /// `while cond { ... }` — the condition must be a Bool; braces required.
     While { cond: Expr, body: Vec<Stmt> },
     /// `print(expr);`
@@ -194,11 +207,20 @@ pub struct ExternFn {
     pub ret: Type,
 }
 
-/// A whole program: extern declarations, function definitions, and top-level
-/// statements (the implicit main). Functions are hoisted — they may be
-/// defined after the code that calls them, and may call each other.
+/// `struct Name { field: Type, ... }` — the nominal record type and the
+/// substrate for Burxt's OOP layers (methods, then interfaces).
+#[derive(Debug, Clone)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<Param>,
+}
+
+/// A whole program: struct and extern declarations, function definitions,
+/// and top-level statements (the implicit main). Declarations are hoisted —
+/// define them in any order.
 #[derive(Debug, Clone)]
 pub struct Program {
+    pub structs: Vec<StructDef>,
     pub externs: Vec<ExternFn>,
     pub fns: Vec<FnDef>,
     pub stmts: Vec<Stmt>,

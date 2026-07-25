@@ -1,0 +1,19 @@
+// The OOP substrate: nominal structs with money fields.
+struct LineItem {
+    price: Decimal<2>,
+    qty: Int,
+}
+// construction names every field; any order
+let item: LineItem = LineItem { qty: 3, price: 19.99 };
+print(item.price);
+print(item.qty);
+print(item.price * item.qty);
+// field mutation follows the binding's mutability
+let mut acc: LineItem = LineItem { price: 0.00, qty: 0 };
+acc.price = 12.50;
+acc.qty = acc.qty + 2;
+print(acc.price);
+print(acc.qty);
+// assignment copies the whole value — no hidden aliasing
+let copy: LineItem = item;
+print(copy.price);

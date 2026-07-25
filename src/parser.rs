@@ -1,25 +1,30 @@
 //! Parser: tokens -> AST via straightforward recursive descent.
 //!
 //! Grammar:
-//!   program := (extern | fn | stmt)*
+//!   program := (struct | extern | fn | stmt)*
+//!   struct  := "struct" IDENT "{" (param ",")* param? "}"
 //!   extern  := "extern" "fn" IDENT "(" (param ("," param)*)? ")" "->" type ";"
 //!   fn      := "fn" IDENT "(" (param ("," param)*)? ")" "->" type block
 //!   param   := IDENT ":" type
 //!   block   := "{" stmt* "}"
 //!   stmt    := "let" "mut"? IDENT ":" type "=" expr ";"
-//!            | IDENT "=" expr ";"
+//!            | IDENT ("." IDENT)* "=" expr ";"
 //!            | "print" "(" expr ")" ";"
 //!            | "return" expr ";"
 //!            | "if" expr block ("else" (block | if-stmt))?
 //!            | "while" expr block
-//!   type    := "Int" | "Bool" | "Decimal" "<" INT ("," rounding)? ">"
+//!   type    := "Int" | "Bool" | "String" | IDENT
+//!            | "Decimal" "<" INT ("," rounding)? ">"
 //!   rounding:= "RoundHalfEven" | "RoundHalfUp"
 //!   expr    := additive (cmp additive)?          -- comparisons don't chain
 //!   cmp     := "==" | "!=" | "<" | "<=" | ">" | ">="
 //!   additive:= term (("+"|"-") term)*
 //!   term    := factor (("*"|"/") factor)*
-//!   factor  := INT | DECIMAL | "true" | "false" | IDENT
-//!            | IDENT "(" (expr ("," expr)*)? ")" | "(" expr ")"
+//!   factor  := primary ("." IDENT)*
+//!   primary := INT | DECIMAL | STRING | "true" | "false" | IDENT
+//!            | IDENT "(" (expr ("," expr)*)? ")"
+//!            | IDENT "{" (IDENT ":" expr ",")* "}"   -- not in if/while conds
+//!            | "(" expr ")"
 
 use crate::ast::*;
 use crate::lexer::Token;
@@ -27,19 +32,26 @@ use crate::lexer::Token;
 pub struct Parser {
     toks: Vec<Token>,
     pos: usize,
+    /// Struct literals are not allowed directly in an if/while condition —
+    /// `while count { ... }` must parse `{` as the loop body, not a literal.
+    /// Parenthesizing re-enables them.
+    allow_struct_lit: bool,
 }
 
 impl Parser {
     pub fn new(toks: Vec<Token>) -> Self {
-        Parser { toks, pos: 0 }
+        Parser { toks, pos: 0, allow_struct_lit: true }
     }
 
     pub fn parse_program(mut self) -> Result<Program, String> {
+        let mut structs = Vec::new();
         let mut externs = Vec::new();
         let mut fns = Vec::new();
         let mut stmts = Vec::new();
         while !self.at(&Token::Eof) {
-            if self.at(&Token::Extern) {
+            if self.at(&Token::Struct) {
+                structs.push(self.parse_struct()?);
+            } else if self.at(&Token::Extern) {
                 externs.push(self.parse_extern()?);
             } else if self.at(&Token::Fn) {
                 fns.push(self.parse_fn()?);
@@ -47,7 +59,7 @@ impl Parser {
                 stmts.push(self.parse_stmt()?);
             }
         }
-        Ok(Program { externs, fns, stmts })
+        Ok(Program { structs, externs, fns, stmts })
     }
 
     // ---- helpers ----
@@ -75,6 +87,34 @@ impl Parser {
         } else {
             Err(format!("expected {:?}, found {:?}", t, self.peek()))
         }
+    }
+
+    // ---- structs ----
+
+    fn parse_struct(&mut self) -> Result<StructDef, String> {
+        self.expect(&Token::Struct)?;
+        let name = match self.bump() {
+            Token::Ident(s) => s,
+            other => return Err(format!("expected a struct name after 'struct', found {:?}", other)),
+        };
+        self.expect(&Token::LBrace)?;
+        let mut fields = Vec::new();
+        while !self.at(&Token::RBrace) {
+            let fname = match self.bump() {
+                Token::Ident(s) => s,
+                other => return Err(format!("expected a field name in struct {}, found {:?}", name, other)),
+            };
+            self.expect(&Token::Colon)?;
+            let ty = self.parse_type()?;
+            fields.push(Param { name: fname, ty });
+            if self.at(&Token::Comma) {
+                self.bump(); // trailing comma allowed
+            } else {
+                break;
+            }
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(StructDef { name, fields })
     }
 
     // ---- functions ----
@@ -163,17 +203,39 @@ impl Parser {
             Token::Ident(s) => s,
             other => return Err(format!("expected identifier, found {:?}", other)),
         };
+        let mut path = Vec::new();
+        while self.at(&Token::Dot) {
+            self.bump();
+            match self.bump() {
+                Token::Ident(f) => path.push(f),
+                other => return Err(format!("expected a field name after '.', found {:?}", other)),
+            }
+        }
         self.expect(&Token::Equals)?;
         let value = self.parse_expr()?;
         self.expect(&Token::Semicolon)?;
-        Ok(Stmt::Assign { name, value })
+        if path.is_empty() {
+            Ok(Stmt::Assign { name, value })
+        } else {
+            Ok(Stmt::AssignField { name, path, value })
+        }
     }
 
     fn parse_while(&mut self) -> Result<Stmt, String> {
         self.expect(&Token::While)?;
-        let cond = self.parse_expr()?;
+        let cond = self.parse_cond()?;
         let body = self.parse_block()?;
         Ok(Stmt::While { cond, body })
+    }
+
+    /// Parse an if/while condition: struct literals are disabled so the `{`
+    /// after the condition always starts the block. Parentheses re-enable.
+    fn parse_cond(&mut self) -> Result<Expr, String> {
+        let saved = self.allow_struct_lit;
+        self.allow_struct_lit = false;
+        let result = self.parse_expr();
+        self.allow_struct_lit = saved;
+        result
     }
 
     fn parse_return(&mut self) -> Result<Stmt, String> {
@@ -185,7 +247,7 @@ impl Parser {
 
     fn parse_if(&mut self) -> Result<Stmt, String> {
         self.expect(&Token::If)?;
-        let cond = self.parse_expr()?;
+        let cond = self.parse_cond()?;
         let then_block = self.parse_block()?;
         let else_block = if self.at(&Token::Else) {
             self.bump();
@@ -279,6 +341,9 @@ impl Parser {
                 self.expect_type_close()?;
                 Ok(Type::Decimal { scale, rounding })
             }
+            // A bare identifier is a struct type; whether it exists is the
+            // typechecker's question, so use-before-declaration works.
+            Token::Ident(name) => Ok(Type::Named(name)),
             other => Err(format!("expected a type, found {:?}", other)),
         }
     }
@@ -334,7 +399,21 @@ impl Parser {
         Ok(lhs)
     }
 
+    /// A factor is a primary followed by any chain of `.field` accesses.
     fn parse_factor(&mut self) -> Result<Expr, String> {
+        let mut e = self.parse_primary()?;
+        while self.at(&Token::Dot) {
+            self.bump();
+            let field = match self.bump() {
+                Token::Ident(f) => f,
+                other => return Err(format!("expected a field name after '.', found {:?}", other)),
+            };
+            e = Expr::Field { base: Box::new(e), field };
+        }
+        Ok(e)
+    }
+
+    fn parse_primary(&mut self) -> Result<Expr, String> {
         match self.bump() {
             Token::Int(n) => Ok(Expr::IntLit(n)),
             Token::Decimal(unscaled, scale) => Ok(Expr::DecimalLit { unscaled, scale }),
@@ -357,12 +436,41 @@ impl Parser {
                     }
                     self.expect(&Token::RParen)?;
                     Ok(Expr::Call { name: s, args })
+                } else if self.at(&Token::LBrace) && self.allow_struct_lit {
+                    self.bump();
+                    let mut fields = Vec::new();
+                    while !self.at(&Token::RBrace) {
+                        let fname = match self.bump() {
+                            Token::Ident(f) => f,
+                            other => {
+                                return Err(format!(
+                                    "expected a field name in `{} {{ ... }}`, found {:?}",
+                                    s, other
+                                ))
+                            }
+                        };
+                        self.expect(&Token::Colon)?;
+                        let value = self.parse_expr()?;
+                        fields.push((fname, value));
+                        if self.at(&Token::Comma) {
+                            self.bump(); // trailing comma allowed
+                        } else {
+                            break;
+                        }
+                    }
+                    self.expect(&Token::RBrace)?;
+                    Ok(Expr::StructLit { name: s, fields })
                 } else {
                     Ok(Expr::Var(s))
                 }
             }
             Token::LParen => {
-                let e = self.parse_expr()?;
+                // parentheses re-enable struct literals inside a condition
+                let saved = self.allow_struct_lit;
+                self.allow_struct_lit = true;
+                let e = self.parse_expr();
+                self.allow_struct_lit = saved;
+                let e = e?;
                 self.expect(&Token::RParen)?;
                 Ok(e)
             }

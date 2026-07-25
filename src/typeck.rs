@@ -55,12 +55,19 @@ pub enum TypedExprKind {
         rhs: Box<TypedExpr>,
     },
     Call { name: String, args: Vec<TypedExpr> },
+    /// Struct construction; fields re-emitted in DECLARATION order, so
+    /// codegen is purely positional.
+    StructLit { name: String, fields: Vec<TypedExpr> },
+    /// Field access, resolved to a positional index.
+    Field { base: Box<TypedExpr>, index: u32 },
 }
 
 #[derive(Debug, Clone)]
 pub enum TypedStmt {
     Let { name: String, ty: Type, value: TypedExpr },
     Assign { name: String, value: TypedExpr },
+    /// Field assignment, path resolved to positional indices.
+    AssignField { name: String, indices: Vec<u32>, value: TypedExpr },
     Print(TypedExpr),
     Return(TypedExpr),
     While { cond: TypedExpr, body: Vec<TypedStmt> },
@@ -88,8 +95,16 @@ pub struct TypedExtern {
     pub ret: Type,
 }
 
+/// A struct, ready for codegen: field types in declaration order.
+#[derive(Debug, Clone)]
+pub struct TypedStruct {
+    pub name: String,
+    pub fields: Vec<Type>,
+}
+
 #[derive(Debug, Clone)]
 pub struct TypedProgram {
+    pub structs: Vec<TypedStruct>,
     pub externs: Vec<TypedExtern>,
     pub fns: Vec<TypedFn>,
     pub stmts: Vec<TypedStmt>,
@@ -101,16 +116,56 @@ pub struct TypeChecker {
     /// function name -> (parameter types, return type); collected up front so
     /// functions may be defined in any order and call each other.
     fns: HashMap<String, (Vec<Type>, Type)>,
+    /// struct name -> fields (name, type) in declaration order; hoisted first.
+    structs: HashMap<String, Vec<(String, Type)>>,
     /// return type of the function currently being checked, if any.
     current_ret: Option<Type>,
 }
 
 impl TypeChecker {
     pub fn new() -> Self {
-        TypeChecker { env: HashMap::new(), fns: HashMap::new(), current_ret: None }
+        TypeChecker {
+            env: HashMap::new(),
+            fns: HashMap::new(),
+            structs: HashMap::new(),
+            current_ret: None,
+        }
     }
 
     pub fn check_program(mut self, prog: &Program) -> Result<TypedProgram, String> {
+        // Pass 0: hoist struct declarations, then validate them (field types
+        // must exist; no struct may contain itself, directly or transitively).
+        for s in &prog.structs {
+            if self.structs.contains_key(&s.name) {
+                return Err(format!("struct `{}` is defined twice", s.name));
+            }
+            let mut fields = Vec::new();
+            for f in &s.fields {
+                if fields.iter().any(|(n, _)| n == &f.name) {
+                    return Err(format!(
+                        "struct `{}` declares the field `{}` twice",
+                        s.name, f.name
+                    ));
+                }
+                fields.push((f.name.clone(), f.ty.clone()));
+            }
+            self.structs.insert(s.name.clone(), fields);
+        }
+        for s in &prog.structs {
+            for f in &s.fields {
+                self.validate_type(&f.ty)?;
+            }
+            self.check_struct_finite(&s.name, &mut Vec::new())?;
+        }
+        let structs = prog
+            .structs
+            .iter()
+            .map(|s| TypedStruct {
+                name: s.name.clone(),
+                fields: s.fields.iter().map(|f| f.ty.clone()).collect(),
+            })
+            .collect();
+
         // Pass 1: collect every signature, so order of definition never matters.
         let mut externs = Vec::new();
         for e in &prog.externs {
@@ -127,6 +182,26 @@ impl TypeChecker {
             if self.fns.contains_key(&f.name) {
                 return Err(format!("function `{}` is defined twice", f.name));
             }
+            for p in &f.params {
+                self.validate_type(&p.ty)?;
+                if matches!(p.ty, Type::Named(_)) {
+                    return Err(format!(
+                        "in fn `{}`: functions cannot take or return structs yet — \
+                         the by-pointer ABI arrives next milestone. Pass the fields \
+                         individually for now.",
+                        f.name
+                    ));
+                }
+            }
+            self.validate_type(&f.ret)?;
+            if matches!(f.ret, Type::Named(_)) {
+                return Err(format!(
+                    "in fn `{}`: functions cannot take or return structs yet — \
+                     the by-pointer ABI arrives next milestone. Return the fields \
+                     individually for now.",
+                    f.name
+                ));
+            }
             let param_tys = f.params.iter().map(|p| p.ty.clone()).collect();
             self.fns.insert(f.name.clone(), (param_tys, f.ret.clone()));
         }
@@ -142,7 +217,58 @@ impl TypeChecker {
         for s in &prog.stmts {
             stmts.push(self.check_stmt(s)?);
         }
-        Ok(TypedProgram { externs, fns, stmts })
+        Ok(TypedProgram { structs, externs, fns, stmts })
+    }
+
+    /// A Named type must refer to a declared struct.
+    fn validate_type(&self, ty: &Type) -> Result<(), String> {
+        if let Type::Named(name) = ty {
+            if !self.structs.contains_key(name) {
+                return Err(format!(
+                    "unknown type `{}` — declare it with `struct {} {{ ... }}`",
+                    name, name
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// No struct may contain itself, directly or through other structs —
+    /// it would have no finite size.
+    fn check_struct_finite(&self, name: &str, trail: &mut Vec<String>) -> Result<(), String> {
+        if trail.iter().any(|t| t == name) {
+            return Err(format!(
+                "a `{}` cannot contain a `{}` — it would have no finite size \
+                 (containment cycle: {} -> {})",
+                trail[0],
+                trail[0],
+                trail.join(" -> "),
+                name
+            ));
+        }
+        trail.push(name.to_string());
+        if let Some(fields) = self.structs.get(name) {
+            for (_, ty) in fields {
+                if let Type::Named(inner) = ty {
+                    self.check_struct_finite(inner, trail)?;
+                }
+            }
+        }
+        trail.pop();
+        Ok(())
+    }
+
+    /// Render a struct's fields as `name: Type, ...` for error messages.
+    fn field_list(&self, name: &str) -> String {
+        self.structs
+            .get(name)
+            .map(|fs| {
+                fs.iter()
+                    .map(|(n, t)| format!("{}: {}", n, t))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default()
     }
 
     /// The FFI contract: Int and String cross the C boundary as parameters
@@ -240,6 +366,7 @@ impl TypeChecker {
     fn check_stmt(&mut self, s: &Stmt) -> Result<TypedStmt, String> {
         match s {
             Stmt::Let { name, mutable, declared, value } => {
+                self.validate_type(declared)?;
                 let typed = self.check_expr(value, Some(declared))?;
                 if &typed.ty != declared {
                     return Err(format!(
@@ -272,6 +399,35 @@ impl TypeChecker {
                 }
                 Ok(TypedStmt::Assign { name: name.clone(), value: typed })
             }
+            Stmt::AssignField { name, path, value } => {
+                let lvalue = format!("{}.{}", name, path.join("."));
+                let (mut cur_ty, mutable) = self
+                    .env
+                    .get(name)
+                    .ok_or_else(|| format!("unknown variable: {}", name))?
+                    .clone();
+                if !mutable {
+                    return Err(format!(
+                        "cannot assign to `{}`: `{}` was declared immutable. \
+                         Declare it `let mut {}: {}` to allow it.",
+                        lvalue, name, name, cur_ty
+                    ));
+                }
+                let mut indices = Vec::new();
+                for field in path {
+                    let (index, field_ty) = self.resolve_field(&cur_ty, field)?;
+                    indices.push(index);
+                    cur_ty = field_ty;
+                }
+                let typed = self.check_expr(value, Some(&cur_ty))?;
+                if typed.ty != cur_ty {
+                    return Err(format!(
+                        "cannot assign a {} to `{}`, which was declared {}",
+                        typed.ty, lvalue, cur_ty
+                    ));
+                }
+                Ok(TypedStmt::AssignField { name: name.clone(), indices, value: typed })
+            }
             Stmt::While { cond, body } => {
                 let cond = self.check_expr(cond, None)?;
                 if cond.ty != Type::Bool {
@@ -286,6 +442,12 @@ impl TypeChecker {
             }
             Stmt::Print(e) => {
                 let typed = self.check_expr(e, None)?;
+                if let Type::Named(n) = &typed.ty {
+                    return Err(format!(
+                        "print does not know how to show a {} — print its fields.",
+                        n
+                    ));
+                }
                 Ok(TypedStmt::Print(typed))
             }
             Stmt::Return(e) => {
@@ -419,7 +581,105 @@ impl TypeChecker {
                 }
                 Ok(TypedExpr { ty: ret, kind: TypedExprKind::Call { name: name.clone(), args: typed_args } })
             }
+
+            Expr::StructLit { name, fields } => {
+                let declared = self
+                    .structs
+                    .get(name)
+                    .ok_or_else(|| {
+                        format!(
+                            "unknown type `{}` — declare it with `struct {} {{ ... }}`",
+                            name, name
+                        )
+                    })?
+                    .clone();
+                // Every field exactly once; unknown names get the full list
+                // (which doubles as typo help).
+                for (given, _) in fields {
+                    if !declared.iter().any(|(n, _)| n == given) {
+                        return Err(format!(
+                            "`{}` has no field named `{}`. Its fields are: {}.",
+                            name,
+                            given,
+                            self.field_list(name)
+                        ));
+                    }
+                    if fields.iter().filter(|(g, _)| g == given).count() > 1 {
+                        return Err(format!(
+                            "in `{} {{ ... }}`, the field `{}` is given twice",
+                            name, given
+                        ));
+                    }
+                }
+                // Re-emit in declaration order so codegen is positional.
+                let mut typed_fields = Vec::new();
+                for (fname, fty) in &declared {
+                    let value = fields
+                        .iter()
+                        .find(|(g, _)| g == fname)
+                        .map(|(_, v)| v)
+                        .ok_or_else(|| {
+                            format!(
+                                "`{} {{ ... }}` is missing the field `{}: {}`. Every \
+                                 field must be given a value — Burxt does not invent \
+                                 defaults.",
+                                name, fname, fty
+                            )
+                        })?;
+                    let typed = self.check_expr(value, Some(fty))?;
+                    if &typed.ty != fty {
+                        return Err(format!(
+                            "in `{} {{ ... }}`, the field `{}` must be {}, but its \
+                             value has type {}",
+                            name, fname, fty, typed.ty
+                        ));
+                    }
+                    typed_fields.push(typed);
+                }
+                Ok(TypedExpr {
+                    ty: Type::Named(name.clone()),
+                    kind: TypedExprKind::StructLit { name: name.clone(), fields: typed_fields },
+                })
+            }
+
+            Expr::Field { base, field } => {
+                let typed_base = self.check_expr(base, None)?;
+                let (index, ty) = self.resolve_field(&typed_base.ty, field)?;
+                Ok(TypedExpr {
+                    ty,
+                    kind: TypedExprKind::Field { base: Box::new(typed_base), index },
+                })
+            }
         }
+    }
+
+    /// Resolve `.field` on a value of type `ty` to (positional index, type).
+    fn resolve_field(&self, ty: &Type, field: &str) -> Result<(u32, Type), String> {
+        let name = match ty {
+            Type::Named(n) => n,
+            other => {
+                return Err(format!(
+                    "`.{}` needs a struct value, but the value has type {}.",
+                    field, other
+                ))
+            }
+        };
+        let fields = self
+            .structs
+            .get(name)
+            .ok_or_else(|| format!("unknown type `{}`", name))?;
+        fields
+            .iter()
+            .position(|(n, _)| n == field)
+            .map(|i| (i as u32, fields[i].1.clone()))
+            .ok_or_else(|| {
+                format!(
+                    "`{}` has no field named `{}`. Its fields are: {}.",
+                    name,
+                    field,
+                    self.field_list(name)
+                )
+            })
     }
 
     /// Comparisons are always exact, and both sides must have the SAME type —
@@ -429,6 +689,10 @@ impl TypeChecker {
         use Type::*;
         match (lhs, rhs) {
             (Int, Int) => Ok(()),
+            (Named(_), Named(_)) => Err(
+                "struct comparison is not available yet — compare fields individually."
+                    .to_string(),
+            ),
             (String, String) => Err(
                 "String comparison is not available yet — it needs a byte-equality \
                  runtime helper, coming with collections."

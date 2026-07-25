@@ -26,6 +26,12 @@ pub enum Token {
     While,
     True,
     False,
+    Struct,
+    // reserved today for the OOP layers (methods, interfaces), so no program
+    // written now breaks when they land
+    Interface,
+    Is,
+    SelfKw,
     // type keywords
     TyInt,
     TyBool,
@@ -37,6 +43,7 @@ pub enum Token {
     Colon,
     Semicolon,
     Comma,
+    Dot,
     Equals,
     Plus,
     Minus,
@@ -95,6 +102,9 @@ impl<'a> Lexer<'a> {
             ':' => { self.chars.next(); return Ok(Token::Colon); }
             ';' => { self.chars.next(); return Ok(Token::Semicolon); }
             ',' => { self.chars.next(); return Ok(Token::Comma); }
+            // a '.' between digits was already consumed by lex_number;
+            // a solitary '.' is field access
+            '.' => { self.chars.next(); return Ok(Token::Dot); }
             '=' => {
                 self.chars.next();
                 if self.chars.peek() == Some(&'=') { self.chars.next(); return Ok(Token::EqEq); }
@@ -279,6 +289,10 @@ impl<'a> Lexer<'a> {
             "else" => Token::Else,
             "true" => Token::True,
             "false" => Token::False,
+            "struct" => Token::Struct,
+            "interface" => Token::Interface,
+            "is" => Token::Is,
+            "self" => Token::SelfKw,
             "Int" => Token::TyInt,
             "Bool" => Token::TyBool,
             "String" => Token::TyString,

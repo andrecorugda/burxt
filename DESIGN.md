@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.7)
+# Burxt — Design Notes (v0.0.8)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -209,6 +209,64 @@ opaque `ptr` — never an integer, so pointer width stays the target's
 business (wasm32-safe). User bytes are always a printf ARGUMENT, never the
 format string.
 
+### v0.0.8: structs — the OOP substrate
+
+```text
+struct LineItem {
+    price: Decimal<2>,
+    qty: Int,
+}
+let mut item: LineItem = LineItem { qty: 3, price: 19.99 };
+print(item.price * item.qty);   // 59.97
+item.price = 12.50;
+```
+
+Rules:
+
+- **Nominal typing.** Two structs with identical fields are different types —
+  the name is a contract, exactly as Decimal<2> and Decimal<2, RoundHalfEven>
+  are kept apart. An `Invoice{total}` never passes where a `Refund{total}` is
+  expected.
+- Construction names EVERY field (any order — the names carry the meaning);
+  Burxt does not invent defaults. Field values obey the same exact-match and
+  literal-adoption rules as `let`.
+- **Value semantics.** Assignment copies the whole struct — no hidden
+  aliasing, no GC pressure. Nesting is allowed; the copy is naturally deep
+  because the layout is flat. A struct cannot contain itself (no finite size).
+- Field assignment (`item.price = ...`, nested paths too) requires the
+  BINDING to be `let mut`. Mutability is per-binding, not per-field.
+- Struct literals are not allowed directly in an if/while condition (the `{`
+  must start the block); parenthesize if ever needed.
+- Deferred, each with a reason: struct fn params/returns (by-pointer ABI,
+  next milestone), `==` (field-wise semantics undecided), `print(struct)`
+  (display story), struct FFI (C-layout contract).
+- Codegen: real LLVM struct types (`bx.<Name>`), aggregate values built with
+  insert_value, field reads via extract_value, field writes via struct GEPs.
+
+### The OOP direction: SOLID by construction
+
+Burxt is OOP by default, and the object model is decided now (keywords
+`interface`, `is`, `self` are already reserved):
+
+- **Methods** are receiver functions — `fn (self: LineItem) total() ->
+  Decimal<2>` — plain functions in the receiver's namespace, no hidden
+  `this`. Mutating methods say so: `fn (mut self: Account) deposit(...)`,
+  callable only on `let mut` bindings.
+- **Interfaces** are declared contracts: `struct LineItem is Priceable`.
+  Conformance is never inferred from shape — structural satisfaction is
+  silent conformance. The check is exact: every method, exact signature.
+- **No implementation inheritance, ever.** Overriding is hidden control
+  flow ("nothing silent"), and without overriding there is nothing left to
+  violate in Liskov at the language level — A5 refinement contracts on
+  interface signatures will cover the semantic half.
+- Dispatch will be dictionary-passing (fat pointers): the method table
+  lives OUTSIDE the struct, so struct layout never changes and stays
+  FFI-viable. Static dispatch whenever the concrete type is known.
+- SOLID mapping: S — cheap nominal structs; O — extend by new type + `is`;
+  L — exact conformance, no overriding; I — small interfaces (exact
+  conformance keeps them small); D — functions take interface-typed
+  parameters, depending on contracts, not concrete structs.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -260,11 +318,11 @@ it travels.
 - A3. FFI / call-into-C — THE KEY UNLOCK: how any Burxt program reaches
   platform APIs on every target. — DONE for Int signatures (v0.0.6);
   String params (v0.0.7); widens further with A4's types.
-- A4. Strings (DONE, v0.0.7), structs, collections <- IN PROGRESS
-- A4+. OOP by default, SOLID-aligned: methods on structs, then interfaces
-  as behavioral contracts. Composition + interfaces, no implementation
-  inheritance — a type satisfies an interface exactly or it is a compile
-  error, so Liskov violations are unrepresentable.
+- A4. Strings (DONE, v0.0.7), structs (DONE, v0.0.8), arrays <- NEXT
+- A4+. OOP by default, SOLID-aligned: by-pointer ABI + receiver methods,
+  then interfaces as behavioral contracts (dictionary dispatch). No
+  implementation inheritance — a type satisfies an interface exactly or it
+  is a compile error, so Liskov violations are unrepresentable.
 - A5. Refinement types ("balance >= 0", "splits sum to total")
 
 #### Phase B — cross-compilation and desktop

@@ -38,6 +38,7 @@
 
 use crate::ast::{BinOp, CmpOp, Rounding, Type};
 use crate::typeck::{TypedExpr, TypedExprKind, TypedFn, TypedProgram, TypedStmt};
+use inkwell::types::StructType;
 
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -59,6 +60,10 @@ pub struct CodeGen<'ctx> {
     checked_fns: HashMap<BinOp, FunctionValue<'ctx>>,
     /// user function name -> its LLVM function (mangled `bx.<name>`)
     user_fns: HashMap<String, FunctionValue<'ctx>>,
+    /// struct name -> its LLVM struct type (named `bx.<name>`)
+    struct_types: HashMap<String, StructType<'ctx>>,
+    /// struct name -> field types in declaration order (for GEP walks)
+    struct_fields: HashMap<String, Vec<Type>>,
     /// libc printf, declared once in compile()
     printf: Option<FunctionValue<'ctx>>,
     /// libc pieces for runtime errors: (stderr global, fputs, exit)
@@ -81,6 +86,8 @@ impl<'ctx> CodeGen<'ctx> {
             round_fns: HashMap::new(),
             checked_fns: HashMap::new(),
             user_fns: HashMap::new(),
+            struct_types: HashMap::new(),
+            struct_fields: HashMap::new(),
             printf: None,
             panic_deps: None,
         }
@@ -95,6 +102,19 @@ impl<'ctx> CodeGen<'ctx> {
         let i8ptr = self.ctx.ptr_type(AddressSpace::default());
         let printf_ty = i32t.fn_type(&[i8ptr.into()], true);
         self.printf = Some(self.module.add_function("printf", printf_ty, None));
+
+        // Create all struct types: opaque shells first so nested references
+        // resolve in any order, then fill in the bodies.
+        for s in &prog.structs {
+            let st = self.ctx.opaque_struct_type(&format!("bx.{}", s.name));
+            self.struct_types.insert(s.name.clone(), st);
+            self.struct_fields.insert(s.name.clone(), s.fields.clone());
+        }
+        for s in &prog.structs {
+            let body: Vec<BasicTypeEnum> =
+                s.fields.iter().map(|t| self.llvm_type(t)).collect();
+            self.struct_types[&s.name].set_body(&body, false);
+        }
 
         // Declare extern fns under their real symbol names — no mangling is
         // the whole point of FFI. (Int -> i64, String -> const char*.)
@@ -182,6 +202,37 @@ impl<'ctx> CodeGen<'ctx> {
                     .get(name)
                     .ok_or_else(|| format!("codegen: unknown variable {}", name))?;
                 self.builder.build_store(slot, val).map_err(|e| e.to_string())?;
+                Ok(())
+            }
+            TypedStmt::AssignField { name, indices, value } => {
+                let val = self.gen_expr(value)?;
+                let (slot, ty) = self
+                    .vars
+                    .get(name)
+                    .ok_or_else(|| format!("codegen: unknown variable {}", name))?
+                    .clone();
+                // Walk the field path with struct GEPs, tracking the type at
+                // each hop (typeck resolved the indices).
+                let mut cur_ptr = slot;
+                let mut cur_ty = ty;
+                for &idx in indices {
+                    let sname = match &cur_ty {
+                        Type::Named(n) => n.clone(),
+                        other => {
+                            return Err(format!(
+                                "codegen bug: field assignment through non-struct {}",
+                                other
+                            ))
+                        }
+                    };
+                    let st = self.struct_types[&sname];
+                    cur_ptr = self
+                        .builder
+                        .build_struct_gep(st, cur_ptr, idx, "fieldptr")
+                        .map_err(|e| e.to_string())?;
+                    cur_ty = self.struct_fields[&sname][idx as usize].clone();
+                }
+                self.builder.build_store(cur_ptr, val).map_err(|e| e.to_string())?;
                 Ok(())
             }
             TypedStmt::While { cond, body } => self.gen_while(cond, body),
@@ -297,6 +348,7 @@ impl<'ctx> CodeGen<'ctx> {
         match ty {
             Type::Int | Type::Bool | Type::Decimal { .. } => self.ctx.i64_type().into(),
             Type::String => self.ctx.ptr_type(AddressSpace::default()).into(),
+            Type::Named(name) => self.struct_types[name].into(),
         }
     }
 
@@ -374,6 +426,12 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder
                     .build_call(printf, &args, "printf_bool")
                     .map_err(|e| e.to_string())?;
+            }
+            Type::Named(n) => {
+                return Err(format!(
+                    "codegen bug: print on struct {} should have been refused by typeck",
+                    n
+                ))
             }
             Type::Decimal { scale, .. } => {
                 // Split |scaled value| into integer and fractional parts, exactly.
@@ -516,6 +574,27 @@ impl<'ctx> CodeGen<'ctx> {
                     inkwell::values::ValueKind::Basic(v) => Ok(v),
                     _ => Err(format!("codegen bug: call to {} returned void", name)),
                 }
+            }
+            TypedExprKind::StructLit { name, fields } => {
+                // Build the aggregate value field by field; storing it (in
+                // Let/Assign) is one whole-struct store — value semantics.
+                let st = self.struct_types[name.as_str()];
+                let mut agg = st.get_undef();
+                for (i, f) in fields.iter().enumerate() {
+                    let v = self.gen_expr(f)?;
+                    agg = self
+                        .builder
+                        .build_insert_value(agg, v, i as u32, "field")
+                        .map_err(|e| e.to_string())?
+                        .into_struct_value();
+                }
+                Ok(agg.into())
+            }
+            TypedExprKind::Field { base, index } => {
+                let agg = self.gen_expr(base)?.into_struct_value();
+                self.builder
+                    .build_extract_value(agg, *index, "field")
+                    .map_err(|e| e.to_string())
             }
         }
     }

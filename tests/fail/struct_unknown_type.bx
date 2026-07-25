@@ -1,0 +1,2 @@
+let x: Basket = Basket { items: 1 };
+print(x.items);

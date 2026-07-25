@@ -1,0 +1,3 @@
+struct LineItem { price: Decimal<2>, qty: Int }
+let x: LineItem = LineItem { price: 1.00 };
+print(x.qty);
