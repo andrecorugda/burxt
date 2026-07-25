@@ -1,0 +1,10 @@
+// Every trait method must be implemented — Burxt has no default bodies.
+trait HasBalance {
+    fn balance_of(self) -> Decimal<2>
+    fn label(self) -> Int
+}
+struct Account { balance: Decimal<2> }
+impl HasBalance for Account {
+    fn (self: Account) balance_of() -> Decimal<2> { return self.balance; }
+}
+print(1);

@@ -26,7 +26,7 @@
 //! so codegen never has to re-derive types.
 
 use crate::ast::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A typed expression: the original node plus its resolved type.
 #[derive(Debug, Clone)]
@@ -63,6 +63,18 @@ pub enum TypedExprKind {
         receiver: String,
         method: String,
         receiver_mut: bool,
+        base: Box<TypedExpr>,
+        args: Vec<TypedExpr>,
+    },
+    /// Build a trait object from a concrete binding: a fat pointer pairing the
+    /// binding's storage with the static (Type, Trait) vtable.
+    DynCoerce { trait_name: String, concrete: String, var: String },
+    /// A dynamically dispatched call: load slot `slot` from the receiver's
+    /// vtable and call it with the data pointer.
+    DynCall {
+        trait_name: String,
+        method: String,
+        slot: u32,
         base: Box<TypedExpr>,
         args: Vec<TypedExpr>,
     },
@@ -133,12 +145,23 @@ pub struct TypedStruct {
     pub fields: Vec<Type>,
 }
 
+/// A vtable codegen must emit: one per (concrete type, trait) pair actually
+/// used as `dyn`. `slots` lists the implementing methods in TRAIT-DECLARATION
+/// order, which is what fixes each method's slot index at compile time.
+#[derive(Debug, Clone)]
+pub struct TypedVTable {
+    pub trait_name: String,
+    pub concrete: String,
+    pub slots: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct TypedProgram {
     pub structs: Vec<TypedStruct>,
     pub externs: Vec<TypedExtern>,
     pub fns: Vec<TypedFn>,
     pub methods: Vec<TypedMethod>,
+    pub vtables: Vec<TypedVTable>,
     pub stmts: Vec<TypedStmt>,
 }
 
@@ -152,6 +175,13 @@ pub struct TypeChecker {
     structs: HashMap<String, Vec<(String, Type)>>,
     /// (receiver, method name) -> (is mutating, param types, return type)
     methods: HashMap<(String, String), (bool, Vec<Type>, Type)>,
+    /// trait name -> its method signatures, in declaration order (slot order)
+    traits: HashMap<String, Vec<TraitSig>>,
+    /// which (trait, concrete type) pairs have an explicit impl
+    impls: HashSet<(String, String)>,
+    /// (trait, concrete) pairs that need a vtable because the trait is used
+    /// as `dyn` somewhere — pay for what you use.
+    dyn_traits: HashSet<String>,
     /// return type of the function currently being checked, if any.
     current_ret: Option<Type>,
 }
@@ -163,6 +193,9 @@ impl TypeChecker {
             fns: HashMap::new(),
             structs: HashMap::new(),
             methods: HashMap::new(),
+            traits: HashMap::new(),
+            impls: HashSet::new(),
+            dyn_traits: HashSet::new(),
             current_ret: None,
         }
     }
@@ -188,7 +221,6 @@ impl TypeChecker {
         }
         for s in &prog.structs {
             for f in &s.fields {
-                self.validate_type(&f.ty)?;
                 if matches!(f.ty, Type::Array { .. }) {
                     return Err(format!(
                         "in struct `{}`: struct fields cannot hold arrays yet — \
@@ -196,6 +228,15 @@ impl TypeChecker {
                         s.name
                     ));
                 }
+                if matches!(f.ty, Type::Dyn(_)) {
+                    return Err(format!(
+                        "in struct `{}`: a field cannot hold a trait object — it \
+                         borrows the value it refers to, and a struct may outlive \
+                         it. Storing trait objects needs borrow tracking.",
+                        s.name
+                    ));
+                }
+                self.validate_type(&f.ty)?;
             }
             self.check_struct_finite(&s.name, &mut Vec::new())?;
         }
@@ -207,6 +248,40 @@ impl TypeChecker {
                 fields: s.fields.iter().map(|f| f.ty.clone()).collect(),
             })
             .collect();
+
+        // Traits: signature sets only, hoisted so impls may precede them.
+        for t in &prog.traits {
+            if self.traits.contains_key(&t.name) {
+                return Err(format!("trait `{}` is defined twice", t.name));
+            }
+            if self.structs.contains_key(&t.name) {
+                return Err(format!(
+                    "`{}` is already a struct — a trait cannot reuse the name",
+                    t.name
+                ));
+            }
+            let mut seen: Vec<&str> = Vec::new();
+            for sig in &t.methods {
+                if seen.contains(&sig.name.as_str()) {
+                    return Err(format!(
+                        "trait `{}` declares the method `{}` twice",
+                        t.name, sig.name
+                    ));
+                }
+                seen.push(&sig.name);
+            }
+            self.traits.insert(t.name.clone(), t.methods.clone());
+        }
+        // Validate the types inside the signatures only once every trait name
+        // is known, so traits may reference each other in any order.
+        for t in &prog.traits {
+            for sig in &t.methods {
+                for p in &sig.params {
+                    self.validate_type(&p.ty)?;
+                }
+                self.validate_type(&sig.ret)?;
+            }
+        }
 
         // Pass 1: collect every signature, so order of definition never matters.
         let mut externs = Vec::new();
@@ -247,13 +322,33 @@ impl TypeChecker {
                     f.name
                 ));
             }
+            // A trait object borrows its data. Returning one would outlive the
+            // storage it points at, and Burxt has no borrow tracking yet.
+            if matches!(f.ret, Type::Dyn(_)) {
+                return Err(format!(
+                    "fn `{}` cannot return a trait object — it borrows the value \
+                     it refers to, which would not outlive the call. Take one as a \
+                     parameter instead.",
+                    f.name
+                ));
+            }
             let param_tys = f.params.iter().map(|p| p.ty.clone()).collect();
             self.fns.insert(f.name.clone(), (param_tys, f.ret.clone()));
         }
 
+        // Collect the methods declared inside impl blocks alongside the
+        // free-standing ones: a trait method is just a method that also counts
+        // toward a contract, so it uses the SAME machinery.
+        let mut all_methods: Vec<&MethodDef> = prog.methods.iter().collect();
+        for im in &prog.impls {
+            for m in &im.methods {
+                all_methods.push(m);
+            }
+        }
+
         // Methods are namespaced by (receiver, name), so they never collide
         // with free functions and may be declared in any order.
-        for m in &prog.methods {
+        for m in all_methods.iter().copied() {
             if !self.structs.contains_key(&m.receiver) {
                 return Err(format!(
                     "method `{}` is declared for unknown type `{}` — declare it \
@@ -283,13 +378,21 @@ impl TypeChecker {
             self.methods.insert(key, (m.receiver_mut, param_tys, m.ret.clone()));
         }
 
+        // Impls: satisfaction must be EXACT — every trait method present, with
+        // matching receiver form and types. A partial or mismatched impl names
+        // the offending method.
+        for im in &prog.impls {
+            self.check_impl(im)?;
+            self.impls.insert((im.trait_name.clone(), im.type_name.clone()));
+        }
+
         // Pass 2: check each function body.
         let mut fns = Vec::new();
         for f in &prog.fns {
             fns.push(self.check_fn(f)?);
         }
         let mut methods = Vec::new();
-        for m in &prog.methods {
+        for m in all_methods.iter().copied() {
             methods.push(self.check_method(m)?);
         }
 
@@ -298,12 +401,141 @@ impl TypeChecker {
         for s in &prog.stmts {
             stmts.push(self.check_stmt(s)?);
         }
-        Ok(TypedProgram { structs, externs, fns, methods, stmts })
+
+        // A vtable is emitted only for impls of traits actually used as `dyn`
+        // — if a type never becomes a trait object, it costs nothing.
+        let mut vtables = Vec::new();
+        for im in &prog.impls {
+            if !self.dyn_traits.contains(&im.trait_name) {
+                continue;
+            }
+            let sigs = &self.traits[&im.trait_name];
+            vtables.push(TypedVTable {
+                trait_name: im.trait_name.clone(),
+                concrete: im.type_name.clone(),
+                // trait-declaration order fixes each slot index
+                slots: sigs.iter().map(|s| s.name.clone()).collect(),
+            });
+        }
+
+        Ok(TypedProgram { structs, externs, fns, methods, vtables, stmts })
+    }
+
+    /// An impl must satisfy its trait EXACTLY: every declared method present,
+    /// same receiver form, same parameter types, same return type.
+    fn check_impl(&self, im: &ImplBlock) -> Result<(), String> {
+        let sigs = self.traits.get(&im.trait_name).ok_or_else(|| {
+            format!(
+                "unknown trait `{}` — declare it with `trait {} {{ ... }}`",
+                im.trait_name, im.trait_name
+            )
+        })?;
+        if !self.structs.contains_key(&im.type_name) {
+            return Err(format!(
+                "`impl {} for {}`: unknown type `{}` — declare it with \
+                 `struct {} {{ ... }}`",
+                im.trait_name, im.type_name, im.type_name, im.type_name
+            ));
+        }
+        if self.impls.contains(&(im.trait_name.clone(), im.type_name.clone())) {
+            return Err(format!(
+                "`{}` already implements `{}`",
+                im.type_name, im.trait_name
+            ));
+        }
+
+        // Every method in the block must belong to the trait...
+        for m in &im.methods {
+            if !sigs.iter().any(|s| s.name == m.name) {
+                return Err(format!(
+                    "`impl {} for {}` defines `{}`, which is not a method of \
+                     `{}`. Its methods are: {}.",
+                    im.trait_name,
+                    im.type_name,
+                    m.name,
+                    im.trait_name,
+                    sigs.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")
+                ));
+            }
+            if m.receiver != im.type_name {
+                return Err(format!(
+                    "in `impl {} for {}`, method `{}` has receiver `self: {}` — \
+                     it must be `self: {}`.",
+                    im.trait_name, im.type_name, m.name, m.receiver, im.type_name
+                ));
+            }
+        }
+
+        // ...and every trait method must be present, matching exactly.
+        for sig in sigs {
+            let found = im.methods.iter().find(|m| m.name == sig.name).ok_or_else(|| {
+                format!(
+                    "`impl {} for {}` is missing the method `{}`. Every trait \
+                     method must be implemented — Burxt has no default bodies.",
+                    im.trait_name, im.type_name, sig.name
+                )
+            })?;
+            if found.receiver_mut != sig.receiver_mut {
+                return Err(format!(
+                    "in `impl {} for {}`, method `{}` declares `{}self` but the \
+                     trait declares `{}self`.",
+                    im.trait_name,
+                    im.type_name,
+                    sig.name,
+                    if found.receiver_mut { "mut " } else { "" },
+                    if sig.receiver_mut { "mut " } else { "" }
+                ));
+            }
+            if found.params.len() != sig.params.len() {
+                return Err(format!(
+                    "in `impl {} for {}`, method `{}` takes {} parameter(s) but \
+                     the trait declares {}.",
+                    im.trait_name,
+                    im.type_name,
+                    sig.name,
+                    found.params.len(),
+                    sig.params.len()
+                ));
+            }
+            for (i, (fp, sp)) in found.params.iter().zip(&sig.params).enumerate() {
+                if fp.ty != sp.ty {
+                    return Err(format!(
+                        "in `impl {} for {}`, method `{}` parameter {} is {} but \
+                         the trait declares {}.",
+                        im.trait_name,
+                        im.type_name,
+                        sig.name,
+                        i + 1,
+                        fp.ty,
+                        sp.ty
+                    ));
+                }
+            }
+            if found.ret != sig.ret {
+                return Err(format!(
+                    "in `impl {} for {}`, method `{}` returns {} but the trait \
+                     declares {}.",
+                    im.trait_name, im.type_name, sig.name, found.ret, sig.ret
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// A Named type must refer to a declared struct; CInt never leaves the
-    /// C boundary.
-    fn validate_type(&self, ty: &Type) -> Result<(), String> {
+    /// C boundary. `dyn Trait` must name a declared trait — and using one
+    /// records that the trait needs vtables.
+    fn validate_type(&mut self, ty: &Type) -> Result<(), String> {
+        if let Type::Dyn(name) = ty {
+            if !self.traits.contains_key(name) {
+                return Err(format!(
+                    "unknown trait `{}` — declare it with `trait {} {{ ... }}`",
+                    name, name
+                ));
+            }
+            self.dyn_traits.insert(name.clone());
+            return Ok(());
+        }
         match ty {
             Type::Named(name) if !self.structs.contains_key(name) => Err(format!(
                 "unknown type `{}` — declare it with `struct {} {{ ... }}`",
@@ -533,6 +765,61 @@ impl TypeChecker {
                         name, declared
                     ));
                 }
+                // `let d: dyn Trait = concrete;` builds a trait object. The
+                // source must be a plain variable: the fat pointer borrows its
+                // storage, and an expression has none.
+                if let Type::Dyn(trait_name) = declared {
+                    let Expr::Var(var) = value else {
+                        return Err(format!(
+                            "`let {}: {}` must be initialized from a variable — a \
+                             trait object borrows the storage of the value it \
+                             refers to, and an expression has none.",
+                            name, declared
+                        ));
+                    };
+                    let (src_ty, _) = self
+                        .env
+                        .get(var)
+                        .ok_or_else(|| format!("unknown variable: {}", var))?
+                        .clone();
+                    let concrete = match &src_ty {
+                        Type::Named(c) => c.clone(),
+                        Type::Dyn(_) => {
+                            return Err(format!(
+                                "`{}` is already a trait object; re-borrowing one \
+                                 is deferred until Burxt tracks borrows.",
+                                var
+                            ))
+                        }
+                        other => {
+                            return Err(format!(
+                                "`{}` has type {}, which cannot be a `{}` — only a \
+                                 struct that implements the trait can.",
+                                var, other, declared
+                            ))
+                        }
+                    };
+                    if !self.impls.contains(&(trait_name.clone(), concrete.clone())) {
+                        return Err(format!(
+                            "`{}` does not implement `{}` — add `impl {} for {} \
+                             {{ ... }}`.",
+                            concrete, trait_name, trait_name, concrete
+                        ));
+                    }
+                    self.env.insert(name.clone(), (declared.clone(), *mutable));
+                    return Ok(TypedStmt::Let {
+                        name: name.clone(),
+                        ty: declared.clone(),
+                        value: TypedExpr {
+                            ty: declared.clone(),
+                            kind: TypedExprKind::DynCoerce {
+                                trait_name: trait_name.clone(),
+                                concrete,
+                                var: var.clone(),
+                            },
+                        },
+                    });
+                }
                 let typed = self.check_expr(value, Some(declared))?;
                 if &typed.ty != declared {
                     return Err(format!(
@@ -663,6 +950,14 @@ impl TypeChecker {
                             "print does not know how to show a {} — print its \
                              elements.",
                             typed.ty
+                        ))
+                    }
+                    Type::Dyn(t) => {
+                        return Err(format!(
+                            "print does not know how to show a `dyn {}` — a trait \
+                             object exposes only its trait methods, so call one \
+                             and print that.",
+                            t
                         ))
                     }
                     _ => {}
@@ -923,6 +1218,73 @@ impl TypeChecker {
 
             Expr::MethodCall { base, method, args } => {
                 let typed_base = self.check_expr(base, None)?;
+
+                // A call on a `dyn Trait` is the ONE place dispatch happens at
+                // runtime: find the method's slot from trait-declaration order.
+                if let Type::Dyn(trait_name) = typed_base.ty.clone() {
+                    let sigs = &self.traits[&trait_name];
+                    let slot = sigs
+                        .iter()
+                        .position(|s| s.name == *method)
+                        .ok_or_else(|| {
+                            format!(
+                                "`dyn {}` has no method named `{}`. Its methods \
+                                 are: {}.",
+                                trait_name,
+                                method,
+                                sigs.iter()
+                                    .map(|s| s.name.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        })?;
+                    let sig = sigs[slot].clone();
+                    if sig.receiver_mut {
+                        return Err(format!(
+                            "`{}` takes `mut self`, and calling a mutating method \
+                             through a trait object is not available yet — the \
+                             compiler cannot tell whether the borrowed value is \
+                             itself mutable. Call it on the concrete type.",
+                            method
+                        ));
+                    }
+                    if args.len() != sig.params.len() {
+                        return Err(format!(
+                            "`dyn {}.{}` takes {} argument(s), but {} were given",
+                            trait_name,
+                            method,
+                            sig.params.len(),
+                            args.len()
+                        ));
+                    }
+                    let mut typed_args = Vec::new();
+                    for (i, (arg, p)) in args.iter().zip(&sig.params).enumerate() {
+                        let typed = self.check_expr(arg, Some(&p.ty))?;
+                        if typed.ty != p.ty {
+                            return Err(format!(
+                                "in the call to `dyn {}.{}`, argument {} must be \
+                                 {}, but it has type {}",
+                                trait_name,
+                                method,
+                                i + 1,
+                                p.ty,
+                                typed.ty
+                            ));
+                        }
+                        typed_args.push(typed);
+                    }
+                    return Ok(TypedExpr {
+                        ty: sig.ret.clone(),
+                        kind: TypedExprKind::DynCall {
+                            trait_name,
+                            method: method.clone(),
+                            slot: slot as u32,
+                            base: Box::new(typed_base),
+                            args: typed_args,
+                        },
+                    });
+                }
+
                 let receiver = match &typed_base.ty {
                     Type::Named(n) => n.clone(),
                     other => {

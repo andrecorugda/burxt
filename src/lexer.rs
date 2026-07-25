@@ -29,9 +29,14 @@ pub enum Token {
     Struct,
     // reserved today for the OOP layers (methods, interfaces), so no program
     // written now breaks when they land
+    /// `interface` stays reserved (v0.0.8) but `trait` is the chosen keyword.
     Interface,
     Is,
     SelfKw,
+    Trait,
+    Impl,
+    For,
+    Dyn,
     // type keywords
     TyInt,
     TyBool,
@@ -89,6 +94,10 @@ impl Token {
             Token::False => "`false`".to_string(),
             Token::Struct => "`struct`".to_string(),
             Token::Interface => "`interface`".to_string(),
+            Token::Trait => "`trait`".to_string(),
+            Token::Impl => "`impl`".to_string(),
+            Token::For => "`for`".to_string(),
+            Token::Dyn => "`dyn`".to_string(),
             Token::Is => "`is`".to_string(),
             Token::SelfKw => "`self`".to_string(),
             Token::TyInt => "`Int`".to_string(),
@@ -377,6 +386,10 @@ impl<'a> Lexer<'a> {
             "interface" => Token::Interface,
             "is" => Token::Is,
             "self" => Token::SelfKw,
+            "trait" => Token::Trait,
+            "impl" => Token::Impl,
+            "for" => Token::For,
+            "dyn" => Token::Dyn,
             "Int" => Token::TyInt,
             "Bool" => Token::TyBool,
             "String" => Token::TyString,

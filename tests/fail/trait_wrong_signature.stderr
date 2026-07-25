@@ -1,0 +1,1 @@
+method `balance_of` returns Int but the trait declares Decimal<2>

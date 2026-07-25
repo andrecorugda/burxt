@@ -58,6 +58,11 @@ pub enum Type {
     /// A fixed-size stack array `[T; N]`. Arrays exist only behind bindings
     /// in this slice: indexed reads/writes and `len(a)` — never a bare value.
     Array { elem: Box<Type>, len: u32 },
+    /// `dyn Trait` — a trait object: the ONLY thing that triggers dynamic
+    /// dispatch. Represented as a fat pointer (data pointer, vtable pointer);
+    /// the vtable lives outside the data, which is why the A4.5 layout
+    /// guarantee means becoming a trait object never moves a field.
+    Dyn(String),
 }
 
 impl Type {
@@ -81,6 +86,7 @@ impl std::fmt::Display for Type {
             Type::Decimal { scale, rounding: Some(r) } => write!(f, "Decimal<{}, {}>", scale, r),
             Type::Named(name) => write!(f, "{}", name),
             Type::Array { elem, len } => write!(f, "[{}; {}]", elem, len),
+            Type::Dyn(name) => write!(f, "dyn {}", name),
         }
     }
 }
@@ -252,6 +258,34 @@ pub struct MethodDef {
     pub body: Vec<Stmt>,
 }
 
+/// One method signature inside a `trait` declaration: a name, a receiver form
+/// and a type — no body, no fields, no state. Traits declare signatures only.
+#[derive(Debug, Clone)]
+pub struct TraitSig {
+    pub name: String,
+    pub receiver_mut: bool,
+    pub params: Vec<Param>,
+    pub ret: Type,
+}
+
+/// `trait Name { fn m(self) -> T ... }` — a named set of method signatures a
+/// type can promise to satisfy. That is the whole concept.
+#[derive(Debug, Clone)]
+pub struct TraitDef {
+    pub name: String,
+    pub methods: Vec<TraitSig>,
+}
+
+/// `impl Trait for Type { <methods> }` — satisfaction is EXPLICIT and nominal:
+/// Burxt never auto-satisfies a trait because method shapes happen to match,
+/// so conformance is a deliberate, greppable declaration.
+#[derive(Debug, Clone)]
+pub struct ImplBlock {
+    pub trait_name: String,
+    pub type_name: String,
+    pub methods: Vec<MethodDef>,
+}
+
 /// `extern fn name(params) -> ret;` — a C function Burxt may call. The name
 /// is the real linker symbol (never mangled); matching the C side's actual
 /// signature is the programmer's contract, as in every FFI.
@@ -276,6 +310,8 @@ pub struct StructDef {
 #[derive(Debug, Clone)]
 pub struct Program {
     pub structs: Vec<StructDef>,
+    pub traits: Vec<TraitDef>,
+    pub impls: Vec<ImplBlock>,
     pub externs: Vec<ExternFn>,
     pub fns: Vec<FnDef>,
     pub methods: Vec<MethodDef>,

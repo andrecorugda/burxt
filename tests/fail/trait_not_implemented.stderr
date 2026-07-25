@@ -1,0 +1,1 @@
+`Book` does not implement `Priced` — add `impl Priced for Book { ... }`.

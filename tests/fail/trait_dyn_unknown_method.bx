@@ -1,0 +1,12 @@
+// A trait object exposes ONLY its trait methods — no downcasting, no asking
+// what concrete type it really is.
+trait Priced { fn price(self) -> Decimal<2> }
+struct Book { cost: Decimal<2>, pages: Int }
+impl Priced for Book {
+    fn (self: Book) price() -> Decimal<2> { return self.cost; }
+}
+fn (self: Book) page_count() -> Int { return self.pages; }
+
+let b: Book = Book { cost: 1.00, pages: 200 };
+let d: dyn Priced = b;
+print(d.page_count());

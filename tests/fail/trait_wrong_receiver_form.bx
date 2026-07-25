@@ -1,0 +1,8 @@
+trait Bumpable {
+    fn bump(mut self) -> Int
+}
+struct Counter { n: Int }
+impl Bumpable for Counter {
+    fn (self: Counter) bump() -> Int { return self.n; }
+}
+print(1);

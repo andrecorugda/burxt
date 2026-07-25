@@ -1,0 +1,3 @@
+trait Priced { fn price(self) -> Decimal<2> }
+struct Holder { item: dyn Priced }
+print(1);

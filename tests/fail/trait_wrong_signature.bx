@@ -1,0 +1,8 @@
+trait HasBalance {
+    fn balance_of(self) -> Decimal<2>
+}
+struct Account { balance: Decimal<2> }
+impl HasBalance for Account {
+    fn (self: Account) balance_of() -> Int { return 1; }
+}
+print(1);

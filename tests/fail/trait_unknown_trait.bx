@@ -1,0 +1,4 @@
+struct Book { cost: Decimal<2> }
+let b: Book = Book { cost: 1.00 };
+let d: dyn Nonexistent = b;
+print(1);

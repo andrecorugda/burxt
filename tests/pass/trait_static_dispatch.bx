@@ -1,0 +1,19 @@
+// A trait is a named set of method signatures a type can promise to satisfy.
+// Satisfaction is EXPLICIT via `impl Trait for Type` — never inferred from
+// method shapes happening to match.
+trait HasBalance {
+    fn balance_of(self) -> Decimal<2>
+    fn label(self) -> Int
+}
+
+struct Account { balance: Decimal<2>, id: Int }
+
+impl HasBalance for Account {
+    fn (self: Account) balance_of() -> Decimal<2> { return self.balance; }
+    fn (self: Account) label() -> Int { return self.id; }
+}
+
+// No `dyn` anywhere: these are direct calls, and no vtable is emitted at all.
+let acct: Account = Account { balance: 125.50, id: 7 };
+print(acct.balance_of());
+print(acct.label());

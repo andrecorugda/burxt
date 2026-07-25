@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.13)
+# Burxt — Design Notes (v0.0.14)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -140,6 +140,11 @@ Listed so they are not mistaken for finished work:
 - **Array returns.** Array PARAMETERS work (v0.0.12); returning one needs
   whole-array binding at the call site, which is the copy question deferred
   with collections.
+- **Method receivers pass as a plain pointer, not `byval`** (v0.0.14). Forced
+  by vtable compatibility: a slot cannot name a concrete type, so it cannot
+  carry `byval(T)`, and mixing the two lowerings produced silently wrong
+  values. Sound because a non-mutating `self` is read-only. Ordinary aggregate
+  parameters are unaffected.
 
 ### Open tradeoff — deliberately undecided, eyes open
 
@@ -726,6 +731,82 @@ was no way to call anything purely for its side effect; every call had to be
 wrapped in `print(...)` or `let`. `f();` and `acct.deposit(10.00);` are now
 statements: `Stmt::ExprStmt`, evaluated for effect, result discarded.
 
+### v0.0.14: interfaces and dispatch (A4.6)
+
+```text
+trait HasBalance {
+    fn balance_of(self) -> Decimal<2>
+}
+
+impl HasBalance for Account {
+    fn (self: Account) balance_of() -> Decimal<2> { return self.balance; }
+}
+
+print(acct.balance_of());          // static: a direct call, no vtable exists
+let any: dyn HasBalance = acct;    // `dyn` is the ONLY thing that asks for
+print(any.balance_of());           // runtime dispatch
+```
+
+A trait is a named set of method signatures a type can promise to satisfy.
+That is the whole concept: no fields, no state, no bodies.
+
+- **Satisfaction is explicit and nominal.** `impl Trait for Type { ... }`.
+  Burxt never auto-satisfies a trait because method shapes happen to match, so
+  conformance is a deliberate, greppable declaration — and adding a trait
+  method later cannot silently un-satisfy a type that never opted in. The
+  check is exact: every method present, same receiver form, same types. A
+  partial impl names the missing method.
+- **Static by default, dynamic only when asked.** A trait-method call on a
+  known concrete type is a direct call and emits no vtable — verified by a
+  test that greps the IR. Write `dyn Trait` and you get a fat pointer
+  `(data, vtable)` with runtime dispatch. If you never write `dyn`, you never
+  pay for one. Performance is legible in the syntax.
+- **This is where the A4.5 layout guarantee gets spent.** The vtable is static
+  read-only data OUTSIDE the value, one table per (Type, Trait) actually used
+  as `dyn`, holding function pointers in trait-declaration slot order. So a
+  struct's field offsets are byte-identical whether or not it is ever a trait
+  object — a test asserts exactly that.
+- **One ABI correction the milestone forced.** Methods now take `self` as a
+  plain pointer, never `byval`. A vtable slot cannot name a concrete type, so
+  it cannot carry `byval(T)`; with byval receivers a direct call (struct
+  lowered into registers) and an indirect call (pointer) disagreed about the
+  ABI, which produced silently wrong values. This is sound because a
+  non-mutating `self` is read-only — the typechecker refuses `self.field =`
+  without `mut self` — so a pointer to the caller's storage is
+  indistinguishable from a pointer to a copy. Ordinary aggregate parameters
+  keep `byval`; only the receiver changed.
+- A trait object **borrows** its data, and Burxt has no borrow tracking, so
+  the sound subset is enforced: it must be built from a variable, may be a
+  parameter (Dependency Inversion — depend on the contract, not the struct),
+  but may not be returned, stored in a struct field, or re-borrowed from
+  another trait object. Each refusal says why.
+- A trait object exposes **only** its trait methods. There is no downcasting
+  and no way to ask what concrete type it really is.
+
+### A4.6 deferred-features ledger
+
+Each of these is a real feature other languages have, and each is deferred
+with a trigger rather than silently added — because in a design phase with no
+physics to enforce discipline, scope is the thing being tested.
+
+| Feature | Why deferred | Earns its place when… |
+|---|---|---|
+| Default methods (bodies in traits) | Pulls in override-resolution: "which body runs" | A required program needs shared default behavior across many impls |
+| Trait inheritance (`trait A : B`) | Biggest complexity multiplier — satisfaction becomes a graph problem | A real hierarchy genuinely cannot be modeled by small separate traits |
+| Generics / trait bounds | A whole milestone: inference, monomorphization | Static polymorphism over type parameters is concretely needed |
+| Associated types / constants | Compounds generics complexity | Only alongside generics, if ever |
+| Blanket / overlapping impls | Coherence and overlap rules | A required pattern cannot be expressed one impl at a time |
+| Operator traits (`Add`) | Backdoors operator overloading into the numeric core | Never, unless the numeric stance is deliberately revisited |
+| Downcasting / reflection | Large surface, breaks the abstraction | A required program genuinely needs runtime type identity |
+| Multiple dispatch | Dispatch is on the single receiver only | — |
+| Mutating methods through `dyn` | Needs to know the borrowed value is itself mutable — that is a borrow checker | Borrow tracking exists |
+| Returning / storing a `dyn` | Borrows would outlive their storage | Borrow tracking exists |
+
+`interface` remains a reserved word (v0.0.8) but `trait` is the chosen
+keyword; the North Star's `struct X is Priceable` sketch is superseded by
+`impl Trait for Type`, which gives the trait's methods one definite home and
+a place to enumerate them for a vtable.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -780,9 +861,9 @@ it travels.
 - A4. Strings (v0.0.7), structs (v0.0.8), arrays (v0.0.10) — DONE
 - A4.5. The aggregate ABI: `byval` params, `sret` returns, layout guarantee
   — DONE (v0.0.12)
-- A4.6. Composition-first OOP: receiver methods (DONE, v0.0.13); `class`,
-  `trait`, `open` single inheritance, dictionary dispatch still to come
-  (see "The OOP model") <- IN PROGRESS
+- A4.6. Composition-first OOP: receiver methods (v0.0.13), traits + `dyn`
+  dispatch (v0.0.14) — DONE. `class` and `open` single inheritance still to
+  come (see "The OOP model") <- IN PROGRESS
 - A4.7. Signature grammar: money/unit literals (`$19.99`, `8.25%`, `5.km`),
   string interpolation, pipelines
 - A4+. OOP by default, SOLID-aligned: by-pointer ABI + receiver methods,

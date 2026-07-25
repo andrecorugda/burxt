@@ -78,6 +78,10 @@ pub struct CodeGen<'ctx> {
     fn_sigs: HashMap<String, (Vec<Type>, Type)>,
     /// (receiver, method name) -> its LLVM function (mangled `bx.<Recv>.<method>`)
     methods: HashMap<(String, String), FunctionValue<'ctx>>,
+    /// (trait, concrete) -> its static vtable global
+    vtables: HashMap<(String, String), inkwell::values::GlobalValue<'ctx>>,
+    /// trait name -> method return types in slot order, for indirect calls
+    trait_slots: HashMap<String, Vec<(Vec<Type>, Type)>>,
     /// the hidden sret pointer of the function being generated, if it returns
     /// an aggregate
     current_sret: Option<PointerValue<'ctx>>,
@@ -113,6 +117,8 @@ impl<'ctx> CodeGen<'ctx> {
             narrow_check_fn: None,
             fn_sigs: HashMap::new(),
             methods: HashMap::new(),
+            vtables: HashMap::new(),
+            trait_slots: HashMap::new(),
             current_sret: None,
             struct_types: HashMap::new(),
             struct_fields: HashMap::new(),
@@ -163,11 +169,6 @@ impl<'ctx> CodeGen<'ctx> {
             self.fn_sigs.insert(f.name.clone(), (param_tys, f.ret.clone()));
         }
 
-        // Define their bodies.
-        for f in &prog.fns {
-            self.gen_fn(f)?;
-        }
-
         // Methods: namespaced by (receiver, name), mangled `bx.<Recv>.<name>`.
         for m in &prog.methods {
             let param_tys: Vec<Type> = m.params.iter().map(|(_, t)| t.clone()).collect();
@@ -180,6 +181,59 @@ impl<'ctx> CodeGen<'ctx> {
                 &m.ret,
             );
             self.methods.insert((m.receiver.clone(), m.name.clone()), llf);
+        }
+
+        // Vtables: static, read-only tables of function pointers in
+        // trait-declaration slot order, one per (Type, Trait) used as `dyn`.
+        // Shared by every trait object of that pair — the instance carries
+        // only two words. Emitted BEFORE any body, since a body may build a
+        // trait object or dispatch through one.
+        for vt in &prog.vtables {
+            let ptr = self.ctx.ptr_type(AddressSpace::default());
+            let fns: Vec<PointerValue> = vt
+                .slots
+                .iter()
+                .map(|m| {
+                    self.methods[&(vt.concrete.clone(), m.clone())]
+                        .as_global_value()
+                        .as_pointer_value()
+                })
+                .collect();
+            let table_ty = ptr.array_type(fns.len() as u32);
+            let global = self.module.add_global(
+                table_ty,
+                None,
+                &format!("bx.vtable.{}.{}", vt.trait_name, vt.concrete),
+            );
+            global.set_initializer(&ptr.const_array(&fns));
+            global.set_constant(true);
+            self.vtables
+                .insert((vt.trait_name.clone(), vt.concrete.clone()), global);
+
+            // Record each slot's signature once, so an indirect call can build
+            // the right function type. Every impl of a trait matches the
+            // trait's signatures exactly, so the first one speaks for all.
+            self.trait_slots.entry(vt.trait_name.clone()).or_insert_with(|| {
+                vt.slots
+                    .iter()
+                    .map(|m| {
+                        let f = prog
+                            .methods
+                            .iter()
+                            .find(|tm| tm.receiver == vt.concrete && tm.name == *m)
+                            .expect("vtable slot method must exist");
+                        (
+                            f.params.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>(),
+                            f.ret.clone(),
+                        )
+                    })
+                    .collect()
+            });
+        }
+
+        // Now the bodies, with every declaration and vtable already in place.
+        for f in &prog.fns {
+            self.gen_fn(f)?;
         }
         for m in &prog.methods {
             self.gen_method(m)?;
@@ -482,11 +536,21 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     /// Declare a method. Identical to `declare_fn` except for the receiver:
-    /// `self` is always passed as a pointer, but it gets the `byval(T)`
-    /// attribute ONLY for a non-mutating method. A mutating method's `self`
-    /// is a true reference on purpose — the one place Burxt passes an
-    /// aggregate by address rather than by value, mirroring the existing
-    /// field-assignment mutability rule.
+    /// `self` is always passed as a PLAIN pointer, never `byval`.
+    ///
+    /// Why this is sound, and why it has to be this way:
+    ///   * A non-mutating `self` is read-only — the typechecker refuses
+    ///     `self.field = ...` without `mut self` — so a pointer to the
+    ///     caller's storage is indistinguishable from a pointer to a copy.
+    ///     The A4.5 rule is that the mechanism must be invisible to the
+    ///     semantics, and for a receiver nobody can write to, it is.
+    ///   * A `mut self` receiver must be the caller's real storage anyway.
+    ///   * Crucially, this makes methods VTABLE-COMPATIBLE. A vtable slot
+    ///     cannot name a concrete type, so it cannot carry `byval(T)`; with
+    ///     byval receivers a direct call (struct lowered into registers) and
+    ///     an indirect call (pointer) would disagree about the ABI, which is
+    ///     a silently wrong value — exactly what Burxt refuses.
+    /// Ordinary aggregate PARAMETERS keep `byval`; only the receiver changes.
     fn declare_method(
         &self,
         name: &str,
@@ -526,13 +590,8 @@ impl<'ctx> CodeGen<'ctx> {
             f.add_attribute(AttributeLoc::Param(0), attr);
             idx = 1;
         }
-        if !receiver_mut {
-            let attr = self.ctx.create_type_attribute(
-                inkwell::attributes::Attribute::get_named_enum_kind_id("byval"),
-                self.llvm_type(receiver_ty).as_any_type_enum(),
-            );
-            f.add_attribute(AttributeLoc::Param(idx), attr);
-        }
+        // The receiver carries no byval attribute — see the doc comment.
+        let _ = (receiver_mut, receiver_ty);
         idx += 1;
         for p in params {
             if is_aggregate(p) {
@@ -648,6 +707,13 @@ impl<'ctx> CodeGen<'ctx> {
             Type::CInt => self.ctx.i32_type().into(),
             Type::Named(name) => self.struct_types[name].into(),
             Type::Array { elem, len } => self.llvm_type(elem).array_type(*len).into(),
+            // A trait object is a fat pointer: { data, vtable }. The vtable
+            // lives OUTSIDE the data, which is why becoming a trait object
+            // never changes a struct's layout.
+            Type::Dyn(_) => {
+                let ptr = self.ctx.ptr_type(AddressSpace::default());
+                self.ctx.struct_type(&[ptr.into(), ptr.into()], false).into()
+            }
         }
     }
 
@@ -726,7 +792,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_call(printf, &args, "printf_bool")
                     .map_err(|e| e.to_string())?;
             }
-            Type::Named(_) | Type::CInt | Type::Array { .. } => {
+            Type::Named(_) | Type::CInt | Type::Array { .. } | Type::Dyn(_) => {
                 return Err(format!(
                     "codegen bug: print on {} should have been refused by typeck",
                     e.ty
@@ -1061,13 +1127,9 @@ impl<'ctx> CodeGen<'ctx> {
                     call.add_attribute(AttributeLoc::Param(0), attr);
                     idx = 1;
                 }
-                if !receiver_mut {
-                    let attr = self.ctx.create_type_attribute(
-                        Attribute::get_named_enum_kind_id("byval"),
-                        self.llvm_type(&Type::Named(receiver.clone())).as_any_type_enum(),
-                    );
-                    call.add_attribute(AttributeLoc::Param(idx), attr);
-                }
+                // The receiver is a plain pointer in both forms, so a direct
+                // call and a vtable call agree on the ABI. (See declare_method.)
+                let _ = receiver_mut;
                 idx += 1;
                 for a in args {
                     if is_aggregate(&a.ty) {
@@ -1091,6 +1153,132 @@ impl<'ctx> CodeGen<'ctx> {
                     _ => Err(format!(
                         "codegen bug: call to {}.{} returned void",
                         receiver, method
+                    )),
+                }
+            }
+            TypedExprKind::DynCoerce { trait_name, concrete, var } => {
+                // Pair the binding's storage with the static vtable. No copy:
+                // the data half IS the borrowed value (and the layout it points
+                // at is unchanged by being viewed as a trait object).
+                let (slot, _) = *self
+                    .vars
+                    .get(var)
+                    .ok_or_else(|| format!("codegen: unknown variable {}", var))?;
+                let vtable = self
+                    .vtables
+                    .get(&(trait_name.clone(), concrete.clone()))
+                    .ok_or_else(|| {
+                        format!("codegen bug: no vtable for {}/{}", concrete, trait_name)
+                    })?
+                    .as_pointer_value();
+                let fat_ty = self.llvm_type(&e.ty).into_struct_type();
+                let mut fat = fat_ty.get_undef();
+                fat = self
+                    .builder
+                    .build_insert_value(fat, slot, 0, "dyn_data")
+                    .map_err(|e| e.to_string())?
+                    .into_struct_value();
+                fat = self
+                    .builder
+                    .build_insert_value(fat, vtable, 1, "dyn_vtable")
+                    .map_err(|e| e.to_string())?
+                    .into_struct_value();
+                Ok(fat.into())
+            }
+            TypedExprKind::DynCall { trait_name, method, slot, base, args } => {
+                let fat = self.gen_expr(base)?.into_struct_value();
+                let data = self
+                    .builder
+                    .build_extract_value(fat, 0, "dyn_data")
+                    .map_err(|e| e.to_string())?
+                    .into_pointer_value();
+                let vtable = self
+                    .builder
+                    .build_extract_value(fat, 1, "dyn_vtable")
+                    .map_err(|e| e.to_string())?
+                    .into_pointer_value();
+
+                // Load the slot's function pointer: the index is fixed at
+                // compile time by trait-declaration order.
+                let ptr_ty = self.ctx.ptr_type(AddressSpace::default());
+                let fn_ptr_addr = unsafe {
+                    self.builder.build_gep(
+                        ptr_ty,
+                        vtable,
+                        &[self.ctx.i32_type().const_int(*slot as u64, false)],
+                        "slot_addr",
+                    )
+                }
+                .map_err(|e| e.to_string())?;
+                let fn_ptr = self
+                    .builder
+                    .build_load(ptr_ty, fn_ptr_addr, "slot_fn")
+                    .map_err(|e| e.to_string())?
+                    .into_pointer_value();
+
+                // Rebuild the callee's type: (receiver ptr, params...) -> ret.
+                // Typeck refused mutating methods here, so the receiver is the
+                // byval form — the callee copies from `data`.
+                let (param_tys, ret_ty) = self
+                    .trait_slots
+                    .get(trait_name)
+                    .and_then(|s| s.get(*slot as usize))
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!("codegen bug: no signature for {}.{}", trait_name, method)
+                    })?;
+                let mut ll_params: Vec<BasicMetadataTypeEnum> = Vec::new();
+                let ret_is_agg = is_aggregate(&ret_ty);
+                if ret_is_agg {
+                    ll_params.push(ptr_ty.into());
+                }
+                ll_params.push(ptr_ty.into()); // self
+                for p in &param_tys {
+                    if is_aggregate(p) {
+                        ll_params.push(ptr_ty.into());
+                    } else {
+                        ll_params.push(self.llvm_type(p).into());
+                    }
+                }
+                let fn_ty = if ret_is_agg {
+                    self.ctx.void_type().fn_type(&ll_params, false)
+                } else {
+                    self.llvm_type(&ret_ty).fn_type(&ll_params, false)
+                };
+
+                let mut vals: Vec<BasicMetadataValueEnum> = Vec::new();
+                let sret_slot = if ret_is_agg {
+                    let s = self.create_entry_alloca("dret_tmp", &ret_ty)?;
+                    vals.push(s.into());
+                    Some(s)
+                } else {
+                    None
+                };
+                vals.push(data.into());
+                for a in args {
+                    if is_aggregate(&a.ty) {
+                        vals.push(self.gen_aggregate_addr(a)?.into());
+                    } else {
+                        vals.push(self.gen_expr(a)?.into());
+                    }
+                }
+
+                let call = self
+                    .builder
+                    .build_indirect_call(fn_ty, fn_ptr, &vals, "dyncall")
+                    .map_err(|e| e.to_string())?;
+
+                if let Some(s) = sret_slot {
+                    return self
+                        .builder
+                        .build_load(self.llvm_type(&ret_ty), s, "dret_val")
+                        .map_err(|e| e.to_string());
+                }
+                match call.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(v) => Ok(v),
+                    _ => Err(format!(
+                        "codegen bug: dyn call to {}.{} returned void",
+                        trait_name, method
                     )),
                 }
             }
@@ -1765,7 +1953,7 @@ impl<'ctx> CodeGen<'ctx> {
 /// The boundary is decided by the TYPE, never by size, so it is identical on
 /// every target.
 pub fn is_aggregate(ty: &Type) -> bool {
-    matches!(ty, Type::Named(_) | Type::Array { .. })
+    matches!(ty, Type::Named(_) | Type::Array { .. } | Type::Dyn(_))
 }
 
 /// The memory layout of an aggregate: exactly its declared fields, in

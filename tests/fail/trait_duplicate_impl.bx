@@ -1,0 +1,9 @@
+trait Priced { fn price(self) -> Decimal<2> }
+struct Book { cost: Decimal<2> }
+impl Priced for Book {
+    fn (self: Book) price() -> Decimal<2> { return self.cost; }
+}
+impl Priced for Book {
+    fn (self: Book) price() -> Decimal<2> { return self.cost; }
+}
+print(1);

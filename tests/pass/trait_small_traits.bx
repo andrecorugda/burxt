@@ -1,0 +1,19 @@
+// Interface Segregation: a one-method trait is the healthy default, and a
+// type may satisfy several small traits rather than one fat one.
+trait Named { fn name_id(self) -> Int }
+trait Valued { fn value(self) -> Decimal<2> }
+
+struct Item { id: Int, cost: Decimal<2> }
+
+impl Named for Item {
+    fn (self: Item) name_id() -> Int { return self.id; }
+}
+impl Valued for Item {
+    fn (self: Item) value() -> Decimal<2> { return self.cost; }
+}
+
+let it: Item = Item { id: 3, cost: 9.99 };
+let n: dyn Named = it;
+let v: dyn Valued = it;
+print(n.name_id());
+print(v.value());

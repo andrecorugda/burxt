@@ -1,0 +1,1 @@
+calling a mutating method through a trait object is not available yet

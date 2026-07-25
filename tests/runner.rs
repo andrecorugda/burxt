@@ -140,6 +140,62 @@ Order: size 24 align 8
     );
 }
 
+/// The A4.5 layout guarantee, cashed in by A4.6: a struct's field offsets must
+/// be byte-identical whether or not it is ever used as a trait object, because
+/// the vtable lives OUTSIDE the value. Also checks the pay-for-what-you-use
+/// rule: a program with no `dyn` emits no vtable at all.
+#[test]
+fn dyn_does_not_change_layout_and_costs_nothing_unused() {
+    let scratch = scratch_dir("dyn-layout");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let common = "trait Priced { fn price(self) -> Decimal<2> }\n\
+                  struct Book { cost: Decimal<2>, pages: Int }\n\
+                  impl Priced for Book {\n\
+                  fn (self: Book) price() -> Decimal<2> { return self.cost; }\n\
+                  }\n\
+                  let b: Book = Book { cost: 1.00, pages: 2 };\n";
+
+    let static_only = scratch.join("static_only.bx");
+    fs::write(&static_only, format!("{}print(b.price());\n", common)).unwrap();
+
+    let with_dyn = scratch.join("with_dyn.bx");
+    fs::write(
+        &with_dyn,
+        format!("{}let d: dyn Priced = b;\nprint(d.price());\n", common),
+    )
+    .unwrap();
+
+    let layout_static = burxt("layout", &static_only, &scratch);
+    let layout_dyn = burxt("layout", &with_dyn, &scratch);
+    let ir_static = burxt("emit-ir", &static_only, &scratch);
+    let ir_dyn = burxt("emit-ir", &with_dyn, &scratch);
+
+    let l_static = String::from_utf8_lossy(&layout_static.stdout).to_string();
+    let l_dyn = String::from_utf8_lossy(&layout_dyn.stdout).to_string();
+    let s_ir = String::from_utf8_lossy(&ir_static.stdout).to_string();
+    let d_ir = String::from_utf8_lossy(&ir_dyn.stdout).to_string();
+    let _ = fs::remove_dir_all(&scratch);
+
+    assert!(
+        l_static.contains("+0 Decimal<2>") && l_static.contains("+8 Int"),
+        "unexpected baseline layout:\n{}",
+        l_static
+    );
+    assert_eq!(
+        l_static, l_dyn,
+        "becoming a trait object moved a field — the vtable must live outside the value"
+    );
+    assert!(
+        !s_ir.contains("bx.vtable"),
+        "a program with no `dyn` must emit no vtable"
+    );
+    assert!(
+        d_ir.contains("bx.vtable.Priced.Book"),
+        "a `dyn` program must emit the (Type, Trait) vtable"
+    );
+}
+
 #[test]
 fn fail_programs_are_rejected_with_expected_error() {
     let scratch = scratch_dir("fail");

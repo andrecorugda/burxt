@@ -45,6 +45,8 @@ impl Parser {
 
     pub fn parse_program(mut self) -> Result<Program, String> {
         let mut structs = Vec::new();
+        let mut traits = Vec::new();
+        let mut impls = Vec::new();
         let mut externs = Vec::new();
         let mut fns = Vec::new();
         let mut methods = Vec::new();
@@ -52,6 +54,10 @@ impl Parser {
         while !self.at(&Token::Eof) {
             if self.at(&Token::Struct) {
                 structs.push(self.parse_struct()?);
+            } else if self.at(&Token::Trait) {
+                traits.push(self.parse_trait()?);
+            } else if self.at(&Token::Impl) {
+                impls.push(self.parse_impl()?);
             } else if self.at(&Token::Extern) {
                 externs.push(self.parse_extern()?);
             } else if self.at(&Token::Fn) {
@@ -66,7 +72,7 @@ impl Parser {
                 stmts.push(self.parse_stmt()?);
             }
         }
-        Ok(Program { structs, externs, fns, methods, stmts })
+        Ok(Program { structs, traits, impls, externs, fns, methods, stmts })
     }
 
     // ---- helpers ----
@@ -127,6 +133,142 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
         Ok(StructDef { name, fields })
+    }
+
+    // ---- traits and impls ----
+
+    /// `trait Name { fn m(self) -> T   fn n(mut self, x: U) -> V }`
+    /// Signatures only: no bodies, no fields, no default methods.
+    fn parse_trait(&mut self) -> Result<TraitDef, String> {
+        self.expect(&Token::Trait)?;
+        let name = match self.bump() {
+            Token::Ident(s) => s,
+            other => {
+                return Err(format!(
+                    "expected a trait name after 'trait', found {}",
+                    other.describe()
+                ))
+            }
+        };
+        self.expect(&Token::LBrace)?;
+        let mut methods = Vec::new();
+        while !self.at(&Token::RBrace) {
+            if self.at(&Token::Eof) {
+                return Err(format!("unclosed trait `{}`: expected `}}`", name));
+            }
+            methods.push(self.parse_trait_sig(&name)?);
+            // a separating semicolon is allowed but not required
+            if self.at(&Token::Semicolon) {
+                self.bump();
+            }
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(TraitDef { name, methods })
+    }
+
+    /// One signature inside a trait: `fn m(self) -> T`, or
+    /// `fn m(mut self, extra: U) -> V`. The receiver has no type — it is
+    /// whichever type implements the trait.
+    fn parse_trait_sig(&mut self, trait_name: &str) -> Result<TraitSig, String> {
+        self.expect(&Token::Fn)?;
+        let name = match self.bump() {
+            Token::Ident(s) => s,
+            other => {
+                return Err(format!(
+                    "expected a method name in trait `{}`, found {}",
+                    trait_name,
+                    other.describe()
+                ))
+            }
+        };
+        self.expect(&Token::LParen)?;
+        let receiver_mut = if self.at(&Token::Mut) {
+            self.bump();
+            true
+        } else {
+            false
+        };
+        if !self.at(&Token::SelfKw) {
+            return Err(format!(
+                "every trait method takes `self` first: write `fn {}({}self, ...)`, \
+                 found {}",
+                name,
+                if receiver_mut { "mut " } else { "" },
+                self.peek().describe()
+            ));
+        }
+        self.bump();
+        let mut params = Vec::new();
+        while self.at(&Token::Comma) {
+            self.bump();
+            let pname = match self.bump() {
+                Token::Ident(s) => s,
+                other => {
+                    return Err(format!("expected a parameter name, found {}", other.describe()))
+                }
+            };
+            self.expect(&Token::Colon)?;
+            let ty = self.parse_type()?;
+            params.push(Param { name: pname, ty });
+        }
+        self.expect(&Token::RParen)?;
+        if !self.at(&Token::Arrow) {
+            return Err(format!(
+                "expected `->` and a return type for `{}.{}` (every Burxt function \
+                 returns a value), found {}",
+                trait_name,
+                name,
+                self.peek().describe()
+            ));
+        }
+        self.bump();
+        let ret = self.parse_type()?;
+        Ok(TraitSig { name, receiver_mut, params, ret })
+    }
+
+    /// `impl Trait for Type { <method definitions> }`
+    fn parse_impl(&mut self) -> Result<ImplBlock, String> {
+        self.expect(&Token::Impl)?;
+        let trait_name = match self.bump() {
+            Token::Ident(s) => s,
+            other => {
+                return Err(format!(
+                    "expected a trait name after 'impl', found {}",
+                    other.describe()
+                ))
+            }
+        };
+        if !self.at(&Token::For) {
+            return Err(format!(
+                "expected `for` in `impl {} for Type`, found {}",
+                trait_name,
+                self.peek().describe()
+            ));
+        }
+        self.bump();
+        let type_name = match self.bump() {
+            Token::Ident(s) => s,
+            other => {
+                return Err(format!(
+                    "expected a type name in `impl {} for ...`, found {}",
+                    trait_name,
+                    other.describe()
+                ))
+            }
+        };
+        self.expect(&Token::LBrace)?;
+        let mut methods = Vec::new();
+        while !self.at(&Token::RBrace) {
+            if self.at(&Token::Eof) {
+                return Err(format!(
+                    "unclosed `impl {} for {}`: expected `}}`",
+                    trait_name, type_name
+                ));
+            }
+            methods.push(self.parse_method()?);
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(ImplBlock { trait_name, type_name, methods })
     }
 
     // ---- functions ----
@@ -456,6 +598,15 @@ impl Parser {
             // A bare identifier is a struct type; whether it exists is the
             // typechecker's question, so use-before-declaration works.
             Token::Ident(name) => Ok(Type::Named(name)),
+            // `dyn Trait` — the only syntax that asks for dynamic dispatch.
+            // If you never write `dyn`, you never pay for a vtable.
+            Token::Dyn => match self.bump() {
+                Token::Ident(name) => Ok(Type::Dyn(name)),
+                other => Err(format!(
+                    "expected a trait name after `dyn`, found {}",
+                    other.describe()
+                )),
+            },
             // [T; N] — fixed-size array
             Token::LBracket => {
                 let elem = self.parse_type()?;
