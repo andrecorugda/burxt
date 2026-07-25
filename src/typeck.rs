@@ -57,6 +57,15 @@ pub enum TypedExprKind {
         rhs: Box<TypedExpr>,
     },
     Call { name: String, args: Vec<TypedExpr> },
+    /// Method call, resolved to its receiver type. `receiver_mut` decides how
+    /// codegen passes `base`: a true reference (mutating) or a value copy.
+    MethodCall {
+        receiver: String,
+        method: String,
+        receiver_mut: bool,
+        base: Box<TypedExpr>,
+        args: Vec<TypedExpr>,
+    },
     /// Struct construction; fields re-emitted in DECLARATION order, so
     /// codegen is purely positional.
     StructLit { name: String, fields: Vec<TypedExpr> },
@@ -74,6 +83,8 @@ pub enum TypedStmt {
     Assign { name: String, value: TypedExpr },
     /// Field assignment, path resolved to positional indices.
     AssignField { name: String, indices: Vec<u32>, value: TypedExpr },
+    /// A call kept for its side effect; the result is evaluated and discarded.
+    ExprStmt(TypedExpr),
     /// Bounds-checked element assignment.
     AssignIndex { name: String, len: u32, index: TypedExpr, value: TypedExpr },
     Print(TypedExpr),
@@ -88,6 +99,18 @@ pub enum TypedStmt {
 
 #[derive(Debug, Clone)]
 pub struct TypedFn {
+    pub name: String,
+    pub params: Vec<(String, Type)>,
+    pub ret: Type,
+    pub body: Vec<TypedStmt>,
+}
+
+/// A method, ready for codegen: `self` is always the first bound name, typed
+/// as the receiver struct.
+#[derive(Debug, Clone)]
+pub struct TypedMethod {
+    pub receiver: String,
+    pub receiver_mut: bool,
     pub name: String,
     pub params: Vec<(String, Type)>,
     pub ret: Type,
@@ -115,6 +138,7 @@ pub struct TypedProgram {
     pub structs: Vec<TypedStruct>,
     pub externs: Vec<TypedExtern>,
     pub fns: Vec<TypedFn>,
+    pub methods: Vec<TypedMethod>,
     pub stmts: Vec<TypedStmt>,
 }
 
@@ -126,6 +150,8 @@ pub struct TypeChecker {
     fns: HashMap<String, (Vec<Type>, Type)>,
     /// struct name -> fields (name, type) in declaration order; hoisted first.
     structs: HashMap<String, Vec<(String, Type)>>,
+    /// (receiver, method name) -> (is mutating, param types, return type)
+    methods: HashMap<(String, String), (bool, Vec<Type>, Type)>,
     /// return type of the function currently being checked, if any.
     current_ret: Option<Type>,
 }
@@ -136,6 +162,7 @@ impl TypeChecker {
             env: HashMap::new(),
             fns: HashMap::new(),
             structs: HashMap::new(),
+            methods: HashMap::new(),
             current_ret: None,
         }
     }
@@ -224,10 +251,46 @@ impl TypeChecker {
             self.fns.insert(f.name.clone(), (param_tys, f.ret.clone()));
         }
 
+        // Methods are namespaced by (receiver, name), so they never collide
+        // with free functions and may be declared in any order.
+        for m in &prog.methods {
+            if !self.structs.contains_key(&m.receiver) {
+                return Err(format!(
+                    "method `{}` is declared for unknown type `{}` — declare it \
+                     with `struct {} {{ ... }}`",
+                    m.name, m.receiver, m.receiver
+                ));
+            }
+            let key = (m.receiver.clone(), m.name.clone());
+            if self.methods.contains_key(&key) {
+                return Err(format!(
+                    "`{}` already has a method named `{}`",
+                    m.receiver, m.name
+                ));
+            }
+            for p in &m.params {
+                self.validate_type(&p.ty)?;
+            }
+            self.validate_type(&m.ret)?;
+            if matches!(m.ret, Type::Array { .. }) {
+                return Err(format!(
+                    "method `{}.{}` cannot return an array yet — the same limit \
+                     as free functions.",
+                    m.receiver, m.name
+                ));
+            }
+            let param_tys = m.params.iter().map(|p| p.ty.clone()).collect();
+            self.methods.insert(key, (m.receiver_mut, param_tys, m.ret.clone()));
+        }
+
         // Pass 2: check each function body.
         let mut fns = Vec::new();
         for f in &prog.fns {
             fns.push(self.check_fn(f)?);
+        }
+        let mut methods = Vec::new();
+        for m in &prog.methods {
+            methods.push(self.check_method(m)?);
         }
 
         // Pass 3: top-level statements (the implicit main).
@@ -235,7 +298,7 @@ impl TypeChecker {
         for s in &prog.stmts {
             stmts.push(self.check_stmt(s)?);
         }
-        Ok(TypedProgram { structs, externs, fns, stmts })
+        Ok(TypedProgram { structs, externs, fns, methods, stmts })
     }
 
     /// A Named type must refer to a declared struct; CInt never leaves the
@@ -372,6 +435,55 @@ impl TypeChecker {
             ));
         }
         Ok(TypedFn { name: f.name.clone(), params, ret: f.ret.clone(), body })
+    }
+
+    /// Check a method body. `self` is bound like any parameter, with its
+    /// mutability set from `receiver_mut` — so `self.field = ...` obeys the
+    /// exact same AssignField rule an ordinary `let mut` binding would.
+    fn check_method(&mut self, m: &MethodDef) -> Result<TypedMethod, String> {
+        self.env.clear();
+        self.env.insert(
+            "self".to_string(),
+            (Type::Named(m.receiver.clone()), m.receiver_mut),
+        );
+        let mut params = Vec::new();
+        for p in &m.params {
+            if p.name == "self" {
+                return Err(format!(
+                    "in `{}.{}`: `self` is already the receiver; parameters \
+                     cannot reuse the name",
+                    m.receiver, m.name
+                ));
+            }
+            if self.env.insert(p.name.clone(), (p.ty.clone(), false)).is_some() {
+                return Err(format!(
+                    "method `{}.{}` has two parameters named `{}`",
+                    m.receiver, m.name, p.name
+                ));
+            }
+            params.push((p.name.clone(), p.ty.clone()));
+        }
+        self.current_ret = Some(m.ret.clone());
+        let body = self.check_block(&m.body)?;
+        self.current_ret = None;
+        self.env.clear();
+
+        if !block_returns(&body) {
+            return Err(format!(
+                "method `{}.{}` must end by returning a {} on every path \
+                 (its last statement must be a `return`, or an if/else where \
+                 both branches return)",
+                m.receiver, m.name, m.ret
+            ));
+        }
+        Ok(TypedMethod {
+            receiver: m.receiver.clone(),
+            receiver_mut: m.receiver_mut,
+            name: m.name.clone(),
+            params,
+            ret: m.ret.clone(),
+            body,
+        })
     }
 
     /// Check a block's statements in a child scope: names declared inside are
@@ -520,6 +632,10 @@ impl TypeChecker {
                     ));
                 }
                 Ok(TypedStmt::AssignIndex { name: name.clone(), len, index, value: typed })
+            }
+            Stmt::ExprStmt(e) => {
+                let typed = self.check_expr(e, None)?;
+                Ok(TypedStmt::ExprStmt(typed))
             }
             Stmt::While { cond, body } => {
                 let cond = self.check_expr(cond, None)?;
@@ -802,6 +918,91 @@ impl TypeChecker {
                 Ok(TypedExpr {
                     ty,
                     kind: TypedExprKind::Field { base: Box::new(typed_base), index },
+                })
+            }
+
+            Expr::MethodCall { base, method, args } => {
+                let typed_base = self.check_expr(base, None)?;
+                let receiver = match &typed_base.ty {
+                    Type::Named(n) => n.clone(),
+                    other => {
+                        return Err(format!(
+                            "`.{}(...)` needs a struct value, but this has type {}.",
+                            method, other
+                        ))
+                    }
+                };
+                let (receiver_mut, param_tys, ret) = self
+                    .methods
+                    .get(&(receiver.clone(), method.clone()))
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!(
+                            "`{}` has no method named `{}`.",
+                            receiver, method
+                        )
+                    })?;
+
+                if receiver_mut {
+                    // A mutating method is passed a true reference, so the
+                    // base MUST be the actual mutable binding — exactly the
+                    // rule AssignField already enforces for `item.field = v`.
+                    let Expr::Var(name) = base.as_ref() else {
+                        return Err(format!(
+                            "`{}` is a mutating method (`fn (mut self: {}) ...`); \
+                             it can only be called on a variable, not an \
+                             expression.",
+                            method, receiver
+                        ));
+                    };
+                    let (_, mutable) = self
+                        .env
+                        .get(name)
+                        .ok_or_else(|| format!("unknown variable: {}", name))?;
+                    if !*mutable {
+                        return Err(format!(
+                            "cannot call the mutating method `{}` on `{}`: it was \
+                             declared immutable. Declare it `let mut {}: {}` to \
+                             allow it.",
+                            method, name, name, receiver
+                        ));
+                    }
+                }
+
+                if args.len() != param_tys.len() {
+                    return Err(format!(
+                        "method `{}.{}` takes {} argument(s), but {} were given",
+                        receiver,
+                        method,
+                        param_tys.len(),
+                        args.len()
+                    ));
+                }
+                let mut typed_args = Vec::new();
+                for (i, (arg, param_ty)) in args.iter().zip(&param_tys).enumerate() {
+                    let typed = self.check_expr(arg, Some(param_ty))?;
+                    if &typed.ty != param_ty {
+                        return Err(format!(
+                            "in the call to `{}.{}`, argument {} must be {}, \
+                             but it has type {}",
+                            receiver,
+                            method,
+                            i + 1,
+                            param_ty,
+                            typed.ty
+                        ));
+                    }
+                    typed_args.push(typed);
+                }
+                Ok(TypedExpr {
+                    ty: ret,
+                    kind: TypedExprKind::MethodCall {
+                        receiver,
+                        method: method.clone(),
+                        receiver_mut,
+                        base: Box::new(typed_base),
+                        args: typed_args,
+                    },
                 })
             }
 

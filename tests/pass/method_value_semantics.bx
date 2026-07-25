@@ -1,0 +1,14 @@
+// A non-mutating method receives self by VALUE — mutating the parameter
+// inside the method can never be observed by the caller, exactly like an
+// ordinary struct function parameter.
+struct LineItem { price: Decimal<2>, qty: Int }
+
+fn (self: LineItem) fake_bump() -> Int {
+    let mut m: LineItem = self;
+    m.qty = 999;
+    return m.qty;
+}
+
+let item: LineItem = LineItem { price: 19.99, qty: 3 };
+print(item.fake_bump());
+print(item.qty);

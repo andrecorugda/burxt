@@ -1,0 +1,21 @@
+// A call kept purely for its side effect: `f();` and `x.method();`.
+// Previously every call had to be wrapped in print(...) or let; methods
+// that mutate and return nothing interesting make that gap impossible to
+// ignore, so a bare call is now a statement in its own right.
+struct Counter { n: Int }
+fn (mut self: Counter) tick() -> Int {
+    self.n = self.n + 1;
+    return self.n;
+}
+
+fn noop(x: Int) -> Int {
+    return x;
+}
+
+let mut c: Counter = Counter { n: 0 };
+c.tick();
+c.tick();
+c.tick();
+print(c.n);
+noop(1);
+print(c.n);

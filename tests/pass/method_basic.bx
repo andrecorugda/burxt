@@ -1,0 +1,12 @@
+// A method is a plain function in the receiver's namespace: no hidden
+// `this`, and `self` obeys the same exact typing rules as any parameter.
+struct LineItem { price: Decimal<2>, qty: Int }
+
+fn (self: LineItem) total() -> Decimal<2> {
+    return self.price * self.qty;
+}
+
+let item: LineItem = LineItem { price: 19.99, qty: 3 };
+print(item.total());
+// a struct literal argument needs no binding of its own
+print(LineItem { price: 2.50, qty: 4 }.total());

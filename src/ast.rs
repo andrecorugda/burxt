@@ -168,6 +168,8 @@ pub enum Expr {
     StructLit { name: String, fields: Vec<(String, Expr)> },
     /// Field access: `item.price` (chains for nested structs).
     Field { base: Box<Expr>, field: String },
+    /// Method call: `item.total()`.
+    MethodCall { base: Box<Expr>, method: String, args: Vec<Expr> },
     /// An array literal `[10.00, 5.99, 4.01]` — only valid as a `let`
     /// initializer with a declared array type.
     ArrayLit(Vec<Expr>),
@@ -196,6 +198,12 @@ pub enum Stmt {
     /// `name[index] = value;` — element assignment through a `let mut`
     /// binding, bounds-checked like every indexed access.
     AssignIndex { name: String, index: Expr, value: Expr },
+    /// A call kept for its side effect, its result discarded: `f();` or
+    /// `acct.deposit(10.00);`. The only expressions worth writing as a bare
+    /// statement are ones with an effect — calls and mutating methods — so
+    /// this is not a general expression-statement; the parser only builds it
+    /// from a call or method-call shape.
+    ExprStmt(Expr),
     /// `while cond { ... }` — the condition must be a Bool; braces required.
     While { cond: Expr, body: Vec<Stmt> },
     /// `print(expr);`
@@ -228,6 +236,22 @@ pub struct FnDef {
     pub body: Vec<Stmt>,
 }
 
+/// `fn (self: Type) name(params) -> ret { body }` — a method: a function in
+/// the receiver type's namespace. `fn (mut self: Type) ...` declares a
+/// MUTATING method, callable only through a `let mut` binding; the receiver
+/// is then passed as a true reference, not a value copy (see the aggregate
+/// ABI — this is the one place Burxt passes an aggregate by address on
+/// purpose, mirroring the existing field-assignment mutability rule).
+#[derive(Debug, Clone)]
+pub struct MethodDef {
+    pub receiver: String,
+    pub receiver_mut: bool,
+    pub name: String,
+    pub params: Vec<Param>,
+    pub ret: Type,
+    pub body: Vec<Stmt>,
+}
+
 /// `extern fn name(params) -> ret;` — a C function Burxt may call. The name
 /// is the real linker symbol (never mangled); matching the C side's actual
 /// signature is the programmer's contract, as in every FFI.
@@ -254,5 +278,6 @@ pub struct Program {
     pub structs: Vec<StructDef>,
     pub externs: Vec<ExternFn>,
     pub fns: Vec<FnDef>,
+    pub methods: Vec<MethodDef>,
     pub stmts: Vec<Stmt>,
 }

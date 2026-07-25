@@ -1,0 +1,6 @@
+struct Account { balance: Decimal<2> }
+fn (self: Account) plus(amount: Decimal<2>) -> Decimal<2> {
+    return self.balance + amount;
+}
+let a: Account = Account { balance: 1.00 };
+print(a.plus(1));

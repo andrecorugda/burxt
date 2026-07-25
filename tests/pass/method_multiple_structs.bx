@@ -1,0 +1,16 @@
+// Methods are namespaced by receiver: two structs may each declare a method
+// with the same name, and calls resolve by the base value's type.
+struct Money { amount: Decimal<2> }
+struct Count { n: Int }
+
+fn (self: Money) describe() -> Decimal<2> {
+    return self.amount;
+}
+fn (self: Count) describe() -> Int {
+    return self.n;
+}
+
+let m: Money = Money { amount: 5.25 };
+let c: Count = Count { n: 7 };
+print(m.describe());
+print(c.describe());

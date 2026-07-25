@@ -1,0 +1,8 @@
+// A mutating method needs an actual binding to write through — not an
+// arbitrary expression, which has no caller storage to mutate.
+struct Account { balance: Decimal<2> }
+fn (mut self: Account) deposit(amount: Decimal<2>) -> Decimal<2> {
+    self.balance = self.balance + amount;
+    return self.balance;
+}
+print(Account { balance: 1.00 }.deposit(1.00));

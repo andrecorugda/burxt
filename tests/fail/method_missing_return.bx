@@ -1,0 +1,7 @@
+struct LineItem { price: Decimal<2>, qty: Int }
+fn (self: LineItem) total() -> Decimal<2> {
+    if self.qty > 0 {
+        return self.price;
+    }
+}
+print(1);

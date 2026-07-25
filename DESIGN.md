@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.12)
+# Burxt — Design Notes (v0.0.13)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -681,6 +681,51 @@ is a value copy on every target; `field N` denotes the same field everywhere.
 Needing to violate one of those is a signal to revisit this milestone
 deliberately and record it — not to bolt a hidden header onto the layout.
 
+### v0.0.13: receiver methods — the first slice of A4.6
+
+```text
+struct Account { balance: Decimal<2> }
+
+fn (self: Account) balance_of() -> Decimal<2> {
+    return self.balance;
+}
+fn (mut self: Account) deposit(amount: Decimal<2>) -> Decimal<2> {
+    self.balance = self.balance + amount;
+    return self.balance;
+}
+
+let mut acct: Account = Account { balance: 100.00 };
+acct.deposit(25.50);           // side effect kept, result discarded
+print(acct.balance_of());      // 125.50
+```
+
+A method is a plain function in the receiver's namespace — `fn (self: T)
+name(...)`, mangled `bx.<T>.<name>` — not an impl block, so there is no hidden
+`this` and no new nesting form. `self` is bound exactly like a parameter, with
+the SAME exact-type rules everywhere else.
+
+- **Two receiver forms, and the aggregate ABI already built them both.**
+  `self: T` passes as `byval(T)` — a value copy, like any struct parameter;
+  mutating it inside the method can never be observed by the caller. `mut
+  self: T` is the one place Burxt passes an aggregate by address ON PURPOSE:
+  no `byval`, so the pointer is the caller's real storage. Nothing new had to
+  be invented for either — non-mutating methods reuse the v0.0.12 `byval`
+  path unchanged, and mutating methods reuse the existing field-assignment
+  address logic.
+- A mutating method may only be called on a `let mut` binding, and only on a
+  plain variable — not an expression, which has no caller storage to mutate.
+  This is the exact rule `item.field = value` already enforces, applied to
+  `self`.
+- Methods are namespaced by `(receiver, name)`, so two structs may each
+  declare a method with the same name; resolution is by the base value's
+  type, decided at compile time (there is no dispatch yet — that is A4.6's
+  next slice, interfaces).
+
+**Also landed: expression statements.** Methods exposed a real gap — there
+was no way to call anything purely for its side effect; every call had to be
+wrapped in `print(...)` or `let`. `f();` and `acct.deposit(10.00);` are now
+statements: `Stmt::ExprStmt`, evaluated for effect, result discarded.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -735,8 +780,9 @@ it travels.
 - A4. Strings (v0.0.7), structs (v0.0.8), arrays (v0.0.10) — DONE
 - A4.5. The aggregate ABI: `byval` params, `sret` returns, layout guarantee
   — DONE (v0.0.12)
-- A4.6. Composition-first OOP: `class`, `trait`, receiver methods, `open`
-  single inheritance, dictionary dispatch (see "The OOP model") <- NEXT
+- A4.6. Composition-first OOP: receiver methods (DONE, v0.0.13); `class`,
+  `trait`, `open` single inheritance, dictionary dispatch still to come
+  (see "The OOP model") <- IN PROGRESS
 - A4.7. Signature grammar: money/unit literals (`$19.99`, `8.25%`, `5.km`),
   string interpolation, pipelines
 - A4+. OOP by default, SOLID-aligned: by-pointer ABI + receiver methods,

@@ -1,0 +1,8 @@
+struct Account { balance: Decimal<2> }
+fn (mut self: Account) deposit(amount: Decimal<2>) -> Decimal<2> {
+    self.balance = self.balance + amount;
+    return self.balance;
+}
+let acct: Account = Account { balance: 100.00 };
+acct.deposit(10.00);
+print(acct.balance);

@@ -43,7 +43,7 @@
 //!     same way, so you get a named error rather than a raw SIGFPE.
 
 use crate::ast::{BinOp, CmpOp, Rounding, Type};
-use crate::typeck::{TypedExpr, TypedExprKind, TypedFn, TypedProgram, TypedStmt};
+use crate::typeck::{TypedExpr, TypedExprKind, TypedFn, TypedMethod, TypedProgram, TypedStmt};
 use inkwell::types::StructType;
 
 use inkwell::builder::Builder;
@@ -76,6 +76,8 @@ pub struct CodeGen<'ctx> {
     narrow_check_fn: Option<FunctionValue<'ctx>>,
     /// user fn name -> (param types, return type), for aggregate call lowering
     fn_sigs: HashMap<String, (Vec<Type>, Type)>,
+    /// (receiver, method name) -> its LLVM function (mangled `bx.<Recv>.<method>`)
+    methods: HashMap<(String, String), FunctionValue<'ctx>>,
     /// the hidden sret pointer of the function being generated, if it returns
     /// an aggregate
     current_sret: Option<PointerValue<'ctx>>,
@@ -110,6 +112,7 @@ impl<'ctx> CodeGen<'ctx> {
             index_check_fn: None,
             narrow_check_fn: None,
             fn_sigs: HashMap::new(),
+            methods: HashMap::new(),
             current_sret: None,
             struct_types: HashMap::new(),
             struct_fields: HashMap::new(),
@@ -163,6 +166,23 @@ impl<'ctx> CodeGen<'ctx> {
         // Define their bodies.
         for f in &prog.fns {
             self.gen_fn(f)?;
+        }
+
+        // Methods: namespaced by (receiver, name), mangled `bx.<Recv>.<name>`.
+        for m in &prog.methods {
+            let param_tys: Vec<Type> = m.params.iter().map(|(_, t)| t.clone()).collect();
+            let mangled = format!("bx.{}.{}", m.receiver, m.name);
+            let llf = self.declare_method(
+                &mangled,
+                &Type::Named(m.receiver.clone()),
+                m.receiver_mut,
+                &param_tys,
+                &m.ret,
+            );
+            self.methods.insert((m.receiver.clone(), m.name.clone()), llf);
+        }
+        for m in &prog.methods {
+            self.gen_method(m)?;
         }
 
         // define: i32 @main()
@@ -288,6 +308,10 @@ impl<'ctx> CodeGen<'ctx> {
                 let val = self.gen_expr(value)?;
                 let ptr = self.gen_element_ptr(name, *len, index)?;
                 self.builder.build_store(ptr, val).map_err(|e| e.to_string())?;
+                Ok(())
+            }
+            TypedStmt::ExprStmt(e) => {
+                self.gen_expr(e)?;
                 Ok(())
             }
             TypedStmt::While { cond, body } => self.gen_while(cond, body),
@@ -455,6 +479,116 @@ impl<'ctx> CodeGen<'ctx> {
             }
         }
         f
+    }
+
+    /// Declare a method. Identical to `declare_fn` except for the receiver:
+    /// `self` is always passed as a pointer, but it gets the `byval(T)`
+    /// attribute ONLY for a non-mutating method. A mutating method's `self`
+    /// is a true reference on purpose — the one place Burxt passes an
+    /// aggregate by address rather than by value, mirroring the existing
+    /// field-assignment mutability rule.
+    fn declare_method(
+        &self,
+        name: &str,
+        receiver_ty: &Type,
+        receiver_mut: bool,
+        params: &[Type],
+        ret: &Type,
+    ) -> FunctionValue<'ctx> {
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+        let mut ll_params: Vec<BasicMetadataTypeEnum> = Vec::new();
+        let ret_is_agg = is_aggregate(ret);
+        if ret_is_agg {
+            ll_params.push(ptr.into());
+        }
+        ll_params.push(ptr.into()); // self, always by address
+        for p in params {
+            if is_aggregate(p) {
+                ll_params.push(ptr.into());
+            } else {
+                ll_params.push(self.llvm_type(p).into());
+            }
+        }
+        let fn_ty = if ret_is_agg {
+            self.ctx.void_type().fn_type(&ll_params, false)
+        } else {
+            self.llvm_type(ret).fn_type(&ll_params, false)
+        };
+        let f = self.module.add_function(name, fn_ty, None);
+
+        use inkwell::attributes::AttributeLoc;
+        let mut idx = 0u32;
+        if ret_is_agg {
+            let attr = self.ctx.create_type_attribute(
+                inkwell::attributes::Attribute::get_named_enum_kind_id("sret"),
+                self.llvm_type(ret).as_any_type_enum(),
+            );
+            f.add_attribute(AttributeLoc::Param(0), attr);
+            idx = 1;
+        }
+        if !receiver_mut {
+            let attr = self.ctx.create_type_attribute(
+                inkwell::attributes::Attribute::get_named_enum_kind_id("byval"),
+                self.llvm_type(receiver_ty).as_any_type_enum(),
+            );
+            f.add_attribute(AttributeLoc::Param(idx), attr);
+        }
+        idx += 1;
+        for p in params {
+            if is_aggregate(p) {
+                let attr = self.ctx.create_type_attribute(
+                    inkwell::attributes::Attribute::get_named_enum_kind_id("byval"),
+                    self.llvm_type(p).as_any_type_enum(),
+                );
+                f.add_attribute(AttributeLoc::Param(idx), attr);
+            }
+            idx += 1;
+        }
+        f
+    }
+
+    /// Generate a method body. `self` binds to the incoming pointer directly
+    /// in both cases: for a non-mutating method `byval` already gave us a
+    /// private copy, so writes are safe; for a mutating method the pointer
+    /// IS the caller's storage, and typeck already proved the call site holds
+    /// a `let mut` binding, so writing through it is exactly the intended
+    /// mutation.
+    fn gen_method(&mut self, m: &TypedMethod) -> Result<(), String> {
+        let llf = self.methods[&(m.receiver.clone(), m.name.clone())];
+        let entry = self.ctx.append_basic_block(llf, "entry");
+        self.builder.position_at_end(entry);
+        self.vars.clear();
+
+        let ret_is_agg = is_aggregate(&m.ret);
+        self.current_sret = if ret_is_agg {
+            Some(llf.get_nth_param(0).unwrap().into_pointer_value())
+        } else {
+            None
+        };
+        let self_idx = if ret_is_agg { 1 } else { 0 };
+        let self_arg = llf.get_nth_param(self_idx as u32).unwrap();
+        self.vars.insert(
+            "self".to_string(),
+            (self_arg.into_pointer_value(), Type::Named(m.receiver.clone())),
+        );
+
+        let param_offset = self_idx + 1;
+        for (i, (name, ty)) in m.params.iter().enumerate() {
+            let arg = llf.get_nth_param((param_offset + i) as u32).unwrap();
+            if is_aggregate(ty) {
+                self.vars.insert(name.clone(), (arg.into_pointer_value(), ty.clone()));
+            } else {
+                let slot = self.create_entry_alloca(name, ty)?;
+                self.builder.build_store(slot, arg).map_err(|e| e.to_string())?;
+                self.vars.insert(name.clone(), (slot, ty.clone()));
+            }
+        }
+
+        for stmt in &m.body {
+            self.gen_stmt(stmt)?;
+        }
+        self.current_sret = None;
+        Ok(())
     }
 
     /// Compute the layout of a Burxt type per the no-hidden-header guarantee.
@@ -877,6 +1011,88 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder
                     .build_extract_value(agg, *index, "field")
                     .map_err(|e| e.to_string())
+            }
+            TypedExprKind::MethodCall { receiver, method, receiver_mut, base, args } => {
+                let f = *self
+                    .methods
+                    .get(&(receiver.clone(), method.clone()))
+                    .ok_or_else(|| {
+                        format!("codegen bug: unknown method {}.{}", receiver, method)
+                    })?;
+                let mut vals: Vec<BasicMetadataValueEnum> = Vec::new();
+
+                let sret_slot = if is_aggregate(&e.ty) {
+                    let slot = self.create_entry_alloca("mret_tmp", &e.ty)?;
+                    vals.push(slot.into());
+                    Some(slot)
+                } else {
+                    None
+                };
+
+                // The receiver's address: for a mutating method typeck has
+                // already proven `base` is a plain `let mut` binding, so this
+                // yields the caller's real storage; for a non-mutating method
+                // it may also be a materialized temporary — either way LLVM's
+                // byval attribute (added below) makes the callee's copy when
+                // one is needed.
+                let recv_addr = self.gen_aggregate_addr(base)?;
+                vals.push(recv_addr.into());
+
+                for a in args {
+                    if is_aggregate(&a.ty) {
+                        vals.push(self.gen_aggregate_addr(a)?.into());
+                    } else {
+                        vals.push(self.gen_expr(a)?.into());
+                    }
+                }
+
+                let call = self
+                    .builder
+                    .build_call(f, &vals, "mcall")
+                    .map_err(|e| e.to_string())?;
+
+                use inkwell::attributes::{Attribute, AttributeLoc};
+                let mut idx = 0u32;
+                if sret_slot.is_some() {
+                    let attr = self.ctx.create_type_attribute(
+                        Attribute::get_named_enum_kind_id("sret"),
+                        self.llvm_type(&e.ty).as_any_type_enum(),
+                    );
+                    call.add_attribute(AttributeLoc::Param(0), attr);
+                    idx = 1;
+                }
+                if !receiver_mut {
+                    let attr = self.ctx.create_type_attribute(
+                        Attribute::get_named_enum_kind_id("byval"),
+                        self.llvm_type(&Type::Named(receiver.clone())).as_any_type_enum(),
+                    );
+                    call.add_attribute(AttributeLoc::Param(idx), attr);
+                }
+                idx += 1;
+                for a in args {
+                    if is_aggregate(&a.ty) {
+                        let attr = self.ctx.create_type_attribute(
+                            Attribute::get_named_enum_kind_id("byval"),
+                            self.llvm_type(&a.ty).as_any_type_enum(),
+                        );
+                        call.add_attribute(AttributeLoc::Param(idx), attr);
+                    }
+                    idx += 1;
+                }
+
+                if let Some(slot) = sret_slot {
+                    return self
+                        .builder
+                        .build_load(self.llvm_type(&e.ty), slot, "mret_val")
+                        .map_err(|e| e.to_string());
+                }
+                match call.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(v) => Ok(v),
+                    _ => Err(format!(
+                        "codegen bug: call to {}.{} returned void",
+                        receiver, method
+                    )),
+                }
             }
             TypedExprKind::ArrayLit(_) => {
                 Err("codegen bug: array literal outside a let initializer".to_string())

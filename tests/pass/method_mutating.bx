@@ -1,0 +1,19 @@
+// `fn (mut self: T) ...` mutates the CALLER's value: the receiver is a true
+// reference in this one case, mirroring field assignment's own mutability
+// rule (callable only through a `let mut` binding). Calling it purely for
+// its side effect uses the new expression-statement form.
+struct Account { balance: Decimal<2> }
+
+fn (mut self: Account) deposit(amount: Decimal<2>) -> Decimal<2> {
+    self.balance = self.balance + amount;
+    return self.balance;
+}
+fn (self: Account) balance_of() -> Decimal<2> {
+    return self.balance;
+}
+
+let mut acct: Account = Account { balance: 100.00 };
+acct.deposit(25.50);
+print(acct.balance_of());
+print(acct.deposit(10.00));
+print(acct.balance);

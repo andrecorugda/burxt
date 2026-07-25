@@ -47,6 +47,7 @@ impl Parser {
         let mut structs = Vec::new();
         let mut externs = Vec::new();
         let mut fns = Vec::new();
+        let mut methods = Vec::new();
         let mut stmts = Vec::new();
         while !self.at(&Token::Eof) {
             if self.at(&Token::Struct) {
@@ -54,15 +55,26 @@ impl Parser {
             } else if self.at(&Token::Extern) {
                 externs.push(self.parse_extern()?);
             } else if self.at(&Token::Fn) {
-                fns.push(self.parse_fn()?);
+                // `fn (self: T) name(...)` is a method; `fn name(...)` is a
+                // free function — the `(` right after `fn` is the tell.
+                if self.peek_at(1) == &Token::LParen {
+                    methods.push(self.parse_method()?);
+                } else {
+                    fns.push(self.parse_fn()?);
+                }
             } else {
                 stmts.push(self.parse_stmt()?);
             }
         }
-        Ok(Program { structs, externs, fns, stmts })
+        Ok(Program { structs, externs, fns, methods, stmts })
     }
 
     // ---- helpers ----
+
+    /// Peek `offset` tokens ahead without consuming (0 = current).
+    fn peek_at(&self, offset: usize) -> &Token {
+        self.toks.get(self.pos + offset).unwrap_or(&Token::Eof)
+    }
 
     fn peek(&self) -> &Token {
         &self.toks[self.pos]
@@ -134,6 +146,41 @@ impl Parser {
         Ok(FnDef { name, params, ret, body })
     }
 
+    /// `fn (self: Type) name(params) -> ret { body }`, or `fn (mut self: ...)`
+    /// for a mutating method.
+    fn parse_method(&mut self) -> Result<MethodDef, String> {
+        self.expect(&Token::Fn)?;
+        self.expect(&Token::LParen)?;
+        let receiver_mut = if self.at(&Token::Mut) {
+            self.bump();
+            true
+        } else {
+            false
+        };
+        if !self.at(&Token::SelfKw) {
+            return Err(format!(
+                "expected `self` in the receiver clause `fn ({}self: Type)`, found {}",
+                if receiver_mut { "mut " } else { "" },
+                self.peek().describe()
+            ));
+        }
+        self.bump();
+        self.expect(&Token::Colon)?;
+        let receiver = match self.bump() {
+            Token::Ident(s) => s,
+            other => {
+                return Err(format!(
+                    "expected a struct name after `self:`, found {}",
+                    other.describe()
+                ))
+            }
+        };
+        self.expect(&Token::RParen)?;
+        let (name, params, ret) = self.parse_fn_signature()?;
+        let body = self.parse_block()?;
+        Ok(MethodDef { receiver, receiver_mut, name, params, ret, body })
+    }
+
     fn parse_fn_signature(&mut self) -> Result<(String, Vec<Param>, Type), String> {
         let name = match self.bump() {
             Token::Ident(s) => s,
@@ -193,17 +240,33 @@ impl Parser {
             Token::Return => self.parse_return(),
             Token::If => self.parse_if(),
             Token::While => self.parse_while(),
-            Token::Ident(_) => self.parse_assign(),
+            Token::Ident(_) | Token::SelfKw => self.parse_assign(),
             other => Err(format!("expected statement, found {}", other.describe())),
         }
     }
 
+    /// A statement starting with an identifier (or `self`) is one of:
+    ///   name = value;                  assignment
+    ///   name[index] = value;           element assignment
+    ///   name.a.b = value;              field assignment
+    ///   name(args);                    a call kept for its side effect
+    ///   name.a.b.method(args);         a method call kept for its side effect
+    /// The dot-chain is walked once; hitting `(` after a segment means that
+    /// segment is a method name, not a field, and everything read so far
+    /// becomes the call's base expression.
     fn parse_assign(&mut self) -> Result<Stmt, String> {
         let name = match self.bump() {
             Token::Ident(s) => s,
+            Token::SelfKw => "self".to_string(),
             other => return Err(format!("expected identifier, found {}", other.describe())),
         };
-        // a[i] = value;
+
+        if self.at(&Token::LParen) {
+            let args = self.parse_call_args()?;
+            self.expect(&Token::Semicolon)?;
+            return Ok(Stmt::ExprStmt(Expr::Call { name, args }));
+        }
+
         if self.at(&Token::LBracket) {
             self.bump();
             let index = self.parse_expr()?;
@@ -213,14 +276,26 @@ impl Parser {
             self.expect(&Token::Semicolon)?;
             return Ok(Stmt::AssignIndex { name, index, value });
         }
+
         let mut path = Vec::new();
         while self.at(&Token::Dot) {
             self.bump();
-            match self.bump() {
-                Token::Ident(f) => path.push(f),
+            let seg = match self.bump() {
+                Token::Ident(f) => f,
                 other => return Err(format!("expected a field name after '.', found {}", other.describe())),
+            };
+            if self.at(&Token::LParen) {
+                let args = self.parse_call_args()?;
+                self.expect(&Token::Semicolon)?;
+                let mut base = Expr::Var(name);
+                for f in path {
+                    base = Expr::Field { base: Box::new(base), field: f };
+                }
+                return Ok(Stmt::ExprStmt(Expr::MethodCall { base: Box::new(base), method: seg, args }));
             }
+            path.push(seg);
         }
+
         self.expect(&Token::Equals)?;
         let value = self.parse_expr()?;
         self.expect(&Token::Semicolon)?;
@@ -229,6 +304,25 @@ impl Parser {
         } else {
             Ok(Stmt::AssignField { name, path, value })
         }
+    }
+
+    /// Parse a parenthesized, comma-separated argument list, including the
+    /// parens: `(a, b, c)`.
+    fn parse_call_args(&mut self) -> Result<Vec<Expr>, String> {
+        self.expect(&Token::LParen)?;
+        let mut args = Vec::new();
+        if !self.at(&Token::RParen) {
+            loop {
+                args.push(self.parse_expr()?);
+                if self.at(&Token::Comma) {
+                    self.bump();
+                } else {
+                    break;
+                }
+            }
+        }
+        self.expect(&Token::RParen)?;
+        Ok(args)
     }
 
     fn parse_while(&mut self) -> Result<Stmt, String> {
@@ -453,8 +547,9 @@ impl Parser {
         Ok(lhs)
     }
 
-    /// A factor is a primary followed by any chain of `.field` accesses,
-    /// optionally negated: `-item.price` is Neg(Field(item, price)).
+    /// A factor is a primary followed by any chain of `.field` accesses and
+    /// `.method(args)` calls, optionally negated:
+    /// `-item.price` is Neg(Field(item, price)).
     fn parse_factor(&mut self) -> Result<Expr, String> {
         if self.at(&Token::Minus) {
             self.bump();
@@ -464,11 +559,28 @@ impl Parser {
         let mut e = self.parse_primary()?;
         while self.at(&Token::Dot) {
             self.bump();
-            let field = match self.bump() {
+            let name = match self.bump() {
                 Token::Ident(f) => f,
-                other => return Err(format!("expected a field name after '.', found {}", other.describe())),
+                other => return Err(format!("expected a field or method name after '.', found {}", other.describe())),
             };
-            e = Expr::Field { base: Box::new(e), field };
+            if self.at(&Token::LParen) {
+                self.bump();
+                let mut args = Vec::new();
+                if !self.at(&Token::RParen) {
+                    loop {
+                        args.push(self.parse_expr()?);
+                        if self.at(&Token::Comma) {
+                            self.bump();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.expect(&Token::RParen)?;
+                e = Expr::MethodCall { base: Box::new(e), method: name, args };
+            } else {
+                e = Expr::Field { base: Box::new(e), field: name };
+            }
         }
         Ok(e)
     }
@@ -480,6 +592,10 @@ impl Parser {
             Token::True => Ok(Expr::BoolLit(true)),
             Token::False => Ok(Expr::BoolLit(false)),
             Token::Str(s) => Ok(Expr::StrLit(s)),
+            // `self` reads as a plain variable in expression position — its
+            // meaning (and mutability) comes from the receiver clause, not
+            // from special-casing here.
+            Token::SelfKw => Ok(Expr::Var("self".to_string())),
             Token::Ident(s) => {
                 if self.at(&Token::LParen) {
                     self.bump();
