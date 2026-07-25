@@ -1,1 +1,1 @@
-only Int may cross the C boundary
+only Int and String may cross the C boundary

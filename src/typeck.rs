@@ -42,6 +42,7 @@ pub enum TypedExprKind {
     /// `unscaled` is value * 10^scale.
     DecimalLit { unscaled: i64 },
     BoolLit(bool),
+    StrLit(String),
     Var(String),
     Binary {
         op: BinOp,
@@ -79,11 +80,12 @@ pub struct TypedFn {
 }
 
 /// An extern declaration, ready for codegen: the unmangled symbol name and
-/// its arity (every FFI value is an Int, i.e. one i64).
+/// its full signature (codegen maps each Burxt type to its C ABI type).
 #[derive(Debug, Clone)]
 pub struct TypedExtern {
     pub name: String,
-    pub arity: usize,
+    pub params: Vec<Type>,
+    pub ret: Type,
 }
 
 #[derive(Debug, Clone)]
@@ -113,9 +115,13 @@ impl TypeChecker {
         let mut externs = Vec::new();
         for e in &prog.externs {
             self.check_extern(e)?;
-            let param_tys = e.params.iter().map(|p| p.ty.clone()).collect();
-            self.fns.insert(e.name.clone(), (param_tys, e.ret.clone()));
-            externs.push(TypedExtern { name: e.name.clone(), arity: e.params.len() });
+            let param_tys: Vec<Type> = e.params.iter().map(|p| p.ty.clone()).collect();
+            self.fns.insert(e.name.clone(), (param_tys.clone(), e.ret.clone()));
+            externs.push(TypedExtern {
+                name: e.name.clone(),
+                params: param_tys,
+                ret: e.ret.clone(),
+            });
         }
         for f in &prog.fns {
             if self.fns.contains_key(&f.name) {
@@ -139,9 +145,12 @@ impl TypeChecker {
         Ok(TypedProgram { externs, fns, stmts })
     }
 
-    /// The FFI contract for now: only Int crosses the C boundary. C has no
-    /// Decimal — passing the raw scaled integer would silently shed its scale
-    /// and rounding contract, the exact meaning-loss Burxt exists to refuse.
+    /// The FFI contract: Int and String cross the C boundary as parameters
+    /// (String passes a borrowed, read-only `const char*`). C has no Decimal —
+    /// passing the raw scaled integer would silently shed its scale and
+    /// rounding contract, the exact meaning-loss Burxt exists to refuse.
+    /// Returns stay Int-only: Burxt cannot yet track who owns memory a C
+    /// function returns.
     fn check_extern(&self, e: &ExternFn) -> Result<(), String> {
         const RESERVED: [&str; 3] = ["printf", "fputs", "exit"];
         if RESERVED.contains(&e.name.as_str()) {
@@ -155,11 +164,11 @@ impl TypeChecker {
             return Err(format!("function `{}` is defined twice", e.name));
         }
         for p in &e.params {
-            if p.ty != Type::Int {
+            if !matches!(p.ty, Type::Int | Type::String) {
                 return Err(format!(
                     "in extern fn `{}`, parameter `{}` has type {}, but only Int \
-                     may cross the C boundary for now — C has no {}, and the raw \
-                     value would silently lose its meaning.",
+                     and String may cross the C boundary for now — C has no {}, \
+                     and the raw value would silently lose its meaning.",
                     e.name, p.name, p.ty, p.ty
                 ));
             }
@@ -167,9 +176,9 @@ impl TypeChecker {
         if e.ret != Type::Int {
             return Err(format!(
                 "extern fn `{}` returns {}, but only Int may cross the C boundary \
-                 for now — C has no {}, and the raw value would silently lose its \
-                 meaning.",
-                e.name, e.ret, e.ret
+                 as a return for now — Burxt cannot yet track who owns memory a C \
+                 function returns.",
+                e.name, e.ret
             ));
         }
         Ok(())
@@ -319,6 +328,10 @@ impl TypeChecker {
 
             Expr::BoolLit(b) => Ok(TypedExpr { ty: Type::Bool, kind: TypedExprKind::BoolLit(*b) }),
 
+            Expr::StrLit(s) => {
+                Ok(TypedExpr { ty: Type::String, kind: TypedExprKind::StrLit(s.clone()) })
+            }
+
             Expr::DecimalLit { unscaled, scale } => {
                 // Determine the target scale (and rounding contract) from
                 // context if available. The contract never rounds the literal
@@ -416,6 +429,11 @@ impl TypeChecker {
         use Type::*;
         match (lhs, rhs) {
             (Int, Int) => Ok(()),
+            (String, String) => Err(
+                "String comparison is not available yet — it needs a byte-equality \
+                 runtime helper, coming with collections."
+                    .to_string(),
+            ),
             (Bool, Bool) => match op {
                 CmpOp::Eq | CmpOp::Ne => Ok(()),
                 _ => Err(format!(
@@ -452,6 +470,14 @@ impl TypeChecker {
 
             // Integer arithmetic.
             (_, Int, Int) => Ok(Int),
+
+            // String + String is concatenation — deferred until Burxt has an
+            // allocation story. Refuse loudly with the reason.
+            (BinOp::Add, String, String) => Err(
+                "`+` on String is concatenation, which needs memory allocation — \
+                 coming with collections (A4)."
+                    .to_string(),
+            ),
 
             // Decimal +/- Decimal: exact, but the types must match exactly
             // (same scale AND same rounding contract).

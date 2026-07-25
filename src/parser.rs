@@ -252,6 +252,7 @@ impl Parser {
         match self.bump() {
             Token::TyInt => Ok(Type::Int),
             Token::TyBool => Ok(Type::Bool),
+            Token::TyString => Ok(Type::String),
             Token::TyDecimal => {
                 self.expect(&Token::Lt)?;
                 let scale = match self.bump() {
@@ -339,6 +340,7 @@ impl Parser {
             Token::Decimal(unscaled, scale) => Ok(Expr::DecimalLit { unscaled, scale }),
             Token::True => Ok(Expr::BoolLit(true)),
             Token::False => Ok(Expr::BoolLit(false)),
+            Token::Str(s) => Ok(Expr::StrLit(s)),
             Token::Ident(s) => {
                 if self.at(&Token::LParen) {
                     self.bump();

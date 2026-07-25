@@ -11,6 +11,8 @@ pub enum Token {
     /// A decimal literal captured exactly: (unscaled value, scale).
     /// `19.99` -> Decimal(1999, 2). `0.5` -> Decimal(5, 1).
     Decimal(i64, u32),
+    /// A string literal, escapes already resolved.
+    Str(String),
     // identifiers & keywords
     Ident(String),
     Let,
@@ -27,6 +29,7 @@ pub enum Token {
     // type keywords
     TyInt,
     TyBool,
+    TyString,
     TyDecimal,
     RoundHalfEven,
     RoundHalfUp,
@@ -128,6 +131,11 @@ impl<'a> Lexer<'a> {
             _ => {}
         }
 
+        // string literal
+        if c == '"' {
+            return self.lex_string();
+        }
+
         // number (int or decimal)
         if c.is_ascii_digit() {
             return self.lex_number();
@@ -209,6 +217,46 @@ impl<'a> Lexer<'a> {
         Ok(Token::Int(value))
     }
 
+    /// Lex a double-quoted, single-line string literal. Escapes are resolved
+    /// here: exactly \\ \" \n \t. There is no \0 — by construction a Burxt
+    /// string never contains an interior NUL.
+    fn lex_string(&mut self) -> Result<Token, String> {
+        self.chars.next(); // opening quote
+        let mut s = String::new();
+        loop {
+            match self.chars.next() {
+                Some('"') => return Ok(Token::Str(s)),
+                None | Some('\n') => {
+                    return Err(
+                        "unterminated string literal — close it with `\"` before \
+                         the end of the line"
+                            .to_string(),
+                    )
+                }
+                Some('\\') => match self.chars.next() {
+                    Some('\\') => s.push('\\'),
+                    Some('"') => s.push('"'),
+                    Some('n') => s.push('\n'),
+                    Some('t') => s.push('\t'),
+                    Some(other) => {
+                        return Err(format!(
+                            "unknown escape `\\{}` — Burxt strings support \\\\, \\\", \\n and \\t",
+                            other
+                        ))
+                    }
+                    None => {
+                        return Err(
+                            "unterminated string literal — close it with `\"` before \
+                             the end of the line"
+                                .to_string(),
+                        )
+                    }
+                },
+                Some(c) => s.push(c),
+            }
+        }
+    }
+
     fn lex_ident_or_keyword(&mut self) -> Token {
         let mut s = String::new();
         while let Some(&c) = self.chars.peek() {
@@ -233,6 +281,7 @@ impl<'a> Lexer<'a> {
             "false" => Token::False,
             "Int" => Token::TyInt,
             "Bool" => Token::TyBool,
+            "String" => Token::TyString,
             "Decimal" => Token::TyDecimal,
             "RoundHalfEven" => Token::RoundHalfEven,
             "RoundHalfUp" => Token::RoundHalfUp,

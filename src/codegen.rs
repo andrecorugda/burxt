@@ -6,11 +6,13 @@
 //! Representation choices:
 //!   * `Int`         -> LLVM i64
 //!   * `Bool`        -> LLVM i64 holding 0 or 1 (i1 only transiently, at
-//!                      comparisons and branches) — one uniform value width
-//!                      keeps variables, params and returns simple.
+//!                      comparisons and branches).
 //!   * `Decimal<S>`  -> LLVM i64 holding the *scaled* value (value * 10^S).
 //!                      e.g. 19.99 as Decimal<2> is the i64 1999. This is exact:
 //!                      no float ever appears in the generated program.
+//!   * `String`      -> LLVM opaque `ptr` to an immutable NUL-terminated byte
+//!                      array in .rodata. Never ptrtoint'ed into an integer —
+//!                      the target decides pointer width (wasm32 is coming).
 //!   * user `fn f`   -> LLVM function `bx.f` (the prefix keeps user names from
 //!                      ever colliding with libc symbols like printf/main).
 //!
@@ -40,7 +42,8 @@ use crate::typeck::{TypedExpr, TypedExprKind, TypedFn, TypedProgram, TypedStmt};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::values::{BasicMetadataValueEnum, FunctionValue, IntValue, PointerValue};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use std::collections::HashMap;
 
@@ -86,7 +89,6 @@ impl<'ctx> CodeGen<'ctx> {
     /// Emit the whole program: user functions first, then the top-level
     /// statements as `main`.
     pub fn compile(&mut self, prog: &TypedProgram) -> Result<(), String> {
-        let i64t = self.ctx.i64_type();
         let i32t = self.ctx.i32_type();
 
         // declare: i32 @printf(i8*, ...)
@@ -95,18 +97,20 @@ impl<'ctx> CodeGen<'ctx> {
         self.printf = Some(self.module.add_function("printf", printf_ty, None));
 
         // Declare extern fns under their real symbol names — no mangling is
-        // the whole point of FFI. (Every FFI value is an Int, i.e. one i64.)
+        // the whole point of FFI. (Int -> i64, String -> const char*.)
         for e in &prog.externs {
-            let param_tys = vec![i64t.into(); e.arity];
-            let fn_ty = i64t.fn_type(&param_tys, false);
+            let param_tys: Vec<BasicMetadataTypeEnum> =
+                e.params.iter().map(|t| self.llvm_type(t).into()).collect();
+            let fn_ty = self.llvm_type(&e.ret).fn_type(&param_tys, false);
             let llf = self.module.add_function(&e.name, fn_ty, None);
             self.user_fns.insert(e.name.clone(), llf);
         }
 
         // Declare every user function up front (mutual recursion, any order).
         for f in &prog.fns {
-            let param_tys = vec![i64t.into(); f.params.len()];
-            let fn_ty = i64t.fn_type(&param_tys, false);
+            let param_tys: Vec<BasicMetadataTypeEnum> =
+                f.params.iter().map(|(_, t)| self.llvm_type(t).into()).collect();
+            let fn_ty = self.llvm_type(&f.ret).fn_type(&param_tys, false);
             let llf = self.module.add_function(&format!("bx.{}", f.name), fn_ty, None);
             self.user_fns.insert(f.name.clone(), llf);
         }
@@ -148,7 +152,7 @@ impl<'ctx> CodeGen<'ctx> {
 
         // Spill each parameter to a stack slot so it behaves like any binding.
         for (i, (name, ty)) in f.params.iter().enumerate() {
-            let slot = self.create_entry_alloca(name)?;
+            let slot = self.create_entry_alloca(name, ty)?;
             let arg = llf.get_nth_param(i as u32).unwrap();
             self.builder.build_store(slot, arg).map_err(|e| e.to_string())?;
             self.vars.insert(name.clone(), (slot, ty.clone()));
@@ -166,7 +170,7 @@ impl<'ctx> CodeGen<'ctx> {
         match stmt {
             TypedStmt::Let { name, ty, value } => {
                 let val = self.gen_expr(value)?;
-                let slot = self.create_entry_alloca(name)?;
+                let slot = self.create_entry_alloca(name, ty)?;
                 self.builder.build_store(slot, val).map_err(|e| e.to_string())?;
                 self.vars.insert(name.clone(), (slot, ty.clone()));
                 Ok(())
@@ -202,7 +206,7 @@ impl<'ctx> CodeGen<'ctx> {
         let err = |e: inkwell::builder::BuilderError| e.to_string();
         let i64t = self.ctx.i64_type();
 
-        let cond_val = self.gen_expr(cond)?;
+        let cond_val = self.gen_expr(cond)?.into_int_value();
         let cond_i1 = self
             .builder
             .build_int_compare(inkwell::IntPredicate::NE, cond_val, i64t.const_zero(), "ifcond")
@@ -263,7 +267,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_unconditional_branch(cond_bb).map_err(err)?;
 
         self.builder.position_at_end(cond_bb);
-        let cond_val = self.gen_expr(cond)?;
+        let cond_val = self.gen_expr(cond)?.into_int_value();
         let cond_i1 = self
             .builder
             .build_int_compare(
@@ -287,10 +291,19 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
+    /// The LLVM type for a Burxt type. All scalars are i64; String is an
+    /// opaque pointer — the TARGET decides pointer width, never this code.
+    fn llvm_type(&self, ty: &Type) -> BasicTypeEnum<'ctx> {
+        match ty {
+            Type::Int | Type::Bool | Type::Decimal { .. } => self.ctx.i64_type().into(),
+            Type::String => self.ctx.ptr_type(AddressSpace::default()).into(),
+        }
+    }
+
     /// Put every alloca in the function's ENTRY block, not wherever the
     /// builder happens to be: an alloca inside a loop body would otherwise
     /// grow the stack on every iteration.
-    fn create_entry_alloca(&self, name: &str) -> Result<PointerValue<'ctx>, String> {
+    fn create_entry_alloca(&self, name: &str, ty: &Type) -> Result<PointerValue<'ctx>, String> {
         let function = self
             .builder
             .get_insert_block()
@@ -304,7 +317,7 @@ impl<'ctx> CodeGen<'ctx> {
             Some(first) => tmp.position_before(&first),
             None => tmp.position_at_end(entry),
         }
-        tmp.build_alloca(self.ctx.i64_type(), name).map_err(|e| e.to_string())
+        tmp.build_alloca(self.llvm_type(ty), name).map_err(|e| e.to_string())
     }
 
     /// Generate a block's statements in a child scope, mirroring the
@@ -333,12 +346,19 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_call(printf, &[fmt.into(), val.into()], "printf_int")
                     .map_err(|e| e.to_string())?;
             }
+            Type::String => {
+                // User bytes are always an ARGUMENT, never the format string.
+                let fmt = self.global_str("%s\n", "fmt_str");
+                self.builder
+                    .build_call(printf, &[fmt.into(), val.into()], "printf_str")
+                    .map_err(|e| e.to_string())?;
+            }
             Type::Bool => {
                 let is_true = self
                     .builder
                     .build_int_compare(
                         inkwell::IntPredicate::NE,
-                        val,
+                        val.into_int_value(),
                         self.ctx.i64_type().const_zero(),
                         "is_true",
                     )
@@ -359,6 +379,7 @@ impl<'ctx> CodeGen<'ctx> {
                 // Split |scaled value| into integer and fractional parts, exactly.
                 // The sign is printed separately: deriving it from int_part alone
                 // would drop it for values like -0.50, where int_part is 0.
+                let val = val.into_int_value();
                 let i64t = self.ctx.i64_type();
                 let pow = i64t.const_int(10u64.pow(*scale), false);
 
@@ -397,32 +418,34 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
-    fn gen_expr(&mut self, e: &TypedExpr) -> Result<IntValue<'ctx>, String> {
+    fn gen_expr(&mut self, e: &TypedExpr) -> Result<BasicValueEnum<'ctx>, String> {
         let i64t = self.ctx.i64_type();
         match &e.kind {
-            TypedExprKind::IntLit(n) => Ok(i64t.const_int(*n as u64, true)),
-            TypedExprKind::DecimalLit { unscaled } => Ok(i64t.const_int(*unscaled as u64, true)),
-            TypedExprKind::BoolLit(b) => Ok(i64t.const_int(*b as u64, false)),
+            TypedExprKind::IntLit(n) => Ok(i64t.const_int(*n as u64, true).into()),
+            TypedExprKind::DecimalLit { unscaled } => {
+                Ok(i64t.const_int(*unscaled as u64, true).into())
+            }
+            TypedExprKind::BoolLit(b) => Ok(i64t.const_int(*b as u64, false).into()),
+            TypedExprKind::StrLit(s) => Ok(self.global_str(s, "str").into()),
             TypedExprKind::Var(name) => {
-                let (slot, _) = self
+                let (slot, ty) = self
                     .vars
                     .get(name)
-                    .ok_or_else(|| format!("codegen: unknown variable {}", name))?;
-                let loaded = self
-                    .builder
-                    .build_load(i64t, *slot, name)
-                    .map_err(|e| e.to_string())?;
-                Ok(loaded.into_int_value())
+                    .ok_or_else(|| format!("codegen: unknown variable {}", name))?
+                    .clone();
+                self.builder
+                    .build_load(self.llvm_type(&ty), slot, name)
+                    .map_err(|e| e.to_string())
             }
             TypedExprKind::Binary { op, lhs, rhs } => {
-                let l = self.gen_expr(lhs)?;
-                let r = self.gen_expr(rhs)?;
+                let l = self.gen_expr(lhs)?.into_int_value();
+                let r = self.gen_expr(rhs)?.into_int_value();
                 // For our representation (scaled i64), Add/Sub map directly to
                 // integer ops, and so does Mul when at most one operand is a
                 // decimal (Decimal<S> * Int keeps the scale, exactly).
                 // Decimal*Decimal and Div produce extra digits and go through
                 // the rounding helper; typeck guarantees a contract is present.
-                match op {
+                let res = match op {
                     BinOp::Add | BinOp::Sub => self.build_checked(*op, l, r),
                     BinOp::Mul => {
                         let both_decimal = matches!(lhs.ty, Type::Decimal { .. })
@@ -450,11 +473,12 @@ impl<'ctx> CodeGen<'ctx> {
                             _ => self.build_round_div(mode, l, r),
                         }
                     }
-                }
+                }?;
+                Ok(res.into())
             }
             TypedExprKind::Compare { op, lhs, rhs } => {
-                let l = self.gen_expr(lhs)?;
-                let r = self.gen_expr(rhs)?;
+                let l = self.gen_expr(lhs)?.into_int_value();
+                let r = self.gen_expr(rhs)?.into_int_value();
                 // Scaled decimals of equal scale compare exactly as plain
                 // integers — no rescaling, no rounding, no float.
                 use inkwell::IntPredicate::*;
@@ -472,6 +496,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(|e| e.to_string())?;
                 self.builder
                     .build_int_z_extend(bit, i64t, "cmp_i64")
+                    .map(Into::into)
                     .map_err(|e| e.to_string())
             }
             TypedExprKind::Call { name, args } => {
@@ -488,7 +513,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_call(f, &vals, "call")
                     .map_err(|e| e.to_string())?;
                 match call.try_as_basic_value() {
-                    inkwell::values::ValueKind::Basic(v) => Ok(v.into_int_value()),
+                    inkwell::values::ValueKind::Basic(v) => Ok(v),
                     _ => Err(format!("codegen bug: call to {} returned void", name)),
                 }
             }

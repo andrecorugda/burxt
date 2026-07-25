@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.6)
+# Burxt — Design Notes (v0.0.7)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -184,6 +184,31 @@ Rules:
 - Extern calls typecheck exactly like ordinary calls — same arity and type
   errors, no special cases.
 
+### v0.0.7: strings — literals only, no heap, no lies
+
+A String is a pointer to an immutable, NUL-terminated byte array. In this
+slice every String is a literal living in .rodata, so there is NO allocation
+— and therefore no free/GC question to answer dishonestly. Operations that
+need allocation are loud, advice-style refusals until the allocation story
+exists:
+
+- `+` (concatenation): "needs memory allocation — coming with collections".
+- `==`/ordering: "needs a byte-equality runtime helper, coming with
+  collections".
+
+What works: literals with exactly four escapes (`\\ \" \n \t` — no `\0`, so
+interior NULs are unrepresentable), `print`, `let` / `let mut` rebinding,
+user-fn params and returns (every value is 'static by construction), and the
+FFI widening: an extern String parameter passes a borrowed, read-only
+`const char*`. Extern returns stay Int-only — Burxt cannot yet track who
+owns memory a C function returns.
+
+Codegen grew up for this: `gen_expr` now returns `BasicValueEnum`, variable
+slots and function signatures are typed per Burxt type, and String is LLVM's
+opaque `ptr` — never an integer, so pointer width stays the target's
+business (wasm32-safe). User bytes are always a printf ARGUMENT, never the
+format string.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -234,8 +259,12 @@ it travels.
   v0.0.5)
 - A3. FFI / call-into-C — THE KEY UNLOCK: how any Burxt program reaches
   platform APIs on every target. — DONE for Int signatures (v0.0.6);
-  widens with A4's types.
-- A4. Strings, structs, collections <- NEXT
+  String params (v0.0.7); widens further with A4's types.
+- A4. Strings (DONE, v0.0.7), structs, collections <- IN PROGRESS
+- A4+. OOP by default, SOLID-aligned: methods on structs, then interfaces
+  as behavioral contracts. Composition + interfaces, no implementation
+  inheritance — a type satisfies an interface exactly or it is a compile
+  error, so Liskov violations are unrepresentable.
 - A5. Refinement types ("balance >= 0", "splits sum to total")
 
 #### Phase B — cross-compilation and desktop

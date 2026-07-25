@@ -39,6 +39,10 @@ impl std::fmt::Display for Rounding {
 pub enum Type {
     Int,
     Bool,
+    /// An immutable, NUL-terminated byte string. In the current slice every
+    /// String is a literal living in .rodata — no allocation, no ownership
+    /// question. Concatenation/equality arrive with the allocation story.
+    String,
     /// Decimal with a fixed scale S (digits after the decimal point).
     /// Represented at runtime as a scaled i64: stored = value * 10^scale.
     Decimal { scale: u32, rounding: Option<Rounding> },
@@ -49,6 +53,7 @@ impl std::fmt::Display for Type {
         match self {
             Type::Int => write!(f, "Int"),
             Type::Bool => write!(f, "Bool"),
+            Type::String => write!(f, "String"),
             Type::Decimal { scale, rounding: None } => write!(f, "Decimal<{}>", scale),
             Type::Decimal { scale, rounding: Some(r) } => write!(f, "Decimal<{}, {}>", scale, r),
         }
@@ -113,6 +118,8 @@ pub enum Expr {
     DecimalLit { unscaled: i64, scale: u32 },
     /// `true` or `false`.
     BoolLit(bool),
+    /// A string literal, escapes already resolved by the lexer.
+    StrLit(String),
     /// A reference to a previously-bound name.
     Var(String),
     /// A binary operation.

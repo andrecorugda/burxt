@@ -1,0 +1,2 @@
+let s: String = 42;
+print(s);

@@ -1,0 +1,6 @@
+// The four escapes: \\ \" \n \t. There is no \0 — a Burxt string can
+// never contain an interior NUL, by construction.
+print("a\tb");
+print("say \"hi\"");
+print("back\\slash");
+print("two\nlines");

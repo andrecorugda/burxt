@@ -1,0 +1,3 @@
+let greeting: String = "Hello, Burxt!";
+print(greeting);
+print("inline literal");
