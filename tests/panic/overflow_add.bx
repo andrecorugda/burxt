@@ -1,0 +1,3 @@
+// Overflow checking covers decimals too (scaled i64 addition).
+let a: Decimal<2> = 92233720368547758.07;
+print(a + a);

@@ -3,6 +3,8 @@
 //! Data-driven layout:
 //!   tests/pass/NAME.bx  + NAME.stdout  — must compile & run; stdout must match exactly.
 //!   tests/fail/NAME.bx  + NAME.stderr  — must be rejected; stderr must contain the text.
+//!   tests/panic/NAME.bx + NAME.stderr  — must compile, but die at runtime with
+//!                                        a nonzero exit and that text on stderr.
 //!
 //! Each program is compiled with the real `burxt` binary (CARGO_BIN_EXE_burxt)
 //! inside a scratch directory, so executables and object files never land in
@@ -65,6 +67,32 @@ fn pass_programs_produce_expected_stdout() {
                 program.display(),
                 expected,
                 stdout
+            ));
+        }
+    }
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+}
+
+#[test]
+fn panic_programs_die_cleanly_at_runtime() {
+    let scratch = scratch_dir("panic");
+    let mut failures = Vec::new();
+    for (program, expected) in cases("panic", "stderr") {
+        let needle = expected.trim();
+        let out = burxt("run", &program, &scratch);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if out.status.success() {
+            failures.push(format!(
+                "{}: expected a runtime error, but it ran successfully",
+                program.display()
+            ));
+        } else if !stderr.contains(needle) {
+            failures.push(format!(
+                "{}: wrong runtime error\n  expected to contain: {:?}\n  actual stderr:       {:?}",
+                program.display(),
+                needle,
+                stderr
             ));
         }
     }

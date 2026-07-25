@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.4)
+# Burxt — Design Notes (v0.0.5)
 
 ## Grammar principle
 The grammar must be eloquent and easy to understand, without compromising the
@@ -127,8 +127,25 @@ Rules:
 - Codegen: every alloca goes in the function's entry block, so a `let`
   inside a loop body cannot grow the stack per iteration.
 
-## Roadmap after v0.0.4
-- overflow-checked arithmetic (or a wider decimal representation)
+## v0.0.5: checked arithmetic — no silently wrong numbers, ever
+Every `+`, `-`, `*` (including the internal double-scale products behind
+Decimal*Decimal and division) goes through `@burxt.checked.<op>`, built on
+LLVM's `llvm.s{add,sub,mul}.with.overflow` intrinsics. On overflow the
+program prints
+
+    burxt runtime error: arithmetic overflow — the exact result no longer
+    fits in the value range
+
+to stderr and exits with code 70. Division by zero (and the lone
+i64::MIN / -1 quotient) gets the same treatment — a named error instead of a
+raw SIGFPE. This closes the last "silently wrong number" hole in the i64
+representation; a wider representation can come later, but wraparound was
+never acceptable.
+
+The test suite gained a third category for this: tests/panic/*.bx must
+compile but die at runtime with the expected message and a nonzero exit.
+
+## Roadmap after v0.0.5
 - refinement types ("balance >= 0", "splits sum to total")
 - strings, arrays/records
 - self-hosting

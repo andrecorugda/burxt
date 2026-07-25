@@ -1,0 +1,3 @@
+// A wrapped money value is a wrong money value: overflow stops the program.
+let big: Int = 9223372036854775807;
+print(big * 2);

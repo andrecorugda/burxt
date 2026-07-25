@@ -25,8 +25,14 @@
 //!     helper `@burxt.round.<mode>(p, d)` = p/d rounded per the mode, built
 //!     from sdiv/srem plus a tie adjustment. One helper per mode per module,
 //!     created lazily — keeps expression codegen simple and the IR readable.
-//!   * Division by zero traps at runtime (SIGFPE), like C. A checked story
-//!     comes later; silently producing a wrong number is not an option.
+//!
+//! Runtime checks (silently wrong numbers are never an option):
+//!   * Every +, -, * goes through `@burxt.checked.<op>`, built on LLVM's
+//!     `llvm.s{add,sub,mul}.with.overflow` intrinsics. On overflow the program
+//!     prints a runtime error to stderr and exits with code 70 — a loud stop
+//!     instead of a silently wrapped money value.
+//!   * Division checks for a zero divisor (and the i64::MIN / -1 edge) the
+//!     same way, so you get a named error rather than a raw SIGFPE.
 
 use crate::ast::{BinOp, CmpOp, Rounding, Type};
 use crate::typeck::{TypedExpr, TypedExprKind, TypedFn, TypedProgram, TypedStmt};
@@ -46,10 +52,18 @@ pub struct CodeGen<'ctx> {
     vars: HashMap<String, (PointerValue<'ctx>, Type)>,
     /// lazily created rounding helpers, one per mode used by the program
     round_fns: HashMap<Rounding, FunctionValue<'ctx>>,
+    /// lazily created overflow-checked arithmetic helpers, one per operator
+    checked_fns: HashMap<BinOp, FunctionValue<'ctx>>,
     /// user function name -> its LLVM function (mangled `bx.<name>`)
     user_fns: HashMap<String, FunctionValue<'ctx>>,
     /// libc printf, declared once in compile()
     printf: Option<FunctionValue<'ctx>>,
+    /// libc pieces for runtime errors: (stderr global, fputs, exit)
+    panic_deps: Option<(
+        inkwell::values::GlobalValue<'ctx>,
+        FunctionValue<'ctx>,
+        FunctionValue<'ctx>,
+    )>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -62,8 +76,10 @@ impl<'ctx> CodeGen<'ctx> {
             builder,
             vars: HashMap::new(),
             round_fns: HashMap::new(),
+            checked_fns: HashMap::new(),
             user_fns: HashMap::new(),
             printf: None,
+            panic_deps: None,
         }
     }
 
@@ -398,22 +414,18 @@ impl<'ctx> CodeGen<'ctx> {
                 // Decimal*Decimal and Div produce extra digits and go through
                 // the rounding helper; typeck guarantees a contract is present.
                 match op {
-                    BinOp::Add => self.builder.build_int_add(l, r, "add").map_err(|e| e.to_string()),
-                    BinOp::Sub => self.builder.build_int_sub(l, r, "sub").map_err(|e| e.to_string()),
+                    BinOp::Add | BinOp::Sub => self.build_checked(*op, l, r),
                     BinOp::Mul => {
                         let both_decimal = matches!(lhs.ty, Type::Decimal { .. })
                             && matches!(rhs.ty, Type::Decimal { .. });
                         if both_decimal {
                             // (A * B) has scale 2S; divide by 10^S, rounding.
-                            let raw = self
-                                .builder
-                                .build_int_mul(l, r, "mul_raw")
-                                .map_err(|e| e.to_string())?;
+                            let raw = self.build_checked(BinOp::Mul, l, r)?;
                             let (scale, mode) = decimal_with_rounding(&e.ty)?;
                             let pow = i64t.const_int(10u64.pow(scale), false);
                             self.build_round_div(mode, raw, pow)
                         } else {
-                            self.builder.build_int_mul(l, r, "mul").map_err(|e| e.to_string())
+                            self.build_checked(BinOp::Mul, l, r)
                         }
                     }
                     BinOp::Div => {
@@ -422,10 +434,7 @@ impl<'ctx> CodeGen<'ctx> {
                             // A/B has scale 0; pre-scale by 10^S: round(A*10^S / B).
                             Type::Decimal { .. } => {
                                 let pow = i64t.const_int(10u64.pow(scale), false);
-                                let scaled = self
-                                    .builder
-                                    .build_int_mul(l, pow, "div_prescale")
-                                    .map_err(|e| e.to_string())?;
+                                let scaled = self.build_checked(BinOp::Mul, l, pow)?;
                                 self.build_round_div(mode, scaled, r)
                             }
                             // A/n keeps scale S: round(A / n).
@@ -477,6 +486,130 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
+    /// Emit the runtime-error tail: fputs(msg, stderr); exit(70); unreachable.
+    /// The builder must be positioned inside the (never-returning) panic path.
+    fn build_panic(&mut self, msg: &str) -> Result<(), String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let (stderr_g, fputs, exit) = match self.panic_deps {
+            Some(deps) => deps,
+            None => {
+                let ptr = self.ctx.ptr_type(AddressSpace::default());
+                let i32t = self.ctx.i32_type();
+                let stderr_g = self.module.add_global(ptr, None, "stderr");
+                let fputs_ty = i32t.fn_type(&[ptr.into(), ptr.into()], false);
+                let fputs = self.module.add_function("fputs", fputs_ty, None);
+                let exit_ty = self.ctx.void_type().fn_type(&[i32t.into()], false);
+                let exit = self.module.add_function("exit", exit_ty, None);
+                *self.panic_deps.insert((stderr_g, fputs, exit))
+            }
+        };
+        let msg_ptr = self.global_str(msg, "panic_msg");
+        let stream = self
+            .builder
+            .build_load(
+                self.ctx.ptr_type(AddressSpace::default()),
+                stderr_g.as_pointer_value(),
+                "stderr",
+            )
+            .map_err(err)?;
+        self.builder
+            .build_call(fputs, &[msg_ptr.into(), stream.into()], "fputs")
+            .map_err(err)?;
+        let code = self.ctx.i32_type().const_int(70, false);
+        self.builder.build_call(exit, &[code.into()], "exit").map_err(err)?;
+        self.builder.build_unreachable().map_err(err)?;
+        Ok(())
+    }
+
+    /// Emit a call to `checked_op(a, b)` — the overflow-trapping version of
+    /// +, - or *.
+    fn build_checked(
+        &mut self,
+        op: BinOp,
+        a: IntValue<'ctx>,
+        b: IntValue<'ctx>,
+    ) -> Result<IntValue<'ctx>, String> {
+        let f = self.checked_fn(op)?;
+        let call = self
+            .builder
+            .build_call(f, &[a.into(), b.into()], "checked")
+            .map_err(|e| e.to_string())?;
+        match call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => Ok(v.into_int_value()),
+            _ => Err("checked-arithmetic helper returned void".to_string()),
+        }
+    }
+
+    /// Get (or lazily define) `i64 @burxt.checked.<op>(i64, i64)`: performs the
+    /// operation via LLVM's overflow-reporting intrinsic and panics on overflow
+    /// instead of wrapping — a money value must never silently corrupt.
+    fn checked_fn(&mut self, op: BinOp) -> Result<FunctionValue<'ctx>, String> {
+        if let Some(f) = self.checked_fns.get(&op) {
+            return Ok(*f);
+        }
+        let (intrinsic_name, fn_name) = match op {
+            BinOp::Add => ("llvm.sadd.with.overflow", "burxt.checked.add"),
+            BinOp::Sub => ("llvm.ssub.with.overflow", "burxt.checked.sub"),
+            BinOp::Mul => ("llvm.smul.with.overflow", "burxt.checked.mul"),
+            BinOp::Div => return Err("checked_fn: division is handled by round_fn".to_string()),
+        };
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let saved_block = self.builder.get_insert_block();
+
+        let i64t = self.ctx.i64_type();
+        let intrinsic = inkwell::intrinsics::Intrinsic::find(intrinsic_name)
+            .ok_or_else(|| format!("LLVM intrinsic {} not found", intrinsic_name))?;
+        let intr_fn = intrinsic
+            .get_declaration(&self.module, &[i64t.into()])
+            .ok_or_else(|| format!("cannot declare {}", intrinsic_name))?;
+
+        let fn_ty = i64t.fn_type(&[i64t.into(), i64t.into()], false);
+        let f = self.module.add_function(fn_name, fn_ty, None);
+        let entry = self.ctx.append_basic_block(f, "entry");
+        let panic_bb = self.ctx.append_basic_block(f, "overflow");
+        let ok_bb = self.ctx.append_basic_block(f, "ok");
+
+        self.builder.position_at_end(entry);
+        let a = f.get_nth_param(0).unwrap().into();
+        let b = f.get_nth_param(1).unwrap().into();
+        let call = self
+            .builder
+            .build_call(intr_fn, &[a, b], "op")
+            .map_err(err)?;
+        let pair = match call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => v.into_struct_value(),
+            _ => return Err("overflow intrinsic returned void".to_string()),
+        };
+        let value = self
+            .builder
+            .build_extract_value(pair, 0, "value")
+            .map_err(err)?
+            .into_int_value();
+        let overflowed = self
+            .builder
+            .build_extract_value(pair, 1, "overflowed")
+            .map_err(err)?
+            .into_int_value();
+        self.builder
+            .build_conditional_branch(overflowed, panic_bb, ok_bb)
+            .map_err(err)?;
+
+        self.builder.position_at_end(panic_bb);
+        self.build_panic(
+            "burxt runtime error: arithmetic overflow — the exact result no \
+             longer fits in the value range\n",
+        )?;
+
+        self.builder.position_at_end(ok_bb);
+        self.builder.build_return(Some(&value)).map_err(err)?;
+
+        if let Some(bb) = saved_block {
+            self.builder.position_at_end(bb);
+        }
+        self.checked_fns.insert(op, f);
+        Ok(f)
+    }
+
     /// Emit a call to `round(p / d)` under the given mode.
     fn build_round_div(
         &mut self,
@@ -517,18 +650,54 @@ impl<'ctx> CodeGen<'ctx> {
         };
         let f = self.module.add_function(name, fn_ty, None);
         let entry = self.ctx.append_basic_block(f, "entry");
+        let div0_bb = self.ctx.append_basic_block(f, "div_by_zero");
+        let ovf_bb = self.ctx.append_basic_block(f, "quot_overflow");
+        let main_bb = self.ctx.append_basic_block(f, "main");
         self.builder.position_at_end(entry);
 
         let p = f.get_nth_param(0).unwrap().into_int_value();
         let d = f.get_nth_param(1).unwrap().into_int_value();
 
         let err = |e: inkwell::builder::BuilderError| e.to_string();
+
+        // Guard the two divisions that cannot produce a value: d == 0, and
+        // the lone overflowing quotient i64::MIN / -1. Both become a named
+        // runtime error instead of a raw SIGFPE.
+        let is_zero = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, d, i64t.const_zero(), "d_is_zero")
+            .map_err(err)?;
+        let min = i64t.const_int(i64::MIN as u64, true);
+        let minus_one_c = i64t.const_int(u64::MAX, true);
+        let p_min = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, p, min, "p_is_min")
+            .map_err(err)?;
+        let d_m1 = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, d, minus_one_c, "d_is_minus_one")
+            .map_err(err)?;
+        let ovf = self.builder.build_and(p_min, d_m1, "quot_overflows").map_err(err)?;
+        let cont_bb = self.ctx.append_basic_block(f, "nonzero");
+        self.builder.build_conditional_branch(is_zero, div0_bb, cont_bb).map_err(err)?;
+        self.builder.position_at_end(cont_bb);
+        self.builder.build_conditional_branch(ovf, ovf_bb, main_bb).map_err(err)?;
+
+        self.builder.position_at_end(div0_bb);
+        self.build_panic("burxt runtime error: division by zero\n")?;
+        self.builder.position_at_end(ovf_bb);
+        self.build_panic(
+            "burxt runtime error: arithmetic overflow — the exact result no \
+             longer fits in the value range\n",
+        )?;
+
+        self.builder.position_at_end(main_bb);
         let q = self.builder.build_int_signed_div(p, d, "q").map_err(err)?;
         let r = self.builder.build_int_signed_rem(p, d, "r").map_err(err)?;
         let abs_r = self.build_abs(r)?;
         let abs_d = self.build_abs(d)?;
         let two = i64t.const_int(2, false);
-        let r2 = self.builder.build_int_mul(abs_r, two, "r2").map_err(err)?;
+        let r2 = self.build_checked(BinOp::Mul, abs_r, two)?;
 
         use inkwell::IntPredicate::*;
         let need_bump = match mode {
@@ -580,11 +749,12 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     /// abs(x) for i64 via select — keeps fractional digits positive when the
-    /// whole value is negative.
-    fn build_abs(&self, x: IntValue<'ctx>) -> Result<IntValue<'ctx>, String> {
+    /// whole value is negative. The negation is overflow-checked: abs(i64::MIN)
+    /// does not exist, and pretending it does would print a wrong number.
+    fn build_abs(&mut self, x: IntValue<'ctx>) -> Result<IntValue<'ctx>, String> {
         let i64t = self.ctx.i64_type();
         let zero = i64t.const_zero();
-        let neg = self.builder.build_int_neg(x, "neg").map_err(|e| e.to_string())?;
+        let neg = self.build_checked(BinOp::Sub, zero, x)?;
         let is_neg = self
             .builder
             .build_int_compare(inkwell::IntPredicate::SLT, x, zero, "is_neg")

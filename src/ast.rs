@@ -56,7 +56,7 @@ impl std::fmt::Display for Type {
 }
 
 /// Binary arithmetic operators supported in the first slice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinOp {
     Add,
     Sub,

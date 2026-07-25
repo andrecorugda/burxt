@@ -1,0 +1,4 @@
+// Division by zero is a named runtime error, not a raw SIGFPE.
+let a: Decimal<2, RoundHalfEven> = 1.00;
+let z: Decimal<2, RoundHalfEven> = 0.00;
+print(a / z);
