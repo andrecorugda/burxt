@@ -1,0 +1,7 @@
+// CInt keeps C's 32-bit sign intact: strcmp's -1 must stay -1.
+// (Declared -> Int, the old i64 mapping read undefined upper bits.)
+extern fn strcmp(a: String, b: String) -> CInt;
+print(strcmp("abc", "abd"));
+print(strcmp("abc", "abd") < 0);
+print(strcmp("same", "same") == 0);
+print(strcmp("abd", "abc") > 0);

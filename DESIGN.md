@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.8)
+# Burxt — Design Notes (v0.0.9)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -52,6 +52,70 @@ absence case to be handled before the `T` can be touched; there is no
   a null must never travel one step into Burxt code as a "value".
 - Option composes with the thesis: `Option<Decimal<2, RoundHalfEven>>`
   is "maybe money", and the rounding contract survives inside it.
+
+## Problems Burxt solves by design
+
+The well-known footguns of existing languages, and Burxt's stance on each —
+honestly labeled: SHIPPED (enforced today), COMMITTED (decided, not yet
+built), ASPIRATION (goal, no timeline), or OPEN TRADEOFF (a real fork in the
+road, deliberately not pretended away). The unifying idea is the decimal
+thesis generalized: **dangerous defaults become compile errors.**
+
+### Shipped — enforced by the compiler today
+
+- **Float money errors** (0.1 + 0.2 != 0.3): the founding thesis. No float
+  exists; decimals are exact scaled integers with rounding contracts.
+- **Silent integer overflow**: every + - * traps with a named runtime error
+  (v0.0.5), never wraps. An overflowing balance is a disaster, not a wrap.
+  Opt-in wrapping may come someday; wrapping-by-default never will.
+- **Implicit conversions**: none, anywhere, ever. Int never becomes Decimal,
+  scales never rescale, nothing is truthy.
+- **One equality, no coercion** (see Semantics principles).
+- **Uninitialized variables**: unrepresentable — `let` requires an
+  initializer; there is no declaration without a value.
+- **Mutable-by-default**: inverted. Immutable is the default; mutation is
+  opt-in and visible (`let mut`, v0.0.4).
+- **Shadowing / silent redefinition**: refused (v0.0.9) — a second
+  `let x` is a compile error, not a quiet new variable.
+- **Format-string and width bugs at the C boundary**: user bytes are never a
+  format string; C's 32-bit int is a distinct `CInt` whose sign survives and
+  whose range is checked (v0.0.9).
+- **Error messages that teach**: every rejection names the rule and shows
+  the syntax that fixes it. A design commitment since v0.0.2.
+
+### Committed — decided now, built when their feature arrives
+
+- **No null** — absence is `Option<T>`, handled or it doesn't compile (see
+  Semantics principles).
+- **Errors as values**: failures the program can handle will be typed
+  values the compiler refuses to ignore — no invisible exceptions, no
+  unchecked error codes. (Today the only failures are panics: loud + fatal.)
+- **Exhaustiveness**: when case analysis on a closed type arrives (Option,
+  enums, interface dispatch), every branch point must handle every case —
+  adding a case later turns every incomplete match into a compile error.
+- **Strings are UTF-8, bytes are bytes**: no implicit mixing, decided before
+  a bytes type exists.
+- **Money-specific defaults**: cross-currency arithmetic will require the
+  currencies to be distinct types (nominal structs already give this shape);
+  dates/timezones, when they come, arrive timezone-explicit or not at all.
+- **Deterministic builds**: when Burxt grows dependencies, resolution is
+  locked and reproducible from day one.
+
+### Aspiration — the strongest differentiator, flagged without a timeline
+
+- **Data races as compile errors.** A corrupted balance from two threads is
+  the same disease as float money. This is genuinely hard (it is Rust's
+  headline achievement); Burxt designs toward it (value semantics and
+  immutability-by-default are the right substrate) but commits no date.
+
+### Open tradeoff — deliberately undecided, eyes open
+
+- **Memory management.** GC (pauses — bad for "predictable"), ownership
+  (no pauses, steep learning curve), ARC (middle ground) — every option
+  costs something real. Burxt has deferred every allocation so far
+  precisely so this fork is chosen once, deliberately. The safety-vs-
+  ergonomics tension is permanent: the art is hiding strictness behind
+  inference so code stays simple while the compiler stays strict.
 
 ## Compiler architecture (backend-independent front end)
 
@@ -297,6 +361,31 @@ Burxt is OOP by default, and the object model is decided now (keywords
   L — exact conformance, no overriding; I — small interfaces (exact
   conformance keeps them small); D — functions take interface-typed
   parameters, depending on contracts, not concrete structs.
+
+### v0.0.9: hardening — findings from the adversarial review
+
+An agent review of the strings release confirmed one serious bug and three
+sharp edges; all fixed:
+
+- **`CInt`** (the serious one): extern `-> Int` mapped C's 32-bit `int` to
+  i64, so `strcmp` returned its sign in undefined upper bits — every
+  `strcmp(...) < 0` took the wrong branch. C's int is now a distinct FFI
+  type: `extern fn strcmp(a: String, b: String) -> CInt;`. Returns
+  sign-extend; arguments range-check at runtime (a value that doesn't fit a
+  C int is a loud exit-70 error, never a silent wrap). CInt exists ONLY in
+  extern signatures; Burxt code sees Int.
+- A raw NUL byte in a string literal (as opposed to the already-refused
+  `\0` escape) silently truncated the string at codegen. Now a lexer error —
+  "interior NULs are unrepresentable" is true again.
+- Decimal scales above 18 panicked the COMPILER (10^19 > i64). Scale is now
+  capped at 18 with an advice error, literal fractional digits likewise, and
+  the internal rescaling powers are overflow-checked.
+- Reserved extern symbols now include `main` and `stderr` (the runtime emits
+  both); colliding declarations are compile errors instead of link failures.
+
+Plus one language rule from the design review: **shadowing is refused** —
+a second `let x` is an error naming the first declaration, not a quiet new
+variable.
 
 ## Testing
 

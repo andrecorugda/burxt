@@ -1,0 +1,4 @@
+// Silent redefinition hides typos; Burxt refuses shadowing.
+let total: Decimal<2> = 10.00;
+let total: Decimal<2> = 20.00;
+print(total);

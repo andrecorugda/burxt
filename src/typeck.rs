@@ -170,11 +170,14 @@ impl TypeChecker {
         let mut externs = Vec::new();
         for e in &prog.externs {
             self.check_extern(e)?;
-            let param_tys: Vec<Type> = e.params.iter().map(|p| p.ty.clone()).collect();
-            self.fns.insert(e.name.clone(), (param_tys.clone(), e.ret.clone()));
+            // Burxt code always sees CInt as Int; the width conversion is
+            // codegen's job at the call site.
+            let seen = |t: &Type| if *t == Type::CInt { Type::Int } else { t.clone() };
+            let param_tys: Vec<Type> = e.params.iter().map(|p| seen(&p.ty)).collect();
+            self.fns.insert(e.name.clone(), (param_tys, seen(&e.ret)));
             externs.push(TypedExtern {
                 name: e.name.clone(),
-                params: param_tys,
+                params: e.params.iter().map(|p| p.ty.clone()).collect(),
                 ret: e.ret.clone(),
             });
         }
@@ -220,17 +223,21 @@ impl TypeChecker {
         Ok(TypedProgram { structs, externs, fns, stmts })
     }
 
-    /// A Named type must refer to a declared struct.
+    /// A Named type must refer to a declared struct; CInt never leaves the
+    /// C boundary.
     fn validate_type(&self, ty: &Type) -> Result<(), String> {
-        if let Type::Named(name) = ty {
-            if !self.structs.contains_key(name) {
-                return Err(format!(
-                    "unknown type `{}` — declare it with `struct {} {{ ... }}`",
-                    name, name
-                ));
-            }
+        match ty {
+            Type::Named(name) if !self.structs.contains_key(name) => Err(format!(
+                "unknown type `{}` — declare it with `struct {} {{ ... }}`",
+                name, name
+            )),
+            Type::CInt => Err(
+                "CInt only exists at the C boundary (extern fn signatures) — \
+                 use Int in Burxt code; values convert at the call."
+                    .to_string(),
+            ),
+            _ => Ok(()),
         }
-        Ok(())
     }
 
     /// No struct may contain itself, directly or through other structs —
@@ -278,7 +285,7 @@ impl TypeChecker {
     /// Returns stay Int-only: Burxt cannot yet track who owns memory a C
     /// function returns.
     fn check_extern(&self, e: &ExternFn) -> Result<(), String> {
-        const RESERVED: [&str; 3] = ["printf", "fputs", "exit"];
+        const RESERVED: [&str; 5] = ["printf", "fputs", "exit", "stderr", "main"];
         if RESERVED.contains(&e.name.as_str()) {
             return Err(format!(
                 "extern fn `{}`: this symbol is used by the Burxt runtime itself. \
@@ -290,20 +297,21 @@ impl TypeChecker {
             return Err(format!("function `{}` is defined twice", e.name));
         }
         for p in &e.params {
-            if !matches!(p.ty, Type::Int | Type::String) {
+            if !matches!(p.ty, Type::Int | Type::String | Type::CInt) {
                 return Err(format!(
-                    "in extern fn `{}`, parameter `{}` has type {}, but only Int \
-                     and String may cross the C boundary for now — C has no {}, \
-                     and the raw value would silently lose its meaning.",
+                    "in extern fn `{}`, parameter `{}` has type {}, but only Int, \
+                     CInt and String may cross the C boundary for now — C has no \
+                     {}, and the raw value would silently lose its meaning.",
                     e.name, p.name, p.ty, p.ty
                 ));
             }
         }
-        if e.ret != Type::Int {
+        if !matches!(e.ret, Type::Int | Type::CInt) {
             return Err(format!(
-                "extern fn `{}` returns {}, but only Int may cross the C boundary \
-                 as a return for now — Burxt cannot yet track who owns memory a C \
-                 function returns.",
+                "extern fn `{}` returns {}, but only Int or CInt may cross the C \
+                 boundary as a return for now — Burxt cannot yet track who owns \
+                 memory a C function returns. (If the C function returns a 32-bit \
+                 `int`, declare `-> CInt` so the sign survives.)",
                 e.name, e.ret
             ));
         }
@@ -366,6 +374,14 @@ impl TypeChecker {
     fn check_stmt(&mut self, s: &Stmt) -> Result<TypedStmt, String> {
         match s {
             Stmt::Let { name, mutable, declared, value } => {
+                if self.env.contains_key(name) {
+                    return Err(format!(
+                        "`{}` is already declared — Burxt does not allow shadowing; \
+                         a second `let {}` would silently hide the first. Use a new \
+                         name, or `{} = ...` if it was declared `let mut`.",
+                        name, name, name
+                    ));
+                }
                 self.validate_type(declared)?;
                 let typed = self.check_expr(value, Some(declared))?;
                 if &typed.ty != declared {
@@ -503,6 +519,13 @@ impl TypeChecker {
                     // No decimal context: the literal's own scale is its type.
                     _ => (*scale, None),
                 };
+                if target_scale > 18 {
+                    return Err(format!(
+                        "this decimal literal has {} fractional digits, but Decimal \
+                         supports at most 18 — a scaled i64 holds no more",
+                        target_scale
+                    ));
+                }
                 let normalized = normalize_decimal(*unscaled, *scale, target_scale)?;
                 Ok(TypedExpr {
                     ty: Type::Decimal { scale: target_scale, rounding },
@@ -693,11 +716,18 @@ impl TypeChecker {
                 "struct comparison is not available yet — compare fields individually."
                     .to_string(),
             ),
-            (String, String) => Err(
-                "String comparison is not available yet — it needs a byte-equality \
-                 runtime helper, coming with collections."
-                    .to_string(),
-            ),
+            (String, String) => match op {
+                CmpOp::Eq | CmpOp::Ne => Err(
+                    "String comparison is not available yet — it needs a \
+                     byte-equality runtime helper, coming with collections."
+                        .to_string(),
+                ),
+                _ => Err(
+                    "Strings have no ordering yet — byte ordering arrives with \
+                     collections. (For C's ordering, call strcmp through FFI.)"
+                        .to_string(),
+                ),
+            },
             (Bool, Bool) => match op {
                 CmpOp::Eq | CmpOp::Ne => Ok(()),
                 _ => Err(format!(
@@ -846,25 +876,36 @@ fn block_returns(stmts: &[TypedStmt]) -> bool {
 /// error, because silently dropping precision on money is exactly what Burxt
 /// exists to prevent.
 fn normalize_decimal(unscaled: i64, from_scale: u32, to_scale: u32) -> Result<i64, String> {
-    if from_scale == to_scale {
-        return Ok(unscaled);
+    if from_scale == to_scale || unscaled == 0 {
+        // zero is exactly representable at every scale
+        return Ok(if unscaled == 0 { 0 } else { unscaled });
     }
     if to_scale > from_scale {
-        let factor = 10i64.pow(to_scale - from_scale);
+        // to_scale is capped at 18, so this power always fits — but stay
+        // checked rather than trusting the cap from a distance.
+        let factor = 10i64
+            .checked_pow(to_scale - from_scale)
+            .ok_or_else(|| "decimal overflow while widening scale".to_string())?;
         unscaled
             .checked_mul(factor)
             .ok_or_else(|| "decimal overflow while widening scale".to_string())
     } else {
-        // narrowing: only ok if exactly divisible
-        let factor = 10i64.pow(from_scale - to_scale);
-        if unscaled % factor == 0 {
-            Ok(unscaled / factor)
-        } else {
-            Err(format!(
+        // Narrowing: only ok if exactly divisible. A literal can carry more
+        // fractional digits than any i64 power of ten (e.g. 24 of them) —
+        // if the factor itself overflows, a nonzero value certainly loses
+        // digits, so it's the same refusal.
+        let lose = || {
+            format!(
                 "literal has scale {} but context expects scale {}; \
                  narrowing would lose precision (refused).",
                 from_scale, to_scale
-            ))
+            )
+        };
+        let factor = 10i64.checked_pow(from_scale - to_scale).ok_or_else(lose)?;
+        if unscaled % factor == 0 {
+            Ok(unscaled / factor)
+        } else {
+            Err(lose())
         }
     }
 }

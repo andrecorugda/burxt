@@ -1,0 +1,3 @@
+// A value that doesn't fit in C's 32-bit int must die loudly, never wrap.
+extern fn abs(x: CInt) -> CInt;
+print(abs(4294967296));

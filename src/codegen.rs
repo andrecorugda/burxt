@@ -60,6 +60,10 @@ pub struct CodeGen<'ctx> {
     checked_fns: HashMap<BinOp, FunctionValue<'ctx>>,
     /// user function name -> its LLVM function (mangled `bx.<name>`)
     user_fns: HashMap<String, FunctionValue<'ctx>>,
+    /// extern name -> its declared C signature (for CInt width conversions)
+    extern_sigs: HashMap<String, (Vec<Type>, Type)>,
+    /// lazily created i64 -> i32 range-checked truncation helper
+    cint_fn: Option<FunctionValue<'ctx>>,
     /// struct name -> its LLVM struct type (named `bx.<name>`)
     struct_types: HashMap<String, StructType<'ctx>>,
     /// struct name -> field types in declaration order (for GEP walks)
@@ -86,6 +90,8 @@ impl<'ctx> CodeGen<'ctx> {
             round_fns: HashMap::new(),
             checked_fns: HashMap::new(),
             user_fns: HashMap::new(),
+            extern_sigs: HashMap::new(),
+            cint_fn: None,
             struct_types: HashMap::new(),
             struct_fields: HashMap::new(),
             printf: None,
@@ -124,6 +130,7 @@ impl<'ctx> CodeGen<'ctx> {
             let fn_ty = self.llvm_type(&e.ret).fn_type(&param_tys, false);
             let llf = self.module.add_function(&e.name, fn_ty, None);
             self.user_fns.insert(e.name.clone(), llf);
+            self.extern_sigs.insert(e.name.clone(), (e.params.clone(), e.ret.clone()));
         }
 
         // Declare every user function up front (mutual recursion, any order).
@@ -348,6 +355,7 @@ impl<'ctx> CodeGen<'ctx> {
         match ty {
             Type::Int | Type::Bool | Type::Decimal { .. } => self.ctx.i64_type().into(),
             Type::String => self.ctx.ptr_type(AddressSpace::default()).into(),
+            Type::CInt => self.ctx.i32_type().into(),
             Type::Named(name) => self.struct_types[name].into(),
         }
     }
@@ -427,10 +435,10 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_call(printf, &args, "printf_bool")
                     .map_err(|e| e.to_string())?;
             }
-            Type::Named(n) => {
+            Type::Named(_) | Type::CInt => {
                 return Err(format!(
-                    "codegen bug: print on struct {} should have been refused by typeck",
-                    n
+                    "codegen bug: print on {} should have been refused by typeck",
+                    e.ty
                 ))
             }
             Type::Decimal { scale, .. } => {
@@ -562,18 +570,38 @@ impl<'ctx> CodeGen<'ctx> {
                     .user_fns
                     .get(name)
                     .ok_or_else(|| format!("codegen bug: unknown function {}", name))?;
+                let extern_sig = self.extern_sigs.get(name).cloned();
                 let mut vals: Vec<BasicMetadataValueEnum> = Vec::new();
-                for a in args {
-                    vals.push(self.gen_expr(a)?.into());
+                for (i, a) in args.iter().enumerate() {
+                    let mut v = self.gen_expr(a)?;
+                    // A CInt parameter is 32-bit on the C side: range-check
+                    // and truncate — a value that doesn't fit is a loud
+                    // runtime error, never a silent wrap.
+                    if let Some((ptys, _)) = &extern_sig {
+                        if ptys.get(i) == Some(&Type::CInt) {
+                            v = self.build_to_cint(v.into_int_value())?.into();
+                        }
+                    }
+                    vals.push(v.into());
                 }
                 let call = self
                     .builder
                     .build_call(f, &vals, "call")
                     .map_err(|e| e.to_string())?;
-                match call.try_as_basic_value() {
-                    inkwell::values::ValueKind::Basic(v) => Ok(v),
-                    _ => Err(format!("codegen bug: call to {} returned void", name)),
+                let result = match call.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(v) => v,
+                    _ => return Err(format!("codegen bug: call to {} returned void", name)),
+                };
+                // A CInt return is C's 32-bit int: sign-extend so the sign
+                // survives into Burxt's Int (strcmp's -1 stays -1).
+                if matches!(extern_sig, Some((_, Type::CInt))) {
+                    return self
+                        .builder
+                        .build_int_s_extend(result.into_int_value(), i64t, "cint_ret")
+                        .map(Into::into)
+                        .map_err(|e| e.to_string());
                 }
+                Ok(result)
             }
             TypedExprKind::StructLit { name, fields } => {
                 // Build the aggregate value field by field; storing it (in
@@ -720,6 +748,65 @@ impl<'ctx> CodeGen<'ctx> {
             self.builder.position_at_end(bb);
         }
         self.checked_fns.insert(op, f);
+        Ok(f)
+    }
+
+    /// Emit a call to the range-checked i64 -> i32 truncation used for CInt
+    /// extern parameters.
+    fn build_to_cint(&mut self, v: IntValue<'ctx>) -> Result<IntValue<'ctx>, String> {
+        let f = self.to_cint_fn()?;
+        let call = self
+            .builder
+            .build_call(f, &[v.into()], "to_cint")
+            .map_err(|e| e.to_string())?;
+        match call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => Ok(v.into_int_value()),
+            _ => Err("CInt helper returned void".to_string()),
+        }
+    }
+
+    /// Get (or lazily define) `i32 @burxt.checked.cint(i64)`: returns the
+    /// value as C's 32-bit int, or panics if it doesn't fit — passing a
+    /// silently wrapped number to C is still a silently wrong number.
+    fn to_cint_fn(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        if let Some(f) = self.cint_fn {
+            return Ok(f);
+        }
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let saved_block = self.builder.get_insert_block();
+
+        let i64t = self.ctx.i64_type();
+        let i32t = self.ctx.i32_type();
+        let fn_ty = i32t.fn_type(&[i64t.into()], false);
+        let f = self.module.add_function("burxt.checked.cint", fn_ty, None);
+        let entry = self.ctx.append_basic_block(f, "entry");
+        let panic_bb = self.ctx.append_basic_block(f, "doesnt_fit");
+        let ok_bb = self.ctx.append_basic_block(f, "ok");
+
+        self.builder.position_at_end(entry);
+        let v = f.get_nth_param(0).unwrap().into_int_value();
+        use inkwell::IntPredicate::*;
+        let max = i64t.const_int(i32::MAX as u64, true);
+        let min = i64t.const_int(i32::MIN as i64 as u64, true);
+        let too_big = self.builder.build_int_compare(SGT, v, max, "too_big").map_err(err)?;
+        let too_small = self.builder.build_int_compare(SLT, v, min, "too_small").map_err(err)?;
+        let out = self.builder.build_or(too_big, too_small, "out_of_range").map_err(err)?;
+        self.builder.build_conditional_branch(out, panic_bb, ok_bb).map_err(err)?;
+
+        self.builder.position_at_end(panic_bb);
+        self.build_panic(
+            "burxt runtime error: this value does not fit in a C int — the extern \
+             parameter is 32-bit\n",
+        )?;
+
+        self.builder.position_at_end(ok_bb);
+        let truncated = self.builder.build_int_truncate(v, i32t, "cint").map_err(err)?;
+        self.builder.build_return(Some(&truncated)).map_err(err)?;
+
+        if let Some(bb) = saved_block {
+            self.builder.position_at_end(bb);
+        }
+        self.cint_fn = Some(f);
         Ok(f)
     }
 

@@ -43,6 +43,11 @@ pub enum Type {
     /// String is a literal living in .rodata — no allocation, no ownership
     /// question. Concatenation/equality arrive with the allocation story.
     String,
+    /// C's 32-bit int. Exists ONLY in extern fn signatures, so FFI is honest
+    /// about width: returns are sign-extended, arguments are range-checked at
+    /// runtime (a value that doesn't fit is a loud error, never a silent wrap).
+    /// In Burxt code the value is always an Int.
+    CInt,
     /// Decimal with a fixed scale S (digits after the decimal point).
     /// Represented at runtime as a scaled i64: stored = value * 10^scale.
     Decimal { scale: u32, rounding: Option<Rounding> },
@@ -58,6 +63,7 @@ impl std::fmt::Display for Type {
             Type::Int => write!(f, "Int"),
             Type::Bool => write!(f, "Bool"),
             Type::String => write!(f, "String"),
+            Type::CInt => write!(f, "CInt"),
             Type::Decimal { scale, rounding: None } => write!(f, "Decimal<{}>", scale),
             Type::Decimal { scale, rounding: Some(r) } => write!(f, "Decimal<{}, {}>", scale, r),
             Type::Named(name) => write!(f, "{}", name),

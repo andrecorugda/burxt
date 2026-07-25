@@ -37,6 +37,8 @@ pub enum Token {
     TyBool,
     TyString,
     TyDecimal,
+    /// C's 32-bit int — only meaningful in extern fn signatures.
+    TyCInt,
     RoundHalfEven,
     RoundHalfUp,
     // punctuation
@@ -248,13 +250,15 @@ impl<'a> Lexer<'a> {
                     Some('"') => s.push('"'),
                     Some('n') => s.push('\n'),
                     Some('t') => s.push('\t'),
-                    Some(other) => {
+                    Some(other) if other != '\n' => {
                         return Err(format!(
                             "unknown escape `\\{}` — Burxt strings support \\\\, \\\", \\n and \\t",
                             other
                         ))
                     }
-                    None => {
+                    // backslash at end of line / end of input: the string
+                    // never closed — say that, not "unknown escape".
+                    _ => {
                         return Err(
                             "unterminated string literal — close it with `\"` before \
                              the end of the line"
@@ -262,6 +266,15 @@ impl<'a> Lexer<'a> {
                         )
                     }
                 },
+                // A raw NUL would silently truncate the NUL-terminated bytes
+                // at runtime — silent data loss, so it cannot appear at all.
+                Some('\0') => {
+                    return Err(
+                        "a raw NUL byte cannot appear in a string literal — Burxt \
+                         strings are NUL-terminated"
+                            .to_string(),
+                    )
+                }
                 Some(c) => s.push(c),
             }
         }
@@ -296,6 +309,7 @@ impl<'a> Lexer<'a> {
             "Int" => Token::TyInt,
             "Bool" => Token::TyBool,
             "String" => Token::TyString,
+            "CInt" => Token::TyCInt,
             "Decimal" => Token::TyDecimal,
             "RoundHalfEven" => Token::RoundHalfEven,
             "RoundHalfUp" => Token::RoundHalfUp,

@@ -1,0 +1,2 @@
+let x: Decimal<25> = 1.0;
+print(x);

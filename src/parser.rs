@@ -315,10 +315,18 @@ impl Parser {
             Token::TyInt => Ok(Type::Int),
             Token::TyBool => Ok(Type::Bool),
             Token::TyString => Ok(Type::String),
+            Token::TyCInt => Ok(Type::CInt),
             Token::TyDecimal => {
                 self.expect(&Token::Lt)?;
                 let scale = match self.bump() {
-                    Token::Int(n) if n >= 0 => n as u32,
+                    Token::Int(n) if (0..=18).contains(&n) => n as u32,
+                    Token::Int(n) => {
+                        return Err(format!(
+                            "Decimal scale must be between 0 and 18, but this is {} — \
+                             a scaled i64 holds at most 18 fractional digits",
+                            n
+                        ))
+                    }
                     other => return Err(format!("expected non-negative scale in Decimal<..>, found {:?}", other)),
                 };
                 // Optional rounding contract: Decimal<2, RoundHalfEven>.

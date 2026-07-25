@@ -1,0 +1,3 @@
+// 22 fractional digits: the unscaled value (1) fits an i64, but no i64
+// power of ten can represent scale 22.
+print(0.0000000000000000000001);

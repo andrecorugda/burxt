@@ -1,0 +1,2 @@
+let x: CInt = 1;
+print(x);
