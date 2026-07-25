@@ -1,0 +1,19 @@
+// `8.25%` is EXACTLY 0.0825 — the same digits with two more decimal places,
+// never a division by 100 and never a float. So a percentage's type is two
+// scales wider than the percentage as written.
+let rate: Decimal<4> = 8.25%;
+print(rate);
+let half: Decimal<2> = 50%;
+print(half);
+let whole: Decimal<2> = 100%;
+print(whole);
+let tiny: Decimal<5> = 0.125%;
+print(tiny);
+// percent-of-money works when the scales line up, with a contract for the
+// rounding the multiplication needs
+let price: Decimal<4, RoundHalfEven> = 19.9900;
+let pct: Decimal<4, RoundHalfEven> = 8.25%;
+let tax: Decimal<4, RoundHalfEven> = price * pct;
+print(tax);
+print(price + tax);
+print("rate {rate} on {price} is {tax}");

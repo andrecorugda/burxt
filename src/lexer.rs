@@ -252,7 +252,14 @@ impl<'a> Lexer<'a> {
             return self.lex_string();
         }
 
-        // number (int or decimal)
+        // `$19.99` — a money literal. Pure sugar for a Decimal<2> value: the
+        // `$` says "money, scale 2" so the digits need not spell the cents.
+        if c == '$' {
+            self.chars.next();
+            return self.lex_money();
+        }
+
+        // number (int or decimal), possibly with a `%` or unit suffix
         if c.is_ascii_digit() {
             return self.lex_number();
         }
@@ -333,6 +340,13 @@ impl<'a> Lexer<'a> {
                 let unscaled: i64 = combined
                     .parse()
                     .map_err(|_| format!("decimal literal too large: {}.{}", int_part, frac_part))?;
+                // `8.25%` is exactly 0.0825: the same digits, two more
+                // fractional places. Never 8.25/100 through a division, and
+                // never a float.
+                if self.chars.peek() == Some(&'%') {
+                    self.chars.next();
+                    return Ok(Token::Decimal(unscaled, scale + 2));
+                }
                 return Ok(Token::Decimal(unscaled, scale));
             }
         }
@@ -340,7 +354,54 @@ impl<'a> Lexer<'a> {
         let value: i64 = int_part
             .parse()
             .map_err(|_| format!("integer literal too large: {}", int_part))?;
+        if self.chars.peek() == Some(&'%') {
+            self.chars.next();
+            // `50%` is exactly 0.50.
+            return Ok(Token::Decimal(value, 2));
+        }
         Ok(Token::Int(value))
+    }
+
+    /// Lex the digits after a `$`. The result is exactly a `Decimal<2>`
+    /// literal — `$5` and `$5.00` and `$5.0` are the same value — so money
+    /// literals are sugar over the existing exact-decimal type, never a new
+    /// one, and every existing decimal rule applies unchanged.
+    fn lex_money(&mut self) -> Result<Token, String> {
+        if !matches!(self.chars.peek(), Some(c) if c.is_ascii_digit()) {
+            return Err(
+                "`$` must be followed by digits — a money literal looks like `$19.99`"
+                    .to_string(),
+            );
+        }
+        match self.lex_number()? {
+            Token::Int(n) => {
+                // `$5` means five whole units: 500 cents.
+                let unscaled = n
+                    .checked_mul(100)
+                    .ok_or("money literal too large for Decimal<2>")?;
+                Ok(Token::Decimal(unscaled, 2))
+            }
+            Token::Decimal(unscaled, scale) => {
+                if scale > 2 {
+                    return Err(format!(
+                        "`$` money is Decimal<2>, but this literal has {} fractional \
+                         digits. Write it with at most 2, or use an explicit \
+                         Decimal<{}> without the `$`.",
+                        scale, scale
+                    ));
+                }
+                // widen 1 fractional digit to 2 ($5.5 == $5.50), exactly
+                let factor = 10i64.pow(2 - scale);
+                let unscaled = unscaled
+                    .checked_mul(factor)
+                    .ok_or("money literal too large for Decimal<2>")?;
+                Ok(Token::Decimal(unscaled, 2))
+            }
+            other => Err(format!(
+                "expected digits after `$`, found {}",
+                other.describe()
+            )),
+        }
     }
 
     /// Lex a double-quoted, single-line string literal. Escapes are resolved

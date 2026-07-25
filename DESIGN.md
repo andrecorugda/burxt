@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.17)
+# Burxt — Design Notes (v0.0.18)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -900,6 +900,33 @@ the milestone on the safe side of the heap boundary; it lifts with M1.
 
 Literal pieces remain printf ARGUMENTS, never format strings, so a `%s` or
 `%n` in user text still prints literally.
+
+### v0.0.18: money and percent literals (A4.7, slice 2)
+
+```text
+let price: Decimal<2> = $19.99;      // sugar for Decimal<2>, not a new type
+let rate:  Decimal<4> = 8.25%;       // exactly 0.0825
+```
+
+- `$19.99` is a `Decimal<2>` literal. `$5` and `$5.5` widen exactly to `5.00`
+  and `5.50`; `$1.999` is refused, because `$` means scale 2 and dropping the
+  third digit would lose money. Every existing decimal rule applies unchanged,
+  since this is sugar over the existing type rather than a new one.
+- `8.25%` is **exactly** 0.0825 — the same digits with two more decimal
+  places, never a division by 100 and never a float. A percentage's type is
+  therefore two scales wider than the percentage as written.
+- **No type inference.** `let price = $19.99;` is still an error. Per the
+  binding amendment in the A4.7 spec, how much inference a language has shapes
+  every line of every program, so it gets its own milestone rather than
+  arriving as a side effect of a dollar sign.
+
+**Open decision this surfaced** (recorded in the A4.7 spec): the spec's own
+flagship `price + price * 8.25%` at `Decimal<2>` does NOT compile, because a
+percent literal is `Decimal<4>` and `Decimal * Decimal` requires matching
+scales. Percent-of-money works at a matching scale today; making the mixed
+form work means deciding whether `*` may take mixed scales when a rounding
+contract says how to land — a change to a core thesis rule, so it is left as
+a judgment call rather than smuggled in.
 
 ## Testing
 

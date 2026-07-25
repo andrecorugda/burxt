@@ -1,0 +1,5 @@
+// A percent literal is two scales wider than the percentage written, so it
+// does not fit a Decimal<2> context. The error says so and names the fix
+// rather than silently dropping digits.
+let rate: Decimal<2> = 8.25%;
+print(rate);

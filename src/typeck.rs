@@ -1786,9 +1786,13 @@ fn normalize_decimal(unscaled: i64, from_scale: u32, to_scale: u32) -> Result<i6
         // digits, so it's the same refusal.
         let lose = || {
             format!(
-                "literal has scale {} but context expects scale {}; \
-                 narrowing would lose precision (refused).",
-                from_scale, to_scale
+                "this literal needs {} decimal places but the context has only {}, \
+                 and dropping digits from money is refused. Either widen the \
+                 binding to Decimal<{}>, or write a literal that fits in {}. \
+                 (A percent literal like `8.25%` needs 2 more places than the \
+                 percentage itself: `8.25%` is exactly 0.0825, so it is a \
+                 Decimal<4>.)",
+                from_scale, to_scale, from_scale, to_scale
             )
         };
         let factor = 10i64.checked_pow(from_scale - to_scale).ok_or_else(lose)?;

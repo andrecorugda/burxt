@@ -1,0 +1,30 @@
+// `$19.99` is sugar for a Decimal<2> value — not a new type, so every
+// existing decimal rule applies unchanged. Note the annotation is still
+// required: A4.7 deliberately introduces no type inference.
+let price: Decimal<2> = $19.99;
+let zero: Decimal<2> = $0.00;
+// fewer digits than cents are widened exactly: $5 and $5.5 are money too
+let whole: Decimal<2> = $5;
+let one_dp: Decimal<2> = $5.5;
+let big: Decimal<2> = $1000.50;
+print(price);
+print(zero);
+print(whole);
+print(one_dp);
+print(big);
+// it behaves as a Decimal<2> everywhere a Decimal<2> does
+print(price + big);
+print(price * 3);
+print(price == $19.99);
+print("interpolated: {price}");
+let mut running: Decimal<2> = $0.00;
+let mut i: Int = 0;
+while i < 3 {
+    running = running + $1.25;
+    i = i + 1;
+}
+print(running);
+// a rounding contract composes with it as with any other Decimal<2>
+let rate: Decimal<2, RoundHalfEven> = $1.01;
+let bal: Decimal<2, RoundHalfEven> = $1000.00;
+print(bal * rate);

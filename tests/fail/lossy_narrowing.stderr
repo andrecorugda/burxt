@@ -1,1 +1,1 @@
-narrowing would lose precision
+this literal needs 3 decimal places but the context has only 2, and dropping digits from money is refused
