@@ -145,7 +145,60 @@ never acceptable.
 The test suite gained a third category for this: tests/panic/*.bx must
 compile but die at runtime with the expected message and a nonzero exit.
 
-## Roadmap after v0.0.5
-- refinement types ("balance >= 0", "splits sum to total")
-- strings, arrays/records
-- self-hosting
+## Roadmap: write once, run native everywhere
+
+Burxt is committed — as of now, so the architecture never needs retrofitting —
+to running natively on web, desktop, and mobile. This is reachable because
+every target reduces to one of two output paths from the same LLVM backend:
+
+1. **Native code** — desktop Linux/macOS/Windows, Android, iOS. Different
+   CPU + libc + object-format combos that LLVM already handles.
+2. **WebAssembly** — the web (and edge/server via WASI).
+
+So platform reach is not five rewrites. It is (a) making the backend
+target-parameterized (`burxt build --target <triple>`) and (b) handling each
+platform's linking/packaging — affecting only codegen plus a thin packaging
+layer, never the front end.
+
+Target triples to support:
+- x86_64 / aarch64 Linux
+- x86_64 / aarch64 macOS (darwin)
+- x86_64 Windows (msvc)
+- aarch64-linux-android
+- aarch64-apple-ios
+- wasm32-unknown-unknown (web)
+- wasm32-wasi (edge/server)
+
+### Sequence: capability BEFORE reach
+A cross-platform print is worthless. The language becomes real first, then
+it travels.
+
+**Phase A — real language (Linux only)**
+- A1. Rounding contracts `Decimal<Scale, Rounding>` — DONE (v0.0.2)
+- A2. Functions + control flow — DONE (v0.0.3, v0.0.4; checked arithmetic
+  v0.0.5)
+- A3. FFI / call-into-C — THE KEY UNLOCK: how any Burxt program reaches
+  platform APIs on every target. <- NEXT
+- A4. Strings, structs, collections
+- A5. Refinement types ("balance >= 0", "splits sum to total")
+
+**Phase B — cross-compilation and desktop**
+- B1. `burxt build --target <triple>`
+- B2/B3. Desktop matrix first: Linux, macOS, Windows
+
+**Phase C — mobile**
+- Android: NDK, .so + thin Kotlin/JNI app shell
+- iOS: Mach-O, Xcode signing
+
+**Phase D — web**
+- wasm32 + JS host glue; then wasm32-wasi for edge/server
+
+**Ongoing** — self-hosting: the day Burxt compiles Burxt, the language is real.
+
+### Design rules (platform)
+- The front end NEVER assumes a platform. All platform differences live
+  behind the target triple + the packaging layer.
+- I/O and platform APIs go through FFI — never hardcoded into the language.
+- Exact-decimal semantics must be byte-identical on every target. The
+  scaled-integer representation makes this free: no float means no per-CPU
+  divergence.
