@@ -1,0 +1,11 @@
+// The i128 intermediate at full stretch: scale 18 x scale 18 means an exact
+// product with 36 decimal places, which only a 128-bit intermediate holds.
+// 3 x 3 = 9 at scale 18 is unscaled 9e18 — just inside i64::MAX (9.223e18).
+let a: Decimal<18, RoundHalfEven> = 3.000000000000000000;
+let b: Decimal<18, RoundHalfEven> = 3.000000000000000000;
+let p: Decimal<18, RoundHalfEven> = a * b;
+print(p);
+// mixed at the extreme: 18 places against 1
+let c: Decimal<1, RoundHalfEven> = 2.5;
+let q: Decimal<18, RoundHalfEven> = a * c;
+print(q);

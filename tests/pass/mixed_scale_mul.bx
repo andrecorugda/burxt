@@ -1,0 +1,26 @@
+// THE FLAGSHIP: percent-of-money, the most canonical money operation there is.
+// `*` may mix scales because multiplication combines a quantity with a RATE
+// (a price is scale-2, a tax rate is finer) — while `+` still demands matching
+// scales, because addition combines LIKE quantities. The result's rounding
+// contract says how the exact sum-of-scales product lands.
+let price: Decimal<2, RoundHalfEven> = $19.99;
+let total: Decimal<2, RoundHalfEven> = price + price * 8.25%;
+print(total);
+print("{price} plus 8.25% tax = {total}");
+// the exact product is 1.649175; rounded half-even to cents it is 1.65
+let tax: Decimal<2, RoundHalfEven> = price * 8.25%;
+print(tax);
+// interest at a finer rate
+let balance: Decimal<2, RoundHalfEven> = $1000.00;
+let monthly: Decimal<6, RoundHalfEven> = 0.4167%;
+let interest: Decimal<2, RoundHalfEven> = balance * monthly;
+print(interest);
+// mixing in the other order works the same
+let flipped: Decimal<2, RoundHalfEven> = monthly * balance;
+print(flipped);
+// same-scale multiplication is unchanged
+let a: Decimal<2, RoundHalfEven> = 1.99;
+print(a * a);
+// scaling by a count is still exact and needs no contract
+let plain: Decimal<2> = $19.99;
+print(plain * 3);

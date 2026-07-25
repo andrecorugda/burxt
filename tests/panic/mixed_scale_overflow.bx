@@ -1,0 +1,6 @@
+// The intermediate is exact in i128, but a RESULT that cannot fit a scaled
+// i64 must still die loudly rather than wrap.
+let a: Decimal<2, RoundHalfEven> = 92233720368547758.07;
+let b: Decimal<1, RoundHalfEven> = 9.9;
+let p: Decimal<2, RoundHalfEven> = a * b;
+print(p);

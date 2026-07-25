@@ -1,0 +1,7 @@
+// Addition combines LIKE quantities, so its scales must still match. The
+// asymmetry with `*` is deliberate: multiplication combines a quantity with a
+// rate, whose scales differ by nature.
+let price: Decimal<2, RoundHalfEven> = $19.99;
+let rate: Decimal<4, RoundHalfEven> = 8.25%;
+let bad: Decimal<4, RoundHalfEven> = price + rate;
+print(bad);

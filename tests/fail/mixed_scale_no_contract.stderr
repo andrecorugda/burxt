@@ -1,0 +1,1 @@
+this multiplication mixes scales 2 and 4, so its exact product has 6 decimal places and must be rounded to reach 2. Give the result a rounding contract to say how, e.g. Decimal<2, RoundHalfEven>.

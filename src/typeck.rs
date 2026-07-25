@@ -1165,9 +1165,27 @@ impl TypeChecker {
             }
 
             Expr::Binary { op, lhs, rhs } => {
-                let l = self.check_expr(lhs, expected)?;
-                let r = self.check_expr(rhs, expected)?;
-                let result_ty = self.check_binop(*op, &l.ty, &r.ty)?;
+                // Multiplication may mix scales (money × rate), so a literal
+                // operand must not be forced to the result's scale — that is
+                // what used to make `price * 8.25%` fail, since 0.0825 cannot
+                // narrow to 2 places. If pushing the expected type into the
+                // operands fails, re-check them at their own natural types and
+                // let the result's rounding contract land the product.
+                let (l, r) = match (
+                    self.check_expr(lhs, expected),
+                    self.check_expr(rhs, expected),
+                ) {
+                    (Ok(l), Ok(r)) => (l, r),
+                    (first, second) if *op == BinOp::Mul => {
+                        let original = first.err().or(second.err());
+                        match (self.check_expr(lhs, None), self.check_expr(rhs, None)) {
+                            (Ok(l), Ok(r)) => (l, r),
+                            _ => return Err(original.expect("one attempt failed")),
+                        }
+                    }
+                    (first, second) => return Err(first.err().or(second.err()).unwrap()),
+                };
+                let result_ty = self.check_binop(*op, &l.ty, &r.ty, expected)?;
                 Ok(TypedExpr {
                     ty: result_ty,
                     kind: TypedExprKind::Binary {
@@ -1640,7 +1658,13 @@ impl TypeChecker {
     }
 
     /// The core thesis rules for arithmetic result types.
-    fn check_binop(&self, op: BinOp, lhs: &Type, rhs: &Type) -> Result<Type, String> {
+    fn check_binop(
+        &self,
+        op: BinOp,
+        lhs: &Type,
+        rhs: &Type,
+        expected: Option<&Type>,
+    ) -> Result<Type, String> {
         use Type::*;
         match (op, lhs, rhs) {
             // Integer division truncates — that is silent rounding. Refused
@@ -1676,11 +1700,50 @@ impl TypeChecker {
                 Ok(dec.clone())
             }
 
-            // Decimal * Decimal and Decimal / Decimal produce digits beyond
-            // the operands' scale, so they require matching types AND an
-            // explicit rounding contract saying how to return to that scale.
-            (BinOp::Mul, Decimal { .. }, Decimal { .. })
-            | (BinOp::Div, Decimal { .. }, Decimal { .. }) => {
+            // Decimal * Decimal: the product's natural scale is the SUM of the
+            // operand scales, so landing it always needs a rounding contract.
+            //
+            // Mixed operand scales are legal here — and only here. Addition
+            // combines like quantities, so its scales must match; multiplication
+            // combines a quantity with a RATE, whose scales differ by nature
+            // (a price is scale-2, a tax rate is finer). What keeps that safe is
+            // that the RESULT's contract, which is mandatory, says how the
+            // sum-of-scales product narrows. Never optional: a silently rounded
+            // product would break the thesis.
+            (BinOp::Mul, Decimal { scale: ls, .. }, Decimal { scale: rs, .. }) => {
+                if lhs == rhs {
+                    // identical operand types: the long-standing rule
+                    return self.require_rounding(op, lhs);
+                }
+                match expected {
+                    Some(t @ Decimal { rounding: Some(_), .. }) => Ok(t.clone()),
+                    Some(Decimal { scale, rounding: None }) => Err(format!(
+                        "this multiplication mixes scales {} and {}, so its exact \
+                         product has {} decimal places and must be rounded to reach \
+                         {}. Give the result a rounding contract to say how, e.g. \
+                         Decimal<{}, RoundHalfEven>.",
+                        ls,
+                        rs,
+                        ls + rs,
+                        scale,
+                        scale
+                    )),
+                    _ => Err(format!(
+                        "this multiplication mixes scales {} and {}, so its exact \
+                         product has {} decimal places and must be rounded. Bind it \
+                         to a Decimal with a rounding contract, e.g. \
+                         `let x: Decimal<2, RoundHalfEven> = ...`, so the rounding \
+                         is declared rather than guessed.",
+                        ls,
+                        rs,
+                        ls + rs
+                    )),
+                }
+            }
+
+            // Decimal / Decimal still requires matching scales: this decision
+            // covered multiplication only.
+            (BinOp::Div, Decimal { .. }, Decimal { .. }) => {
                 let result = self.matching_decimal(op, lhs, rhs)?;
                 self.require_rounding(op, &result)
             }

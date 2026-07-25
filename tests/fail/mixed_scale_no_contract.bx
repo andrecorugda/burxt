@@ -1,0 +1,7 @@
+// The non-negotiable safety line: mixed-scale multiplication WITHOUT a
+// rounding contract on the result must stay a compile error. If a mixed-scale
+// product could be silently rounded, the thesis would be broken.
+let price: Decimal<2> = $19.99;
+let rate: Decimal<4> = 8.25%;
+let tax: Decimal<2> = price * rate;
+print(tax);

@@ -1,0 +1,28 @@
+// Rounding ties at MIXED scales — where a subtle bug would hide. Each value
+// below is an exact tie, and each was checked against an independent exact
+// decimal implementation.
+// 0.05 x 0.5 = 0.025 exactly: half-even goes to the even neighbour (0.02),
+// half-up goes away from zero (0.03).
+let a: Decimal<2, RoundHalfEven> = 0.05;
+let b: Decimal<1, RoundHalfEven> = 0.5;
+let t1: Decimal<2, RoundHalfEven> = a * b;
+print(t1);
+let c: Decimal<2, RoundHalfUp> = 0.05;
+let d: Decimal<1, RoundHalfUp> = 0.5;
+let t2: Decimal<2, RoundHalfUp> = c * d;
+print(t2);
+// 0.15 x 0.5 = 0.075: the even neighbour is 0.08 for both modes
+let e: Decimal<2, RoundHalfEven> = 0.15;
+let t3: Decimal<2, RoundHalfEven> = e * b;
+print(t3);
+// negative ties keep each mode's direction
+let z: Decimal<2, RoundHalfEven> = 0.00;
+let t4: Decimal<2, RoundHalfEven> = (z - a) * b;
+print(t4);
+let zu: Decimal<2, RoundHalfUp> = 0.00;
+let t5: Decimal<2, RoundHalfUp> = (zu - c) * d;
+print(t5);
+// The other direction: when the result is WIDER than the exact product,
+// widening is lossless and nothing rounds at all.
+let w: Decimal<6, RoundHalfEven> = a * b;
+print(w);

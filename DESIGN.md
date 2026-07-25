@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.18)
+# Burxt — Design Notes (v0.0.19)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -140,6 +140,13 @@ Listed so they are not mistaken for finished work:
 - **Array returns.** Array PARAMETERS work (v0.0.12); returning one needs
   whole-array binding at the call site, which is the copy question deferred
   with collections.
+- **Multiplication scale rule refined** (v0.0.19), superseding "operands of
+  `*` must have matching scales": `*` permits mixed operand scales when the
+  result binding supplies a rounding contract; `+`/`-` remain strict; `/` is
+  untouched. Rationale: multiplication combines a quantity with a rate (differing
+  scales are natural), addition combines like quantities (differing scales are
+  suspicious). The mandatory contract preserves no-silent-rounding, and must
+  never become optional.
 - **Method receivers pass as a plain pointer, not `byval`** (v0.0.14). Forced
   by vtable compatibility: a slot cannot name a concrete type, so it cannot
   carry `byval(T)`, and mixing the two lowerings produced silently wrong
@@ -927,6 +934,56 @@ scales. Percent-of-money works at a matching scale today; making the mixed
 form work means deciding whether `*` may take mixed scales when a rounding
 contract says how to land — a change to a core thesis rule, so it is left as
 a judgment call rather than smuggled in.
+
+### v0.0.19: mixed-scale multiplication — percent-of-money works
+
+```text
+let price: Decimal<2, RoundHalfEven> = $19.99;
+let total: Decimal<2, RoundHalfEven> = price + price * 8.25%;   // 21.64
+```
+
+**A refined rule, not a silent swap.** `*` now permits operands of DIFFERENT
+scales when the result binding supplies a rounding contract. `+` and `-`
+remain strict. The asymmetry is principled and states in one sentence:
+
+> Addition combines like quantities, so scales must match. Multiplication
+> combines a quantity with a rate, so scales differ by nature.
+
+`$1.00 + $0.001` is almost always a bug — differing scales suggest the operands
+are not the same kind of thing. But money × rate is inherently between two
+different kinds: a price is scale-2, a tax or interest rate is finer. Forcing
+those to match was forcing a fiction.
+
+**The mandatory contract is the safety line and must never become optional.**
+A mixed-scale product's natural scale is the SUM of the operand scales, so
+landing it on the declared scale drops digits, and someone must say how. Without
+a contract on the result it is a compile error naming the fix. If a mixed-scale
+product could be silently rounded, the thesis would be broken.
+
+This is *more* on-thesis than staying strict, not a loosening: the strict form
+already "worked" by making the author widen money to the rate's scale by hand,
+multiply, and narrow back — a human performing rounding and rescaling manually,
+which is exactly what Burxt exists to prevent.
+
+| Operation | Scales | Rule |
+|---|---|---|
+| `+`, `-` | must match | unchanged |
+| `*` | same | legal; contract still required (the scale doubles) |
+| `*` | mixed | legal **only** with a rounding contract on the result |
+| `/` | must match | unchanged — this decision covered `*` only |
+
+Codegen shifts the exact product by `lhs_scale + rhs_scale - result_scale`,
+which subsumes the same-scale case (`s + s - s = s`), so mixed and matching
+scales share one path instead of being special-cased against each other. A
+result *wider* than the exact product widens losslessly and rounds nothing.
+The i128 intermediate reaches 10^36, so `pow10` now builds its constant from a
+`u128` rather than one 64-bit word.
+
+Tested to the numeric core's bar: exact ties at mixed scales in both modes and
+both signs, checked against an independent exact-decimal implementation; the
+scale-18 × scale-18 extreme where the intermediate needs 36 decimal places; the
+widening direction; and a result that genuinely cannot fit a scaled i64, which
+still traps loudly.
 
 ## Testing
 

@@ -1013,18 +1013,35 @@ impl<'ctx> CodeGen<'ctx> {
                         let both_decimal = matches!(lhs.ty, Type::Decimal { .. })
                             && matches!(rhs.ty, Type::Decimal { .. });
                         if both_decimal {
-                            // (A * B) has scale 2S; divide by 10^S, rounding.
-                            // Both the product and the division happen in i128,
-                            // so a representable result is never refused.
+                            // The exact product's scale is the SUM of the operand
+                            // scales, so reaching the result's scale means shifting
+                            // by (ls + rs - result). That one expression covers the
+                            // same-scale case too (s + s - s = s), so mixed and
+                            // matching scales share a single path rather than being
+                            // special-cased against each other.
                             let (scale, mode) = decimal_with_rounding(&e.ty)?;
+                            let ls = decimal_scale(&lhs.ty)?;
+                            let rs = decimal_scale(&rhs.ty)?;
                             let l128 = self.widen(l)?;
                             let r128 = self.widen(r)?;
                             let raw = self
                                 .builder
                                 .build_int_mul(l128, r128, "mul_raw")
                                 .map_err(|e| e.to_string())?;
-                            let pow = self.pow10_i128(scale);
-                            self.build_round_div(mode, raw, pow)
+                            let shift = ls as i64 + rs as i64 - scale as i64;
+                            if shift >= 0 {
+                                let pow = self.pow10_i128(shift as u32);
+                                self.build_round_div(mode, raw, pow)
+                            } else {
+                                // The result is WIDER than the exact product, so
+                                // widening is lossless and nothing rounds.
+                                let pow = self.pow10_i128((-shift) as u32);
+                                let widened = self
+                                    .builder
+                                    .build_int_mul(raw, pow, "mul_widen")
+                                    .map_err(|e| e.to_string())?;
+                                self.build_narrow_to_i64(widened)
+                            }
                         } else {
                             self.build_checked(BinOp::Mul, l, r)
                         }
@@ -1982,10 +1999,10 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     /// 10^scale as an i128 constant (scale <= 18, so this always fits).
-    fn pow10_i128(&self, scale: u32) -> IntValue<'ctx> {
+    fn pow10_i128(&self, exp: u32) -> IntValue<'ctx> {
         self.ctx
             .i128_type()
-            .const_int_arbitrary_precision(&pow10_words(scale))
+            .const_int_arbitrary_precision(&pow10_words(exp))
     }
 
     /// Narrow i128 -> i64, dying loudly if the value does not fit. This is the
@@ -2260,8 +2277,19 @@ pub struct Layout {
 
 /// 10^scale as the 64-bit words LLVM wants for an i128 constant.
 /// scale is capped at 18, so the value always fits in the low word.
-fn pow10_words(scale: u32) -> [u64; 2] {
-    [10u64.pow(scale), 0]
+fn pow10_words(exp: u32) -> [u64; 2] {
+    // Mixed-scale multiplication can need 10^(s1+s2), up to 10^36, which no
+    // longer fits one 64-bit word.
+    let v: u128 = 10u128.pow(exp);
+    [(v & u64::MAX as u128) as u64, (v >> 64) as u64]
+}
+
+/// The scale of a Decimal type; a codegen bug anywhere else.
+fn decimal_scale(ty: &Type) -> Result<u32, String> {
+    match ty {
+        Type::Decimal { scale, .. } => Ok(*scale),
+        other => Err(format!("codegen bug: expected a Decimal, got {}", other)),
+    }
 }
 
 /// A rounding operation's result type must be a Decimal carrying a contract —

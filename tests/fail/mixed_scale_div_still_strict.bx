@@ -1,0 +1,6 @@
+// The decision covered multiplication only; division still requires matching
+// scales until it is decided on its own terms.
+let a: Decimal<2, RoundHalfEven> = 1.00;
+let b: Decimal<4, RoundHalfEven> = 0.5000;
+let q: Decimal<2, RoundHalfEven> = a / b;
+print(q);
