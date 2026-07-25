@@ -1,0 +1,1 @@
+`!` needs a Bool, but this has type Int — Burxt has no truthiness, so there is nothing to negate.

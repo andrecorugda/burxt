@@ -642,7 +642,37 @@ impl Parser {
     /// Comparison is the loosest level, and it deliberately does not chain:
     /// `a < b < c` is not a Burxt expression (and would be a type error anyway
     /// — a Bool has no order).
+    /// The loosest level: `||`, then `&&`, then comparison. Both are
+    /// left-associative and both short-circuit.
     fn parse_expr(&mut self) -> Result<Expr, String> {
+        let mut lhs = self.parse_and()?;
+        while self.at(&Token::PipePipe) {
+            self.bump();
+            let rhs = self.parse_and()?;
+            lhs = Expr::Logical {
+                op: LogicalOp::Or,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
+        }
+        Ok(lhs)
+    }
+
+    fn parse_and(&mut self) -> Result<Expr, String> {
+        let mut lhs = self.parse_comparison()?;
+        while self.at(&Token::AmpAmp) {
+            self.bump();
+            let rhs = self.parse_comparison()?;
+            lhs = Expr::Logical {
+                op: LogicalOp::And,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
+        }
+        Ok(lhs)
+    }
+
+    fn parse_comparison(&mut self) -> Result<Expr, String> {
         let lhs = self.parse_additive()?;
         let op = match self.peek() {
             Token::EqEq => CmpOp::Eq,
@@ -706,6 +736,11 @@ impl Parser {
             self.bump();
             let e = self.parse_factor()?;
             return Ok(Expr::Neg(Box::new(e)));
+        }
+        if self.at(&Token::Bang) {
+            self.bump();
+            let e = self.parse_factor()?;
+            return Ok(Expr::Not(Box::new(e)));
         }
         let mut e = self.parse_primary()?;
         while self.at(&Token::Dot) {

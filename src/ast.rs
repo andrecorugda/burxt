@@ -112,6 +112,22 @@ impl std::fmt::Display for BinOp {
     }
 }
 
+/// Short-circuiting boolean operators.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogicalOp {
+    And,
+    Or,
+}
+
+impl std::fmt::Display for LogicalOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LogicalOp::And => write!(f, "&&"),
+            LogicalOp::Or => write!(f, "||"),
+        }
+    }
+}
+
 /// Comparison operators. Comparisons are always exact (scaled integers compare
 /// directly) and always produce a Bool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,6 +171,13 @@ pub enum Expr {
     Var(String),
     /// Unary negation, e.g. `-19.99`. Overflow-checked like every subtraction.
     Neg(Box<Expr>),
+    /// Logical not: `!ok`. Bool only — there is no truthiness to negate.
+    Not(Box<Expr>),
+    /// `&&` / `||`. Kept separate from BinOp because they SHORT-CIRCUIT: the
+    /// right side is not evaluated when the left already decides the answer.
+    /// That is observable behavior, so it is part of the language, not an
+    /// optimization.
+    Logical { op: LogicalOp, lhs: Box<Expr>, rhs: Box<Expr> },
     /// A binary operation.
     Binary {
         op: BinOp,

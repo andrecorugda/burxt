@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.14)
+# Burxt — Design Notes (v0.0.15)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -806,6 +806,34 @@ physics to enforce discipline, scope is the thing being tested.
 keyword; the North Star's `struct X is Priceable` sketch is superseded by
 `impl Trait for Type`, which gives the trait's methods one definite home and
 a place to enumerate them for a vtable.
+
+### v0.0.15: `&&`, `||`, `!` — closing A5.0
+
+The last gap in the control-flow milestone. Bool-only, no truthiness: the
+left and right of `&&`/`||` must each be a `Bool`, and `!` refuses anything
+else, each with an error that says why.
+
+```text
+if balance > 0.00 && balance < 1000.00 { ... }
+if n != 0 && d / n > 1.00 { ... }        // safe: the division never runs
+```
+
+**Short-circuit is part of the language, not an optimization**, because
+skipping the right side is observable. It lowers to real basic blocks with a
+phi at the join, never a bitwise `and` of both sides. Two tests pin this down:
+one where the right side is a function that prints (its number is absent when
+skipped), and one where the right side would divide by zero — it prints
+instead of trapping, which is only possible if the right side genuinely does
+not execute.
+
+`&` and `|` alone are errors pointing at `&&`/`||`; Burxt has no bitwise
+operators, so the single forms are free to be advice instead of silently
+meaning something else.
+
+With this, A5.0's own acceptance program passes: `fib(20)` prints `6765`.
+Still deliberately deferred from that spec: `for` (needs iterators),
+`match` (needs sum types), `break`/`continue` (nothing has needed them yet),
+and any form of ternary.
 
 ## Testing
 

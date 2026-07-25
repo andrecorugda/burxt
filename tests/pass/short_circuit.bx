@@ -1,0 +1,16 @@
+// Short-circuit is OBSERVABLE behavior, not an optimization: the right side
+// must not run when the left already decides the answer. `loud` prints its
+// tag, so a missing number proves the right side was skipped.
+fn loud(tag: Int, answer: Bool) -> Bool {
+    print(tag);
+    return answer;
+}
+
+let a: Bool = false && loud(1, true);
+print(a);
+let b: Bool = true && loud(2, true);
+print(b);
+let c: Bool = true || loud(3, true);
+print(c);
+let d: Bool = false || loud(4, true);
+print(d);

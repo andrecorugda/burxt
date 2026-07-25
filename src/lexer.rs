@@ -69,6 +69,9 @@ pub enum Token {
     Ge,
     EqEq,
     NotEq,
+    Bang,
+    AmpAmp,
+    PipePipe,
     // end of input
     Eof,
 }
@@ -129,6 +132,9 @@ impl Token {
             Token::Ge => "`>=`".to_string(),
             Token::EqEq => "`==`".to_string(),
             Token::NotEq => "`!=`".to_string(),
+            Token::Bang => "`!`".to_string(),
+            Token::AmpAmp => "`&&`".to_string(),
+            Token::PipePipe => "`||`".to_string(),
             Token::Eof => "the end of the file".to_string(),
         }
     }
@@ -205,10 +211,24 @@ impl<'a> Lexer<'a> {
                 if self.chars.peek() == Some(&'=') { self.chars.next(); return Ok(Token::Ge); }
                 return Ok(Token::Gt);
             }
+            '&' => {
+                self.chars.next();
+                if self.chars.peek() == Some(&'&') { self.chars.next(); return Ok(Token::AmpAmp); }
+                return Err(
+                    "Burxt has no bitwise `&` — did you mean `&&` (logical and)?".to_string(),
+                );
+            }
+            '|' => {
+                self.chars.next();
+                if self.chars.peek() == Some(&'|') { self.chars.next(); return Ok(Token::PipePipe); }
+                return Err(
+                    "Burxt has no bitwise `|` — did you mean `||` (logical or)?".to_string(),
+                );
+            }
             '!' => {
                 self.chars.next();
                 if self.chars.peek() == Some(&'=') { self.chars.next(); return Ok(Token::NotEq); }
-                return Err("unexpected character: '!' (did you mean '!='?)".to_string());
+                return Ok(Token::Bang);
             }
             _ => {}
         }

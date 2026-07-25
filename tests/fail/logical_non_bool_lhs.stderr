@@ -1,0 +1,1 @@
+the left side of `&&` must be a Bool, but it has type Int — Burxt has no truthiness.

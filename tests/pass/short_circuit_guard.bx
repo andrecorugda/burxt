@@ -1,0 +1,14 @@
+// The guard idiom that only works BECAUSE of short-circuit: if `&&` evaluated
+// both sides, this would trap with division by zero (exit 70) instead of
+// printing. This is why short-circuit has to be part of the language.
+let n: Int = 0;
+let d: Decimal<2, RoundHalfEven> = 10.00;
+if n != 0 && d / n > 1.00 {
+    print(1);
+} else {
+    print(2);
+}
+// same shape with `||`: the safe branch is taken first
+if n == 0 || d / n > 1.00 {
+    print(3);
+}

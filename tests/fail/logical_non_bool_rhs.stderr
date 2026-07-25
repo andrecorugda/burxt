@@ -1,0 +1,1 @@
+the right side of `||` must be a Bool, but it has type Decimal<2> — Burxt has no truthiness.

@@ -42,7 +42,7 @@
 //!   * Division checks for a zero divisor (and the i64::MIN / -1 edge) the
 //!     same way, so you get a named error rather than a raw SIGFPE.
 
-use crate::ast::{BinOp, CmpOp, Rounding, Type};
+use crate::ast::{BinOp, CmpOp, LogicalOp, Rounding, Type};
 use crate::typeck::{TypedExpr, TypedExprKind, TypedFn, TypedMethod, TypedProgram, TypedStmt};
 use inkwell::types::StructType;
 
@@ -884,6 +884,67 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder
                     .build_load(self.llvm_type(&ty), slot, name)
                     .map_err(|e| e.to_string())
+            }
+            TypedExprKind::Not(inner) => {
+                // Bool is 0/1, so `1 - v` flips it without any branch.
+                let v = self.gen_expr(inner)?.into_int_value();
+                self.builder
+                    .build_int_sub(i64t.const_int(1, false), v, "not")
+                    .map(Into::into)
+                    .map_err(|e| e.to_string())
+            }
+            TypedExprKind::Logical { op, lhs, rhs } => {
+                // Short-circuit with real control flow: the right side must NOT
+                // execute when the left already decides the answer, because that
+                // is observable (its side effects would show).
+                let err = |e: inkwell::builder::BuilderError| e.to_string();
+                let function = self
+                    .builder
+                    .get_insert_block()
+                    .and_then(|b| b.get_parent())
+                    .ok_or("codegen bug: logical operator outside a function")?;
+
+                let l = self.gen_expr(lhs)?.into_int_value();
+                let l_bit = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::NE, l, i64t.const_zero(), "lhs_bit")
+                    .map_err(err)?;
+                let lhs_block = self.builder.get_insert_block().unwrap();
+                let rhs_bb = self.ctx.append_basic_block(function, "sc.rhs");
+                let join_bb = self.ctx.append_basic_block(function, "sc.join");
+
+                // `&&` evaluates the right side only when the left is true;
+                // `||` only when the left is false.
+                match op {
+                    LogicalOp::And => {
+                        self.builder
+                            .build_conditional_branch(l_bit, rhs_bb, join_bb)
+                            .map_err(err)?
+                    }
+                    LogicalOp::Or => {
+                        self.builder
+                            .build_conditional_branch(l_bit, join_bb, rhs_bb)
+                            .map_err(err)?
+                    }
+                };
+
+                self.builder.position_at_end(rhs_bb);
+                let r = self.gen_expr(rhs)?.into_int_value();
+                // The right side may itself have branched (a nested `&&`), so
+                // take the block we actually end in, not rhs_bb.
+                let rhs_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(join_bb).map_err(err)?;
+
+                self.builder.position_at_end(join_bb);
+                let phi = self.builder.build_phi(i64t, "sc").map_err(err)?;
+                // Arriving from the left means the left decided it: false for
+                // `&&`, true for `||`.
+                let short = match op {
+                    LogicalOp::And => i64t.const_zero(),
+                    LogicalOp::Or => i64t.const_int(1, false),
+                };
+                phi.add_incoming(&[(&short, lhs_block), (&r, rhs_end)]);
+                Ok(phi.as_basic_value())
             }
             TypedExprKind::Neg(inner) => {
                 // 0 - v, overflow-checked like any subtraction (there is no

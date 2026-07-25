@@ -46,6 +46,10 @@ pub enum TypedExprKind {
     Var(String),
     /// Negation of a non-literal (literals are folded at check time).
     Neg(Box<TypedExpr>),
+    Not(Box<TypedExpr>),
+    /// Short-circuiting `&&` / `||`; codegen must not evaluate `rhs` when
+    /// `lhs` already decides the result.
+    Logical { op: LogicalOp, lhs: Box<TypedExpr>, rhs: Box<TypedExpr> },
     Binary {
         op: BinOp,
         lhs: Box<TypedExpr>,
@@ -1063,6 +1067,46 @@ impl TypeChecker {
                     other => TypedExprKind::Neg(Box::new(TypedExpr { ty: t.ty.clone(), kind: other })),
                 };
                 Ok(TypedExpr { ty: t.ty, kind })
+            }
+
+            Expr::Not(inner) => {
+                let t = self.check_expr(inner, None)?;
+                if t.ty != Type::Bool {
+                    return Err(format!(
+                        "`!` needs a Bool, but this has type {} — Burxt has no \
+                         truthiness, so there is nothing to negate.",
+                        t.ty
+                    ));
+                }
+                Ok(TypedExpr { ty: Type::Bool, kind: TypedExprKind::Not(Box::new(t)) })
+            }
+
+            Expr::Logical { op, lhs, rhs } => {
+                // Both sides must be Bool: `&&`/`||` are not a coercion site.
+                let l = self.check_expr(lhs, None)?;
+                if l.ty != Type::Bool {
+                    return Err(format!(
+                        "the left side of `{}` must be a Bool, but it has type {} — \
+                         Burxt has no truthiness.",
+                        op, l.ty
+                    ));
+                }
+                let r = self.check_expr(rhs, None)?;
+                if r.ty != Type::Bool {
+                    return Err(format!(
+                        "the right side of `{}` must be a Bool, but it has type {} — \
+                         Burxt has no truthiness.",
+                        op, r.ty
+                    ));
+                }
+                Ok(TypedExpr {
+                    ty: Type::Bool,
+                    kind: TypedExprKind::Logical {
+                        op: *op,
+                        lhs: Box::new(l),
+                        rhs: Box::new(r),
+                    },
+                })
             }
 
             Expr::Binary { op, lhs, rhs } => {
