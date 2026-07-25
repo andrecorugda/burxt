@@ -1,4 +1,12 @@
-# Burxt — Design Notes (v0.0.2)
+# Burxt — Design Notes (v0.0.3)
+
+## Grammar principle
+The grammar must be eloquent and easy to understand, without compromising the
+thesis. Types read as plain English (`Decimal<2, RoundHalfEven>` = "two
+decimal places, rounding half to even"), there is one obvious way to write
+each construct, and every compile error reads like advice — it names the rule
+and shows the syntax that fixes it. When brevity and clarity conflict,
+clarity wins; exactness and explicitness are never traded for either.
 
 **Burxt** is a typed, compiled, native-Linux programming language.
 
@@ -73,8 +81,36 @@ near the top of the i64 range.
 - tests/fail/NAME.bx + NAME.stderr — must be rejected with an error containing that text.
 Adding a test = dropping two files in the right directory.
 
-## Roadmap after v0.0.2
-- functions, control flow
+## v0.0.3: functions, control flow, Bool
+Burxt is now a real programming language: recursion makes it computationally
+complete without needing mutation yet.
+
+    fn total(price: Decimal<2>, qty: Int) -> Decimal<2> {
+        return price * qty;
+    }
+    print(total(19.99, 3));    // 59.97
+
+Rules:
+- Every function declares parameter types and a return type, and the
+  typechecker PROVES it returns on every path (last statement is a `return`,
+  or an if/else where both branches return). Code after a returning statement
+  is an error, not a warning.
+- Functions are hoisted: define them in any order, call them mutually.
+- Argument and return types must match exactly — same rules as `let`. A
+  literal argument adopts the parameter's type (`total(19.99, 3)` works).
+- `if cond { } else if { } else { }`: the condition must be a Bool, braces
+  are required, blocks are real lexical scopes.
+- Comparisons (`== != < <= > >=`) are always exact (scaled integers compare
+  directly) and produce a `Bool`. Both sides must have the SAME type —
+  comparing Decimal<2> to Decimal<3> is refused like adding them would be.
+  A literal adopts the type of what it faces: `balance > 0.00` just works.
+  Comparisons do not chain (`a < b < c` is not an expression).
+- `Bool` is first-class; it has `==`/`!=` but no order.
+- Codegen: all values are i64 (Bool holds 0/1, i1 only at branches); user
+  functions are mangled `bx.<name>` so they can never collide with libc.
+
+## Roadmap after v0.0.3
+- mutation + loops (`let mut`, `while`)
 - overflow-checked arithmetic (or a wider decimal representation)
 - refinement types ("balance >= 0", "splits sum to total")
 - self-hosting

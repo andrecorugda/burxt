@@ -15,8 +15,15 @@ pub enum Token {
     Ident(String),
     Let,
     Print,
+    Fn,
+    Return,
+    If,
+    Else,
+    True,
+    False,
     // type keywords
     TyInt,
+    TyBool,
     TyDecimal,
     RoundHalfEven,
     RoundHalfUp,
@@ -31,8 +38,15 @@ pub enum Token {
     Slash,
     LParen,
     RParen,
+    LBrace,
+    RBrace,
+    Arrow,
     Lt,
     Gt,
+    Le,
+    Ge,
+    EqEq,
+    NotEq,
     // end of input
     Eof,
 }
@@ -70,21 +84,44 @@ impl<'a> Lexer<'a> {
             Some(&c) => c,
         };
 
-        // punctuation
+        // punctuation (two-character operators first: they extend a one-char one)
         match c {
             ':' => { self.chars.next(); return Ok(Token::Colon); }
             ';' => { self.chars.next(); return Ok(Token::Semicolon); }
             ',' => { self.chars.next(); return Ok(Token::Comma); }
-            '=' => { self.chars.next(); return Ok(Token::Equals); }
+            '=' => {
+                self.chars.next();
+                if self.chars.peek() == Some(&'=') { self.chars.next(); return Ok(Token::EqEq); }
+                return Ok(Token::Equals);
+            }
             '+' => { self.chars.next(); return Ok(Token::Plus); }
-            '-' => { self.chars.next(); return Ok(Token::Minus); }
+            '-' => {
+                self.chars.next();
+                if self.chars.peek() == Some(&'>') { self.chars.next(); return Ok(Token::Arrow); }
+                return Ok(Token::Minus);
+            }
             '*' => { self.chars.next(); return Ok(Token::Star); }
             // a solitary '/' is division; '//' was already consumed as a comment
             '/' => { self.chars.next(); return Ok(Token::Slash); }
             '(' => { self.chars.next(); return Ok(Token::LParen); }
             ')' => { self.chars.next(); return Ok(Token::RParen); }
-            '<' => { self.chars.next(); return Ok(Token::Lt); }
-            '>' => { self.chars.next(); return Ok(Token::Gt); }
+            '{' => { self.chars.next(); return Ok(Token::LBrace); }
+            '}' => { self.chars.next(); return Ok(Token::RBrace); }
+            '<' => {
+                self.chars.next();
+                if self.chars.peek() == Some(&'=') { self.chars.next(); return Ok(Token::Le); }
+                return Ok(Token::Lt);
+            }
+            '>' => {
+                self.chars.next();
+                if self.chars.peek() == Some(&'=') { self.chars.next(); return Ok(Token::Ge); }
+                return Ok(Token::Gt);
+            }
+            '!' => {
+                self.chars.next();
+                if self.chars.peek() == Some(&'=') { self.chars.next(); return Ok(Token::NotEq); }
+                return Err("unexpected character: '!' (did you mean '!='?)".to_string());
+            }
             _ => {}
         }
 
@@ -182,7 +219,14 @@ impl<'a> Lexer<'a> {
         match s.as_str() {
             "let" => Token::Let,
             "print" => Token::Print,
+            "fn" => Token::Fn,
+            "return" => Token::Return,
+            "if" => Token::If,
+            "else" => Token::Else,
+            "true" => Token::True,
+            "false" => Token::False,
             "Int" => Token::TyInt,
+            "Bool" => Token::TyBool,
             "Decimal" => Token::TyDecimal,
             "RoundHalfEven" => Token::RoundHalfEven,
             "RoundHalfUp" => Token::RoundHalfUp,

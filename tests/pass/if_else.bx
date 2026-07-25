@@ -1,0 +1,19 @@
+// else-if chains; both branches returning satisfies the return-path check.
+fn tier(amount: Decimal<2>) -> Int {
+    if amount >= 100.00 {
+        return 3;
+    } else if amount >= 50.00 {
+        return 2;
+    } else {
+        return 1;
+    }
+}
+print(tier(150.00));
+print(tier(75.00));
+print(tier(10.00));
+// if without else at top level, plus block scoping: `inner` dies at the brace.
+if tier(200.00) == 3 {
+    let inner: Int = 99;
+    print(inner);
+}
+print(1);

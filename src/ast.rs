@@ -38,6 +38,7 @@ impl std::fmt::Display for Rounding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Int,
+    Bool,
     /// Decimal with a fixed scale S (digits after the decimal point).
     /// Represented at runtime as a scaled i64: stored = value * 10^scale.
     Decimal { scale: u32, rounding: Option<Rounding> },
@@ -47,6 +48,7 @@ impl std::fmt::Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Type::Int => write!(f, "Int"),
+            Type::Bool => write!(f, "Bool"),
             Type::Decimal { scale, rounding: None } => write!(f, "Decimal<{}>", scale),
             Type::Decimal { scale, rounding: Some(r) } => write!(f, "Decimal<{}, {}>", scale, r),
         }
@@ -74,6 +76,32 @@ impl std::fmt::Display for BinOp {
     }
 }
 
+/// Comparison operators. Comparisons are always exact (scaled integers compare
+/// directly) and always produce a Bool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CmpOp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+impl std::fmt::Display for CmpOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            CmpOp::Eq => "==",
+            CmpOp::Ne => "!=",
+            CmpOp::Lt => "<",
+            CmpOp::Le => "<=",
+            CmpOp::Gt => ">",
+            CmpOp::Ge => ">=",
+        };
+        write!(f, "{}", s)
+    }
+}
+
 /// Expressions.
 #[derive(Debug, Clone)]
 pub enum Expr {
@@ -83,6 +111,8 @@ pub enum Expr {
     /// e.g. `19.99` -> DecimalLit { unscaled: 1999, scale: 2 }.
     /// We never parse it through f64 — that is the whole point.
     DecimalLit { unscaled: i64, scale: u32 },
+    /// `true` or `false`.
+    BoolLit(bool),
     /// A reference to a previously-bound name.
     Var(String),
     /// A binary operation.
@@ -91,6 +121,14 @@ pub enum Expr {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    /// A comparison, e.g. `balance >= 0.00`. Produces a Bool.
+    Compare {
+        op: CmpOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
+    /// A function call, e.g. `total(19.99, 3)`.
+    Call { name: String, args: Vec<Expr> },
 }
 
 /// Statements. A Burxt v0.0.1 program is just a sequence of these.
@@ -104,10 +142,39 @@ pub enum Stmt {
     },
     /// `print(expr);`
     Print(Expr),
+    /// `return expr;` — only valid inside a function.
+    Return(Expr),
+    /// `if cond { ... } else { ... }` — the condition must be a Bool, and the
+    /// braces are required. `else if` chains nest inside `else_block`.
+    If {
+        cond: Expr,
+        then_block: Vec<Stmt>,
+        else_block: Option<Vec<Stmt>>,
+    },
 }
 
-/// A whole program: an ordered list of statements.
+/// One typed function parameter: `price: Decimal<2>`.
+#[derive(Debug, Clone)]
+pub struct Param {
+    pub name: String,
+    pub ty: Type,
+}
+
+/// `fn name(params) -> ret { body }`. Every function returns a value, and the
+/// typechecker proves it returns on every path.
+#[derive(Debug, Clone)]
+pub struct FnDef {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub ret: Type,
+    pub body: Vec<Stmt>,
+}
+
+/// A whole program: function definitions plus top-level statements (the
+/// implicit main). Functions are hoisted — they may be defined after the
+/// code that calls them, and may call each other.
 #[derive(Debug, Clone)]
 pub struct Program {
+    pub fns: Vec<FnDef>,
     pub stmts: Vec<Stmt>,
 }

@@ -1,0 +1,12 @@
+// Money comparisons: the literal adopts the money type it faces.
+let balance: Decimal<2> = 100.00;
+let limit: Decimal<2> = 99.99;
+print(balance > limit);
+print(balance <= limit);
+print(balance != limit);
+if balance > 50.00 {
+    print(1);
+}
+// negatives order correctly in the scaled representation
+let debt: Decimal<2> = 0.00 - 0.50;
+print(debt < 0.00);

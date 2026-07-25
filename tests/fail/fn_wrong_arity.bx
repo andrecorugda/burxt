@@ -1,0 +1,4 @@
+fn double(x: Decimal<2>) -> Decimal<2> {
+    return x + x;
+}
+print(double(1.00, 2.00));

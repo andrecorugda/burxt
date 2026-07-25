@@ -3,11 +3,16 @@
 //! This is the ONLY file that knows about LLVM. Swapping backends (Cranelift,
 //! an interpreter) would replace only this file.
 //!
-//! Representation choices for v0.0.1:
+//! Representation choices:
 //!   * `Int`         -> LLVM i64
+//!   * `Bool`        -> LLVM i64 holding 0 or 1 (i1 only transiently, at
+//!                      comparisons and branches) — one uniform value width
+//!                      keeps variables, params and returns simple.
 //!   * `Decimal<S>`  -> LLVM i64 holding the *scaled* value (value * 10^S).
 //!                      e.g. 19.99 as Decimal<2> is the i64 1999. This is exact:
 //!                      no float ever appears in the generated program.
+//!   * user `fn f`   -> LLVM function `bx.f` (the prefix keeps user names from
+//!                      ever colliding with libc symbols like printf/main).
 //!
 //! Printing:
 //!   * Int prints via printf("%lld\n", v).
@@ -23,8 +28,8 @@
 //!   * Division by zero traps at runtime (SIGFPE), like C. A checked story
 //!     comes later; silently producing a wrong number is not an option.
 
-use crate::ast::{BinOp, Rounding, Type};
-use crate::typeck::{TypedExpr, TypedExprKind, TypedProgram, TypedStmt};
+use crate::ast::{BinOp, CmpOp, Rounding, Type};
+use crate::typeck::{TypedExpr, TypedExprKind, TypedFn, TypedProgram, TypedStmt};
 
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -37,20 +42,33 @@ pub struct CodeGen<'ctx> {
     ctx: &'ctx Context,
     module: Module<'ctx>,
     builder: Builder<'ctx>,
-    /// name -> (stack slot, type)
+    /// name -> (stack slot, type); reset per function
     vars: HashMap<String, (PointerValue<'ctx>, Type)>,
     /// lazily created rounding helpers, one per mode used by the program
     round_fns: HashMap<Rounding, FunctionValue<'ctx>>,
+    /// user function name -> its LLVM function (mangled `bx.<name>`)
+    user_fns: HashMap<String, FunctionValue<'ctx>>,
+    /// libc printf, declared once in compile()
+    printf: Option<FunctionValue<'ctx>>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
     pub fn new(ctx: &'ctx Context, module_name: &str) -> Self {
         let module = ctx.create_module(module_name);
         let builder = ctx.create_builder();
-        CodeGen { ctx, module, builder, vars: HashMap::new(), round_fns: HashMap::new() }
+        CodeGen {
+            ctx,
+            module,
+            builder,
+            vars: HashMap::new(),
+            round_fns: HashMap::new(),
+            user_fns: HashMap::new(),
+            printf: None,
+        }
     }
 
-    /// Emit the whole program into a `main` function returning 0.
+    /// Emit the whole program: user functions first, then the top-level
+    /// statements as `main`.
     pub fn compile(&mut self, prog: &TypedProgram) -> Result<(), String> {
         let i64t = self.ctx.i64_type();
         let i32t = self.ctx.i32_type();
@@ -58,20 +76,33 @@ impl<'ctx> CodeGen<'ctx> {
         // declare: i32 @printf(i8*, ...)
         let i8ptr = self.ctx.ptr_type(AddressSpace::default());
         let printf_ty = i32t.fn_type(&[i8ptr.into()], true);
-        let printf = self.module.add_function("printf", printf_ty, None);
+        self.printf = Some(self.module.add_function("printf", printf_ty, None));
+
+        // Declare every user function up front (mutual recursion, any order).
+        for f in &prog.fns {
+            let param_tys = vec![i64t.into(); f.params.len()];
+            let fn_ty = i64t.fn_type(&param_tys, false);
+            let llf = self.module.add_function(&format!("bx.{}", f.name), fn_ty, None);
+            self.user_fns.insert(f.name.clone(), llf);
+        }
+
+        // Define their bodies.
+        for f in &prog.fns {
+            self.gen_fn(f)?;
+        }
 
         // define: i32 @main()
         let main_ty = i32t.fn_type(&[], false);
         let main_fn = self.module.add_function("main", main_ty, None);
         let entry = self.ctx.append_basic_block(main_fn, "entry");
         self.builder.position_at_end(entry);
+        self.vars.clear();
 
         for stmt in &prog.stmts {
-            self.gen_stmt(stmt, printf)?;
+            self.gen_stmt(stmt)?;
         }
 
         // return 0  (main returns i32)
-        let _ = i64t; // (i64 type used elsewhere; silence unused if it were)
         self.builder
             .build_return(Some(&i32t.const_int(0, false)))
             .map_err(|e| e.to_string())?;
@@ -84,11 +115,32 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
-    fn gen_stmt(
-        &mut self,
-        stmt: &TypedStmt,
-        printf: inkwell::values::FunctionValue<'ctx>,
-    ) -> Result<(), String> {
+    fn gen_fn(&mut self, f: &TypedFn) -> Result<(), String> {
+        let llf = self.user_fns[&f.name];
+        let entry = self.ctx.append_basic_block(llf, "entry");
+        self.builder.position_at_end(entry);
+        self.vars.clear();
+
+        // Spill each parameter to a stack slot so it behaves like any binding.
+        for (i, (name, ty)) in f.params.iter().enumerate() {
+            let slot = self
+                .builder
+                .build_alloca(self.ctx.i64_type(), name)
+                .map_err(|e| e.to_string())?;
+            let arg = llf.get_nth_param(i as u32).unwrap();
+            self.builder.build_store(slot, arg).map_err(|e| e.to_string())?;
+            self.vars.insert(name.clone(), (slot, ty.clone()));
+        }
+
+        for stmt in &f.body {
+            self.gen_stmt(stmt)?;
+        }
+        // The typechecker proved every path ends in `return`, so the current
+        // block is already terminated — no fallthrough ret is needed.
+        Ok(())
+    }
+
+    fn gen_stmt(&mut self, stmt: &TypedStmt) -> Result<(), String> {
         match stmt {
             TypedStmt::Let { name, ty, value } => {
                 let val = self.gen_expr(value)?;
@@ -100,21 +152,120 @@ impl<'ctx> CodeGen<'ctx> {
                 self.vars.insert(name.clone(), (slot, ty.clone()));
                 Ok(())
             }
-            TypedStmt::Print(e) => self.gen_print(e, printf),
+            TypedStmt::Print(e) => self.gen_print(e),
+            TypedStmt::Return(e) => {
+                let val = self.gen_expr(e)?;
+                self.builder.build_return(Some(&val)).map_err(|e| e.to_string())?;
+                Ok(())
+            }
+            TypedStmt::If { cond, then_block, else_block } => {
+                self.gen_if(cond, then_block, else_block.as_deref())
+            }
         }
     }
 
-    fn gen_print(
+    fn gen_if(
         &mut self,
-        e: &TypedExpr,
-        printf: inkwell::values::FunctionValue<'ctx>,
+        cond: &TypedExpr,
+        then_block: &[TypedStmt],
+        else_block: Option<&[TypedStmt]>,
     ) -> Result<(), String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+
+        let cond_val = self.gen_expr(cond)?;
+        let cond_i1 = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::NE, cond_val, i64t.const_zero(), "ifcond")
+            .map_err(err)?;
+
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_parent())
+            .ok_or("codegen bug: `if` outside a function")?;
+        let then_bb = self.ctx.append_basic_block(function, "then");
+        let else_bb = else_block.map(|_| self.ctx.append_basic_block(function, "else"));
+        let merge_bb = self.ctx.append_basic_block(function, "endif");
+
+        self.builder
+            .build_conditional_branch(cond_i1, then_bb, else_bb.unwrap_or(merge_bb))
+            .map_err(err)?;
+
+        // A branch "falls through" unless every path in it returned.
+        let mut any_fallthrough = else_bb.is_none();
+
+        self.builder.position_at_end(then_bb);
+        self.gen_block(then_block)?;
+        if self.current_block_open() {
+            self.builder.build_unconditional_branch(merge_bb).map_err(err)?;
+            any_fallthrough = true;
+        }
+
+        if let (Some(else_bb), Some(else_stmts)) = (else_bb, else_block) {
+            self.builder.position_at_end(else_bb);
+            self.gen_block(else_stmts)?;
+            if self.current_block_open() {
+                self.builder.build_unconditional_branch(merge_bb).map_err(err)?;
+                any_fallthrough = true;
+            }
+        }
+
+        self.builder.position_at_end(merge_bb);
+        if !any_fallthrough {
+            // Both branches returned; nothing ever reaches here (and the
+            // typechecker refuses statements after such an `if`).
+            self.builder.build_unreachable().map_err(err)?;
+        }
+        Ok(())
+    }
+
+    /// Generate a block's statements in a child scope, mirroring the
+    /// typechecker: bindings made inside vanish at the closing brace.
+    fn gen_block(&mut self, stmts: &[TypedStmt]) -> Result<(), String> {
+        let saved = self.vars.clone();
+        let result = stmts.iter().try_for_each(|s| self.gen_stmt(s));
+        self.vars = saved;
+        result
+    }
+
+    /// Is the builder's current block still missing a terminator?
+    fn current_block_open(&self) -> bool {
+        self.builder
+            .get_insert_block()
+            .is_some_and(|b| b.get_terminator().is_none())
+    }
+
+    fn gen_print(&mut self, e: &TypedExpr) -> Result<(), String> {
+        let printf = self.printf.ok_or("codegen bug: printf not declared")?;
         let val = self.gen_expr(e)?;
         match &e.ty {
             Type::Int => {
                 let fmt = self.global_str("%lld\n", "fmt_int");
                 self.builder
                     .build_call(printf, &[fmt.into(), val.into()], "printf_int")
+                    .map_err(|e| e.to_string())?;
+            }
+            Type::Bool => {
+                let is_true = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::NE,
+                        val,
+                        self.ctx.i64_type().const_zero(),
+                        "is_true",
+                    )
+                    .map_err(|e| e.to_string())?;
+                let t = self.global_str("true\n", "str_true");
+                let f = self.global_str("false\n", "str_false");
+                let s = self
+                    .builder
+                    .build_select(is_true, t, f, "bool_str")
+                    .map_err(|e| e.to_string())?;
+                let fmt = self.global_str("%s", "fmt_bool");
+                let args: Vec<BasicMetadataValueEnum> = vec![fmt.into(), s.into()];
+                self.builder
+                    .build_call(printf, &args, "printf_bool")
                     .map_err(|e| e.to_string())?;
             }
             Type::Decimal { scale, .. } => {
@@ -164,6 +315,7 @@ impl<'ctx> CodeGen<'ctx> {
         match &e.kind {
             TypedExprKind::IntLit(n) => Ok(i64t.const_int(*n as u64, true)),
             TypedExprKind::DecimalLit { unscaled } => Ok(i64t.const_int(*unscaled as u64, true)),
+            TypedExprKind::BoolLit(b) => Ok(i64t.const_int(*b as u64, false)),
             TypedExprKind::Var(name) => {
                 let (slot, _) = self
                     .vars
@@ -215,9 +367,49 @@ impl<'ctx> CodeGen<'ctx> {
                                 self.build_round_div(mode, scaled, r)
                             }
                             // A/n keeps scale S: round(A / n).
-                            Type::Int => self.build_round_div(mode, l, r),
+                            _ => self.build_round_div(mode, l, r),
                         }
                     }
+                }
+            }
+            TypedExprKind::Compare { op, lhs, rhs } => {
+                let l = self.gen_expr(lhs)?;
+                let r = self.gen_expr(rhs)?;
+                // Scaled decimals of equal scale compare exactly as plain
+                // integers — no rescaling, no rounding, no float.
+                use inkwell::IntPredicate::*;
+                let pred = match op {
+                    CmpOp::Eq => EQ,
+                    CmpOp::Ne => NE,
+                    CmpOp::Lt => SLT,
+                    CmpOp::Le => SLE,
+                    CmpOp::Gt => SGT,
+                    CmpOp::Ge => SGE,
+                };
+                let bit = self
+                    .builder
+                    .build_int_compare(pred, l, r, "cmp")
+                    .map_err(|e| e.to_string())?;
+                self.builder
+                    .build_int_z_extend(bit, i64t, "cmp_i64")
+                    .map_err(|e| e.to_string())
+            }
+            TypedExprKind::Call { name, args } => {
+                let f = *self
+                    .user_fns
+                    .get(name)
+                    .ok_or_else(|| format!("codegen bug: unknown function {}", name))?;
+                let mut vals: Vec<BasicMetadataValueEnum> = Vec::new();
+                for a in args {
+                    vals.push(self.gen_expr(a)?.into());
+                }
+                let call = self
+                    .builder
+                    .build_call(f, &vals, "call")
+                    .map_err(|e| e.to_string())?;
+                match call.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(v) => Ok(v.into_int_value()),
+                    _ => Err(format!("codegen bug: call to {} returned void", name)),
                 }
             }
         }

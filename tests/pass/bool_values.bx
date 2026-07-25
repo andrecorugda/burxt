@@ -1,0 +1,8 @@
+// Bool is a first-class type; comparisons are exact.
+let ok: Bool = 1 < 2;
+print(ok);
+print(false);
+let no: Bool = 2 <= 1;
+print(ok != no);
+print(true == true);
+print(3.14 == 3.14);

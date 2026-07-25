@@ -1,0 +1,8 @@
+// Functions with money parameters; literal arguments adopt the param type.
+fn total(price: Decimal<2>, qty: Int) -> Decimal<2> {
+    return price * qty;
+}
+print(total(19.99, 3));
+print(total(5.00, 2));
+let t: Decimal<2> = total(3.33, 7);
+print(t);

@@ -1,0 +1,4 @@
+fn f() -> Int {
+    return 1.00;
+}
+print(f());
