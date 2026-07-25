@@ -1,0 +1,3 @@
+// A String compared to anything else is the same cross-type error every
+// other mismatched comparison gives — not a special string message.
+print("a" == 1);

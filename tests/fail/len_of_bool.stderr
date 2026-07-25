@@ -1,0 +1,1 @@
+len(...) needs an array or a string, but this has type Bool

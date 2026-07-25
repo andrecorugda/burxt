@@ -1,0 +1,2 @@
+let price: Decimal<2> = 1.00;
+print("1.00" == price);

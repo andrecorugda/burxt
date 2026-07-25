@@ -7,7 +7,7 @@ ledger with the trigger that would earn each deferral a future milestone.
 **Read this file first.** The specs were written when Burxt was at roughly
 v0.0.1, so several describe work that is now done, and one describes work that
 was built in a different order than specified. This index records what is
-actually true as of **v0.0.15**, audited by running the compiler — not by
+actually true as of **v0.0.16**, audited by running the compiler — not by
 reading the specs. Where a spec and the implementation disagree, the note says
 which is right.
 
@@ -15,7 +15,7 @@ which is right.
 
 | Spec | State | What remains |
 |---|---|---|
-| [A4.4 Strings & Collections](A4.4-STRINGS-COLLECTIONS.md) | **Partial** | Arrays fully done. Strings: only literals, printing, and FFI. Length, equality, `.bytes()`/`.chars()` still missing; concatenation is heap-blocked (M1). |
+| [A4.4 Strings & Collections](A4.4-STRINGS-COLLECTIONS.md) | **Partial** | Arrays fully done. Strings: literals, printing, FFI, **length + equality (v0.0.16)**. Remaining: `.bytes()`/`.chars()` views; concatenation heap-blocked (M1). |
 | [A4.5 Aggregate ABI](A4.5-AGGREGATE-ABI.md) | **DONE** (v0.0.12) | — |
 | [A4.6 Interfaces & Dispatch](A4.6-INTERFACES-DISPATCH.md) | **DONE** (v0.0.14) | Traits, `impl`, static + `dyn` dispatch shipped. `class` / `open` inheritance from the North Star is separate and still unbuilt. |
 | [A4.7 Signature Grammar](A4.7-SIGNATURE-GRAMMAR.md) | **Not started** | All six deliverables. This is the "eloquence" / demo milestone. |
@@ -61,10 +61,11 @@ Not built: the `[0; N]` repeat form (sugar, deferred).
 **Strings are only half done** (v0.0.7). Literals with the four escapes,
 printing, immutability, and passing to C as `const char*` all work. Missing:
 
-- **Length** — `len("hello")` errors with *"len(...) needs an array"*.
-- **Equality** — refused, pointing at a byte-equality runtime helper.
-- **`.bytes()` / `.chars()` views** — not built. Bare `s[i]` is correctly
-  absent, per the spec's byte-vs-char decision.
+- ~~**Length**~~ and ~~**equality**~~ — **shipped in v0.0.16** as generated
+  byte-scan helpers, exactly as this audit predicted. `==` slots into the one
+  equality rule; comparison is by bytes, not pointers.
+- **`.bytes()` / `.chars()` views** — still not built. Bare `s[i]` is
+  correctly absent, per the spec's byte-vs-char decision.
 - **Concatenation** — refused, and *correctly* so: it needs allocation, which
   is M1's job.
 
@@ -115,10 +116,9 @@ In dependency order, cheapest and most-unblocking first:
 
 1. ~~Finish A5.0: `&&`, `||`, `!` with short-circuit.~~ **Done in v0.0.15**,
    with short-circuit proven observable by two tests.
-2. **Advance A4.4's strings: length and equality.** Buildable now, no heap
-   needed (see the audit above). Equality also settles a correctness-family
-   question — `==` on `String` must arrive as the *same* `==`, total within
-   its type.
+2. ~~Advance A4.4's strings: length and equality.~~ **Done in v0.0.16.**
+   Equality landed inside the existing one-equality rule rather than beside
+   it, which was the point of doing it while String was still small.
 3. **A4.7 Signature Grammar.** The demo milestone, and the biggest remaining
    near-term chunk. Sequence within it: fix the brace hazard, then money and
    percent literals, then `requires` / `ensures` runtime-checked, then

@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.15)
+# Burxt — Design Notes (v0.0.16)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -834,6 +834,38 @@ With this, A5.0's own acceptance program passes: `fib(20)` prints `6765`.
 Still deliberately deferred from that spec: `for` (needs iterators),
 `match` (needs sum types), `break`/`continue` (nothing has needed them yet),
 and any form of ternary.
+
+### v0.0.16: string length and equality (A4.4, unblocked half)
+
+```text
+print(len("hello"));        // 5
+print("abc" == "abc");      // true
+```
+
+The audit in `spec/README.md` found that A4.4 bundled length, equality and
+concatenation as one heap-blocked group, but only concatenation actually needs
+the heap. Length is a byte scan; equality is a byte loop. Both shipped here;
+**concatenation stays refused** until the memory model (M1).
+
+- **`==` on String is the SAME `==`**, not a parallel string-equals path. It
+  slots into the existing one-equality-no-coercion rule exactly as `Bool` does:
+  equality yes, ordering still refused, and a cross-type comparison falls
+  through to the shared catch-all, so `"a" == 1` reads identically to
+  `1 == 1.00`. Getting this right while String has few operations is much
+  cheaper than retrofitting it later.
+- **Equality is by BYTES, never pointer identity.** Two identical literals
+  become two separate globals (`@str`, `@str.1`) with different addresses, and
+  a test asserts they still compare equal.
+- **`len` now spans arrays and strings, and the two are different kinds of
+  length** — worth keeping visible: an array's length lives in its TYPE and
+  folds to a compile-time constant, while a string's is a property of its DATA
+  and is scanned at runtime. A test rebinds a `let mut` String to prove the
+  string form is genuinely not constant-folded.
+- Both helpers (`@burxt.strlen`, `@burxt.streq`) are generated loops rather
+  than calls to libc `strlen`/`strcmp`. A builtin must not quietly consume a C
+  symbol name — `extern fn strlen` stays available to user code, and an
+  existing test still uses it — and nothing here depends on libc for a future
+  wasm target.
 
 ## Testing
 

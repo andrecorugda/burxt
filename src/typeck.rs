@@ -47,6 +47,9 @@ pub enum TypedExprKind {
     /// Negation of a non-literal (literals are folded at check time).
     Neg(Box<TypedExpr>),
     Not(Box<TypedExpr>),
+    /// `len(s)` on a String: a runtime byte scan (an array's length folds to a
+    /// constant instead, so it never reaches codegen).
+    StrLen(Box<TypedExpr>),
     /// Short-circuiting `&&` / `||`; codegen must not evaluate `rhs` when
     /// `lhs` already decides the result.
     Logical { op: LogicalOp, lhs: Box<TypedExpr>, rhs: Box<TypedExpr> },
@@ -1141,12 +1144,18 @@ impl TypeChecker {
             }
 
             Expr::Call { name, args } => {
-                // `len(a)` is a builtin that folds to the array's constant
-                // length — codegen never sees it, and code stays honest when
-                // the length changes.
+                // `len` is a builtin over both arrays and strings, but the two
+                // are different KINDS of length, and the difference is worth
+                // keeping visible:
+                //   * an array's length lives in its TYPE, so it folds to a
+                //     constant and codegen never sees the call;
+                //   * a string's length is a property of its DATA, so it is a
+                //     byte scan at runtime.
                 if name == "len" {
                     if args.len() != 1 {
-                        return Err("len(...) takes exactly one array".to_string());
+                        return Err(
+                            "len(...) takes exactly one array or string".to_string()
+                        );
                     }
                     let arg = self.check_expr(&args[0], None)?;
                     return match arg.ty {
@@ -1154,8 +1163,12 @@ impl TypeChecker {
                             ty: Type::Int,
                             kind: TypedExprKind::IntLit(len as i64),
                         }),
+                        Type::String => Ok(TypedExpr {
+                            ty: Type::Int,
+                            kind: TypedExprKind::StrLen(Box::new(arg)),
+                        }),
                         other => Err(format!(
-                            "len(...) needs an array, but this has type {}",
+                            "len(...) needs an array or a string, but this has type {}",
                             other
                         )),
                     };
@@ -1540,12 +1553,13 @@ impl TypeChecker {
                 "struct comparison is not available yet — compare fields individually."
                     .to_string(),
             ),
+            // Strings compare by BYTES, and only for equality. This is the
+            // same `==` every other type uses — not a parallel string-equals
+            // path — so a cross-type comparison involving a String falls
+            // through to the shared catch-all below and reads identically to
+            // any other type mismatch.
             (String, String) => match op {
-                CmpOp::Eq | CmpOp::Ne => Err(
-                    "String comparison is not available yet — it needs a \
-                     byte-equality runtime helper, coming with collections."
-                        .to_string(),
-                ),
+                CmpOp::Eq | CmpOp::Ne => Ok(()),
                 _ => Err(
                     "Strings have no ordering yet — byte ordering arrives with \
                      collections. (For C's ordering, call strcmp through FFI.)"

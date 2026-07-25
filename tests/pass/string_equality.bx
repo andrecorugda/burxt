@@ -1,0 +1,31 @@
+// `==` on String is the SAME `==` every other type uses: same-type only,
+// no coercion, returning Bool. Comparison is by BYTES.
+print("a" == "a");
+print("a" == "b");
+print("abc" == "abc");
+print("abc" == "abd");
+// prefixes must not compare equal in either direction
+print("abc" == "ab");
+print("ab" == "abc");
+// empty strings
+print("" == "");
+print("" == "x");
+print("x" == "");
+// `!=` is the exact negation
+print("a" != "a");
+print("a" != "b");
+// escapes compare by the bytes they denote, not by their source spelling
+print("a\tb" == "a\tb");
+print("a\tb" == "a b");
+let s: String = "burxt";
+let t: String = "burxt";
+print(s == t);
+// composes with the rest of the language
+if s == "burxt" && len(s) == 5 {
+    print(1);
+}
+let mut m: String = "no";
+while m != "yes" {
+    m = "yes";
+}
+print(m == "yes");

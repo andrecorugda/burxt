@@ -1,1 +1,1 @@
-len(...) needs an array, but this has type Int
+len(...) needs an array or a string, but this has type Int

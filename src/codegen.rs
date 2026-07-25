@@ -74,6 +74,9 @@ pub struct CodeGen<'ctx> {
     index_check_fn: Option<FunctionValue<'ctx>>,
     /// lazily created i128 -> i64 checked narrowing helper
     narrow_check_fn: Option<FunctionValue<'ctx>>,
+    /// lazily created string byte-scan helpers
+    str_len_fn: Option<FunctionValue<'ctx>>,
+    str_eq_fn: Option<FunctionValue<'ctx>>,
     /// user fn name -> (param types, return type), for aggregate call lowering
     fn_sigs: HashMap<String, (Vec<Type>, Type)>,
     /// (receiver, method name) -> its LLVM function (mangled `bx.<Recv>.<method>`)
@@ -115,6 +118,8 @@ impl<'ctx> CodeGen<'ctx> {
             cint_fn: None,
             index_check_fn: None,
             narrow_check_fn: None,
+            str_len_fn: None,
+            str_eq_fn: None,
             fn_sigs: HashMap::new(),
             methods: HashMap::new(),
             vtables: HashMap::new(),
@@ -885,6 +890,10 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_load(self.llvm_type(&ty), slot, name)
                     .map_err(|e| e.to_string())
             }
+            TypedExprKind::StrLen(inner) => {
+                let s = self.gen_expr(inner)?.into_pointer_value();
+                self.build_str_len(s).map(Into::into)
+            }
             TypedExprKind::Not(inner) => {
                 // Bool is 0/1, so `1 - v` flips it without any branch.
                 let v = self.gen_expr(inner)?.into_int_value();
@@ -1009,6 +1018,27 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(res.into())
             }
             TypedExprKind::Compare { op, lhs, rhs } => {
+                // Strings are pointers, so they compare by scanning bytes
+                // rather than by comparing the pointers — two equal strings
+                // must be equal regardless of where they live. Typeck allows
+                // only `==`/`!=` here.
+                if lhs.ty == Type::String {
+                    let a = self.gen_expr(lhs)?.into_pointer_value();
+                    let b = self.gen_expr(rhs)?.into_pointer_value();
+                    let eq = self.build_str_eq(a, b)?;
+                    return match op {
+                        CmpOp::Eq => Ok(eq.into()),
+                        CmpOp::Ne => self
+                            .builder
+                            .build_int_sub(i64t.const_int(1, false), eq, "str_ne")
+                            .map(Into::into)
+                            .map_err(|e| e.to_string()),
+                        other => Err(format!(
+                            "codegen bug: `{}` on String should have been refused",
+                            other
+                        )),
+                    };
+                }
                 let l = self.gen_expr(lhs)?.into_int_value();
                 let r = self.gen_expr(rhs)?.into_int_value();
                 // Scaled decimals of equal scale compare exactly as plain
@@ -1666,6 +1696,166 @@ impl<'ctx> CodeGen<'ctx> {
             self.builder.position_at_end(bb);
         }
         self.checked_fns.insert(op, f);
+        Ok(f)
+    }
+
+    /// Emit a call to `@burxt.strlen(s)` — the byte length of a String.
+    fn build_str_len(&mut self, s: PointerValue<'ctx>) -> Result<IntValue<'ctx>, String> {
+        let f = self.str_len_fn()?;
+        let call = self
+            .builder
+            .build_call(f, &[s.into()], "strlen")
+            .map_err(|e| e.to_string())?;
+        match call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => Ok(v.into_int_value()),
+            _ => Err("string-length helper returned void".to_string()),
+        }
+    }
+
+    /// Emit a call to `@burxt.streq(a, b)` — 1 if the bytes match, else 0.
+    fn build_str_eq(
+        &mut self,
+        a: PointerValue<'ctx>,
+        b: PointerValue<'ctx>,
+    ) -> Result<IntValue<'ctx>, String> {
+        let f = self.str_eq_fn()?;
+        let call = self
+            .builder
+            .build_call(f, &[a.into(), b.into()], "streq")
+            .map_err(|e| e.to_string())?;
+        match call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => Ok(v.into_int_value()),
+            _ => Err("string-equality helper returned void".to_string()),
+        }
+    }
+
+    /// Get (or lazily define) `i64 @burxt.strlen(ptr)`: scan to the NUL.
+    ///
+    /// Burxt generates its own loop instead of calling libc `strlen` so that
+    /// `extern fn strlen` stays available to user code — a builtin must not
+    /// quietly consume a C symbol name — and so nothing here depends on libc
+    /// for a future wasm target.
+    fn str_len_fn(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        if let Some(f) = self.str_len_fn {
+            return Ok(f);
+        }
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let saved = self.builder.get_insert_block();
+
+        let i64t = self.ctx.i64_type();
+        let i8t = self.ctx.i8_type();
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+        let f = self
+            .module
+            .add_function("burxt.strlen", i64t.fn_type(&[ptr.into()], false), None);
+        let entry = self.ctx.append_basic_block(f, "entry");
+        let loop_bb = self.ctx.append_basic_block(f, "scan");
+        let next_bb = self.ctx.append_basic_block(f, "next");
+        let done_bb = self.ctx.append_basic_block(f, "done");
+
+        let s = f.get_nth_param(0).unwrap().into_pointer_value();
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(loop_bb).map_err(err)?;
+
+        self.builder.position_at_end(loop_bb);
+        let i = self.builder.build_phi(i64t, "i").map_err(err)?;
+        i.add_incoming(&[(&i64t.const_zero(), entry)]);
+        let idx = i.as_basic_value().into_int_value();
+        let p = unsafe { self.builder.build_gep(i8t, s, &[idx], "byte_ptr") }.map_err(err)?;
+        let c = self.builder.build_load(i8t, p, "byte").map_err(err)?.into_int_value();
+        let is_nul = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, c, i8t.const_zero(), "is_nul")
+            .map_err(err)?;
+        self.builder.build_conditional_branch(is_nul, done_bb, next_bb).map_err(err)?;
+
+        self.builder.position_at_end(next_bb);
+        let bumped = self
+            .builder
+            .build_int_add(idx, i64t.const_int(1, false), "i_next")
+            .map_err(err)?;
+        i.add_incoming(&[(&bumped, next_bb)]);
+        self.builder.build_unconditional_branch(loop_bb).map_err(err)?;
+
+        self.builder.position_at_end(done_bb);
+        self.builder.build_return(Some(&idx)).map_err(err)?;
+
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        self.str_len_fn = Some(f);
+        Ok(f)
+    }
+
+    /// Get (or lazily define) `i64 @burxt.streq(ptr, ptr)`: byte equality,
+    /// returning Burxt's 0/1 Bool. Two strings are equal when their bytes are
+    /// equal, never because their pointers happen to match.
+    fn str_eq_fn(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        if let Some(f) = self.str_eq_fn {
+            return Ok(f);
+        }
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let saved = self.builder.get_insert_block();
+
+        let i64t = self.ctx.i64_type();
+        let i8t = self.ctx.i8_type();
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+        let f = self.module.add_function(
+            "burxt.streq",
+            i64t.fn_type(&[ptr.into(), ptr.into()], false),
+            None,
+        );
+        let entry = self.ctx.append_basic_block(f, "entry");
+        let loop_bb = self.ctx.append_basic_block(f, "scan");
+        let same_bb = self.ctx.append_basic_block(f, "same_byte");
+        let next_bb = self.ctx.append_basic_block(f, "next");
+        let eq_bb = self.ctx.append_basic_block(f, "equal");
+        let ne_bb = self.ctx.append_basic_block(f, "not_equal");
+
+        let a = f.get_nth_param(0).unwrap().into_pointer_value();
+        let b = f.get_nth_param(1).unwrap().into_pointer_value();
+        self.builder.position_at_end(entry);
+        self.builder.build_unconditional_branch(loop_bb).map_err(err)?;
+
+        self.builder.position_at_end(loop_bb);
+        let i = self.builder.build_phi(i64t, "i").map_err(err)?;
+        i.add_incoming(&[(&i64t.const_zero(), entry)]);
+        let idx = i.as_basic_value().into_int_value();
+        let pa = unsafe { self.builder.build_gep(i8t, a, &[idx], "a_ptr") }.map_err(err)?;
+        let pb = unsafe { self.builder.build_gep(i8t, b, &[idx], "b_ptr") }.map_err(err)?;
+        let ca = self.builder.build_load(i8t, pa, "a_byte").map_err(err)?.into_int_value();
+        let cb = self.builder.build_load(i8t, pb, "b_byte").map_err(err)?.into_int_value();
+        let differs = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::NE, ca, cb, "differs")
+            .map_err(err)?;
+        self.builder.build_conditional_branch(differs, ne_bb, same_bb).map_err(err)?;
+
+        // Bytes match: if this is the terminator, both strings ended together.
+        self.builder.position_at_end(same_bb);
+        let at_end = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, ca, i8t.const_zero(), "at_end")
+            .map_err(err)?;
+        self.builder.build_conditional_branch(at_end, eq_bb, next_bb).map_err(err)?;
+
+        self.builder.position_at_end(next_bb);
+        let bumped = self
+            .builder
+            .build_int_add(idx, i64t.const_int(1, false), "i_next")
+            .map_err(err)?;
+        i.add_incoming(&[(&bumped, next_bb)]);
+        self.builder.build_unconditional_branch(loop_bb).map_err(err)?;
+
+        self.builder.position_at_end(eq_bb);
+        self.builder.build_return(Some(&i64t.const_int(1, false))).map_err(err)?;
+        self.builder.position_at_end(ne_bb);
+        self.builder.build_return(Some(&i64t.const_zero())).map_err(err)?;
+
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        self.str_eq_fn = Some(f);
         Ok(f)
     }
 

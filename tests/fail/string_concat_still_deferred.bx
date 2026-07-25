@@ -1,0 +1,3 @@
+// Length and equality need no heap, so they shipped. Concatenation does,
+// so it stays refused until the memory model (M1).
+print("a" + "b");

@@ -1,0 +1,20 @@
+// `len` spans arrays and strings, but they are different KINDS of length:
+// an array's lives in its type and folds to a constant; a string's is a
+// property of its data, so it is a byte scan at runtime.
+print(len("hello"));
+print(len(""));
+// escapes are single bytes: "a\tb" is three
+print(len("a\tb"));
+let s: String = "burxt";
+print(len(s));
+// a rebound `let mut` gives a different length — proof it is not constant-folded
+let mut m: String = "one";
+print(len(m));
+m = "seventeen chars..";
+print(len(m));
+// length composes with arithmetic and comparison
+print(len("abc") + len("de"));
+print(len(s) == 5);
+// still works for arrays, unchanged
+let a: [Int; 3] = [1, 2, 3];
+print(len(a));

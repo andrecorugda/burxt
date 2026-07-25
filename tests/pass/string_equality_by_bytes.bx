@@ -1,0 +1,14 @@
+// Two identical literals become two SEPARATE globals (@str and @str.1), so
+// their pointers differ. Equality must still say true — it compares bytes,
+// never pointer identity.
+print("same" == "same");
+// and via functions, where the values arrive from different places
+fn a() -> String {
+    return "shared";
+}
+fn b() -> String {
+    let local: String = "shared";
+    return local;
+}
+print(a() == b());
+print(len(a()) == len(b()));
