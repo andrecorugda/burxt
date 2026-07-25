@@ -22,6 +22,37 @@ each construct, and every compile error reads like advice — it names the rule
 and shows the syntax that fixes it. When brevity and clarity conflict,
 clarity wins; exactness and explicitness are never traded for either.
 
+## Semantics principles
+
+Decided now, before the features that would test them are built:
+
+### One equality, no coercion
+
+`==` is the only equality Burxt will ever have, and it never converts.
+Both sides must be the SAME type — no int→decimal promotion, no
+scale rescaling, no truthiness, and never a second "looser" equality
+operator. A comparison either compiles as an exact, value-level equality
+or it is a compile error that says what to convert explicitly. This is
+already the implemented behavior; it is now a standing rule for every
+future type (struct field-wise equality, string byte equality, Option)
+— they must all arrive as the SAME `==`, total within their type, or
+be refused until they can.
+
+### No null — absence is an explicit Option, handled or it doesn't compile
+
+Burxt will never have null, nil, or sentinel values. When a value can
+be absent, the type says so — `Option<T>` — and the compiler forces the
+absence case to be handled before the `T` can be touched; there is no
+"unwrap and hope". Consequences committed now:
+
+- No feature may introduce a silently-absent value in the meantime: an
+  operation that could fail to produce a value either takes the panic
+  path (loud, like division by zero) or waits for Option.
+- At the FFI boundary, a C null pointer must become `None` at the edge —
+  a null must never travel one step into Burxt code as a "value".
+- Option composes with the thesis: `Option<Decimal<2, RoundHalfEven>>`
+  is "maybe money", and the rounding contract survives inside it.
+
 ## Compiler architecture (backend-independent front end)
 
 ```text
