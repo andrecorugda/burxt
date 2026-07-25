@@ -112,6 +112,13 @@ impl std::fmt::Display for BinOp {
     }
 }
 
+/// One piece of an interpolated string, with its expression parsed.
+#[derive(Debug, Clone)]
+pub enum InterpPart {
+    Lit(String),
+    Expr(Expr),
+}
+
 /// Short-circuiting boolean operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogicalOp {
@@ -167,6 +174,10 @@ pub enum Expr {
     BoolLit(bool),
     /// A string literal, escapes already resolved by the lexer.
     StrLit(String),
+    /// An interpolated string: `"total: {amount}"`. Currently valid only as a
+    /// direct argument to `print`, because producing a String VALUE would need
+    /// allocation (M1) — printing the pieces in order needs none.
+    InterpStr(Vec<InterpPart>),
     /// A reference to a previously-bound name.
     Var(String),
     /// Unary negation, e.g. `-19.99`. Overflow-checked like every subtraction.

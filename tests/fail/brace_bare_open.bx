@@ -1,0 +1,4 @@
+// THE breaking change: a bare `{` used to be an ordinary character. Accepting
+// it silently would have changed what this program means, so it is now an
+// error that names the fix. The error IS the feature working correctly.
+print("bare { brace");

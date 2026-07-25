@@ -1,0 +1,10 @@
+// Literal braces are `\{` and `\}`. They coexist with interpolation in the
+// same literal, and with the older escapes.
+print("literal: \{not interpolated\}");
+let n: Int = 7;
+print("both: \{literal\} and {n}");
+print("nested-looking: \{\{n\}\}");
+// A `%` in user text must stay harmless: literal pieces are printf ARGUMENTS,
+// never the format string.
+print("100% and %s and %n with {n}");
+print("tab\tand brace \{ together");

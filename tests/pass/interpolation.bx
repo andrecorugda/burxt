@@ -1,0 +1,21 @@
+// `{expr}` splices a value's exact display form. No concatenation, no
+// printf-juggling — and no allocation, because the pieces print in order
+// rather than building a new String.
+let owner: String = "Andre";
+let balance: Decimal<2> = 1234.56;
+let count: Int = 3;
+let ok: Bool = true;
+print("Account of {owner}: {balance}");
+print("count={count} ok={ok}");
+// any expression, obeying exactly the normal grammar and type rules
+print("expr: {count + 1} and {balance - 0.56}");
+print("call: {len(owner)}");
+print("adjacent {count}{count}");
+print("{owner}");
+// decimals keep their exact form, contract and all
+let rate: Decimal<2, RoundHalfEven> = 1.01;
+let amount: Decimal<2, RoundHalfEven> = 1000.00;
+print("interest: {amount * rate}");
+// scale 0 has no phantom fractional digit here either
+let whole: Decimal<0> = 42.0;
+print("whole: {whole}");

@@ -778,6 +778,35 @@ impl Parser {
             Token::True => Ok(Expr::BoolLit(true)),
             Token::False => Ok(Expr::BoolLit(false)),
             Token::Str(s) => Ok(Expr::StrLit(s)),
+            Token::InterpStr(parts) => {
+                // Each `{...}` was captured as source text; parse it now, so an
+                // interpolated expression obeys exactly the same grammar and
+                // type rules as one written outside a string.
+                let mut out = Vec::new();
+                for p in parts {
+                    match p {
+                        crate::lexer::StrPart::Lit(text) => out.push(InterpPart::Lit(text)),
+                        crate::lexer::StrPart::Expr(src) => {
+                            let toks = crate::lexer::Lexer::new(&src).tokenize().map_err(|e| {
+                                format!("in the interpolation `{{{}}}`: {}", src.trim(), e)
+                            })?;
+                            let mut sub = Parser::new(toks);
+                            let e = sub.parse_expr().map_err(|e| {
+                                format!("in the interpolation `{{{}}}`: {}", src.trim(), e)
+                            })?;
+                            if !sub.at(&Token::Eof) {
+                                return Err(format!(
+                                    "in the interpolation `{{{}}}`: expected one \
+                                     expression, but found more after it",
+                                    src.trim()
+                                ));
+                            }
+                            out.push(InterpPart::Expr(e));
+                        }
+                    }
+                }
+                Ok(Expr::InterpStr(out))
+            }
             // `self` reads as a plain variable in expression position — its
             // meaning (and mutability) comes from the receiver clause, not
             // from special-casing here.

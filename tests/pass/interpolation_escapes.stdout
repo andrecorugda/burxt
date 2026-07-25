@@ -1,0 +1,5 @@
+literal: {not interpolated}
+both: {literal} and 7
+nested-looking: {{n}}
+100% and %s and %n with 7
+tab	and brace { together

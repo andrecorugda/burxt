@@ -1,0 +1,1 @@
+interpolation currently works only directly inside `print(...)` — producing a String value from it needs memory allocation

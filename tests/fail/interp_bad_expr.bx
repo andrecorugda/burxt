@@ -1,0 +1,3 @@
+// An interpolated expression obeys the same grammar as any other, and a
+// failure inside one names the interpolation it came from.
+print("broken {1 +}");

@@ -1,0 +1,5 @@
+// Producing a String VALUE from interpolation means building new bytes, which
+// needs allocation — the same wall concatenation hits. Printing needs none.
+let n: Int = 1;
+let s: String = "value {n}";
+print(s);

@@ -107,6 +107,8 @@ pub enum TypedStmt {
     /// Bounds-checked element assignment.
     AssignIndex { name: String, len: u32, index: TypedExpr, value: TypedExpr },
     Print(TypedExpr),
+    /// `print` of an interpolated string: emit each piece in order.
+    PrintInterp(Vec<TypedInterpPart>),
     Return(TypedExpr),
     While { cond: TypedExpr, body: Vec<TypedStmt> },
     If {
@@ -114,6 +116,12 @@ pub enum TypedStmt {
         then_block: Vec<TypedStmt>,
         else_block: Option<Vec<TypedStmt>>,
     },
+}
+
+#[derive(Debug, Clone)]
+pub enum TypedInterpPart {
+    Lit(String),
+    Expr(TypedExpr),
 }
 
 #[derive(Debug, Clone)]
@@ -944,6 +952,39 @@ impl TypeChecker {
                 Ok(TypedStmt::While { cond, body })
             }
             Stmt::Print(e) => {
+                // An interpolated string prints its pieces in order, which
+                // needs no allocation — so it is handled here rather than as a
+                // String-valued expression.
+                if let Expr::InterpStr(parts) = e {
+                    let mut typed_parts = Vec::new();
+                    for p in parts {
+                        match p {
+                            InterpPart::Lit(text) => {
+                                typed_parts.push(TypedInterpPart::Lit(text.clone()))
+                            }
+                            InterpPart::Expr(inner) => {
+                                let t = self.check_expr(inner, None)?;
+                                match &t.ty {
+                                    Type::Int
+                                    | Type::Bool
+                                    | Type::String
+                                    | Type::Decimal { .. } => {}
+                                    other => {
+                                        return Err(format!(
+                                            "cannot interpolate {} {} — only Int, \
+                                             Bool, String and Decimal have a display \
+                                             form so far.",
+                                            other.article(),
+                                            other
+                                        ))
+                                    }
+                                }
+                                typed_parts.push(TypedInterpPart::Expr(t));
+                            }
+                        }
+                    }
+                    return Ok(TypedStmt::PrintInterp(typed_parts));
+                }
                 let typed = self.check_expr(e, None)?;
                 match &typed.ty {
                     Type::Named(n) => {
@@ -1014,6 +1055,17 @@ impl TypeChecker {
             Expr::StrLit(s) => {
                 Ok(TypedExpr { ty: Type::String, kind: TypedExprKind::StrLit(s.clone()) })
             }
+
+            // Producing a String VALUE from interpolation means building new
+            // bytes, which needs allocation — the same wall concatenation hits.
+            // Printing the pieces in order needs none, so that is where it
+            // works for now.
+            Expr::InterpStr(_) => Err(
+                "interpolation currently works only directly inside `print(...)` — \
+                 producing a String value from it needs memory allocation, coming \
+                 with the memory model."
+                    .to_string(),
+            ),
 
             Expr::DecimalLit { unscaled, scale } => {
                 // Determine the target scale (and rounding contract) from

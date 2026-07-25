@@ -11,8 +11,12 @@ pub enum Token {
     /// A decimal literal captured exactly: (unscaled value, scale).
     /// `19.99` -> Decimal(1999, 2). `0.5` -> Decimal(5, 1).
     Decimal(i64, u32),
-    /// A string literal, escapes already resolved.
+    /// A string literal with no interpolation, escapes already resolved.
     Str(String),
+    /// A string literal containing at least one `{expr}`. The expression is
+    /// carried as source text and parsed by the parser, so the lexer settles
+    /// all brace questions and leaves no ambiguity behind.
+    InterpStr(Vec<StrPart>),
     // identifiers & keywords
     Ident(String),
     Let,
@@ -76,6 +80,15 @@ pub enum Token {
     Eof,
 }
 
+/// One piece of an interpolated string literal.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StrPart {
+    /// Literal text, escapes already resolved.
+    Lit(String),
+    /// The source text between `{` and `}`, to be parsed as an expression.
+    Expr(String),
+}
+
 impl Token {
     /// Human description for error messages — never the Rust Debug name.
     pub fn describe(&self) -> String {
@@ -83,6 +96,7 @@ impl Token {
             Token::Int(n) => format!("the number {}", n),
             Token::Decimal(..) => "a decimal literal".to_string(),
             Token::Str(_) => "a string literal".to_string(),
+            Token::InterpStr(_) => "an interpolated string literal".to_string(),
             Token::Ident(s) => format!("`{}`", s),
             Token::Let => "`let`".to_string(),
             Token::Mut => "`mut`".to_string(),
@@ -335,9 +349,79 @@ impl<'a> Lexer<'a> {
     fn lex_string(&mut self) -> Result<Token, String> {
         self.chars.next(); // opening quote
         let mut s = String::new();
+        let mut parts: Vec<StrPart> = Vec::new();
         loop {
             match self.chars.next() {
-                Some('"') => return Ok(Token::Str(s)),
+                Some('"') => {
+                    if parts.is_empty() {
+                        return Ok(Token::Str(s));
+                    }
+                    if !s.is_empty() {
+                        parts.push(StrPart::Lit(s));
+                    }
+                    return Ok(Token::InterpStr(parts));
+                }
+                // `{expr}` interpolates. A BARE `{` used to be an ordinary
+                // character, so accepting it silently would change what
+                // existing programs mean — instead a literal brace must now be
+                // written `\{`, and the error says so.
+                Some('{') => {
+                    if !s.is_empty() {
+                        parts.push(StrPart::Lit(std::mem::take(&mut s)));
+                    }
+                    let mut expr = String::new();
+                    let mut depth = 1usize;
+                    loop {
+                        match self.chars.next() {
+                            Some('{') => {
+                                depth += 1;
+                                expr.push('{');
+                            }
+                            Some('}') => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                                expr.push('}');
+                            }
+                            None | Some('\n') => {
+                                return Err(
+                                    "unterminated interpolation — close it with `}` \
+                                     before the end of the line"
+                                        .to_string(),
+                                )
+                            }
+                            // The string ended before the interpolation closed.
+                            // Overwhelmingly this means a literal brace was
+                            // intended, so lead with that advice.
+                            Some('"') => {
+                                return Err(
+                                    "a literal `{` in a string must be written `\\{` — \
+                                     an unescaped `{` starts a `{expr}` interpolation. \
+                                     (A string literal cannot appear inside `{...}` \
+                                     yet either.)"
+                                        .to_string(),
+                                )
+                            }
+                            Some(c) => expr.push(c),
+                        }
+                    }
+                    if expr.trim().is_empty() {
+                        return Err(
+                            "empty interpolation `{}` — put an expression inside it, \
+                             or write `\\{` and `\\}` for literal braces"
+                                .to_string(),
+                        );
+                    }
+                    parts.push(StrPart::Expr(expr));
+                }
+                Some('}') => {
+                    return Err(
+                        "a literal `}` in a string must be written `\\}` — a bare `}` \
+                         only closes a `{expr}` interpolation"
+                            .to_string(),
+                    )
+                }
                 None | Some('\n') => {
                     return Err(
                         "unterminated string literal — close it with `\"` before \
@@ -350,9 +434,12 @@ impl<'a> Lexer<'a> {
                     Some('"') => s.push('"'),
                     Some('n') => s.push('\n'),
                     Some('t') => s.push('\t'),
+                    Some('{') => s.push('{'),
+                    Some('}') => s.push('}'),
                     Some(other) if other != '\n' => {
                         return Err(format!(
-                            "unknown escape `\\{}` — Burxt strings support \\\\, \\\", \\n and \\t",
+                            "unknown escape `\\{}` — Burxt strings support \\\\, \\\", \
+                             \\n, \\t, \\{{ and \\}}",
                             other
                         ))
                     }

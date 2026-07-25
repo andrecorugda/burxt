@@ -375,6 +375,26 @@ impl<'ctx> CodeGen<'ctx> {
             }
             TypedStmt::While { cond, body } => self.gen_while(cond, body),
             TypedStmt::Print(e) => self.gen_print(e),
+            TypedStmt::PrintInterp(parts) => {
+                // Emit each piece in order — no intermediate String is built,
+                // so this needs no allocation.
+                let printf = self.printf.ok_or("codegen bug: printf not declared")?;
+                for p in parts {
+                    match p {
+                        crate::typeck::TypedInterpPart::Lit(text) => {
+                            // Literal text is an ARGUMENT to %s, never the
+                            // format string — a `%` in it must stay harmless.
+                            let s = self.global_str(text, "interp_lit");
+                            let fmt = self.global_str("%s", "fmt_interp");
+                            self.builder
+                                .build_call(printf, &[fmt.into(), s.into()], "printf_lit")
+                                .map_err(|e| e.to_string())?;
+                        }
+                        crate::typeck::TypedInterpPart::Expr(e) => self.gen_print_value(e)?,
+                    }
+                }
+                self.gen_newline()
+            }
             TypedStmt::Return(e) => {
                 if let Some(sret) = self.current_sret {
                     // Build the result directly in the caller's space, then
@@ -759,18 +779,35 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     fn gen_print(&mut self, e: &TypedExpr) -> Result<(), String> {
+        self.gen_print_value(e)?;
+        self.gen_newline()
+    }
+
+    /// Print a single trailing newline.
+    fn gen_newline(&mut self) -> Result<(), String> {
+        let printf = self.printf.ok_or("codegen bug: printf not declared")?;
+        let fmt = self.global_str("\n", "fmt_nl");
+        self.builder
+            .build_call(printf, &[fmt.into()], "printf_nl")
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Print one value with NO trailing newline. `print` adds the newline
+    /// itself, and interpolation must not put one between pieces.
+    fn gen_print_value(&mut self, e: &TypedExpr) -> Result<(), String> {
         let printf = self.printf.ok_or("codegen bug: printf not declared")?;
         let val = self.gen_expr(e)?;
         match &e.ty {
             Type::Int => {
-                let fmt = self.global_str("%lld\n", "fmt_int");
+                let fmt = self.global_str("%lld", "fmt_int");
                 self.builder
                     .build_call(printf, &[fmt.into(), val.into()], "printf_int")
                     .map_err(|e| e.to_string())?;
             }
             Type::String => {
                 // User bytes are always an ARGUMENT, never the format string.
-                let fmt = self.global_str("%s\n", "fmt_str");
+                let fmt = self.global_str("%s", "fmt_str");
                 self.builder
                     .build_call(printf, &[fmt.into(), val.into()], "printf_str")
                     .map_err(|e| e.to_string())?;
@@ -785,8 +822,8 @@ impl<'ctx> CodeGen<'ctx> {
                         "is_true",
                     )
                     .map_err(|e| e.to_string())?;
-                let t = self.global_str("true\n", "str_true");
-                let f = self.global_str("false\n", "str_false");
+                let t = self.global_str("true", "str_true");
+                let f = self.global_str("false", "str_false");
                 let s = self
                     .builder
                     .build_select(is_true, t, f, "bool_str")
@@ -837,7 +874,7 @@ impl<'ctx> CodeGen<'ctx> {
                     // Scale 0 has NO fractional digits — printing ".0" would
                     // show a digit that does not exist.
                     let int_part = narrow(&self.builder, abs, "int_part")?;
-                    let fmt = self.global_str("%s%llu\n", "fmt_dec0");
+                    let fmt = self.global_str("%s%llu", "fmt_dec0");
                     let args: Vec<BasicMetadataValueEnum> =
                         vec![fmt.into(), sign.into(), int_part.into()];
                     self.builder
@@ -858,7 +895,7 @@ impl<'ctx> CodeGen<'ctx> {
                     let _ = i128t;
 
                     // "%s%llu.%0<scale>llu\n" — sign, then zero-padded digits.
-                    let fmt_str = format!("%s%llu.%0{}llu\n", scale);
+                    let fmt_str = format!("%s%llu.%0{}llu", scale);
                     let fmt = self.global_str(&fmt_str, "fmt_dec");
                     let args: Vec<BasicMetadataValueEnum> =
                         vec![fmt.into(), sign.into(), int_part.into(), frac_part.into()];

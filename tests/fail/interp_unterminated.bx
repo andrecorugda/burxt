@@ -1,0 +1,2 @@
+let n: Int = 1;
+print("open {n");

@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.16)
+# Burxt — Design Notes (v0.0.17)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -866,6 +866,40 @@ the heap. Length is a byte scan; equality is a byte loop. Both shipped here;
   symbol name — `extern fn strlen` stays available to user code, and an
   existing test still uses it — and nothing here depends on libc for a future
   wasm target.
+
+### v0.0.17: string interpolation, and the syntax-change law
+
+```text
+print("Account of {owner}: {balance}");    // Account of Andre: 1234.56
+print("literal braces: \{like this\}");
+```
+
+`{expr}` splices a value's exact display form; any expression works, obeying
+exactly the grammar and type rules it would outside a string.
+
+**The law this milestone established**, because a bare `{` was previously an
+ordinary character:
+
+> A feature that changes what currently-valid syntax MEANS must make the old
+> form a compile error, never silently reinterpret it. The breaking error,
+> pointing at the exact fix, is the feature working correctly.
+
+So `print("hi {name}")` — which used to print the braces literally — is now a
+compile error naming `\{` as the fix, rather than quietly becoming
+interpolation. Letting it change meaning silently was rejected on principle:
+a language that reinterprets valid syntax once will do it again, and that is
+the whole trust proposition. All brace handling lives in the lexer's string
+scanner, so `{`, `}`, `\{`, `\}` are settled at tokenization and the parser
+has no ambiguity left to resolve.
+
+**Interpolation prints; it does not build a String.** Producing a String value
+would mean building new bytes — the same allocation wall concatenation hits —
+so `let s: String = "x {n}";` is refused with that reason, while
+`print("x {n}")` emits the pieces in order and allocates nothing. This keeps
+the milestone on the safe side of the heap boundary; it lifts with M1.
+
+Literal pieces remain printf ARGUMENTS, never format strings, so a `%s` or
+`%n` in user text still prints literally.
 
 ## Testing
 
