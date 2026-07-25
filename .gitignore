@@ -4,3 +4,7 @@
 # compiled burxt outputs (bare executables next to their .bx)
 money
 order
+# transient delivery artifacts, and the marker Windows attaches to downloads
+*.zip
+*.tar.gz
+*:Zone.Identifier
