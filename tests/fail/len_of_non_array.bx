@@ -1,0 +1,2 @@
+let n: Int = 5;
+print(len(n));

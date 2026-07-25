@@ -55,6 +55,9 @@ pub enum Type {
     /// fields are different types — the name is a contract, exactly as
     /// Decimal<2> and Decimal<2, RoundHalfEven> are kept apart.
     Named(String),
+    /// A fixed-size stack array `[T; N]`. Arrays exist only behind bindings
+    /// in this slice: indexed reads/writes and `len(a)` — never a bare value.
+    Array { elem: Box<Type>, len: u32 },
 }
 
 impl std::fmt::Display for Type {
@@ -67,6 +70,7 @@ impl std::fmt::Display for Type {
             Type::Decimal { scale, rounding: None } => write!(f, "Decimal<{}>", scale),
             Type::Decimal { scale, rounding: Some(r) } => write!(f, "Decimal<{}, {}>", scale, r),
             Type::Named(name) => write!(f, "{}", name),
+            Type::Array { elem, len } => write!(f, "[{}; {}]", elem, len),
         }
     }
 }
@@ -152,6 +156,12 @@ pub enum Expr {
     StructLit { name: String, fields: Vec<(String, Expr)> },
     /// Field access: `item.price` (chains for nested structs).
     Field { base: Box<Expr>, field: String },
+    /// An array literal `[10.00, 5.99, 4.01]` — only valid as a `let`
+    /// initializer with a declared array type.
+    ArrayLit(Vec<Expr>),
+    /// Indexed read `a[i]`. The base is a binding NAME, not an expression —
+    /// arrays only live behind bindings in this slice.
+    Index { name: String, index: Box<Expr> },
 }
 
 /// Statements. A Burxt v0.0.1 program is just a sequence of these.
@@ -171,6 +181,9 @@ pub enum Stmt {
     /// `name.field(.field)* = value;` — field assignment through a `let mut`
     /// binding. Mutability is per-binding, not per-field.
     AssignField { name: String, path: Vec<String>, value: Expr },
+    /// `name[index] = value;` — element assignment through a `let mut`
+    /// binding, bounds-checked like every indexed access.
+    AssignIndex { name: String, index: Expr, value: Expr },
     /// `while cond { ... }` — the condition must be a Bool; braces required.
     While { cond: Expr, body: Vec<Stmt> },
     /// `print(expr);`

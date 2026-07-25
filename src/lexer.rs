@@ -55,6 +55,8 @@ pub enum Token {
     RParen,
     LBrace,
     RBrace,
+    LBracket,
+    RBracket,
     Arrow,
     Lt,
     Gt,
@@ -125,6 +127,8 @@ impl<'a> Lexer<'a> {
             ')' => { self.chars.next(); return Ok(Token::RParen); }
             '{' => { self.chars.next(); return Ok(Token::LBrace); }
             '}' => { self.chars.next(); return Ok(Token::RBrace); }
+            '[' => { self.chars.next(); return Ok(Token::LBracket); }
+            ']' => { self.chars.next(); return Ok(Token::RBracket); }
             '<' => {
                 self.chars.next();
                 if self.chars.peek() == Some(&'=') { self.chars.next(); return Ok(Token::Le); }
@@ -156,6 +160,16 @@ impl<'a> Lexer<'a> {
         // identifier / keyword
         if c.is_ascii_alphabetic() || c == '_' {
             return Ok(self.lex_ident_or_keyword());
+        }
+
+        // '#' is claimed for compile-time attributes before anything else can
+        // use it — the future surface of verification contracts.
+        if c == '#' {
+            return Err(
+                "'#' is reserved for attributes — #[invariant(...)], #[ensures(...)] — \
+                 coming with refinement types"
+                    .to_string(),
+            );
         }
 
         Err(format!("unexpected character: {:?}", c))

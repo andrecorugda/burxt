@@ -1,0 +1,1 @@
+index 5 is out of bounds for [Decimal<2>; 3]: valid indexes are 0 to 2. This would always fail at runtime, so it is refused now.

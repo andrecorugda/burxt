@@ -60,6 +60,10 @@ pub enum TypedExprKind {
     StructLit { name: String, fields: Vec<TypedExpr> },
     /// Field access, resolved to a positional index.
     Field { base: Box<TypedExpr>, index: u32 },
+    /// Array literal (only ever a `let` initializer).
+    ArrayLit(Vec<TypedExpr>),
+    /// Bounds-checked indexed read; `len` carried for the runtime check.
+    Index { name: String, len: u32, index: Box<TypedExpr> },
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +72,8 @@ pub enum TypedStmt {
     Assign { name: String, value: TypedExpr },
     /// Field assignment, path resolved to positional indices.
     AssignField { name: String, indices: Vec<u32>, value: TypedExpr },
+    /// Bounds-checked element assignment.
+    AssignIndex { name: String, len: u32, index: TypedExpr, value: TypedExpr },
     Print(TypedExpr),
     Return(TypedExpr),
     While { cond: TypedExpr, body: Vec<TypedStmt> },
@@ -154,6 +160,13 @@ impl TypeChecker {
         for s in &prog.structs {
             for f in &s.fields {
                 self.validate_type(&f.ty)?;
+                if matches!(f.ty, Type::Array { .. }) {
+                    return Err(format!(
+                        "in struct `{}`: struct fields cannot hold arrays yet — \
+                         coming with the aggregate ABI.",
+                        s.name
+                    ));
+                }
             }
             self.check_struct_finite(&s.name, &mut Vec::new())?;
         }
@@ -185,24 +198,31 @@ impl TypeChecker {
             if self.fns.contains_key(&f.name) {
                 return Err(format!("function `{}` is defined twice", f.name));
             }
+            if f.name == "len" {
+                return Err(
+                    "the name `len` is reserved for the built-in array length".to_string()
+                );
+            }
             for p in &f.params {
                 self.validate_type(&p.ty)?;
-                if matches!(p.ty, Type::Named(_)) {
+                if matches!(p.ty, Type::Named(_) | Type::Array { .. }) {
                     return Err(format!(
-                        "in fn `{}`: functions cannot take or return structs yet — \
-                         the by-pointer ABI arrives next milestone. Pass the fields \
-                         individually for now.",
-                        f.name
+                        "in fn `{}`: functions cannot take or return {} yet — \
+                         the aggregate ABI arrives in a later milestone. Pass the \
+                         parts individually for now.",
+                        f.name,
+                        if matches!(p.ty, Type::Named(_)) { "structs" } else { "arrays" }
                     ));
                 }
             }
             self.validate_type(&f.ret)?;
-            if matches!(f.ret, Type::Named(_)) {
+            if matches!(f.ret, Type::Named(_) | Type::Array { .. }) {
                 return Err(format!(
-                    "in fn `{}`: functions cannot take or return structs yet — \
-                     the by-pointer ABI arrives next milestone. Return the fields \
-                     individually for now.",
-                    f.name
+                    "in fn `{}`: functions cannot take or return {} yet — \
+                     the aggregate ABI arrives in a later milestone. Return the \
+                     parts individually for now.",
+                    f.name,
+                    if matches!(f.ret, Type::Named(_)) { "structs" } else { "arrays" }
                 ));
             }
             let param_tys = f.params.iter().map(|p| p.ty.clone()).collect();
@@ -236,6 +256,14 @@ impl TypeChecker {
                  use Int in Burxt code; values convert at the call."
                     .to_string(),
             ),
+            Type::Array { elem, .. } => match elem.as_ref() {
+                Type::Int | Type::Bool | Type::Decimal { .. } => Ok(()),
+                other => Err(format!(
+                    "arrays of {} are not available yet — elements must be Int, \
+                     Bool or Decimal for now",
+                    other
+                )),
+            },
             _ => Ok(()),
         }
     }
@@ -285,7 +313,12 @@ impl TypeChecker {
     /// Returns stay Int-only: Burxt cannot yet track who owns memory a C
     /// function returns.
     fn check_extern(&self, e: &ExternFn) -> Result<(), String> {
-        const RESERVED: [&str; 5] = ["printf", "fputs", "exit", "stderr", "main"];
+        const RESERVED: [&str; 6] = ["printf", "fprintf", "fputs", "exit", "stderr", "main"];
+        if e.name == "len" {
+            return Err(
+                "the name `len` is reserved for the built-in array length".to_string()
+            );
+        }
         if RESERVED.contains(&e.name.as_str()) {
             return Err(format!(
                 "extern fn `{}`: this symbol is used by the Burxt runtime itself. \
@@ -383,6 +416,16 @@ impl TypeChecker {
                     ));
                 }
                 self.validate_type(declared)?;
+                // An array exists only behind a binding: it must be created
+                // right here, from a literal (whole-array copies are deferred).
+                if matches!(declared, Type::Array { .. }) && !matches!(value, Expr::ArrayLit(_))
+                {
+                    return Err(format!(
+                        "`let {}: {}` must be initialized with an array literal, \
+                         e.g. [1, 2, 3] — copying a whole array is deferred.",
+                        name, declared
+                    ));
+                }
                 let typed = self.check_expr(value, Some(declared))?;
                 if &typed.ty != declared {
                     return Err(format!(
@@ -399,6 +442,13 @@ impl TypeChecker {
                     .get(name)
                     .ok_or_else(|| format!("unknown variable: {}", name))?
                     .clone();
+                if matches!(declared, Type::Array { .. }) {
+                    return Err(format!(
+                        "whole-array assignment is deferred — assign elements \
+                         individually: {}[0] = ...",
+                        name
+                    ));
+                }
                 if !mutable {
                     return Err(format!(
                         "cannot assign to `{}`: it was declared immutable. \
@@ -444,6 +494,38 @@ impl TypeChecker {
                 }
                 Ok(TypedStmt::AssignField { name: name.clone(), indices, value: typed })
             }
+            Stmt::AssignIndex { name, index, value } => {
+                let (declared, mutable) = self
+                    .env
+                    .get(name)
+                    .ok_or_else(|| format!("unknown variable: {}", name))?
+                    .clone();
+                let (elem, len) = match &declared {
+                    Type::Array { elem, len } => (elem.as_ref().clone(), *len),
+                    other => {
+                        return Err(format!(
+                            "`{}[...]` indexing needs an array, but `{}` has type {}",
+                            name, name, other
+                        ))
+                    }
+                };
+                if !mutable {
+                    return Err(format!(
+                        "cannot assign to `{}[...]`: `{}` was declared immutable. \
+                         Declare it `let mut {}: {}` to allow it.",
+                        name, name, name, declared
+                    ));
+                }
+                let index = self.check_index(name, len, index)?;
+                let typed = self.check_expr(value, Some(&elem))?;
+                if typed.ty != elem {
+                    return Err(format!(
+                        "cannot assign a {} to `{}[...]`, which holds {}",
+                        typed.ty, name, elem
+                    ));
+                }
+                Ok(TypedStmt::AssignIndex { name: name.clone(), len, index, value: typed })
+            }
             Stmt::While { cond, body } => {
                 let cond = self.check_expr(cond, None)?;
                 if cond.ty != Type::Bool {
@@ -458,11 +540,21 @@ impl TypeChecker {
             }
             Stmt::Print(e) => {
                 let typed = self.check_expr(e, None)?;
-                if let Type::Named(n) = &typed.ty {
-                    return Err(format!(
-                        "print does not know how to show a {} — print its fields.",
-                        n
-                    ));
+                match &typed.ty {
+                    Type::Named(n) => {
+                        return Err(format!(
+                            "print does not know how to show a {} — print its fields.",
+                            n
+                        ))
+                    }
+                    Type::Array { .. } => {
+                        return Err(format!(
+                            "print does not know how to show a {} — print its \
+                             elements.",
+                            typed.ty
+                        ))
+                    }
+                    _ => {}
                 }
                 Ok(TypedStmt::Print(typed))
             }
@@ -574,6 +666,25 @@ impl TypeChecker {
             }
 
             Expr::Call { name, args } => {
+                // `len(a)` is a builtin that folds to the array's constant
+                // length — codegen never sees it, and code stays honest when
+                // the length changes.
+                if name == "len" {
+                    if args.len() != 1 {
+                        return Err("len(...) takes exactly one array".to_string());
+                    }
+                    let arg = self.check_expr(&args[0], None)?;
+                    return match arg.ty {
+                        Type::Array { len, .. } => Ok(TypedExpr {
+                            ty: Type::Int,
+                            kind: TypedExprKind::IntLit(len as i64),
+                        }),
+                        other => Err(format!(
+                            "len(...) needs an array, but this has type {}",
+                            other
+                        )),
+                    };
+                }
                 let (param_tys, ret) = self
                     .fns
                     .get(name)
@@ -673,7 +784,93 @@ impl TypeChecker {
                     kind: TypedExprKind::Field { base: Box::new(typed_base), index },
                 })
             }
+
+            Expr::ArrayLit(elems) => {
+                let (elem_ty, len) = match expected {
+                    Some(Type::Array { elem, len }) => (elem.as_ref().clone(), *len),
+                    _ => {
+                        return Err(
+                            "an array literal needs a declared array type — write it \
+                             as a `let` initializer: let a: [Int; 3] = [...];"
+                                .to_string(),
+                        )
+                    }
+                };
+                if elems.len() != len as usize {
+                    return Err(format!(
+                        "this literal has {} value(s), but [{}; {}] holds exactly {}",
+                        elems.len(),
+                        elem_ty,
+                        len,
+                        len
+                    ));
+                }
+                let mut typed = Vec::new();
+                for (i, e) in elems.iter().enumerate() {
+                    let t = self.check_expr(e, Some(&elem_ty))?;
+                    if t.ty != elem_ty {
+                        return Err(format!(
+                            "in this array literal, element {} must be {}, but it \
+                             has type {}",
+                            i, elem_ty, t.ty
+                        ));
+                    }
+                    typed.push(t);
+                }
+                Ok(TypedExpr {
+                    ty: Type::Array { elem: Box::new(elem_ty), len },
+                    kind: TypedExprKind::ArrayLit(typed),
+                })
+            }
+
+            Expr::Index { name, index } => {
+                let (ty, _) = self
+                    .env
+                    .get(name)
+                    .ok_or_else(|| format!("unknown variable: {}", name))?
+                    .clone();
+                let (elem, len) = match &ty {
+                    Type::Array { elem, len } => (elem.as_ref().clone(), *len),
+                    other => {
+                        return Err(format!(
+                            "`{}[...]` indexing needs an array, but `{}` has type {}",
+                            name, name, other
+                        ))
+                    }
+                };
+                let index = self.check_index(name, len, index)?;
+                Ok(TypedExpr {
+                    ty: elem,
+                    kind: TypedExprKind::Index { name: name.clone(), len, index: Box::new(index) },
+                })
+            }
         }
+    }
+
+    /// Check an index expression: it must be an Int, and a LITERAL index
+    /// that is provably out of range is refused at compile time — it would
+    /// always fail at runtime, so it fails now instead.
+    fn check_index(&self, name: &str, len: u32, index: &Expr) -> Result<TypedExpr, String> {
+        let typed = self.check_expr(index, None)?;
+        if typed.ty != Type::Int {
+            return Err(format!(
+                "an array index must be an Int, but this one has type {}",
+                typed.ty
+            ));
+        }
+        if let TypedExprKind::IntLit(n) = typed.kind {
+            if n < 0 || n >= len as i64 {
+                let (ty, _) = self.env.get(name).cloned().unwrap_or((Type::Int, false));
+                return Err(format!(
+                    "index {} is out of bounds for {}: valid indexes are 0 to {}. \
+                     This would always fail at runtime, so it is refused now.",
+                    n,
+                    ty,
+                    len - 1
+                ));
+            }
+        }
+        Ok(typed)
     }
 
     /// Resolve `.field` on a value of type `ty` to (positional index, type).

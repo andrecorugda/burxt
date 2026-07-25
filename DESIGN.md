@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.9)
+# Burxt — Design Notes (v0.0.10)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -116,6 +116,38 @@ thesis generalized: **dangerous defaults become compile errors.**
   precisely so this fork is chosen once, deliberately. The safety-vs-
   ergonomics tension is permanent: the art is hiding strictness behind
   inference so code stays simple while the compiler stays strict.
+
+## Attributes — the syntax of verification (committed)
+
+Burxt will have **compile-time attributes**: `#[...]` metadata attached to
+code that the COMPILER reads, checks, and discards — zero runtime trace, per
+the no-runtime-baggage pillar. This is not a borrowed convenience: the
+refinement-type thesis ("balance never negative", "splits sum to total") IS
+metadata attached to code that the compiler enforces, so attributes are the
+natural surface for A5:
+
+```text
+#[invariant(self.balance >= 0.00)]
+struct Account { balance: Decimal<2, RoundHalfEven> }
+
+#[requires(amount > 0.00)]
+#[ensures(result == a + b)]
+fn add(a: Decimal<2>, b: Decimal<2>) -> Decimal<2> { ... }
+```
+
+Rules committed now:
+
+- Attributes are parsed, typed, and validated language constructs — never
+  comment-scraping (the pre-PHP-8 docblock hack is the cautionary tale).
+  An unknown attribute is a compile error, not silently ignored metadata.
+- Compile-time only. Runtime reflection is not core and may never come —
+  it costs runtime baggage and the thesis doesn't need it.
+- Discipline: attributes carry cross-cutting, machine-checked meaning —
+  contracts first (`#[invariant]`, `#[requires]`, `#[ensures]`), possibly
+  serialization/deprecation later. They are never a replacement for normal
+  code; logic buried under decorator stacks is its own footgun.
+- The `#` character is reserved in the lexer TODAY (with an error message
+  saying what it's for), so no program ever uses it for anything else.
 
 ## Compiler architecture (backend-independent front end)
 
@@ -387,6 +419,34 @@ Plus one language rule from the design review: **shadowing is refused** —
 a second `let x` is an error naming the first declaration, not a quiet new
 variable.
 
+### v0.0.10: arrays — fixed-size, always bounds-checked
+
+```text
+let splits: [Decimal<2>; 3] = [10.00, 5.99, 4.01];
+let mut sum: Decimal<2> = 0.00;
+let mut i: Int = 0;
+while i < len(splits) { sum = sum + splits[i]; i = i + 1; }
+print(sum == 20.00);   // true — A5's refinement, checked by hand for now
+```
+
+Rules:
+
+- `[T; N]` is a fixed-size stack array, N in 1..=65536 (a huge N would be a
+  silent SIGSEGV — the one death Burxt never permits). Elements are scalars
+  (Int, Bool, Decimal) for now. Growable vectors wait for the allocation
+  story, decided once.
+- **Bounds are checked on every access, always.** A computed index out of
+  range dies with a message that names the offending index and the valid
+  range (exit 70). A LITERAL index that is provably out of range is refused
+  at compile time — it would always fail, so it fails now.
+- Element writes (`a[i] = v`) follow the binding's `let mut`, like fields.
+- `len(a)` folds to the constant N at compile time — zero runtime cost,
+  and code stays honest when the length changes.
+- Arrays exist only behind bindings in this slice: created by a literal in
+  `let`, touched via `a[i]` and `len(a)`. Bare `a` in an expression,
+  `print(a)`, whole-array assignment, fn params/returns, struct fields —
+  each refused with the reason and its arrival milestone.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -438,7 +498,8 @@ it travels.
 - A3. FFI / call-into-C — THE KEY UNLOCK: how any Burxt program reaches
   platform APIs on every target. — DONE for Int signatures (v0.0.6);
   String params (v0.0.7); widens further with A4's types.
-- A4. Strings (DONE, v0.0.7), structs (DONE, v0.0.8), arrays <- NEXT
+- A4. Strings (v0.0.7), structs (v0.0.8), arrays (v0.0.10) — DONE
+- A4.5. The aggregate ABI: by-pointer struct/array params and returns <- NEXT
 - A4+. OOP by default, SOLID-aligned: by-pointer ABI + receiver methods,
   then interfaces as behavioral contracts (dictionary dispatch). No
   implementation inheritance — a type satisfies an interface exactly or it

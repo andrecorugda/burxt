@@ -1,0 +1,3 @@
+// A literal index that is provably out of range fails at compile time.
+let a: [Decimal<2>; 3] = [1.00, 2.00, 3.00];
+print(a[5]);

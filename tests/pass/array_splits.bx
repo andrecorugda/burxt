@@ -1,0 +1,11 @@
+// The flagship: splits sum to total — checked by hand until A5's
+// refinement types make the compiler do it.
+let splits: [Decimal<2>; 3] = [10.00, 5.99, 4.01];
+let mut sum: Decimal<2> = 0.00;
+let mut i: Int = 0;
+while i < len(splits) {
+    sum = sum + splits[i];
+    i = i + 1;
+}
+print(sum);
+print(sum == 20.00);

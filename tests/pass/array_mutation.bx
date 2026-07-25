@@ -1,0 +1,10 @@
+// Element writes follow the binding's mutability, like struct fields.
+let mut slots: [Int; 4] = [0, 0, 0, 0];
+let mut j: Int = 0;
+while j < len(slots) {
+    slots[j] = j * 10;
+    j = j + 1;
+}
+print(slots[0] + slots[1] + slots[2] + slots[3]);
+// literal (compile-time-checked) indexes work everywhere an Int does
+print(slots[3] - slots[1]);

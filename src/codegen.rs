@@ -64,6 +64,8 @@ pub struct CodeGen<'ctx> {
     extern_sigs: HashMap<String, (Vec<Type>, Type)>,
     /// lazily created i64 -> i32 range-checked truncation helper
     cint_fn: Option<FunctionValue<'ctx>>,
+    /// lazily created array bounds-check helper
+    index_check_fn: Option<FunctionValue<'ctx>>,
     /// struct name -> its LLVM struct type (named `bx.<name>`)
     struct_types: HashMap<String, StructType<'ctx>>,
     /// struct name -> field types in declaration order (for GEP walks)
@@ -92,6 +94,7 @@ impl<'ctx> CodeGen<'ctx> {
             user_fns: HashMap::new(),
             extern_sigs: HashMap::new(),
             cint_fn: None,
+            index_check_fn: None,
             struct_types: HashMap::new(),
             struct_fields: HashMap::new(),
             printf: None,
@@ -196,6 +199,27 @@ impl<'ctx> CodeGen<'ctx> {
     fn gen_stmt(&mut self, stmt: &TypedStmt) -> Result<(), String> {
         match stmt {
             TypedStmt::Let { name, ty, value } => {
+                // An array is built in place: alloca once, store per element.
+                if let TypedExprKind::ArrayLit(elems) = &value.kind {
+                    let slot = self.create_entry_alloca(name, ty)?;
+                    let arr_ty = self.llvm_type(ty);
+                    for (i, e) in elems.iter().enumerate() {
+                        let v = self.gen_expr(e)?;
+                        let idx = self.ctx.i64_type().const_int(i as u64, false);
+                        let ptr = unsafe {
+                            self.builder.build_in_bounds_gep(
+                                arr_ty,
+                                slot,
+                                &[self.ctx.i64_type().const_zero(), idx],
+                                "elem_init",
+                            )
+                        }
+                        .map_err(|e| e.to_string())?;
+                        self.builder.build_store(ptr, v).map_err(|e| e.to_string())?;
+                    }
+                    self.vars.insert(name.clone(), (slot, ty.clone()));
+                    return Ok(());
+                }
                 let val = self.gen_expr(value)?;
                 let slot = self.create_entry_alloca(name, ty)?;
                 self.builder.build_store(slot, val).map_err(|e| e.to_string())?;
@@ -240,6 +264,12 @@ impl<'ctx> CodeGen<'ctx> {
                     cur_ty = self.struct_fields[&sname][idx as usize].clone();
                 }
                 self.builder.build_store(cur_ptr, val).map_err(|e| e.to_string())?;
+                Ok(())
+            }
+            TypedStmt::AssignIndex { name, len, index, value } => {
+                let val = self.gen_expr(value)?;
+                let ptr = self.gen_element_ptr(name, *len, index)?;
+                self.builder.build_store(ptr, val).map_err(|e| e.to_string())?;
                 Ok(())
             }
             TypedStmt::While { cond, body } => self.gen_while(cond, body),
@@ -357,6 +387,7 @@ impl<'ctx> CodeGen<'ctx> {
             Type::String => self.ctx.ptr_type(AddressSpace::default()).into(),
             Type::CInt => self.ctx.i32_type().into(),
             Type::Named(name) => self.struct_types[name].into(),
+            Type::Array { elem, len } => self.llvm_type(elem).array_type(*len).into(),
         }
     }
 
@@ -435,7 +466,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_call(printf, &args, "printf_bool")
                     .map_err(|e| e.to_string())?;
             }
-            Type::Named(_) | Type::CInt => {
+            Type::Named(_) | Type::CInt | Type::Array { .. } => {
                 return Err(format!(
                     "codegen bug: print on {} should have been refused by typeck",
                     e.ty
@@ -624,14 +655,65 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_extract_value(agg, *index, "field")
                     .map_err(|e| e.to_string())
             }
+            TypedExprKind::ArrayLit(_) => {
+                Err("codegen bug: array literal outside a let initializer".to_string())
+            }
+            TypedExprKind::Index { name, len, index } => {
+                let (_, ty) = self
+                    .vars
+                    .get(name)
+                    .ok_or_else(|| format!("codegen: unknown variable {}", name))?
+                    .clone();
+                let elem_ty = match &ty {
+                    Type::Array { elem, .. } => self.llvm_type(elem),
+                    other => return Err(format!("codegen bug: indexing a {}", other)),
+                };
+                let ptr = self.gen_element_ptr(name, *len, index)?;
+                self.builder
+                    .build_load(elem_ty, ptr, "elem")
+                    .map_err(|e| e.to_string())
+            }
         }
     }
 
-    /// Emit the runtime-error tail: fputs(msg, stderr); exit(70); unreachable.
-    /// The builder must be positioned inside the (never-returning) panic path.
-    fn build_panic(&mut self, msg: &str) -> Result<(), String> {
-        let err = |e: inkwell::builder::BuilderError| e.to_string();
-        let (stderr_g, fputs, exit) = match self.panic_deps {
+    /// Bounds-check `index` against `len`, then GEP to the element. Every
+    /// indexed access — read or write — goes through here.
+    fn gen_element_ptr(
+        &mut self,
+        name: &str,
+        len: u32,
+        index: &TypedExpr,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let (slot, ty) = self
+            .vars
+            .get(name)
+            .ok_or_else(|| format!("codegen: unknown variable {}", name))?
+            .clone();
+        let i64t = self.ctx.i64_type();
+        let idx_val = self.gen_expr(index)?.into_int_value();
+        let n = i64t.const_int(len as u64, false);
+        let checked = self.build_checked_index(idx_val, n)?;
+        let arr_ty = self.llvm_type(&ty);
+        unsafe {
+            self.builder.build_in_bounds_gep(
+                arr_ty,
+                slot,
+                &[i64t.const_zero(), checked],
+                "elem_ptr",
+            )
+        }
+        .map_err(|e| e.to_string())
+    }
+
+    /// Declare (once) the libc pieces every runtime error needs.
+    fn panic_deps(
+        &mut self,
+    ) -> (
+        inkwell::values::GlobalValue<'ctx>,
+        FunctionValue<'ctx>,
+        FunctionValue<'ctx>,
+    ) {
+        match self.panic_deps {
             Some(deps) => deps,
             None => {
                 let ptr = self.ctx.ptr_type(AddressSpace::default());
@@ -643,23 +725,119 @@ impl<'ctx> CodeGen<'ctx> {
                 let exit = self.module.add_function("exit", exit_ty, None);
                 *self.panic_deps.insert((stderr_g, fputs, exit))
             }
-        };
-        let msg_ptr = self.global_str(msg, "panic_msg");
-        let stream = self
-            .builder
+        }
+    }
+
+    /// Load the current stderr FILE* (a libc global).
+    fn load_stderr(
+        &mut self,
+        stderr_g: inkwell::values::GlobalValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        self.builder
             .build_load(
                 self.ctx.ptr_type(AddressSpace::default()),
                 stderr_g.as_pointer_value(),
                 "stderr",
             )
-            .map_err(err)?;
-        self.builder
-            .build_call(fputs, &[msg_ptr.into(), stream.into()], "fputs")
-            .map_err(err)?;
+            .map_err(|e| e.to_string())
+    }
+
+    /// Emit `exit(70); unreachable` — the tail of every runtime error.
+    fn build_exit70(&mut self, exit: FunctionValue<'ctx>) -> Result<(), String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
         let code = self.ctx.i32_type().const_int(70, false);
         self.builder.build_call(exit, &[code.into()], "exit").map_err(err)?;
         self.builder.build_unreachable().map_err(err)?;
         Ok(())
+    }
+
+    /// Emit the runtime-error tail: fputs(msg, stderr); exit(70); unreachable.
+    /// The builder must be positioned inside the (never-returning) panic path.
+    fn build_panic(&mut self, msg: &str) -> Result<(), String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let (stderr_g, fputs, exit) = self.panic_deps();
+        let msg_ptr = self.global_str(msg, "panic_msg");
+        let stream = self.load_stderr(stderr_g)?;
+        self.builder
+            .build_call(fputs, &[msg_ptr.into(), stream.into()], "fputs")
+            .map_err(err)?;
+        self.build_exit70(exit)
+    }
+
+    /// Emit a call to `checked_index(i, n)` — returns i when 0 <= i < n,
+    /// otherwise dies with a message that NAMES the offending index and the
+    /// valid range (advice, not just an alarm).
+    fn build_checked_index(
+        &mut self,
+        i: IntValue<'ctx>,
+        n: IntValue<'ctx>,
+    ) -> Result<IntValue<'ctx>, String> {
+        let f = self.index_fn()?;
+        let call = self
+            .builder
+            .build_call(f, &[i.into(), n.into()], "checked_index")
+            .map_err(|e| e.to_string())?;
+        match call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => Ok(v.into_int_value()),
+            _ => Err("index helper returned void".to_string()),
+        }
+    }
+
+    /// Get (or lazily define) `i64 @burxt.checked.index(i64 %i, i64 %n)`.
+    fn index_fn(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        if let Some(f) = self.index_check_fn {
+            return Ok(f);
+        }
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let saved_block = self.builder.get_insert_block();
+
+        let i64t = self.ctx.i64_type();
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+        let i32t = self.ctx.i32_type();
+        // i32 @fprintf(ptr, ptr, ...)
+        let fprintf_ty = i32t.fn_type(&[ptr.into(), ptr.into()], true);
+        let fprintf = self.module.add_function("fprintf", fprintf_ty, None);
+        let (stderr_g, _, exit) = self.panic_deps();
+
+        let fn_ty = i64t.fn_type(&[i64t.into(), i64t.into()], false);
+        let f = self.module.add_function("burxt.checked.index", fn_ty, None);
+        let entry = self.ctx.append_basic_block(f, "entry");
+        let oob_bb = self.ctx.append_basic_block(f, "out_of_bounds");
+        let ok_bb = self.ctx.append_basic_block(f, "ok");
+
+        self.builder.position_at_end(entry);
+        let i = f.get_nth_param(0).unwrap().into_int_value();
+        let n = f.get_nth_param(1).unwrap().into_int_value();
+        use inkwell::IntPredicate::*;
+        let neg = self.builder.build_int_compare(SLT, i, i64t.const_zero(), "neg").map_err(err)?;
+        let too_big = self.builder.build_int_compare(SGE, i, n, "too_big").map_err(err)?;
+        let oob = self.builder.build_or(neg, too_big, "oob").map_err(err)?;
+        self.builder.build_conditional_branch(oob, oob_bb, ok_bb).map_err(err)?;
+
+        self.builder.position_at_end(oob_bb);
+        let fmt = self.global_str(
+            "burxt runtime error: index %lld is out of bounds — this array holds \
+             %lld values (valid indexes 0 to %lld)\n",
+            "fmt_oob",
+        );
+        let stream = self.load_stderr(stderr_g)?;
+        let n_minus_1 = self
+            .builder
+            .build_int_sub(n, i64t.const_int(1, false), "n_minus_1")
+            .map_err(err)?;
+        let args: Vec<BasicMetadataValueEnum> =
+            vec![stream.into(), fmt.into(), i.into(), n.into(), n_minus_1.into()];
+        self.builder.build_call(fprintf, &args, "fprintf").map_err(err)?;
+        self.build_exit70(exit)?;
+
+        self.builder.position_at_end(ok_bb);
+        self.builder.build_return(Some(&i)).map_err(err)?;
+
+        if let Some(bb) = saved_block {
+            self.builder.position_at_end(bb);
+        }
+        self.index_check_fn = Some(f);
+        Ok(f)
     }
 
     /// Emit a call to `checked_op(a, b)` — the overflow-trapping version of

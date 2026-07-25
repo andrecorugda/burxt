@@ -203,6 +203,16 @@ impl Parser {
             Token::Ident(s) => s,
             other => return Err(format!("expected identifier, found {:?}", other)),
         };
+        // a[i] = value;
+        if self.at(&Token::LBracket) {
+            self.bump();
+            let index = self.parse_expr()?;
+            self.expect(&Token::RBracket)?;
+            self.expect(&Token::Equals)?;
+            let value = self.parse_expr()?;
+            self.expect(&Token::Semicolon)?;
+            return Ok(Stmt::AssignIndex { name, index, value });
+        }
         let mut path = Vec::new();
         while self.at(&Token::Dot) {
             self.bump();
@@ -352,6 +362,32 @@ impl Parser {
             // A bare identifier is a struct type; whether it exists is the
             // typechecker's question, so use-before-declaration works.
             Token::Ident(name) => Ok(Type::Named(name)),
+            // [T; N] — fixed-size array
+            Token::LBracket => {
+                let elem = self.parse_type()?;
+                self.expect(&Token::Semicolon)?;
+                let len = match self.bump() {
+                    Token::Int(0) => {
+                        return Err("an array must hold at least one value".to_string())
+                    }
+                    Token::Int(n) if (1..=65536).contains(&n) => n as u32,
+                    Token::Int(n) => {
+                        return Err(format!(
+                            "arrays live on the stack; [T; N] is capped at 65536 \
+                             values for now, but this is {}",
+                            n
+                        ))
+                    }
+                    other => {
+                        return Err(format!(
+                            "expected the array length after `;` in [T; N], found {:?}",
+                            other
+                        ))
+                    }
+                };
+                self.expect(&Token::RBracket)?;
+                Ok(Type::Array { elem: Box::new(elem), len })
+            }
             other => Err(format!("expected a type, found {:?}", other)),
         }
     }
@@ -468,9 +504,27 @@ impl Parser {
                     }
                     self.expect(&Token::RBrace)?;
                     Ok(Expr::StructLit { name: s, fields })
+                } else if self.at(&Token::LBracket) {
+                    self.bump();
+                    let index = self.parse_expr()?;
+                    self.expect(&Token::RBracket)?;
+                    Ok(Expr::Index { name: s, index: Box::new(index) })
                 } else {
                     Ok(Expr::Var(s))
                 }
+            }
+            Token::LBracket => {
+                let mut elems = Vec::new();
+                while !self.at(&Token::RBracket) {
+                    elems.push(self.parse_expr()?);
+                    if self.at(&Token::Comma) {
+                        self.bump(); // trailing comma allowed
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(&Token::RBracket)?;
+                Ok(Expr::ArrayLit(elems))
             }
             Token::LParen => {
                 // parentheses re-enable struct literals inside a condition
