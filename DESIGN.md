@@ -1,7 +1,19 @@
-# Burxt — Design Notes (v0.0.10)
+# Burxt — Design Notes (v0.0.11)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
+
+## Identity (the anchor)
+
+> Burxt is **composition-first OOP with opt-in safe inheritance**, where the
+> compiler rigorously enforces **objective** correctness (no null, no silent
+> overflow, verified contracts, exhaustiveness) and makes SOLID design the
+> **ergonomic default** — giving PHP's familiarity, Rust's safety, and a
+> verification layer neither has.
+
+Distinct from PHP (enforces nothing; null + inheritance footguns) and from
+Rust (no inheritance, no built-in contracts). And honest: it does not claim to
+mechanically enforce the unenforceable. Everything below serves this line.
 
 ## Thesis (what makes Burxt worth existing)
 
@@ -117,23 +129,130 @@ thesis generalized: **dangerous defaults become compile errors.**
   ergonomics tension is permanent: the art is hiding strictness behind
   inference so code stays simple while the compiler stays strict.
 
-## Attributes — the syntax of verification (committed)
+## The OOP model — composition-first, opt-in safe inheritance (committed)
+
+**This section supersedes the earlier "no implementation inheritance, ever"
+stance.** Inheritance EXISTS, but constrained so the classic footguns
+(fragile base class, diamond problem) cannot happen — which is the real goal
+the earlier absolute rule was reaching for.
+
+- Sharing **behavior** → traits (interfaces). Small by default.
+- Reusing **state/structure** → composition ("has-a"). The ergonomic default.
+- **Inheritance** ("is-a") only from a class explicitly marked `open`, and
+  only single inheritance. Not marked `open` → cannot be extended, so the
+  fragile-base-class problem is prevented by construction; no multiple
+  inheritance, so no diamond.
+
+```text
+trait Printable {
+    fn describe(self) -> String
+}
+
+// Composition is the natural default: Account HAS-A Ledger, not IS-A.
+class Account : Printable {
+    owner:   String
+    balance: Decimal<2> = $0.00
+    ledger:  Ledger                 // a field, not a parent
+
+    fn describe(self) -> String {
+        "Account of {self.owner}: {self.balance}"
+    }
+}
+
+open class Shape { fn area(self) -> Decimal<4> }
+class Circle : Shape { radius: Decimal<4> }   // allowed: Shape is `open`
+// class Sneaky : Account { }                 // ERROR: Account is not `open`
+```
+
+The gap between PHP (inheritance-heavy) and Rust (no inheritance) is where
+Burxt lives. Today's `struct` is the value-type substrate this grows from;
+`class`, `trait`, `open` arrive with the aggregate ABI and dispatch.
+
+### SOLID stance — enforce the objective, encourage the subjective
+
+Claiming to "enforce all of SOLID" would overpromise: *single responsibility*
+has no crisp definition, and hard-erroring on it would produce false
+positives and lose trust. So:
+
+| Principle | Burxt stance |
+|---|---|
+| Single Responsibility | Encouraged; optional lint. NOT a hard error — too subjective. |
+| Open/Closed | Grammar-supported: `open` classes, traits extend without modification. |
+| Liskov Substitution | Contract-checked: a subtype's `requires`/`ensures` may not violate the base's. |
+| Interface Segregation | Structurally nudged: small traits are the easy path; lint warns on bloat. |
+| Dependency Inversion | Depending on a trait is ergonomic; depending on a concrete class is the awkward opt-in. |
+
+## Signature grammar — eloquent because it matches intent (committed)
+
+95% familiar, 5% novel exactly where the thesis lives. Eloquence comes from
+grammar matching the domain so closely that correct code reads like a
+description of the problem.
+
+### Contracts as first-class grammar
+
+**This supersedes contracts-as-attributes below.** `requires` / `ensures` are
+KEYWORDS, so a function reads as a self-documenting sentence:
+
+```text
+fn withdraw(acct: Account, amount: Decimal<2>)
+    requires amount > $0.00
+    ensures  acct.balance >= $0.00
+{
+    acct.balance = acct.balance - amount
+}
+```
+
+Verified at compile time where possible, else a checked guard is inserted.
+Either way the intent lives in the signature, not a comment. Attributes
+remain for other cross-cutting metadata — they are not the contract syntax.
+
+### Money and units as first-class literals
+
+```text
+let price = $19.99        // $ => Decimal<2>, no annotation needed
+let tax   = 8.25%         // a real literal, not float/100
+let dist  = 5.km
+// let bad = price + dist    // ERROR: cannot add money to distance
+// let bad = 5.usd + 3.eur   // ERROR: different currencies; convert explicitly
+```
+
+Units carry meaning in the type; illegal mixing is a compile error. This is
+also how "comparisons across currencies" stops being a footgun.
+
+### Pipelines and interpolation
+
+```text
+let owed = invoices |> filter(unpaid) |> map(amount) |> sum |> in_currency(usd)
+print("Account of {owner}: {balance}")
+```
+
+Left-to-right reading instead of inside-out nesting; interpolation by default,
+no concat or printf-juggling. Neither is novel (F#, Elixir, every modern
+language) — both are proven, cheap eloquence.
+
+### The permanent tension
+
+Burxt wants both *many guarantees* and *Python-like ease*; these pull against
+each other, since every guarantee adds ceremony. The craft is hiding
+strictness behind good inference: **the compiler should be strict silently,
+not loud.** Discipline: pick a FEW signature features (contracts, money/units,
+composition-first OOP, the correctness family) and keep everything else
+minimal and familiar. Resist the kitchen sink — a language novel on every
+line gets admired and unused. When "more power" fights "still easy", bias to
+easy plus inference.
+
+## Attributes — cross-cutting metadata (committed)
 
 Burxt will have **compile-time attributes**: `#[...]` metadata attached to
 code that the COMPILER reads, checks, and discards — zero runtime trace, per
-the no-runtime-baggage pillar. This is not a borrowed convenience: the
-refinement-type thesis ("balance never negative", "splits sum to total") IS
-metadata attached to code that the compiler enforces, so attributes are the
-natural surface for A5:
+the no-runtime-baggage pillar.
 
-```text
-#[invariant(self.balance >= 0.00)]
-struct Account { balance: Decimal<2, RoundHalfEven> }
-
-#[requires(amount > 0.00)]
-#[ensures(result == a + b)]
-fn add(a: Decimal<2>, b: Decimal<2>) -> Decimal<2> { ... }
-```
+Scope note: function/type CONTRACTS use the `requires`/`ensures` keyword
+grammar above, not attributes — a contract is part of the signature, not
+metadata about it. Attributes carry the genuinely cross-cutting rest
+(deprecation, serialization, lint control, and type-level invariants that
+have no signature to live in, e.g. `#[invariant(self.balance >= $0.00)]` on a
+class).
 
 Rules committed now:
 
@@ -382,10 +501,12 @@ Burxt is OOP by default, and the object model is decided now (keywords
 - **Interfaces** are declared contracts: `struct LineItem is Priceable`.
   Conformance is never inferred from shape — structural satisfaction is
   silent conformance. The check is exact: every method, exact signature.
-- **No implementation inheritance, ever.** Overriding is hidden control
-  flow ("nothing silent"), and without overriding there is nothing left to
-  violate in Liskov at the language level — A5 refinement contracts on
-  interface signatures will cover the semantic half.
+- **Inheritance: superseded — see "The OOP model" above.** This section
+  originally said "no implementation inheritance, ever". The current
+  direction keeps the goal (no fragile base class, no diamond, no hidden
+  override dispatch) but reaches it with `open`-only single inheritance
+  rather than prohibition, so genuine is-a modeling is available and
+  composition stays the default.
 - Dispatch will be dictionary-passing (fat pointers): the method table
   lives OUTSIDE the struct, so struct layout never changes and stays
   FFI-viable. Static dispatch whenever the concrete type is known.
@@ -447,6 +568,38 @@ Rules:
   `print(a)`, whole-array assignment, fn params/returns, struct fields —
   each refused with the reason and its arrival milestone.
 
+### v0.0.11: honest numbers, unary minus, human errors
+
+A 97-program adversarial sweep found six open issues; all fixed. The numeric
+three shared one root cause worth stating plainly: **the scaled-i64
+representation's cost is not precision, it is that INTERMEDIATES need more
+headroom than values do.**
+
+- **i128 intermediates.** The double-scale product (`A*B`), the pre-scaled
+  dividend (`A*10^S`), and the tie test (`2*|r|`) now compute in i128, where
+  they cannot overflow; only the final narrowing back to i64 is checked. So
+  `40000000.00 * 40000000.00` and `Decimal<18> / Decimal<18>` work, and the
+  overflow error now means what it says — before, it fired on results that
+  fit perfectly, which is worse than the abort because it misdirects
+  debugging.
+- **The most negative decimal prints.** The print path splits in i128 and
+  shows magnitudes with `%llu`, so a value you can compute and store is no
+  longer unprintable.
+- **`Decimal<0>` prints no phantom `.0`.** Scale 0 has no fractional digits;
+  showing one contradicted "prints exactly".
+- **Unary minus exists.** `print(-19.99)` works, negation is
+  overflow-checked, and negated literals stay literals. Previously the only
+  way to negate was `0 - x`, and the test suite carried throwaway zero
+  bindings to do it — the language telling on itself.
+- **Deep nesting no longer aborts the compiler.** Compilation runs on a
+  512 MB-stack thread: 5000-term expressions and 2000-deep parens compile
+  fine (1500 terms used to abort). Machine-generated Burxt is the point —
+  self-hosting depends on it.
+- **Errors read as English.** Token names come from a `describe()` table
+  (`expected \`;\`, found the end of the file`), never Rust `Debug` dumps,
+  and chained comparisons get their own message instead of mentioning
+  `RParen`.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -500,11 +653,17 @@ it travels.
   String params (v0.0.7); widens further with A4's types.
 - A4. Strings (v0.0.7), structs (v0.0.8), arrays (v0.0.10) — DONE
 - A4.5. The aggregate ABI: by-pointer struct/array params and returns <- NEXT
+- A4.6. Composition-first OOP: `class`, `trait`, receiver methods, `open`
+  single inheritance, dictionary dispatch (see "The OOP model")
+- A4.7. Signature grammar: money/unit literals (`$19.99`, `8.25%`, `5.km`),
+  string interpolation, pipelines
 - A4+. OOP by default, SOLID-aligned: by-pointer ABI + receiver methods,
   then interfaces as behavioral contracts (dictionary dispatch). No
   implementation inheritance — a type satisfies an interface exactly or it
   is a compile error, so Liskov violations are unrepresentable.
-- A5. Refinement types ("balance >= 0", "splits sum to total")
+- A5. Contracts + refinement types: `requires`/`ensures` keywords,
+  "balance >= 0", "splits sum to total", Liskov-checked overrides; then
+  SOLID ergonomics and lints
 
 #### Phase B — cross-compilation and desktop
 

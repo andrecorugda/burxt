@@ -1,0 +1,1 @@
+comparisons do not chain — `a < b < c` is not a Burxt expression. Write the two comparisons separately.

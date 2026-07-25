@@ -27,6 +27,12 @@
 //!     helper `@burxt.round.<mode>(p, d)` = p/d rounded per the mode, built
 //!     from sdiv/srem plus a tie adjustment. One helper per mode per module,
 //!     created lazily — keeps expression codegen simple and the IR readable.
+//!   * Those helpers work in **i128**, and so do the hidden intermediates
+//!     (the double-scale product A*B and the pre-scaled dividend A*10^S).
+//!     Values are i64; only intermediates need the extra headroom, and this
+//!     is where the old compiler reported "overflow" for results that fit
+//!     perfectly. The final narrowing back to i64 is checked, so the
+//!     overflow error now fires only when the RESULT genuinely doesn't fit.
 //!
 //! Runtime checks (silently wrong numbers are never an option):
 //!   * Every +, -, * goes through `@burxt.checked.<op>`, built on LLVM's
@@ -66,6 +72,8 @@ pub struct CodeGen<'ctx> {
     cint_fn: Option<FunctionValue<'ctx>>,
     /// lazily created array bounds-check helper
     index_check_fn: Option<FunctionValue<'ctx>>,
+    /// lazily created i128 -> i64 checked narrowing helper
+    narrow_check_fn: Option<FunctionValue<'ctx>>,
     /// struct name -> its LLVM struct type (named `bx.<name>`)
     struct_types: HashMap<String, StructType<'ctx>>,
     /// struct name -> field types in declaration order (for GEP walks)
@@ -95,6 +103,7 @@ impl<'ctx> CodeGen<'ctx> {
             extern_sigs: HashMap::new(),
             cint_fn: None,
             index_check_fn: None,
+            narrow_check_fn: None,
             struct_types: HashMap::new(),
             struct_fields: HashMap::new(),
             printf: None,
@@ -476,23 +485,20 @@ impl<'ctx> CodeGen<'ctx> {
                 // Split |scaled value| into integer and fractional parts, exactly.
                 // The sign is printed separately: deriving it from int_part alone
                 // would drop it for values like -0.50, where int_part is 0.
+                // The split happens in i128 so that the most negative
+                // representable value stays printable (|i64::MIN| needs 64
+                // unsigned bits), and the parts print with %llu — they are
+                // magnitudes, never negative.
                 let val = val.into_int_value();
                 let i64t = self.ctx.i64_type();
-                let pow = i64t.const_int(10u64.pow(*scale), false);
+                let i128t = self.ctx.i128_type();
 
                 let is_neg = self
                     .builder
                     .build_int_compare(inkwell::IntPredicate::SLT, val, i64t.const_zero(), "is_neg")
                     .map_err(|e| e.to_string())?;
-                let abs = self.build_abs(val)?;
-                let int_part = self
-                    .builder
-                    .build_int_unsigned_div(abs, pow, "int_part")
-                    .map_err(|e| e.to_string())?;
-                let frac_part = self
-                    .builder
-                    .build_int_unsigned_rem(abs, pow, "frac_part")
-                    .map_err(|e| e.to_string())?;
+                let wide = self.widen(val)?;
+                let abs = self.build_abs_wide(wide)?;
 
                 let minus = self.global_str("-", "str_minus");
                 let empty = self.global_str("", "str_empty");
@@ -501,15 +507,43 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_select(is_neg, minus, empty, "sign")
                     .map_err(|e| e.to_string())?;
 
-                // "%s%lld.%0<scale>lld\n" — sign, then zero-padded fractional digits.
-                let fmt_str = format!("%s%lld.%0{}lld\n", scale);
-                let fmt = self.global_str(&fmt_str, "fmt_dec");
+                let narrow = |b: &Builder<'ctx>, v: IntValue<'ctx>, n: &str| {
+                    b.build_int_truncate(v, i64t, n).map_err(|e| e.to_string())
+                };
 
-                let args: Vec<BasicMetadataValueEnum> =
-                    vec![fmt.into(), sign.into(), int_part.into(), frac_part.into()];
-                self.builder
-                    .build_call(printf, &args, "printf_dec")
-                    .map_err(|e| e.to_string())?;
+                if *scale == 0 {
+                    // Scale 0 has NO fractional digits — printing ".0" would
+                    // show a digit that does not exist.
+                    let int_part = narrow(&self.builder, abs, "int_part")?;
+                    let fmt = self.global_str("%s%llu\n", "fmt_dec0");
+                    let args: Vec<BasicMetadataValueEnum> =
+                        vec![fmt.into(), sign.into(), int_part.into()];
+                    self.builder
+                        .build_call(printf, &args, "printf_dec")
+                        .map_err(|e| e.to_string())?;
+                } else {
+                    let pow = self.pow10_i128(*scale);
+                    let int_wide = self
+                        .builder
+                        .build_int_unsigned_div(abs, pow, "int_wide")
+                        .map_err(|e| e.to_string())?;
+                    let frac_wide = self
+                        .builder
+                        .build_int_unsigned_rem(abs, pow, "frac_wide")
+                        .map_err(|e| e.to_string())?;
+                    let int_part = narrow(&self.builder, int_wide, "int_part")?;
+                    let frac_part = narrow(&self.builder, frac_wide, "frac_part")?;
+                    let _ = i128t;
+
+                    // "%s%llu.%0<scale>llu\n" — sign, then zero-padded digits.
+                    let fmt_str = format!("%s%llu.%0{}llu\n", scale);
+                    let fmt = self.global_str(&fmt_str, "fmt_dec");
+                    let args: Vec<BasicMetadataValueEnum> =
+                        vec![fmt.into(), sign.into(), int_part.into(), frac_part.into()];
+                    self.builder
+                        .build_call(printf, &args, "printf_dec")
+                        .map_err(|e| e.to_string())?;
+                }
             }
         }
         Ok(())
@@ -534,6 +568,13 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_load(self.llvm_type(&ty), slot, name)
                     .map_err(|e| e.to_string())
             }
+            TypedExprKind::Neg(inner) => {
+                // 0 - v, overflow-checked like any subtraction (there is no
+                // negation of the most negative value).
+                let v = self.gen_expr(inner)?.into_int_value();
+                let zero = i64t.const_zero();
+                self.build_checked(BinOp::Sub, zero, v).map(Into::into)
+            }
             TypedExprKind::Binary { op, lhs, rhs } => {
                 let l = self.gen_expr(lhs)?.into_int_value();
                 let r = self.gen_expr(rhs)?.into_int_value();
@@ -549,9 +590,16 @@ impl<'ctx> CodeGen<'ctx> {
                             && matches!(rhs.ty, Type::Decimal { .. });
                         if both_decimal {
                             // (A * B) has scale 2S; divide by 10^S, rounding.
-                            let raw = self.build_checked(BinOp::Mul, l, r)?;
+                            // Both the product and the division happen in i128,
+                            // so a representable result is never refused.
                             let (scale, mode) = decimal_with_rounding(&e.ty)?;
-                            let pow = i64t.const_int(10u64.pow(scale), false);
+                            let l128 = self.widen(l)?;
+                            let r128 = self.widen(r)?;
+                            let raw = self
+                                .builder
+                                .build_int_mul(l128, r128, "mul_raw")
+                                .map_err(|e| e.to_string())?;
+                            let pow = self.pow10_i128(scale);
                             self.build_round_div(mode, raw, pow)
                         } else {
                             self.build_checked(BinOp::Mul, l, r)
@@ -562,12 +610,21 @@ impl<'ctx> CodeGen<'ctx> {
                         match rhs.ty {
                             // A/B has scale 0; pre-scale by 10^S: round(A*10^S / B).
                             Type::Decimal { .. } => {
-                                let pow = i64t.const_int(10u64.pow(scale), false);
-                                let scaled = self.build_checked(BinOp::Mul, l, pow)?;
-                                self.build_round_div(mode, scaled, r)
+                                let l128 = self.widen(l)?;
+                                let pow = self.pow10_i128(scale);
+                                let scaled = self
+                                    .builder
+                                    .build_int_mul(l128, pow, "div_prescale")
+                                    .map_err(|e| e.to_string())?;
+                                let r128 = self.widen(r)?;
+                                self.build_round_div(mode, scaled, r128)
                             }
                             // A/n keeps scale S: round(A / n).
-                            _ => self.build_round_div(mode, l, r),
+                            _ => {
+                                let l128 = self.widen(l)?;
+                                let r128 = self.widen(r)?;
+                                self.build_round_div(mode, l128, r128)
+                            }
                         }
                     }
                 }?;
@@ -1000,10 +1057,85 @@ impl<'ctx> CodeGen<'ctx> {
             .builder
             .build_call(f, &[p.into(), d.into()], "round")
             .map_err(|e| e.to_string())?;
+        let wide = match call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => v.into_int_value(),
+            _ => return Err("rounding helper returned void".to_string()),
+        };
+        self.build_narrow_to_i64(wide)
+    }
+
+    /// Sign-extend an i64 value to i128 for intermediate arithmetic.
+    fn widen(&self, v: IntValue<'ctx>) -> Result<IntValue<'ctx>, String> {
+        self.builder
+            .build_int_s_extend(v, self.ctx.i128_type(), "widen")
+            .map_err(|e| e.to_string())
+    }
+
+    /// 10^scale as an i128 constant (scale <= 18, so this always fits).
+    fn pow10_i128(&self, scale: u32) -> IntValue<'ctx> {
+        self.ctx
+            .i128_type()
+            .const_int_arbitrary_precision(&pow10_words(scale))
+    }
+
+    /// Narrow i128 -> i64, dying loudly if the value does not fit. This is the
+    /// ONLY place the overflow error can now come from for decimal
+    /// multiplication and division — so when it fires, the RESULT really
+    /// doesn't fit, not merely an intermediate.
+    fn build_narrow_to_i64(&mut self, v: IntValue<'ctx>) -> Result<IntValue<'ctx>, String> {
+        let f = self.narrow_fn()?;
+        let call = self
+            .builder
+            .build_call(f, &[v.into()], "narrow")
+            .map_err(|e| e.to_string())?;
         match call.try_as_basic_value() {
             inkwell::values::ValueKind::Basic(v) => Ok(v.into_int_value()),
-            _ => Err("rounding helper returned void".to_string()),
+            _ => Err("narrowing helper returned void".to_string()),
         }
+    }
+
+    /// Get (or lazily define) `i64 @burxt.checked.narrow(i128)`.
+    fn narrow_fn(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        if let Some(f) = self.narrow_check_fn {
+            return Ok(f);
+        }
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let saved_block = self.builder.get_insert_block();
+
+        let i64t = self.ctx.i64_type();
+        let i128t = self.ctx.i128_type();
+        let fn_ty = i64t.fn_type(&[i128t.into()], false);
+        let f = self.module.add_function("burxt.checked.narrow", fn_ty, None);
+        let entry = self.ctx.append_basic_block(f, "entry");
+        let panic_bb = self.ctx.append_basic_block(f, "doesnt_fit");
+        let ok_bb = self.ctx.append_basic_block(f, "ok");
+
+        self.builder.position_at_end(entry);
+        let v = f.get_nth_param(0).unwrap().into_int_value();
+        // Round-trip through i64: if truncating then sign-extending changes
+        // the value, it never fitted.
+        let trunc = self.builder.build_int_truncate(v, i64t, "trunc").map_err(err)?;
+        let back = self.builder.build_int_s_extend(trunc, i128t, "back").map_err(err)?;
+        let fits = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, v, back, "fits")
+            .map_err(err)?;
+        self.builder.build_conditional_branch(fits, ok_bb, panic_bb).map_err(err)?;
+
+        self.builder.position_at_end(panic_bb);
+        self.build_panic(
+            "burxt runtime error: arithmetic overflow — the exact result no \
+             longer fits in the value range\n",
+        )?;
+
+        self.builder.position_at_end(ok_bb);
+        self.builder.build_return(Some(&trunc)).map_err(err)?;
+
+        if let Some(bb) = saved_block {
+            self.builder.position_at_end(bb);
+        }
+        self.narrow_check_fn = Some(f);
+        Ok(f)
     }
 
     /// Get (or lazily define) the rounding helper for `mode`:
@@ -1020,8 +1152,10 @@ impl<'ctx> CodeGen<'ctx> {
         }
         let saved_block = self.builder.get_insert_block();
 
-        let i64t = self.ctx.i64_type();
-        let fn_ty = i64t.fn_type(&[i64t.into(), i64t.into()], false);
+        // The helper works in i128: the caller's operands are widened i64s or
+        // a pre-scaled product, so no intermediate here can overflow.
+        let i128t = self.ctx.i128_type();
+        let fn_ty = i128t.fn_type(&[i128t.into(), i128t.into()], false);
         let name = match mode {
             Rounding::HalfEven => "burxt.round.half_even",
             Rounding::HalfUp => "burxt.round.half_up",
@@ -1029,7 +1163,6 @@ impl<'ctx> CodeGen<'ctx> {
         let f = self.module.add_function(name, fn_ty, None);
         let entry = self.ctx.append_basic_block(f, "entry");
         let div0_bb = self.ctx.append_basic_block(f, "div_by_zero");
-        let ovf_bb = self.ctx.append_basic_block(f, "quot_overflow");
         let main_bb = self.ctx.append_basic_block(f, "main");
         self.builder.position_at_end(entry);
 
@@ -1038,44 +1171,26 @@ impl<'ctx> CodeGen<'ctx> {
 
         let err = |e: inkwell::builder::BuilderError| e.to_string();
 
-        // Guard the two divisions that cannot produce a value: d == 0, and
-        // the lone overflowing quotient i64::MIN / -1. Both become a named
-        // runtime error instead of a raw SIGFPE.
+        // The only division that cannot produce a value is d == 0 (i128 has
+        // room for every quotient of our i64-derived operands). It becomes a
+        // named runtime error instead of a raw SIGFPE.
         let is_zero = self
             .builder
-            .build_int_compare(inkwell::IntPredicate::EQ, d, i64t.const_zero(), "d_is_zero")
+            .build_int_compare(inkwell::IntPredicate::EQ, d, i128t.const_zero(), "d_is_zero")
             .map_err(err)?;
-        let min = i64t.const_int(i64::MIN as u64, true);
-        let minus_one_c = i64t.const_int(u64::MAX, true);
-        let p_min = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::EQ, p, min, "p_is_min")
-            .map_err(err)?;
-        let d_m1 = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::EQ, d, minus_one_c, "d_is_minus_one")
-            .map_err(err)?;
-        let ovf = self.builder.build_and(p_min, d_m1, "quot_overflows").map_err(err)?;
-        let cont_bb = self.ctx.append_basic_block(f, "nonzero");
-        self.builder.build_conditional_branch(is_zero, div0_bb, cont_bb).map_err(err)?;
-        self.builder.position_at_end(cont_bb);
-        self.builder.build_conditional_branch(ovf, ovf_bb, main_bb).map_err(err)?;
+        self.builder.build_conditional_branch(is_zero, div0_bb, main_bb).map_err(err)?;
 
         self.builder.position_at_end(div0_bb);
         self.build_panic("burxt runtime error: division by zero\n")?;
-        self.builder.position_at_end(ovf_bb);
-        self.build_panic(
-            "burxt runtime error: arithmetic overflow — the exact result no \
-             longer fits in the value range\n",
-        )?;
 
         self.builder.position_at_end(main_bb);
         let q = self.builder.build_int_signed_div(p, d, "q").map_err(err)?;
         let r = self.builder.build_int_signed_rem(p, d, "r").map_err(err)?;
-        let abs_r = self.build_abs(r)?;
-        let abs_d = self.build_abs(d)?;
-        let two = i64t.const_int(2, false);
-        let r2 = self.build_checked(BinOp::Mul, abs_r, two)?;
+        let abs_r = self.build_abs_wide(r)?;
+        let abs_d = self.build_abs_wide(d)?;
+        let two = i128t.const_int(2, false);
+        // In i128 the tie test cannot overflow: |r| < |d| <= 10^36 or so.
+        let r2 = self.builder.build_int_mul(abs_r, two, "r2").map_err(err)?;
 
         use inkwell::IntPredicate::*;
         let need_bump = match mode {
@@ -1088,11 +1203,11 @@ impl<'ctx> CodeGen<'ctx> {
                 let eq = self.builder.build_int_compare(EQ, r2, abs_d, "exact_tie").map_err(err)?;
                 let q_lsb = self
                     .builder
-                    .build_and(q, i64t.const_int(1, false), "q_lsb")
+                    .build_and(q, i128t.const_int(1, false), "q_lsb")
                     .map_err(err)?;
                 let q_odd = self
                     .builder
-                    .build_int_compare(NE, q_lsb, i64t.const_zero(), "q_odd")
+                    .build_int_compare(NE, q_lsb, i128t.const_zero(), "q_odd")
                     .map_err(err)?;
                 let tie_to_even = self.builder.build_and(eq, q_odd, "tie_to_even").map_err(err)?;
                 self.builder.build_or(gt, tie_to_even, "need_bump").map_err(err)?
@@ -1101,11 +1216,11 @@ impl<'ctx> CodeGen<'ctx> {
 
         // "away from zero" = in the direction of the true quotient's sign,
         // which is sign(p) * sign(d).
-        let p_neg = self.builder.build_int_compare(SLT, p, i64t.const_zero(), "p_neg").map_err(err)?;
-        let d_neg = self.builder.build_int_compare(SLT, d, i64t.const_zero(), "d_neg").map_err(err)?;
+        let p_neg = self.builder.build_int_compare(SLT, p, i128t.const_zero(), "p_neg").map_err(err)?;
+        let d_neg = self.builder.build_int_compare(SLT, d, i128t.const_zero(), "d_neg").map_err(err)?;
         let opposite = self.builder.build_xor(p_neg, d_neg, "opposite_signs").map_err(err)?;
-        let minus_one = i64t.const_int(u64::MAX, true); // -1
-        let one = i64t.const_int(1, false);
+        let minus_one = i128t.const_all_ones(); // -1
+        let one = i128t.const_int(1, false);
         let bump = self
             .builder
             .build_select(opposite, minus_one, one, "bump_dir")
@@ -1113,7 +1228,7 @@ impl<'ctx> CodeGen<'ctx> {
             .into_int_value();
         let delta = self
             .builder
-            .build_select(need_bump, bump, i64t.const_zero(), "delta")
+            .build_select(need_bump, bump, i128t.const_zero(), "delta")
             .map_err(err)?
             .into_int_value();
         let rounded = self.builder.build_int_add(q, delta, "rounded").map_err(err)?;
@@ -1124,6 +1239,22 @@ impl<'ctx> CodeGen<'ctx> {
         }
         self.round_fns.insert(mode, f);
         Ok(f)
+    }
+
+    /// abs(x) for a WIDE (i128) value. No overflow check is needed: every
+    /// value reaching here came from i64s, so its negation always fits.
+    fn build_abs_wide(&mut self, x: IntValue<'ctx>) -> Result<IntValue<'ctx>, String> {
+        let zero = x.get_type().const_zero();
+        let neg = self.builder.build_int_neg(x, "neg").map_err(|e| e.to_string())?;
+        let is_neg = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, x, zero, "is_neg")
+            .map_err(|e| e.to_string())?;
+        Ok(self
+            .builder
+            .build_select(is_neg, neg, x, "abs")
+            .map_err(|e| e.to_string())?
+            .into_int_value())
     }
 
     /// abs(x) for i64 via select — keeps fractional digits positive when the
@@ -1188,6 +1319,12 @@ impl<'ctx> CodeGen<'ctx> {
         tm.write_to_file(&self.module, FileType::Object, std::path::Path::new(path))
             .map_err(|e| e.to_string())
     }
+}
+
+/// 10^scale as the 64-bit words LLVM wants for an i128 constant.
+/// scale is capped at 18, so the value always fits in the low word.
+fn pow10_words(scale: u32) -> [u64; 2] {
+    [10u64.pow(scale), 0]
 }
 
 /// A rounding operation's result type must be a Decimal carrying a contract —

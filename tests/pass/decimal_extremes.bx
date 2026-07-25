@@ -1,0 +1,15 @@
+// The most negative representable decimal must print, not die: the print
+// path splits the value in i128 and shows magnitudes with %llu.
+let a: Decimal<2> = -92233720368547758.07;
+let b: Decimal<2> = 0.01;
+print(a - b);
+print(a);
+// Decimal<0> has NO fractional digits — printing ".0" would show a digit
+// that does not exist.
+let seven: Decimal<0> = 7.0;
+let five: Decimal<0> = 5.0;
+print(seven + five);
+print(seven - five);
+let r: Decimal<0, RoundHalfEven> = 7.0;
+print(r * r);
+print(r / 2);

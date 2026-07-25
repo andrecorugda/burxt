@@ -1,0 +1,15 @@
+// Intermediates are computed in i128, so a representable result is never
+// refused. Each of these overflowed before v0.0.11 even though the answer
+// fits an i64 easily.
+let a: Decimal<2, RoundHalfEven> = 40000000.00;
+print(a * a);
+let b: Decimal<9, RoundHalfEven> = 4.000000000;
+print(b * b);
+// the matched pair: both spellings of the same division now agree
+let one: Decimal<18, RoundHalfEven> = 1.000000000000000000;
+let three: Decimal<18, RoundHalfEven> = 3.000000000000000000;
+print(one / three);
+print(one / 3);
+// the tie test itself used to overflow near i64::MAX
+let big: Decimal<2, RoundHalfUp> = 92233720368547758.06;
+print(big / 9223372036854775807);

@@ -85,7 +85,7 @@ impl Parser {
             self.bump();
             Ok(())
         } else {
-            Err(format!("expected {:?}, found {:?}", t, self.peek()))
+            Err(format!("expected {}, found {}", t.describe(), self.peek().describe()))
         }
     }
 
@@ -95,14 +95,14 @@ impl Parser {
         self.expect(&Token::Struct)?;
         let name = match self.bump() {
             Token::Ident(s) => s,
-            other => return Err(format!("expected a struct name after 'struct', found {:?}", other)),
+            other => return Err(format!("expected a struct name after 'struct', found {}", other.describe())),
         };
         self.expect(&Token::LBrace)?;
         let mut fields = Vec::new();
         while !self.at(&Token::RBrace) {
             let fname = match self.bump() {
                 Token::Ident(s) => s,
-                other => return Err(format!("expected a field name in struct {}, found {:?}", name, other)),
+                other => return Err(format!("expected a field name in struct {}, found {}", name, other.describe())),
             };
             self.expect(&Token::Colon)?;
             let ty = self.parse_type()?;
@@ -137,7 +137,7 @@ impl Parser {
     fn parse_fn_signature(&mut self) -> Result<(String, Vec<Param>, Type), String> {
         let name = match self.bump() {
             Token::Ident(s) => s,
-            other => return Err(format!("expected a function name after 'fn', found {:?}", other)),
+            other => return Err(format!("expected a function name after 'fn', found {}", other.describe())),
         };
         self.expect(&Token::LParen)?;
         let mut params = Vec::new();
@@ -145,7 +145,7 @@ impl Parser {
             loop {
                 let pname = match self.bump() {
                     Token::Ident(s) => s,
-                    other => return Err(format!("expected a parameter name, found {:?}", other)),
+                    other => return Err(format!("expected a parameter name, found {}", other.describe())),
                 };
                 self.expect(&Token::Colon)?;
                 let ty = self.parse_type()?;
@@ -161,9 +161,9 @@ impl Parser {
         if !self.at(&Token::Arrow) {
             return Err(format!(
                 "expected `->` and a return type after fn {}'s parameter list \
-                 (every Burxt function returns a value), found {:?}",
+                 (every Burxt function returns a value), found {}",
                 name,
-                self.peek()
+                self.peek().describe()
             ));
         }
         self.bump();
@@ -194,14 +194,14 @@ impl Parser {
             Token::If => self.parse_if(),
             Token::While => self.parse_while(),
             Token::Ident(_) => self.parse_assign(),
-            other => Err(format!("expected statement, found {:?}", other)),
+            other => Err(format!("expected statement, found {}", other.describe())),
         }
     }
 
     fn parse_assign(&mut self) -> Result<Stmt, String> {
         let name = match self.bump() {
             Token::Ident(s) => s,
-            other => return Err(format!("expected identifier, found {:?}", other)),
+            other => return Err(format!("expected identifier, found {}", other.describe())),
         };
         // a[i] = value;
         if self.at(&Token::LBracket) {
@@ -218,7 +218,7 @@ impl Parser {
             self.bump();
             match self.bump() {
                 Token::Ident(f) => path.push(f),
-                other => return Err(format!("expected a field name after '.', found {:?}", other)),
+                other => return Err(format!("expected a field name after '.', found {}", other.describe())),
             }
         }
         self.expect(&Token::Equals)?;
@@ -283,7 +283,7 @@ impl Parser {
         };
         let name = match self.bump() {
             Token::Ident(s) => s,
-            other => return Err(format!("expected identifier after 'let', found {:?}", other)),
+            other => return Err(format!("expected identifier after 'let', found {}", other.describe())),
         };
         self.expect(&Token::Colon)?;
         let declared = self.parse_type()?;
@@ -316,7 +316,7 @@ impl Parser {
             self.toks[self.pos] = Token::Equals;
             Ok(())
         } else {
-            Err(format!("expected `>` to close Decimal<..>, found {:?}", self.peek()))
+            Err(format!("expected `>` to close Decimal<..>, found {}", self.peek().describe()))
         }
     }
 
@@ -337,7 +337,7 @@ impl Parser {
                             n
                         ))
                     }
-                    other => return Err(format!("expected non-negative scale in Decimal<..>, found {:?}", other)),
+                    other => return Err(format!("expected non-negative scale in Decimal<..>, found {}", other.describe())),
                 };
                 // Optional rounding contract: Decimal<2, RoundHalfEven>.
                 let rounding = if self.at(&Token::Comma) {
@@ -348,8 +348,8 @@ impl Parser {
                         other => {
                             return Err(format!(
                                 "expected a rounding mode (RoundHalfEven or RoundHalfUp) \
-                                 after the comma in Decimal<..>, found {:?}",
-                                other
+                                 after the comma in Decimal<..>, found {}",
+                                other.describe()
                             ))
                         }
                     }
@@ -380,15 +380,15 @@ impl Parser {
                     }
                     other => {
                         return Err(format!(
-                            "expected the array length after `;` in [T; N], found {:?}",
-                            other
+                            "expected the array length after `;` in [T; N], found {}",
+                            other.describe()
                         ))
                     }
                 };
                 self.expect(&Token::RBracket)?;
                 Ok(Type::Array { elem: Box::new(elem), len })
             }
-            other => Err(format!("expected a type, found {:?}", other)),
+            other => Err(format!("expected a type, found {}", other.describe())),
         }
     }
 
@@ -410,6 +410,16 @@ impl Parser {
         };
         self.bump();
         let rhs = self.parse_additive()?;
+        if matches!(
+            self.peek(),
+            Token::EqEq | Token::NotEq | Token::Lt | Token::Le | Token::Gt | Token::Ge
+        ) {
+            return Err(
+                "comparisons do not chain — `a < b < c` is not a Burxt expression. \
+                 Write the two comparisons separately."
+                    .to_string(),
+            );
+        }
         Ok(Expr::Compare { op, lhs: Box::new(lhs), rhs: Box::new(rhs) })
     }
 
@@ -443,14 +453,20 @@ impl Parser {
         Ok(lhs)
     }
 
-    /// A factor is a primary followed by any chain of `.field` accesses.
+    /// A factor is a primary followed by any chain of `.field` accesses,
+    /// optionally negated: `-item.price` is Neg(Field(item, price)).
     fn parse_factor(&mut self) -> Result<Expr, String> {
+        if self.at(&Token::Minus) {
+            self.bump();
+            let e = self.parse_factor()?;
+            return Ok(Expr::Neg(Box::new(e)));
+        }
         let mut e = self.parse_primary()?;
         while self.at(&Token::Dot) {
             self.bump();
             let field = match self.bump() {
                 Token::Ident(f) => f,
-                other => return Err(format!("expected a field name after '.', found {:?}", other)),
+                other => return Err(format!("expected a field name after '.', found {}", other.describe())),
             };
             e = Expr::Field { base: Box::new(e), field };
         }
@@ -488,8 +504,8 @@ impl Parser {
                             Token::Ident(f) => f,
                             other => {
                                 return Err(format!(
-                                    "expected a field name in `{} {{ ... }}`, found {:?}",
-                                    s, other
+                                    "expected a field name in `{} {{ ... }}`, found {}",
+                                    s, other.describe()
                                 ))
                             }
                         };
@@ -536,7 +552,7 @@ impl Parser {
                 self.expect(&Token::RParen)?;
                 Ok(e)
             }
-            other => Err(format!("expected an expression, found {:?}", other)),
+            other => Err(format!("expected an expression, found {}", other.describe())),
         }
     }
 }

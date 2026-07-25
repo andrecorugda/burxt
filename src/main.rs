@@ -15,7 +15,25 @@ use inkwell::context::Context;
 use std::path::Path;
 use std::process::Command;
 
+/// The parser, typechecker and codegen all recurse over expression trees, so
+/// deeply nested source needs stack. Machine-generated Burxt (and eventually
+/// the self-hosted compiler's own output) can nest thousands deep, so run the
+/// whole compilation on a thread with a large stack rather than aborting.
+const COMPILER_STACK_BYTES: usize = 512 * 1024 * 1024;
+
 fn main() {
+    let child = std::thread::Builder::new()
+        .stack_size(COMPILER_STACK_BYTES)
+        .spawn(compile_main)
+        .expect("failed to start the compiler thread");
+    match child.join() {
+        Ok(()) => {}
+        // The thread already reported the failure; don't double-print.
+        Err(_) => std::process::exit(101),
+    }
+}
+
+fn compile_main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
         eprintln!("burxt {} — the Burxt compiler", env!("CARGO_PKG_VERSION"));

@@ -1,0 +1,13 @@
+// Negative literals are literals: `-19.99` needs no throwaway zero binding.
+print(-1);
+let price: Decimal<2> = -19.99;
+print(price);
+print(-price);
+let owed: Decimal<2> = 1.00;
+print(owed - -2.50);
+// negation of an expression, not just a literal
+let n: Int = 7;
+print(-(n + 1));
+// negated literals adopt the declared scale like any literal
+let wide: Decimal<4> = -1.5;
+print(wide);

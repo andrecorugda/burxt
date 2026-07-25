@@ -68,6 +68,63 @@ pub enum Token {
     Eof,
 }
 
+impl Token {
+    /// Human description for error messages — never the Rust Debug name.
+    pub fn describe(&self) -> String {
+        match self {
+            Token::Int(n) => format!("the number {}", n),
+            Token::Decimal(..) => "a decimal literal".to_string(),
+            Token::Str(_) => "a string literal".to_string(),
+            Token::Ident(s) => format!("`{}`", s),
+            Token::Let => "`let`".to_string(),
+            Token::Mut => "`mut`".to_string(),
+            Token::Print => "`print`".to_string(),
+            Token::Fn => "`fn`".to_string(),
+            Token::Extern => "`extern`".to_string(),
+            Token::Return => "`return`".to_string(),
+            Token::If => "`if`".to_string(),
+            Token::Else => "`else`".to_string(),
+            Token::While => "`while`".to_string(),
+            Token::True => "`true`".to_string(),
+            Token::False => "`false`".to_string(),
+            Token::Struct => "`struct`".to_string(),
+            Token::Interface => "`interface`".to_string(),
+            Token::Is => "`is`".to_string(),
+            Token::SelfKw => "`self`".to_string(),
+            Token::TyInt => "`Int`".to_string(),
+            Token::TyBool => "`Bool`".to_string(),
+            Token::TyString => "`String`".to_string(),
+            Token::TyCInt => "`CInt`".to_string(),
+            Token::TyDecimal => "`Decimal`".to_string(),
+            Token::RoundHalfEven => "`RoundHalfEven`".to_string(),
+            Token::RoundHalfUp => "`RoundHalfUp`".to_string(),
+            Token::Colon => "`:`".to_string(),
+            Token::Semicolon => "`;`".to_string(),
+            Token::Comma => "`,`".to_string(),
+            Token::Dot => "`.`".to_string(),
+            Token::Equals => "`=`".to_string(),
+            Token::Plus => "`+`".to_string(),
+            Token::Minus => "`-`".to_string(),
+            Token::Star => "`*`".to_string(),
+            Token::Slash => "`/`".to_string(),
+            Token::LParen => "`(`".to_string(),
+            Token::RParen => "`)`".to_string(),
+            Token::LBrace => "`{`".to_string(),
+            Token::RBrace => "`}`".to_string(),
+            Token::LBracket => "`[`".to_string(),
+            Token::RBracket => "`]`".to_string(),
+            Token::Arrow => "`->`".to_string(),
+            Token::Lt => "`<`".to_string(),
+            Token::Gt => "`>`".to_string(),
+            Token::Le => "`<=`".to_string(),
+            Token::Ge => "`>=`".to_string(),
+            Token::EqEq => "`==`".to_string(),
+            Token::NotEq => "`!=`".to_string(),
+            Token::Eof => "the end of the file".to_string(),
+        }
+    }
+}
+
 pub struct Lexer<'a> {
     chars: std::iter::Peekable<std::str::Chars<'a>>,
 }

@@ -60,6 +60,16 @@ pub enum Type {
     Array { elem: Box<Type>, len: u32 },
 }
 
+impl Type {
+    /// "a" or "an", so error messages read as English ("an Int", "a Bool").
+    pub fn article(&self) -> &'static str {
+        match self {
+            Type::Int => "an",
+            _ => "a",
+        }
+    }
+}
+
 impl std::fmt::Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -137,6 +147,8 @@ pub enum Expr {
     StrLit(String),
     /// A reference to a previously-bound name.
     Var(String),
+    /// Unary negation, e.g. `-19.99`. Overflow-checked like every subtraction.
+    Neg(Box<Expr>),
     /// A binary operation.
     Binary {
         op: BinOp,

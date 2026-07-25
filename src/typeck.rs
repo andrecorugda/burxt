@@ -44,6 +44,8 @@ pub enum TypedExprKind {
     BoolLit(bool),
     StrLit(String),
     Var(String),
+    /// Negation of a non-literal (literals are folded at check time).
+    Neg(Box<TypedExpr>),
     Binary {
         op: BinOp,
         lhs: Box<TypedExpr>,
@@ -459,8 +461,8 @@ impl TypeChecker {
                 let typed = self.check_expr(value, Some(&declared))?;
                 if typed.ty != declared {
                     return Err(format!(
-                        "cannot assign a {} to `{}`, which was declared {}",
-                        typed.ty, name, declared
+                        "cannot assign {} {} to `{}`, which was declared {}",
+                        typed.ty.article(), typed.ty, name, declared
                     ));
                 }
                 Ok(TypedStmt::Assign { name: name.clone(), value: typed })
@@ -488,8 +490,8 @@ impl TypeChecker {
                 let typed = self.check_expr(value, Some(&cur_ty))?;
                 if typed.ty != cur_ty {
                     return Err(format!(
-                        "cannot assign a {} to `{}`, which was declared {}",
-                        typed.ty, lvalue, cur_ty
+                        "cannot assign {} {} to `{}`, which was declared {}",
+                        typed.ty.article(), typed.ty, lvalue, cur_ty
                     ));
                 }
                 Ok(TypedStmt::AssignField { name: name.clone(), indices, value: typed })
@@ -520,8 +522,8 @@ impl TypeChecker {
                 let typed = self.check_expr(value, Some(&elem))?;
                 if typed.ty != elem {
                     return Err(format!(
-                        "cannot assign a {} to `{}[...]`, which holds {}",
-                        typed.ty, name, elem
+                        "cannot assign {} {} to `{}[...]`, which holds {}",
+                        typed.ty.article(), typed.ty, name, elem
                     ));
                 }
                 Ok(TypedStmt::AssignIndex { name: name.clone(), len, index, value: typed })
@@ -632,6 +634,31 @@ impl TypeChecker {
                     .ok_or_else(|| format!("unknown variable: {}", name))?
                     .clone();
                 Ok(TypedExpr { ty, kind: TypedExprKind::Var(name.clone()) })
+            }
+
+            Expr::Neg(inner) => {
+                let t = self.check_expr(inner, expected)?;
+                match &t.ty {
+                    Type::Int | Type::Decimal { .. } => {}
+                    other => {
+                        return Err(format!(
+                            "`-` needs a number, but this has type {}",
+                            other
+                        ))
+                    }
+                }
+                // Fold negated literals so `-19.99` IS a literal (it can then
+                // sit anywhere a literal can, and needs no runtime work).
+                let kind = match t.kind {
+                    TypedExprKind::IntLit(n) => TypedExprKind::IntLit(
+                        n.checked_neg().ok_or("integer literal too small")?,
+                    ),
+                    TypedExprKind::DecimalLit { unscaled } => TypedExprKind::DecimalLit {
+                        unscaled: unscaled.checked_neg().ok_or("decimal literal too small")?,
+                    },
+                    other => TypedExprKind::Neg(Box::new(TypedExpr { ty: t.ty.clone(), kind: other })),
+                };
+                Ok(TypedExpr { ty: t.ty, kind })
             }
 
             Expr::Binary { op, lhs, rhs } => {
