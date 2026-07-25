@@ -1,0 +1,6 @@
+/target
+*.o
+*.ll
+# compiled burxt outputs (bare executables next to their .bx)
+money
+order

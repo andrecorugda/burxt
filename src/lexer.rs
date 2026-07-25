@@ -1,0 +1,183 @@
+//! Lexer: turns Burxt source text into a flat stream of tokens.
+//!
+//! Crucially, decimal literals like `19.99` are captured as their raw digit
+//! text and split into (integer part, fractional part) — never parsed through
+//! a floating-point type. Exactness starts at the very first stage.
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Token {
+    // literals
+    Int(i64),
+    /// A decimal literal captured exactly: (unscaled value, scale).
+    /// `19.99` -> Decimal(1999, 2). `0.5` -> Decimal(5, 1).
+    Decimal(i64, u32),
+    // identifiers & keywords
+    Ident(String),
+    Let,
+    Print,
+    // type keywords
+    TyInt,
+    TyDecimal,
+    // punctuation
+    Colon,
+    Semicolon,
+    Equals,
+    Plus,
+    Minus,
+    Star,
+    LParen,
+    RParen,
+    Lt,
+    Gt,
+    // end of input
+    Eof,
+}
+
+pub struct Lexer<'a> {
+    chars: std::iter::Peekable<std::str::Chars<'a>>,
+}
+
+impl<'a> Lexer<'a> {
+    pub fn new(src: &'a str) -> Self {
+        Lexer {
+            chars: src.chars().peekable(),
+        }
+    }
+
+    /// Tokenize the whole input. Returns an error string on the first bad char.
+    pub fn tokenize(mut self) -> Result<Vec<Token>, String> {
+        let mut out = Vec::new();
+        loop {
+            let tok = self.next_token()?;
+            let is_eof = tok == Token::Eof;
+            out.push(tok);
+            if is_eof {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    fn next_token(&mut self) -> Result<Token, String> {
+        self.skip_whitespace_and_comments();
+
+        let c = match self.chars.peek() {
+            None => return Ok(Token::Eof),
+            Some(&c) => c,
+        };
+
+        // punctuation
+        match c {
+            ':' => { self.chars.next(); return Ok(Token::Colon); }
+            ';' => { self.chars.next(); return Ok(Token::Semicolon); }
+            '=' => { self.chars.next(); return Ok(Token::Equals); }
+            '+' => { self.chars.next(); return Ok(Token::Plus); }
+            '-' => { self.chars.next(); return Ok(Token::Minus); }
+            '*' => { self.chars.next(); return Ok(Token::Star); }
+            '(' => { self.chars.next(); return Ok(Token::LParen); }
+            ')' => { self.chars.next(); return Ok(Token::RParen); }
+            '<' => { self.chars.next(); return Ok(Token::Lt); }
+            '>' => { self.chars.next(); return Ok(Token::Gt); }
+            _ => {}
+        }
+
+        // number (int or decimal)
+        if c.is_ascii_digit() {
+            return self.lex_number();
+        }
+
+        // identifier / keyword
+        if c.is_ascii_alphabetic() || c == '_' {
+            return Ok(self.lex_ident_or_keyword());
+        }
+
+        Err(format!("unexpected character: {:?}", c))
+    }
+
+    fn skip_whitespace_and_comments(&mut self) {
+        loop {
+            match self.chars.peek() {
+                Some(&c) if c.is_whitespace() => { self.chars.next(); }
+                // line comment: // ... to end of line
+                Some(&'/') => {
+                    // need to look ahead for a second '/'
+                    let mut clone = self.chars.clone();
+                    clone.next();
+                    if clone.peek() == Some(&'/') {
+                        // consume until newline
+                        while let Some(&c) = self.chars.peek() {
+                            self.chars.next();
+                            if c == '\n' { break; }
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+    }
+
+    /// Lex an integer or a decimal. Decimals are captured EXACTLY: we count the
+    /// fractional digits to derive the scale and build the unscaled integer.
+    fn lex_number(&mut self) -> Result<Token, String> {
+        let mut int_part = String::new();
+        while let Some(&c) = self.chars.peek() {
+            if c.is_ascii_digit() {
+                int_part.push(c);
+                self.chars.next();
+            } else {
+                break;
+            }
+        }
+
+        // Is there a fractional part?
+        if self.chars.peek() == Some(&'.') {
+            // Look ahead: only treat '.' as decimal point if a digit follows.
+            let mut clone = self.chars.clone();
+            clone.next();
+            if matches!(clone.peek(), Some(c) if c.is_ascii_digit()) {
+                self.chars.next(); // consume '.'
+                let mut frac_part = String::new();
+                while let Some(&c) = self.chars.peek() {
+                    if c.is_ascii_digit() {
+                        frac_part.push(c);
+                        self.chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                let scale = frac_part.len() as u32;
+                let combined = format!("{}{}", int_part, frac_part);
+                let unscaled: i64 = combined
+                    .parse()
+                    .map_err(|_| format!("decimal literal too large: {}.{}", int_part, frac_part))?;
+                return Ok(Token::Decimal(unscaled, scale));
+            }
+        }
+
+        let value: i64 = int_part
+            .parse()
+            .map_err(|_| format!("integer literal too large: {}", int_part))?;
+        Ok(Token::Int(value))
+    }
+
+    fn lex_ident_or_keyword(&mut self) -> Token {
+        let mut s = String::new();
+        while let Some(&c) = self.chars.peek() {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                s.push(c);
+                self.chars.next();
+            } else {
+                break;
+            }
+        }
+        match s.as_str() {
+            "let" => Token::Let,
+            "print" => Token::Print,
+            "Int" => Token::TyInt,
+            "Decimal" => Token::TyDecimal,
+            _ => Token::Ident(s),
+        }
+    }
+}

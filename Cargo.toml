@@ -1,0 +1,12 @@
+[package]
+name = "burxt"
+version = "0.0.1"
+edition = "2021"
+description = "The Burxt programming language: typed, compiled, native-Linux, exact decimals by default."
+
+[[bin]]
+name = "burxt"
+path = "src/main.rs"
+
+[dependencies]
+inkwell = { version = "0.9.0", features = ["llvm18-1"] }
