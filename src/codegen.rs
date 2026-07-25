@@ -14,14 +14,22 @@
 //!   * Decimal<S> prints exactly by splitting the scaled integer into its
 //!     integer part (v / 10^S) and fractional part (v % 10^S), then printing
 //!     "%lld.%0*lld" so 5997 with scale 2 prints "59.97" — never a float.
+//!
+//! Rounding:
+//!   * Operations that round (Decimal*Decimal, division) call a tiny generated
+//!     helper `@burxt.round.<mode>(p, d)` = p/d rounded per the mode, built
+//!     from sdiv/srem plus a tie adjustment. One helper per mode per module,
+//!     created lazily — keeps expression codegen simple and the IR readable.
+//!   * Division by zero traps at runtime (SIGFPE), like C. A checked story
+//!     comes later; silently producing a wrong number is not an option.
 
-use crate::ast::{BinOp, Type};
+use crate::ast::{BinOp, Rounding, Type};
 use crate::typeck::{TypedExpr, TypedExprKind, TypedProgram, TypedStmt};
 
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::values::{BasicMetadataValueEnum, IntValue, PointerValue};
+use inkwell::values::{BasicMetadataValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use std::collections::HashMap;
 
@@ -31,13 +39,15 @@ pub struct CodeGen<'ctx> {
     builder: Builder<'ctx>,
     /// name -> (stack slot, type)
     vars: HashMap<String, (PointerValue<'ctx>, Type)>,
+    /// lazily created rounding helpers, one per mode used by the program
+    round_fns: HashMap<Rounding, FunctionValue<'ctx>>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
     pub fn new(ctx: &'ctx Context, module_name: &str) -> Self {
         let module = ctx.create_module(module_name);
         let builder = ctx.create_builder();
-        CodeGen { ctx, module, builder, vars: HashMap::new() }
+        CodeGen { ctx, module, builder, vars: HashMap::new(), round_fns: HashMap::new() }
     }
 
     /// Emit the whole program into a `main` function returning 0.
@@ -107,7 +117,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_call(printf, &[fmt.into(), val.into()], "printf_int")
                     .map_err(|e| e.to_string())?;
             }
-            Type::Decimal { scale } => {
+            Type::Decimal { scale, .. } => {
                 // Split |scaled value| into integer and fractional parts, exactly.
                 // The sign is printed separately: deriving it from int_part alone
                 // would drop it for values like -0.50, where int_part is 0.
@@ -149,7 +159,7 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
-    fn gen_expr(&self, e: &TypedExpr) -> Result<IntValue<'ctx>, String> {
+    fn gen_expr(&mut self, e: &TypedExpr) -> Result<IntValue<'ctx>, String> {
         let i64t = self.ctx.i64_type();
         match &e.kind {
             TypedExprKind::IntLit(n) => Ok(i64t.const_int(*n as u64, true)),
@@ -168,18 +178,151 @@ impl<'ctx> CodeGen<'ctx> {
             TypedExprKind::Binary { op, lhs, rhs } => {
                 let l = self.gen_expr(lhs)?;
                 let r = self.gen_expr(rhs)?;
-                // For our representation (scaled i64), Add/Sub/Mul map directly to
-                // integer ops. Decimal<S> * Int works because the scaled value
-                // times a plain count keeps the same scale.
-                let res = match op {
-                    BinOp::Add => self.builder.build_int_add(l, r, "add"),
-                    BinOp::Sub => self.builder.build_int_sub(l, r, "sub"),
-                    BinOp::Mul => self.builder.build_int_mul(l, r, "mul"),
+                // For our representation (scaled i64), Add/Sub map directly to
+                // integer ops, and so does Mul when at most one operand is a
+                // decimal (Decimal<S> * Int keeps the scale, exactly).
+                // Decimal*Decimal and Div produce extra digits and go through
+                // the rounding helper; typeck guarantees a contract is present.
+                match op {
+                    BinOp::Add => self.builder.build_int_add(l, r, "add").map_err(|e| e.to_string()),
+                    BinOp::Sub => self.builder.build_int_sub(l, r, "sub").map_err(|e| e.to_string()),
+                    BinOp::Mul => {
+                        let both_decimal = matches!(lhs.ty, Type::Decimal { .. })
+                            && matches!(rhs.ty, Type::Decimal { .. });
+                        if both_decimal {
+                            // (A * B) has scale 2S; divide by 10^S, rounding.
+                            let raw = self
+                                .builder
+                                .build_int_mul(l, r, "mul_raw")
+                                .map_err(|e| e.to_string())?;
+                            let (scale, mode) = decimal_with_rounding(&e.ty)?;
+                            let pow = i64t.const_int(10u64.pow(scale), false);
+                            self.build_round_div(mode, raw, pow)
+                        } else {
+                            self.builder.build_int_mul(l, r, "mul").map_err(|e| e.to_string())
+                        }
+                    }
+                    BinOp::Div => {
+                        let (scale, mode) = decimal_with_rounding(&e.ty)?;
+                        match rhs.ty {
+                            // A/B has scale 0; pre-scale by 10^S: round(A*10^S / B).
+                            Type::Decimal { .. } => {
+                                let pow = i64t.const_int(10u64.pow(scale), false);
+                                let scaled = self
+                                    .builder
+                                    .build_int_mul(l, pow, "div_prescale")
+                                    .map_err(|e| e.to_string())?;
+                                self.build_round_div(mode, scaled, r)
+                            }
+                            // A/n keeps scale S: round(A / n).
+                            Type::Int => self.build_round_div(mode, l, r),
+                        }
+                    }
                 }
-                .map_err(|e| e.to_string())?;
-                Ok(res)
             }
         }
+    }
+
+    /// Emit a call to `round(p / d)` under the given mode.
+    fn build_round_div(
+        &mut self,
+        mode: Rounding,
+        p: IntValue<'ctx>,
+        d: IntValue<'ctx>,
+    ) -> Result<IntValue<'ctx>, String> {
+        let f = self.round_fn(mode)?;
+        let call = self
+            .builder
+            .build_call(f, &[p.into(), d.into()], "round")
+            .map_err(|e| e.to_string())?;
+        match call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => Ok(v.into_int_value()),
+            _ => Err("rounding helper returned void".to_string()),
+        }
+    }
+
+    /// Get (or lazily define) the rounding helper for `mode`:
+    ///   i64 @burxt.round.<mode>(i64 %p, i64 %d) = p/d rounded per the mode.
+    ///
+    /// Both modes start from truncating division (q = sdiv, r = srem) and then
+    /// decide whether to bump q one step away from zero:
+    ///   RoundHalfUp:   bump when 2|r| >= |d|            (ties away from zero)
+    ///   RoundHalfEven: bump when 2|r| >  |d|, or on an
+    ///                  exact tie (2|r| == |d|) when q is odd (ties to even)
+    fn round_fn(&mut self, mode: Rounding) -> Result<FunctionValue<'ctx>, String> {
+        if let Some(f) = self.round_fns.get(&mode) {
+            return Ok(*f);
+        }
+        let saved_block = self.builder.get_insert_block();
+
+        let i64t = self.ctx.i64_type();
+        let fn_ty = i64t.fn_type(&[i64t.into(), i64t.into()], false);
+        let name = match mode {
+            Rounding::HalfEven => "burxt.round.half_even",
+            Rounding::HalfUp => "burxt.round.half_up",
+        };
+        let f = self.module.add_function(name, fn_ty, None);
+        let entry = self.ctx.append_basic_block(f, "entry");
+        self.builder.position_at_end(entry);
+
+        let p = f.get_nth_param(0).unwrap().into_int_value();
+        let d = f.get_nth_param(1).unwrap().into_int_value();
+
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let q = self.builder.build_int_signed_div(p, d, "q").map_err(err)?;
+        let r = self.builder.build_int_signed_rem(p, d, "r").map_err(err)?;
+        let abs_r = self.build_abs(r)?;
+        let abs_d = self.build_abs(d)?;
+        let two = i64t.const_int(2, false);
+        let r2 = self.builder.build_int_mul(abs_r, two, "r2").map_err(err)?;
+
+        use inkwell::IntPredicate::*;
+        let need_bump = match mode {
+            Rounding::HalfUp => self
+                .builder
+                .build_int_compare(SGE, r2, abs_d, "half_or_more")
+                .map_err(err)?,
+            Rounding::HalfEven => {
+                let gt = self.builder.build_int_compare(SGT, r2, abs_d, "over_half").map_err(err)?;
+                let eq = self.builder.build_int_compare(EQ, r2, abs_d, "exact_tie").map_err(err)?;
+                let q_lsb = self
+                    .builder
+                    .build_and(q, i64t.const_int(1, false), "q_lsb")
+                    .map_err(err)?;
+                let q_odd = self
+                    .builder
+                    .build_int_compare(NE, q_lsb, i64t.const_zero(), "q_odd")
+                    .map_err(err)?;
+                let tie_to_even = self.builder.build_and(eq, q_odd, "tie_to_even").map_err(err)?;
+                self.builder.build_or(gt, tie_to_even, "need_bump").map_err(err)?
+            }
+        };
+
+        // "away from zero" = in the direction of the true quotient's sign,
+        // which is sign(p) * sign(d).
+        let p_neg = self.builder.build_int_compare(SLT, p, i64t.const_zero(), "p_neg").map_err(err)?;
+        let d_neg = self.builder.build_int_compare(SLT, d, i64t.const_zero(), "d_neg").map_err(err)?;
+        let opposite = self.builder.build_xor(p_neg, d_neg, "opposite_signs").map_err(err)?;
+        let minus_one = i64t.const_int(u64::MAX, true); // -1
+        let one = i64t.const_int(1, false);
+        let bump = self
+            .builder
+            .build_select(opposite, minus_one, one, "bump_dir")
+            .map_err(err)?
+            .into_int_value();
+        let delta = self
+            .builder
+            .build_select(need_bump, bump, i64t.const_zero(), "delta")
+            .map_err(err)?
+            .into_int_value();
+        let rounded = self.builder.build_int_add(q, delta, "rounded").map_err(err)?;
+        self.builder.build_return(Some(&rounded)).map_err(err)?;
+
+        if let Some(b) = saved_block {
+            self.builder.position_at_end(b);
+        }
+        self.round_fns.insert(mode, f);
+        Ok(f)
     }
 
     /// abs(x) for i64 via select — keeps fractional digits positive when the
@@ -207,6 +350,8 @@ impl<'ctx> CodeGen<'ctx> {
             .expect("global string");
         gv.as_pointer_value()
     }
+
+    // (rounding helpers above; printing/IO below)
 
     /// Write the LLVM IR to a file (for inspection / debugging).
     pub fn write_ir(&self, path: &str) -> Result<(), String> {
@@ -240,5 +385,17 @@ impl<'ctx> CodeGen<'ctx> {
 
         tm.write_to_file(&self.module, FileType::Object, std::path::Path::new(path))
             .map_err(|e| e.to_string())
+    }
+}
+
+/// A rounding operation's result type must be a Decimal carrying a contract —
+/// the typechecker guarantees this; violating it is a compiler bug.
+fn decimal_with_rounding(ty: &Type) -> Result<(u32, Rounding), String> {
+    match ty {
+        Type::Decimal { scale, rounding: Some(mode) } => Ok((*scale, *mode)),
+        other => Err(format!(
+            "codegen bug: expected a Decimal with a rounding contract, got {}",
+            other
+        )),
     }
 }

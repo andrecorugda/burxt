@@ -1,0 +1,2 @@
+// Integer division truncates = silent rounding. Refused.
+print(7 / 2);

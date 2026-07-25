@@ -6,10 +6,19 @@
 //!   * `Int + Int = Int`, `Int * Int = Int`.
 //!   * `Decimal<S> + Decimal<S> = Decimal<S>` — scales MUST match. Adding
 //!     `Decimal<2>` to `Decimal<3>` is a compile error, not a silent coercion.
+//!     The same goes for rounding contracts: `Decimal<2, RoundHalfEven>` and
+//!     `Decimal<2>` are different types, and Burxt never reconciles them
+//!     silently.
 //!   * `Decimal<S> * Int = Decimal<S>` (scaling a money value by a count).
-//!     This is the `price * qty` case. Multiplying two decimals (which would
-//!     change the scale) is intentionally deferred — it needs a rounding
-//!     contract, which is the next milestone.
+//!     This is the `price * qty` case. It is always exact, so no rounding
+//!     contract is required.
+//!   * `Decimal<S,R> * Decimal<S,R>` and `Decimal<S,R> / Decimal<S,R>` (or
+//!     `/ Int`) produce digits beyond scale S, so they are only allowed when
+//!     the operands carry a rounding contract R — that contract says exactly
+//!     how the result returns to scale S. Without one: compile error.
+//!   * `Int / Int` is refused for now: truncation is silent rounding, which is
+//!     exactly what Burxt exists to prevent. It will return with explicit
+//!     semantics.
 //!   * There is no float type at all, so float↔decimal mixing is impossible by
 //!     construction — the strongest possible version of "no silent float".
 //!
@@ -95,15 +104,17 @@ impl TypeChecker {
             Expr::IntLit(n) => Ok(TypedExpr { ty: Type::Int, kind: TypedExprKind::IntLit(*n) }),
 
             Expr::DecimalLit { unscaled, scale } => {
-                // Determine the target scale from context if available.
-                let target_scale = match expected {
-                    Some(Type::Decimal { scale: s }) => *s,
+                // Determine the target scale (and rounding contract) from
+                // context if available. The contract never rounds the literal
+                // itself — literals must be exactly representable.
+                let (target_scale, rounding) = match expected {
+                    Some(Type::Decimal { scale: s, rounding }) => (*s, *rounding),
                     // No decimal context: the literal's own scale is its type.
-                    _ => *scale,
+                    _ => (*scale, None),
                 };
                 let normalized = normalize_decimal(*unscaled, *scale, target_scale)?;
                 Ok(TypedExpr {
-                    ty: Type::Decimal { scale: target_scale },
+                    ty: Type::Decimal { scale: target_scale, rounding },
                     kind: TypedExprKind::DecimalLit { unscaled: normalized },
                 })
             }
@@ -137,42 +148,89 @@ impl TypeChecker {
     fn check_binop(&self, op: BinOp, lhs: &Type, rhs: &Type) -> Result<Type, String> {
         use Type::*;
         match (op, lhs, rhs) {
+            // Integer division truncates — that is silent rounding. Refused
+            // until integers get explicit division semantics.
+            (BinOp::Div, Int, Int) => Err(
+                "integer division truncates, which rounds silently. \
+                 Burxt does not allow it (yet) — use Decimals with a rounding \
+                 contract, e.g. Decimal<2, RoundHalfEven>."
+                    .to_string(),
+            ),
+
             // Integer arithmetic.
             (_, Int, Int) => Ok(Int),
 
-            // Decimal +/- Decimal: scales MUST match exactly.
-            (BinOp::Add, Decimal { scale: a }, Decimal { scale: b })
-            | (BinOp::Sub, Decimal { scale: a }, Decimal { scale: b }) => {
-                if a == b {
-                    Ok(Decimal { scale: *a })
-                } else {
-                    Err(format!(
-                        "cannot {} Decimal<{}> and Decimal<{}>: scales must match. \
-                         Burxt does not silently rescale money.",
-                        op, a, b
-                    ))
-                }
+            // Decimal +/- Decimal: exact, but the types must match exactly
+            // (same scale AND same rounding contract).
+            (BinOp::Add, Decimal { .. }, Decimal { .. })
+            | (BinOp::Sub, Decimal { .. }, Decimal { .. }) => {
+                self.matching_decimal(op, lhs, rhs)
             }
 
             // Decimal * Int (or Int * Decimal): scale the money value by a count.
-            // Result keeps the decimal's scale. This is `price * qty`.
-            (BinOp::Mul, Decimal { scale }, Int) | (BinOp::Mul, Int, Decimal { scale }) => {
-                Ok(Decimal { scale: *scale })
+            // Always exact, so no rounding contract needed. This is `price * qty`.
+            (BinOp::Mul, dec @ Decimal { .. }, Int) | (BinOp::Mul, Int, dec @ Decimal { .. }) => {
+                Ok(dec.clone())
             }
 
-            // Decimal * Decimal changes scale and needs a rounding contract.
-            // Deferred to the next milestone — refuse rather than guess.
-            (BinOp::Mul, Decimal { .. }, Decimal { .. }) => Err(
-                "multiplying two Decimals changes the scale and requires an explicit \
-                 rounding contract (coming in the next milestone). Not allowed yet."
-                    .to_string(),
-            ),
+            // Decimal * Decimal and Decimal / Decimal produce digits beyond
+            // the operands' scale, so they require matching types AND an
+            // explicit rounding contract saying how to return to that scale.
+            (BinOp::Mul, Decimal { .. }, Decimal { .. })
+            | (BinOp::Div, Decimal { .. }, Decimal { .. }) => {
+                let result = self.matching_decimal(op, lhs, rhs)?;
+                self.require_rounding(op, &result)
+            }
+
+            // Decimal / Int: the quotient can also fall between representable
+            // values (1.00 / 3), so a rounding contract is required too.
+            (BinOp::Div, dec @ Decimal { .. }, Int) => self.require_rounding(op, dec),
 
             // Decimal +/- Int and friends: refuse. No silent int->decimal.
             (_, a, b) => Err(format!(
                 "type error: cannot apply `{}` to {} and {}",
                 op, a, b
             )),
+        }
+    }
+
+    /// Both operands must be the SAME decimal type: equal scale and equal
+    /// rounding contract. Burxt never reconciles differing money types.
+    fn matching_decimal(&self, op: BinOp, lhs: &Type, rhs: &Type) -> Result<Type, String> {
+        if lhs == rhs {
+            return Ok(lhs.clone());
+        }
+        if let (Type::Decimal { scale: a, .. }, Type::Decimal { scale: b, .. }) = (lhs, rhs) {
+            if a != b {
+                return Err(format!(
+                    "cannot {} {} and {}: scales must match. \
+                     Burxt does not silently rescale money.",
+                    op, lhs, rhs
+                ));
+            }
+        }
+        Err(format!(
+            "cannot {} {} and {}: rounding contracts must match. \
+             Burxt does not silently pick one.",
+            op, lhs, rhs
+        ))
+    }
+
+    /// The operation rounds, so the decimal type must carry a rounding contract.
+    fn require_rounding(&self, op: BinOp, dec: &Type) -> Result<Type, String> {
+        match dec {
+            Type::Decimal { rounding: Some(_), .. } => Ok(dec.clone()),
+            Type::Decimal { scale, rounding: None } => Err(format!(
+                "`{}` on {} needs an explicit rounding contract, because the exact \
+                 result can have more than {} decimal places. Declare one in the \
+                 type, e.g. Decimal<{}, RoundHalfEven> or Decimal<{}, RoundHalfUp>.",
+                op,
+                dec,
+                scale,
+                scale,
+                scale
+            )),
+            Type::Int => unreachable!("require_rounding called on Int"),
         }
     }
 }

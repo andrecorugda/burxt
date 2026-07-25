@@ -18,13 +18,17 @@ pub enum Token {
     // type keywords
     TyInt,
     TyDecimal,
+    RoundHalfEven,
+    RoundHalfUp,
     // punctuation
     Colon,
     Semicolon,
+    Comma,
     Equals,
     Plus,
     Minus,
     Star,
+    Slash,
     LParen,
     RParen,
     Lt,
@@ -70,10 +74,13 @@ impl<'a> Lexer<'a> {
         match c {
             ':' => { self.chars.next(); return Ok(Token::Colon); }
             ';' => { self.chars.next(); return Ok(Token::Semicolon); }
+            ',' => { self.chars.next(); return Ok(Token::Comma); }
             '=' => { self.chars.next(); return Ok(Token::Equals); }
             '+' => { self.chars.next(); return Ok(Token::Plus); }
             '-' => { self.chars.next(); return Ok(Token::Minus); }
             '*' => { self.chars.next(); return Ok(Token::Star); }
+            // a solitary '/' is division; '//' was already consumed as a comment
+            '/' => { self.chars.next(); return Ok(Token::Slash); }
             '(' => { self.chars.next(); return Ok(Token::LParen); }
             ')' => { self.chars.next(); return Ok(Token::RParen); }
             '<' => { self.chars.next(); return Ok(Token::Lt); }
@@ -177,6 +184,8 @@ impl<'a> Lexer<'a> {
             "print" => Token::Print,
             "Int" => Token::TyInt,
             "Decimal" => Token::TyDecimal,
+            "RoundHalfEven" => Token::RoundHalfEven,
+            "RoundHalfUp" => Token::RoundHalfUp,
             _ => Token::Ident(s),
         }
     }

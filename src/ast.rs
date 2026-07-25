@@ -5,24 +5,50 @@
 //! the lexer/parser/typechecker produce and consume these nodes, and codegen
 //! reads them. No LLVM types leak in here.
 
+/// A rounding contract: how a decimal result returns to its declared scale
+/// when arithmetic (multiplication, division) produces extra digits.
+/// Naming reads as plain English inside the type: `Decimal<2, RoundHalfEven>`
+/// = "two decimal places, rounding half to even".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Rounding {
+    /// Ties go to the even neighbor (banker's rounding): 0.105 -> 0.10.
+    HalfEven,
+    /// Ties go away from zero (commercial rounding): 0.105 -> 0.11.
+    HalfUp,
+}
+
+impl std::fmt::Display for Rounding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Rounding::HalfEven => write!(f, "RoundHalfEven"),
+            Rounding::HalfUp => write!(f, "RoundHalfUp"),
+        }
+    }
+}
+
 /// A Burxt type as written in source.
 ///
 /// `Decimal<S>` carries its *scale* (number of fractional digits) in the type
 /// itself. This is the heart of the thesis: a money value's precision is part
 /// of its type, not a runtime accident.
+///
+/// `Decimal<S, R>` additionally carries a rounding contract `R`. Without one,
+/// only exact arithmetic (+, -, * Int) is allowed; multiplication and division
+/// of decimals — which must round — are compile errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Int,
     /// Decimal with a fixed scale S (digits after the decimal point).
     /// Represented at runtime as a scaled i64: stored = value * 10^scale.
-    Decimal { scale: u32 },
+    Decimal { scale: u32, rounding: Option<Rounding> },
 }
 
 impl std::fmt::Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Type::Int => write!(f, "Int"),
-            Type::Decimal { scale } => write!(f, "Decimal<{}>", scale),
+            Type::Decimal { scale, rounding: None } => write!(f, "Decimal<{}>", scale),
+            Type::Decimal { scale, rounding: Some(r) } => write!(f, "Decimal<{}, {}>", scale, r),
         }
     }
 }
@@ -33,6 +59,7 @@ pub enum BinOp {
     Add,
     Sub,
     Mul,
+    Div,
 }
 
 impl std::fmt::Display for BinOp {
@@ -41,6 +68,7 @@ impl std::fmt::Display for BinOp {
             BinOp::Add => "+",
             BinOp::Sub => "-",
             BinOp::Mul => "*",
+            BinOp::Div => "/",
         };
         write!(f, "{}", s)
     }

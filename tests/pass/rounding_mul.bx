@@ -1,0 +1,14 @@
+// Decimal * Decimal rounds back to the declared scale per the contract.
+// 1.05 * 0.10 = 0.105 exactly — a tie at scale 2.
+let a: Decimal<2, RoundHalfEven> = 1.05;
+let b: Decimal<2, RoundHalfEven> = 0.10;
+print(a * b);
+let c: Decimal<2, RoundHalfUp> = 1.05;
+let d: Decimal<2, RoundHalfUp> = 0.10;
+print(c * d);
+// 1.15 * 0.10 = 0.115: the tie's even neighbor is 0.12 for both modes.
+let e: Decimal<2, RoundHalfEven> = 1.15;
+print(e * b);
+// non-tie: 1.99 * 1.99 = 3.9601 -> 3.96 either way.
+let f: Decimal<2, RoundHalfEven> = 1.99;
+print(f * f);

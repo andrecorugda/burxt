@@ -1,0 +1,4 @@
+// Different rounding contracts never mix silently — not even with none.
+let a: Decimal<2, RoundHalfEven> = 1.00;
+let b: Decimal<2> = 2.00;
+print(a + b);

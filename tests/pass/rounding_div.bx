@@ -1,0 +1,14 @@
+// Division requires a rounding contract; the quotient returns to scale S.
+let one: Decimal<2, RoundHalfEven> = 1.00;
+let two: Decimal<2, RoundHalfEven> = 2.00;
+let three: Int = 3;
+print(one / three);
+print(two / three);
+// Decimal / Decimal: 1.00 / 0.30 = 3.333... -> 3.33
+let rate: Decimal<2, RoundHalfEven> = 0.30;
+print(one / rate);
+// exact tie in division: 0.25 / 2 = 0.125 -> HalfEven 0.12, HalfUp 0.13
+let q: Decimal<2, RoundHalfEven> = 0.25;
+print(q / 2);
+let r: Decimal<2, RoundHalfUp> = 0.25;
+print(r / 2);

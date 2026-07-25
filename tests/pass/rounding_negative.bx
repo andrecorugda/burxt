@@ -1,0 +1,13 @@
+// Negative ties: RoundHalfUp goes away from zero, RoundHalfEven to even.
+// -1.05 * 0.10 = -0.105.
+let zero_up: Decimal<2, RoundHalfUp> = 0.00;
+let a: Decimal<2, RoundHalfUp> = 1.05;
+let b: Decimal<2, RoundHalfUp> = 0.10;
+print((zero_up - a) * b);
+let zero_ev: Decimal<2, RoundHalfEven> = 0.00;
+let c: Decimal<2, RoundHalfEven> = 1.05;
+let d: Decimal<2, RoundHalfEven> = 0.10;
+print((zero_ev - c) * d);
+// negative division: -1.00 / 3 = -0.333... -> -0.33
+let one: Decimal<2, RoundHalfEven> = 1.00;
+print((zero_ev - one) / 3);

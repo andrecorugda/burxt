@@ -4,9 +4,10 @@
 //!   program := stmt*
 //!   stmt    := "let" IDENT ":" type "=" expr ";"
 //!            | "print" "(" expr ")" ";"
-//!   type    := "Int" | "Decimal" "<" INT ">"
+//!   type    := "Int" | "Decimal" "<" INT ("," rounding)? ">"
+//!   rounding:= "RoundHalfEven" | "RoundHalfUp"
 //!   expr    := term (("+"|"-") term)*
-//!   term    := factor ("*" factor)*
+//!   term    := factor (("*"|"/") factor)*
 //!   factor  := INT | DECIMAL | IDENT | "(" expr ")"
 
 use crate::ast::*;
@@ -101,8 +102,25 @@ impl Parser {
                     Token::Int(n) if n >= 0 => n as u32,
                     other => return Err(format!("expected non-negative scale in Decimal<..>, found {:?}", other)),
                 };
+                // Optional rounding contract: Decimal<2, RoundHalfEven>.
+                let rounding = if self.at(&Token::Comma) {
+                    self.bump();
+                    match self.bump() {
+                        Token::RoundHalfEven => Some(Rounding::HalfEven),
+                        Token::RoundHalfUp => Some(Rounding::HalfUp),
+                        other => {
+                            return Err(format!(
+                                "expected a rounding mode (RoundHalfEven or RoundHalfUp) \
+                                 after the comma in Decimal<..>, found {:?}",
+                                other
+                            ))
+                        }
+                    }
+                } else {
+                    None
+                };
                 self.expect(&Token::Gt)?;
-                Ok(Type::Decimal { scale })
+                Ok(Type::Decimal { scale, rounding })
             }
             other => Err(format!("expected a type, found {:?}", other)),
         }
@@ -128,14 +146,14 @@ impl Parser {
     fn parse_term(&mut self) -> Result<Expr, String> {
         let mut lhs = self.parse_factor()?;
         loop {
-            match self.peek() {
-                Token::Star => {
-                    self.bump();
-                    let rhs = self.parse_factor()?;
-                    lhs = Expr::Binary { op: BinOp::Mul, lhs: Box::new(lhs), rhs: Box::new(rhs) };
-                }
+            let op = match self.peek() {
+                Token::Star => BinOp::Mul,
+                Token::Slash => BinOp::Div,
                 _ => break,
-            }
+            };
+            self.bump();
+            let rhs = self.parse_factor()?;
+            lhs = Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) };
         }
         Ok(lhs)
     }
