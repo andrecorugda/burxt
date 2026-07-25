@@ -4,7 +4,7 @@ version = "0.0.19"
 edition = "2021"
 description = "The Burxt programming language: typed, compiled, native, exact decimals by default."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/burxt/burxt"
+repository = "https://github.com/andrecorugda/burxt"
 readme = "README.md"
 
 [[bin]]
