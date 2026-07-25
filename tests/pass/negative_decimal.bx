@@ -1,0 +1,7 @@
+// Negative decimals must print correctly, including when the integer
+// part is zero (-0.50): the sign cannot be derived from int_part alone.
+let a: Decimal<2> = 1.00;
+let b: Decimal<2> = 3.50;
+print(a - b);
+let c: Decimal<2> = 3.00;
+print(c - b);

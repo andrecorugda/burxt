@@ -108,27 +108,39 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(|e| e.to_string())?;
             }
             Type::Decimal { scale } => {
-                // Split scaled value into integer and fractional parts, exactly.
+                // Split |scaled value| into integer and fractional parts, exactly.
+                // The sign is printed separately: deriving it from int_part alone
+                // would drop it for values like -0.50, where int_part is 0.
                 let i64t = self.ctx.i64_type();
                 let pow = i64t.const_int(10u64.pow(*scale), false);
 
+                let is_neg = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, val, i64t.const_zero(), "is_neg")
+                    .map_err(|e| e.to_string())?;
+                let abs = self.build_abs(val)?;
                 let int_part = self
                     .builder
-                    .build_int_signed_div(val, pow, "int_part")
+                    .build_int_unsigned_div(abs, pow, "int_part")
                     .map_err(|e| e.to_string())?;
                 let frac_part = self
                     .builder
-                    .build_int_signed_rem(val, pow, "frac_part")
+                    .build_int_unsigned_rem(abs, pow, "frac_part")
                     .map_err(|e| e.to_string())?;
-                // fractional part must be non-negative for printing
-                let frac_abs = self.build_abs(frac_part)?;
 
-                // "%lld.%0<scale>lld\n" — zero-pad the fractional digits.
-                let fmt_str = format!("%lld.%0{}lld\n", scale);
+                let minus = self.global_str("-", "str_minus");
+                let empty = self.global_str("", "str_empty");
+                let sign = self
+                    .builder
+                    .build_select(is_neg, minus, empty, "sign")
+                    .map_err(|e| e.to_string())?;
+
+                // "%s%lld.%0<scale>lld\n" — sign, then zero-padded fractional digits.
+                let fmt_str = format!("%s%lld.%0{}lld\n", scale);
                 let fmt = self.global_str(&fmt_str, "fmt_dec");
 
                 let args: Vec<BasicMetadataValueEnum> =
-                    vec![fmt.into(), int_part.into(), frac_abs.into()];
+                    vec![fmt.into(), sign.into(), int_part.into(), frac_part.into()];
                 self.builder
                     .build_call(printf, &args, "printf_dec")
                     .map_err(|e| e.to_string())?;
