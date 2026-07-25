@@ -78,8 +78,17 @@ pub struct TypedFn {
     pub body: Vec<TypedStmt>,
 }
 
+/// An extern declaration, ready for codegen: the unmangled symbol name and
+/// its arity (every FFI value is an Int, i.e. one i64).
+#[derive(Debug, Clone)]
+pub struct TypedExtern {
+    pub name: String,
+    pub arity: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct TypedProgram {
+    pub externs: Vec<TypedExtern>,
     pub fns: Vec<TypedFn>,
     pub stmts: Vec<TypedStmt>,
 }
@@ -101,6 +110,13 @@ impl TypeChecker {
 
     pub fn check_program(mut self, prog: &Program) -> Result<TypedProgram, String> {
         // Pass 1: collect every signature, so order of definition never matters.
+        let mut externs = Vec::new();
+        for e in &prog.externs {
+            self.check_extern(e)?;
+            let param_tys = e.params.iter().map(|p| p.ty.clone()).collect();
+            self.fns.insert(e.name.clone(), (param_tys, e.ret.clone()));
+            externs.push(TypedExtern { name: e.name.clone(), arity: e.params.len() });
+        }
         for f in &prog.fns {
             if self.fns.contains_key(&f.name) {
                 return Err(format!("function `{}` is defined twice", f.name));
@@ -120,7 +136,43 @@ impl TypeChecker {
         for s in &prog.stmts {
             stmts.push(self.check_stmt(s)?);
         }
-        Ok(TypedProgram { fns, stmts })
+        Ok(TypedProgram { externs, fns, stmts })
+    }
+
+    /// The FFI contract for now: only Int crosses the C boundary. C has no
+    /// Decimal — passing the raw scaled integer would silently shed its scale
+    /// and rounding contract, the exact meaning-loss Burxt exists to refuse.
+    fn check_extern(&self, e: &ExternFn) -> Result<(), String> {
+        const RESERVED: [&str; 3] = ["printf", "fputs", "exit"];
+        if RESERVED.contains(&e.name.as_str()) {
+            return Err(format!(
+                "extern fn `{}`: this symbol is used by the Burxt runtime itself. \
+                 Call it through a differently-named C wrapper.",
+                e.name
+            ));
+        }
+        if self.fns.contains_key(&e.name) {
+            return Err(format!("function `{}` is defined twice", e.name));
+        }
+        for p in &e.params {
+            if p.ty != Type::Int {
+                return Err(format!(
+                    "in extern fn `{}`, parameter `{}` has type {}, but only Int \
+                     may cross the C boundary for now — C has no {}, and the raw \
+                     value would silently lose its meaning.",
+                    e.name, p.name, p.ty, p.ty
+                ));
+            }
+        }
+        if e.ret != Type::Int {
+            return Err(format!(
+                "extern fn `{}` returns {}, but only Int may cross the C boundary \
+                 for now — C has no {}, and the raw value would silently lose its \
+                 meaning.",
+                e.name, e.ret, e.ret
+            ));
+        }
+        Ok(())
     }
 
     fn check_fn(&mut self, f: &FnDef) -> Result<TypedFn, String> {

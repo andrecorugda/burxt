@@ -1,7 +1,8 @@
 //! Parser: tokens -> AST via straightforward recursive descent.
 //!
 //! Grammar:
-//!   program := (fn | stmt)*
+//!   program := (extern | fn | stmt)*
+//!   extern  := "extern" "fn" IDENT "(" (param ("," param)*)? ")" "->" type ";"
 //!   fn      := "fn" IDENT "(" (param ("," param)*)? ")" "->" type block
 //!   param   := IDENT ":" type
 //!   block   := "{" stmt* "}"
@@ -34,16 +35,19 @@ impl Parser {
     }
 
     pub fn parse_program(mut self) -> Result<Program, String> {
+        let mut externs = Vec::new();
         let mut fns = Vec::new();
         let mut stmts = Vec::new();
         while !self.at(&Token::Eof) {
-            if self.at(&Token::Fn) {
+            if self.at(&Token::Extern) {
+                externs.push(self.parse_extern()?);
+            } else if self.at(&Token::Fn) {
                 fns.push(self.parse_fn()?);
             } else {
                 stmts.push(self.parse_stmt()?);
             }
         }
-        Ok(Program { fns, stmts })
+        Ok(Program { externs, fns, stmts })
     }
 
     // ---- helpers ----
@@ -75,8 +79,22 @@ impl Parser {
 
     // ---- functions ----
 
+    fn parse_extern(&mut self) -> Result<ExternFn, String> {
+        self.expect(&Token::Extern)?;
+        self.expect(&Token::Fn)?;
+        let (name, params, ret) = self.parse_fn_signature()?;
+        self.expect(&Token::Semicolon)?;
+        Ok(ExternFn { name, params, ret })
+    }
+
     fn parse_fn(&mut self) -> Result<FnDef, String> {
         self.expect(&Token::Fn)?;
+        let (name, params, ret) = self.parse_fn_signature()?;
+        let body = self.parse_block()?;
+        Ok(FnDef { name, params, ret, body })
+    }
+
+    fn parse_fn_signature(&mut self) -> Result<(String, Vec<Param>, Type), String> {
         let name = match self.bump() {
             Token::Ident(s) => s,
             other => return Err(format!("expected a function name after 'fn', found {:?}", other)),
@@ -110,8 +128,7 @@ impl Parser {
         }
         self.bump();
         let ret = self.parse_type()?;
-        let body = self.parse_block()?;
-        Ok(FnDef { name, params, ret, body })
+        Ok((name, params, ret))
     }
 
     fn parse_block(&mut self) -> Result<Vec<Stmt>, String> {

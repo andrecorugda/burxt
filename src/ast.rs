@@ -177,11 +177,22 @@ pub struct FnDef {
     pub body: Vec<Stmt>,
 }
 
-/// A whole program: function definitions plus top-level statements (the
-/// implicit main). Functions are hoisted — they may be defined after the
-/// code that calls them, and may call each other.
+/// `extern fn name(params) -> ret;` — a C function Burxt may call. The name
+/// is the real linker symbol (never mangled); matching the C side's actual
+/// signature is the programmer's contract, as in every FFI.
+#[derive(Debug, Clone)]
+pub struct ExternFn {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub ret: Type,
+}
+
+/// A whole program: extern declarations, function definitions, and top-level
+/// statements (the implicit main). Functions are hoisted — they may be
+/// defined after the code that calls them, and may call each other.
 #[derive(Debug, Clone)]
 pub struct Program {
+    pub externs: Vec<ExternFn>,
     pub fns: Vec<FnDef>,
     pub stmts: Vec<Stmt>,
 }

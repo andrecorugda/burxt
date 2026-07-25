@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.5)
+# Burxt — Design Notes (v0.0.6)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -159,6 +159,31 @@ raw SIGFPE. This closes the last "silently wrong number" hole in the i64
 representation; a wider representation can come later, but wraparound was
 never acceptable.
 
+### v0.0.6: FFI — call into C
+
+The key unlock for the platform roadmap: every platform API Burxt will ever
+touch goes through this door.
+
+```text
+extern fn llabs(x: Int) -> Int;
+print(llabs(0 - 42));    // 42
+```
+
+Rules:
+
+- `extern fn name(params) -> ret;` declares a C function. The name is the
+  real linker symbol — never mangled (user fns keep their `bx.` prefix, so
+  the two can never collide). Matching the C side's actual signature is the
+  programmer's contract, as in every FFI.
+- Only `Int` crosses the boundary for now. C has no Decimal — passing the
+  raw scaled i64 would silently shed its scale and rounding contract, the
+  exact meaning-loss Burxt exists to refuse. Strings and richer types widen
+  this deliberately in A4.
+- `printf`, `fputs`, and `exit` are reserved (the Burxt runtime declares
+  them itself); call them through a differently-named C wrapper.
+- Extern calls typecheck exactly like ordinary calls — same arity and type
+  errors, no special cases.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -208,8 +233,9 @@ it travels.
 - A2. Functions + control flow — DONE (v0.0.3, v0.0.4; checked arithmetic
   v0.0.5)
 - A3. FFI / call-into-C — THE KEY UNLOCK: how any Burxt program reaches
-  platform APIs on every target. <- NEXT
-- A4. Strings, structs, collections
+  platform APIs on every target. — DONE for Int signatures (v0.0.6);
+  widens with A4's types.
+- A4. Strings, structs, collections <- NEXT
 - A5. Refinement types ("balance >= 0", "splits sum to total")
 
 #### Phase B — cross-compilation and desktop

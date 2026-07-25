@@ -94,6 +94,15 @@ impl<'ctx> CodeGen<'ctx> {
         let printf_ty = i32t.fn_type(&[i8ptr.into()], true);
         self.printf = Some(self.module.add_function("printf", printf_ty, None));
 
+        // Declare extern fns under their real symbol names — no mangling is
+        // the whole point of FFI. (Every FFI value is an Int, i.e. one i64.)
+        for e in &prog.externs {
+            let param_tys = vec![i64t.into(); e.arity];
+            let fn_ty = i64t.fn_type(&param_tys, false);
+            let llf = self.module.add_function(&e.name, fn_ty, None);
+            self.user_fns.insert(e.name.clone(), llf);
+        }
+
         // Declare every user function up front (mutual recursion, any order).
         for f in &prog.fns {
             let param_tys = vec![i64t.into(); f.params.len()];
