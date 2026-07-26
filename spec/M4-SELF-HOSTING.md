@@ -32,7 +32,7 @@ language server, JSON layer or diagnostics rendering.
 |---|---|---|---|
 | Lexer | 661 | 800–1,000 | **376, DONE** (v0.0.52) — came in under estimate |
 | AST + parser | 1,787 | 2,000–2,600 | **~930, DONE** (v0.0.53–54) — under estimate |
-| Typechecker | 3,702 | 4,500–5,500 | **~800**, 4a + most of 4b (v0.0.59) |
+| Typechecker | 3,702 | 4,500–5,500 | **~1,050**, the type rules complete (v0.0.60) |
 | Backend (IR text) | 3,924 | 2,500–3,500 | 0 |
 | Driver | 230 | ~150 | 0 |
 | **Total** | | **≈10,000–12,500** | ~680 of real front-end work |
@@ -96,6 +96,36 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
      *checks nothing* — silence that looks exactly like agreement. Match arms were the
      first rule whose failure could not be silent, because a binding that never
      entered the symbol table becomes "unknown name".
+   - **4b DONE for the type rules (v0.0.60):** **0 false positives across all 88 pass
+     programs**, from 19, and stage-1 typechecks its own 2,411 lines with none. What
+     closed the gap, in the order the measurement pointed at:
+     - a decimal literal takes its context's scale when that loses nothing (`$5` in a
+       `Decimal<2>` is `5.00`), and refuses when it would drop a digit;
+     - `Decimal / Decimal` and `Decimal / Int` need a rounding contract — unlike `*`,
+       even when the scales match, because a quotient falls between representable
+       values;
+     - `*` on two identical Decimal types lands on their own contract, so the context
+       does not have to repeat it;
+     - an operand of `*` keeps its own scale rather than being forced to the result's,
+       which is how `price * 8.25%` survives (stage-0 reaches the same answer by
+       re-checking both operands with no expected type);
+     - `CInt`/`CDouble` in an `extern` signature are recorded as the `Int` a Burxt
+       caller passes, which is why `strcmp(a, b) < 0` compares two Ints;
+     - methods declared inside `impl` blocks are collected, and **method bodies are
+       checked at all** — with `self` bound from the clause node — which they were not
+       before;
+     - a method call answers its declared return type, and one shared routine checks
+       arity and argument types for functions and methods alike;
+     - `dyn Trait` accepts a type that implements it (`fits`, kept separate from
+       `ty_same` because equality must stay equality), and a method on a `dyn` value is
+       checked against the trait's signature rather than any concrete type.
+
+     Measured the other way too, which is the honest half: stage-1 rejects **67 of the
+     190 fail programs** on its own. The rest are the rules it does not yet mention —
+     regions and escapes, purity, exhaustiveness, arrays, the reserved names, contract
+     clauses, unreachable code. Both numbers are now machine-checked: the pass suite is
+     swept in full, and 67 is a floor that may only rise.
+
 5. **An IR-text backend in Burxt.**
 6. **Bootstrap and fixpoint.** stage-0 builds stage-1; stage-1 builds stage-1;
    compare.

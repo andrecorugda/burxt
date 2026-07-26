@@ -1007,20 +1007,30 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
             .unwrap_or(-1)
     };
 
-    // Direction 1: silent on programs it covers — including its own source, which is
-    // the strongest single case, being 1,700 lines of the language.
-    for name in [
-        "examples/stage1.bx",
-        "money.bx",
-        "tests/pass/contracts.bx",
-        "tests/pass/int_division.bx",
-        "tests/pass/termination_measure.bx",
-        "tests/pass/enum_match_flow.bx",
-        "tests/pass/method_basic.bx",
-    ] {
-        let found = errors_reported(&root.join(name));
-        assert_eq!(found, 0, "stage-1 complained about {}, which stage-0 accepts", name);
+    // Direction 1: silent on every program stage-0 accepts. Not a sample — the whole
+    // pass suite, plus its own source, which is the strongest single case at 2,300
+    // lines of the language. A false positive here means the two implementations
+    // disagree about what Burxt IS.
+    let mut noisy = Vec::new();
+    for name in ["examples/stage1.bx", "examples/tour.bx", "money.bx"] {
+        if errors_reported(&root.join(name)) != 0 {
+            noisy.push(name.to_string());
+        }
     }
+    for entry in fs::read_dir(root.join("tests/pass")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("bx") {
+            continue;
+        }
+        if errors_reported(&path) != 0 {
+            noisy.push(path.file_name().unwrap().to_string_lossy().into_owned());
+        }
+    }
+    assert!(
+        noisy.is_empty(),
+        "stage-1 complained about programs stage-0 accepts: {:?}",
+        noisy
+    );
 
     // Direction 2: it catches the mistakes stage-0 catches. One program, every rule
     // this phase implements.
@@ -1063,7 +1073,30 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     .unwrap();
     let shape_errors = errors_reported(&shapes);
 
+    // Direction 2b, a ratchet: how much of the fail suite stage-1 rejects on its own.
+    // It is not all of it — regions, purity, exhaustiveness and the reserved names are
+    // still stage-0's alone — so the number is a floor that may only go up. A floor
+    // rather than an exact count, because catching MORE is the goal, not a regression.
+    let mut caught = 0;
+    let mut total = 0;
+    for entry in fs::read_dir(root.join("tests/fail")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("bx") {
+            continue;
+        }
+        total += 1;
+        if errors_reported(&path) != 0 {
+            caught += 1;
+        }
+    }
+
     let _ = fs::remove_dir_all(&scratch);
+    assert!(
+        caught >= 67,
+        "stage-1 rejected only {} of {} fail programs, down from 67",
+        caught,
+        total
+    );
     assert_eq!(
         shape_errors, 3,
         "stage-1 should have caught the arity, the element type and the indexed String"

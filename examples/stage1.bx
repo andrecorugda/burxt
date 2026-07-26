@@ -127,7 +127,13 @@ struct Unit {
     pos: Int,
     // Nonzero while parsing an `if`/`while` condition, where a `{` opens the BODY
     // rather than a struct literal. The Rust parser carries the same flag.
+    impls: [Impl],
     no_struct: Int,
+    // Set while typing the operands of `*`. Multiplication combines a quantity with a
+    // rate, so its operand scales differ by nature: a literal that cannot narrow to
+    // the result's scale keeps its own instead of being refused. Stage-0 reaches the
+    // same answer by re-checking both operands with no expected type.
+    in_mul: Int,
     errors: Int,
 }
 
@@ -609,22 +615,74 @@ fn (mut self: Unit) builtin_type(src: String, name: Tok, args: Int) -> Ty alloca
     return ty_unknown();
 }
 
-fn (self: Unit) find_method(src: String, holder: Ty, name_tok: Int) -> Int {
-    if holder.kind != 46 {
-        return -1;
+// A `dyn Trait` value can do exactly what the trait says, so the trait's signature
+// is what the call is checked against — no concrete type is involved, which is the
+// whole point of the indirection.
+fn (mut self: Unit) dyn_method(src: String, holder: Ty, call: Node) -> Ty allocates {
+    let wanted: Tok = self.toks[call.tok];
+    let found: Int = self.find_type(src, holder.name_start, holder.name_len);
+    if found < 0 {
+        let e: Int = self.complain_at(src, call.tok, "no trait of this name is declared");
+        return ty_unknown();
     }
-    let wanted: Tok = self.toks[name_tok];
+    let decl: TypeDecl = self.types[found];
+    let item: Node = self.nodes[decl.node];
+    let mut i: Int = 0;
+    while i < item.b {
+        let sig: Node = self.nodes[self.kids[item.a + i]];
+        let named: Tok = self.toks[sig.tok];
+        if spans_eq(src, named.start, named.length, wanted.start, wanted.length) {
+            // A trait signature's parameters live in `subs`, after the receiver.
+            let list: Node = self.nodes[call.b];
+            if list.b != sig.c {
+                let e: Int = self.complain_at(src, call.tok,
+                    "this call passes " + to_string(list.b) + " argument(s), but the "
+                    + "method takes " + to_string(sig.c));
+                return self.ty_of(src, sig.a);
+            }
+            let mut p: Int = 0;
+            while p < sig.c {
+                let param: Node = self.nodes[self.subs[sig.b + p]];
+                let want: Ty = self.ty_of(src, param.a);
+                let got: Ty = self.type_of(src, self.kids[list.a + p], want);
+                if !is_unknown(got) && !self.fits(src, got, want) {
+                    let e: Int = self.complain_at(src, call.tok,
+                        "argument " + to_string(p + 1) + " should be " + ty_show(src, want)
+                        + ", but it is " + ty_show(src, got));
+                }
+                p = p + 1;
+            }
+            return self.ty_of(src, sig.a);
+        }
+        i = i + 1;
+    }
+    let e: Int = self.complain_at(src, call.tok,
+        ty_show(src, holder) + " has no such method");
+    return ty_unknown();
+}
+
+fn (self: Unit) find_method_named(src: String, holder_start: Int, holder_len: Int,
+                                  name_start: Int, name_len: Int) -> Int {
     let mut i: Int = 0;
     while i < len(self.methods) {
         let m: Method = self.methods[i];
-        if spans_eq(src, m.receiver_start, m.receiver_len, holder.name_start, holder.name_len) {
-            if spans_eq(src, m.start, m.length, wanted.start, wanted.length) {
+        if spans_eq(src, m.receiver_start, m.receiver_len, holder_start, holder_len) {
+            if spans_eq(src, m.start, m.length, name_start, name_len) {
                 return i;
             }
         }
         i = i + 1;
     }
     return -1;
+}
+
+fn (self: Unit) find_method(src: String, holder: Ty, name_tok: Int) -> Int {
+    if holder.kind != 46 {
+        return -1;
+    }
+    let wanted: Tok = self.toks[name_tok];
+    return self.find_method_named(src, holder.name_start, holder.name_len,
+                                  wanted.start, wanted.length);
 }
 
 // The payload types of `Enum.Variant`, bound to an arm's names.
@@ -667,6 +725,31 @@ fn (mut self: Unit) bind_arm(src: String, holder: Ty, arm: Node) -> Int allocate
     }
     let e: Int = self.complain_at(src, arm.tok, "this enum has no such variant");
     return 0;
+}
+
+// Where a value is stored rather than combined, `dyn Trait` accepts a type that
+// implements it. This is the ONLY widening in the language, which is why it is a
+// separate question from `ty_same`: equality must stay equality.
+fn (mut self: Unit) fits(src: String, got: Ty, want: Ty) -> Bool {
+    if ty_same(src, got, want) {
+        return true;
+    }
+    if want.kind != 49 || got.kind != 46 {
+        return false;
+    }
+    let mut i: Int = 0;
+    while i < len(self.impls) {
+        let candidate: Impl = self.impls[i];
+        if spans_eq(src, candidate.trait_start, candidate.trait_len,
+                    want.name_start, want.name_len) {
+            if spans_eq(src, candidate.type_start, candidate.type_len,
+                        got.name_start, got.name_len) {
+                return true;
+            }
+        }
+        i = i + 1;
+    }
+    return false;
 }
 
 // ---- expressions -------------------------------------------------------------
@@ -1153,7 +1236,10 @@ fn (mut self: Unit) parse_params(src: String) -> Int allocates {
 }
 
 // `requires`, `ensures` and `decreases`, between the signature and the body.
-fn (mut self: Unit) parse_clauses(src: String, ret: Int) -> Int allocates {
+// `ret` and `receiver_tok` ride in the clause node's two spare slots. A method item
+// has five slots and six things to say, and this is the one that costs nothing: the
+// clause node exists for every function whether it has clauses or not.
+fn (mut self: Unit) parse_clauses(src: String, ret: Int, receiver_tok: Int) -> Int allocates {
     let here: Int = self.pos;
     let base: Int = len(self.stack);
     let mut count: Int = 0;
@@ -1174,7 +1260,7 @@ fn (mut self: Unit) parse_clauses(src: String, ret: Int) -> Int allocates {
         count = count + 1;
     }
     let start: Int = self.commit(base);
-    return self.add(15, start, count, ret, 0, here);
+    return self.add(15, start, count, ret, receiver_tok, here);
 }
 
 // `fn name(params) -> Type [allocates] [clauses] { body }`, or a method when a
@@ -1220,7 +1306,7 @@ fn (mut self: Unit) parse_fn(src: String, is_pure: Int) -> Int allocates {
         builds_in_caller = 1;                        // word mean the marker.
         let a: Int = self.advance();
     }
-    let clauses: Int = self.parse_clauses(src, ret);
+    let clauses: Int = self.parse_clauses(src, ret, receiver_tok);
     if clauses < 0 { return -1; }
     let body: Int = self.parse_block(src);
     if body < 0 { return -1; }
@@ -1231,8 +1317,9 @@ fn (mut self: Unit) parse_fn(src: String, is_pure: Int) -> Int allocates {
     if builds_in_caller == 1 { flags = flags + 2; }
     if receiver_mut == 1 { flags = flags + 4; }
     if receiver_tok >= 0 {
-        // A method: the receiver's token goes in `c`, so nothing is lost.
-        let m: Int = self.add(81, params, body, receiver_tok, flags, name_tok);
+        // A method: `c` is the clause node, which holds the receiver and the return
+        // type both, so a method item has the same shape a function's does.
+        let m: Int = self.add(81, params, body, clauses, flags, name_tok);
         return m;
     }
     let f: Int = self.add(80, params, body, clauses, flags, name_tok);
@@ -1462,6 +1549,15 @@ fn ty_simple(kind: Int) -> Ty {
     return Ty { kind: kind, scale: 0, contract: 0, name_start: 0, name_len: 0 };
 }
 
+// C's widths as Burxt sees them at the boundary. See N1-BOUNDARY-EXACTNESS: the
+// exactness rule lives in `as scaled`, and the widths themselves are C's business.
+fn as_burxt_sees(t: Ty) -> Ty {
+    if t.kind == 43 || t.kind == 44 {
+        return ty_simple(40);
+    }
+    return t;
+}
+
 fn ty_decimal(scale: Int, contract: Int) -> Ty {
     return Ty { kind: 45, scale: scale, contract: contract, name_start: 0, name_len: 0 };
 }
@@ -1472,6 +1568,10 @@ fn ty_decimal(scale: Int, contract: Int) -> Ty {
 fn is_unknown(t: Ty) -> Bool {
     return t.kind == 0;
 }
+
+// A trait implementation: a pair of names, which is all `dyn` dispatch needs to know.
+// The method table already knows what the type can do.
+struct Impl { trait_start: Int, trait_len: Int, type_start: Int, type_len: Int }
 
 fn ty_same(src: String, a: Ty, b: Ty) -> Bool {
     if a.kind == 0 || b.kind == 0 {
@@ -1583,6 +1683,27 @@ fn (self: Unit) find_type(src: String, start: Int, length: Int) -> Int {
 
 // Every signature first, so functions may be declared in any order and call each
 // other — the same two-pass shape stage-0 uses.
+fn (mut self: Unit) collect_method(src: String, index: Int) -> Int allocates {
+    let item: Node = self.nodes[index];
+    let name: Tok = self.toks[item.tok];
+    let signature: Node = self.nodes[item.c];
+    let receiver: Tok = self.toks[signature.value];
+    let mut mutating: Int = 0;
+    if item.value >= 4 { mutating = 1; }
+    if self.find_method_named(src, receiver.start, receiver.length,
+                              name.start, name.length) >= 0 {
+        let e: Int = self.complain_at(src, item.tok, "this method is declared twice");
+        return 0;
+    }
+    push(self.methods, Method {
+        receiver_start: receiver.start, receiver_len: receiver.length,
+        start: name.start, length: name.length,
+        ret: self.ty_of(src, signature.c), params: item.a,
+        mutating: mutating,
+    });
+    return 1;
+}
+
 fn (mut self: Unit) collect_declarations(src: String) -> Int allocates {
     let mut i: Int = 0;
     while i < len(self.items) {
@@ -1598,17 +1719,23 @@ fn (mut self: Unit) collect_declarations(src: String) -> Int allocates {
             }
         }
         if item.kind == 81 {                         // a method
-            let receiver: Tok = self.toks[item.c];
-            let signature: Node = self.nodes[item.b];
-            // A method node holds (params, body, receiver token); its return type is
-            // on the clause node the body follows, so it is read from the item.
-            let mut mutating: Int = 0;
-            if item.value >= 4 { mutating = 1; }
-            push(self.methods, Method {
-                receiver_start: receiver.start, receiver_len: receiver.length,
-                start: name.start, length: name.length,
-                ret: ty_unknown(), params: item.a, mutating: mutating,
-            });
+            let m: Int = self.collect_method(src, index);
+        }
+        if item.kind == 84 {                         // trait
+            push(self.types, TypeDecl { start: name.start, length: name.length,
+                                        kind: item.kind, node: index });
+        }
+        if item.kind == 85 {                         // impl Trait for Type { ... }
+            let target: Tok = self.toks[item.c];
+            push(self.impls, Impl { trait_start: name.start, trait_len: name.length,
+                                    type_start: target.start, type_len: target.length });
+            // The methods inside an impl are declared exactly as free-standing ones
+            // are, so they are collected by the same code rather than by a copy of it.
+            let mut k: Int = 0;
+            while k < item.b {
+                let m: Int = self.collect_method(src, self.kids[item.a + k]);
+                k = k + 1;
+            }
         }
         if item.kind == 80 || item.kind == 86 {
             if self.find_fun(src, name.start, name.length) >= 0 {
@@ -1620,6 +1747,11 @@ fn (mut self: Unit) collect_declarations(src: String) -> Int allocates {
                     ret = self.ty_of(src, signature.c);
                 } else {
                     ret = self.ty_of(src, item.b);   // an extern holds it directly
+                    // CInt and CDouble are C's widths, not Burxt types: a Burxt caller
+                    // passes and receives an Int. So an extern's signature is recorded
+                    // as Burxt sees it, which is why `strcmp(a, b) < 0` compares two
+                    // Ints rather than mixing a CInt with one.
+                    ret = as_burxt_sees(ret);
                 }
                 push(self.funs, Fun { start: name.start, length: name.length,
                                       ret: ret, params: item.a, flags: item.value });
@@ -1640,7 +1772,35 @@ fn (mut self: Unit) type_of(src: String, node: Int, expected: Ty) -> Ty allocate
     let n: Node = self.nodes[node];
 
     if n.kind == 1 { return ty_simple(40); }
-    if n.kind == 2 { return ty_decimal(n.a, expected.contract); }
+    if n.kind == 2 {                                 // a decimal, money or percent
+        if expected.kind != 45 {
+            return ty_decimal(n.a, 0);
+        }
+        if expected.scale >= n.a {
+            // Widening a literal is exact: $5 in a Decimal<2> context is 5.00. The
+            // contract comes from the context too, and never rounds the literal —
+            // a literal that needed rounding would be refused below.
+            return ty_decimal(expected.scale, expected.contract);
+        }
+        // Narrowing: allowed only when every digit dropped is a zero.
+        let mut factor: Int = 1;
+        let mut drop: Int = n.a - expected.scale;
+        while drop > 0 {
+            factor = factor * 10;
+            drop = drop - 1;
+        }
+        if rem(n.value, factor) == 0 {
+            return ty_decimal(expected.scale, expected.contract);
+        }
+        if self.in_mul == 1 {
+            return ty_decimal(n.a, 0);
+        }
+        let e: Int = self.complain_at(src, n.tok,
+            "this literal needs " + to_string(n.a) + " decimal places but the context "
+            + "has only " + to_string(expected.scale) + ", and dropping digits from "
+            + "money is refused");
+        return ty_unknown();
+    }
     if n.kind == 3 { return ty_simple(42); }
     if n.kind == 4 { return ty_simple(41); }
 
@@ -1667,8 +1827,11 @@ fn (mut self: Unit) type_of(src: String, node: Int, expected: Ty) -> Ty allocate
     }
 
     if n.kind == 8 {                                 // a + b, a * b
+        let outer: Int = self.in_mul;
+        if n.value == 27 { self.in_mul = 1; }
         let left: Ty = self.type_of(src, n.a, expected);
         let right: Ty = self.type_of(src, n.b, expected);
+        self.in_mul = outer;
         if is_unknown(left) || is_unknown(right) {
             return ty_unknown();
         }
@@ -1676,6 +1839,18 @@ fn (mut self: Unit) type_of(src: String, node: Int, expected: Ty) -> Ty allocate
         // product's scale is their SUM, and landing it needs a declared contract.
         if n.value == 27 {
             if left.kind == 45 && right.kind == 45 {
+                if ty_same(src, left, right) {
+                    // Identical operand types: their own contract lands the product,
+                    // so the context does not have to repeat it.
+                    if left.contract == 0 {
+                        let e: Int = self.complain_at(src, n.tok,
+                            "`*` on " + ty_show(src, left) + " and " + ty_show(src, right)
+                            + " needs a rounding contract: the exact product has "
+                            + to_string(left.scale + right.scale) + " decimal places");
+                        return ty_unknown();
+                    }
+                    return left;
+                }
                 if expected.contract == 0 {
                     let e: Int = self.complain_at(src, n.tok,
                         "`*` on " + ty_show(src, left) + " and " + ty_show(src, right)
@@ -1688,11 +1863,32 @@ fn (mut self: Unit) type_of(src: String, node: Int, expected: Ty) -> Ty allocate
             if left.kind == 45 && right.kind == 40 { return left; }
             if left.kind == 40 && right.kind == 45 { return right; }
         }
-        if n.value == 28 && left.kind == 40 && right.kind == 40 {
-            let e: Int = self.complain_at(src, n.tok,
-                "`/` on two Ints would have to round, and one operator cannot say "
-                + "which way — use div_floor, div_trunc or rem");
-            return ty_unknown();
+        if n.value == 28 {                           // `/`
+            if left.kind == 40 && right.kind == 40 {
+                let e: Int = self.complain_at(src, n.tok,
+                    "`/` on two Ints would have to round, and one operator cannot say "
+                    + "which way — use div_floor, div_trunc or rem");
+                return ty_unknown();
+            }
+            // A quotient can fall between two representable values — 1.00 / 3 — so
+            // unlike `*`, division needs a contract even when the scales match, and
+            // the contract has to be on the value being divided.
+            if left.kind == 45 && (right.kind == 45 || right.kind == 40) {
+                if right.kind == 45 && !ty_same(src, left, right) {
+                    let e: Int = self.complain_at(src, n.tok,
+                        "cannot divide " + ty_show(src, left) + " by " + ty_show(src, right)
+                        + ": division needs the same type, scale included");
+                    return ty_unknown();
+                }
+                if left.contract == 0 {
+                    let e: Int = self.complain_at(src, n.tok,
+                        "`/` on " + ty_show(src, left) + " needs a rounding contract, "
+                        + "because the exact quotient can have more than "
+                        + to_string(left.scale) + " decimal places");
+                    return ty_unknown();
+                }
+                return left;
+            }
         }
         // `+` and `-` combine like quantities: the types must match exactly.
         if !ty_same(src, left, right) {
@@ -1771,19 +1967,23 @@ fn (mut self: Unit) type_of(src: String, node: Int, expected: Ty) -> Ty allocate
 
     if n.kind == 14 {                                // a method call on a value
         let holder: Ty = self.type_of(src, n.a, ty_unknown());
-        let visited: Int = self.check_args(src, n.b);
         if is_unknown(holder) {
+            let visited: Int = self.check_args(src, n.b);
             return ty_unknown();
+        }
+        if holder.kind == 49 {                       // dyn Trait
+            return self.dyn_method(src, holder, n);
         }
         let found: Int = self.find_method(src, holder, n.tok);
         if found < 0 {
+            let visited: Int = self.check_args(src, n.b);
             let e: Int = self.complain_at(src, n.tok,
                 ty_show(src, holder) + " has no such method");
             return ty_unknown();
         }
-        // The return type is read from the declaration when 4b completes; for now the
-        // call is accepted and its type left open rather than guessed.
-        return ty_unknown();
+        let m: Method = self.methods[found];
+        let ok: Int = self.check_against_params(src, n.tok, n.b, m.params, "method");
+        return m.ret;
     }
 
     if n.kind == 11 {                                // a field access
@@ -1818,7 +2018,7 @@ fn (mut self: Unit) type_of(src: String, node: Int, expected: Ty) -> Ty allocate
                     ty_show(src, holder) + " has no such field");
             }
             let got: Ty = self.type_of(src, pair.a, want);
-            if !is_unknown(got) && !is_unknown(want) && !ty_same(src, got, want) {
+            if !is_unknown(got) && !is_unknown(want) && !self.fits(src, got, want) {
                 let e: Int = self.complain_at(src, pair.tok,
                     "this field is " + ty_show(src, want) + ", but the value is "
                     + ty_show(src, got));
@@ -1841,27 +2041,8 @@ fn (mut self: Unit) type_of(src: String, node: Int, expected: Ty) -> Ty allocate
             return builtin;
         }
         let signature: Fun = self.funs[found];
-        let list: Node = self.nodes[n.a];
-        let params: Node = self.nodes[signature.params];
-        if list.b != params.b {
-            let e: Int = self.complain_at(src, n.tok,
-                "this call passes " + to_string(list.b) + " argument(s), but the "
-                + "function takes " + to_string(params.b));
-            return signature.ret;
-        }
-        let mut i: Int = 0;
-        while i < list.b {
-            let arg: Int = self.kids[list.a + i];
-            let param: Node = self.nodes[self.kids[params.a + i]];
-            let want: Ty = self.ty_of(src, param.a);
-            let got: Ty = self.type_of(src, arg, want);
-            if !is_unknown(got) && !ty_same(src, got, want) {
-                let e: Int = self.complain_at(src, n.tok,
-                    "argument " + to_string(i + 1) + " should be " + ty_show(src, want)
-                    + ", but it is " + ty_show(src, got));
-            }
-            i = i + 1;
-        }
+        let ok: Int = self.check_against_params(src, n.tok, n.a, signature.params,
+                                                "function");
         return signature.ret;
     }
 
@@ -1900,6 +2081,36 @@ fn (mut self: Unit) visit_children(src: String, node: Int) -> Int allocates {
         return 1;
     }
     return 0;
+}
+
+// Arity and argument types against a declared parameter list. Shared by function and
+// method calls, because what the reader needs to be told is the same either way.
+fn (mut self: Unit) check_against_params(src: String, at: Int, list_node: Int,
+                                        params_node: Int, what: String) -> Int allocates {
+    let list: Node = self.nodes[list_node];
+    let params: Node = self.nodes[params_node];
+    if list.b != params.b {
+        let e: Int = self.complain_at(src, at,
+            "this call passes " + to_string(list.b) + " argument(s), but the "
+            + what + " takes " + to_string(params.b));
+        return 0;
+    }
+    let mut i: Int = 0;
+    while i < list.b {
+        let param: Node = self.nodes[self.kids[params.a + i]];
+        let want: Ty = as_burxt_sees(self.ty_of(src, param.a));
+        let outer: Int = self.in_mul;
+        self.in_mul = 0;                             // an argument is its own context
+        let got: Ty = self.type_of(src, self.kids[list.a + i], want);
+        self.in_mul = outer;
+        if !is_unknown(got) && !self.fits(src, got, want) {
+            let e: Int = self.complain_at(src, at,
+                "argument " + to_string(i + 1) + " should be " + ty_show(src, want)
+                + ", but it is " + ty_show(src, got));
+        }
+        i = i + 1;
+    }
+    return 1;
 }
 
 fn (mut self: Unit) check_args(src: String, list_node: Int) -> Int allocates {
@@ -1947,7 +2158,7 @@ fn (mut self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -> Int allo
     if n.kind == 60 {                                // let
         let declared: Ty = self.ty_of(src, n.a);
         let actual: Ty = self.type_of(src, n.b, declared);
-        if !is_unknown(actual) && !ty_same(src, actual, declared) {
+        if !is_unknown(actual) && !self.fits(src, actual, declared) {
             let e: Int = self.complain_at(src, n.tok,
                 "declared " + ty_show(src, declared) + ", but the value is "
                 + ty_show(src, actual));
@@ -1967,7 +2178,7 @@ fn (mut self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -> Int allo
         let target: Node = self.nodes[n.a];
         let want: Ty = self.type_of(src, n.a, ty_unknown());
         let got: Ty = self.type_of(src, n.b, want);
-        if !is_unknown(got) && !is_unknown(want) && !ty_same(src, got, want) {
+        if !is_unknown(got) && !is_unknown(want) && !self.fits(src, got, want) {
             let e: Int = self.complain_at(src, n.tok,
                 "cannot assign " + ty_show(src, got) + " to " + ty_show(src, want));
         }
@@ -1990,7 +2201,7 @@ fn (mut self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -> Int allo
 
     if n.kind == 63 || n.kind == 64 {                // return, return tail
         let value: Ty = self.type_of(src, n.a, ret);
-        if !is_unknown(value) && !is_unknown(ret) && !ty_same(src, value, ret) {
+        if !is_unknown(value) && !is_unknown(ret) && !self.fits(src, value, ret) {
             let e: Int = self.complain_at(src, n.tok,
                 "this function returns " + ty_show(src, ret) + ", but the value is "
                 + ty_show(src, value));
@@ -2049,32 +2260,64 @@ fn (mut self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -> Int allo
 }
 
 // ---- the pass ----------------------------------------------------------------
+// A function or method body, with its parameters — and a method's `self` — in scope.
+fn (mut self: Unit) check_body(src: String, index: Int) -> Int allocates {
+    let item: Node = self.nodes[index];
+    let base: Int = len(self.syms);
+    self.depth = self.depth + 1;
+    let signature: Node = self.nodes[item.c];
+    if item.kind == 81 {
+        // `self` is a name like any other once it is bound: the receiver's type is
+        // written in the clause node, so a method body needs no special rule.
+        let receiver: Tok = self.toks[signature.value];
+        // The clause node holds the receiver's TYPE token; the word `self` is two
+        // tokens before it, because a receiver clause has exactly one shape:
+        // `(self: Type)` or `(mut self: Type)`. Checked rather than assumed.
+        let mut self_tok: Int = signature.value - 2;
+        if self.toks[self_tok].kind != 119 {
+            self_tok = signature.value;
+        }
+        let word: Tok = self.toks[self_tok];
+        let mut writable: Int = 0;
+        if item.value >= 4 { writable = 1; }
+        push(self.syms, Sym { start: word.start, length: word.length,
+                              ty: Ty { kind: 46, scale: 0, contract: 0,
+                                       name_start: receiver.start,
+                                       name_len: receiver.length },
+                              mutable: writable, depth: self.depth });
+    }
+    let params: Node = self.nodes[item.a];
+    let mut p: Int = 0;
+    while p < params.b {
+        let param: Node = self.nodes[self.kids[params.a + p]];
+        let name: Tok = self.toks[param.tok];
+        push(self.syms, Sym { start: name.start, length: name.length,
+                              ty: self.ty_of(src, param.a), mutable: 0,
+                              depth: self.depth });
+        p = p + 1;
+    }
+    let ret: Ty = self.ty_of(src, signature.c);
+    let body: Int = self.check_block_nodes(src, item.b, ret);
+    let dropped: Int = truncate(self.syms, base);
+    self.depth = self.depth - 1;
+    return 1;
+}
+
 fn (mut self: Unit) check(src: String) -> Int allocates {
     let collected: Int = self.collect_declarations(src);
     let mut i: Int = 0;
     while i < len(self.items) {
         let index: Int = self.items[i];
         let item: Node = self.nodes[index];
-        if item.kind == 80 {                         // a function: parameters in scope
-            let base: Int = len(self.syms);
-            self.depth = self.depth + 1;
-            let params: Node = self.nodes[item.a];
-            let mut p: Int = 0;
-            while p < params.b {
-                let param: Node = self.nodes[self.kids[params.a + p]];
-                let name: Tok = self.toks[param.tok];
-                push(self.syms, Sym { start: name.start, length: name.length,
-                                      ty: self.ty_of(src, param.a), mutable: 0,
-                                      depth: self.depth });
-                p = p + 1;
+        if item.kind == 80 || item.kind == 81 {
+            let checked: Int = self.check_body(src, index);
+        }
+        if item.kind == 85 {                         // an impl block's methods
+            let mut k: Int = 0;
+            while k < item.b {
+                let checked: Int = self.check_body(src, self.kids[item.a + k]);
+                k = k + 1;
             }
-            // The return type rides in the clause node's spare slot.
-            let signature: Node = self.nodes[item.c];
-            let ret: Ty = self.ty_of(src, signature.c);
-            let body: Int = self.check_block_nodes(src, item.b, ret);
-            // The parameters go out of scope with the function.
-            let dropped: Int = truncate(self.syms, base);
-            self.depth = self.depth - 1;
         }
         if item.kind >= 60 && item.kind <= 71 {      // a top-level statement
             let checked: Int = self.check_stmt_node(src, index, ty_unknown());
@@ -2130,7 +2373,7 @@ region compile {
         path = arg(1);
     }
     let src: String = read_file(path);
-    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], depth: 0, problems: 0, pos: 0, no_struct: 0, errors: 0 };
+    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], impls: [], depth: 0, problems: 0, pos: 0, no_struct: 0, in_mul: 0, errors: 0 };
     let installed: Int = unit.install_keywords();
     let total: Int = unit.run(src);
 
