@@ -14,7 +14,7 @@ answers.
 **Read this file first.** The specs were written when Burxt was at roughly
 v0.0.1, so several describe work that is now done, and one describes work that
 was built in a different order than specified. This index records what is
-actually true as of **v0.0.35**, audited by running the compiler — not by
+actually true as of **v0.0.36**, audited by running the compiler — not by
 reading the specs. Where a spec and the implementation disagree, the note says
 which is right.
 
@@ -190,8 +190,9 @@ In dependency order, cheapest and most-unblocking first:
     feeding the buffer to `burxt check - --json`. **Expression spans and hover shipped in
     v0.0.35**, which also sharpened every caret to the sub-expression. Remaining
     editor work: go-to-definition, error recovery (more than one error at a time),
-    a tree-sitter grammar for Neovim/Helix colour, and a VS Code LSP client so
-    VS Code gets hover too.
+    and a tree-sitter grammar for Neovim/Helix colour. **VS Code moved onto the
+    language server in v0.0.36**, so hover works there too, still with no npm
+    dependency.
 14. Still unblocked polish: A4.7's units/contracts/pipelines, `.chars()`,
     `[0; N]` repeat literals, `break`/`continue`, iterative AST walkers, and a
     NAMED stack-overflow error (tail calls avoid it; they do not name it).

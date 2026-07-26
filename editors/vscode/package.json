@@ -1,7 +1,7 @@
 {
   "name": "burxt",
   "displayName": "Burxt",
-  "description": "Burxt language support: syntax highlighting and live diagnostics from the compiler itself.",
+  "description": "Burxt language support: syntax highlighting, live diagnostics, and hover from the compiler itself.",
   "version": "0.1.0",
   "publisher": "burxt",
   "license": "MIT OR Apache-2.0",
@@ -75,8 +75,8 @@
     ],
     "commands": [
       {
-        "command": "burxt.check",
-        "title": "Burxt: Check This File"
+        "command": "burxt.restartServer",
+        "title": "Burxt: Restart Language Server"
       }
     ],
     "configuration": {
@@ -85,7 +85,7 @@
         "burxt.path": {
           "type": "string",
           "default": "",
-          "description": "Path to the burxt compiler. Empty means: use ./target/debug/burxt in the workspace if it exists, otherwise `burxt` from PATH."
+          "description": "Path to the burxt compiler, which also hosts the language server (`burxt lsp`). Empty means: use ./target/debug/burxt in the workspace if it exists, otherwise `burxt` from PATH."
         }
       }
     }

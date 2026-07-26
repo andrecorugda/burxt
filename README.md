@@ -101,9 +101,16 @@ message. Adding a test means dropping two files in a directory.
 ln -s "$PWD/editors/vscode" ~/.vscode/extensions/burxt   # then reload the window
 ```
 
-That gives VS Code syntax highlighting **and errors as you type**, with no
-`npm install` — the extension feeds your buffer to the compiler and shows what it
-says.
+That gives VS Code syntax highlighting, **errors as you type, and hover** — with no
+`npm install`. Hovering a value shows its exact type *and what that type
+guarantees*:
+
+```text
+Decimal<2, RoundHalfEven>
+
+Exact decimal, 2 decimal places. A result that needs rounding rounds half to even
+(banker's rounding).
+```
 
 Syntax highlighting for VS Code (and any editor that reads TextMate grammars)
 lives in [`editors/`](editors/). The grammar is checked against the compiler by a

@@ -726,23 +726,59 @@ fn json_diagnostics_keep_the_contract_editors_depend_on() {
     // line-by-line without a streaming parser.
     assert_eq!(json.lines().count(), 1, "one diagnostic per line: {}", json);
 
-    // Now the consumer side: the extension must read the fields the compiler
-    // writes. A rename on either side fails here.
-    let ext = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("editors/vscode/extension.js"),
-    )
-    .unwrap();
-    for field in ["lspStart", "lspEnd", "message"] {
-        assert!(
-            ext.contains(field),
-            "the VS Code extension does not read `{}`, which the compiler emits",
-            field
-        );
+    // `--json` stays a supported interface for tasks and CI even though the VS
+    // Code extension now speaks LSP instead: `.vscode/tasks.json` and the
+    // `$burxt` problem matcher both depend on it.
+}
+
+/// The VS Code extension is a hand-written LSP client, and its failure modes are
+/// the ones that look fine on inspection: a message split across chunks, a byte
+/// length applied to a string, a promise that never resolves. `node
+/// editors/vscode/test/harness.js` drives it against a real server with a stub
+/// `vscode` module and checks the whole loop — diagnostics appearing, clearing,
+/// and hover answering.
+///
+/// Run from here when node is available, and SKIPPED loudly when it is not: the
+/// Rust suite must not require a JavaScript toolchain, but the check is too
+/// valuable to leave un-run by default.
+#[test]
+fn vscode_extension_speaks_to_the_language_server() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let harness = root.join("editors/vscode/test/harness.js");
+    let ext = fs::read_to_string(root.join("editors/vscode/extension.js")).unwrap();
+
+    // Static properties first, so a broken client is caught even without node.
+    for (needle, why) in [
+        ("\"lsp\"", "the extension must launch the language server"),
+        ("publishDiagnostics", "it must apply the server's diagnostics"),
+        ("registerHoverProvider", "it must offer hover"),
+        ("Content-Length", "it must frame messages"),
+        ("Buffer.concat", "it must buffer BYTES — a byte length applied to a string \
+                           corrupts any message with a non-ASCII character"),
+    ] {
+        assert!(ext.contains(needle), "{}", why);
     }
-    // It must invoke the stdin form, or it would check the file on disk and
-    // report errors about code the user already fixed.
+
+    let node = Command::new("node").arg("--version").output();
+    if node.map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!(
+            "SKIPPED the live extension check: node is not available. \
+             Run `node {}` where it is.",
+            harness.display()
+        );
+        return;
+    }
+
+    let out = Command::new("node")
+        .arg(&harness)
+        .arg(env!("CARGO_BIN_EXE_burxt"))
+        .current_dir(root)
+        .output()
+        .expect("failed to run node");
     assert!(
-        ext.contains("\"check\", \"-\", \"--json\"") || ext.contains("'check', '-', '--json'"),
-        "the extension must check the BUFFER via stdin (`check - --json`)"
+        out.status.success(),
+        "the extension harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
 }

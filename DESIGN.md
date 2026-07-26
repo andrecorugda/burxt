@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.35)
+# Burxt — Design Notes (v0.0.36)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1729,6 +1729,44 @@ and the cursor on `qty` in `price * qty` should say `Int`, not the product's typ
 the probe moved to `textDocument/definition` and the test gained an assertion that
 hover actually answers with a type.
 
+### v0.0.36: VS Code speaks to the language server
+
+Hover shipped for every LSP-speaking editor in v0.0.35 — except VS Code, which was
+on a private `burxt check --json` path. Now it uses the same server as everyone
+else, and still needs **no `npm install`**.
+
+**A hand-written LSP client, about a hundred lines**, instead of
+`vscode-languageclient`. That package would bring npm, a lock file and a bundling
+step, and the property worth protecting is that `editors/vscode/` is a directory
+you copy into place and use. What the client has to get right is small and
+well-defined: frame messages out, unframe them in, match responses to requests by
+id, and pass notifications along.
+
+**The one detail that decides whether it works: buffer BYTES, not a string.**
+`Content-Length` counts bytes, so accumulating stdout as a string and slicing on
+that count corrupts every message containing a non-ASCII character — and Burxt
+programs contain `café` and `€` in string literals routinely. The test asserts
+`Buffer.concat` is used, with the reason written next to it.
+
+**Why using the server matters more than the line count:** there is now exactly one
+place where "what does the compiler know about this buffer" is answered, and every
+editor asks it the same way. The `--json` path stays supported for tasks and CI —
+`.vscode/tasks.json` and the `$burxt` problem matcher both use it — but it is no
+longer a second implementation of the editor experience.
+
+**The client is tested rather than inspected.** VS Code cannot be scripted here;
+the client can. `editors/vscode/test/harness.js` stubs the `vscode` module, drives
+the real `extension.js` against a real `burxt lsp`, and checks the whole loop:
+a valid buffer publishes an empty list, a broken one publishes exactly one
+diagnostic positioned at the offending value, fixing it clears the squiggle, hover
+returns `Decimal<2, RoundHalfEven>` with its contract explained, and hover on
+whitespace returns null rather than a guess. `cargo test` runs it when node is
+available and **says loudly when it skips** — the Rust suite must not require a
+JavaScript toolchain, but a check this valuable should not quietly not run.
+
+These are exactly the failures that look fine on inspection: a message split across
+chunks, a byte length applied to a string, a promise that never resolves.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -1793,6 +1831,9 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- T6. VS Code on the language server (v0.0.36): a dependency-free LSP client,
+  hover in VS Code, and a node harness that drives the extension against a real
+  server.
 - T5. Expression spans, sharper carets and hover (v0.0.35): `blame` for
   parent-owned errors, a `(span, type)` table, and hover that explains rounding
   contracts.

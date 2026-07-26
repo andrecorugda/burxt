@@ -11,7 +11,7 @@ directory holds that half of the project.
 | `burxt check` — front end only, for editors and CI | **DONE** (v0.0.31) | `src/main.rs` |
 | Diagnostics with line/column | **DONE** (v0.0.32) | `src/diag.rs`, `burxt check --json` |
 | Language server (`burxt lsp`) | **DONE** (v0.0.33) — diagnostics on change, hover (v0.0.35) | `src/lsp.rs` |
-| VS Code live diagnostics | **DONE** (v0.0.34) — dependency-free, checks the buffer | `vscode/extension.js` |
+| VS Code diagnostics + hover | **DONE** (v0.0.36) — hand-written LSP client, still no npm | `vscode/extension.js` |
 | VS Code problem matcher (for tasks and CI) | **DONE** (v0.0.33) | `vscode/package.json`, `.vscode/tasks.json` |
 | Neovim / Helix configs | **DONE** (v0.0.33) — diagnostics, no highlighting yet | `nvim/`, `helix/` |
 | Tree-sitter grammar (Neovim/Helix colour) | not written | see below |
@@ -94,23 +94,31 @@ vim.cmd('source /path/to/burxt/editors/nvim/burxt.lua')
 **Zed, Emacs (eglot/lsp-mode), Sublime LSP, Kate** — any LSP client works; the
 command is `burxt lsp` and the file type is `.bx`.
 
-**VS Code** — the extension shows errors as you type, and still needs no
-`npm install`. It does *not* use the LSP: it runs `burxt check - --json` and feeds
-it the buffer on stdin, which gets the same squiggles with plain CommonJS against
-the `vscode` API (injected by the editor) instead of `vscode-languageclient`, npm
-and a bundler. Set `burxt.path` in settings if the compiler is not on `PATH` and
-not at `./target/debug/burxt` in the workspace.
+**VS Code** — errors as you type *and* hover, with **no `npm install`**. The
+extension is a hand-written LSP client (about a hundred lines of framing and
+request bookkeeping) rather than `vscode-languageclient`, because that package
+would bring npm, a lock file and a bundling step, and the property worth
+protecting is that this directory can be copied into place and used.
 
-The compiler emits **0-based LSP positions** in its JSON precisely so no client
-converts them — that conversion is where off-by-ones live. A test asserts the
-field names on both sides at once, so a rename cannot silently stop the squiggles.
+It talks to the same `burxt lsp` every other editor uses. That matters more than
+the line count: there is one place where "what does the compiler know about this
+buffer" is answered, and every editor asks it the same way.
 
-A `$burxt` problem matcher is also contributed, for tasks and CI:
-`Ctrl+Shift+B` runs `burxt check` on the current file and fills the Problems
-panel; `.vscode/tasks.json` here is the working example.
+Set `burxt.path` in settings if the compiler is not on `PATH` and not at
+`./target/debug/burxt` in the workspace. *Burxt: Restart Language Server* is in the
+command palette.
 
-Switching VS Code to the real LSP would buy hover and go-to-definition when those
-exist — at the cost of a build step. Worth doing then, not now.
+A `$burxt` problem matcher is also contributed, for tasks and CI: `Ctrl+Shift+B`
+runs `burxt check` on the current file and fills the Problems panel;
+`.vscode/tasks.json` here is the working example. `burxt check <file> --json`
+remains supported for exactly that.
+
+**The client is tested, not just inspected.** VS Code cannot be scripted here, but
+the client can: `node editors/vscode/test/harness.js` stubs the `vscode` module,
+drives the real extension against a real server, and checks the whole loop —
+diagnostics appearing, clearing when the code is fixed, and hover returning the
+type with its rounding contract. `cargo test` runs it when node is present and says
+so loudly when it does not.
 
 ### What the server does NOT do yet
 

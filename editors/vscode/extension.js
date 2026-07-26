@@ -1,41 +1,42 @@
-// Live diagnostics for Burxt in VS Code.
+// Burxt language support for VS Code: live diagnostics and hover, from the
+// compiler itself.
 //
-// Deliberately dependency-free: plain CommonJS against the `vscode` API, which
-// the editor injects at runtime. No `npm install`, no `node_modules`, no
-// bundler — the extension stays a directory you can copy into place, which is
-// the property that makes it easy to try.
+// Deliberately dependency-free. This is a hand-written LSP client — about a
+// hundred lines of framing and request bookkeeping — instead of
+// `vscode-languageclient`, because that package would bring npm, a lock file and
+// a bundling step, and the property worth protecting here is that the extension
+// is a directory you can copy into place and use.
 //
-// It shells out to `burxt check - --json` and feeds it the BUFFER on stdin, so
-// errors describe what you are looking at rather than what was last saved.
-// (`burxt lsp` is the real language server and any other editor should use it;
-// wiring it in here would mean vscode-languageclient, npm, and a build step for
-// exactly the same squiggles.)
+// It talks to `burxt lsp` over stdio, which is the same server every other editor
+// uses. That matters more than the line count: there is one place where "what
+// does the compiler know about this buffer" is answered, and every editor asks it
+// the same way.
+//
+// (`burxt check <file> --json` still exists for tasks and CI, and the `$burxt`
+// problem matcher still works — but the editor path is the server.)
 
 const vscode = require("vscode");
 const { spawn } = require("child_process");
+const fs = require("fs");
 const path = require("path");
 
-/** How long to wait after the last keystroke before checking. */
-const DEBOUNCE_MS = 250;
+/** Language id contributed in package.json. */
+const LANGUAGE = "burxt";
 
+let client;
 let diagnostics;
-let pending;
-/** Set once, after the first failure to launch, so the warning appears once. */
-let warnedAboutBinary = false;
 
 function compilerPath() {
   const configured = vscode.workspace.getConfiguration("burxt").get("path");
   if (configured && configured.trim() !== "") {
     return configured;
   }
-  // A workspace build is what a contributor to the language itself will have.
+  // A contributor to the language itself will have a workspace build.
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (folder) {
     const local = path.join(folder.uri.fsPath, "target", "debug", "burxt");
     try {
-      if (require("fs").existsSync(local)) {
-        return local;
-      }
+      if (fs.existsSync(local)) return local;
     } catch {
       // Fall through to PATH.
     }
@@ -44,100 +45,232 @@ function compilerPath() {
 }
 
 /**
- * Run the compiler's front end over `text` and resolve with the diagnostics it
- * reported. Resolves with an empty array when the program is legal — clearing
- * the squiggles matters as much as showing them.
+ * A minimal JSON-RPC-over-stdio client: frame messages out, unframe them in,
+ * match responses to requests by id, and hand notifications to a callback.
  */
-function check(text) {
-  return new Promise((resolve) => {
-    let child;
+class Client {
+  constructor(command, onNotification, onExit) {
+    this.command = command;
+    this.onNotification = onNotification;
+    this.onExit = onExit;
+    this.nextId = 1;
+    this.pending = new Map();
+    // Bytes, not a string: Content-Length counts bytes, and slicing a string on
+    // a byte count corrupts every message containing a non-ASCII character.
+    this.buffer = Buffer.alloc(0);
+    this.child = null;
+  }
+
+  start() {
+    this.child = spawn(this.command, ["lsp"]);
+    this.child.stdout.on("data", (chunk) => this.receive(chunk));
+    this.child.on("error", (e) => this.onExit(e.message));
+    this.child.on("close", () => this.onExit(null));
+    this.child.stdin.on("error", () => {}); // The server may exit mid-write.
+  }
+
+  stop() {
+    if (!this.child) return;
     try {
-      child = spawn(compilerPath(), ["check", "-", "--json"]);
-    } catch (e) {
-      resolve({ error: e.message, diagnostics: [] });
-      return;
+      // Ask politely, then let the pipe close finish the job.
+      this.request("shutdown", null).catch(() => {});
+      this.notify("exit", null);
+    } catch {
+      // Already gone.
     }
+    this.child.stdin.end();
+    this.child = null;
+  }
 
-    let out = "";
-    child.stdout.on("data", (chunk) => (out += chunk));
-    child.on("error", (e) => resolve({ error: e.message, diagnostics: [] }));
-    child.on("close", () => {
-      const found = [];
-      for (const line of out.split("\n")) {
-        if (line.trim() === "") continue;
-        let d;
-        try {
-          d = JSON.parse(line);
-        } catch {
-          continue; // Not a diagnostic; ignore rather than fail loudly.
-        }
-        // The compiler emits LSP-ready 0-based positions precisely so this
-        // conversion is not done here, where an off-by-one would live.
-        const start = new vscode.Position(d.lspStart?.line ?? 0, d.lspStart?.character ?? 0);
-        const end = new vscode.Position(d.lspEnd?.line ?? 0, d.lspEnd?.character ?? 0);
-        const entry = new vscode.Diagnostic(
-          new vscode.Range(start, end),
-          d.message,
-          vscode.DiagnosticSeverity.Error
-        );
-        entry.source = "burxt";
-        found.push(entry);
-      }
-      resolve({ diagnostics: found });
+  send(message) {
+    if (!this.child) return;
+    const body = Buffer.from(JSON.stringify(message), "utf8");
+    this.child.stdin.write(`Content-Length: ${body.length}\r\n\r\n`);
+    this.child.stdin.write(body);
+  }
+
+  notify(method, params) {
+    this.send({ jsonrpc: "2.0", method, params });
+  }
+
+  request(method, params) {
+    const id = this.nextId++;
+    const promise = new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
     });
+    this.send({ jsonrpc: "2.0", id, method, params });
+    return promise;
+  }
 
-    child.stdin.on("error", () => {}); // The child may exit before we finish writing.
-    child.stdin.end(text);
+  receive(chunk) {
+    this.buffer = Buffer.concat([this.buffer, chunk]);
+    // A single chunk may hold several messages, or half of one.
+    for (;;) {
+      const headerEnd = this.buffer.indexOf("\r\n\r\n");
+      if (headerEnd === -1) return;
+      const headers = this.buffer.subarray(0, headerEnd).toString("ascii");
+      const match = /Content-Length:\s*(\d+)/i.exec(headers);
+      if (!match) {
+        // Unframed output means something other than a server is on the pipe.
+        this.buffer = Buffer.alloc(0);
+        return;
+      }
+      const length = Number(match[1]);
+      const bodyStart = headerEnd + 4;
+      if (this.buffer.length < bodyStart + length) return; // Wait for the rest.
+      const body = this.buffer.subarray(bodyStart, bodyStart + length).toString("utf8");
+      this.buffer = this.buffer.subarray(bodyStart + length);
+      let message;
+      try {
+        message = JSON.parse(body);
+      } catch {
+        continue; // Not something we can act on; keep going rather than stall.
+      }
+      if (message.id !== undefined && this.pending.has(message.id)) {
+        const { resolve, reject } = this.pending.get(message.id);
+        this.pending.delete(message.id);
+        message.error ? reject(message.error) : resolve(message.result);
+      } else if (message.method) {
+        this.onNotification(message);
+      }
+    }
+  }
+}
+
+function isBurxt(document) {
+  return document && document.languageId === LANGUAGE;
+}
+
+function applyDiagnostics(params) {
+  const uri = vscode.Uri.parse(params.uri);
+  const entries = (params.diagnostics || []).map((d) => {
+    const range = new vscode.Range(
+      new vscode.Position(d.range.start.line, d.range.start.character),
+      new vscode.Position(d.range.end.line, d.range.end.character)
+    );
+    // The server sends severity 1 (Error) only — Burxt has no warnings, because
+    // every diagnostic it can produce is a refusal to compile.
+    const entry = new vscode.Diagnostic(range, d.message, vscode.DiagnosticSeverity.Error);
+    entry.source = d.source || "burxt";
+    return entry;
+  });
+  // Setting an EMPTY list is what clears the squiggle when the code becomes
+  // valid, so this path must run for the empty case too.
+  diagnostics.set(uri, entries);
+}
+
+function openDocument(document) {
+  if (!isBurxt(document) || !client) return;
+  client.notify("textDocument/didOpen", {
+    textDocument: {
+      uri: document.uri.toString(),
+      languageId: LANGUAGE,
+      version: document.version,
+      text: document.getText(),
+    },
   });
 }
 
-async function refresh(document) {
-  if (!document || document.languageId !== "burxt") {
-    return;
-  }
-  const result = await check(document.getText());
-  if (result.error) {
-    if (!warnedAboutBinary) {
-      warnedAboutBinary = true;
-      vscode.window.showWarningMessage(
-        `Burxt: could not run the compiler (${result.error}). ` +
-          `Set "burxt.path" in settings, or build it with \`cargo build\`.`
-      );
-    }
-    // No compiler means no information — leave whatever was shown alone rather
-    // than clearing it, which would look like the code became valid.
-    return;
-  }
-  diagnostics.set(document.uri, result.diagnostics);
-}
-
-function scheduleRefresh(document) {
-  clearTimeout(pending);
-  pending = setTimeout(() => refresh(document), DEBOUNCE_MS);
-}
-
 function activate(context) {
-  diagnostics = vscode.languages.createDiagnosticCollection("burxt");
+  diagnostics = vscode.languages.createDiagnosticCollection(LANGUAGE);
   context.subscriptions.push(diagnostics);
 
-  context.subscriptions.push(
-    vscode.workspace.onDidOpenTextDocument(refresh),
-    vscode.workspace.onDidSaveTextDocument(refresh),
-    vscode.workspace.onDidChangeTextDocument((e) => scheduleRefresh(e.document)),
-    // A closed document's problems must go, or the panel keeps errors for a file
-    // that is no longer open.
-    vscode.workspace.onDidCloseTextDocument((doc) => diagnostics.delete(doc.uri)),
-    vscode.commands.registerCommand("burxt.check", () =>
-      refresh(vscode.window.activeTextEditor?.document)
-    )
+  let warned = false;
+  const onExit = (message) => {
+    if (warned) return;
+    warned = true;
+    vscode.window.showWarningMessage(
+      `Burxt: the language server stopped${message ? ` (${message})` : ""}. ` +
+        `Set "burxt.path" in settings, or build the compiler with \`cargo build\`.`
+    );
+  };
+
+  client = new Client(
+    compilerPath(),
+    (message) => {
+      if (message.method === "textDocument/publishDiagnostics") {
+        applyDiagnostics(message.params);
+      }
+    },
+    onExit
+  );
+  client.start();
+  client.request("initialize", { processId: process.pid, capabilities: {} }).then(
+    () => {
+      client.notify("initialized", {});
+      vscode.workspace.textDocuments.forEach(openDocument);
+    },
+    () => onExit("initialize failed")
   );
 
-  // Anything already open when the extension activates.
-  vscode.workspace.textDocuments.forEach(refresh);
+  context.subscriptions.push(
+    vscode.workspace.onDidOpenTextDocument(openDocument),
+    vscode.workspace.onDidChangeTextDocument((e) => {
+      if (!isBurxt(e.document) || !client) return;
+      // The server asks for full sync, so the whole buffer goes every time —
+      // which is also why it can never disagree with what is on screen.
+      client.notify("textDocument/didChange", {
+        textDocument: { uri: e.document.uri.toString(), version: e.document.version },
+        contentChanges: [{ text: e.document.getText() }],
+      });
+    }),
+    vscode.workspace.onDidSaveTextDocument((document) => {
+      if (!isBurxt(document) || !client) return;
+      client.notify("textDocument/didSave", {
+        textDocument: { uri: document.uri.toString() },
+      });
+    }),
+    vscode.workspace.onDidCloseTextDocument((document) => {
+      if (!isBurxt(document) || !client) return;
+      client.notify("textDocument/didClose", {
+        textDocument: { uri: document.uri.toString() },
+      });
+      diagnostics.delete(document.uri);
+    }),
+    vscode.languages.registerHoverProvider(LANGUAGE, {
+      async provideHover(document, position) {
+        if (!client) return null;
+        let result;
+        try {
+          result = await client.request("textDocument/hover", {
+            textDocument: { uri: document.uri.toString() },
+            position: { line: position.line, character: position.character },
+          });
+        } catch {
+          return null;
+        }
+        if (!result || !result.contents) return null;
+        const markdown = new vscode.MarkdownString(result.contents.value);
+        const range = result.range
+          ? new vscode.Range(
+              new vscode.Position(result.range.start.line, result.range.start.character),
+              new vscode.Position(result.range.end.line, result.range.end.character)
+            )
+          : undefined;
+        return new vscode.Hover(markdown, range);
+      },
+    }),
+    vscode.commands.registerCommand("burxt.restartServer", () => {
+      client?.stop();
+      warned = false;
+      client = new Client(
+        compilerPath(),
+        (m) =>
+          m.method === "textDocument/publishDiagnostics" && applyDiagnostics(m.params),
+        onExit
+      );
+      client.start();
+      client.request("initialize", { processId: process.pid, capabilities: {} }).then(() => {
+        client.notify("initialized", {});
+        vscode.workspace.textDocuments.forEach(openDocument);
+      });
+    })
+  );
 }
 
 function deactivate() {
-  clearTimeout(pending);
+  client?.stop();
+  client = null;
   diagnostics?.dispose();
 }
 
