@@ -49,6 +49,9 @@ pub enum TypedExprKind {
     /// Negation of a non-literal (literals are folded at check time).
     Neg(Box<TypedExpr>),
     Not(Box<TypedExpr>),
+    /// `div_floor`, `div_trunc` or `rem` on two Ints. Three names rather than one
+    /// operator, because they disagree on negatives.
+    IntDiv { kind: crate::codegen::IntDiv, lhs: Box<TypedExpr>, rhs: Box<TypedExpr> },
     /// `old(expr)` in an `ensures` clause: the value that expression had on
     /// ENTRY, by index into the function's hoisted list.
     Old(usize),
@@ -726,7 +729,7 @@ impl TypeChecker {
             if self.fns.contains_key(&f.name) {
                 return Err(format!("function `{}` is defined twice", f.name));
             }
-            if f.name == "len" || f.name == "byte_at" || f.name == "push" || f.name == "read_file" || f.name == "to_string" || f.name == "old" {
+            if f.name == "len" || f.name == "byte_at" || f.name == "push" || f.name == "read_file" || f.name == "to_string" || f.name == "old" || f.name == "div_floor" || f.name == "div_trunc" || f.name == "rem" {
                 return Err(format!(
                     "the name `{}` is reserved for a built-in",
                     f.name
@@ -1241,7 +1244,7 @@ impl TypeChecker {
     /// function returns.
     fn check_extern(&self, e: &ExternFn) -> Result<(), String> {
         const RESERVED: [&str; 6] = ["printf", "fprintf", "fputs", "exit", "stderr", "main"];
-        if e.name == "len" || e.name == "byte_at" || e.name == "push" || e.name == "read_file" || e.name == "to_string" || e.name == "old" {
+        if e.name == "len" || e.name == "byte_at" || e.name == "push" || e.name == "read_file" || e.name == "to_string" || e.name == "old" || e.name == "div_floor" || e.name == "div_trunc" || e.name == "rem" {
             return Err(format!("the name `{}` is reserved for a built-in", e.name));
         }
         if RESERVED.contains(&e.name.as_str()) {
@@ -2440,6 +2443,39 @@ impl TypeChecker {
                 // region. A builtin rather than user FFI because the result must
                 // be region-allocated to be escape-checked; a raw `extern` that
                 // returned a pointer could not be.
+                // Integer division, by name. `/` on two Ints stays refused: one
+                // operator cannot say which way it rounds, and for negatives the
+                // answers differ.
+                if let Some(kind) = match name.as_str() {
+                    "div_floor" => Some(crate::codegen::IntDiv::Floor),
+                    "div_trunc" => Some(crate::codegen::IntDiv::Trunc),
+                    "rem" => Some(crate::codegen::IntDiv::Rem),
+                    _ => None,
+                } {
+                    if args.len() != 2 {
+                        return Err(format!("{}(...) takes two Ints", name));
+                    }
+                    let lhs = self.check_expr(&args[0], Some(&Type::Int))?;
+                    let rhs = self.check_expr(&args[1], Some(&Type::Int))?;
+                    for (which, side) in [("first", &lhs), ("second", &rhs)] {
+                        if side.ty != Type::Int {
+                            return Err(format!(
+                                "{}(...) works on Ints, but the {} argument has type \
+                                 {}. A Decimal divides with `/` and its own rounding \
+                                 contract.",
+                                name, which, side.ty
+                            ));
+                        }
+                    }
+                    return Ok(TypedExpr {
+                        ty: Type::Int,
+                        kind: TypedExprKind::IntDiv {
+                            kind,
+                            lhs: Box::new(lhs),
+                            rhs: Box::new(rhs),
+                        },
+                    });
+                }
                 // `old(expr)` — the value `expr` had on entry. Hoisted out of the
                 // clause here, so codegen can evaluate it once at the top of the
                 // function and the clause can compare against what it stored.
@@ -3231,9 +3267,10 @@ impl TypeChecker {
             // Integer division truncates — that is silent rounding. Refused
             // until integers get explicit division semantics.
             (BinOp::Div, Int, Int) => Err(
-                "integer division truncates, which rounds silently. \
-                 Burxt does not allow it (yet) — use Decimals with a rounding \
-                 contract, e.g. Decimal<2, RoundHalfEven>."
+                "`/` on two Ints would have to round, and one operator cannot say \
+                 which way: -7 divided by 2 is -3 rounding toward zero and -4 \
+                 rounding down. Say which you mean — `div_floor(a, b)`, \
+                 `div_trunc(a, b)`, or `rem(a, b)` for the remainder."
                     .to_string(),
             ),
 

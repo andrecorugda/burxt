@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.45)
+# Burxt — Design Notes (v0.0.46)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -184,12 +184,28 @@ Listed so they are not mistaken for finished work:
   ergonomics tension is permanent: the art is hiding strictness behind
   inference so code stays simple while the compiler stays strict.
 
-## The OOP model — composition-first, opt-in safe inheritance (committed)
+## The OOP model — composition only (DECIDED, v0.0.46)
 
-**This section supersedes the earlier "no implementation inheritance, ever"
-stance.** Inheritance EXISTS, but constrained so the classic footguns
-(fragile base class, diamond problem) cannot happen — which is the real goal
-the earlier absolute rule was reaching for.
+> **Decision taken (v0.0.46): `class` and `open` single inheritance are DROPPED.**
+> Composition-only is final, and this is now the settled model rather than a
+> waypoint.
+>
+> The reason is evidence, not taste. Traits + `impl` + composition shipped in
+> v0.0.13–v0.0.14, and in every version since — regions, sum types, contracts,
+> conservation laws, a self-hosted lexer and parser — **nothing has needed
+> inheritance.** Not once. An item that sits on a roadmap through thirty versions
+> without a single program asking for it is not "planned", it is a wish, and this
+> project's rule is that a feature earns its place by being needed.
+>
+> What the earlier plan was reaching for, it already has: *reuse* comes from
+> composition, *substitutability* from traits, and the fragile-base-class and
+> diamond problems are absent because there is no base class to be fragile. The
+> "opt-in safe inheritance" design below is kept as the record of what was
+> considered and why it was dropped.
+
+**Superseded plan (kept for the record).** Inheritance would have existed, but
+constrained so the classic footguns (fragile base class, diamond problem) could not
+happen — which is the real goal the original absolute rule was reaching for.
 
 - Sharing **behavior** → traits (interfaces). Small by default.
 - Reusing **state/structure** → composition ("has-a"). The ergonomic default.
@@ -219,9 +235,9 @@ class Circle : Shape { radius: Decimal<4> }   // allowed: Shape is `open`
 // class Sneaky : Account { }                 // ERROR: Account is not `open`
 ```
 
-The gap between PHP (inheritance-heavy) and Rust (no inheritance) is where
-Burxt lives. Today's `struct` is the value-type substrate this grows from;
-`class`, `trait`, `open` arrive with the aggregate ABI and dispatch.
+The gap between PHP (inheritance-heavy) and Rust (no inheritance) is where Burxt was
+going to live. **In the event it lives at the Rust end**, and got there by finding
+that nothing needed the other half.
 
 ### SOLID stance — enforce the objective, encourage the subjective
 
@@ -232,10 +248,10 @@ positives and lose trust. So:
 | Principle | Burxt stance |
 |---|---|
 | Single Responsibility | Encouraged; optional lint. NOT a hard error — too subjective. |
-| Open/Closed | Grammar-supported: `open` classes, traits extend without modification. |
-| Liskov Substitution | Contract-checked: a subtype's `requires`/`ensures` may not violate the base's. |
+| Open/Closed | Traits extend behaviour without modifying what exists. (No `open` classes — see the decision above.) |
+| Liskov Substitution | Unrepresentable to violate: a type satisfies a trait exactly or it is a compile error, and there is no subtype to weaken a contract. Contracts themselves are checked (v0.0.43). |
 | Interface Segregation | Structurally nudged: small traits are the easy path; lint warns on bloat. |
-| Dependency Inversion | Depending on a trait is ergonomic; depending on a concrete class is the awkward opt-in. |
+| Dependency Inversion | Depending on a trait is ergonomic (`dyn Trait` as a parameter); depending on a concrete type is the awkward opt-in. |
 
 ## Signature grammar — eloquent because it matches intent (committed)
 
@@ -556,12 +572,12 @@ Burxt is OOP by default, and the object model is decided now (keywords
 - **Interfaces** are declared contracts: `struct LineItem is Priceable`.
   Conformance is never inferred from shape — structural satisfaction is
   silent conformance. The check is exact: every method, exact signature.
-- **Inheritance: superseded — see "The OOP model" above.** This section
-  originally said "no implementation inheritance, ever". The current
-  direction keeps the goal (no fragile base class, no diamond, no hidden
-  override dispatch) but reaches it with `open`-only single inheritance
-  rather than prohibition, so genuine is-a modeling is available and
-  composition stays the default.
+- **Inheritance: none, and that is settled (v0.0.46).** This section originally
+  said "no implementation inheritance, ever"; a later revision softened it to
+  `open`-only single inheritance; the decision above closes it back on the original
+  answer, this time with evidence rather than conviction — thirty versions of real
+  programs never needed it. The goals it was reaching for (no fragile base class, no
+  diamond, no hidden override dispatch) are met by not having the mechanism at all.
 - Dispatch will be dictionary-passing (fat pointers): the method table
   lives OUTSIDE the struct, so struct layout never changes and stays
   FFI-viable. Static dispatch whenever the concrete type is known.
@@ -2216,6 +2232,52 @@ to compare `g`'s state against.
 
 Spec: `spec/N5-TERMINATION.md`.
 
+### v0.0.46: integer division by name, and inheritance dropped
+
+Two decisions taken, one adding a feature and one removing a plan.
+
+**`div_floor`, `div_trunc`, `rem` — and `/` on two Ints stays refused.**
+
+```text
+print(div_floor(-7, 2));   // -4, rounds down
+print(div_trunc(-7, 2));   // -3, rounds toward zero
+```
+
+Integer division had been refused outright since v0.0.2, which was right about the
+danger and wrong about the remedy: compiler-shaped code needs midpoints, counts and
+byte arithmetic, and forcing a rounding contract onto an array index is absurd. But
+**one operator cannot say which way it rounds**, and the answers differ on negatives
+— which is exactly the kind of difference that must not hide behind a symbol. So the
+operation is named, the way `byte_at` is named for bytes:
+
+```text
+error: `/` on two Ints would have to round, and one operator cannot say which way:
+       -7 divided by 2 is -3 rounding toward zero and -4 rounding down. Say which you
+       mean — `div_floor(a, b)`, `div_trunc(a, b)`, or `rem(a, b)`.
+```
+
+Each form checks what C leaves **undefined**: division by zero, and `i64::MIN / -1`,
+whose quotient does not exist in an i64. Both are named runtime errors with exit 70,
+like every other one. `rem` pairs with `div_trunc` (its sign follows the dividend); a
+flooring remainder is deferred until something needs it.
+
+**`class` and `open` single inheritance are dropped. Composition-only is final.**
+
+The reason is evidence rather than taste. Traits + `impl` + composition shipped in
+v0.0.13–v0.0.14, and across everything since — regions, sum types, contracts,
+conservation laws, termination measures, a self-hosted lexer and parser — **nothing
+has needed inheritance. Not once.** An item that sits on a roadmap for thirty
+versions without a single program asking for it is not planned, it is a wish, and the
+rule here is that a feature earns its place by being needed.
+
+What the plan was reaching for, the language already has: reuse from composition,
+substitutability from traits, and no fragile base class or diamond problem because
+there is no base class. The superseded design is kept in DESIGN.md as the record of
+what was considered — including the SOLID table, where Liskov moves from
+"contract-checked" to something stronger: **unrepresentable to violate**, since a
+type satisfies a trait exactly or it is a compile error, and there is no subtype to
+weaken a contract.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -2271,8 +2333,8 @@ it travels.
 - A4.5. The aggregate ABI: `byval` params, `sret` returns, layout guarantee
   — DONE (v0.0.12)
 - A4.6. Composition-first OOP: receiver methods (v0.0.13), traits + `dyn`
-  dispatch (v0.0.14) — DONE. `class` and `open` single inheritance still to
-  come (see "The OOP model") <- IN PROGRESS
+  dispatch (v0.0.14) — **DONE and CLOSED.** `class` / `open` single inheritance
+  was dropped in v0.0.46: thirty versions of real programs never needed it.
 - A4.7. Signature grammar: money/unit literals (`$19.99`, `8.25%`), string
   interpolation as a print (v0.0.17) and as a value (v0.0.28) — DONE. Unit
   literals (`5.km`) and pipelines still to come.
@@ -2280,6 +2342,9 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- A2a. Integer division by name (v0.0.46): `div_floor`, `div_trunc`, `rem`, each
+  checked for zero and for the one quotient an i64 cannot hold.
+- A4.6 CLOSED (v0.0.46): `class` / `open` inheritance dropped; composition-only final.
 - N5. Termination measures (v0.0.45): `decreases`, checked at every recursive call
   site — which is what makes it work with guaranteed tail calls. NOVELTY §5.
 - A5a. `old(...)` and method contracts (v0.0.44): NOVELTY §3's conservation laws,

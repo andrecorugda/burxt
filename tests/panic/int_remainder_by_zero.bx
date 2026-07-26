@@ -1,0 +1,2 @@
+let n: Int = 0;
+print(rem(1, n));

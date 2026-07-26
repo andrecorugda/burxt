@@ -1,1 +1,1 @@
-integer division truncates
+`/` on two Ints would have to round, and one operator cannot say which way

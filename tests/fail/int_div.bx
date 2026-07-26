@@ -1,2 +1,3 @@
-// Integer division truncates = silent rounding. Refused.
+// `/` on two Ints would have to round, and one operator cannot say which way.
+// The error names the three that can.
 print(7 / 2);

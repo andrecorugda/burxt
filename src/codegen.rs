@@ -1265,6 +1265,11 @@ impl<'ctx> CodeGen<'ctx> {
                     .map(Into::into)
                     .map_err(|e| e.to_string())
             }
+            TypedExprKind::IntDiv { kind, lhs, rhs } => {
+                let a = self.gen_expr(lhs)?.into_int_value();
+                let b = self.gen_expr(rhs)?.into_int_value();
+                self.build_int_div(*kind, a, b).map(Into::into)
+            }
             TypedExprKind::Old(index) => {
                 let (slot, ty) = self
                     .old_slots
@@ -3283,6 +3288,117 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(f)
     }
 
+    /// Integer division and remainder, in three named forms.
+    ///
+    /// `/` on two Ints stays refused, because a single operator cannot say which way
+    /// it rounds and the answer differs for negatives: -7 divided by 2 is -3 rounding
+    /// toward zero and -4 rounding down. Naming the operation says it out loud, which
+    /// is the same reasoning that made `byte_at` say "byte".
+    ///
+    /// Every form checks what C leaves undefined: division by zero, and
+    /// `i64::MIN / -1`, whose quotient does not exist in an i64.
+    fn build_int_div(
+        &mut self,
+        kind: IntDiv,
+        a: IntValue<'ctx>,
+        b: IntValue<'ctx>,
+    ) -> Result<IntValue<'ctx>, String> {
+        let f = self.int_div_fn(kind)?;
+        let call = self
+            .builder
+            .build_call(f, &[a.into(), b.into()], "intdiv")
+            .map_err(|e| e.to_string())?;
+        match call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => Ok(v.into_int_value()),
+            _ => Err("integer division helper returned void".to_string()),
+        }
+    }
+
+    fn int_div_fn(&mut self, kind: IntDiv) -> Result<FunctionValue<'ctx>, String> {
+        let (symbol, name) = match kind {
+            IntDiv::Floor => ("burxt.div.floor", "div_floor"),
+            IntDiv::Trunc => ("burxt.div.trunc", "div_trunc"),
+            IntDiv::Rem => ("burxt.rem", "rem"),
+        };
+        if let Some(f) = self.module.get_function(symbol) {
+            return Ok(f);
+        }
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let saved_block = self.builder.get_insert_block();
+        let i64t = self.ctx.i64_type();
+        let f = self.module.add_function(symbol, i64t.fn_type(&[i64t.into(), i64t.into()], false), None);
+        let entry = self.ctx.append_basic_block(f, "entry");
+        let by_zero = self.ctx.append_basic_block(f, "by_zero");
+        let not_zero = self.ctx.append_basic_block(f, "not_zero");
+        let overflows = self.ctx.append_basic_block(f, "overflows");
+        let compute = self.ctx.append_basic_block(f, "compute");
+
+        self.builder.position_at_end(entry);
+        let a = f.get_nth_param(0).unwrap().into_int_value();
+        let b = f.get_nth_param(1).unwrap().into_int_value();
+        use inkwell::IntPredicate::*;
+        let zero = i64t.const_zero();
+        let is_zero = self.builder.build_int_compare(EQ, b, zero, "is_zero").map_err(err)?;
+        self.builder.build_conditional_branch(is_zero, by_zero, not_zero).map_err(err)?;
+
+        self.builder.position_at_end(by_zero);
+        self.build_panic(&format!(
+            "burxt runtime error: {}(...) by zero\n",
+            name
+        ))?;
+
+        // i64::MIN / -1 has no i64 answer, and LLVM's sdiv leaves it undefined.
+        self.builder.position_at_end(not_zero);
+        let min = i64t.const_int(i64::MIN as u64, true);
+        let neg_one = i64t.const_int(-1i64 as u64, true);
+        let a_is_min = self.builder.build_int_compare(EQ, a, min, "a_min").map_err(err)?;
+        let b_is_neg1 = self.builder.build_int_compare(EQ, b, neg_one, "b_neg1").map_err(err)?;
+        let bad = self.builder.build_and(a_is_min, b_is_neg1, "min_over_neg1").map_err(err)?;
+        self.builder.build_conditional_branch(bad, overflows, compute).map_err(err)?;
+
+        self.builder.position_at_end(overflows);
+        self.build_panic(&format!(
+            "burxt runtime error: {}(...) overflowed — the most negative Int divided \
+             by -1 has no Int answer\n",
+            name
+        ))?;
+
+        self.builder.position_at_end(compute);
+        let result = match kind {
+            IntDiv::Rem => self.builder.build_int_signed_rem(a, b, "rem").map_err(err)?,
+            IntDiv::Trunc => self.builder.build_int_signed_div(a, b, "quot").map_err(err)?,
+            IntDiv::Floor => {
+                // Truncating division rounds toward zero; flooring rounds down. They
+                // differ by one exactly when there is a remainder and the operands
+                // have opposite signs.
+                let q = self.builder.build_int_signed_div(a, b, "quot").map_err(err)?;
+                let r = self.builder.build_int_signed_rem(a, b, "rem").map_err(err)?;
+                let has_rem = self.builder.build_int_compare(NE, r, zero, "has_rem").map_err(err)?;
+                let r_neg = self.builder.build_int_compare(SLT, r, zero, "r_neg").map_err(err)?;
+                let b_neg = self.builder.build_int_compare(SLT, b, zero, "b_neg").map_err(err)?;
+                let signs_differ = self
+                    .builder
+                    .build_xor(r_neg, b_neg, "signs_differ")
+                    .map_err(err)?;
+                let adjust = self.builder.build_and(has_rem, signs_differ, "adjust").map_err(err)?;
+                let lower = self
+                    .builder
+                    .build_int_sub(q, i64t.const_int(1, false), "lower")
+                    .map_err(err)?;
+                self.builder
+                    .build_select(adjust, lower, q, "floor")
+                    .map_err(err)?
+                    .into_int_value()
+            }
+        };
+        self.builder.build_return(Some(&result)).map_err(err)?;
+
+        if let Some(bb) = saved_block {
+            self.builder.position_at_end(bb);
+        }
+        Ok(f)
+    }
+
     /// Emit a call to the range-checked i64 -> double conversion used for a
     /// `CDouble` extern parameter.
     fn build_to_cdouble(&mut self, v: IntValue<'ctx>) -> Result<FloatValue<'ctx>, String> {
@@ -3644,6 +3760,18 @@ struct MeasureState<'ctx> {
     params: Vec<(String, Type)>,
     text: String,
     function: String,
+}
+
+/// Which integer division a call asked for. Three names rather than one operator,
+/// because they disagree on negatives and the difference must be visible.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum IntDiv {
+    /// Rounds down, toward negative infinity: `div_floor(-7, 2) == -4`.
+    Floor,
+    /// Rounds toward zero, as C does: `div_trunc(-7, 2) == -3`.
+    Trunc,
+    /// The remainder that pairs with `div_trunc`: its sign follows the dividend.
+    Rem,
 }
 
 pub fn is_aggregate(ty: &Type) -> bool {

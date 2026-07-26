@@ -1,0 +1,2 @@
+let d: Decimal<2> = $7.00;
+print(div_floor(d, 2));
