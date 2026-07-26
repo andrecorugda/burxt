@@ -71,11 +71,50 @@ struct Node {
 // is the better design regardless. Children pushed into a side array land
 // CONTIGUOUSLY even though their subtrees interleave in `nodes`, so nothing needs
 // back-patching, and a list is two integers instead of a chain of cells.
+// A declared type: `Int`, `Decimal<2, RoundHalfEven>`, `[Int]`, a struct name.
+// A struct rather than an enum, because it is compared and copied constantly and a
+// payload enum would need a match at every use.
+struct Ty {
+    // The node kinds the parser produces: 40 Int, 41 Bool, 42 String, 43 CInt,
+    // 44 CDouble, 45 Decimal, 46 named, 47 slice, 48 array, 49 dyn. 0 is unknown,
+    // which never equals anything — including another unknown.
+    kind: Int,
+    scale: Int,
+    contract: Int,
+    // For a named type, the span of its name in the source.
+    name_start: Int,
+    name_len: Int,
+}
+
+// A binding in scope: its name as a SPAN, so the checker allocates nothing to
+// remember a variable.
+struct Sym { start: Int, length: Int, ty: Ty, mutable: Int, depth: Int }
+// A declared function: its name span, its return type, and its parameter list node.
+struct Fun { start: Int, length: Int, ret: Ty, params: Int, flags: Int }
+// A declared struct or enum: its name span and the item node that declared it.
+struct TypeDecl { start: Int, length: Int, kind: Int, node: Int }
+
 struct Unit {
     toks: [Tok],
     words: [Kw],
     nodes: [Node],
     kids: [Int],
+    // A SECOND child array, for lists nested inside another list: a match arm's
+    // bindings, an enum variant's payload types, a trait signature's parameters.
+    //
+    // Not tidiness — correctness. Pushing bindings and arms into one array
+    // interleaves them, and the design's whole premise is that a list is contiguous.
+    // The first version did exactly that and indexed past the end; the cross-check
+    // test caught it on tests/pass/enum_match_flow.bx.
+    subs: [Int],
+    // Top-level items, in source order, for the checker to walk.
+    items: [Int],
+    syms: [Sym],
+    funs: [Fun],
+    types: [TypeDecl],
+    // Block depth, so a binding leaves scope at the closing brace.
+    depth: Int,
+    problems: Int,
     // Where the parser is in the token array.
     pos: Int,
     // Nonzero while parsing an `if`/`while` condition, where a `{` opens the BODY
@@ -105,6 +144,24 @@ fn at_byte(src: String, i: Int) -> Int {
         return -1;
     }
     return byte_at(src, i);
+}
+
+// Compare two spans of the source directly. The obvious way to write this is
+// `span_eq(src, a, alen, substring(src, b, blen))` — and the compiler refused it,
+// because `substring` allocates and a comparison has no business needing a region.
+// Comparing in place is both cheaper and what the checker wanted anyway.
+fn spans_eq(src: String, a: Int, a_len: Int, b: Int, b_len: Int) -> Bool {
+    if a_len != b_len {
+        return false;
+    }
+    let mut i: Int = 0;
+    while i < a_len {
+        if byte_at(src, a + i) != byte_at(src, b + i) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
 }
 
 // Compare a span of the source against a whole word, without allocating.
@@ -853,7 +910,7 @@ fn (mut self: Unit) parse_stmt(src: String) -> Int allocates {
             }
             let variant_tok: Int = self.pos;
             let v: Int = self.advance();
-            let bind_start: Int = len(self.kids);
+            let bind_start: Int = len(self.subs);
             let mut binds: Int = 0;
             if self.at(29) {                         // '(' bindings
                 let p: Int = self.advance();
@@ -861,7 +918,7 @@ fn (mut self: Unit) parse_stmt(src: String) -> Int allocates {
                     if !self.at(1) {
                         return self.complain(src, "a name to bind the payload to");
                     }
-                    push(self.kids, self.pos);
+                    push(self.subs, self.pos);
                     binds = binds + 1;
                     let b: Int = self.advance();
                     if self.at(22) {
@@ -956,7 +1013,7 @@ fn (mut self: Unit) parse_params(src: String) -> Int allocates {
 }
 
 // `requires`, `ensures` and `decreases`, between the signature and the body.
-fn (mut self: Unit) parse_clauses(src: String) -> Int allocates {
+fn (mut self: Unit) parse_clauses(src: String, ret: Int) -> Int allocates {
     let here: Int = self.pos;
     let start: Int = len(self.kids);
     let mut count: Int = 0;
@@ -976,7 +1033,7 @@ fn (mut self: Unit) parse_clauses(src: String) -> Int allocates {
         push(self.kids, clause);
         count = count + 1;
     }
-    return self.add(15, start, count, 0, 0, here);
+    return self.add(15, start, count, ret, 0, here);
 }
 
 // `fn name(params) -> Type [allocates] [clauses] { body }`, or a method when a
@@ -1022,7 +1079,7 @@ fn (mut self: Unit) parse_fn(src: String, is_pure: Int) -> Int allocates {
         builds_in_caller = 1;                        // word mean the marker.
         let a: Int = self.advance();
     }
-    let clauses: Int = self.parse_clauses(src);
+    let clauses: Int = self.parse_clauses(src, ret);
     if clauses < 0 { return -1; }
     let body: Int = self.parse_block(src);
     if body < 0 { return -1; }
@@ -1083,14 +1140,14 @@ fn (mut self: Unit) parse_enum(src: String) -> Int allocates {
         if !self.at(1) { return self.complain(src, "a variant name"); }
         let variant_tok: Int = self.pos;
         let v: Int = self.advance();
-        let payload_start: Int = len(self.kids);
+        let payload_start: Int = len(self.subs);
         let mut payload: Int = 0;
         if self.at(29) {                             // '(' — a payload
             let p: Int = self.advance();
             while !self.at(30) {
                 let ty: Int = self.parse_type(src);
                 if ty < 0 { return -1; }
-                push(self.kids, ty);
+                push(self.subs, ty);
                 payload = payload + 1;
                 if self.at(22) {
                     let c: Int = self.advance();
@@ -1135,7 +1192,7 @@ fn (mut self: Unit) parse_trait(src: String) -> Int allocates {
         }
         if !self.eat(src, 119, "`self`") { return -1; }
         // A trait signature may take parameters after `self`.
-        let extra_start: Int = len(self.kids);
+        let extra_start: Int = len(self.subs);
         let mut extra: Int = 0;
         while self.at(22) {                          // ',' more parameters
             let c: Int = self.advance();
@@ -1146,7 +1203,7 @@ fn (mut self: Unit) parse_trait(src: String) -> Int allocates {
             let ty: Int = self.parse_type(src);
             if ty < 0 { return -1; }
             let param: Int = self.add(90, ty, 0, 0, 0, pname);
-            push(self.kids, param);
+            push(self.subs, param);
             extra = extra + 1;
         }
         if !self.eat(src, 30, "`)`") { return -1; }
@@ -1246,6 +1303,513 @@ fn (mut self: Unit) skip_item() -> Int {
     return self.pos;
 }
 
+
+// ============================================================================
+// PHASE 4: the typechecker. Types in, refusals out — the same rules the Rust
+// compiler enforces, applied to the AST the parser just built.
+// ============================================================================
+
+fn ty_unknown() -> Ty {
+    return Ty { kind: 0, scale: 0, contract: 0, name_start: 0, name_len: 0 };
+}
+
+fn ty_simple(kind: Int) -> Ty {
+    return Ty { kind: kind, scale: 0, contract: 0, name_start: 0, name_len: 0 };
+}
+
+fn ty_decimal(scale: Int, contract: Int) -> Ty {
+    return Ty { kind: 45, scale: scale, contract: contract, name_start: 0, name_len: 0 };
+}
+
+// An unknown type never equals anything, including another unknown: one bad
+// expression must not make every later comparison succeed. The stage-1 checker in
+// examples/checker.bx learned this the hard way, and so did stage-0's recovery.
+fn is_unknown(t: Ty) -> Bool {
+    return t.kind == 0;
+}
+
+fn ty_same(src: String, a: Ty, b: Ty) -> Bool {
+    if a.kind == 0 || b.kind == 0 {
+        return false;
+    }
+    if a.kind != b.kind {
+        return false;
+    }
+    if a.kind == 45 {
+        // The rounding contract is part of the type, so it is part of equality.
+        return a.scale == b.scale && a.contract == b.contract;
+    }
+    if a.kind == 46 || a.kind == 49 {
+        return spans_eq(src, a.name_start, a.name_len, b.name_start, b.name_len);
+    }
+    return true;
+}
+
+fn ty_show(src: String, t: Ty) -> String allocates {
+    if t.kind == 0 { return "?"; }
+    if t.kind == 40 { return "Int"; }
+    if t.kind == 41 { return "Bool"; }
+    if t.kind == 42 { return "String"; }
+    if t.kind == 43 { return "CInt"; }
+    if t.kind == 44 { return "CDouble"; }
+    if t.kind == 45 {
+        if t.contract == 1 {
+            return "Decimal<" + to_string(t.scale) + ", RoundHalfEven>";
+        }
+        if t.contract == 2 {
+            return "Decimal<" + to_string(t.scale) + ", RoundHalfUp>";
+        }
+        return "Decimal<" + to_string(t.scale) + ">";
+    }
+    if t.kind == 47 { return "a growable array"; }
+    if t.kind == 48 { return "an array"; }
+    if t.kind == 49 { return "dyn " + substring(src, t.name_start, t.name_len); }
+    return substring(src, t.name_start, t.name_len);
+}
+
+// Read a type NODE into a Ty.
+fn (self: Unit) ty_of(src: String, node: Int) -> Ty {
+    if node < 0 {
+        return ty_unknown();
+    }
+    let n: Node = self.nodes[node];
+    if n.kind == 45 {
+        return ty_decimal(n.a, n.b);
+    }
+    if n.kind == 46 || n.kind == 49 {
+        let t: Tok = self.toks[n.tok];
+        return Ty { kind: n.kind, scale: 0, contract: 0,
+                    name_start: t.start, name_len: t.length };
+    }
+    if n.kind >= 40 && n.kind <= 48 {
+        return ty_simple(n.kind);
+    }
+    return ty_unknown();
+}
+
+fn (mut self: Unit) complain_at(src: String, tok: Int, message: String) -> Int allocates {
+    let t: Tok = self.toks[tok];
+    print("error: " + message + " (at `" + substring(src, t.start, t.length) + "`)");
+    self.problems = self.problems + 1;
+    return 0;
+}
+
+// ---- declarations ------------------------------------------------------------
+fn (self: Unit) find_sym(src: String, start: Int, length: Int) -> Int {
+    // Backwards: the innermost binding with this name is the one in scope.
+    let mut i: Int = len(self.syms) - 1;
+    while i >= 0 {
+        if spans_eq(src, self.syms[i].start, self.syms[i].length, start, length) {
+            return i;
+        }
+        i = i - 1;
+    }
+    return -1;
+}
+
+fn (self: Unit) find_fun(src: String, start: Int, length: Int) -> Int {
+    let mut i: Int = 0;
+    while i < len(self.funs) {
+        if spans_eq(src, self.funs[i].start, self.funs[i].length, start, length) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn (self: Unit) find_type(src: String, start: Int, length: Int) -> Int {
+    let mut i: Int = 0;
+    while i < len(self.types) {
+        if spans_eq(src, self.types[i].start, self.types[i].length, start, length) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// Every signature first, so functions may be declared in any order and call each
+// other — the same two-pass shape stage-0 uses.
+fn (mut self: Unit) collect_declarations(src: String) -> Int allocates {
+    let mut i: Int = 0;
+    while i < len(self.items) {
+        let index: Int = self.items[i];
+        let item: Node = self.nodes[index];
+        let name: Tok = self.toks[item.tok];
+        if item.kind == 82 || item.kind == 83 {
+            if self.find_type(src, name.start, name.length) >= 0 {
+                let e: Int = self.complain_at(src, item.tok, "this type is declared twice");
+            } else {
+                push(self.types, TypeDecl { start: name.start, length: name.length,
+                                            kind: item.kind, node: index });
+            }
+        }
+        if item.kind == 80 || item.kind == 86 {
+            if self.find_fun(src, name.start, name.length) >= 0 {
+                let e: Int = self.complain_at(src, item.tok, "this function is declared twice");
+            } else {
+                let mut ret: Ty = ty_unknown();
+                if item.kind == 80 {
+                    let signature: Node = self.nodes[item.c];
+                    ret = self.ty_of(src, signature.c);
+                } else {
+                    ret = self.ty_of(src, item.b);   // an extern holds it directly
+                }
+                push(self.funs, Fun { start: name.start, length: name.length,
+                                      ret: ret, params: item.a, flags: item.value });
+            }
+        }
+        i = i + 1;
+    }
+    return len(self.funs);
+}
+
+// ---- expressions -------------------------------------------------------------
+// `expected` carries the declared type inward, which is how a Decimal product can
+// know whether a rounding contract was supplied — exactly as in stage-0.
+fn (mut self: Unit) type_of(src: String, node: Int, expected: Ty) -> Ty allocates {
+    if node < 0 {
+        return ty_unknown();
+    }
+    let n: Node = self.nodes[node];
+
+    if n.kind == 1 { return ty_simple(40); }
+    if n.kind == 2 { return ty_decimal(n.a, expected.contract); }
+    if n.kind == 3 { return ty_simple(42); }
+    if n.kind == 4 { return ty_simple(41); }
+
+    if n.kind == 5 {                                 // a name
+        let t: Tok = self.toks[n.tok];
+        let found: Int = self.find_sym(src, t.start, t.length);
+        if found < 0 {
+            let e: Int = self.complain_at(src, n.tok, "unknown name");
+            return ty_unknown();
+        }
+        return self.syms[found].ty;
+    }
+
+    if n.kind == 6 {                                 // -x
+        return self.type_of(src, n.a, expected);
+    }
+    if n.kind == 7 {                                 // !x
+        let inner: Ty = self.type_of(src, n.a, ty_simple(41));
+        if !is_unknown(inner) && inner.kind != 41 {
+            let e: Int = self.complain_at(src, n.tok,
+                "`!` needs a Bool, but this is " + ty_show(src, inner));
+        }
+        return ty_simple(41);
+    }
+
+    if n.kind == 8 {                                 // a + b, a * b
+        let left: Ty = self.type_of(src, n.a, expected);
+        let right: Ty = self.type_of(src, n.b, expected);
+        if is_unknown(left) || is_unknown(right) {
+            return ty_unknown();
+        }
+        // `*` combines a quantity with a rate, so the scales may differ — but the
+        // product's scale is their SUM, and landing it needs a declared contract.
+        if n.value == 27 {
+            if left.kind == 45 && right.kind == 45 {
+                if expected.contract == 0 {
+                    let e: Int = self.complain_at(src, n.tok,
+                        "`*` on " + ty_show(src, left) + " and " + ty_show(src, right)
+                        + " needs a rounding contract: the exact product has "
+                        + to_string(left.scale + right.scale) + " decimal places");
+                    return ty_unknown();
+                }
+                return expected;
+            }
+            if left.kind == 45 && right.kind == 40 { return left; }
+            if left.kind == 40 && right.kind == 45 { return right; }
+        }
+        if n.value == 28 && left.kind == 40 && right.kind == 40 {
+            let e: Int = self.complain_at(src, n.tok,
+                "`/` on two Ints would have to round, and one operator cannot say "
+                + "which way — use div_floor, div_trunc or rem");
+            return ty_unknown();
+        }
+        // `+` and `-` combine like quantities: the types must match exactly.
+        if !ty_same(src, left, right) {
+            let e: Int = self.complain_at(src, n.tok,
+                "cannot combine " + ty_show(src, left) + " and " + ty_show(src, right)
+                + ": addition and subtraction need the same type, scale included");
+            return ty_unknown();
+        }
+        return left;
+    }
+
+    if n.kind == 9 {                                 // a comparison
+        let left: Ty = self.type_of(src, n.a, ty_unknown());
+        let right: Ty = self.type_of(src, n.b, left);
+        if !is_unknown(left) && !is_unknown(right) && !ty_same(src, left, right) {
+            let e: Int = self.complain_at(src, n.tok,
+                "cannot compare " + ty_show(src, left) + " with " + ty_show(src, right)
+                + ": one equality, no coercion");
+        }
+        return ty_simple(41);
+    }
+
+    if n.kind == 10 {                                // && ||
+        let left: Ty = self.type_of(src, n.a, ty_simple(41));
+        let right: Ty = self.type_of(src, n.b, ty_simple(41));
+        if !is_unknown(left) && left.kind != 41 {
+            let e: Int = self.complain_at(src, n.tok, "this operator needs a Bool");
+        }
+        if !is_unknown(right) && right.kind != 41 {
+            let e: Int = self.complain_at(src, n.tok, "this operator needs a Bool");
+        }
+        return ty_simple(41);
+    }
+
+    if n.kind == 13 {                                // a call
+        let t: Tok = self.toks[n.tok];
+        let found: Int = self.find_fun(src, t.start, t.length);
+        if found < 0 {
+            // Builtins are not in the table: `len`, `to_string`, `print` and friends
+            // are checked in phase 4b, so their arguments are visited and let be.
+            let args: Int = self.check_args(src, n.a);
+            return ty_unknown();
+        }
+        let signature: Fun = self.funs[found];
+        let list: Node = self.nodes[n.a];
+        let params: Node = self.nodes[signature.params];
+        if list.b != params.b {
+            let e: Int = self.complain_at(src, n.tok,
+                "this call passes " + to_string(list.b) + " argument(s), but the "
+                + "function takes " + to_string(params.b));
+            return signature.ret;
+        }
+        let mut i: Int = 0;
+        while i < list.b {
+            let arg: Int = self.kids[list.a + i];
+            let param: Node = self.nodes[self.kids[params.a + i]];
+            let want: Ty = self.ty_of(src, param.a);
+            let got: Ty = self.type_of(src, arg, want);
+            if !is_unknown(got) && !ty_same(src, got, want) {
+                let e: Int = self.complain_at(src, n.tok,
+                    "argument " + to_string(i + 1) + " should be " + ty_show(src, want)
+                    + ", but it is " + ty_show(src, got));
+            }
+            i = i + 1;
+        }
+        return signature.ret;
+    }
+
+    // Anything else — fields, method calls, indexing, struct and array literals —
+    // is phase 4b. Its children are still visited so unknown names are still found.
+    let visited: Int = self.visit_children(src, node);
+    return ty_unknown();
+}
+
+// Walk an expression's children without judging the node itself.
+fn (mut self: Unit) visit_children(src: String, node: Int) -> Int allocates {
+    let n: Node = self.nodes[node];
+    if n.kind == 11 || n.kind == 6 || n.kind == 7 {
+        let a: Ty = self.type_of(src, n.a, ty_unknown());
+        return 1;
+    }
+    if n.kind == 12 || n.kind == 14 {
+        let a: Ty = self.type_of(src, n.a, ty_unknown());
+        if n.kind == 12 {
+            let b: Ty = self.type_of(src, n.b, ty_simple(40));
+        }
+        return 1;
+    }
+    if n.kind == 17 || n.kind == 19 {                // array or struct literal
+        let mut i: Int = 0;
+        while i < n.b {
+            let child: Int = self.kids[n.a + i];
+            let field: Node = self.nodes[child];
+            if n.kind == 19 {
+                let v: Ty = self.type_of(src, field.a, ty_unknown());
+            } else {
+                let v: Ty = self.type_of(src, child, ty_unknown());
+            }
+            i = i + 1;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+fn (mut self: Unit) check_args(src: String, list_node: Int) -> Int allocates {
+    if list_node < 0 {
+        return 0;
+    }
+    let list: Node = self.nodes[list_node];
+    let mut i: Int = 0;
+    while i < list.b {
+        let arg: Ty = self.type_of(src, self.kids[list.a + i], ty_unknown());
+        i = i + 1;
+    }
+    return list.b;
+}
+
+// ---- statements --------------------------------------------------------------
+fn (mut self: Unit) check_block_nodes(src: String, block: Int, ret: Ty) -> Int allocates {
+    if block < 0 {
+        return 0;
+    }
+    let node: Node = self.nodes[block];
+    self.depth = self.depth + 1;
+    let mut i: Int = 0;
+    while i < node.b {
+        let checked: Int = self.check_stmt_node(src, self.kids[node.a + i], ret);
+        i = i + 1;
+    }
+    // Everything declared inside the block leaves scope at the closing brace. One
+    // `truncate` rather than a loop: the bindings a block made are the ones on top.
+    let mut keep: Int = len(self.syms);
+    while keep > 0 && self.syms[keep - 1].depth >= self.depth {
+        keep = keep - 1;
+    }
+    let dropped: Int = truncate(self.syms, keep);
+    self.depth = self.depth - 1;
+    return node.b;
+}
+
+fn (mut self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -> Int allocates {
+    if stmt < 0 {
+        return 0;
+    }
+    let n: Node = self.nodes[stmt];
+
+    if n.kind == 60 {                                // let
+        let declared: Ty = self.ty_of(src, n.a);
+        let actual: Ty = self.type_of(src, n.b, declared);
+        if !is_unknown(actual) && !ty_same(src, actual, declared) {
+            let e: Int = self.complain_at(src, n.tok,
+                "declared " + ty_show(src, declared) + ", but the value is "
+                + ty_show(src, actual));
+        }
+        let name: Tok = self.toks[n.tok];
+        // Shadowing is refused, so a second `let` of the same name is an error.
+        if self.find_sym(src, name.start, name.length) >= 0 {
+            let e: Int = self.complain_at(src, n.tok,
+                "this name is already declared — Burxt does not shadow");
+        }
+        push(self.syms, Sym { start: name.start, length: name.length,
+                              ty: declared, mutable: n.value, depth: self.depth });
+        return 1;
+    }
+
+    if n.kind == 61 {                                // assignment
+        let target: Node = self.nodes[n.a];
+        let want: Ty = self.type_of(src, n.a, ty_unknown());
+        let got: Ty = self.type_of(src, n.b, want);
+        if !is_unknown(got) && !is_unknown(want) && !ty_same(src, got, want) {
+            let e: Int = self.complain_at(src, n.tok,
+                "cannot assign " + ty_show(src, got) + " to " + ty_show(src, want));
+        }
+        // Only a `let mut` binding may be assigned to.
+        if target.kind == 5 {
+            let name: Tok = self.toks[target.tok];
+            let found: Int = self.find_sym(src, name.start, name.length);
+            if found >= 0 && self.syms[found].mutable == 0 {
+                let e: Int = self.complain_at(src, target.tok,
+                    "this was declared immutable — declare it `let mut` to allow it");
+            }
+        }
+        return 1;
+    }
+
+    if n.kind == 62 || n.kind == 70 {                // print, expression statement
+        let value: Ty = self.type_of(src, n.a, ty_unknown());
+        return 1;
+    }
+
+    if n.kind == 63 || n.kind == 64 {                // return, return tail
+        let value: Ty = self.type_of(src, n.a, ret);
+        if !is_unknown(value) && !is_unknown(ret) && !ty_same(src, value, ret) {
+            let e: Int = self.complain_at(src, n.tok,
+                "this function returns " + ty_show(src, ret) + ", but the value is "
+                + ty_show(src, value));
+        }
+        return 1;
+    }
+
+    if n.kind == 65 {                                // if
+        let cond: Ty = self.type_of(src, n.a, ty_simple(41));
+        if !is_unknown(cond) && cond.kind != 41 {
+            let e: Int = self.complain_at(src, n.tok, "an `if` condition must be a Bool");
+        }
+        let t: Int = self.check_block_nodes(src, n.b, ret);
+        if n.c >= 0 {
+            let other: Node = self.nodes[n.c];
+            if other.kind == 16 {
+                let f: Int = self.check_block_nodes(src, n.c, ret);
+            } else {
+                let f: Int = self.check_stmt_node(src, n.c, ret);
+            }
+        }
+        return 1;
+    }
+
+    if n.kind == 66 {                                // while
+        let cond: Ty = self.type_of(src, n.a, ty_simple(41));
+        if !is_unknown(cond) && cond.kind != 41 {
+            let e: Int = self.complain_at(src, n.tok, "a `while` condition must be a Bool");
+        }
+        let body: Int = self.check_block_nodes(src, n.b, ret);
+        return 1;
+    }
+
+    if n.kind == 69 {                                // region
+        let body: Int = self.check_block_nodes(src, n.a, ret);
+        return 1;
+    }
+
+    if n.kind == 71 {                                // match — arms are phase 4b
+        let value: Ty = self.type_of(src, n.a, ty_unknown());
+        let mut i: Int = 0;
+        while i < n.c {
+            let arm: Node = self.nodes[self.kids[n.b + i]];
+            let body: Int = self.check_block_nodes(src, arm.a, ret);
+            i = i + 1;
+        }
+        return 1;
+    }
+
+    return 0;
+}
+
+// ---- the pass ----------------------------------------------------------------
+fn (mut self: Unit) check(src: String) -> Int allocates {
+    let collected: Int = self.collect_declarations(src);
+    let mut i: Int = 0;
+    while i < len(self.items) {
+        let index: Int = self.items[i];
+        let item: Node = self.nodes[index];
+        if item.kind == 80 {                         // a function: parameters in scope
+            let base: Int = len(self.syms);
+            self.depth = self.depth + 1;
+            let params: Node = self.nodes[item.a];
+            let mut p: Int = 0;
+            while p < params.b {
+                let param: Node = self.nodes[self.kids[params.a + p]];
+                let name: Tok = self.toks[param.tok];
+                push(self.syms, Sym { start: name.start, length: name.length,
+                                      ty: self.ty_of(src, param.a), mutable: 0,
+                                      depth: self.depth });
+                p = p + 1;
+            }
+            // The return type rides in the clause node's spare slot.
+            let signature: Node = self.nodes[item.c];
+            let ret: Ty = self.ty_of(src, signature.c);
+            let body: Int = self.check_block_nodes(src, item.b, ret);
+            // The parameters go out of scope with the function.
+            let dropped: Int = truncate(self.syms, base);
+            self.depth = self.depth - 1;
+        }
+        if item.kind >= 60 && item.kind <= 71 {      // a top-level statement
+            let checked: Int = self.check_stmt_node(src, index, ty_unknown());
+        }
+        i = i + 1;
+    }
+    return self.problems;
+}
+
 // ---- reporting -------------------------------------------------------------
 fn kind_name(kind: Int) -> String allocates {
     if kind == 1 { return "ident"; }
@@ -1292,7 +1856,7 @@ region compile {
         path = arg(1);
     }
     let src: String = read_file(path);
-    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], pos: 0, no_struct: 0, errors: 0 };
+    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], types: [], depth: 0, problems: 0, pos: 0, no_struct: 0, errors: 0 };
     let installed: Int = unit.install_keywords();
     let total: Int = unit.run(src);
 
@@ -1312,10 +1876,19 @@ region compile {
         if item < 0 {
             break;
         }
+        push(unit.items, item);
         items = items + 1;
     }
     print("parsed " + to_string(items) + " items and statements into "
           + to_string(len(unit.nodes)) + " nodes, "
           + to_string(len(unit.kids)) + " child slots");
     print("  parse errors: " + to_string(unit.errors));
+
+    // ---- phase 4: check what the parser read ----
+    if unit.errors == 0 {
+        let problems: Int = unit.check(src);
+        print("checked " + to_string(len(unit.funs)) + " functions and "
+              + to_string(len(unit.types)) + " types");
+        print("  type errors: " + to_string(problems));
+    }
 }

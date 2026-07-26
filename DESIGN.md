@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.56)
+# Burxt — Design Notes (v0.0.57)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -2691,6 +2691,51 @@ the M4 certificate; it is a differential test. A change to the language now has 
 places that must agree, and the disagreement surfaces as a failing test rather than as
 a bug report six months later. That is worth more than the milestone.
 
+### v0.0.57: `truncate`, and stage-1 typechecks itself
+
+M4 phase 4a. The stage-1 compiler is 1,758 lines of Burxt and now **typechecks**: it
+collects every declaration, walks every expression and statement, and refuses what
+stage-0 refuses.
+
+```text
+error: `*` on Decimal<2> and Decimal<4> needs a rounding contract: the exact product
+       has 6 decimal places
+error: cannot combine Decimal<2> and Decimal<4>: addition and subtraction need the
+       same type, scale included
+error: `/` on two Ints would have to round, and one operator cannot say which way
+error: unknown name (at `nobody_declared_this`)
+```
+
+**The thesis, enforced by a Burxt program, over a real AST.** And the strongest single
+case: `stage1.bx` typechecks **its own 1,758 lines with zero complaints.** A test holds
+it to both directions — silent on what stage-0 accepts, and catching all seven mistakes
+in a program written to break every rule this phase implements, inventing none.
+
+Honest measure of what remains: **22 of 87 pass programs still draw a complaint stage-0
+does not**, all from what phase 4b covers — field access, struct literals, methods,
+match bindings, builtins. That number is the progress bar.
+
+**`truncate(xs, n)` had to be added to the language**, and it is the clearest "earned
+its place" case yet. Leaving a block must drop the bindings it made, and Burxt had no
+way to make a growable array shorter: `push` and reading worked, shrinking did not. So a
+scope could only ever grow, and a function's parameters stayed visible forever — which
+showed up immediately as a **false "already declared"** on a top-level name that matched
+a parameter. The buffer is kept, so a scope that pushes and truncates reuses the same
+memory instead of growing; a length above the current one is a named runtime error,
+because exposing elements that were never written is exactly the silent wrongness this
+language refuses.
+
+**And a bug in my own Burxt worth keeping**, because it broke the design's premise. The
+arena's whole idea is that a child list is *contiguous*, so a node stores `(start,
+count)`. I then pushed a match arm's **bindings** into the same array as the **arms** —
+interleaving two lists, so reading `count` arms from `start` walked past the end. It
+read index 95 of 91.
+
+The cross-check test found it on `tests/pass/enum_match_flow.bx` within seconds. Nested
+lists now have their own array, and the comment above it says why it is correctness
+rather than tidiness. Three places had the same shape: match bindings, enum payload
+types, trait signature parameters.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -2755,6 +2800,9 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- M4 phase 4a (v0.0.57): the stage-1 typechecker — declarations, expressions,
+  statements, the scale rules. Typechecks its own source. Plus `truncate(xs, n)`, which
+  a scope-based checker cannot do without.
 - A4.7b. Contextual marker words (v0.0.55): `allocates`, `requires`, `ensures` and
   `decreases` are recognised by position, not reserved — so they are usable as names.
 - M4 phase 3b (v0.0.54): items, markers and contract clauses — stage-1 parses its own

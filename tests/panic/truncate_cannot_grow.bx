@@ -1,0 +1,5 @@
+region r {
+    let mut xs: [Int] = [];
+    push(xs, 1);
+    print(truncate(xs, 5));
+}

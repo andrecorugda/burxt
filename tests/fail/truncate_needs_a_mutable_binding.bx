@@ -1,0 +1,4 @@
+region r {
+    let xs: [Int] = [];
+    print(truncate(xs, 0));
+}

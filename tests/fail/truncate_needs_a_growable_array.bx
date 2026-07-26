@@ -1,0 +1,2 @@
+let xs: [Int; 2] = [1, 2];
+region r { print(truncate(xs, 1)); }

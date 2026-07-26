@@ -49,6 +49,9 @@ pub enum TypedExprKind {
     /// Negation of a non-literal (literals are folded at check time).
     Neg(Box<TypedExpr>),
     Not(Box<TypedExpr>),
+    /// `truncate(xs, n)` — drop everything past `n`. The counterpart to `push`, and
+    /// the primitive a scope needs: leaving a block drops every binding it made.
+    Truncate { place: Box<TypedExpr>, length: Box<TypedExpr> },
     /// `arg_count()` and `arg(n)` — the command line. A compiler needs to know which
     /// file it was asked to compile.
     ArgCount,
@@ -749,7 +752,7 @@ impl TypeChecker {
             if self.fns.contains_key(&f.name) {
                 return Err(format!("function `{}` is defined twice", f.name));
             }
-            if f.name == "len" || f.name == "byte_at" || f.name == "push" || f.name == "read_file" || f.name == "to_string" || f.name == "old" || f.name == "substring" || f.name == "write_file" || f.name == "arg" || f.name == "arg_count" || f.name == "div_floor" || f.name == "div_trunc" || f.name == "rem" {
+            if f.name == "len" || f.name == "byte_at" || f.name == "push" || f.name == "read_file" || f.name == "to_string" || f.name == "old" || f.name == "substring" || f.name == "truncate" || f.name == "write_file" || f.name == "arg" || f.name == "arg_count" || f.name == "div_floor" || f.name == "div_trunc" || f.name == "rem" {
                 return Err(format!(
                     "the name `{}` is reserved for a built-in",
                     f.name
@@ -1283,7 +1286,7 @@ impl TypeChecker {
     /// function returns.
     fn check_extern(&self, e: &ExternFn) -> Result<(), String> {
         const RESERVED: [&str; 6] = ["printf", "fprintf", "fputs", "exit", "stderr", "main"];
-        if e.name == "len" || e.name == "byte_at" || e.name == "push" || e.name == "read_file" || e.name == "to_string" || e.name == "old" || e.name == "substring" || e.name == "write_file" || e.name == "arg" || e.name == "arg_count" || e.name == "div_floor" || e.name == "div_trunc" || e.name == "rem" {
+        if e.name == "len" || e.name == "byte_at" || e.name == "push" || e.name == "read_file" || e.name == "to_string" || e.name == "old" || e.name == "substring" || e.name == "truncate" || e.name == "write_file" || e.name == "arg" || e.name == "arg_count" || e.name == "div_floor" || e.name == "div_trunc" || e.name == "rem" {
             return Err(format!("the name `{}` is reserved for a built-in", e.name));
         }
         if RESERVED.contains(&e.name.as_str()) {
@@ -2463,6 +2466,41 @@ impl TypeChecker {
                 // `push(xs, v)` appends to a growable array, growing it in the
                 // region when it is full. It needs a mutable PLACE, the same
                 // rule element assignment follows.
+                // `truncate(xs, n)` — the only way to make a growable array shorter.
+                // Earned by a self-hosted checker: leaving a block has to drop the
+                // bindings it made, and without this a scope could only ever grow.
+                if name == "truncate" {
+                    if args.len() != 2 {
+                        return Err(
+                            "truncate(...) takes a growable array and a length: \
+                             truncate(xs, n)"
+                                .to_string(),
+                        );
+                    }
+                    let place = self.check_expr(&args[0], None)?;
+                    if !matches!(place.ty, Type::Slice(_)) {
+                        return Err(format!(
+                            "truncate(...) needs a growable array `[T]`, but this has \
+                             type {}",
+                            place.ty
+                        ));
+                    }
+                    self.require_mutable_place(&args[0])?;
+                    let length = self.check_expr(&args[1], Some(&Type::Int))?;
+                    if length.ty != Type::Int {
+                        return Err(format!(
+                            "truncate(...) takes an Int length, but this has type {}",
+                            length.ty
+                        ));
+                    }
+                    return Ok(TypedExpr {
+                        ty: Type::Int,
+                        kind: TypedExprKind::Truncate {
+                            place: Box::new(place),
+                            length: Box::new(length),
+                        },
+                    });
+                }
                 if name == "push" {
                     if args.len() != 2 {
                         return Err(

@@ -32,7 +32,7 @@ language server, JSON layer or diagnostics rendering.
 |---|---|---|---|
 | Lexer | 661 | 800–1,000 | **376, DONE** (v0.0.52) — came in under estimate |
 | AST + parser | 1,787 | 2,000–2,600 | **~930, DONE** (v0.0.53–54) — under estimate |
-| Typechecker | 3,702 | 4,500–5,500 | 385 (scale rule, symbol table) |
+| Typechecker | 3,702 | 4,500–5,500 | **~470 for 4a** (v0.0.57); 4b remains |
 | Backend (IR text) | 3,924 | 2,500–3,500 | 0 |
 | Driver | 230 | ~150 | 0 |
 | **Total** | | **≈10,000–12,500** | ~680 of real front-end work |
@@ -62,8 +62,15 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
      errors. Still open: splitting interpolation fragments into pieces, and a trait
      signature's parameters beyond the receiver.
 4. **A full typechecker in Burxt.** The big one, and the one where the language will
-   hurt most: 4,500 lines of rules with linear-search symbol tables and one source
-   file.
+   hurt most: rules with linear-search symbol tables and one source file.
+   - **4a DONE (v0.0.57):** declarations collected in a first pass, expressions typed
+     with the expected type carried inward (which is how a Decimal product knows
+     whether a contract was supplied), statements checked including `let`, assignment,
+     mutability, `return` against the signature, and conditions. **stage-1 typechecks
+     its own source with zero complaints.** 22 of 87 pass programs still draw a
+     complaint stage-0 does not — that is the progress bar for 4b.
+   - **4b:** field access and struct literals, methods, match bindings against variant
+     payloads, and the builtins (`len`, `to_string`, `push`, `substring`, …).
 5. **An IR-text backend in Burxt.**
 6. **Bootstrap and fixpoint.** stage-0 builds stage-1; stage-1 builds stage-1;
    compare.

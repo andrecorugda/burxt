@@ -975,3 +975,75 @@ fn the_burxt_front_end_accepts_every_burxt_source() {
     );
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }
+
+/// The stage-1 TYPECHECKER, written in Burxt, must refuse what stage-0 refuses and
+/// accept what stage-0 accepts — over the subset it covers so far.
+///
+/// Two directions, because either one alone is easy to pass: a checker that says
+/// nothing accepts everything, and a checker that says everything catches everything.
+#[test]
+fn the_burxt_typechecker_agrees_with_the_rust_one() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("stage1-check");
+    fs::create_dir_all(&scratch).unwrap();
+    let build = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("examples/stage1.bx"))
+        .current_dir(&scratch)
+        .output()
+        .expect("failed to spawn burxt");
+    assert!(build.status.success(), "stage-1 did not compile");
+
+    let errors_reported = |file: &Path| -> i32 {
+        let out = Command::new(scratch.join("stage1"))
+            .arg(file)
+            .current_dir(&scratch)
+            .output()
+            .expect("failed to run stage-1");
+        let text = String::from_utf8_lossy(&out.stdout);
+        text.lines()
+            .find_map(|l| l.trim().strip_prefix("type errors: "))
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(-1)
+    };
+
+    // Direction 1: silent on programs it covers — including its own source, which is
+    // the strongest single case, being 1,700 lines of the language.
+    for name in [
+        "examples/stage1.bx",
+        "money.bx",
+        "tests/pass/contracts.bx",
+        "tests/pass/int_division.bx",
+        "tests/pass/termination_measure.bx",
+    ] {
+        let found = errors_reported(&root.join(name));
+        assert_eq!(found, 0, "stage-1 complained about {}, which stage-0 accepts", name);
+    }
+
+    // Direction 2: it catches the mistakes stage-0 catches. One program, every rule
+    // this phase implements.
+    let wrong = scratch.join("wrong.bx");
+    fs::write(
+        &wrong,
+        "fn tax(amount: Decimal<2>, rate: Decimal<4>) -> Decimal<2, RoundHalfEven> {\n\
+         return amount * rate;\n\
+         }\n\
+         let price: Decimal<2> = $19.99;\n\
+         let rate: Decimal<4> = 8.25%;\n\
+         let scales: Decimal<2> = price + rate;\n\
+         let narrow: Int = price;\n\
+         let arity: Decimal<2, RoundHalfEven> = tax(price);\n\
+         let contract: Decimal<2> = price * rate;\n\
+         let truth: Bool = price;\n\
+         let divided: Int = 7 / 2;\n\
+         print(nobody_declared_this);\n",
+    )
+    .unwrap();
+    let found = errors_reported(&wrong);
+    let _ = fs::remove_dir_all(&scratch);
+    assert_eq!(
+        found, 7,
+        "expected stage-1 to catch all seven mistakes and invent none, got {}",
+        found
+    );
+}

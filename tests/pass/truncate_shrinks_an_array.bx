@@ -1,0 +1,22 @@
+// `truncate` is the counterpart to `push`, and it was earned by a self-hosted
+// typechecker: leaving a block must drop the bindings it made, and without this a
+// scope could only ever grow. The buffer is kept, so a scope that pushes and
+// truncates repeatedly reuses the same memory rather than growing forever.
+region r {
+    let mut xs: [Int] = [];
+    let mut i: Int = 0;
+    while i < 10 {
+        push(xs, i);
+        i = i + 1;
+    }
+    print(len(xs));
+    print(truncate(xs, 4));
+    print(len(xs));
+    print(xs[3]);
+    // Pushing after truncating reuses the space the dropped elements had.
+    push(xs, 99);
+    print(len(xs));
+    print(xs[4]);
+    print(truncate(xs, 0));
+    print(len(xs));
+}

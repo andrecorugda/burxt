@@ -1999,6 +1999,11 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_load(ll_elem, p, "elem")
                     .map_err(|e| e.to_string())
             }
+            TypedExprKind::Truncate { place, length } => {
+                let slot = self.gen_place_addr(place)?;
+                let n = self.gen_expr(length)?.into_int_value();
+                self.build_truncate(&place.ty, slot, n).map(Into::into)
+            }
             TypedExprKind::Push { place, value } => {
                 let elem_ty = match &place.ty {
                     Type::Slice(t) => t.as_ref().clone(),
@@ -2824,6 +2829,57 @@ impl<'ctx> CodeGen<'ctx> {
     /// old one, because a bump allocator cannot free an individual object. That
     /// space is reclaimed when the region ends — the arena tradeoff, paid
     /// visibly rather than hidden.
+    /// Shorten a growable array to `n`. The capacity and the buffer are untouched:
+    /// the elements past `n` are simply no longer part of it, so a scope that pushes
+    /// and truncates repeatedly reuses the same memory rather than growing forever.
+    ///
+    /// Bounds-checked in both directions — a length above the current one would
+    /// expose elements that were never written, which is the kind of "silently wrong"
+    /// this language exists to refuse.
+    fn build_truncate(
+        &mut self,
+        slice_ty: &Type,
+        slot: PointerValue<'ctx>,
+        new_len: IntValue<'ctx>,
+    ) -> Result<IntValue<'ctx>, String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+        let st = self.llvm_type(slice_ty).into_struct_type();
+        let len_p = self.builder.build_struct_gep(st, slot, 1, "len_p").map_err(err)?;
+        let len = self.builder.build_load(i64t, len_p, "len").map_err(err)?.into_int_value();
+
+        use inkwell::IntPredicate::*;
+        let negative = self.builder.build_int_compare(SLT, new_len, i64t.const_zero(), "neg").map_err(err)?;
+        let longer = self.builder.build_int_compare(SGT, new_len, len, "longer").map_err(err)?;
+        let bad = self.builder.build_or(negative, longer, "bad_length").map_err(err)?;
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_parent())
+            .ok_or("codegen bug: truncate outside a function")?;
+        let broken = self.ctx.append_basic_block(function, "truncate_bad");
+        let ok = self.ctx.append_basic_block(function, "truncate_ok");
+        self.builder.build_conditional_branch(bad, broken, ok).map_err(err)?;
+
+        self.builder.position_at_end(broken);
+        let fprintf = self.fprintf_fn();
+        let (stderr_g, _, exit) = self.panic_deps();
+        let fmt = self.global_str(
+            "burxt runtime error: truncate(xs, %lld) — this array has %lld elements, \
+             and truncate only ever makes one shorter\n",
+            "fmt_truncate",
+        );
+        let stream = self.load_stderr(stderr_g)?;
+        let args: Vec<BasicMetadataValueEnum> =
+            vec![stream.into(), fmt.into(), new_len.into(), len.into()];
+        self.builder.build_call(fprintf, &args, "fprintf").map_err(err)?;
+        self.build_exit70(exit)?;
+
+        self.builder.position_at_end(ok);
+        self.builder.build_store(len_p, new_len).map_err(err)?;
+        Ok(new_len)
+    }
+
     fn build_push(
         &mut self,
         slice_ty: &Type,
