@@ -31,7 +31,7 @@ language server, JSON layer or diagnostics rendering.
 | Piece | Rust | Burxt estimate | Written |
 |---|---|---|---|
 | Lexer | 661 | 800–1,000 | **376, DONE** (v0.0.52) — came in under estimate |
-| AST + parser | 1,787 | 2,000–2,600 | **~330 for 3a** (v0.0.53); items remain |
+| AST + parser | 1,787 | 2,000–2,600 | **633 for 3a** (v0.0.53); items remain |
 | Typechecker | 3,702 | 4,500–5,500 | 385 (scale rule, symbol table) |
 | Backend (IR text) | 3,924 | 2,500–3,500 | 0 |
 | Driver | 230 | ~150 | 0 |

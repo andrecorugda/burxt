@@ -2539,7 +2539,7 @@ M4 phase 3a. `examples/stage1_lexer.bx` became `examples/stage1.bx`, because it 
 longer a lexer: it is the stage-1 compiler, growing a phase at a time in one file, which
 is the shape the plan predicted while Burxt has no modules.
 
-**700 lines of Burxt** now: every type form (including `Decimal<S, R>`, slices, fixed
+**1,009 lines of Burxt** now — 376 of lexer and 633 of parser: every type form (including `Decimal<S, R>`, slices, fixed
 arrays and `dyn`), the full expression precedence ladder with postfix chains, struct and
 array literals, and every statement — `let`, assignment, `print`, `return`, `return
 tail`, `if`/`else if`, `while`, `break`, `continue`, `region`, `match` with payload
