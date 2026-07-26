@@ -385,6 +385,50 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder.build_store(cur_ptr, val).map_err(|e| e.to_string())?;
                 Ok(())
             }
+            TypedStmt::AssignFieldIndex { name, indices, len, index, value } => {
+                let val = self.gen_expr(value)?;
+                let (slot, ty) = self
+                    .vars
+                    .get(name)
+                    .ok_or_else(|| format!("codegen: unknown variable {}", name))?
+                    .clone();
+                // Walk the field path to the array, then bounds-check and store.
+                let mut cur_ptr = slot;
+                let mut cur_ty = ty;
+                for &idx in indices {
+                    let sname = match &cur_ty {
+                        Type::Named(n) => n.clone(),
+                        other => {
+                            return Err(format!(
+                                "codegen bug: field path through non-struct {}",
+                                other
+                            ))
+                        }
+                    };
+                    let st = self.struct_types[&sname];
+                    cur_ptr = self
+                        .builder
+                        .build_struct_gep(st, cur_ptr, idx, "fieldptr")
+                        .map_err(|e| e.to_string())?;
+                    cur_ty = self.struct_fields[&sname][idx as usize].clone();
+                }
+                let i64t = self.ctx.i64_type();
+                let idx_val = self.gen_expr(index)?.into_int_value();
+                let n = i64t.const_int(*len as u64, false);
+                let checked = self.build_checked_index(idx_val, n)?;
+                let arr_ty = self.llvm_type(&cur_ty);
+                let elem_ptr = unsafe {
+                    self.builder.build_in_bounds_gep(
+                        arr_ty,
+                        cur_ptr,
+                        &[i64t.const_zero(), checked],
+                        "elem_ptr",
+                    )
+                }
+                .map_err(|e| e.to_string())?;
+                self.builder.build_store(elem_ptr, val).map_err(|e| e.to_string())?;
+                Ok(())
+            }
             TypedStmt::AssignIndex { name, len, index, value } => {
                 let val = self.gen_expr(value)?;
                 let ptr = self.gen_element_ptr(name, *len, index)?;
@@ -1401,19 +1445,26 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(|e| e.to_string())
             }
             TypedExprKind::StructLit { name, fields } => {
-                // Build the aggregate value field by field; storing it (in
-                // Let/Assign) is one whole-struct store — value semantics.
+                // Built in place rather than with insertvalue, so a field that
+                // is itself an array literal can be filled element by element.
                 let st = self.struct_types[name.as_str()];
-                let mut agg = st.get_undef();
+                let slot = self.create_entry_alloca("struct_tmp", &e.ty)?;
+                let field_tys = self.struct_fields[name.as_str()].clone();
                 for (i, f) in fields.iter().enumerate() {
-                    let v = self.gen_expr(f)?;
-                    agg = self
+                    let fptr = self
                         .builder
-                        .build_insert_value(agg, v, i as u32, "field")
-                        .map_err(|e| e.to_string())?
-                        .into_struct_value();
+                        .build_struct_gep(st, slot, i as u32, "fieldptr")
+                        .map_err(|e| e.to_string())?;
+                    if let TypedExprKind::ArrayLit(elems) = &f.kind {
+                        self.store_array_elements(fptr, &field_tys[i], elems)?;
+                    } else {
+                        let v = self.gen_expr(f)?;
+                        self.builder.build_store(fptr, v).map_err(|e| e.to_string())?;
+                    }
                 }
-                Ok(agg.into())
+                self.builder
+                    .build_load(st, slot, "struct_val")
+                    .map_err(|e| e.to_string())
             }
             TypedExprKind::Field { base, index } => {
                 let agg = self.gen_expr(base)?.into_struct_value();
@@ -1628,19 +1679,28 @@ impl<'ctx> CodeGen<'ctx> {
             TypedExprKind::ArrayLit(_) => {
                 Err("codegen bug: array literal outside a let initializer".to_string())
             }
-            TypedExprKind::Index { name, len, index } => {
-                let (_, ty) = self
-                    .vars
-                    .get(name)
-                    .ok_or_else(|| format!("codegen: unknown variable {}", name))?
-                    .clone();
-                let elem_ty = match &ty {
+            TypedExprKind::Index { base, len, index } => {
+                let elem_ty = match &base.ty {
                     Type::Array { elem, .. } => self.llvm_type(elem),
                     other => return Err(format!("codegen bug: indexing a {}", other)),
                 };
-                let ptr = self.gen_element_ptr(name, *len, index)?;
+                let arr_ty = self.llvm_type(&base.ty);
+                let base_ptr = self.gen_place_addr(base)?;
+                let i64t2 = self.ctx.i64_type();
+                let idx = self.gen_expr(index)?.into_int_value();
+                let checked =
+                    self.build_checked_index(idx, i64t2.const_int(*len as u64, false))?;
+                let p = unsafe {
+                    self.builder.build_in_bounds_gep(
+                        arr_ty,
+                        base_ptr,
+                        &[i64t2.const_zero(), checked],
+                        "elem_ptr",
+                    )
+                }
+                .map_err(|e| e.to_string())?;
                 self.builder
-                    .build_load(elem_ty, ptr, "elem")
+                    .build_load(elem_ty, p, "elem")
                     .map_err(|e| e.to_string())
             }
         }
@@ -1651,12 +1711,7 @@ impl<'ctx> CodeGen<'ctx> {
     /// else is materialized into a temporary first.
     fn gen_aggregate_addr(&mut self, e: &TypedExpr) -> Result<PointerValue<'ctx>, String> {
         match &e.kind {
-            TypedExprKind::Var(name) => {
-                if let Some((slot, _)) = self.vars.get(name) {
-                    return Ok(*slot);
-                }
-                Err(format!("codegen: unknown variable {}", name))
-            }
+            TypedExprKind::Var(_) | TypedExprKind::Field { .. } => self.gen_place_addr(e),
             // An array literal has no home yet — build it in a temporary.
             TypedExprKind::ArrayLit(elems) => {
                 let tmp = self.create_entry_alloca("arr_tmp", &e.ty)?;
@@ -1696,6 +1751,38 @@ impl<'ctx> CodeGen<'ctx> {
             self.builder.build_store(ptr, v).map_err(|e| e.to_string())?;
         }
         Ok(())
+    }
+
+    /// The ADDRESS of a place: a binding, or a field path through one. Both
+    /// indexed reads and aggregate passing need this, so it lives in one spot.
+    fn gen_place_addr(&mut self, e: &TypedExpr) -> Result<PointerValue<'ctx>, String> {
+        match &e.kind {
+            TypedExprKind::Var(name) => self
+                .vars
+                .get(name)
+                .map(|(slot, _)| *slot)
+                .ok_or_else(|| format!("codegen: unknown variable {}", name)),
+            TypedExprKind::Field { base, index } => {
+                let base_ptr = self.gen_place_addr(base)?;
+                let sname = match &base.ty {
+                    Type::Named(n) => n.clone(),
+                    other => {
+                        return Err(format!("codegen bug: field of non-struct {}", other))
+                    }
+                };
+                let st = self.struct_types[&sname];
+                self.builder
+                    .build_struct_gep(st, base_ptr, *index, "fieldptr")
+                    .map_err(|e| e.to_string())
+            }
+            // Anything else is an rvalue: materialize it so it has an address.
+            _ => {
+                let v = self.gen_expr(e)?;
+                let tmp = self.create_entry_alloca("place_tmp", &e.ty)?;
+                self.builder.build_store(tmp, v).map_err(|er| er.to_string())?;
+                Ok(tmp)
+            }
+        }
     }
 
     /// Bounds-check `index` against `len`, then GEP to the element. Every

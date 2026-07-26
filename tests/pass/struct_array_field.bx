@@ -1,0 +1,28 @@
+// A struct holding storage, mutated through a `mut self` method — the
+// by-reference receiver Burxt already had. This is what makes an arena work
+// without adding mutable parameters or any new semantics.
+struct Bag { items: [Int; 4], count: Int }
+
+fn (mut self: Bag) push(v: Int) -> Int {
+    let at: Int = self.count;
+    self.items[at] = v;
+    self.count = at + 1;
+    return at;
+}
+fn (self: Bag) total() -> Int {
+    let mut sum: Int = 0;
+    let mut i: Int = 0;
+    while i < self.count {
+        sum = sum + self.items[i];
+        i = i + 1;
+    }
+    return sum;
+}
+
+let mut b: Bag = Bag { items: [0, 0, 0, 0], count: 0 };
+b.push(10);
+b.push(20);
+b.push(12);
+print(b.count);
+print(b.items[1]);
+print(b.total());

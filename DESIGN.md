@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.21)
+# Burxt — Design Notes (v0.0.22)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1061,6 +1061,44 @@ were filled in before enum types existed. Enums are now created first — a
 total order, not a guess, since enum payloads are scalars and so can never
 reference a struct. That fix is what lets the lexer return "the token, and
 where to continue" as one `Scan` value.
+
+### v0.0.22: the parser self-hosts — and the memory model was not the blocker
+
+**`examples/parser.bx` is a Burxt expression parser and evaluator, written in
+Burxt.** `1.00 + 2.00 * 3.00 = 7.00`, with correct precedence, parentheses, and
+exact decimals — every result checked against an independent exact-decimal
+implementation.
+
+**The correction that matters:** v0.0.20 recorded that the parser was
+M1-blocked, because an AST node is a recursive enum. That was wrong, and it was
+wrong in an instructive way. **An AST does not need recursive types.** Nodes
+live in a flat **arena** and refer to their children by **index**, which is how
+Zig and Carbon build theirs. No recursion in the type, no heap, no memory
+model. The parser was blocked on believing it was blocked.
+
+What it actually needed were three restrictions lifted, none of them semantic —
+all three were conservatism written early, not consequences of the design:
+
+- **Arrays may hold aggregates.** A `[Node; 64]` is stack-allocatable; the old
+  "elements must be Int, Bool or Decimal" was arbitrary. Nested arrays stay
+  refused, with a reason: `a[i][j]` could not be written.
+- **Structs may hold arrays.** The restriction's own message said "coming with
+  the aggregate ABI" — which shipped in v0.0.12, so it was simply stale.
+- **Indexing applies to any place, not just a bare name.** `self.nodes[i]`
+  now reads and writes, via one `gen_place_addr` walker shared by both. This
+  replaced a half-feature: an indexed *write* through a field path had briefly
+  existed with no matching *read*.
+
+Crucially, **no new semantics were added.** The arena mutates through a
+`mut self` method — the by-reference receiver from v0.0.13 — so value semantics
+stand untouched. Mutable aggregate *parameters* would have been a second
+exception to A4.5's value-copy principle, and were deliberately not added.
+
+**What self-hosting still needs from M1:** growable storage. The arena is a
+fixed `[Node; 64]`, so a real compiler needs either a larger fixed budget or
+heap growth. That is a genuine M1 dependency — but it is now a question of
+*scale*, not of *expressibility*, which is a far smaller wall than the one
+recorded two versions ago.
 
 ## Testing
 

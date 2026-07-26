@@ -214,9 +214,10 @@ pub enum Expr {
     /// An array literal `[10.00, 5.99, 4.01]` — only valid as a `let`
     /// initializer with a declared array type.
     ArrayLit(Vec<Expr>),
-    /// Indexed read `a[i]`. The base is a binding NAME, not an expression —
-    /// arrays only live behind bindings in this slice.
-    Index { name: String, index: Box<Expr> },
+    /// Indexed read `a[i]` or `s.field[i]`. The base is a PLACE — a binding,
+    /// possibly reached through fields — because an element read needs an
+    /// address to GEP from.
+    Index { base: Box<Expr>, index: Box<Expr> },
 }
 
 /// Statements. A Burxt v0.0.1 program is just a sequence of these.
@@ -236,6 +237,10 @@ pub enum Stmt {
     /// `name.field(.field)* = value;` — field assignment through a `let mut`
     /// binding. Mutability is per-binding, not per-field.
     AssignField { name: String, path: Vec<String>, value: Expr },
+    /// `name.field(.field)*[index] = value;` — element assignment through a
+    /// field path, which is what an arena needs: a struct holding the storage
+    /// plus a mutating method that writes into it.
+    AssignFieldIndex { name: String, path: Vec<String>, index: Expr, value: Expr },
     /// `name[index] = value;` — element assignment through a `let mut`
     /// binding, bounds-checked like every indexed access.
     AssignIndex { name: String, index: Expr, value: Expr },

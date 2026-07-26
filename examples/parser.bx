@@ -1,0 +1,150 @@
+// ============================================================================
+// A Burxt expression parser and evaluator, written in Burxt.
+//
+// The point of this file: an AST does NOT need recursive types, and therefore
+// does not need the heap. Nodes live in a flat ARENA and refer to their children
+// by INDEX. That is how Zig and Carbon build their ASTs — and it means the
+// parser was never blocked on the memory model, only on believing it was.
+//
+// The arena is a struct holding fixed storage, mutated through a `mut self`
+// method — the by-reference receiver Burxt already had. No new semantics.
+//
+//   expr   := term (('+' | '-') term)*
+//   term   := factor ('*' factor)*
+//   factor := NUMBER | '(' expr ')'
+// ============================================================================
+
+struct Node {
+    kind: Int,                          // 1 num, 2 add, 3 sub, 4 mul
+    value: Decimal<2, RoundHalfEven>,   // meaningful when kind == 1
+    lhs: Int,                           // arena indices, -1 when absent
+    rhs: Int,
+}
+
+struct Arena {
+    nodes: [Node; 64],
+    count: Int,
+    pos: Int,       // scan position, carried here so it survives calls
+    last: Int,      // index of the node just produced
+}
+
+fn (mut self: Arena) push(kind: Int, value: Decimal<2, RoundHalfEven>, lhs: Int, rhs: Int) -> Int {
+    let at: Int = self.count;
+    self.nodes[at] = Node { kind: kind, value: value, lhs: lhs, rhs: rhs };
+    self.count = at + 1;
+    self.last = at;
+    return at;
+}
+
+fn is_digit(b: Int) -> Bool {
+    return b >= 48 && b <= 57;
+}
+
+fn (mut self: Arena) skip_spaces(src: String) -> Int {
+    while self.pos < len(src) && byte_at(src, self.pos) == 32 {
+        self.pos = self.pos + 1;
+    }
+    return self.pos;
+}
+
+fn (mut self: Arena) factor(src: String) -> Int {
+    let at: Int = self.skip_spaces(src);
+    if at < len(src) && byte_at(src, at) == 40 {
+        self.pos = at + 1;
+        let inner: Int = self.expr(src);
+        let close: Int = self.skip_spaces(src);
+        if close < len(src) && byte_at(src, close) == 41 {
+            self.pos = close + 1;
+        }
+        return inner;
+    }
+    // an exact decimal, digit by digit — never through a float
+    let mut whole: Int = 0;
+    while self.pos < len(src) && is_digit(byte_at(src, self.pos)) {
+        whole = whole * 10 + (byte_at(src, self.pos) - 48);
+        self.pos = self.pos + 1;
+    }
+    let mut cents: Int = 0;
+    if self.pos < len(src) && byte_at(src, self.pos) == 46 {
+        self.pos = self.pos + 1;
+        let mut place: Int = 0;
+        while self.pos < len(src) && is_digit(byte_at(src, self.pos)) && place < 2 {
+            cents = cents * 10 + (byte_at(src, self.pos) - 48);
+            place = place + 1;
+            self.pos = self.pos + 1;
+        }
+        if place == 1 { cents = cents * 10; }
+    }
+    let penny: Decimal<2, RoundHalfEven> = 0.01;
+    let total: Decimal<2, RoundHalfEven> = penny * (whole * 100 + cents);
+    return self.push(1, total, -1, -1);
+}
+
+fn (mut self: Arena) term(src: String) -> Int {
+    let mut node: Int = self.factor(src);
+    let mut going: Bool = true;
+    while going {
+        let at: Int = self.skip_spaces(src);
+        if at < len(src) && byte_at(src, at) == 42 {
+            self.pos = at + 1;
+            let rhs: Int = self.factor(src);
+            node = self.push(4, 0.00, node, rhs);
+        } else {
+            going = false;
+        }
+    }
+    return node;
+}
+
+fn (mut self: Arena) expr(src: String) -> Int {
+    let mut node: Int = self.term(src);
+    let mut going: Bool = true;
+    while going {
+        let at: Int = self.skip_spaces(src);
+        let mut kind: Int = 0;
+        if at < len(src) && byte_at(src, at) == 43 { kind = 2; }
+        if at < len(src) && byte_at(src, at) == 45 { kind = 3; }
+        if kind == 0 {
+            going = false;
+        } else {
+            self.pos = at + 1;
+            let rhs: Int = self.term(src);
+            node = self.push(kind, 0.00, node, rhs);
+        }
+    }
+    return node;
+}
+
+fn (self: Arena) eval(at: Int) -> Decimal<2, RoundHalfEven> {
+    let n: Node = self.nodes[at];
+    if n.kind == 1 {
+        return n.value;
+    }
+    let l: Decimal<2, RoundHalfEven> = self.eval(n.lhs);
+    let r: Decimal<2, RoundHalfEven> = self.eval(n.rhs);
+    if n.kind == 2 { return l + r; }
+    if n.kind == 3 { return l - r; }
+    return l * r;
+}
+
+fn empty() -> Node {
+    return Node { kind: 0, value: 0.00, lhs: -1, rhs: -1 };
+}
+
+let src: String = "1.00 + 2.00 * 3.00";
+let mut a: Arena = Arena {
+    nodes: [empty(), empty(), empty(), empty(), empty(), empty(), empty(), empty(),
+            empty(), empty(), empty(), empty(), empty(), empty(), empty(), empty(),
+            empty(), empty(), empty(), empty(), empty(), empty(), empty(), empty(),
+            empty(), empty(), empty(), empty(), empty(), empty(), empty(), empty(),
+            empty(), empty(), empty(), empty(), empty(), empty(), empty(), empty(),
+            empty(), empty(), empty(), empty(), empty(), empty(), empty(), empty(),
+            empty(), empty(), empty(), empty(), empty(), empty(), empty(), empty(),
+            empty(), empty(), empty(), empty(), empty(), empty(), empty(), empty()],
+    count: 0,
+    pos: 0,
+    last: -1,
+};
+let root: Int = a.expr(src);
+print("{src} = {a.eval(root)}");
+print("nodes used: {a.count}");

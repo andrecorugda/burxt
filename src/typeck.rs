@@ -96,8 +96,8 @@ pub enum TypedExprKind {
     ArrayLit(Vec<TypedExpr>),
     /// Enum construction: the variant's index plus its payload values.
     VariantLit { enum_name: String, tag: u32, args: Vec<TypedExpr> },
-    /// Bounds-checked indexed read; `len` carried for the runtime check.
-    Index { name: String, len: u32, index: Box<TypedExpr> },
+    /// Bounds-checked indexed read from a place; `len` is the static length.
+    Index { base: Box<TypedExpr>, len: u32, index: Box<TypedExpr> },
 }
 
 #[derive(Debug, Clone)]
@@ -108,6 +108,15 @@ pub enum TypedStmt {
     AssignField { name: String, indices: Vec<u32>, value: TypedExpr },
     /// A call kept for its side effect; the result is evaluated and discarded.
     ExprStmt(TypedExpr),
+    /// Element assignment through a field path: walk `indices` to the array
+    /// field, then a bounds-checked element store.
+    AssignFieldIndex {
+        name: String,
+        indices: Vec<u32>,
+        len: u32,
+        index: TypedExpr,
+        value: TypedExpr,
+    },
     /// Bounds-checked element assignment.
     AssignIndex { name: String, len: u32, index: TypedExpr, value: TypedExpr },
     Print(TypedExpr),
@@ -338,13 +347,6 @@ impl TypeChecker {
 
         for s in &prog.structs {
             for f in &s.fields {
-                if matches!(f.ty, Type::Array { .. }) {
-                    return Err(format!(
-                        "in struct `{}`: struct fields cannot hold arrays yet — \
-                         coming with the aggregate ABI.",
-                        s.name
-                    ));
-                }
                 if matches!(f.ty, Type::Dyn(_)) {
                     return Err(format!(
                         "in struct `{}`: a field cannot hold a trait object — it \
@@ -669,13 +671,31 @@ impl TypeChecker {
                  use Int in Burxt code; values convert at the call."
                     .to_string(),
             ),
+            // Elements may be scalars OR aggregates: a `[Node; 256]` is
+            // stack-allocatable, which is what makes an arena-style AST
+            // (children referenced by index, never by pointer) possible without
+            // any heap. Refused: nested arrays, because `a[i][j]` cannot be
+            // written — indexing takes a binding name, not an expression — and
+            // trait objects, because they borrow and storing a borrow needs
+            // tracking Burxt does not have.
             Type::Array { elem, .. } => match elem.as_ref() {
-                Type::Int | Type::Bool | Type::Decimal { .. } => Ok(()),
-                other => Err(format!(
-                    "arrays of {} are not available yet — elements must be Int, \
-                     Bool or Decimal for now",
-                    other
+                Type::Array { .. } => Err(
+                    "arrays of arrays are not available yet — `a[i][j]` cannot be \
+                     written, since indexing applies to a binding rather than an \
+                     expression. Use one array of a struct instead."
+                        .to_string(),
+                ),
+                Type::Dyn(t) => Err(format!(
+                    "an array cannot hold `dyn {}` — a trait object borrows the value \
+                     it refers to, and storing borrows needs tracking Burxt does not \
+                     have yet.",
+                    t
                 )),
+                Type::CInt => Err(
+                    "CInt only exists at the C boundary — use Int for array elements"
+                        .to_string(),
+                ),
+                other => self.validate_type(&other.clone()),
             },
             _ => Ok(()),
         }
@@ -1014,6 +1034,54 @@ impl TypeChecker {
                 }
                 Ok(TypedStmt::AssignField { name: name.clone(), indices, value: typed })
             }
+            Stmt::AssignFieldIndex { name, path, index, value } => {
+                let lvalue = format!("{}.{}", name, path.join("."));
+                let (mut cur_ty, mutable) = self
+                    .env
+                    .get(name)
+                    .ok_or_else(|| self.unknown_name(name))?
+                    .clone();
+                if !mutable {
+                    return Err(format!(
+                        "cannot assign to `{}[...]`: `{}` was declared immutable. \
+                         Declare it `let mut {}: {}` to allow it.",
+                        lvalue, name, name, cur_ty
+                    ));
+                }
+                let mut indices = Vec::new();
+                for field in path {
+                    let (i, t) = self.resolve_field(&cur_ty, field)?;
+                    indices.push(i);
+                    cur_ty = t;
+                }
+                let (elem, len) = match &cur_ty {
+                    Type::Array { elem, len } => (elem.as_ref().clone(), *len),
+                    other => {
+                        return Err(format!(
+                            "`{}[...]` indexing needs an array, but `{}` has type {}",
+                            lvalue, lvalue, other
+                        ))
+                    }
+                };
+                let index = self.check_index(&format!("{}", cur_ty), len, index)?;
+                let typed = self.check_expr(value, Some(&elem))?;
+                if typed.ty != elem {
+                    return Err(format!(
+                        "cannot assign {} {} to `{}[...]`, which holds {}",
+                        typed.ty.article(),
+                        typed.ty,
+                        lvalue,
+                        elem
+                    ));
+                }
+                Ok(TypedStmt::AssignFieldIndex {
+                    name: name.clone(),
+                    indices,
+                    len,
+                    index,
+                    value: typed,
+                })
+            }
             Stmt::AssignIndex { name, index, value } => {
                 let (declared, mutable) = self
                     .env
@@ -1036,7 +1104,7 @@ impl TypeChecker {
                         name, name, name, declared
                     ));
                 }
-                let index = self.check_index(name, len, index)?;
+                let index = self.check_index(&format!("{}", declared), len, index)?;
                 let typed = self.check_expr(value, Some(&elem))?;
                 if typed.ty != elem {
                     return Err(format!(
@@ -1794,25 +1862,26 @@ impl TypeChecker {
                 })
             }
 
-            Expr::Index { name, index } => {
-                let (ty, _) = self
-                    .env
-                    .get(name)
-                    .ok_or_else(|| format!("unknown variable: {}", name))?
-                    .clone();
-                let (elem, len) = match &ty {
+            Expr::Index { base, index } => {
+                let typed_base = self.check_expr(base, None)?;
+                let (elem, len) = match &typed_base.ty {
                     Type::Array { elem, len } => (elem.as_ref().clone(), *len),
                     other => {
                         return Err(format!(
-                            "`{}[...]` indexing needs an array, but `{}` has type {}",
-                            name, name, other
+                            "indexing with `[...]` needs an array, but this has type {}",
+                            other
                         ))
                     }
                 };
-                let index = self.check_index(name, len, index)?;
+                let index =
+                    self.check_index(&format!("{}", typed_base.ty), len, index)?;
                 Ok(TypedExpr {
                     ty: elem,
-                    kind: TypedExprKind::Index { name: name.clone(), len, index: Box::new(index) },
+                    kind: TypedExprKind::Index {
+                        base: Box::new(typed_base),
+                        len,
+                        index: Box::new(index),
+                    },
                 })
             }
         }
@@ -1821,7 +1890,7 @@ impl TypeChecker {
     /// Check an index expression: it must be an Int, and a LITERAL index
     /// that is provably out of range is refused at compile time — it would
     /// always fail at runtime, so it fails now instead.
-    fn check_index(&self, name: &str, len: u32, index: &Expr) -> Result<TypedExpr, String> {
+    fn check_index(&self, what: &str, len: u32, index: &Expr) -> Result<TypedExpr, String> {
         let typed = self.check_expr(index, None)?;
         if typed.ty != Type::Int {
             return Err(format!(
@@ -1831,12 +1900,11 @@ impl TypeChecker {
         }
         if let TypedExprKind::IntLit(n) = typed.kind {
             if n < 0 || n >= len as i64 {
-                let (ty, _) = self.env.get(name).cloned().unwrap_or((Type::Int, false));
                 return Err(format!(
                     "index {} is out of bounds for {}: valid indexes are 0 to {}. \
                      This would always fail at runtime, so it is refused now.",
                     n,
-                    ty,
+                    what,
                     len - 1
                 ));
             }

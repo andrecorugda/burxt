@@ -494,6 +494,15 @@ impl Parser {
             path.push(seg);
         }
 
+        if self.at(&Token::LBracket) && !path.is_empty() {
+            self.bump();
+            let index = self.parse_expr()?;
+            self.expect(&Token::RBracket)?;
+            self.expect(&Token::Equals)?;
+            let value = self.parse_expr()?;
+            self.expect(&Token::Semicolon)?;
+            return Ok(Stmt::AssignFieldIndex { name, path, index, value });
+        }
         self.expect(&Token::Equals)?;
         let value = self.parse_expr()?;
         self.expect(&Token::Semicolon)?;
@@ -862,7 +871,17 @@ impl Parser {
             return Ok(Expr::Not(Box::new(e)));
         }
         let mut e = self.parse_primary()?;
-        while self.at(&Token::Dot) {
+        loop {
+            if self.at(&Token::LBracket) {
+                self.bump();
+                let index = self.parse_expr()?;
+                self.expect(&Token::RBracket)?;
+                e = Expr::Index { base: Box::new(e), index: Box::new(index) };
+                continue;
+            }
+            if !self.at(&Token::Dot) {
+                break;
+            }
             self.bump();
             let name = match self.bump() {
                 Token::Ident(f) => f,
@@ -970,12 +989,9 @@ impl Parser {
                     }
                     self.expect(&Token::RBrace)?;
                     Ok(Expr::StructLit { name: s, fields })
-                } else if self.at(&Token::LBracket) {
-                    self.bump();
-                    let index = self.parse_expr()?;
-                    self.expect(&Token::RBracket)?;
-                    Ok(Expr::Index { name: s, index: Box::new(index) })
                 } else {
+                    // `name[i]` is handled by the postfix loop, so a bare name
+                    // is all that is left here.
                     Ok(Expr::Var(s))
                 }
             }

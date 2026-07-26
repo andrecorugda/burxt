@@ -14,7 +14,7 @@ answers.
 **Read this file first.** The specs were written when Burxt was at roughly
 v0.0.1, so several describe work that is now done, and one describes work that
 was built in a different order than specified. This index records what is
-actually true as of **v0.0.21**, audited by running the compiler — not by
+actually true as of **v0.0.22**, audited by running the compiler — not by
 reading the specs. Where a spec and the implementation disagree, the note says
 which is right.
 
@@ -137,9 +137,16 @@ In dependency order, cheapest and most-unblocking first:
    bytes so the byte-vs-char ambiguity cannot hide.
 6. ~~The partial self-host: a Burxt lexer in Burxt.~~ **Done in v0.0.21** —
    `examples/lexer.bx`, heap-free via spans and arithmetic accumulation.
-7. **Next: the parser is M1-blocked** (recursive enums for an AST). So the
-   self-hosting path now runs through M1, whose gate is open. Everything else
-   unblocked is polish: A4.7's units/contracts/pipelines, `.chars()`, `[0; N]`.
+7. ~~The parser is M1-blocked.~~ **That was wrong** — corrected in v0.0.22.
+   An arena AST (children by index, not pointer) needs no recursive types and
+   no heap, so `examples/parser.bx` parses and evaluates in Burxt today. It
+   needed three conservative restrictions lifted, none semantic.
+8. **Next, and now genuinely M1-shaped: growable storage.** The arena is a
+   fixed `[Node; 64]`; a real compiler needs growth. That is a question of
+   SCALE rather than expressibility — a much smaller wall than "the parser
+   cannot be written."
+9. Still unblocked polish: A4.7's units/contracts/pipelines, `.chars()`,
+   `[0; N]` repeat literals, `break`/`continue`, iterative AST walkers.
 
 **Priority note:** the stated goal is a compiler written in Burxt. Measured
 against that, A4.7's leftovers (units, contracts, pipelines) add eloquence and
