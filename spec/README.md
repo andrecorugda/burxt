@@ -14,7 +14,7 @@ answers.
 **Read this file first.** The specs were written when Burxt was at roughly
 v0.0.1, so several describe work that is now done, and one describes work that
 was built in a different order than specified. This index records what is
-actually true as of **v0.0.20**, audited by running the compiler — not by
+actually true as of **v0.0.21**, audited by running the compiler — not by
 reading the specs. Where a spec and the implementation disagree, the note says
 which is right.
 
@@ -22,7 +22,7 @@ which is right.
 
 | Spec | State | What remains |
 |---|---|---|
-| [A4.4 Strings & Collections](A4.4-STRINGS-COLLECTIONS.md) | **Partial** | Arrays fully done. Strings: literals, printing, FFI, **length + equality (v0.0.16)**. Remaining: `.bytes()`/`.chars()` views; concatenation heap-blocked (M1). |
+| [A4.4 Strings & Collections](A4.4-STRINGS-COLLECTIONS.md) | **Partial** | Arrays done. Strings: literals, printing, FFI, length, equality, **`byte_at` (v0.0.21)**. Remaining: `.chars()`; concatenation heap-blocked (M1). |
 | [A4.5 Aggregate ABI](A4.5-AGGREGATE-ABI.md) | **DONE** (v0.0.12) | — |
 | [A4.6 Interfaces & Dispatch](A4.6-INTERFACES-DISPATCH.md) | **DONE** (v0.0.14) | Traits, `impl`, static + `dyn` dispatch shipped. `class` / `open` inheritance from the North Star is separate and still unbuilt. |
 | [A4.7 Signature Grammar](A4.7-SIGNATURE-GRAMMAR.md) | **Not started** | All six deliverables. This is the "eloquence" / demo milestone. |
@@ -133,9 +133,13 @@ In dependency order, cheapest and most-unblocking first:
    multiplication all shipped. Remaining and unblocked: unit literals
    (`5.km`), `requires`/`ensures` as runtime-checked grammar, pipelines.
 4. ~~A6.0 sum types + exhaustive matching.~~ **Done in v0.0.20.**
-5. **String byte access** — the other thing a lexer needs. Unblocked.
-6. **The partial self-host: a Burxt lexer in Burxt.** Reachable once (5) lands.
-   It stops at the parser, which needs recursive enums and therefore M1.
+5. ~~String byte access.~~ **Done in v0.0.21** as `byte_at(s, i)`, named for
+   bytes so the byte-vs-char ambiguity cannot hide.
+6. ~~The partial self-host: a Burxt lexer in Burxt.~~ **Done in v0.0.21** —
+   `examples/lexer.bx`, heap-free via spans and arithmetic accumulation.
+7. **Next: the parser is M1-blocked** (recursive enums for an AST). So the
+   self-hosting path now runs through M1, whose gate is open. Everything else
+   unblocked is polish: A4.7's units/contracts/pipelines, `.chars()`, `[0; N]`.
 
 **Priority note:** the stated goal is a compiler written in Burxt. Measured
 against that, A4.7's leftovers (units, contracts, pipelines) add eloquence and

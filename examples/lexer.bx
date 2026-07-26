@@ -1,0 +1,128 @@
+// ============================================================================
+// A Burxt lexer, written in Burxt.
+//
+// This is the first piece of the compiler to be self-hosted. It tokenizes real
+// Burxt-ish source and needs NO heap: a token that refers to source text
+// carries a (start, length) span rather than an owned substring, and numbers
+// are accumulated arithmetically as digits arrive. That is why this runs today,
+// before the memory model exists.
+// ============================================================================
+
+enum Token {
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    LParen,
+    RParen,
+    Semi,
+    // a literal value, accumulated digit by digit — no string building
+    Number(Int),
+    // a span into the source: start byte and length, so no allocation
+    Name(Int, Int),
+    Unknown(Int),
+    End,
+}
+
+// One step of the scan: the token found, and where to continue from.
+struct Scan {
+    tok: Token,
+    next: Int,
+}
+
+fn is_digit(b: Int) -> Bool {
+    return b >= 48 && b <= 57;
+}
+
+fn is_alpha(b: Int) -> Bool {
+    return (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95;
+}
+
+fn is_space(b: Int) -> Bool {
+    return b == 32 || b == 9 || b == 10 || b == 13;
+}
+
+fn skip_spaces(src: String, from: Int) -> Int {
+    let mut i: Int = from;
+    while i < len(src) && is_space(byte_at(src, i)) {
+        i = i + 1;
+    }
+    return i;
+}
+
+fn next_token(src: String, from: Int) -> Scan {
+    let start: Int = skip_spaces(src, from);
+    if start >= len(src) {
+        return Scan { tok: Token.End, next: start };
+    }
+
+    let b: Int = byte_at(src, start);
+
+    if is_digit(b) {
+        // accumulate the value as we go: no substring, no allocation
+        let mut i: Int = start;
+        let mut value: Int = 0;
+        while i < len(src) && is_digit(byte_at(src, i)) {
+            value = value * 10 + (byte_at(src, i) - 48);
+            i = i + 1;
+        }
+        return Scan { tok: Token.Number(value), next: i };
+    }
+
+    if is_alpha(b) {
+        let mut i: Int = start;
+        while i < len(src) && (is_alpha(byte_at(src, i)) || is_digit(byte_at(src, i))) {
+            i = i + 1;
+        }
+        return Scan { tok: Token.Name(start, i - start), next: i };
+    }
+
+    let after: Int = start + 1;
+    if b == 43 { return Scan { tok: Token.Plus,   next: after }; }
+    if b == 45 { return Scan { tok: Token.Minus,  next: after }; }
+    if b == 42 { return Scan { tok: Token.Star,   next: after }; }
+    if b == 47 { return Scan { tok: Token.Slash,  next: after }; }
+    if b == 40 { return Scan { tok: Token.LParen, next: after }; }
+    if b == 41 { return Scan { tok: Token.RParen, next: after }; }
+    if b == 59 { return Scan { tok: Token.Semi,   next: after }; }
+    return Scan { tok: Token.Unknown(b), next: after };
+}
+
+// Printing a token is where `match` earns its keep: add a variant to Token and
+// this function stops compiling until the new case is handled.
+fn show(t: Token) -> Int {
+    match t {
+        Plus => { print("PLUS"); return 1; }
+        Minus => { print("MINUS"); return 1; }
+        Star => { print("STAR"); return 1; }
+        Slash => { print("SLASH"); return 1; }
+        LParen => { print("LPAREN"); return 1; }
+        RParen => { print("RPAREN"); return 1; }
+        Semi => { print("SEMI"); return 1; }
+        Number(v) => { print("NUMBER {v}"); return 1; }
+        Name(at, n) => { print("NAME at {at} len {n}"); return 1; }
+        Unknown(b) => { print("UNKNOWN byte {b}"); return 1; }
+        End => { return 0; }
+    }
+}
+
+fn tokenize(src: String) -> Int {
+    let mut pos: Int = 0;
+    let mut count: Int = 0;
+    let mut running: Bool = true;
+    while running {
+        let s: Scan = next_token(src, pos);
+        pos = s.next;
+        if show(s.tok) == 0 {
+            running = false;
+        } else {
+            count = count + 1;
+        }
+    }
+    return count;
+}
+
+let source: String = "let total = price * 3 + 42;";
+print("--- source: {source}");
+let n: Int = tokenize(source);
+print("--- {n} tokens");

@@ -1,0 +1,2 @@
+fn byte_at(x: Int) -> Int { return x; }
+print(1);

@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.20)
+# Burxt — Design Notes (v0.0.21)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1029,6 +1029,38 @@ heap indirection. A lexer's `Token` is flat, so **the lexer is expressible
 today** — but an AST node is recursive, so **the parser is M1-blocked.** That
 sharpens the self-hosting path: the partial self-host can begin now and stops
 precisely at the parser.
+
+### v0.0.21: string bytes, and the first self-hosted piece
+
+```text
+print(byte_at("AbZ", 1));    // 98
+```
+
+`byte_at(s, i)` reads the i-th byte as an Int, bounds-checked with a message
+naming bytes. It is **named for bytes deliberately**: A4.4 refused a bare
+`s[i]` precisely because it would hide whether an index means a byte or a
+character, and a builtin whose name says "byte" cannot hide it. Bytes
+zero-extend, so a UTF-8 continuation byte comes back as 195, never negative.
+
+**A Burxt lexer now exists, written in Burxt** — `examples/lexer.bx`, and a
+test pins its output. It tokenizes real Burxt-ish source into `Plus`, `Number`,
+`Name`, and friends, and it needs **no heap at all**:
+
+- a token referring to source text carries a `(start, length)` **span**, not an
+  owned substring — so no allocation;
+- numeric literals are **accumulated arithmetically** as digits arrive
+  (`value * 10 + (byte - 48)`), so no string building.
+
+That is why the lexer runs before the memory model exists, and it is the
+concrete first step of the self-hosting path. `match` earns its keep here: add
+a variant to `Token` and the printer stops compiling until the case is handled.
+
+**One compiler bug this found**, which is the value of writing real programs:
+a struct field holding an enum panicked the compiler, because struct bodies
+were filled in before enum types existed. Enums are now created first — a
+total order, not a guess, since enum payloads are scalars and so can never
+reference a struct. That fix is what lets the lexer return "the token, and
+where to continue" as one `Scan` value.
 
 ## Testing
 

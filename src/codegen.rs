@@ -76,6 +76,7 @@ pub struct CodeGen<'ctx> {
     narrow_check_fn: Option<FunctionValue<'ctx>>,
     /// lazily created string byte-scan helpers
     str_len_fn: Option<FunctionValue<'ctx>>,
+    byte_index_check_fn: Option<FunctionValue<'ctx>>,
     str_eq_fn: Option<FunctionValue<'ctx>>,
     /// user fn name -> (param types, return type), for aggregate call lowering
     fn_sigs: HashMap<String, (Vec<Type>, Type)>,
@@ -122,6 +123,7 @@ impl<'ctx> CodeGen<'ctx> {
             index_check_fn: None,
             narrow_check_fn: None,
             str_len_fn: None,
+            byte_index_check_fn: None,
             str_eq_fn: None,
             fn_sigs: HashMap::new(),
             methods: HashMap::new(),
@@ -146,19 +148,6 @@ impl<'ctx> CodeGen<'ctx> {
         let printf_ty = i32t.fn_type(&[i8ptr.into()], true);
         self.printf = Some(self.module.add_function("printf", printf_ty, None));
 
-        // Create all struct types: opaque shells first so nested references
-        // resolve in any order, then fill in the bodies.
-        for s in &prog.structs {
-            let st = self.ctx.opaque_struct_type(&format!("bx.{}", s.name));
-            self.struct_types.insert(s.name.clone(), st);
-            self.struct_fields.insert(s.name.clone(), s.fields.clone());
-        }
-        for s in &prog.structs {
-            let body: Vec<BasicTypeEnum> =
-                s.fields.iter().map(|t| self.llvm_type(t)).collect();
-            self.struct_types[&s.name].set_body(&body, false);
-        }
-
         // Enums are a tag plus an inline payload area: `{ i64, [N x i64] }`,
         // where N is the largest payload slot count. Every payload field is 8
         // bytes (payloads are scalars), so slots need no size computation.
@@ -173,6 +162,19 @@ impl<'ctx> CodeGen<'ctx> {
             }
             self.enum_types
                 .insert(en.name.clone(), (st, en.variants.clone()));
+        }
+
+        // Create all struct types: opaque shells first so nested references
+        // resolve in any order, then fill in the bodies.
+        for s in &prog.structs {
+            let st = self.ctx.opaque_struct_type(&format!("bx.{}", s.name));
+            self.struct_types.insert(s.name.clone(), st);
+            self.struct_fields.insert(s.name.clone(), s.fields.clone());
+        }
+        for s in &prog.structs {
+            let body: Vec<BasicTypeEnum> =
+                s.fields.iter().map(|t| self.llvm_type(t)).collect();
+            self.struct_types[&s.name].set_body(&body, false);
         }
 
         // Declare extern fns under their real symbol names — no mangling is
@@ -1053,6 +1055,30 @@ impl<'ctx> CodeGen<'ctx> {
                     .clone();
                 self.builder
                     .build_load(self.llvm_type(&ty), slot, name)
+                    .map_err(|e| e.to_string())
+            }
+            TypedExprKind::ByteAt { s, index } => {
+                let sp = self.gen_expr(s)?.into_pointer_value();
+                let i = self.gen_expr(index)?.into_int_value();
+                let n = self.build_str_len(sp)?;
+                // Reading past the end would hand back whatever byte follows —
+                // silent garbage, so it is checked like every array index.
+                let checked = self.build_checked_byte_index(i, n)?;
+                let p = unsafe {
+                    self.builder
+                        .build_gep(self.ctx.i8_type(), sp, &[checked], "byte_ptr")
+                }
+                .map_err(|e| e.to_string())?;
+                let b = self
+                    .builder
+                    .build_load(self.ctx.i8_type(), p, "byte")
+                    .map_err(|e| e.to_string())?
+                    .into_int_value();
+                // Bytes are unsigned 0..255, so zero-extend — a sign-extend
+                // would turn byte 200 into a negative number.
+                self.builder
+                    .build_int_z_extend(b, i64t, "byte_i64")
+                    .map(Into::into)
                     .map_err(|e| e.to_string())
             }
             TypedExprKind::StrLen(inner) => {
@@ -1953,6 +1979,88 @@ impl<'ctx> CodeGen<'ctx> {
             inkwell::values::ValueKind::Basic(v) => Ok(v.into_int_value()),
             _ => Err("string-equality helper returned void".to_string()),
         }
+    }
+
+    /// Emit a call to the string byte-index bounds check.
+    fn build_checked_byte_index(
+        &mut self,
+        i: IntValue<'ctx>,
+        n: IntValue<'ctx>,
+    ) -> Result<IntValue<'ctx>, String> {
+        let f = self.byte_index_fn()?;
+        let call = self
+            .builder
+            .build_call(f, &[i.into(), n.into()], "checked_byte")
+            .map_err(|e| e.to_string())?;
+        match call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => Ok(v.into_int_value()),
+            _ => Err("byte-index helper returned void".to_string()),
+        }
+    }
+
+    /// Get (or lazily define) `i64 @burxt.checked.byte_index(i64 %i, i64 %n)`.
+    /// Separate from the array check only so the message names BYTES — the same
+    /// shape otherwise.
+    fn byte_index_fn(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        if let Some(f) = self.byte_index_check_fn {
+            return Ok(f);
+        }
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let saved = self.builder.get_insert_block();
+
+        let i64t = self.ctx.i64_type();
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+        let i32t = self.ctx.i32_type();
+        let fprintf = match self.module.get_function("fprintf") {
+            Some(f) => f,
+            None => self
+                .module
+                .add_function("fprintf", i32t.fn_type(&[ptr.into(), ptr.into()], true), None),
+        };
+        let (stderr_g, _, exit) = self.panic_deps();
+
+        let f = self.module.add_function(
+            "burxt.checked.byte_index",
+            i64t.fn_type(&[i64t.into(), i64t.into()], false),
+            None,
+        );
+        let entry = self.ctx.append_basic_block(f, "entry");
+        let oob_bb = self.ctx.append_basic_block(f, "out_of_bounds");
+        let ok_bb = self.ctx.append_basic_block(f, "ok");
+
+        self.builder.position_at_end(entry);
+        let i = f.get_nth_param(0).unwrap().into_int_value();
+        let n = f.get_nth_param(1).unwrap().into_int_value();
+        use inkwell::IntPredicate::*;
+        let neg = self.builder.build_int_compare(SLT, i, i64t.const_zero(), "neg").map_err(err)?;
+        let big = self.builder.build_int_compare(SGE, i, n, "too_big").map_err(err)?;
+        let oob = self.builder.build_or(neg, big, "oob").map_err(err)?;
+        self.builder.build_conditional_branch(oob, oob_bb, ok_bb).map_err(err)?;
+
+        self.builder.position_at_end(oob_bb);
+        let fmt = self.global_str(
+            "burxt runtime error: byte index %lld is out of bounds — this string has \
+             %lld bytes (valid indexes 0 to %lld)\n",
+            "fmt_byte_oob",
+        );
+        let stream = self.load_stderr(stderr_g)?;
+        let last = self
+            .builder
+            .build_int_sub(n, i64t.const_int(1, false), "n_minus_1")
+            .map_err(err)?;
+        let args: Vec<BasicMetadataValueEnum> =
+            vec![stream.into(), fmt.into(), i.into(), n.into(), last.into()];
+        self.builder.build_call(fprintf, &args, "fprintf").map_err(err)?;
+        self.build_exit70(exit)?;
+
+        self.builder.position_at_end(ok_bb);
+        self.builder.build_return(Some(&i)).map_err(err)?;
+
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        self.byte_index_check_fn = Some(f);
+        Ok(f)
     }
 
     /// Get (or lazily define) `i64 @burxt.strlen(ptr)`: scan to the NUL.

@@ -1,0 +1,11 @@
+--- source: let total = price * 3 + 42;
+NAME at 0 len 3
+NAME at 4 len 5
+UNKNOWN byte 61
+NAME at 12 len 5
+STAR
+NUMBER 3
+PLUS
+NUMBER 42
+SEMI
+--- 9 tokens

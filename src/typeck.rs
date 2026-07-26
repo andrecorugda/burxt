@@ -47,6 +47,8 @@ pub enum TypedExprKind {
     /// Negation of a non-literal (literals are folded at check time).
     Neg(Box<TypedExpr>),
     Not(Box<TypedExpr>),
+    /// `byte_at(s, i)`: the i-th byte as an Int, bounds-checked at runtime.
+    ByteAt { s: Box<TypedExpr>, index: Box<TypedExpr> },
     /// `len(s)` on a String: a runtime byte scan (an array's length folds to a
     /// constant instead, so it never reaches codegen).
     StrLen(Box<TypedExpr>),
@@ -417,10 +419,11 @@ impl TypeChecker {
             if self.fns.contains_key(&f.name) {
                 return Err(format!("function `{}` is defined twice", f.name));
             }
-            if f.name == "len" {
-                return Err(
-                    "the name `len` is reserved for the built-in array length".to_string()
-                );
+            if f.name == "len" || f.name == "byte_at" {
+                return Err(format!(
+                    "the name `{}` is reserved for a built-in",
+                    f.name
+                ));
             }
             for p in &f.params {
                 self.validate_type(&p.ty)?;
@@ -724,10 +727,8 @@ impl TypeChecker {
     /// function returns.
     fn check_extern(&self, e: &ExternFn) -> Result<(), String> {
         const RESERVED: [&str; 6] = ["printf", "fprintf", "fputs", "exit", "stderr", "main"];
-        if e.name == "len" {
-            return Err(
-                "the name `len` is reserved for the built-in array length".to_string()
-            );
+        if e.name == "len" || e.name == "byte_at" {
+            return Err(format!("the name `{}` is reserved for a built-in", e.name));
         }
         if RESERVED.contains(&e.name.as_str()) {
             return Err(format!(
@@ -1442,6 +1443,39 @@ impl TypeChecker {
                 //     constant and codegen never sees the call;
                 //   * a string's length is a property of its DATA, so it is a
                 //     byte scan at runtime.
+                // `byte_at(s, i)` — the i-th BYTE of a string, bounds-checked.
+                // Named for bytes on purpose: A4.4 refused a bare `s[i]`
+                // because it would hide whether you get a byte or a character.
+                if name == "byte_at" {
+                    if args.len() != 2 {
+                        return Err(
+                            "byte_at(...) takes a string and an index: byte_at(s, i)"
+                                .to_string(),
+                        );
+                    }
+                    let s = self.check_expr(&args[0], None)?;
+                    if s.ty != Type::String {
+                        return Err(format!(
+                            "byte_at(...) reads a String, but the first argument has \
+                             type {}",
+                            s.ty
+                        ));
+                    }
+                    let idx = self.check_expr(&args[1], None)?;
+                    if idx.ty != Type::Int {
+                        return Err(format!(
+                            "a byte index must be an Int, but this one has type {}",
+                            idx.ty
+                        ));
+                    }
+                    return Ok(TypedExpr {
+                        ty: Type::Int,
+                        kind: TypedExprKind::ByteAt {
+                            s: Box::new(s),
+                            index: Box::new(idx),
+                        },
+                    });
+                }
                 if name == "len" {
                     if args.len() != 1 {
                         return Err(
