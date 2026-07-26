@@ -747,6 +747,40 @@ fn vscode_extension_speaks_to_the_language_server() {
     let harness = root.join("editors/vscode/test/harness.js");
     let ext = fs::read_to_string(root.join("editors/vscode/extension.js")).unwrap();
 
+    // The manifest has two properties that are easy to lose in an edit and whose
+    // loss is silent: the language icon (v0.0.41 was spent chasing an icon that
+    // was declared correctly all along) and the remote extension kind (without it,
+    // the extension runs on the UI side of a WSL/SSH session and cannot see the
+    // compiler at all).
+    let manifest = fs::read_to_string(root.join("editors/vscode/package.json")).unwrap();
+    for (needle, why) in [
+        ("\"icon\"", "the extension must declare an icon for the burxt language"),
+        ("file-icon.png", "the language icon file must be the one that is packaged"),
+        ("\"extensionKind\"", "the extension must declare where it runs on a remote"),
+        ("workspace", "extensionKind must be `workspace`: it spawns the compiler"),
+    ] {
+        assert!(manifest.contains(needle), "{}", why);
+    }
+    // Everything the packager ships has to exist, or `pack.py` fails at the worst
+    // possible moment — when someone is trying to install it.
+    let packer = fs::read_to_string(root.join("editors/vscode/pack.py")).unwrap();
+    let listed = packer
+        .split("FILES = [")
+        .nth(1)
+        .and_then(|s| s.split(']').next())
+        .expect("pack.py should list the files it packages");
+    for line in listed.lines() {
+        let name = line.trim().trim_end_matches(',').trim_matches('"');
+        if name.is_empty() || name.starts_with('#') {
+            continue;
+        }
+        assert!(
+            root.join("editors/vscode").join(name).exists(),
+            "pack.py packages `{}`, which does not exist",
+            name
+        );
+    }
+
     // Static properties first, so a broken client is caught even without node.
     for (needle, why) in [
         ("\"lsp\"", "the extension must launch the language server"),

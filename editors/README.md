@@ -14,26 +14,34 @@ directory holds that half of the project.
 | VS Code diagnostics + hover | **DONE** (v0.0.36) — hand-written LSP client, still no npm | `vscode/extension.js` |
 | VS Code problem matcher (for tasks and CI) | **DONE** (v0.0.33) | `vscode/package.json`, `.vscode/tasks.json` |
 | Neovim / Helix configs | **DONE** (v0.0.33) — diagnostics, no highlighting yet | `nvim/`, `helix/` |
-| `.bx` file icon in the explorer | **DONE** (v0.0.41) — needs a theme that shows it, see below | `vscode/fileicons/` |
+| `.bx` file icon in the explorer | **DONE** (v0.0.42) — works under the default theme | `vscode/package.json` |
 | Tree-sitter grammar (Neovim/Helix colour) | not written | see below |
 | Hover, go-to-definition | not written | see below |
 | GitHub language detection | blocked on a popularity gate, not on us | see below |
 
 ## Installing the VS Code extension
 
-The extension is **declarative** — a grammar plus a language configuration, no
-JavaScript and no build step — so it installs by being copied into place:
+Package it and install it — no npm, no `vsce`, no bundler:
 
 ```bash
-# VS Code
-ln -s "$PWD/editors/vscode" ~/.vscode/extensions/burxt
-
-# VS Code Insiders
-ln -s "$PWD/editors/vscode" ~/.vscode-insiders/extensions/burxt
-
-# VSCodium
-ln -s "$PWD/editors/vscode" ~/.vscode-oss/extensions/burxt
+python3 editors/vscode/pack.py                                  # writes burxt-0.1.0.vsix
+code --install-extension editors/vscode/burxt-0.1.0.vsix
 ```
+
+`pack.py` is a .vsix writer in the standard library: a .vsix is a ZIP holding an OPC
+content-types map, a VSIX manifest, and the extension under `extension/`. `vsce`
+does more — linting, dependency bundling, marketplace checks — and all of it is for
+publishing rather than installing, so none of it is needed here.
+
+**Install rather than symlink.** A symlink into the extensions directory does work,
+until something reads the extension registry and does not find you. An installed
+extension is registered, versioned, upgradable and uninstallable through the normal
+UI, and it is the shape every other extension has.
+
+On a remote — WSL, SSH, a container — the manifest declares
+`"extensionKind": ["workspace"]`, because the extension spawns the compiler and the
+language server and therefore has to run where the code is rather than on the UI
+side.
 
 Then reload the window. A `.bx` file should light up: money literals as numbers,
 `Decimal<2, RoundHalfEven>` with the scale and the rounding contract distinct,
@@ -48,31 +56,29 @@ cd editors/vscode && vsce package
 
 ## Getting the Burxt icon on `.bx` files
 
-This one has a wrinkle worth stating plainly, because it looks like a bug otherwise:
-**VS Code has no supported way to add a single icon on top of another icon theme.**
-A file icon theme is monolithic. The extension contributes an icon for the `burxt`
-language, but the default **Seti** theme ignores language-contributed icons entirely,
-and the built-in **Minimal** theme does too (its `languageIds` map is empty). So the
-declaration alone shows nothing.
+`contributes.languages[].icon` is the whole mechanism — the same one
+`apex-stack.apex-alpine` uses — and it works under the **default Seti theme**. No
+icon theme to install, nothing to switch, nothing lost.
 
-Three ways to actually see it, in order of how little they cost you:
+**A correction worth keeping, because v0.0.41 got this wrong.** I claimed Seti
+ignores language-contributed icons and shipped a file icon theme to work around it.
+That was an assumption, and it was false. VS Code's own logic is:
 
-1. **Switch to the theme this extension ships.** *Preferences: File Icon Theme →
-   Burxt*, or `"workbench.iconTheme": "burxt"`. `.bx` files get the mark; everything
-   else gets a plain document or folder. Deliberately minimal — it is not an attempt
-   to be a full icon set, and it says so rather than shipping four hundred glyphs
-   nobody asked for. **This repository turns it on in `.vscode/settings.json`**, so
-   it applies here and nowhere else; delete that line to opt out.
-2. **Use an icon theme with custom associations.** `vscode-icons` supports a custom
-   icon folder (`vsicons.customIconFolderPath`): drop `file_type_bx.png` in it and
-   you keep rich icons for everything else.
-3. **Any theme that sets `showLanguageModeIcons: true`** will pick up the
-   contributed icon automatically. Worth knowing if you already use one.
+```js
+n = true                     // set when a theme defines languageIds
+showLanguageModeIcons === true || (n && showLanguageModeIcons !== false)
+```
 
-Zero built-in languages contribute an icon today, which is why option 1 needs its
-own default document glyph at all — a `showLanguageModeIcons` theme with no
-fallback would leave every other file blank.
+Seti defines 83 `languageIds` and never sets the flag to `false`, so the second
+clause is true and language icons apply to any language Seti does not itself cover —
+which includes Burxt. The icon theme has been removed; it solved a problem that did
+not exist, at the cost of every other file's icon.
 
+The lesson is the one this project applies to the compiler: **check the mechanism,
+do not reason about it from memory.** The answer was in the shipped bundle the whole
+time.
+
+## Other editors
 ## Other editors
 
 The grammar is a standard TextMate grammar, which is the same artifact most

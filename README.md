@@ -104,7 +104,8 @@ message. Adding a test means dropping two files in a directory.
 highlighting, live diagnostics and hover, with no `npm install`:
 
 ```sh
-ln -s "$PWD/editors/vscode" ~/.vscode/extensions/burxt   # then reload the window
+python3 editors/vscode/pack.py                            # no npm, no vsce
+code --install-extension editors/vscode/burxt-0.1.0.vsix  # then reload the window
 ```
 
 That gives VS Code syntax highlighting, **errors as you type, and hover** — with no

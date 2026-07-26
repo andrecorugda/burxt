@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.41)
+# Burxt — Design Notes (v0.0.42)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1997,6 +1997,49 @@ opts into language icons.
 
 This repository turns the theme on in `.vscode/settings.json`, which is
 workspace-scoped: it applies here, nowhere else, and one deleted line reverts it.
+
+### v0.0.42: a real extension, and a correction
+
+**v0.0.41 was wrong, and the way it was wrong is worth more than the fix.** I claimed
+the default Seti theme ignores language-contributed icons, and shipped a whole file
+icon theme to work around it — at the cost of every other file's icon. That claim was
+an assumption. VS Code's own logic, read out of the shipped bundle:
+
+```js
+n = true                     // set when a theme defines languageIds
+showLanguageModeIcons === true || (n && showLanguageModeIcons !== false)
+```
+
+Seti defines 83 `languageIds` and never sets the flag to `false`, so language icons
+**do** apply to any language Seti does not itself cover. `contributes.languages[].icon`
+was correct all along — the same mechanism `apex-stack.apex-alpine` uses, which is
+what Andre pointed at. The icon theme is removed, along with the workspace setting
+that turned it on. No theme to switch, nothing lost.
+
+The lesson is the one this project already applies to the compiler: **check the
+mechanism instead of reasoning about it from memory.** The answer was in a file on
+disk the whole time, and finding it took one grep.
+
+**What was actually missing was installation.** The extension had been *symlinked*
+into the extensions directory, which works until something reads the extension
+registry and does not find you. So it is now packaged and installed properly:
+
+```sh
+python3 editors/vscode/pack.py                            # no npm, no vsce
+code --install-extension editors/vscode/burxt-0.1.0.vsix
+```
+
+`pack.py` is a .vsix writer in the standard library — a .vsix is a ZIP holding an OPC
+content-types map, a VSIX manifest and the extension under `extension/`. `vsce` does
+more (linting, dependency bundling, marketplace checks), all of it for *publishing*
+rather than installing, so none of it is needed. The extension keeps its promise of
+needing no toolchain.
+
+**One manifest property that matters on a remote:** `"extensionKind": ["workspace"]`.
+Without it, a WSL or SSH session runs the extension on the **UI** side, where there
+is no compiler and no language server to talk to. Now asserted by a test, along with
+the language icon declaration and the existence of every file `pack.py` ships —
+three things whose loss is silent.
 
 ## Testing
 
