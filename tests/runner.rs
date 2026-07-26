@@ -897,15 +897,15 @@ fn a_parse_error_is_reported_alone() {
     assert!(json.contains("expected"), "{}", json);
 }
 
-/// The stage-1 lexer, written in Burxt, must lex every Burxt source in this
-/// repository without an error — including its own source, which is the first real
-/// test of a self-hosted front end.
+/// The stage-1 front end, written in Burxt, must LEX AND PARSE every Burxt source in
+/// this repository without an error — including its own source, which is the first
+/// real test of a self-hosted compiler.
 ///
 /// It is a cross-check, not a unit test: the Rust lexer already accepted these files
 /// (they compile), so any byte the Burxt lexer refuses is a disagreement between the
 /// two, and one of them is wrong.
 #[test]
-fn the_burxt_lexer_accepts_every_burxt_source() {
+fn the_burxt_front_end_accepts_every_burxt_source() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let scratch = scratch_dir("stage1-lexer");
     fs::create_dir_all(&scratch).unwrap();
@@ -913,7 +913,7 @@ fn the_burxt_lexer_accepts_every_burxt_source() {
     // Build it once with the Rust compiler, then run it over everything.
     let build = Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("examples/stage1_lexer.bx"))
+        .arg(root.join("examples/stage1.bx"))
         .current_dir(&scratch)
         .output()
         .expect("failed to spawn burxt");
@@ -924,7 +924,7 @@ fn the_burxt_lexer_accepts_every_burxt_source() {
     );
 
     let mut sources: Vec<PathBuf> = vec![
-        root.join("examples/stage1_lexer.bx"),
+        root.join("examples/stage1.bx"),
         root.join("examples/checker.bx"),
         root.join("examples/symbols.bx"),
         root.join("examples/lexer.bx"),
@@ -939,7 +939,7 @@ fn the_burxt_lexer_accepts_every_burxt_source() {
 
     let mut failures = Vec::new();
     for source in &sources {
-        let out = Command::new(scratch.join("stage1_lexer"))
+        let out = Command::new(scratch.join("stage1"))
             .arg(source)
             .current_dir(&scratch)
             .output()
@@ -950,10 +950,18 @@ fn the_burxt_lexer_accepts_every_burxt_source() {
             failures.push(format!("{}: exited {:?}: {}", source.display(), out.status.code(), stderr));
             continue;
         }
-        // "errors: 0" is the lexer's own report of bytes it could not tokenize.
+        // Both halves report their own failures: bytes that started no token, and
+        // constructs the parser could not read.
         if !text.contains("errors:      0") {
             failures.push(format!(
-                "{}: the Burxt lexer reported an error the Rust lexer did not:\n{}",
+                "{}: the Burxt LEXER reported an error the Rust lexer did not:\n{}",
+                source.display(),
+                text
+            ));
+        }
+        if !text.contains("parse errors: 0") {
+            failures.push(format!(
+                "{}: the Burxt PARSER reported an error the Rust parser did not:\n{}",
                 source.display(),
                 text
             ));

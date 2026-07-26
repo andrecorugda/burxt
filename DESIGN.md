@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.52)
+# Burxt — Design Notes (v0.0.53)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -2533,6 +2533,53 @@ because the alternative is `_`, which v0.0.20 refused on purpose.
 declared `allocates`, because building `"error: byte " + to_string(one)` allocates —
 and the compiler said so, naming the fix, in a file it had never seen before.
 
+### v0.0.53: the stage-1 parser — types, expressions, statements
+
+M4 phase 3a. `examples/stage1_lexer.bx` became `examples/stage1.bx`, because it is no
+longer a lexer: it is the stage-1 compiler, growing a phase at a time in one file, which
+is the shape the plan predicted while Burxt has no modules.
+
+**700 lines of Burxt** now: every type form (including `Decimal<S, R>`, slices, fixed
+arrays and `dyn`), the full expression precedence ladder with postfix chains, struct and
+array literals, and every statement — `let`, assignment, `print`, `return`, `return
+tail`, `if`/`else if`, `while`, `break`, `continue`, `region`, `match` with payload
+bindings, and expression statements.
+
+**It parses every Burxt source in the repository, including its own**, and the
+cross-check test now covers both halves: any construct the Burxt parser refuses is a
+disagreement with the Rust parser, and one of them is wrong.
+
+**The arena design changed, and for a better reason than the one that forced it.**
+Child lists — a call's arguments, a block's statements, a match's arms — live in a
+side array of indices, with a node holding `(start, count)`. That began as a workaround:
+Burxt has no `xs[i].field = v`, and cannot write to a growable array element through a
+field, so the obvious linked-cell approach could not back-patch. But children pushed
+into a side array land **contiguously** even though their subtrees interleave in the
+node array, so a list is two integers instead of a chain — which is what production
+compilers do anyway. **The language's limitation pushed the design somewhere better.**
+
+**Three gaps found, each recorded with its trigger:**
+
+- **`xs[i].field = v`** — assignment through an index and then a field. Utterly
+  ordinary (`table.rows[i].count = 5`), so it earns its place; deferred to keep this
+  phase shippable.
+- **Writing to a growable array element through a field** — `self.nodes[i] = value`.
+  Reading works, `push` works, writing does not.
+- **The highlighter disagreed with the compiler about `\}`.** The compiler accepts it
+  as an escape; the TextMate grammar's escape list did not include it, so valid code
+  was flagged invalid. Fixed. That is the second time writing Burxt found a drift the
+  keyword test could not see, because it checks that keywords *exist*, not that escape
+  rules match.
+
+**And a bug in my own Burxt code worth keeping.** The driver steps over items it does
+not parse yet by matching braces, and treated any semicolon before the first brace as
+the end of a bodyless `extern` declaration. `fn f(xs: [Int; 3])` contains a semicolon —
+inside the array type — so the skip stopped mid-signature. Fixed by counting
+parentheses and brackets too. A heuristic that had to meet real syntax to fail.
+
+Items — `fn`, `struct`, `enum`, `trait`, `impl`, `extern` — are phase 3b. The driver
+steps over them rather than pretending to read them.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -2597,6 +2644,8 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- M4 phase 3a (v0.0.53): the stage-1 parser — all types, the full expression ladder,
+  every statement form, in an arena with contiguous child lists. Parses its own source.
 - M4 phase 2 (v0.0.52): the stage-1 lexer in Burxt — the real token set, exact money
   literals, and a cross-check that it accepts every Burxt source in the repository
   including its own.

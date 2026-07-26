@@ -1,0 +1,1009 @@
+// ============================================================================
+// STAGE-1: the Burxt compiler, written in Burxt.
+//
+// One file, because Burxt has no module system yet — which is the shape
+// spec/M4-SELF-HOSTING.md predicted stage-1 would take. It grows a phase at a time:
+//
+//   phase 2 (v0.0.52)  the lexer: the real token set, exact money literals
+//   phase 3 (v0.0.53)  the parser: types, expressions, statements, in an arena
+//
+// Nothing here uses a map, because Burxt has none: the keyword table and the symbol
+// table are arrays searched linearly, which is what a compiler's lookups cost anyway.
+// ============================================================================
+
+// ---- token kinds -----------------------------------------------------------
+// Codes rather than an enum: a 60-variant enum would force a 60-arm `match` at
+// every use, and the payloads differ per kind. The names live in `kind_name`.
+//   1 identifier      2 Int literal      3 Decimal literal     4 String literal
+//   10..49 punctuation                   100.. keywords
+struct Tok {
+    kind: Int,
+    start: Int,
+    length: Int,
+    // Int literals: the value. Decimals: the unscaled integer, with `scale` places.
+    value: Int,
+    scale: Int,
+    // A string literal containing `{` opens an interpolation; splitting the pieces
+    // is the parser's job, so the lexer only records that there is one.
+    interpolated: Bool,
+}
+
+struct Kw { word: String, code: Int }
+// ---- the AST -----------------------------------------------------------------
+// Children by INDEX, not by pointer: v0.0.22 proved an arena needs no recursive
+// types, and an index is a number a struct field can hold.
+//
+// Expression kinds:
+//   1 Int literal        2 Decimal literal      3 String literal    4 Bool literal
+//   5 name               6 unary minus          7 not
+//   8 binary (a op b, op in `value`)             9 comparison
+//  10 logical            11 field access        12 index
+//  13 call               14 method call
+// Type kinds:
+//  40 Int  41 Bool  42 String  43 CInt  44 CDouble
+//  45 Decimal (scale in `a`, contract in `b`)   46 named   47 slice   48 array
+//  49 dyn
+// Statement kinds:
+//  60 let (name tok in `tok`, type in `a`, value in `b`, mutable in `value`)
+//  61 assign            62 print               63 return            64 tail return
+//  65 if                66 while               67 break             68 continue
+//  69 region            70 expression statement
+struct Node {
+    kind: Int,
+    // Child indices, or payload. Meaning depends on `kind`, documented above.
+    a: Int,
+    b: Int,
+    c: Int,
+    // The operator byte, a flag, or a literal's value — whatever the kind needs.
+    value: Int,
+    // The token this node started at, so a message can point at the source.
+    tok: Int,
+}
+
+// One compilation unit: its tokens, its keyword table, and its AST.
+//
+// `kids` is where child LISTS live — the arguments of a call, the statements of a
+// block. A node stores a start offset and a count into it, rather than a linked list
+// through the nodes themselves.
+//
+// That is not a workaround for the two gaps found writing this file (Burxt has no
+// `xs[i].field = v`, and no writing to a growable array element through a field): it
+// is the better design regardless. Children pushed into a side array land
+// CONTIGUOUSLY even though their subtrees interleave in `nodes`, so nothing needs
+// back-patching, and a list is two integers instead of a chain of cells.
+struct Unit {
+    toks: [Tok],
+    words: [Kw],
+    nodes: [Node],
+    kids: [Int],
+    // Where the parser is in the token array.
+    pos: Int,
+    // Nonzero while parsing an `if`/`while` condition, where a `{` opens the BODY
+    // rather than a struct literal. The Rust parser carries the same flag.
+    no_struct: Int,
+    errors: Int,
+}
+
+fn is_alpha(b: Int) -> Bool {
+    return (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95;
+}
+
+fn is_digit(b: Int) -> Bool {
+    return b >= 48 && b <= 57;
+}
+
+fn is_name_byte(b: Int) -> Bool {
+    return is_alpha(b) || is_digit(b);
+}
+
+fn is_space(b: Int) -> Bool {
+    return b == 32 || b == 9 || b == 10 || b == 13;
+}
+
+fn at_byte(src: String, i: Int) -> Int {
+    if i < 0 || i >= len(src) {
+        return -1;
+    }
+    return byte_at(src, i);
+}
+
+// Compare a span of the source against a whole word, without allocating.
+fn span_eq(src: String, start: Int, length: Int, word: String) -> Bool {
+    if length != len(word) {
+        return false;
+    }
+    let mut i: Int = 0;
+    while i < length {
+        if byte_at(src, start + i) != byte_at(word, i) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// ---- the keyword table -----------------------------------------------------
+// Codes from 100. Order does not matter; the lookup is a scan.
+fn (mut self: Unit) add_word(word: String, code: Int) -> Int {
+    push(self.words, Kw { word: word, code: code });
+    return len(self.words);
+}
+
+fn (mut self: Unit) install_keywords() -> Int {
+    let mut n: Int = 0;
+    n = self.add_word("let", 100);
+    n = self.add_word("mut", 101);
+    n = self.add_word("fn", 102);
+    n = self.add_word("return", 103);
+    n = self.add_word("if", 104);
+    n = self.add_word("else", 105);
+    n = self.add_word("while", 106);
+    n = self.add_word("break", 107);
+    n = self.add_word("continue", 108);
+    n = self.add_word("struct", 109);
+    n = self.add_word("enum", 110);
+    n = self.add_word("match", 111);
+    n = self.add_word("trait", 112);
+    n = self.add_word("impl", 113);
+    n = self.add_word("for", 114);
+    n = self.add_word("dyn", 115);
+    n = self.add_word("extern", 116);
+    n = self.add_word("region", 117);
+    n = self.add_word("print", 118);
+    n = self.add_word("self", 119);
+    n = self.add_word("true", 120);
+    n = self.add_word("false", 121);
+    n = self.add_word("as", 122);
+    n = self.add_word("tail", 123);
+    n = self.add_word("pure", 124);
+    n = self.add_word("allocates", 125);
+    n = self.add_word("requires", 126);
+    n = self.add_word("ensures", 127);
+    n = self.add_word("decreases", 128);
+    n = self.add_word("interface", 129);
+    n = self.add_word("is", 130);
+    // Type names are keywords too: the parser needs them distinguished from
+    // ordinary identifiers, exactly as the Rust lexer does.
+    n = self.add_word("Int", 140);
+    n = self.add_word("Bool", 141);
+    n = self.add_word("String", 142);
+    n = self.add_word("CInt", 143);
+    n = self.add_word("CDouble", 144);
+    n = self.add_word("Decimal", 145);
+    n = self.add_word("RoundHalfEven", 146);
+    n = self.add_word("RoundHalfUp", 147);
+    return n;
+}
+
+// An identifier's span, or a keyword code if the table has it.
+fn (self: Unit) keyword_code(src: String, start: Int, length: Int) -> Int {
+    let mut i: Int = 0;
+    while i < len(self.words) {
+        if span_eq(src, start, length, self.words[i].word) {
+            return self.words[i].code;
+        }
+        i = i + 1;
+    }
+    return 1;
+}
+
+fn (mut self: Unit) emit(kind: Int, start: Int, length: Int) -> Int {
+    push(self.toks, Tok {
+        kind: kind, start: start, length: length,
+        value: 0, scale: 0, interpolated: false,
+    });
+    return len(self.toks);
+}
+
+fn (mut self: Unit) emit_number(kind: Int, start: Int, length: Int, value: Int, scale: Int) -> Int {
+    push(self.toks, Tok {
+        kind: kind, start: start, length: length,
+        value: value, scale: scale, interpolated: false,
+    });
+    return len(self.toks);
+}
+
+fn (mut self: Unit) emit_string(start: Int, length: Int, interpolated: Bool) -> Int {
+    push(self.toks, Tok {
+        kind: 4, start: start, length: length,
+        value: 0, scale: 0, interpolated: interpolated,
+    });
+    return len(self.toks);
+}
+
+// ---- whitespace and comments ----------------------------------------------
+fn skip_trivia(src: String, from: Int) -> Int {
+    let mut i: Int = from;
+    while true {
+        let mut moved: Bool = false;
+        while i < len(src) && is_space(byte_at(src, i)) {
+            i = i + 1;
+            moved = true;
+        }
+        if at_byte(src, i) == 47 && at_byte(src, i + 1) == 47 {
+            while i < len(src) && byte_at(src, i) != 10 {
+                i = i + 1;
+            }
+            moved = true;
+        }
+        if !moved {
+            break;
+        }
+    }
+    return i;
+}
+
+// ---- numbers ---------------------------------------------------------------
+// `19.99` is the unscaled integer 1999 with scale 2 — accumulated digit by digit,
+// never through a float. `$19.99` is the same. `8.25%` is two places finer.
+fn (mut self: Unit) scan_number(src: String, from: Int) -> Int allocates {
+    let mut i: Int = from;
+    let money: Bool = byte_at(src, i) == 36;         // '$'
+    if money {
+        i = i + 1;
+    }
+    let mut value: Int = 0;
+    while i < len(src) && is_digit(byte_at(src, i)) {
+        value = value * 10 + (byte_at(src, i) - 48);
+        i = i + 1;
+    }
+    let mut scale: Int = 0;
+    if at_byte(src, i) == 46 && is_digit(at_byte(src, i + 1)) {
+        i = i + 1;
+        while i < len(src) && is_digit(byte_at(src, i)) {
+            value = value * 10 + (byte_at(src, i) - 48);
+            scale = scale + 1;
+            i = i + 1;
+        }
+    }
+    if at_byte(src, i) == 37 {                       // '%'
+        i = i + 1;
+        // A percent is the number divided by a hundred: two more places, exactly.
+        let n: Int = self.emit_number(3, from, i - from, value, scale + 2);
+        return i;
+    }
+    if money || scale > 0 {
+        let n: Int = self.emit_number(3, from, i - from, value, scale);
+        return i;
+    }
+    let n: Int = self.emit_number(2, from, i - from, value, 0);
+    return i;
+}
+
+// ---- strings ---------------------------------------------------------------
+fn (mut self: Unit) scan_string(src: String, from: Int) -> Int allocates {
+    let mut i: Int = from + 1;
+    let mut interpolated: Bool = false;
+    while true {
+        if i >= len(src) {
+            print("error: unterminated string literal");
+            self.errors = self.errors + 1;
+            break;
+        }
+        let b: Int = byte_at(src, i);
+        if b == 92 {                                 // '\' — an escape, whatever follows
+            i = i + 2;
+            continue;
+        }
+        if b == 123 {                                // '{' opens an interpolation
+            interpolated = true;
+            i = i + 1;
+            continue;
+        }
+        if b == 34 {                                 // '"' closes it
+            i = i + 1;
+            break;
+        }
+        i = i + 1;
+    }
+    let n: Int = self.emit_string(from, i - from, interpolated);
+    return i;
+}
+
+// ---- punctuation -----------------------------------------------------------
+// Two-character forms are tried first: `-` and `->` differ by one byte and mean
+// entirely different things.
+fn (mut self: Unit) scan_punct(src: String, from: Int) -> Int allocates {
+    let one: Int = byte_at(src, from);
+    let two: Int = at_byte(src, from + 1);
+    if one == 45 && two == 62 { let n: Int = self.emit(10, from, 2); return from + 2; }  // ->
+    if one == 61 && two == 62 { let n: Int = self.emit(11, from, 2); return from + 2; }  // =>
+    if one == 61 && two == 61 { let n: Int = self.emit(12, from, 2); return from + 2; }  // ==
+    if one == 33 && two == 61 { let n: Int = self.emit(13, from, 2); return from + 2; }  // !=
+    if one == 60 && two == 61 { let n: Int = self.emit(14, from, 2); return from + 2; }  // <=
+    if one == 62 && two == 61 { let n: Int = self.emit(15, from, 2); return from + 2; }  // >=
+    if one == 38 && two == 38 { let n: Int = self.emit(16, from, 2); return from + 2; }  // &&
+    if one == 124 && two == 124 { let n: Int = self.emit(17, from, 2); return from + 2; } // ||
+
+    if one == 58 { let n: Int = self.emit(20, from, 1); return from + 1; }   // :
+    if one == 59 { let n: Int = self.emit(21, from, 1); return from + 1; }   // ;
+    if one == 44 { let n: Int = self.emit(22, from, 1); return from + 1; }   // ,
+    if one == 46 { let n: Int = self.emit(23, from, 1); return from + 1; }   // .
+    if one == 61 { let n: Int = self.emit(24, from, 1); return from + 1; }   // =
+    if one == 43 { let n: Int = self.emit(25, from, 1); return from + 1; }   // +
+    if one == 45 { let n: Int = self.emit(26, from, 1); return from + 1; }   // -
+    if one == 42 { let n: Int = self.emit(27, from, 1); return from + 1; }   // *
+    if one == 47 { let n: Int = self.emit(28, from, 1); return from + 1; }   // /
+    if one == 40 { let n: Int = self.emit(29, from, 1); return from + 1; }   // (
+    if one == 41 { let n: Int = self.emit(30, from, 1); return from + 1; }   // )
+    if one == 123 { let n: Int = self.emit(31, from, 1); return from + 1; }  // {
+    if one == 125 { let n: Int = self.emit(32, from, 1); return from + 1; }  // }
+    if one == 91 { let n: Int = self.emit(33, from, 1); return from + 1; }   // [
+    if one == 93 { let n: Int = self.emit(34, from, 1); return from + 1; }   // ]
+    if one == 60 { let n: Int = self.emit(35, from, 1); return from + 1; }   // <
+    if one == 62 { let n: Int = self.emit(36, from, 1); return from + 1; }   // >
+    if one == 33 { let n: Int = self.emit(37, from, 1); return from + 1; }   // !
+
+    print("error: byte " + to_string(one) + " starts no token");
+    self.errors = self.errors + 1;
+    return from + 1;
+}
+
+// ---- the loop --------------------------------------------------------------
+fn (mut self: Unit) run(src: String) -> Int allocates {
+    let mut i: Int = 0;
+    while true {
+        i = skip_trivia(src, i);
+        if i >= len(src) {
+            break;
+        }
+        let b: Int = byte_at(src, i);
+        if is_alpha(b) {
+            let start: Int = i;
+            while i < len(src) && is_name_byte(byte_at(src, i)) {
+                i = i + 1;
+            }
+            let code: Int = self.keyword_code(src, start, i - start);
+            let n: Int = self.emit(code, start, i - start);
+            continue;
+        }
+        if is_digit(b) || (b == 36 && is_digit(at_byte(src, i + 1))) {
+            i = self.scan_number(src, i);
+            continue;
+        }
+        if b == 34 {
+            i = self.scan_string(src, i);
+            continue;
+        }
+        i = self.scan_punct(src, i);
+    }
+    return len(self.toks);
+}
+
+
+// ============================================================================
+// PHASE 3: the parser. Tokens in, arena AST out.
+// ============================================================================
+
+fn (self: Unit) kind_at(offset: Int) -> Int {
+    let i: Int = self.pos + offset;
+    if i < 0 || i >= len(self.toks) {
+        return 0;                                    // past the end
+    }
+    return self.toks[i].kind;
+}
+
+fn (self: Unit) at(kind: Int) -> Bool {
+    return self.kind_at(0) == kind;
+}
+
+fn (self: Unit) done() -> Bool {
+    return self.pos >= len(self.toks);
+}
+
+fn (mut self: Unit) advance() -> Int {
+    self.pos = self.pos + 1;
+    return self.pos;
+}
+
+fn (mut self: Unit) complain(src: String, what: String) -> Int allocates {
+    let where: Int = self.pos;
+    if where < len(self.toks) {
+        let t: Tok = self.toks[where];
+        print("parse error: expected " + what + ", found `"
+              + substring(src, t.start, t.length) + "`");
+    } else {
+        print("parse error: expected " + what + ", found the end of the file");
+    }
+    self.errors = self.errors + 1;
+    return -1;
+}
+
+// Consume a token of this kind, or report what was there instead.
+fn (mut self: Unit) eat(src: String, kind: Int, what: String) -> Bool allocates {
+    if self.at(kind) {
+        let n: Int = self.advance();
+        return true;
+    }
+    let bad: Int = self.complain(src, what);
+    return false;
+}
+
+fn (mut self: Unit) add(kind: Int, a: Int, b: Int, c: Int, value: Int, tok: Int) -> Int {
+    push(self.nodes, Node { kind: kind, a: a, b: b, c: c, value: value, tok: tok });
+    return len(self.nodes) - 1;
+}
+
+// ---- types -------------------------------------------------------------------
+fn (mut self: Unit) parse_type(src: String) -> Int allocates {
+    let here: Int = self.pos;
+    let k: Int = self.kind_at(0);
+    if k == 140 { let n: Int = self.advance(); return self.add(40, 0, 0, 0, 0, here); }
+    if k == 141 { let n: Int = self.advance(); return self.add(41, 0, 0, 0, 0, here); }
+    if k == 142 { let n: Int = self.advance(); return self.add(42, 0, 0, 0, 0, here); }
+    if k == 143 { let n: Int = self.advance(); return self.add(43, 0, 0, 0, 0, here); }
+    if k == 144 { let n: Int = self.advance(); return self.add(44, 0, 0, 0, 0, here); }
+    if k == 145 {
+        // Decimal<S> or Decimal<S, RoundHalfEven>: the scale and the contract are
+        // part of the type, so they are part of the node.
+        let n: Int = self.advance();
+        if !self.eat(src, 35, "`<` after `Decimal`") { return -1; }
+        if !self.at(2) { return self.complain(src, "a scale, e.g. `Decimal<2>`"); }
+        let scale: Int = self.toks[self.pos].value;
+        let m: Int = self.advance();
+        let mut contract: Int = 0;
+        if self.at(22) {                             // ','
+            let c: Int = self.advance();
+            if self.at(146) { contract = 1; }
+            if self.at(147) { contract = 2; }
+            if contract == 0 {
+                return self.complain(src, "`RoundHalfEven` or `RoundHalfUp`");
+            }
+            let d: Int = self.advance();
+        }
+        if !self.eat(src, 36, "`>` closing the type") { return -1; }
+        return self.add(45, scale, contract, 0, 0, here);
+    }
+    if k == 115 {                                    // dyn
+        let n: Int = self.advance();
+        if !self.at(1) { return self.complain(src, "a trait name after `dyn`"); }
+        let name_tok: Int = self.pos;
+        let m: Int = self.advance();
+        return self.add(49, 0, 0, 0, 0, name_tok);
+    }
+    if k == 33 {                                     // '[' — slice or fixed array
+        let n: Int = self.advance();
+        let elem: Int = self.parse_type(src);
+        if elem < 0 { return -1; }
+        if self.at(21) {                             // ';' — a fixed length follows
+            let semi: Int = self.advance();
+            if !self.at(2) { return self.complain(src, "an array length"); }
+            let count: Int = self.toks[self.pos].value;
+            let m: Int = self.advance();
+            if !self.eat(src, 34, "`]` closing the array type") { return -1; }
+            return self.add(48, elem, count, 0, 0, here);
+        }
+        if !self.eat(src, 34, "`]` closing the slice type") { return -1; }
+        return self.add(47, elem, 0, 0, 0, here);
+    }
+    if k == 1 {                                      // a named struct, enum or trait
+        let name_tok: Int = self.pos;
+        let n: Int = self.advance();
+        return self.add(46, 0, 0, 0, 0, name_tok);
+    }
+    return self.complain(src, "a type");
+}
+
+// ---- expressions -------------------------------------------------------------
+// Precedence climbs the way the Rust parser's does: or, and, comparison, additive,
+// term, unary, postfix, primary.
+fn (mut self: Unit) parse_expr(src: String) -> Int allocates {
+    return self.parse_or(src);
+}
+
+fn (mut self: Unit) parse_or(src: String) -> Int allocates {
+    let mut left: Int = self.parse_and(src);
+    while left >= 0 && self.at(17) {                 // ||
+        let here: Int = self.pos;
+        let n: Int = self.advance();
+        let right: Int = self.parse_and(src);
+        if right < 0 { return -1; }
+        left = self.add(10, left, right, 0, 124, here);
+    }
+    return left;
+}
+
+fn (mut self: Unit) parse_and(src: String) -> Int allocates {
+    let mut left: Int = self.parse_comparison(src);
+    while left >= 0 && self.at(16) {                 // &&
+        let here: Int = self.pos;
+        let n: Int = self.advance();
+        let right: Int = self.parse_comparison(src);
+        if right < 0 { return -1; }
+        left = self.add(10, left, right, 0, 38, here);
+    }
+    return left;
+}
+
+fn (mut self: Unit) parse_comparison(src: String) -> Int allocates {
+    let left: Int = self.parse_additive(src);
+    if left < 0 { return -1; }
+    let k: Int = self.kind_at(0);
+    if k == 12 || k == 13 || k == 14 || k == 15 || k == 35 || k == 36 {
+        let here: Int = self.pos;
+        let n: Int = self.advance();
+        let right: Int = self.parse_additive(src);
+        if right < 0 { return -1; }
+        // Chained comparisons are not an expression in Burxt, and saying so here
+        // beats letting `a < b < c` parse into something surprising.
+        let next: Int = self.kind_at(0);
+        if next == 12 || next == 13 || next == 14 || next == 15 || next == 35 || next == 36 {
+            return self.complain(src, "no second comparison — `a < b < c` does not chain");
+        }
+        return self.add(9, left, right, 0, k, here);
+    }
+    return left;
+}
+
+fn (mut self: Unit) parse_additive(src: String) -> Int allocates {
+    let mut left: Int = self.parse_term(src);
+    while left >= 0 && (self.at(25) || self.at(26)) {  // + -
+        let here: Int = self.pos;
+        let op: Int = self.kind_at(0);
+        let n: Int = self.advance();
+        let right: Int = self.parse_term(src);
+        if right < 0 { return -1; }
+        left = self.add(8, left, right, 0, op, here);
+    }
+    return left;
+}
+
+fn (mut self: Unit) parse_term(src: String) -> Int allocates {
+    let mut left: Int = self.parse_unary(src);
+    while left >= 0 && (self.at(27) || self.at(28)) {  // * /
+        let here: Int = self.pos;
+        let op: Int = self.kind_at(0);
+        let n: Int = self.advance();
+        let right: Int = self.parse_unary(src);
+        if right < 0 { return -1; }
+        left = self.add(8, left, right, 0, op, here);
+    }
+    return left;
+}
+
+fn (mut self: Unit) parse_unary(src: String) -> Int allocates {
+    let here: Int = self.pos;
+    if self.at(26) {                                 // -
+        let n: Int = self.advance();
+        let inner: Int = self.parse_unary(src);
+        if inner < 0 { return -1; }
+        return self.add(6, inner, 0, 0, 0, here);
+    }
+    if self.at(37) {                                 // !
+        let n: Int = self.advance();
+        let inner: Int = self.parse_unary(src);
+        if inner < 0 { return -1; }
+        return self.add(7, inner, 0, 0, 0, here);
+    }
+    return self.parse_postfix(src);
+}
+
+// `.field`, `.method(args)` and `[index]`, chained as far as they go.
+fn (mut self: Unit) parse_postfix(src: String) -> Int allocates {
+    let mut node: Int = self.parse_primary(src);
+    while node >= 0 {
+        if self.at(23) {                             // '.'
+            let here: Int = self.pos;
+            let n: Int = self.advance();
+            if !self.at(1) {
+                return self.complain(src, "a field or method name after `.`");
+            }
+            let name_tok: Int = self.pos;
+            let m: Int = self.advance();
+            if self.at(29) {                         // '(' — a method call
+                let args: Int = self.parse_args(src);
+                if args < 0 { return -1; }
+                node = self.add(14, node, args, 0, 0, name_tok);
+                continue;
+            }
+            node = self.add(11, node, 0, 0, 0, name_tok);
+            continue;
+        }
+        if self.at(33) {                             // '['
+            let here: Int = self.pos;
+            let n: Int = self.advance();
+            let index: Int = self.parse_expr(src);
+            if index < 0 { return -1; }
+            if !self.eat(src, 34, "`]` closing the index") { return -1; }
+            node = self.add(12, node, index, 0, 0, here);
+            continue;
+        }
+        break;
+    }
+    return node;
+}
+
+// An argument list. Returns a node holding (start, count) into `kids`.
+fn (mut self: Unit) parse_args(src: String) -> Int allocates {
+    let here: Int = self.pos;
+    if !self.eat(src, 29, "`(`") { return -1; }
+    // Collect the argument node indices locally first: parsing one appends its whole
+    // subtree to `nodes`, but nothing to `kids`, so the indices stay contiguous.
+    let start: Int = len(self.kids);
+    let mut count: Int = 0;
+    while !self.at(30) {                             // until ')'
+        let arg: Int = self.parse_expr(src);
+        if arg < 0 { return -1; }
+        push(self.kids, arg);
+        count = count + 1;
+        if self.at(22) {                             // ','
+            let n: Int = self.advance();
+            continue;
+        }
+        break;
+    }
+    if !self.eat(src, 30, "`)` closing the arguments") { return -1; }
+    return self.add(15, start, count, 0, 0, here);
+}
+
+fn (mut self: Unit) parse_primary(src: String) -> Int allocates {
+    let here: Int = self.pos;
+    let k: Int = self.kind_at(0);
+    if k == 2 {
+        let value: Int = self.toks[self.pos].value;
+        let n: Int = self.advance();
+        return self.add(1, 0, 0, 0, value, here);
+    }
+    if k == 3 {
+        let t: Tok = self.toks[self.pos];
+        let n: Int = self.advance();
+        // The unscaled integer and the scale, carried exactly as the lexer read them.
+        return self.add(2, t.scale, 0, 0, t.value, here);
+    }
+    if k == 4 {
+        let n: Int = self.advance();
+        return self.add(3, 0, 0, 0, 0, here);
+    }
+    if k == 120 || k == 121 {                        // true / false
+        let n: Int = self.advance();
+        let truth: Int = 0;
+        if k == 120 { return self.add(4, 0, 0, 0, 1, here); }
+        return self.add(4, 0, 0, 0, 0, here);
+    }
+    if k == 29 {                                     // '(' grouping
+        let n: Int = self.advance();
+        let inner: Int = self.parse_expr(src);
+        if inner < 0 { return -1; }
+        if !self.eat(src, 30, "`)` closing the group") { return -1; }
+        return inner;
+    }
+    if k == 33 {                                     // '[' — an array or slice literal
+        let n: Int = self.advance();
+        let start: Int = len(self.kids);
+        let mut count: Int = 0;
+        while !self.at(34) {                         // until ']'
+            let item: Int = self.parse_expr(src);
+            if item < 0 { return -1; }
+            push(self.kids, item);
+            count = count + 1;
+            if self.at(22) {                         // ','
+                let c: Int = self.advance();
+                continue;
+            }
+            break;
+        }
+        if !self.eat(src, 34, "`]` closing the literal") { return -1; }
+        return self.add(17, start, count, 0, 0, here);
+    }
+    if k == 1 || k == 119 || (k >= 140 && k <= 145) {  // a name, `self`, or a type name
+        let name_tok: Int = self.pos;
+        let n: Int = self.advance();
+        if self.at(29) {                             // a call
+            let args: Int = self.parse_args(src);
+            if args < 0 { return -1; }
+            return self.add(13, args, 0, 0, 0, name_tok);
+        }
+        if self.at(31) && self.no_struct == 0 {      // `Name { field: value }`
+            let m: Int = self.advance();
+            let start: Int = len(self.kids);
+            let mut count: Int = 0;
+            while !self.at(32) {                     // until '}'
+                if !self.at(1) {
+                    return self.complain(src, "a field name");
+                }
+                let field_tok: Int = self.pos;
+                let f: Int = self.advance();
+                if !self.eat(src, 20, "`:` after the field name") { return -1; }
+                let value: Int = self.parse_expr(src);
+                if value < 0 { return -1; }
+                // One kid per field: the value, with the field's token on the node.
+                let pair: Int = self.add(18, value, 0, 0, 0, field_tok);
+                push(self.kids, pair);
+                count = count + 1;
+                if self.at(22) {                     // ',' — trailing one allowed
+                    let c: Int = self.advance();
+                    continue;
+                }
+                break;
+            }
+            if !self.eat(src, 32, "`\}` closing the literal") { return -1; }
+            return self.add(19, start, count, 0, 0, name_tok);
+        }
+        return self.add(5, 0, 0, 0, 0, name_tok);
+    }
+    return self.complain(src, "an expression");
+}
+
+// ---- statements --------------------------------------------------------------
+// A block: a node holding (start, count) into `kids`, like an argument list.
+fn (mut self: Unit) parse_block(src: String) -> Int allocates {
+    let here: Int = self.pos;
+    if !self.eat(src, 31, "`\{` opening a block") { return -1; }
+    let start: Int = len(self.kids);
+    let mut count: Int = 0;
+    while !self.at(32) && !self.done() {             // until '}'
+        let stmt: Int = self.parse_stmt(src);
+        if stmt < 0 { return -1; }
+        push(self.kids, stmt);
+        count = count + 1;
+    }
+    if !self.eat(src, 32, "`\}` closing a block") { return -1; }
+    return self.add(16, start, count, 0, 0, here);
+}
+fn (mut self: Unit) parse_stmt(src: String) -> Int allocates {
+    let here: Int = self.pos;
+    let k: Int = self.kind_at(0);
+
+    if k == 100 {                                    // let
+        let n: Int = self.advance();
+        let mut mutable: Int = 0;
+        if self.at(101) {                            // mut
+            mutable = 1;
+            let m: Int = self.advance();
+        }
+        if !self.at(1) { return self.complain(src, "a name after `let`"); }
+        let name_tok: Int = self.pos;
+        let m2: Int = self.advance();
+        if !self.eat(src, 20, "`:` and a type — every `let` declares one") { return -1; }
+        let ty: Int = self.parse_type(src);
+        if ty < 0 { return -1; }
+        if !self.eat(src, 24, "`=` and an initial value") { return -1; }
+        let value: Int = self.parse_expr(src);
+        if value < 0 { return -1; }
+        if !self.eat(src, 21, "`;`") { return -1; }
+        return self.add(60, ty, value, 0, mutable, name_tok);
+    }
+    if k == 118 {                                    // print
+        let n: Int = self.advance();
+        if !self.eat(src, 29, "`(` after `print`") { return -1; }
+        let value: Int = self.parse_expr(src);
+        if value < 0 { return -1; }
+        if !self.eat(src, 30, "`)`") { return -1; }
+        if !self.eat(src, 21, "`;`") { return -1; }
+        return self.add(62, value, 0, 0, 0, here);
+    }
+    if k == 103 {                                    // return
+        let n: Int = self.advance();
+        let mut kind: Int = 63;
+        if self.at(123) {                            // tail
+            kind = 64;
+            let m: Int = self.advance();
+        }
+        let value: Int = self.parse_expr(src);
+        if value < 0 { return -1; }
+        if !self.eat(src, 21, "`;`") { return -1; }
+        return self.add(kind, value, 0, 0, 0, here);
+    }
+    if k == 104 {                                    // if
+        let n: Int = self.advance();
+        self.no_struct = self.no_struct + 1;
+        let cond: Int = self.parse_expr(src);
+        self.no_struct = self.no_struct - 1;
+        if cond < 0 { return -1; }
+        let then_block: Int = self.parse_block(src);
+        if then_block < 0 { return -1; }
+        let mut else_block: Int = -1;
+        if self.at(105) {                            // else
+            let m: Int = self.advance();
+            if self.at(104) {
+                // `else if` is an else-block holding one if-statement.
+                else_block = self.parse_stmt(src);
+            } else {
+                else_block = self.parse_block(src);
+            }
+            if else_block < 0 { return -1; }
+        }
+        return self.add(65, cond, then_block, else_block, 0, here);
+    }
+    if k == 106 {                                    // while
+        let n: Int = self.advance();
+        self.no_struct = self.no_struct + 1;
+        let cond: Int = self.parse_expr(src);
+        self.no_struct = self.no_struct - 1;
+        if cond < 0 { return -1; }
+        let body: Int = self.parse_block(src);
+        if body < 0 { return -1; }
+        return self.add(66, cond, body, 0, 0, here);
+    }
+    if k == 107 {                                    // break
+        let n: Int = self.advance();
+        if !self.eat(src, 21, "`;`") { return -1; }
+        return self.add(67, 0, 0, 0, 0, here);
+    }
+    if k == 108 {                                    // continue
+        let n: Int = self.advance();
+        if !self.eat(src, 21, "`;`") { return -1; }
+        return self.add(68, 0, 0, 0, 0, here);
+    }
+    if k == 111 {                                    // match
+        let n: Int = self.advance();
+        self.no_struct = self.no_struct + 1;
+        let value: Int = self.parse_expr(src);
+        self.no_struct = self.no_struct - 1;
+        if value < 0 { return -1; }
+        if !self.eat(src, 31, "`\{` opening the arms") { return -1; }
+        let start: Int = len(self.kids);
+        let mut count: Int = 0;
+        while !self.at(32) && !self.done() {         // until '}'
+            // `Variant => { ... }` or `Variant(a, b) => { ... }`. Every arm names a
+            // variant: there is no wildcard, on purpose.
+            if !self.at(1) {
+                return self.complain(src, "a variant name — Burxt has no `_` arm");
+            }
+            let variant_tok: Int = self.pos;
+            let v: Int = self.advance();
+            let bind_start: Int = len(self.kids);
+            let mut binds: Int = 0;
+            if self.at(29) {                         // '(' bindings
+                let p: Int = self.advance();
+                while !self.at(30) {
+                    if !self.at(1) {
+                        return self.complain(src, "a name to bind the payload to");
+                    }
+                    push(self.kids, self.pos);
+                    binds = binds + 1;
+                    let b: Int = self.advance();
+                    if self.at(22) {
+                        let c: Int = self.advance();
+                        continue;
+                    }
+                    break;
+                }
+                if !self.eat(src, 30, "`)` closing the bindings") { return -1; }
+            }
+            if !self.eat(src, 11, "`=>` after the variant") { return -1; }
+            let body: Int = self.parse_block(src);
+            if body < 0 { return -1; }
+            let arm: Int = self.add(20, body, bind_start, binds, 0, variant_tok);
+            push(self.kids, arm);
+            count = count + 1;
+        }
+        if !self.eat(src, 32, "`\}` closing the arms") { return -1; }
+        return self.add(71, value, start, count, 0, here);
+    }
+    if k == 117 {                                    // region
+        let n: Int = self.advance();
+        if !self.at(1) { return self.complain(src, "a name for the region"); }
+        let name_tok: Int = self.pos;
+        let m: Int = self.advance();
+        let body: Int = self.parse_block(src);
+        if body < 0 { return -1; }
+        return self.add(69, body, 0, 0, 0, name_tok);
+    }
+
+    // Anything else starts with an expression: an assignment or a call kept for its
+    // effect. Parse the expression first and let what follows decide which.
+    let target: Int = self.parse_expr(src);
+    if target < 0 { return -1; }
+    if self.at(24) {                                 // '='
+        let n: Int = self.advance();
+        let value: Int = self.parse_expr(src);
+        if value < 0 { return -1; }
+        if !self.eat(src, 21, "`;`") { return -1; }
+        return self.add(61, target, value, 0, 0, here);
+    }
+    if !self.eat(src, 21, "`;`") { return -1; }
+    return self.add(70, target, 0, 0, 0, here);
+}
+
+// Step over an item without reading it: phase 3b parses these, and until then the
+// driver must not mistake a function body for top-level code.
+fn (mut self: Unit) skip_item() -> Int {
+    let mut braces: Int = 0;
+    let mut nesting: Int = 0;
+    let mut seen_brace: Bool = false;
+    while !self.done() {
+        let k: Int = self.kind_at(0);
+        if k == 31 {
+            braces = braces + 1;
+            seen_brace = true;
+        }
+        if k == 32 { braces = braces - 1; }
+        // Parentheses and brackets are counted too, and the reason is a bug this
+        // caught: `fn f(xs: [Int; 3])` contains a SEMICOLON, inside the array type.
+        // Treating any semicolon as the end of a bodyless `extern` declaration
+        // stopped the skip in the middle of a signature.
+        if k == 29 || k == 33 { nesting = nesting + 1; }
+        if k == 30 || k == 34 { nesting = nesting - 1; }
+        let n: Int = self.advance();
+        if seen_brace && braces == 0 {
+            break;
+        }
+        if !seen_brace && k == 21 && nesting == 0 {
+            break;
+        }
+    }
+    return self.pos;
+}
+
+// ---- reporting -------------------------------------------------------------
+fn kind_name(kind: Int) -> String allocates {
+    if kind == 1 { return "ident"; }
+    if kind == 2 { return "int"; }
+    if kind == 3 { return "decimal"; }
+    if kind == 4 { return "string"; }
+    if kind >= 140 { return "type"; }
+    if kind >= 100 { return "keyword"; }
+    return "punct";
+}
+
+fn (self: Unit) report(src: String, limit: Int) -> Int allocates {
+    let mut i: Int = 0;
+    while i < len(self.toks) && i < limit {
+        let t: Tok = self.toks[i];
+        let text: String = substring(src, t.start, t.length);
+        if t.kind == 3 {
+            print("  decimal " + text + " -> unscaled " + to_string(t.value)
+                  + " scale " + to_string(t.scale));
+        } else {
+            print("  " + kind_name(t.kind) + " `" + text + "`");
+        }
+        i = i + 1;
+    }
+    return i;
+}
+
+fn (self: Unit) count_of(kind: Int) -> Int {
+    let mut i: Int = 0;
+    let mut found: Int = 0;
+    while i < len(self.toks) {
+        if self.toks[i].kind == kind {
+            found = found + 1;
+        }
+        i = i + 1;
+    }
+    return found;
+}
+
+region compile {
+    // The file to lex: whatever was asked for, or the tour as a default.
+    let mut path: String = "examples/tour.bx";
+    if arg_count() > 1 {
+        path = arg(1);
+    }
+    let src: String = read_file(path);
+    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], pos: 0, no_struct: 0, errors: 0 };
+    let installed: Int = unit.install_keywords();
+    let total: Int = unit.run(src);
+
+    print("lexed " + path + ": " + to_string(total) + " tokens, "
+          + to_string(installed) + " keywords known");
+    print("  identifiers: " + to_string(unit.count_of(1)));
+    print("  decimals:    " + to_string(unit.count_of(3)));
+    print("  strings:     " + to_string(unit.count_of(4)));
+    print("  errors:      " + to_string(unit.errors));
+    print("first tokens:");
+    let shown: Int = unit.report(src, 8);
+
+    // ---- phase 3: parse the statements the tokens describe ----
+    // Only top-level statements for now: items (fn, struct, enum, trait, impl) are
+    // phase 3b, and the loop skips past them rather than pretending to read them.
+    let mut statements: Int = 0;
+    while !unit.done() {
+        let k: Int = unit.kind_at(0);
+        // An item starts with one of these; step over it by matching braces.
+        if k == 102 || k == 109 || k == 110 || k == 112 || k == 113 || k == 116 || k == 124 {
+            let skipped: Int = unit.skip_item();
+            continue;
+        }
+        let stmt: Int = unit.parse_stmt(src);
+        if stmt < 0 {
+            break;
+        }
+        statements = statements + 1;
+    }
+    print("parsed " + to_string(statements) + " top-level statements into "
+          + to_string(len(unit.nodes)) + " nodes, "
+          + to_string(len(unit.kids)) + " child slots");
+    print("  parse errors: " + to_string(unit.errors));
+}

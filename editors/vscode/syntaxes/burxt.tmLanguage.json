@@ -55,7 +55,7 @@
         {
           "comment": "The escapes Burxt actually accepts. Anything else is refused by the lexer.",
           "name": "constant.character.escape.burxt",
-          "match": "\\\\[nt\"\\\\{]"
+          "match": "\\\\[nt\"\\\\{}]"
         },
         {
           "name": "invalid.illegal.unknown-escape.burxt",
