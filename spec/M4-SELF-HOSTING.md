@@ -33,7 +33,7 @@ language server, JSON layer or diagnostics rendering.
 | Lexer | 661 | 800–1,000 | **376, DONE** (v0.0.52) — came in under estimate |
 | AST + parser | 1,787 | 2,000–2,600 | **~930, DONE** (v0.0.53–54) — under estimate |
 | Typechecker | 3,702 | 4,500–5,500 | **~2,190**, 4b complete (v0.0.64) |
-| Backend (IR text) | 3,924 | 2,500–3,500 | **~630, slices 1–2 running** (v0.0.66) |
+| Backend (IR text) | 3,924 | 2,500–3,500 | **~1,000, slices 1–3 running** (v0.0.67) |
 | Driver | 230 | ~150 | 0 |
 | **Total** | | **≈10,000–12,500** | ~680 of real front-end work |
 
@@ -270,8 +270,36 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
    which is what M1a §4 predicted when it said "NO change to codegen": the bump allocator
    and the caller's mark already do it. That prediction is now checked by running one.
 
-   Still to emit: aggregates and growable arrays (the next slice, and the one bootstrap
-   waits on), Decimals and their rounding, `match`, methods, `tail` with `musttail`,
+   **Slice 3 SHIPPED (v0.0.67): structs, fixed arrays, and by-value semantics.**
+   - A layout is a **COUNT**, not an alignment problem: everything a Burxt value can be
+     is eight bytes wide or an aggregate of things that are — a String and a growable
+     array are pointers, a Decimal is a scaled i64 — so `cells_of` counts cells and
+     `offset_of` walks the same fields in the same order, which is why the two cannot
+     disagree about a layout.
+   - **An aggregate's value is its address**, and a copy happens where a copy is *meant*:
+     at a `let`, an assignment, a struct-literal field, and a parameter. `let b = a;
+     b.x = 100;` leaves `a.x` alone, and a callee writing to its parameter cannot reach
+     back into the caller. Checked by running it, not by reading the emitter.
+   - `x.f`, `x.f.g` (a field that is an aggregate answers an interior address, which is
+     the same kind of value as any other), `xs[i]` read and written, `[a, b, c]`
+     literals, and struct literals with nested aggregate fields.
+   - **The bounds check is emitted, not assumed**: an index outside the array names
+     itself on stderr and exits 70, with everything printed before it intact. Two
+     `icmp`s and a branch, per index.
+   - Aggregate RETURNS are refused by name: they need the caller's storage, which this
+     slice does not pass, and a pointer into the callee's frame would be a dangling one.
+
+   Two defects worth recording, both structural rather than typographical. **Allocas
+   must land in the entry block** — an `alloca` inside a loop allocates again on every
+   iteration, so a `let` in a `while` would grow the stack until it ran out; the emitter
+   now keeps a per-function entry buffer and a body buffer and joins them when the
+   function closes. And introducing those buffers **silently discarded the whole
+   runtime**, because the preamble was still written through the body buffer, which
+   `open_fn` clears — `llc` caught it as an undefined `@burxt.bounds`. Module-level text
+   now has its own way out.
+
+   Still to emit: growable arrays with `push` and `truncate` (the last piece bootstrap
+   waits on), methods, Decimals and their rounding, `match`, `tail` with `musttail`,
    contracts, and the FFI boundary.
 6. **Bootstrap and fixpoint.** stage-0 builds stage-1; stage-1 builds stage-1;
    compare.

@@ -1136,7 +1136,7 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
 
     // What slice 1 covers: Ints, Bools, String literals, checked arithmetic,
     // comparisons, `if`, `while`, `break`, `continue`, functions, calls, `print`.
-    let programs: [(&str, &str); 6] = [
+    let programs: [(&str, &str); 7] = [
         ("arith.bx", "let a: Int = 6;\nlet b: Int = 7;\nprint(a * b);\nprint(a - b);\n"),
         (
             "loop.bx",
@@ -1156,6 +1156,13 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
         (
             "strings.bx",
             "fn describe(line: Int) -> String allocates {\n               return \"line \" + to_string(line) + \": unexpected byte\";\n}\n             region r {\n  print(describe(3));\n  let s: String = \"hello, burxt\";\n               print(len(s));\n  print(byte_at(s, 0));\n  print(substring(s, 7, 5));\n               print(to_string(true) + \"/\" + to_string(false));\n}\n",
+        ),
+        // Structs by value, a nested struct, a struct-typed parameter, a fixed array
+        // read and written, and an aggregate copied — `b = a` then `b.x = 100` must
+        // leave `a.x` alone, which is the whole of by-value semantics.
+        (
+            "aggregates.bx",
+            "struct Point { x: Int, y: Int }\n             struct Line { from: Point, to: Point, label: String }\n             fn total_of(p: Point) -> Int { return p.x + p.y; }\n             let a: Point = Point { x: 3, y: 4 };\n             let mut b: Point = a;\n             b.x = 100;\n             print(total_of(a));\nprint(a.x);\nprint(b.x);\n             let l: Line = Line { from: a, to: b, label: \"diagonal\" };\n             print(l.from.x);\nprint(l.to.x);\nprint(l.label);\n             let mut xs: [Int; 4] = [10, 20, 30, 40];\n             xs[1] = 99;\n             let mut i: Int = 0;\nlet mut total: Int = 0;\n             while i < 4 { total = total + xs[i]; i = i + 1; }\n             print(total);\n",
         ),
         (
             "division.bx",
@@ -1229,6 +1236,53 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
         }
     }
 
+    // A named runtime failure: exit 70, the message on stderr, and the output before it
+    // intact. A bounds check that is only a comment is not a bounds check.
+    let oob = scratch.join("oob.bx");
+    fs::write(
+        &oob,
+        "let xs: [Int; 3] = [1, 2, 3];\nlet mut i: Int = 0;\n         while i < 5 { print(xs[i]); i = i + 1; }\n",
+    )
+    .unwrap();
+    let ll = scratch.join("oob.ll");
+    let emitted = Command::new(scratch.join("stage1"))
+        .arg(&oob)
+        .arg(&ll)
+        .current_dir(&scratch)
+        .output()
+        .expect("stage-1");
+    assert!(
+        String::from_utf8_lossy(&emitted.stdout).contains("bytes of IR"),
+        "stage-1 did not emit the bounds program"
+    );
+    let obj = scratch.join("oob.o");
+    assert!(Command::new(llc)
+        .args(["-relocation-model=pic", "-filetype=obj", "-o"])
+        .arg(&obj)
+        .arg(&ll)
+        .status()
+        .expect("llc")
+        .success());
+    let exe = scratch.join("oob.exe");
+    assert!(Command::new("cc")
+        .arg("-o")
+        .arg(&exe)
+        .arg(&obj)
+        .status()
+        .expect("cc")
+        .success());
+    let ran = Command::new(&exe).output().expect("run");
+    let out = String::from_utf8_lossy(&ran.stdout).to_string();
+    let err = String::from_utf8_lossy(&ran.stderr).to_string();
+    let code = ran.status.code();
+
     let _ = fs::remove_dir_all(&scratch);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert_eq!(out, "1\n2\n3\n", "the reads before the bad one must still print");
+    assert!(
+        err.contains("index outside the array"),
+        "the failure belongs on stderr, named: {:?}",
+        err
+    );
+    assert_eq!(code, Some(70), "a named runtime failure exits 70");
 }
