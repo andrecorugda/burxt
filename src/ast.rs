@@ -5,6 +5,8 @@
 //! the lexer/parser/typechecker produce and consume these nodes, and codegen
 //! reads them. No LLVM types leak in here.
 
+use crate::diag::Span;
+
 /// A rounding contract: how a decimal result returns to its declared scale
 /// when arithmetic (multiplication, division) produces extra digits.
 /// Naming reads as plain English inside the type: `Decimal<2, RoundHalfEven>`
@@ -232,8 +234,19 @@ pub enum Expr {
 }
 
 /// Statements. A Burxt v0.0.1 program is just a sequence of these.
+/// A statement, plus where it came from.
+///
+/// The position lives here rather than inside every variant because a statement
+/// is the granularity an editor underlines and a person reads. Expressions get
+/// their own spans when something needs finer aim than "this line".
 #[derive(Debug, Clone)]
-pub enum Stmt {
+pub struct Stmt {
+    pub kind: StmtKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum StmtKind {
     /// `let name: Type = value;` — or `let mut name: ...` to allow
     /// reassignment. Immutable is the default; mutation is opt-in and visible.
     Let {
@@ -323,6 +336,8 @@ pub struct FnDef {
     pub params: Vec<Param>,
     pub ret: Type,
     pub body: Vec<Stmt>,
+    /// Where this item was written, for errors about the item itself.
+    pub span: Span,
 }
 
 /// `fn (self: Type) name(params) -> ret { body }` — a method: a function in
@@ -339,6 +354,8 @@ pub struct MethodDef {
     pub params: Vec<Param>,
     pub ret: Type,
     pub body: Vec<Stmt>,
+    /// Where this item was written, for errors about the item itself.
+    pub span: Span,
 }
 
 /// One method signature inside a `trait` declaration: a name, a receiver form
@@ -357,6 +374,8 @@ pub struct TraitSig {
 pub struct TraitDef {
     pub name: String,
     pub methods: Vec<TraitSig>,
+    /// Where this item was written, for errors about the item itself.
+    pub span: Span,
 }
 
 /// `impl Trait for Type { <methods> }` — satisfaction is EXPLICIT and nominal:
@@ -367,6 +386,8 @@ pub struct ImplBlock {
     pub trait_name: String,
     pub type_name: String,
     pub methods: Vec<MethodDef>,
+    /// Where this item was written, for errors about the item itself.
+    pub span: Span,
 }
 
 /// `extern fn name(params) -> ret;` — a C function Burxt may call. The name
@@ -377,6 +398,8 @@ pub struct ExternFn {
     pub name: String,
     pub params: Vec<Param>,
     pub ret: Type,
+    /// Where this item was written, for errors about the item itself.
+    pub span: Span,
 }
 
 /// One variant of an enum: a name plus zero or more positional payload types.
@@ -391,6 +414,8 @@ pub struct Variant {
 pub struct EnumDef {
     pub name: String,
     pub variants: Vec<Variant>,
+    /// Where this item was written, for errors about the item itself.
+    pub span: Span,
 }
 
 /// One arm of a `match`: an unqualified variant name, names for its payload,
@@ -408,6 +433,8 @@ pub struct MatchArm {
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<Param>,
+    /// Where this item was written, for errors about the item itself.
+    pub span: Span,
 }
 
 /// A whole program: struct and extern declarations, function definitions,

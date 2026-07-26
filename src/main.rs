@@ -12,6 +12,7 @@
 //! delegates linking to system tools rather than owning it.
 
 mod ast;
+mod diag;
 mod lexer;
 mod parser;
 mod typeck;
@@ -56,28 +57,72 @@ fn compile_main() {
     }
     let cmd = &args[1];
     let path = &args[2];
-    let link_args = &args[3..];
+    let rest = &args[3..];
+    // `--json` makes diagnostics machine-readable: one JSON object per line, for
+    // editors and CI. It is not passed on to the linker.
+    let json = rest.iter().any(|a| a == "--json");
+    let link_args: Vec<String> = rest.iter().filter(|a| *a != "--json").cloned().collect();
 
-    if let Err(e) = run(cmd, path, link_args) {
-        eprintln!("error: {}", e);
+    if let Err(e) = run(cmd, path, &link_args, json) {
+        match e {
+            // A diagnostic knows where it is, so it can be shown properly.
+            Failure::At(d, src) => {
+                if json {
+                    println!("{}", diag::to_json(path, &src, &d));
+                } else {
+                    eprint!("{}", diag::render(path, &src, &d));
+                }
+            }
+            // Something with no position: a missing file, a failed link.
+            Failure::Plain(message) => {
+                if json {
+                    println!(
+                        "{{\"file\":{},\"severity\":\"error\",\"message\":{}}}",
+                        diag::json_string(path),
+                        diag::json_string(&message)
+                    );
+                } else {
+                    eprintln!("error: {}", message);
+                }
+            }
+        }
         std::process::exit(1);
     }
 }
 
-fn run(cmd: &str, path: &str, link_args: &[String]) -> Result<(), String> {
+/// A failure that either knows where it happened or does not. Keeping the two
+/// apart means the position is never invented — a link error has no line.
+enum Failure {
+    At(diag::Diagnostic, String),
+    Plain(String),
+}
+
+impl From<String> for Failure {
+    fn from(message: String) -> Self {
+        Failure::Plain(message)
+    }
+}
+
+fn run(cmd: &str, path: &str, link_args: &[String], json: bool) -> Result<(), Failure> {
     let src = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read {}: {}", path, e))?;
 
     // ---- front end (backend-independent) ----
-    let tokens = lexer::Lexer::new(&src).tokenize()?;
-    let program = parser::Parser::new(tokens).parse_program()?;
-    let typed = typeck::TypeChecker::new().check_program(&program)?;
+    // Every front-end failure carries a span, so it can be rendered with the
+    // offending line and a caret under it.
+    let located = |d: diag::Diagnostic| Failure::At(d, src.clone());
+    let tokens = lexer::Lexer::new(&src).tokenize().map_err(located)?;
+    let program = parser::Parser::new(tokens).parse().map_err(located)?;
+    let typed = typeck::TypeChecker::new().check(&program).map_err(located)?;
 
     // `check` is the front end and nothing more: no LLVM context, no object
     // file, no linker. This is what an editor or a CI gate calls, so it must
     // stay the cheapest way to ask "is this program legal?".
     if cmd == "check" {
-        eprintln!("{}: no errors", path);
+        // Silence on success in JSON mode: no diagnostics IS the result.
+        if !json {
+            eprintln!("{}: no errors", path);
+        }
         return Ok(());
     }
 
@@ -115,7 +160,7 @@ fn run(cmd: &str, path: &str, link_args: &[String]) -> Result<(), String> {
                 .status()
                 .map_err(|e| format!("failed to invoke cc: {}", e))?;
             if !status.success() {
-                return Err("linking failed".to_string());
+                return Err("linking failed".to_string().into());
             }
             let _ = std::fs::remove_file(&obj);
             eprintln!("compiled {} -> {}", path, exe);
@@ -128,6 +173,6 @@ fn run(cmd: &str, path: &str, link_args: &[String]) -> Result<(), String> {
             }
             Ok(())
         }
-        other => Err(format!("unknown command: {}", other)),
+        other => Err(format!("unknown command: {}", other).into()),
     }
 }

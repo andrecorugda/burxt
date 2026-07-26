@@ -3,6 +3,11 @@
 //! Crucially, decimal literals like `19.99` are captured as their raw digit
 //! text and split into (integer part, fractional part) — never parsed through
 //! a floating-point type. Exactness starts at the very first stage.
+//!
+//! Every token carries a `Span` — the byte range it came from — because an error
+//! that cannot say WHERE is an error an editor cannot show.
+
+use crate::diag::{Diagnostic, Span};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -174,22 +179,52 @@ impl Token {
 
 pub struct Lexer<'a> {
     chars: std::iter::Peekable<std::str::Chars<'a>>,
+    /// Byte offset of the next character. Tracked here rather than by switching
+    /// to `char_indices` so every scanning site stays as it reads, and so the
+    /// offset is maintained in exactly one place: `bump`.
+    pos: usize,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(src: &'a str) -> Self {
         Lexer {
             chars: src.chars().peekable(),
+            pos: 0,
         }
     }
 
-    /// Tokenize the whole input. Returns an error string on the first bad char.
-    pub fn tokenize(mut self) -> Result<Vec<Token>, String> {
+    /// Consume one character, keeping the byte offset honest for multi-byte
+    /// characters — a span measured in bytes must be measured in bytes.
+    fn bump(&mut self) -> Option<char> {
+        let c = self.chars.next();
+        if let Some(c) = c {
+            self.pos += c.len_utf8();
+        }
+        c
+    }
+
+    fn peek_char(&mut self) -> Option<&char> {
+        self.chars.peek()
+    }
+
+    /// Tokenize the whole input, pairing every token with the source it came
+    /// from. The span is what lets an editor underline the right characters.
+    pub fn tokenize(mut self) -> Result<Vec<(Token, Span)>, Diagnostic> {
         let mut out = Vec::new();
         loop {
-            let tok = self.next_token()?;
+            self.skip_whitespace_and_comments();
+            let start = self.pos;
+            let tok = match self.next_token() {
+                Ok(t) => t,
+                // A lexer error is always inside the token being scanned, so
+                // the span runs from that token's first character to here.
+                Err(message) => {
+                    let end = self.pos.max(start + 1);
+                    return Err(Diagnostic::new(message, Span::new(start, end)));
+                }
+            };
             let is_eof = tok == Token::Eof;
-            out.push(tok);
+            out.push((tok, Span::new(start, self.pos)));
             if is_eof {
                 break;
             }
@@ -200,67 +235,67 @@ impl<'a> Lexer<'a> {
     fn next_token(&mut self) -> Result<Token, String> {
         self.skip_whitespace_and_comments();
 
-        let c = match self.chars.peek() {
+        let c = match self.peek_char() {
             None => return Ok(Token::Eof),
             Some(&c) => c,
         };
 
         // punctuation (two-character operators first: they extend a one-char one)
         match c {
-            ':' => { self.chars.next(); return Ok(Token::Colon); }
-            ';' => { self.chars.next(); return Ok(Token::Semicolon); }
-            ',' => { self.chars.next(); return Ok(Token::Comma); }
+            ':' => { self.bump(); return Ok(Token::Colon); }
+            ';' => { self.bump(); return Ok(Token::Semicolon); }
+            ',' => { self.bump(); return Ok(Token::Comma); }
             // a '.' between digits was already consumed by lex_number;
             // a solitary '.' is field access
-            '.' => { self.chars.next(); return Ok(Token::Dot); }
+            '.' => { self.bump(); return Ok(Token::Dot); }
             '=' => {
-                self.chars.next();
-                if self.chars.peek() == Some(&'=') { self.chars.next(); return Ok(Token::EqEq); }
-                if self.chars.peek() == Some(&'>') { self.chars.next(); return Ok(Token::FatArrow); }
+                self.bump();
+                if self.peek_char() == Some(&'=') { self.bump(); return Ok(Token::EqEq); }
+                if self.peek_char() == Some(&'>') { self.bump(); return Ok(Token::FatArrow); }
                 return Ok(Token::Equals);
             }
-            '+' => { self.chars.next(); return Ok(Token::Plus); }
+            '+' => { self.bump(); return Ok(Token::Plus); }
             '-' => {
-                self.chars.next();
-                if self.chars.peek() == Some(&'>') { self.chars.next(); return Ok(Token::Arrow); }
+                self.bump();
+                if self.peek_char() == Some(&'>') { self.bump(); return Ok(Token::Arrow); }
                 return Ok(Token::Minus);
             }
-            '*' => { self.chars.next(); return Ok(Token::Star); }
+            '*' => { self.bump(); return Ok(Token::Star); }
             // a solitary '/' is division; '//' was already consumed as a comment
-            '/' => { self.chars.next(); return Ok(Token::Slash); }
-            '(' => { self.chars.next(); return Ok(Token::LParen); }
-            ')' => { self.chars.next(); return Ok(Token::RParen); }
-            '{' => { self.chars.next(); return Ok(Token::LBrace); }
-            '}' => { self.chars.next(); return Ok(Token::RBrace); }
-            '[' => { self.chars.next(); return Ok(Token::LBracket); }
-            ']' => { self.chars.next(); return Ok(Token::RBracket); }
+            '/' => { self.bump(); return Ok(Token::Slash); }
+            '(' => { self.bump(); return Ok(Token::LParen); }
+            ')' => { self.bump(); return Ok(Token::RParen); }
+            '{' => { self.bump(); return Ok(Token::LBrace); }
+            '}' => { self.bump(); return Ok(Token::RBrace); }
+            '[' => { self.bump(); return Ok(Token::LBracket); }
+            ']' => { self.bump(); return Ok(Token::RBracket); }
             '<' => {
-                self.chars.next();
-                if self.chars.peek() == Some(&'=') { self.chars.next(); return Ok(Token::Le); }
+                self.bump();
+                if self.peek_char() == Some(&'=') { self.bump(); return Ok(Token::Le); }
                 return Ok(Token::Lt);
             }
             '>' => {
-                self.chars.next();
-                if self.chars.peek() == Some(&'=') { self.chars.next(); return Ok(Token::Ge); }
+                self.bump();
+                if self.peek_char() == Some(&'=') { self.bump(); return Ok(Token::Ge); }
                 return Ok(Token::Gt);
             }
             '&' => {
-                self.chars.next();
-                if self.chars.peek() == Some(&'&') { self.chars.next(); return Ok(Token::AmpAmp); }
+                self.bump();
+                if self.peek_char() == Some(&'&') { self.bump(); return Ok(Token::AmpAmp); }
                 return Err(
                     "Burxt has no bitwise `&` — did you mean `&&` (logical and)?".to_string(),
                 );
             }
             '|' => {
-                self.chars.next();
-                if self.chars.peek() == Some(&'|') { self.chars.next(); return Ok(Token::PipePipe); }
+                self.bump();
+                if self.peek_char() == Some(&'|') { self.bump(); return Ok(Token::PipePipe); }
                 return Err(
                     "Burxt has no bitwise `|` — did you mean `||` (logical or)?".to_string(),
                 );
             }
             '!' => {
-                self.chars.next();
-                if self.chars.peek() == Some(&'=') { self.chars.next(); return Ok(Token::NotEq); }
+                self.bump();
+                if self.peek_char() == Some(&'=') { self.bump(); return Ok(Token::NotEq); }
                 return Ok(Token::Bang);
             }
             _ => {}
@@ -274,7 +309,7 @@ impl<'a> Lexer<'a> {
         // `$19.99` — a money literal. Pure sugar for a Decimal<2> value: the
         // `$` says "money, scale 2" so the digits need not spell the cents.
         if c == '$' {
-            self.chars.next();
+            self.bump();
             return self.lex_money();
         }
 
@@ -303,8 +338,8 @@ impl<'a> Lexer<'a> {
 
     fn skip_whitespace_and_comments(&mut self) {
         loop {
-            match self.chars.peek() {
-                Some(&c) if c.is_whitespace() => { self.chars.next(); }
+            match self.peek_char() {
+                Some(&c) if c.is_whitespace() => { self.bump(); }
                 // line comment: // ... to end of line
                 Some(&'/') => {
                     // need to look ahead for a second '/'
@@ -312,8 +347,8 @@ impl<'a> Lexer<'a> {
                     clone.next();
                     if clone.peek() == Some(&'/') {
                         // consume until newline
-                        while let Some(&c) = self.chars.peek() {
-                            self.chars.next();
+                        while let Some(&c) = self.peek_char() {
+                            self.bump();
                             if c == '\n' { break; }
                         }
                     } else {
@@ -329,27 +364,27 @@ impl<'a> Lexer<'a> {
     /// fractional digits to derive the scale and build the unscaled integer.
     fn lex_number(&mut self) -> Result<Token, String> {
         let mut int_part = String::new();
-        while let Some(&c) = self.chars.peek() {
+        while let Some(&c) = self.peek_char() {
             if c.is_ascii_digit() {
                 int_part.push(c);
-                self.chars.next();
+                self.bump();
             } else {
                 break;
             }
         }
 
         // Is there a fractional part?
-        if self.chars.peek() == Some(&'.') {
+        if self.peek_char() == Some(&'.') {
             // Look ahead: only treat '.' as decimal point if a digit follows.
             let mut clone = self.chars.clone();
             clone.next();
             if matches!(clone.peek(), Some(c) if c.is_ascii_digit()) {
-                self.chars.next(); // consume '.'
+                self.bump(); // consume '.'
                 let mut frac_part = String::new();
-                while let Some(&c) = self.chars.peek() {
+                while let Some(&c) = self.peek_char() {
                     if c.is_ascii_digit() {
                         frac_part.push(c);
-                        self.chars.next();
+                        self.bump();
                     } else {
                         break;
                     }
@@ -362,8 +397,8 @@ impl<'a> Lexer<'a> {
                 // `8.25%` is exactly 0.0825: the same digits, two more
                 // fractional places. Never 8.25/100 through a division, and
                 // never a float.
-                if self.chars.peek() == Some(&'%') {
-                    self.chars.next();
+                if self.peek_char() == Some(&'%') {
+                    self.bump();
                     return Ok(Token::Decimal(unscaled, scale + 2));
                 }
                 return Ok(Token::Decimal(unscaled, scale));
@@ -373,8 +408,8 @@ impl<'a> Lexer<'a> {
         let value: i64 = int_part
             .parse()
             .map_err(|_| format!("integer literal too large: {}", int_part))?;
-        if self.chars.peek() == Some(&'%') {
-            self.chars.next();
+        if self.peek_char() == Some(&'%') {
+            self.bump();
             // `50%` is exactly 0.50.
             return Ok(Token::Decimal(value, 2));
         }
@@ -386,7 +421,7 @@ impl<'a> Lexer<'a> {
     /// literals are sugar over the existing exact-decimal type, never a new
     /// one, and every existing decimal rule applies unchanged.
     fn lex_money(&mut self) -> Result<Token, String> {
-        if !matches!(self.chars.peek(), Some(c) if c.is_ascii_digit()) {
+        if !matches!(self.peek_char(), Some(c) if c.is_ascii_digit()) {
             return Err(
                 "`$` must be followed by digits — a money literal looks like `$19.99`"
                     .to_string(),
@@ -427,11 +462,11 @@ impl<'a> Lexer<'a> {
     /// here: exactly \\ \" \n \t. There is no \0 — by construction a Burxt
     /// string never contains an interior NUL.
     fn lex_string(&mut self) -> Result<Token, String> {
-        self.chars.next(); // opening quote
+        self.bump(); // opening quote
         let mut s = String::new();
         let mut parts: Vec<StrPart> = Vec::new();
         loop {
-            match self.chars.next() {
+            match self.bump() {
                 Some('"') => {
                     if parts.is_empty() {
                         return Ok(Token::Str(s));
@@ -452,7 +487,7 @@ impl<'a> Lexer<'a> {
                     let mut expr = String::new();
                     let mut depth = 1usize;
                     loop {
-                        match self.chars.next() {
+                        match self.bump() {
                             Some('{') => {
                                 depth += 1;
                                 expr.push('{');
@@ -509,7 +544,7 @@ impl<'a> Lexer<'a> {
                             .to_string(),
                     )
                 }
-                Some('\\') => match self.chars.next() {
+                Some('\\') => match self.bump() {
                     Some('\\') => s.push('\\'),
                     Some('"') => s.push('"'),
                     Some('n') => s.push('\n'),
@@ -549,10 +584,10 @@ impl<'a> Lexer<'a> {
 
     fn lex_ident_or_keyword(&mut self) -> Token {
         let mut s = String::new();
-        while let Some(&c) = self.chars.peek() {
+        while let Some(&c) = self.peek_char() {
             if c.is_ascii_alphanumeric() || c == '_' {
                 s.push(c);
-                self.chars.next();
+                self.bump();
             } else {
                 break;
             }

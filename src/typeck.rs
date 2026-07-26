@@ -25,6 +25,7 @@
 //! Output: a `TypedProgram` where every expression is annotated with its type,
 //! so codegen never has to re-derive types.
 
+use crate::diag::{Diagnostic, Span};
 use crate::ast::*;
 use std::collections::{HashMap, HashSet};
 
@@ -261,6 +262,9 @@ pub struct TypeChecker {
     /// as `dyn` somewhere — pay for what you use.
     dyn_traits: HashSet<String>,
     /// return type of the function currently being checked, if any.
+    /// Where the checker currently is, for attaching a position to any error it
+    /// returns. Updated on entering a statement or a top-level item.
+    current_span: Span,
     current_ret: Option<Type>,
     /// The enclosing function's name and parameter types. A guaranteed tail
     /// call needs them: LLVM only guarantees the call when caller and callee
@@ -284,16 +288,34 @@ impl TypeChecker {
             traits: HashMap::new(),
             impls: HashSet::new(),
             dyn_traits: HashSet::new(),
+            current_span: Span::default(),
             current_ret: None,
             current_sig: None,
             current_region: None,
         }
     }
 
-    pub fn check_program(mut self, prog: &Program) -> Result<TypedProgram, String> {
+    /// Check a program, reporting WHERE any problem is.
+    ///
+    /// The position is attached here, once, from wherever the checker had reached
+    /// — so every one of the ~160 error sites inside stays a plain sentence, and
+    /// a nested statement naturally yields the most precise position because it
+    /// was the last thing entered.
+    pub fn check(mut self, prog: &Program) -> Result<TypedProgram, Diagnostic> {
+        match self.check_program_inner(prog) {
+            Ok(t) => Ok(t),
+            Err(message) => {
+                let span = self.current_span;
+                Err(Diagnostic::new(message, span))
+            }
+        }
+    }
+
+    fn check_program_inner(&mut self, prog: &Program) -> Result<TypedProgram, String> {
         // Pass 0: hoist struct declarations, then validate them (field types
         // must exist; no struct may contain itself, directly or transitively).
         for s in &prog.structs {
+            self.current_span = s.span;
             if self.structs.contains_key(&s.name) {
                 return Err(format!("struct `{}` is defined twice", s.name));
             }
@@ -320,6 +342,7 @@ impl TypeChecker {
         // Enum names must be known before any type is validated, exactly like
         // struct names — a payload or field may name an enum declared later.
         for e in &prog.enums {
+            self.current_span = e.span;
             if self.enums.contains_key(&e.name) || self.structs.contains_key(&e.name) {
                 return Err(format!("`{}` is declared twice", e.name));
             }
@@ -349,6 +372,7 @@ impl TypeChecker {
         }
         // Traits: signature sets only, hoisted so impls may precede them.
         for t in &prog.traits {
+            self.current_span = t.span;
             if self.traits.contains_key(&t.name) {
                 return Err(format!("trait `{}` is defined twice", t.name));
             }
@@ -373,6 +397,7 @@ impl TypeChecker {
         // Validate the types inside the signatures only once every trait name
         // is known, so traits may reference each other in any order.
         for t in &prog.traits {
+            self.current_span = t.span;
             for sig in &t.methods {
                 for p in &sig.params {
                     self.validate_type(&p.ty)?;
@@ -385,6 +410,7 @@ impl TypeChecker {
         // the recursive-size question (an enum containing itself is infinite),
         // which needs indirection and therefore M1.
         for e in &prog.enums {
+            self.current_span = e.span;
             for v in &e.variants {
                 for (i, t) in v.payload.iter().enumerate() {
                     match t {
@@ -426,6 +452,7 @@ impl TypeChecker {
             .collect();
 
         for s in &prog.structs {
+            self.current_span = s.span;
             for f in &s.fields {
 
                 self.validate_type(&f.ty)?;
@@ -444,6 +471,7 @@ impl TypeChecker {
         // Pass 1: collect every signature, so order of definition never matters.
         let mut externs = Vec::new();
         for e in &prog.externs {
+            self.current_span = e.span;
             self.check_extern(e)?;
             // Burxt code always sees CInt as Int; the width conversion is
             // codegen's job at the call site.
@@ -469,6 +497,7 @@ impl TypeChecker {
             });
         }
         for f in &prog.fns {
+            self.current_span = f.span;
             if self.fns.contains_key(&f.name) {
                 return Err(format!("function `{}` is defined twice", f.name));
             }
@@ -525,6 +554,7 @@ impl TypeChecker {
         // toward a contract, so it uses the SAME machinery.
         let mut all_methods: Vec<&MethodDef> = prog.methods.iter().collect();
         for im in &prog.impls {
+            self.current_span = im.span;
             for m in &im.methods {
                 all_methods.push(m);
             }
@@ -566,6 +596,7 @@ impl TypeChecker {
         // matching receiver form and types. A partial or mismatched impl names
         // the offending method.
         for im in &prog.impls {
+            self.current_span = im.span;
             self.check_impl(im)?;
             self.impls.insert((im.trait_name.clone(), im.type_name.clone()));
         }
@@ -573,6 +604,7 @@ impl TypeChecker {
         // Pass 2: check each function body.
         let mut fns = Vec::new();
         for f in &prog.fns {
+            self.current_span = f.span;
             fns.push(self.check_fn(f)?);
         }
         let mut methods = Vec::new();
@@ -590,6 +622,7 @@ impl TypeChecker {
         // — if a type never becomes a trait object, it costs nothing.
         let mut vtables = Vec::new();
         for im in &prog.impls {
+            self.current_span = im.span;
             if !self.dyn_traits.contains(&im.trait_name) {
                 continue;
             }
@@ -1041,6 +1074,7 @@ impl TypeChecker {
     }
 
     fn check_fn(&mut self, f: &FnDef) -> Result<TypedFn, String> {
+        self.current_span = f.span;
         self.env.clear();
         let mut params = Vec::new();
         for p in &f.params {
@@ -1086,6 +1120,7 @@ impl TypeChecker {
     /// mutability set from `receiver_mut` — so `self.field = ...` obeys the
     /// exact same AssignField rule an ordinary `let mut` binding would.
     fn check_method(&mut self, m: &MethodDef) -> Result<TypedMethod, String> {
+        self.current_span = m.span;
         self.env.clear();
         self.env.insert(
             "self".to_string(),
@@ -1285,8 +1320,13 @@ impl TypeChecker {
     }
 
     fn check_stmt(&mut self, s: &Stmt) -> Result<TypedStmt, String> {
-        match s {
-            Stmt::Let { name, mutable, declared, value } => {
+        // Remember where we are. Errors below are returned as plain messages and
+        // the position is attached once, at the boundary — so a nested statement
+        // naturally reports the innermost (most precise) position, and no error
+        // site has to thread a span through.
+        self.current_span = s.span;
+        match &s.kind {
+            StmtKind::Let { name, mutable, declared, value } => {
                 if self.env.contains_key(name) {
                     return Err(format!(
                         "`{}` is already declared — Burxt does not allow shadowing; \
@@ -1328,7 +1368,7 @@ impl TypeChecker {
                 self.env.insert(name.clone(), (declared.clone(), *mutable));
                 Ok(TypedStmt::Let { name: name.clone(), ty: declared.clone(), value: typed })
             }
-            Stmt::Assign { name, value } => {
+            StmtKind::Assign { name, value } => {
                 let (declared, mutable) = self
                     .env
                     .get(name)
@@ -1357,7 +1397,7 @@ impl TypeChecker {
                 }
                 Ok(TypedStmt::Assign { name: name.clone(), value: typed })
             }
-            Stmt::AssignField { name, path, value } => {
+            StmtKind::AssignField { name, path, value } => {
                 let lvalue = format!("{}.{}", name, path.join("."));
                 let (mut cur_ty, mutable) = self
                     .env
@@ -1386,7 +1426,7 @@ impl TypeChecker {
                 }
                 Ok(TypedStmt::AssignField { name: name.clone(), indices, value: typed })
             }
-            Stmt::AssignFieldIndex { name, path, index, value } => {
+            StmtKind::AssignFieldIndex { name, path, index, value } => {
                 let lvalue = format!("{}.{}", name, path.join("."));
                 let (mut cur_ty, mutable) = self
                     .env
@@ -1434,7 +1474,7 @@ impl TypeChecker {
                     value: typed,
                 })
             }
-            Stmt::AssignIndex { name, index, value } => {
+            StmtKind::AssignIndex { name, index, value } => {
                 let (declared, mutable) = self
                     .env
                     .get(name)
@@ -1466,11 +1506,11 @@ impl TypeChecker {
                 }
                 Ok(TypedStmt::AssignIndex { name: name.clone(), len, index, value: typed })
             }
-            Stmt::ExprStmt(e) => {
+            StmtKind::ExprStmt(e) => {
                 let typed = self.check_expr(e, None)?;
                 Ok(TypedStmt::ExprStmt(typed))
             }
-            Stmt::Region { name, body } => {
+            StmtKind::Region { name, body } => {
                 // One level only in this slice — nesting is deferred with a
                 // reason rather than half-supported.
                 if let Some(open) = &self.current_region {
@@ -1493,7 +1533,7 @@ impl TypeChecker {
                 self.current_region = None;
                 Ok(TypedStmt::Region { name: name.clone(), body: checked? })
             }
-            Stmt::Match { value, arms } => {
+            StmtKind::Match { value, arms } => {
                 let scrutinee = self.check_expr(value, None)?;
                 let enum_name = match &scrutinee.ty {
                     Type::Named(n) if self.enums.contains_key(n) => n.clone(),
@@ -1597,7 +1637,7 @@ impl TypeChecker {
                 typed_arms.sort_by_key(|a| a.tag);
                 Ok(TypedStmt::Match { value: scrutinee, arms: typed_arms })
             }
-            Stmt::While { cond, body } => {
+            StmtKind::While { cond, body } => {
                 let cond = self.check_expr(cond, None)?;
                 if cond.ty != Type::Bool {
                     return Err(format!(
@@ -1609,7 +1649,7 @@ impl TypeChecker {
                 let body = self.check_block(body)?;
                 Ok(TypedStmt::While { cond, body })
             }
-            Stmt::Print(e) => {
+            StmtKind::Print(e) => {
                 // An interpolated string prints its pieces in order, which
                 // needs no allocation — so it is handled here rather than as a
                 // String-valued expression.
@@ -1677,7 +1717,7 @@ impl TypeChecker {
                 }
                 Ok(TypedStmt::Print(typed))
             }
-            Stmt::Return(e) => {
+            StmtKind::Return(e) => {
                 let ret = self.current_ret.clone().ok_or_else(|| {
                     "`return` only makes sense inside a function".to_string()
                 })?;
@@ -1700,8 +1740,8 @@ impl TypeChecker {
                 }
                 Ok(TypedStmt::Return(typed))
             }
-            Stmt::TailReturn(e) => self.check_tail_return(e),
-            Stmt::If { cond, then_block, else_block } => {
+            StmtKind::TailReturn(e) => self.check_tail_return(e),
+            StmtKind::If { cond, then_block, else_block } => {
                 let cond = self.check_expr(cond, None)?;
                 if cond.ty != Type::Bool {
                     return Err(format!(

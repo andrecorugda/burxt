@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.31)
+# Burxt — Design Notes (v0.0.32)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1510,6 +1510,73 @@ Helix) and a formatter are also recorded as not-built rather than implied;
 `editors/README.md` holds the dependency order and the Linguist checklist,
 including why `.bx` is not mislabelled as another language to fake detection.
 
+### v0.0.32: errors that know where they are
+
+```text
+error: `*` on Decimal<2> needs an explicit rounding contract, because the exact
+       result can have more than 2 decimal places. Declare one in the type, e.g.
+       Decimal<2, RoundHalfEven> or Decimal<2, RoundHalfUp>.
+ --> invoice.bx:3:1
+  |
+3 | let total: Decimal<2> = price * rate;
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+Burxt's errors were always sentences a person could act on. What they lacked was
+a **position** — fine in a terminal, useless to an editor, which needs a line, a
+column and a length to underline. This is that missing half, and it is the
+prerequisite the previous version named for everything editor-facing.
+
+**Spans are byte ranges, and lines are a presentation concern.** The lexer knows
+offsets for free; `LineIndex` converts to line/column once, at the edge. Storing
+line/column everywhere instead would mean every layer agreeing on how to count a
+tab. Columns count **characters**, so a `café` earlier on the line does not push
+the caret one place right of what the reader sees.
+
+**The interesting part is how little the error sites changed.** There are roughly
+200 `Err(format!(...))` sites across the parser and typechecker, and not one of
+them threads a span. Instead each stage attaches the position **once, at its
+boundary**:
+
+- The parser fails fast, so the token under the cursor when the error surfaces
+  *is* the token the message is about.
+- The typechecker records where it is on entering a statement or a top-level
+  item, and attaches that on the way out. A nested statement naturally yields the
+  **most precise** position, because it was the last thing entered.
+
+That is why this landed as a refactor rather than a rewrite: the position was
+recoverable from control flow that already existed.
+
+**`--json` diagnostics.** `burxt check file.bx --json` emits one JSON object per
+diagnostic, carrying 1-based line/column for humans *and* 0-based LSP positions,
+because converting between them in the consumer is where off-by-ones live. Any
+editor with a problem matcher can show squiggles today, without an LSP.
+
+**A test that found five real bugs the moment it was written.** Every program in
+`tests/fail/` is now required to report a position that points at *code* — not at
+a comment or a blank line, which is the tell for a span that was never set.
+Five of 226 failed: four validation paths (array returns, recursive structs,
+incomplete impls, `dyn` returns) reported line 1 because they check *items*
+rather than statements, and one pointed at the empty line after a file ending in
+a newline. All five fixed — item passes now record the item's span, and an error
+at end-of-file is reported on the last line with content, because "unexpected end
+of file" pointing at a blank line is technically true and useless.
+
+**A self-inflicted bug worth recording**, because the class recurs: adding
+offset tracking meant routing every `self.chars.next()` through a `bump()`
+helper — and the mechanical replacement rewrote the call *inside `bump` itself*,
+so it called itself forever. Every program stack-overflowed instantly. The lesson
+is the same one the codegen match-arm edits taught: **a global replace whose
+pattern also matches the replacement's own body is a trap**, and the fix is to
+check the helper after replacing, not to trust the sed.
+
+**Deferred honestly:** expression-level spans. A type error underlines the whole
+statement rather than the offending sub-expression, which is right about the line
+and coarse within it. Also, a diagnostic inside a `{interpolation}` carries the
+message but points at the string literal, because the interpolated fragment is
+re-lexed on its own and its offsets are relative to the fragment. Both are
+refinements of a working position, not missing positions.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -1574,6 +1641,9 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- T2. Diagnostics with positions (v0.0.32): spans through lexer/parser/typeck,
+  a caret rendering, `--json` output with LSP positions, and a suite-wide test
+  that every rejection points at real code.
 - T1. Editor support (v0.0.31): TextMate grammar, VS Code extension,
   `burxt check`, and a test locking the grammar to the compiler's keyword table.
   Diagnostics and an LSP wait on source spans.

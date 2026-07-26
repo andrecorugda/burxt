@@ -9,8 +9,8 @@ directory holds that half of the project.
 | Language configuration (comments, brackets, indent) | **DONE** (v0.0.31) | `vscode/language-configuration.json` |
 | VS Code extension | **DONE** (v0.0.31) — declarative, no build step | `vscode/` |
 | `burxt check` — front end only, for editors and CI | **DONE** (v0.0.31) | `src/main.rs` |
-| Diagnostics with line/column | **NEXT** — needs source spans in the compiler | see below |
-| Language server (`burxt lsp`) | after spans | see below |
+| Diagnostics with line/column | **DONE** (v0.0.32) | `src/diag.rs`, `burxt check --json` |
+| Language server (`burxt lsp`) | **NEXT** — spans exist now | see below |
 | GitHub language detection | blocked on a popularity gate, not on us | see below |
 
 ## Installing the VS Code extension
@@ -77,8 +77,8 @@ The plan, in dependency order, because the pieces genuinely block each other:
    hover showing a value's exact type (a `Decimal<2, RoundHalfEven>` hover is
    worth more here than in most languages), and go-to-definition.
 
-The order matters: an LSP that cannot say *where* a problem is would be a shell
-with nothing inside it.
+The order mattered: an LSP that cannot say *where* a problem is would have been a
+shell with nothing inside it. It can now.
 
 ## GitHub language detection
 

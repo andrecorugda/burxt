@@ -490,3 +490,75 @@ fn every_example_still_typechecks() {
     assert!(checked >= 3, "expected several examples, checked only {}", checked);
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }
+
+/// Every rejection must say WHERE, and point somewhere real.
+///
+/// Run across all of tests/fail/, this catches the failure mode that would make
+/// editor diagnostics useless: an error whose span was never set, which renders
+/// as line 1 column 1 no matter where the mistake is. Most fail programs open
+/// with a comment explaining what they test, so "the diagnostic points at a
+/// comment or a blank line" is a reliable tell that the position is a default
+/// rather than a fact.
+#[test]
+fn every_rejection_reports_a_position_that_points_at_code() {
+    let scratch = scratch_dir("positions");
+    fs::create_dir_all(&scratch).unwrap();
+    let mut failures = Vec::new();
+    let mut checked = 0;
+
+    for (program, _) in cases("fail", "stderr") {
+        let src = fs::read_to_string(&program).unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("check")
+            .arg(&program)
+            .arg("--json")
+            .current_dir(&scratch)
+            .output()
+            .expect("failed to spawn burxt");
+        let json = String::from_utf8_lossy(&out.stdout);
+        checked += 1;
+
+        // Minimal field extraction: the compiler has one dependency and a test
+        // helper is not a reason for a second.
+        let field = |name: &str| -> Option<usize> {
+            let key = format!("\"{}\":", name);
+            let at = json.find(&key)? + key.len();
+            let rest = &json[at..];
+            let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+            rest[..end].parse().ok()
+        };
+
+        let (Some(line), Some(col)) = (field("line"), field("column")) else {
+            failures.push(format!("{}: no position in {:?}", program.display(), json.trim()));
+            continue;
+        };
+
+        let lines: Vec<&str> = src.lines().collect();
+        if line == 0 || line > lines.len() {
+            failures.push(format!(
+                "{}: reported line {} but the file has {} lines",
+                program.display(),
+                line,
+                lines.len()
+            ));
+            continue;
+        }
+        let text = lines[line - 1].trim();
+        if text.is_empty() || text.starts_with("//") {
+            failures.push(format!(
+                "{}: points at line {} ({:?}) — a comment or blank line, so the span \
+                 was probably never set",
+                program.display(),
+                line,
+                lines[line - 1]
+            ));
+        }
+        if col == 0 {
+            failures.push(format!("{}: column 0 — columns are 1-based", program.display()));
+        }
+    }
+
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(checked > 50, "expected the whole fail suite, checked {}", checked);
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+}

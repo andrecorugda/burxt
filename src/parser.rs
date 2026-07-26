@@ -27,10 +27,15 @@
 //!            | "(" expr ")"
 
 use crate::ast::*;
+use crate::diag::{Diagnostic, Span};
 use crate::lexer::Token;
 
 pub struct Parser {
     toks: Vec<Token>,
+    /// Where each token came from, indexed alongside `toks`. Kept parallel
+    /// rather than packed into the token so every `self.at(&Token::X)` in this
+    /// file reads exactly as it did before spans existed.
+    spans: Vec<Span>,
     pos: usize,
     /// Struct literals are not allowed directly in an if/while condition —
     /// `while count { ... }` must parse `{` as the loop body, not a literal.
@@ -39,11 +44,39 @@ pub struct Parser {
 }
 
 impl Parser {
-    pub fn new(toks: Vec<Token>) -> Self {
-        Parser { toks, pos: 0, allow_struct_lit: true }
+    pub fn new(tokens: Vec<(Token, Span)>) -> Self {
+        let (toks, spans) = tokens.into_iter().unzip();
+        Parser { toks, spans, pos: 0, allow_struct_lit: true }
     }
 
-    pub fn parse_program(mut self) -> Result<Program, String> {
+    /// The span of the token the parser is looking at. A parse error is always
+    /// "this token is not what I needed", so this is where the caret belongs.
+    fn span(&self) -> Span {
+        self.spans.get(self.pos).copied().unwrap_or_default()
+    }
+
+    /// The end of the last consumed token — where a construct stops.
+    fn prev_end(&self) -> u32 {
+        if self.pos == 0 {
+            return 0;
+        }
+        self.spans.get(self.pos - 1).map(|s| s.end).unwrap_or_default()
+    }
+
+    /// Parse, and on failure report WHERE the parser gave up.
+    ///
+    /// The message sites are left alone deliberately: a parse error surfaces
+    /// immediately, so the token under the cursor at that moment IS the token the
+    /// message is about. Threading a span through forty `format!` calls would add
+    /// no information the position already carries.
+    pub fn parse(mut self) -> Result<Program, Diagnostic> {
+        match self.parse_program_inner() {
+            Ok(p) => Ok(p),
+            Err(message) => Err(Diagnostic::new(message, self.span())),
+        }
+    }
+
+    fn parse_program_inner(&mut self) -> Result<Program, String> {
         let mut structs = Vec::new();
         let mut enums = Vec::new();
         let mut traits = Vec::new();
@@ -113,6 +146,7 @@ impl Parser {
     // ---- structs ----
 
     fn parse_struct(&mut self) -> Result<StructDef, String> {
+        let start = self.span().start;
         self.expect(&Token::Struct)?;
         let name = match self.bump() {
             Token::Ident(s) => s,
@@ -138,11 +172,12 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace)?;
-        Ok(StructDef { name, fields })
+        Ok(StructDef { name, fields, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `enum Name { Unit, WithPayload(Int, String), }`
     fn parse_enum(&mut self) -> Result<EnumDef, String> {
+        let start = self.span().start;
         self.expect(&Token::Enum)?;
         let name = match self.bump() {
             Token::Ident(s) => s,
@@ -190,7 +225,7 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace)?;
-        Ok(EnumDef { name, variants })
+        Ok(EnumDef { name, variants, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     // ---- traits and impls ----
@@ -198,6 +233,7 @@ impl Parser {
     /// `trait Name { fn m(self) -> T   fn n(mut self, x: U) -> V }`
     /// Signatures only: no bodies, no fields, no default methods.
     fn parse_trait(&mut self) -> Result<TraitDef, String> {
+        let start = self.span().start;
         self.expect(&Token::Trait)?;
         let name = match self.bump() {
             Token::Ident(s) => s,
@@ -221,7 +257,7 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace)?;
-        Ok(TraitDef { name, methods })
+        Ok(TraitDef { name, methods, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// One signature inside a trait: `fn m(self) -> T`, or
@@ -286,6 +322,7 @@ impl Parser {
 
     /// `impl Trait for Type { <method definitions> }`
     fn parse_impl(&mut self) -> Result<ImplBlock, String> {
+        let start = self.span().start;
         self.expect(&Token::Impl)?;
         let trait_name = match self.bump() {
             Token::Ident(s) => s,
@@ -326,29 +363,32 @@ impl Parser {
             methods.push(self.parse_method()?);
         }
         self.expect(&Token::RBrace)?;
-        Ok(ImplBlock { trait_name, type_name, methods })
+        Ok(ImplBlock { trait_name, type_name, methods, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     // ---- functions ----
 
     fn parse_extern(&mut self) -> Result<ExternFn, String> {
+        let start = self.span().start;
         self.expect(&Token::Extern)?;
         self.expect(&Token::Fn)?;
         let (name, params, ret) = self.parse_fn_signature()?;
         self.expect(&Token::Semicolon)?;
-        Ok(ExternFn { name, params, ret })
+        Ok(ExternFn { name, params, ret, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     fn parse_fn(&mut self) -> Result<FnDef, String> {
+        let start = self.span().start;
         self.expect(&Token::Fn)?;
         let (name, params, ret) = self.parse_fn_signature()?;
         let body = self.parse_block()?;
-        Ok(FnDef { name, params, ret, body })
+        Ok(FnDef { name, params, ret, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `fn (self: Type) name(params) -> ret { body }`, or `fn (mut self: ...)`
     /// for a mutating method.
     fn parse_method(&mut self) -> Result<MethodDef, String> {
+        let start = self.span().start;
         self.expect(&Token::Fn)?;
         self.expect(&Token::LParen)?;
         let receiver_mut = if self.at(&Token::Mut) {
@@ -378,7 +418,7 @@ impl Parser {
         self.expect(&Token::RParen)?;
         let (name, params, ret) = self.parse_fn_signature()?;
         let body = self.parse_block()?;
-        Ok(MethodDef { receiver, receiver_mut, name, params, ret, body })
+        Ok(MethodDef { receiver, receiver_mut, name, params, ret, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `as <marshaller>` declares how a value crosses a foreign boundary.
@@ -454,7 +494,15 @@ impl Parser {
 
     // ---- statements ----
 
+    /// Every statement is wrapped with the source range it covers, here, once —
+    /// so no individual statement parser has to remember to carry a span.
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
+        let start = self.span().start;
+        let kind = self.parse_stmt_kind()?;
+        Ok(Stmt { kind, span: Span { start, end: self.prev_end().max(start + 1) } })
+    }
+
+    fn parse_stmt_kind(&mut self) -> Result<StmtKind, String> {
         match self.peek() {
             Token::Let => self.parse_let(),
             Token::Print => self.parse_print(),
@@ -477,7 +525,7 @@ impl Parser {
     /// The dot-chain is walked once; hitting `(` after a segment means that
     /// segment is a method name, not a field, and everything read so far
     /// becomes the call's base expression.
-    fn parse_assign(&mut self) -> Result<Stmt, String> {
+    fn parse_assign(&mut self) -> Result<StmtKind, String> {
         let name = match self.bump() {
             Token::Ident(s) => s,
             Token::SelfKw => "self".to_string(),
@@ -487,7 +535,7 @@ impl Parser {
         if self.at(&Token::LParen) {
             let args = self.parse_call_args()?;
             self.expect(&Token::Semicolon)?;
-            return Ok(Stmt::ExprStmt(Expr::Call { name, args }));
+            return Ok(StmtKind::ExprStmt(Expr::Call { name, args }));
         }
 
         if self.at(&Token::LBracket) {
@@ -497,7 +545,7 @@ impl Parser {
             self.expect(&Token::Equals)?;
             let value = self.parse_expr()?;
             self.expect(&Token::Semicolon)?;
-            return Ok(Stmt::AssignIndex { name, index, value });
+            return Ok(StmtKind::AssignIndex { name, index, value });
         }
 
         let mut path = Vec::new();
@@ -514,7 +562,7 @@ impl Parser {
                 for f in path {
                     base = Expr::Field { base: Box::new(base), field: f };
                 }
-                return Ok(Stmt::ExprStmt(Expr::MethodCall { base: Box::new(base), method: seg, args }));
+                return Ok(StmtKind::ExprStmt(Expr::MethodCall { base: Box::new(base), method: seg, args }));
             }
             path.push(seg);
         }
@@ -526,15 +574,15 @@ impl Parser {
             self.expect(&Token::Equals)?;
             let value = self.parse_expr()?;
             self.expect(&Token::Semicolon)?;
-            return Ok(Stmt::AssignFieldIndex { name, path, index, value });
+            return Ok(StmtKind::AssignFieldIndex { name, path, index, value });
         }
         self.expect(&Token::Equals)?;
         let value = self.parse_expr()?;
         self.expect(&Token::Semicolon)?;
         if path.is_empty() {
-            Ok(Stmt::Assign { name, value })
+            Ok(StmtKind::Assign { name, value })
         } else {
-            Ok(Stmt::AssignField { name, path, value })
+            Ok(StmtKind::AssignField { name, path, value })
         }
     }
 
@@ -560,7 +608,7 @@ impl Parser {
     /// `match value { Variant => { .. }  Other(a, b) => { .. } }`
     /// Patterns are UNQUALIFIED: the matched value's type already says which
     /// enum it is, so repeating it would be noise.
-    fn parse_match(&mut self) -> Result<Stmt, String> {
+    fn parse_match(&mut self) -> Result<StmtKind, String> {
         self.expect(&Token::Match)?;
         let value = self.parse_cond()?; // no struct literal before the `{`
         self.expect(&Token::LBrace)?;
@@ -617,11 +665,11 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace)?;
-        Ok(Stmt::Match { value, arms })
+        Ok(StmtKind::Match { value, arms })
     }
 
     /// `region name { ... }`
-    fn parse_region(&mut self) -> Result<Stmt, String> {
+    fn parse_region(&mut self) -> Result<StmtKind, String> {
         self.expect(&Token::Region)?;
         let name = match self.bump() {
             Token::Ident(s) => s,
@@ -634,14 +682,14 @@ impl Parser {
             }
         };
         let body = self.parse_block()?;
-        Ok(Stmt::Region { name, body })
+        Ok(StmtKind::Region { name, body })
     }
 
-    fn parse_while(&mut self) -> Result<Stmt, String> {
+    fn parse_while(&mut self) -> Result<StmtKind, String> {
         self.expect(&Token::While)?;
         let cond = self.parse_cond()?;
         let body = self.parse_block()?;
-        Ok(Stmt::While { cond, body })
+        Ok(StmtKind::While { cond, body })
     }
 
     /// Parse an if/while condition: struct literals are disabled so the `{`
@@ -654,7 +702,7 @@ impl Parser {
         result
     }
 
-    fn parse_return(&mut self) -> Result<Stmt, String> {
+    fn parse_return(&mut self) -> Result<StmtKind, String> {
         self.expect(&Token::Return)?;
         // `return tail f(x)` asks for a guaranteed tail call. It reads as what
         // it is at the call site, which is the whole point: a reader can see
@@ -673,12 +721,12 @@ impl Parser {
                         .to_string(),
                 );
             }
-            return Ok(Stmt::TailReturn(e));
+            return Ok(StmtKind::TailReturn(e));
         }
-        Ok(Stmt::Return(e))
+        Ok(StmtKind::Return(e))
     }
 
-    fn parse_if(&mut self) -> Result<Stmt, String> {
+    fn parse_if(&mut self) -> Result<StmtKind, String> {
         self.expect(&Token::If)?;
         let cond = self.parse_cond()?;
         let then_block = self.parse_block()?;
@@ -686,17 +734,18 @@ impl Parser {
             self.bump();
             if self.at(&Token::If) {
                 // `else if ...` chains as an else-block holding one if-statement.
-                Some(vec![self.parse_if()?])
+                // Routed through parse_stmt so the nested `if` gets its own span.
+                Some(vec![self.parse_stmt()?])
             } else {
                 Some(self.parse_block()?)
             }
         } else {
             None
         };
-        Ok(Stmt::If { cond, then_block, else_block })
+        Ok(StmtKind::If { cond, then_block, else_block })
     }
 
-    fn parse_let(&mut self) -> Result<Stmt, String> {
+    fn parse_let(&mut self) -> Result<StmtKind, String> {
         self.expect(&Token::Let)?;
         let mutable = if self.at(&Token::Mut) {
             self.bump();
@@ -713,16 +762,16 @@ impl Parser {
         self.expect(&Token::Equals)?;
         let value = self.parse_expr()?;
         self.expect(&Token::Semicolon)?;
-        Ok(Stmt::Let { name, mutable, declared, value })
+        Ok(StmtKind::Let { name, mutable, declared, value })
     }
 
-    fn parse_print(&mut self) -> Result<Stmt, String> {
+    fn parse_print(&mut self) -> Result<StmtKind, String> {
         self.expect(&Token::Print)?;
         self.expect(&Token::LParen)?;
         let e = self.parse_expr()?;
         self.expect(&Token::RParen)?;
         self.expect(&Token::Semicolon)?;
-        Ok(Stmt::Print(e))
+        Ok(StmtKind::Print(e))
     }
 
     // ---- types ----
@@ -990,8 +1039,13 @@ impl Parser {
                     match p {
                         crate::lexer::StrPart::Lit(text) => out.push(InterpPart::Lit(text)),
                         crate::lexer::StrPart::Expr(src) => {
+                            // The fragment is lexed on its own, so its offsets are
+                            // relative to the fragment, not the file. Only the
+                            // message travels out; the caret lands on the string
+                            // literal, which is the right place until fragment
+                            // offsets are recorded (see `StrPart`).
                             let toks = crate::lexer::Lexer::new(&src).tokenize().map_err(|e| {
-                                format!("in the interpolation `{{{}}}`: {}", src.trim(), e)
+                                format!("in the interpolation `{{{}}}`: {}", src.trim(), e.message)
                             })?;
                             let mut sub = Parser::new(toks);
                             let e = sub.parse_expr().map_err(|e| {
