@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.55)
+# Burxt — Design Notes (v0.0.56)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -2660,6 +2660,36 @@ requires, and it is the opposite direction from the change that law was written 
 begin a statement or an expression, where an identifier can also begin one. Recognising
 those by position would be genuine ambiguity rather than free precision. The line is not
 "which words are keywords" but "which words have exactly one possible position".
+
+### v0.0.56: stage-1 follows stage-0, and the cross-check proved its worth
+
+A correction, and the best evidence yet for building the second implementation early.
+
+v0.0.55 made four marker words contextual in **stage-0** and shipped with a failing
+test — I chained the commands and committed before reading the result, which is the
+same mistake as the `grep -c` one in v0.0.44: **not looking at the answer.**
+
+What failed was exactly the right thing. The front-end cross-check compiles the Burxt
+lexer and parser and runs them over every source in the repository, and it reported:
+
+```text
+tests/pass/contextual_markers.bx: the Burxt PARSER reported an error the Rust parser
+did not
+```
+
+Stage-1's own keyword table still held `allocates`, `requires`, `ensures` and
+`decreases`, so `let mut allocates: Int = 0;` — a program stage-0 had just started
+accepting — was a syntax error to stage-1. **Two implementations of the same language
+disagreeing, caught within a minute, by a test written two versions earlier for
+exactly this.**
+
+Stage-1 now recognises the four by position too, comparing the token's span against
+the word without allocating — the same trick its keyword lookup uses.
+
+**The lesson is about method, not about markers.** A second implementation is not only
+the M4 certificate; it is a differential test. A change to the language now has two
+places that must agree, and the disagreement surfaces as a failing test rather than as
+a bug report six months later. That is worth more than the milestone.
 
 ## Testing
 

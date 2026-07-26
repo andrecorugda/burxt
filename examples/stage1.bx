@@ -156,10 +156,11 @@ fn (mut self: Unit) install_keywords() -> Int {
     n = self.add_word("as", 122);
     n = self.add_word("tail", 123);
     n = self.add_word("pure", 124);
-    n = self.add_word("allocates", 125);
-    n = self.add_word("requires", 126);
-    n = self.add_word("ensures", 127);
-    n = self.add_word("decreases", 128);
+    // `allocates`, `requires`, `ensures` and `decreases` are deliberately NOT here:
+    // stage-0 made them contextual in v0.0.55, so they are ordinary identifiers and
+    // the parser recognises them by position. A lexer that disagreed with stage-0
+    // about this would reject `let allocates: Int = 0;` — which the cross-check test
+    // caught within a minute of the change.
     n = self.add_word("interface", 129);
     n = self.add_word("is", 130);
     // Type names are keywords too: the parser needs them distinguished from
@@ -385,6 +386,16 @@ fn (self: Unit) kind_at(offset: Int) -> Int {
 
 fn (self: Unit) at(kind: Int) -> Bool {
     return self.kind_at(0) == kind;
+}
+
+// Is the current token the contextual word `word`? Compared against the source span,
+// so it costs no allocation — the same trick keyword lookup uses.
+fn (self: Unit) at_word(src: String, word: String) -> Bool {
+    if self.kind_at(0) != 1 {
+        return false;
+    }
+    let t: Tok = self.toks[self.pos];
+    return span_eq(src, t.start, t.length, word);
 }
 
 fn (self: Unit) done() -> Bool {
@@ -949,8 +960,12 @@ fn (mut self: Unit) parse_clauses(src: String) -> Int allocates {
     let here: Int = self.pos;
     let start: Int = len(self.kids);
     let mut count: Int = 0;
-    while self.at(126) || self.at(127) || self.at(128) {
-        let which: Int = self.kind_at(0);
+    while self.at_word(src, "requires") || self.at_word(src, "ensures")
+          || self.at_word(src, "decreases") {
+        // Which clause, decided before the word is consumed.
+        let mut which: Int = 126;
+        if self.at_word(src, "ensures") { which = 127; }
+        if self.at_word(src, "decreases") { which = 128; }
         let n: Int = self.advance();
         // A clause is a condition, so a `{` after it opens the BODY.
         self.no_struct = self.no_struct + 1;
@@ -1003,9 +1018,9 @@ fn (mut self: Unit) parse_fn(src: String, is_pure: Int) -> Int allocates {
     let ret: Int = self.parse_type(src);
     if ret < 0 { return -1; }
     let mut builds_in_caller: Int = 0;
-    if self.at(125) {                                // `allocates` — not usable as a
-        builds_in_caller = 1;                        // name here, because it is a
-        let a: Int = self.advance();                 // keyword. The language is right.
+    if self.at_word(src, "allocates") {              // contextual: only here does the
+        builds_in_caller = 1;                        // word mean the marker.
+        let a: Int = self.advance();
     }
     let clauses: Int = self.parse_clauses(src);
     if clauses < 0 { return -1; }

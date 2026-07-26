@@ -114,5 +114,13 @@ Every self-hosted piece so far has found a real defect in the Rust compiler:
 - designing the checker's error type (v0.0.48) found a **use-after-free** the escape
   checker had accepted since regions shipped.
 
-Four for four. Self-hosting is the best test suite this project has, and that is the
-argument for doing it now rather than at the end.
+- and in v0.0.56 the front-end cross-check caught **stage-0 and stage-1 disagreeing
+  about the language itself**, one version after a change to it: stage-1 still treated
+  four contextual marker words as reserved, so it rejected a program stage-0 had just
+  started accepting.
+
+Five for five. Self-hosting is the best test suite this project has, and the second
+implementation is a **differential test** as well as a certificate: from here on, a
+change to the language has two places that must agree, and disagreement arrives as a
+failing test rather than a bug report. That is the argument for doing it now rather
+than at the end.
