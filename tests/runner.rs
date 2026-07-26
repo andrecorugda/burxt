@@ -782,3 +782,83 @@ fn vscode_extension_speaks_to_the_language_server() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// Every type error at once, in source order, with no invented ones.
+///
+/// The count matters as much as the messages: a checker that recovers badly
+/// produces a cascade — one real mistake followed by five "unknown name" errors
+/// about the binding it gave up on. Burxt avoids that because every `let`
+/// declares its type, so a failed statement still contributes a correctly-typed
+/// name. This asserts both halves: all the real errors, and nothing else.
+#[test]
+fn several_mistakes_are_all_reported_and_nothing_is_invented() {
+    let scratch = scratch_dir("recovery");
+    fs::create_dir_all(&scratch).unwrap();
+    let program = scratch.join("many.bx");
+    fs::write(
+        &program,
+        // Three mistakes on lines 3, 5 and 7. Lines 8-9 USE the bindings whose
+        // initializers failed, which is where a cascade would show up.
+        "let price: Decimal<2> = $19.99;\n\
+         let qty: Int = 3;\n\
+         let wrong: Bool = qty;\n\
+         let total: Decimal<2> = price * qty;\n\
+         let bad: String = total;\n\
+         let ok: Int = qty + 1;\n\
+         let mixed: Int = price;\n\
+         print(wrong);\n\
+         print(bad);\n",
+    )
+    .unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("check")
+        .arg(&program)
+        .arg("--json")
+        .current_dir(&scratch)
+        .output()
+        .expect("failed to spawn burxt");
+    let json = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let _ = fs::remove_dir_all(&scratch);
+
+    let lines: Vec<&str> = json.lines().collect();
+    assert_eq!(
+        lines.len(),
+        3,
+        "expected exactly the three real mistakes, got:\n{}",
+        json
+    );
+    // In source order, so a reader can work top to bottom.
+    for (line, wanted) in lines.iter().zip(["\"line\":3", "\"line\":5", "\"line\":7"]) {
+        assert!(line.contains(wanted), "expected {} in {}", wanted, line);
+    }
+    assert!(
+        !json.contains("unknown") && !json.contains("not declared"),
+        "a failed `let` must still bind its DECLARED type, or later uses cascade:\n{}",
+        json
+    );
+}
+
+/// A lexer or parser error still arrives alone — recovering a token stream is its
+/// own design question, and guessing where a malformed statement ends invents
+/// errors rather than finding them. Asserted so the distinction stays deliberate.
+#[test]
+fn a_parse_error_is_reported_alone() {
+    let scratch = scratch_dir("parse-alone");
+    fs::create_dir_all(&scratch).unwrap();
+    let program = scratch.join("broken.bx");
+    fs::write(&program, "let a: Int = 1\nlet b: Bool = 2;\nlet c: Int = \"x\";\n").unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("check")
+        .arg(&program)
+        .arg("--json")
+        .current_dir(&scratch)
+        .output()
+        .expect("failed to spawn burxt");
+    let json = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let _ = fs::remove_dir_all(&scratch);
+
+    assert_eq!(json.lines().count(), 1, "one parse error, reported once:\n{}", json);
+    assert!(json.contains("expected"), "{}", json);
+}

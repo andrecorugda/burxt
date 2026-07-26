@@ -83,12 +83,22 @@ fn compile_main() {
 
     if let Err(e) = run(cmd, path, &link_args, json) {
         match e {
-            // A diagnostic knows where it is, so it can be shown properly.
-            Failure::At(d, src) => {
-                if json {
-                    println!("{}", diag::to_json(path, &src, &d));
-                } else {
-                    eprint!("{}", diag::render(path, &src, &d));
+            // Diagnostics know where they are, so they can be shown properly —
+            // all of them, in the order a reader meets them.
+            Failure::At(ds, src) => {
+                let total = ds.len();
+                for (i, d) in ds.iter().enumerate() {
+                    if json {
+                        println!("{}", diag::to_json(path, &src, d));
+                    } else {
+                        if i > 0 {
+                            eprintln!();
+                        }
+                        eprint!("{}", diag::render(path, &src, d));
+                    }
+                }
+                if !json && total > 1 {
+                    eprintln!("\n{} errors", total);
                 }
             }
             // Something with no position: a missing file, a failed link.
@@ -111,7 +121,7 @@ fn compile_main() {
 /// A failure that either knows where it happened or does not. Keeping the two
 /// apart means the position is never invented — a link error has no line.
 enum Failure {
-    At(diag::Diagnostic, String),
+    At(Vec<diag::Diagnostic>, String),
     Plain(String),
 }
 
@@ -148,10 +158,13 @@ fn run(cmd: &str, path: &str, link_args: &[String], json: bool) -> Result<(), Fa
     // ---- front end (backend-independent) ----
     // Every front-end failure carries a span, so it can be rendered with the
     // offending line and a caret under it.
-    let located = |d: diag::Diagnostic| Failure::At(d, src.clone());
-    let tokens = lexer::Lexer::new(&src).tokenize().map_err(located)?;
-    let program = parser::Parser::new(tokens).parse().map_err(located)?;
-    let typed = typeck::TypeChecker::new().check(&program).map_err(located)?;
+    // The lexer and parser stop at the first problem (recovering a token stream
+    // is its own design question); the typechecker reports everything it finds.
+    let one = |d: diag::Diagnostic| Failure::At(vec![d], src.clone());
+    let all = |ds: Vec<diag::Diagnostic>| Failure::At(ds, src.clone());
+    let tokens = lexer::Lexer::new(&src).tokenize().map_err(one)?;
+    let program = parser::Parser::new(tokens).parse().map_err(one)?;
+    let typed = typeck::TypeChecker::new().check(&program).map_err(all)?;
 
     // `check` is the front end and nothing more: no LLVM context, no object
     // file, no linker. This is what an editor or a CI gate calls, so it must

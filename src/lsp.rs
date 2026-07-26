@@ -10,20 +10,19 @@
 //! whose contract you cannot see is exactly the kind of thing this language
 //! exists to make visible.
 //!
-//! One consequence of the compiler stopping at the first error: hover knows the
-//! types of expressions checked BEFORE that error and nothing after it. So hover
-//! goes quiet below a mistake and returns when the mistake is fixed. That is
-//! error recovery's job, not the server's, and it is tested rather than
-//! footnoted.
+//! Hover works even in a file that does not compile, because the checker keeps
+//! going past a failed statement — it only stops short at a *declaration* error
+//! (a bad struct field, an unknown type in a signature), where continuing would
+//! mean guessing what the author meant.
 //!
 //! Design notes worth keeping:
 //!
 //! - **The buffer, not the file.** Diagnostics run on the client's in-memory
 //!   text, so they are right while the file on disk is stale — which is the
 //!   entire point of an editor integration.
-//! - **One diagnostic at a time, honestly.** The compiler stops at the first
-//!   error, so the server publishes one or none rather than pretending to a list.
-//!   Recovering to report several is a compiler change, not a server change.
+//! - **Every type error at once.** The typechecker recovers per statement, so a
+//!   buffer with five mistakes underlines five places. A lexer or parser error
+//!   still arrives alone: recovering a token stream is its own design question.
 //! - **Publishing an empty array matters as much as publishing an error**: it is
 //!   what clears the squiggle when the code becomes valid.
 //! - **No panics on bad input.** A malformed message is answered or ignored, never
@@ -347,12 +346,14 @@ fn respond(output: &mut impl Write, id: Value, result: Value) -> Result<(), Stri
     )
 }
 
-/// Typecheck the buffer and publish what came back — one diagnostic, or none.
+/// Typecheck the buffer and publish what came back — every problem, or none.
 fn publish(output: &mut impl Write, uri: &str, text: &str) -> Result<(), String> {
-    let diagnostics = match check_source(text) {
-        Ok(()) => Vec::new(),
-        Err(d) => vec![as_lsp_diagnostic(text, &d)],
-    };
+    let diagnostics = check_source(text)
+        .err()
+        .unwrap_or_default()
+        .iter()
+        .map(|d| as_lsp_diagnostic(text, d))
+        .collect();
     send(output, diagnostics_message(uri, diagnostics))
 }
 
@@ -372,9 +373,9 @@ fn diagnostics_message(uri: &str, diagnostics: Vec<Value>) -> Value {
 
 /// The front end, and only the front end: no LLVM context, no object file. The
 /// editor asks "is this legal?" on every keystroke, so this has to stay cheap.
-fn check_source(text: &str) -> Result<(), Diagnostic> {
-    let tokens = crate::lexer::Lexer::new(text).tokenize()?;
-    let program = crate::parser::Parser::new(tokens).parse()?;
+fn check_source(text: &str) -> Result<(), Vec<Diagnostic>> {
+    let tokens = crate::lexer::Lexer::new(text).tokenize().map_err(|d| vec![d])?;
+    let program = crate::parser::Parser::new(tokens).parse().map_err(|d| vec![d])?;
     crate::typeck::TypeChecker::new().check(&program)?;
     Ok(())
 }
@@ -453,21 +454,33 @@ mod tests {
         assert!(text.contains("half to even"), "got {:?}", text);
     }
 
-    /// Hover keeps working in a file that does not compile — but only UP TO the
-    /// first error, because the checker stops there. Recorded as a test rather
-    /// than a footnote, since it is the behaviour a user will notice: hover goes
-    /// quiet below a mistake, and comes back when the mistake is fixed. Fixing
-    /// that properly is error recovery, a compiler change.
+    /// Hover works throughout a file that does not compile — above AND below the
+    /// mistake — because the checker recovers per statement instead of stopping.
+    /// This test used to assert the opposite; error recovery is what changed it.
     #[test]
-    fn hover_answers_up_to_the_first_error_and_not_past_it() {
+    fn hover_answers_on_both_sides_of_an_error() {
         let src = "let a: Int = 1;\nlet b: Bool = 2;\nprint(a);\n";
-        // Before the error: checked, so known.
-        let at_a = src.lines().next().unwrap().find("1").unwrap();
-        let v = hover(src, 0, at_a).expect("hover should work above the error");
-        assert!(v.path(&["contents", "value"]).unwrap().as_str().unwrap().contains("Int"));
-        // After it: never checked, so nothing is claimed rather than guessed.
-        let at_print = src.lines().nth(2).unwrap().find('a').unwrap();
-        assert!(hover(src, 2, at_print).is_none());
+        let at_one = src.lines().next().unwrap().find('1').unwrap();
+        let above = hover(src, 0, at_one).expect("hover should work above the error");
+        assert!(above.path(&["contents", "value"]).unwrap().as_str().unwrap().contains("Int"));
+
+        let at_a = src.lines().nth(2).unwrap().find('a').unwrap();
+        let below = hover(src, 2, at_a).expect("hover should work BELOW the error too");
+        assert!(below.path(&["contents", "value"]).unwrap().as_str().unwrap().contains("Int"));
+    }
+
+    /// The server publishes EVERY problem, not the first: a buffer with three
+    /// mistakes must underline three places, or the editor quietly hides two.
+    #[test]
+    fn every_mistake_in_the_buffer_is_published() {
+        let src = "let a: Bool = 1;\nlet b: Int = 2;\nlet c: String = b;\nlet d: Int = \"x\";\n";
+        let found = check_source(src).unwrap_err();
+        assert_eq!(found.len(), 3, "expected three diagnostics, got {:?}", found);
+        let lines: Vec<u32> = found
+            .iter()
+            .map(|d| LineIndex::new(src).locate(d.span.start).line as u32)
+            .collect();
+        assert_eq!(lines, vec![1, 3, 4], "in source order");
     }
 
     #[test]
@@ -484,8 +497,9 @@ mod tests {
     #[test]
     fn a_broken_buffer_yields_a_positioned_diagnostic() {
         let src = "let a: Int = 1;\nlet b: Bool = 2;\n";
-        let d = check_source(src).unwrap_err();
-        let v = as_lsp_diagnostic(src, &d);
+        let found = check_source(src).unwrap_err();
+        assert_eq!(found.len(), 1, "one mistake, one diagnostic");
+        let v = as_lsp_diagnostic(src, &found[0]);
         // Line 2 of the file is line 1 to the protocol, and the range covers the
         // offending VALUE (`2` at character 14) rather than the whole binding —
         // the declaration is not what is wrong.

@@ -128,9 +128,10 @@ so loudly when it does not.
   and knows types only up to the first error, because the compiler stops there.
 - **Go-to-definition**, which needs the compiler to keep name resolution rather
   than only its result.
-- **More than one error at a time**, which is a *compiler* change (error recovery),
-  not a server change. Recorded here so the limitation is not mistaken for a
-  server bug. It applies to every client, including the VS Code path.
+- ~~**More than one error at a time**~~ **shipped in v0.0.37**: the typechecker
+  recovers per statement, so every type error is published at once. Lexer, parser
+  and declaration errors still arrive alone — guessing where a malformed statement
+  ends would invent errors instead of finding them.
 - **Incremental sync.** The server asks for full-document sync deliberately:
   applying incremental text edits correctly is fiddly, and a server that corrupts
   its own copy of the buffer reports errors about code you never wrote.

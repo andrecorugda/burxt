@@ -277,6 +277,10 @@ pub struct TypeChecker {
     /// Every expression's span and resolved type, in check order. This is what
     /// answers "what is the type here?" — hover, in the language server.
     expr_types: RefCell<Vec<(Span, Type)>>,
+    /// Errors found so far. Checking a statement that fails does not stop the
+    /// checker: it records the problem and moves to the next statement, so one
+    /// mistake does not hide the other five.
+    errors: Vec<Diagnostic>,
     current_ret: Option<Type>,
     /// The enclosing function's name and parameter types. A guaranteed tail
     /// call needs them: LLVM only guarantees the call when caller and callee
@@ -303,6 +307,7 @@ impl TypeChecker {
             current_span: Cell::new(Span::default()),
             error_located: Cell::new(false),
             expr_types: RefCell::new(Vec::new()),
+            errors: Vec::new(),
             current_ret: None,
             current_sig: None,
             current_region: None,
@@ -315,10 +320,49 @@ impl TypeChecker {
     /// — so every one of the ~160 error sites inside stays a plain sentence, and
     /// a nested statement naturally yields the most precise position because it
     /// was the last thing entered.
-    pub fn check(&mut self, prog: &Program) -> Result<TypedProgram, Diagnostic> {
-        match self.check_program_inner(prog) {
-            Ok(t) => Ok(t),
-            Err(message) => Err(Diagnostic::new(message, self.current_span.get())),
+    pub fn check(&mut self, prog: &Program) -> Result<TypedProgram, Vec<Diagnostic>> {
+        let result = self.check_program_inner(prog);
+        if let Err(message) = result {
+            // A declaration-level failure stops the pass it was in, so it arrives
+            // here rather than through `record`.
+            self.record(message);
+            return Err(self.take_errors());
+        }
+        if self.errors.is_empty() {
+            return result.map_err(|_| unreachable!());
+        }
+        Err(self.take_errors())
+    }
+
+    /// The errors found, in the order a reader meets them, each one only once.
+    fn take_errors(&mut self) -> Vec<Diagnostic> {
+        let mut out = std::mem::take(&mut self.errors);
+        out.sort_by_key(|d| (d.span.start, d.span.end));
+        out
+    }
+
+    /// Record a problem at wherever the checker currently is, and keep going.
+    fn record(&mut self, message: impl Into<String>) {
+        let d = Diagnostic::new(message, self.current_span.get());
+        // The same message at the same place twice is one problem, not two.
+        if !self.errors.iter().any(|e| e.span == d.span && e.message == d.message) {
+            self.errors.push(d);
+        }
+    }
+
+    /// Keep checking usefully after a statement failed.
+    ///
+    /// This is where Burxt gets an unusual advantage: **every `let` declares its
+    /// type**, so even when the initializer is wrong the binding's type is known.
+    /// Binding it anyway means the rest of the function checks against the type
+    /// the author asked for, instead of drowning the real error in a cascade of
+    /// "unknown name" noise. In a language with inference this is the hard part;
+    /// here the annotation was mandatory all along.
+    fn recover_from(&mut self, s: &Stmt) {
+        if let StmtKind::Let { name, mutable, declared, .. } = &s.kind {
+            if self.validate_type(declared).is_ok() && !self.env.contains_key(name) {
+                self.env.insert(name.clone(), (declared.clone(), *mutable));
+            }
         }
     }
 
@@ -643,8 +687,20 @@ impl TypeChecker {
 
         // Pass 3: top-level statements (the implicit main).
         let mut stmts = Vec::new();
+        // Top-level statements recover exactly as a function body's do.
         for s in &prog.stmts {
-            stmts.push(self.check_stmt(s)?);
+            if stmts.last().is_some_and(stmt_returns) {
+                self.current_span.set(s.span);
+                self.record("unreachable statement: this code comes after a `return`");
+                break;
+            }
+            match self.check_stmt(s) {
+                Ok(t) => stmts.push(t),
+                Err(message) => {
+                    self.record(message);
+                    self.recover_from(s);
+                }
+            }
         }
 
         // A vtable is emitted only for impls of traits actually used as `dyn`
@@ -1127,12 +1183,17 @@ impl TypeChecker {
         self.current_ret = Some(f.ret.clone());
         self.current_sig =
             Some((f.name.clone(), f.params.iter().map(|p| p.ty.clone()).collect()));
+        let errors_before = self.errors.len();
         let body = self.check_block(&f.body)?;
         self.current_ret = None;
         self.current_sig = None;
         self.env.clear();
 
-        if !block_returns(&body) {
+        // Only prove the return paths if the body actually checked. A statement
+        // that failed produced no TypedStmt, so "must end by returning" would be
+        // a second, misleading complaint about the same mistake.
+        if self.errors.len() == errors_before && !block_returns(&body) {
+            self.current_span.set(f.span);
             return Err(format!(
                 "function `{}` must end by returning {} {} on every path \
                  (its last statement must be a `return`, or an if/else where \
@@ -1329,22 +1390,28 @@ impl TypeChecker {
     fn check_block(&mut self, stmts: &[Stmt]) -> Result<Vec<TypedStmt>, String> {
         let saved = self.env.clone();
         let mut out: Vec<TypedStmt> = Vec::new();
+        let errors_before = self.errors.len();
         for s in stmts {
             if out.last().is_some_and(stmt_returns) {
-                self.env = saved;
-                return Err(
-                    "unreachable statement: this code comes after a `return`".to_string()
-                );
+                self.current_span.set(s.span);
+                self.record("unreachable statement: this code comes after a `return`");
+                // One report is enough: everything after a `return` is
+                // unreachable, and saying so five times is noise.
+                break;
             }
             match self.check_stmt(s) {
                 Ok(t) => out.push(t),
-                Err(e) => {
-                    self.env = saved;
-                    return Err(e);
+                Err(message) => {
+                    // Record and CARRY ON. A compiler that stops at the first
+                    // problem makes the reader fix one thing, recompile, and
+                    // discover the next — five times in a row.
+                    self.record(message);
+                    self.recover_from(s);
                 }
             }
         }
         self.env = saved;
+        let _ = errors_before;
         Ok(out)
     }
 

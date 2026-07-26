@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.36)
+# Burxt — Design Notes (v0.0.37)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1767,6 +1767,60 @@ JavaScript toolchain, but a check this valuable should not quietly not run.
 These are exactly the failures that look fine on inspection: a message split across
 chunks, a byte length applied to a string, a promise that never resolves.
 
+### v0.0.37: every mistake at once
+
+```text
+error: type mismatch in `let wrong`: declared Bool, but expression has type Int
+ --> many.bx:3:19
+  |
+3 | let wrong: Bool = qty;
+  |                   ^^^
+
+error: type mismatch in `let bad`: declared String, but expression has type Decimal<2>
+ --> many.bx:5:19
+  ...
+
+3 errors
+```
+
+The typechecker no longer stops at the first problem. It records it, recovers, and
+carries on — so a file with three mistakes reports three, in source order, instead
+of making the reader fix one, recompile, and discover the next five times over.
+
+**Burxt turns out to be unusually good at this, for a reason worth recording:
+every `let` declares its type.** The hard part of error recovery elsewhere is that
+a failed initializer leaves a binding with no type, so every later use of it
+produces a second, invented error — the cascade that makes recovery worse than
+useless. Here the annotation was mandatory all along, so a statement that fails
+still contributes a **correctly typed name**, and the rest of the function checks
+against the type the author asked for. The test asserts both halves: all three
+real errors, and *nothing else* — no "unknown name" noise from the two later
+statements that use the failed bindings.
+
+**Two things deliberately still report alone:**
+
+- **Lexer and parser errors.** Recovering a token stream means guessing where a
+  malformed statement ends, and a wrong guess *invents* errors rather than finding
+  them. Asserted by its own test so the distinction stays a decision.
+- **Declaration errors** — a bad struct field, an unknown type in a signature.
+  Continuing past those means checking a function whose types are unknown, which
+  produces confident nonsense.
+
+**Two follow-on effects, one of which reversed an earlier test:**
+
+- **Hover now works below a mistake**, not just above it. The v0.0.35 test asserted
+  the opposite ("hover goes quiet below a mistake, and comes back when it is
+  fixed") and was correct at the time; recovery is what changed it. The test now
+  asserts hover answers on *both* sides of an error.
+- **The return-path proof had to become conditional.** A body with a failed
+  statement produces no `TypedStmt` for it, so "must end by returning" would fire
+  as a second complaint about the same mistake. It now runs only when the body
+  checked cleanly.
+
+The language server publishes all of them, so an editor underlines every place at
+once; `--json` emits one object per line, already in source order, each error only
+once.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -1831,6 +1885,9 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- T7. Error recovery (v0.0.37): every type error at once, cascade-free because
+  `let` always declares its type. Parse and declaration errors still report alone,
+  on purpose.
 - T6. VS Code on the language server (v0.0.36): a dependency-free LSP client,
   hover in VS Code, and a node harness that drives the extension against a real
   server.
