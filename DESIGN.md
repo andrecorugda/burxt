@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.28)
+# Burxt — Design Notes (v0.0.29)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -147,18 +147,21 @@ Listed so they are not mistaken for finished work:
   with collections.
 - **Stack overflow is the one failure Burxt does not name.** Measured at
   v0.0.23: recursion 100,000 deep works; 1,000,000 deep dies with a raw
-  SIGSEGV (exit 139), not a named error and not exit 70. Every other failure
+  SIGSEGV (exit 139), not a named error and not exit 70. **`return tail`
+  (v0.0.29) gives a way to AVOID it, which is not the same as naming it** — an
+  unmarked deep recursion still dies anonymously. Every other failure
   mode — array bounds, integer overflow, division by zero, region exhaustion —
   reports itself and exits 70. Honest severity: this is LOUD, so it is a
   diagnostics gap rather than a correctness hole like a wrong number would be.
   Fix is either a guard-page signal handler (what Rust does) or a depth counter
   in codegen. Worth doing so nothing in the language fails anonymously.
-- **Tail calls are not optimized** (measured at v0.0.23): a tail-recursive loop
-  dies at exactly the same depth as a non-tail one, so recursion cannot
-  currently substitute for iteration. That matters more than it looks in a
-  language with immutability by default, where a functional style is otherwise
-  natural. The intended answer is a *guaranteed, checked* tail call rather than
-  an invisible optimization — see `spec/NOVELTY.md`.
+- ~~**Tail calls are not optimized**~~ — **shipped in v0.0.29** as
+  `return tail f(...)`: a *guaranteed, checked* tail call, never an invisible
+  optimization. Measured: 50,000,000 frames deep in constant stack; the same
+  program without `tail` dies. What remains deferred is the *inferred* case —
+  Burxt will not silently turn an unmarked tail call into a loop, because then a
+  small edit could silently reintroduce stack growth. That is the whole point of
+  making it explicit.
 - **Multiplication scale rule refined** (v0.0.19), superseding "operands of
   `*` must have matching scales": `*` permits mixed operand scales when the
   result binding supplies a rounding contract; `+`/`-` remain strict; `/` is
@@ -1327,6 +1330,69 @@ executables had been committed. They are untracked now, with `.gitignore`
 covering the bare, extensionless outputs `burxt build` writes into the working
 directory.
 
+### v0.0.29: guaranteed tail calls, and two region bugs found on the way
+
+```text
+fn count_down(n: Int, acc: Int) -> Int {
+    if n <= 0 { return acc; }
+    return tail count_down(n - 1, acc + 1);   // constant stack, or it will not compile
+}
+print(count_down(50000000, 0));               // 50 million frames deep
+```
+
+**`return tail f(...)` is a checked guarantee, not an optimization.** It lowers
+to LLVM `musttail`, which *fails the build* if the call is not genuinely in tail
+position — so there is never a silent difference between "optimized" and "hoped
+for". The same program without `tail` dies at that depth, and a test asserts the
+IR contains exactly one `musttail`, on the call that asked for it and nowhere
+else. The guarantee is explicit by design: inferring it would mean a small edit
+could silently reintroduce stack growth, which is the failure mode the whole
+feature exists to remove. This is NOVELTY §4, and the same shape as every other
+promise in the language — declare the intent, and the compiler guarantees it or
+refuses with a reason.
+
+`musttail` is only legal when the caller's and callee's **prototypes match**, so
+that condition is checked in Burxt's own words rather than surfaced as an LLVM
+verifier message:
+
+```text
+a guaranteed tail call reuses this frame, so `step` and `helper` must have the
+SAME signature — `step` takes (Int) -> Int, but `helper` takes (Int, Int) -> Int.
+```
+
+Self-recursion satisfies that trivially, and mutual recursion does when the
+signatures agree — which covers the loop use case. Also refused, each with its
+own reason: a tail call into an `extern fn` (the C side owns that ABI, and
+Burxt's width conversion has to happen *after* the call returns), aggregates
+passed or returned by hidden pointer, and `return tail` on something that is not
+a call. `tail` is now a keyword, so a program that used it as a name gets a
+compile error rather than a changed meaning — the v0.0.17 syntax-change law.
+
+**One refusal is a soundness rule rather than a limitation:** `return tail`
+cannot leave a `region`. A region is released on the way out, but a tail call
+never comes back to do it — and the release would have to happen *before* the
+call, while the arguments may still point into the region.
+
+**And that question exposed two real bugs in regions, both fixed here:**
+
+- **A `return` from inside a region leaked it.** The cursor was only rewound at
+  the closing brace, so leaving early skipped the release and the bump pointer
+  climbed for the life of the process. A function that returned from inside a
+  region leaked its region *on every call*. Now `return` releases the region on
+  the way out, computing the result first (the expression may still be reading
+  region storage). The regression test calls such a function 30,000 times, which
+  would otherwise die of region exhaustion.
+- **The return-path prover did not know a region body can return.** It demanded
+  a second `return` after the block and then called that statement unreachable —
+  there was no way to write a function that returns from inside a region at all.
+  Before the fix the combination emitted invalid IR; a region is a lexical scope,
+  not a branch, so if its body returns on every path, so does the region.
+
+Worth stating plainly: **the tail-call work is what surfaced both.** Asking
+"what has to happen between the call and the `ret`?" is the same question as
+"what has to happen between the last statement and the `ret`?", and the second
+one had two wrong answers.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -1389,6 +1455,8 @@ it travels.
   literals (`5.km`) and pipelines still to come.
 - A4.8. File input: `read_file` and `to_string` (v0.0.28) — the two things a
   self-hosted compiler could not do without.
+- A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
+  (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
 - A4+. OOP by default, SOLID-aligned: by-pointer ABI + receiver methods,
   then interfaces as behavioral contracts (dictionary dispatch). No
   implementation inheritance — a type satisfies an interface exactly or it

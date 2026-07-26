@@ -95,6 +95,9 @@ pub struct CodeGen<'ctx> {
     /// the hidden sret pointer of the function being generated, if it returns
     /// an aggregate
     current_sret: Option<PointerValue<'ctx>>,
+    /// the bump-cursor mark of the region currently open, so a `return` from
+    /// inside it releases the region on the way out. One level, per M1.
+    region_mark: Option<IntValue<'ctx>>,
     /// struct name -> its LLVM struct type (named `bx.<name>`)
     struct_types: HashMap<String, StructType<'ctx>>,
     /// struct name -> field types in declaration order (for GEP walks)
@@ -138,6 +141,7 @@ impl<'ctx> CodeGen<'ctx> {
             vtables: HashMap::new(),
             trait_slots: HashMap::new(),
             current_sret: None,
+            region_mark: None,
             struct_types: HashMap::new(),
             struct_fields: HashMap::new(),
             enum_types: HashMap::new(),
@@ -454,8 +458,13 @@ impl<'ctx> CodeGen<'ctx> {
                 let _ = name;
                 let mark = self.build_region_open()?;
                 let saved = self.vars.clone();
+                // A `return` inside the body has to put the cursor back too, so
+                // the mark is reachable from there. One level of nesting, per
+                // the M1 spec, so one slot is enough.
+                let outer_mark = self.region_mark.replace(mark);
                 let r = body.iter().try_for_each(|s| self.gen_stmt(s));
                 self.vars = saved;
+                self.region_mark = outer_mark;
                 r?;
                 if self.current_block_open() {
                     self.build_region_close(mark)?;
@@ -586,10 +595,46 @@ impl<'ctx> CodeGen<'ctx> {
                     // subtlety.
                     let val = self.gen_expr(e)?;
                     self.builder.build_store(sret, val).map_err(|e| e.to_string())?;
+                    self.close_open_region()?;
                     self.builder.build_return(None).map_err(|e| e.to_string())?;
                 } else {
                     let val = self.gen_expr(e)?;
+                    // Compute FIRST, then release: the expression may still be
+                    // reading region storage (a slice's length, say).
+                    self.close_open_region()?;
                     self.builder.build_return(Some(&val)).map_err(|e| e.to_string())?;
+                }
+                Ok(())
+            }
+            // A guaranteed tail call. `musttail` is the mechanism: LLVM either
+            // emits a real tail call or fails the build — it never silently
+            // falls back to a growing stack. Typeck has already proven the
+            // prototypes match, so nothing here can surprise the verifier.
+            //
+            // The call must sit IMMEDIATELY before the `ret`, with nothing in
+            // between. That is why a tail call inside a region is refused
+            // earlier: the region release would land in that gap.
+            TypedStmt::TailReturn { name, args } => {
+                let f = *self
+                    .user_fns
+                    .get(name.as_str())
+                    .ok_or_else(|| format!("codegen bug: unknown function {}", name))?;
+                let mut vals: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
+                for a in args {
+                    vals.push(self.gen_expr(a)?.into());
+                }
+                let call = self
+                    .builder
+                    .build_call(f, &vals, "tailcall")
+                    .map_err(|e| e.to_string())?;
+                call.set_tail_call_kind(inkwell::values::LLVMTailCallKind::LLVMTailCallKindMustTail);
+                match call.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(v) => {
+                        self.builder.build_return(Some(&v)).map_err(|e| e.to_string())?;
+                    }
+                    _ => {
+                        self.builder.build_return(None).map_err(|e| e.to_string())?;
+                    }
                 }
                 Ok(())
             }
@@ -2551,6 +2596,17 @@ impl<'ctx> CodeGen<'ctx> {
             .build_load(self.ctx.i64_type(), next.as_pointer_value(), "region_mark")
             .map(|v| v.into_int_value())
             .map_err(|e| e.to_string())
+    }
+
+    /// Leaving a region by `return` releases it exactly as reaching its closing
+    /// brace would. Without this the bump cursor kept climbing for the life of
+    /// the process, so a function that returned from inside a region leaked its
+    /// region on every call.
+    fn close_open_region(&mut self) -> Result<(), String> {
+        if let Some(mark) = self.region_mark {
+            self.build_region_close(mark)?;
+        }
+        Ok(())
     }
 
     /// `close` is "put the cursor back" — that is the entire deallocation.

@@ -163,8 +163,22 @@ Why this is on-thesis rather than a borrowed convenience:
 - Self-hosting needs recursion for tree walking; a guarantee about its cost is
   worth having before the compiler is written in Burxt.
 
-Measured state at v0.0.23: no TCO at all — a tail-recursive loop segfaults at
-the same depth as a non-tail one.
+**SHIPPED in v0.0.29** — the first entry in this register to become real.
+`return tail f(...)` lowers to `musttail`, measured at 50,000,000 frames in
+constant stack; the same program without `tail` dies. The illustrative syntax
+above is the actual syntax.
+
+What shipped is exactly the *checkable* version argued for here: the guarantee
+is explicit (never inferred, so an edit cannot silently reintroduce stack
+growth), and when it cannot be honoured the compiler says why in its own words —
+`musttail` requires the caller's and callee's prototypes to match, so mismatched
+signatures, `extern fn` targets, aggregates travelling by hidden pointer, and
+leaving a `region` are each refused with their own reason. Self- and mutual
+recursion with matching signatures are the covered cases.
+
+Still open, deliberately: this makes stack overflow **avoidable**, not **named**.
+An unmarked deep recursion still dies anonymously, which is the diagnostics gap
+recorded in DESIGN.md's interim ledger.
 
 ## 5. Termination as a contract
 

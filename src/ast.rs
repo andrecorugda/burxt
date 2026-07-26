@@ -267,6 +267,10 @@ pub enum Stmt {
     Print(Expr),
     /// `return expr;` — only valid inside a function.
     Return(Expr),
+    /// `return tail f(args);` — a call the compiler must turn into a real tail
+    /// call (constant stack) or refuse to compile. Never a silent difference
+    /// between "optimized" and "hoped for".
+    TailReturn(Expr),
     /// `if cond { ... } else { ... }` — the condition must be a Bool, and the
     /// braces are required. `else if` chains nest inside `else_block`.
     If {

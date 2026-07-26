@@ -1,0 +1,6 @@
+fn step(n: Int) -> Int {
+    if n <= 0 { return 0; }
+    return tail helper(n - 1, 1);
+}
+fn helper(n: Int, m: Int) -> Int { return n + m; }
+print(step(3));

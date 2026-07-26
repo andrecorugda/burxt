@@ -632,8 +632,25 @@ impl Parser {
 
     fn parse_return(&mut self) -> Result<Stmt, String> {
         self.expect(&Token::Return)?;
+        // `return tail f(x)` asks for a guaranteed tail call. It reads as what
+        // it is at the call site, which is the whole point: a reader can see
+        // that this call does not grow the stack.
+        let tail = self.at(&Token::Tail);
+        if tail {
+            self.bump();
+        }
         let e = self.parse_expr()?;
         self.expect(&Token::Semicolon)?;
+        if tail {
+            if !matches!(e, Expr::Call { .. }) {
+                return Err(
+                    "`return tail` must be followed by a call — a tail call is a \
+                     call that replaces this frame, so there has to be one."
+                        .to_string(),
+                );
+            }
+            return Ok(Stmt::TailReturn(e));
+        }
         Ok(Stmt::Return(e))
     }
 

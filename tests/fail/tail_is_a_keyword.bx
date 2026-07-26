@@ -1,0 +1,2 @@
+let tail: Int = 1;
+print(tail);

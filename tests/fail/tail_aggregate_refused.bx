@@ -1,0 +1,5 @@
+struct Pair { a: Int, b: Int }
+fn again(p: Pair) -> Pair {
+    return tail again(p);
+}
+print(again(Pair { a: 1, b: 2 }).a);

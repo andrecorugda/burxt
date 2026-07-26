@@ -1,0 +1,4 @@
+fn f(n: Int) -> Int {
+    return tail nope(n);
+}
+print(f(1));

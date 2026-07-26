@@ -1,0 +1,4 @@
+fn f(n: Int) -> Int {
+    return tail n + 1;
+}
+print(f(1));

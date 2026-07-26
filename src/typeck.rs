@@ -141,6 +141,10 @@ pub enum TypedStmt {
     /// `print` of an interpolated string: emit each piece in order.
     PrintInterp(Vec<TypedInterpPart>),
     Return(TypedExpr),
+    /// A guaranteed tail call: the frame is replaced, not stacked. Typeck has
+    /// already proven the two signatures match, so codegen can emit `musttail`
+    /// knowing LLVM will accept it.
+    TailReturn { name: String, args: Vec<TypedExpr> },
     While { cond: TypedExpr, body: Vec<TypedStmt> },
     If {
         cond: TypedExpr,
@@ -234,6 +238,10 @@ pub struct TypeChecker {
     /// function name -> (parameter types, return type); collected up front so
     /// functions may be defined in any order and call each other.
     fns: HashMap<String, (Vec<Type>, Type)>,
+    /// which of those names are `extern fn` declarations. They share `fns` so
+    /// call checking is uniform, but they are NOT Burxt functions — a tail-call
+    /// guarantee, for one, stops at the C boundary.
+    extern_names: HashSet<String>,
     /// struct name -> fields (name, type) in declaration order; hoisted first.
     structs: HashMap<String, Vec<(String, Type)>>,
     /// enum name -> variants (name, payload types) in declaration order, which
@@ -250,6 +258,10 @@ pub struct TypeChecker {
     dyn_traits: HashSet<String>,
     /// return type of the function currently being checked, if any.
     current_ret: Option<Type>,
+    /// The enclosing function's name and parameter types. A guaranteed tail
+    /// call needs them: LLVM only guarantees the call when caller and callee
+    /// prototypes match, so that has to be checked before promising it.
+    current_sig: Option<(String, Vec<Type>)>,
     /// the region currently open, if any. One level only in this slice, so
     /// this doubles as the nesting guard.
     current_region: Option<String>,
@@ -260,6 +272,7 @@ impl TypeChecker {
         TypeChecker {
             env: HashMap::new(),
             fns: HashMap::new(),
+            extern_names: HashSet::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
             methods: HashMap::new(),
@@ -267,6 +280,7 @@ impl TypeChecker {
             impls: HashSet::new(),
             dyn_traits: HashSet::new(),
             current_ret: None,
+            current_sig: None,
             current_region: None,
         }
     }
@@ -423,6 +437,7 @@ impl TypeChecker {
             let seen = |t: &Type| if *t == Type::CInt { Type::Int } else { t.clone() };
             let param_tys: Vec<Type> = e.params.iter().map(|p| seen(&p.ty)).collect();
             self.fns.insert(e.name.clone(), (param_tys, seen(&e.ret)));
+            self.extern_names.insert(e.name.clone());
             externs.push(TypedExtern {
                 name: e.name.clone(),
                 params: e.params.iter().map(|p| p.ty.clone()).collect(),
@@ -971,8 +986,11 @@ impl TypeChecker {
             params.push((p.name.clone(), p.ty.clone()));
         }
         self.current_ret = Some(f.ret.clone());
+        self.current_sig =
+            Some((f.name.clone(), f.params.iter().map(|p| p.ty.clone()).collect()));
         let body = self.check_block(&f.body)?;
         self.current_ret = None;
+        self.current_sig = None;
         self.env.clear();
 
         if !block_returns(&body) {
@@ -1038,6 +1056,123 @@ impl TypeChecker {
             ret: m.ret.clone(),
             body,
         })
+    }
+
+    /// `return tail f(args)` — the guarantee, checked.
+    ///
+    /// LLVM's `musttail` either compiles to a real tail call or fails the build,
+    /// which is exactly the contract Burxt wants: declare the intent, and the
+    /// compiler guarantees it or refuses with a reason. But `musttail` is only
+    /// legal when the caller's and callee's prototypes MATCH, so that condition
+    /// is checked here, in words, rather than surfacing as an LLVM verifier
+    /// message no one can act on.
+    fn check_tail_return(&mut self, e: &Expr) -> Result<TypedStmt, String> {
+        let ret = self.current_ret.clone().ok_or_else(|| {
+            "`return` only makes sense inside a function".to_string()
+        })?;
+        let (caller, caller_params) = self.current_sig.clone().ok_or_else(|| {
+            "a guaranteed tail call only makes sense inside a function".to_string()
+        })?;
+        let (name, args) = match e {
+            Expr::Call { name, args } => (name.clone(), args),
+            // The parser already refused anything else.
+            _ => return Err("`return tail` must be followed by a call".to_string()),
+        };
+
+        // A region is released when it is left, and a tail call never comes
+        // back — so the release would have to happen BEFORE the call, while the
+        // arguments may still point into the region. Refused rather than
+        // silently handing over freed storage.
+        if let Some(region) = self.current_region.clone() {
+            return Err(format!(
+                "`return tail` cannot leave the region `{}`: the region is \
+                 released on the way out, but a tail call never returns to do \
+                 it, and the arguments may point into it. Move the call outside \
+                 the region, or use an ordinary `return`.",
+                region
+            ));
+        }
+
+        if self.extern_names.contains(&name) {
+            return Err(format!(
+                "`{}` is an `extern fn`, so Burxt cannot guarantee a tail call \
+                 into it: the C side owns that ABI, and the width conversion \
+                 Burxt does on the result has to happen after the call returns.",
+                name
+            ));
+        }
+        let (params, callee_ret) = self.fns.get(&name).cloned().ok_or_else(|| {
+            format!(
+                "unknown function `{}` — a guaranteed tail call needs a `fn` \
+                 declared in this program.",
+                name
+            )
+        })?;
+
+        // The prototypes must match for the guarantee to exist at all. Say so
+        // in terms of the two signatures, not in terms of LLVM.
+        let scalar = |t: &Type| {
+            matches!(
+                t,
+                Type::Int | Type::Bool | Type::String | Type::CInt | Type::Decimal { .. }
+            )
+        };
+        if callee_ret != ret || params != caller_params {
+            return Err(format!(
+                "a guaranteed tail call reuses this frame, so `{}` and `{}` must \
+                 have the SAME signature — `{}` takes ({}) -> {}, but `{}` takes \
+                 ({}) -> {}. Use an ordinary `return` for a call that differs.",
+                caller,
+                name,
+                caller,
+                Self::type_list(&caller_params),
+                ret,
+                name,
+                Self::type_list(&params),
+                callee_ret
+            ));
+        }
+        if !params.iter().all(scalar) || !scalar(&ret) {
+            return Err(format!(
+                "a guaranteed tail call is limited to scalar parameters and \
+                 returns for now — `{}` passes or returns an aggregate, which \
+                 travels by hidden pointer into storage this frame owns. Use an \
+                 ordinary `return`.",
+                name
+            ));
+        }
+
+        // Ordinary argument checking: a tail call is still a call.
+        if args.len() != params.len() {
+            return Err(format!(
+                "`{}` takes {} argument{}, but {} {} given",
+                name,
+                params.len(),
+                if params.len() == 1 { "" } else { "s" },
+                args.len(),
+                if args.len() == 1 { "was" } else { "were" }
+            ));
+        }
+        let mut typed_args = Vec::new();
+        for (arg, want) in args.iter().zip(params.iter()) {
+            let t = self.check_expr(arg, Some(want))?;
+            if t.ty != *want {
+                return Err(format!(
+                    "`{}` expects {} {} here, but this argument has type {}",
+                    name,
+                    want.article(),
+                    want,
+                    t.ty
+                ));
+            }
+            typed_args.push(t);
+        }
+        Ok(TypedStmt::TailReturn { name, args: typed_args })
+    }
+
+    /// Render a parameter list for an error message.
+    fn type_list(types: &[Type]) -> String {
+        types.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ")
     }
 
     /// Check a block's statements in a child scope: names declared inside are
@@ -1481,6 +1616,7 @@ impl TypeChecker {
                 }
                 Ok(TypedStmt::Return(typed))
             }
+            Stmt::TailReturn(e) => self.check_tail_return(e),
             Stmt::If { cond, then_block, else_block } => {
                 let cond = self.check_expr(cond, None)?;
                 if cond.ty != Type::Bool {
@@ -2608,7 +2744,7 @@ impl TypeChecker {
 /// Does this statement return on every path through it?
 fn stmt_returns(s: &TypedStmt) -> bool {
     match s {
-        TypedStmt::Return(_) => true,
+        TypedStmt::Return(_) | TypedStmt::TailReturn { .. } => true,
         TypedStmt::If { then_block, else_block: Some(e), .. } => {
             block_returns(then_block) && block_returns(e)
         }
@@ -2619,6 +2755,12 @@ fn stmt_returns(s: &TypedStmt) -> bool {
         TypedStmt::Match { arms, .. } => {
             !arms.is_empty() && arms.iter().all(|a| block_returns(&a.body))
         }
+        // A region is a lexical scope, not a branch: if its body returns on
+        // every path, so does the region. Without this the prover asked for a
+        // second `return` after the block and then called it unreachable —
+        // there was no way to write a function that returns from inside a
+        // region.
+        TypedStmt::Region { body, .. } => block_returns(body),
         _ => false,
     }
 }

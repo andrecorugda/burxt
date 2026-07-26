@@ -1,0 +1,29 @@
+// A guaranteed tail call runs in constant stack. Fifty million frames deep is
+// the proof: without `tail` this same program dies on a stack it cannot name.
+fn count_down(n: Int, acc: Int) -> Int {
+    if n <= 0 { return acc; }
+    return tail count_down(n - 1, acc + 1);
+}
+
+// Mutual recursion is a loop too, as long as the signatures match.
+fn even_steps(n: Int, seen: Int) -> Int {
+    if n == 0 { return seen; }
+    return tail odd_steps(n - 1, seen + 1);
+}
+fn odd_steps(n: Int, seen: Int) -> Int {
+    if n == 0 { return seen; }
+    return tail even_steps(n - 1, seen + 1);
+}
+
+// The accumulator can be money: exactness and constant stack together.
+fn accumulate(n: Int, acc: Decimal<2>) -> Decimal<2> {
+    if n <= 0 {
+        return acc;
+    } else {
+        return tail accumulate(n - 1, acc + $0.01);
+    }
+}
+
+print(count_down(50000000, 0));
+print(even_steps(10000001, 0));
+print(accumulate(1000000, $0.00));

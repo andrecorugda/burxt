@@ -14,7 +14,7 @@ answers.
 **Read this file first.** The specs were written when Burxt was at roughly
 v0.0.1, so several describe work that is now done, and one describes work that
 was built in a different order than specified. This index records what is
-actually true as of **v0.0.28**, audited by running the compiler — not by
+actually true as of **v0.0.29**, audited by running the compiler — not by
 reading the specs. Where a spec and the implementation disagree, the note says
 which is right.
 
@@ -30,7 +30,7 @@ which is right.
 | [Far-horizon M1–M4](FAR-HORIZON-ROADMAP.md) | **Direction only** | Re-spec each on arrival. **M1's trigger is now MET** — see its amendment; two new criteria argue against the ARC lean. |
 | [A6.0 Sum Types](A6.0-SUM-TYPES.md) | **DONE** (v0.0.20) | Enums, exhaustive `match`. Deferred: wildcards, recursive/aggregate payloads (M1), guards, nested patterns, match-as-expression, generics. |
 | [M1 Memory Model](M1-MEMORY-MODEL.md) | **DONE** (v0.0.24–v0.0.27) | All four slices shipped: regions + bump allocator, growable arrays with escape checking, string concatenation, storable `dyn`. Two of its predictions were corrected rather than forced — see §6a. |
-| [Novelty register](NOVELTY.md) | **Ambition, unscheduled** | What Burxt is *for*: exactness across boundaries, provable determinism, conservation-law contracts, effects-not-async. |
+| [Novelty register](NOVELTY.md) | **Ambition, unscheduled — §4 shipped** | What Burxt is *for*: exactness across boundaries, provable determinism, conservation-law contracts, effects-not-async. **§4 guaranteed tail calls shipped in v0.0.29.** |
 
 ## The audit, in detail
 
@@ -164,12 +164,18 @@ In dependency order, cheapest and most-unblocking first:
 9. ~~The compiler cannot read its own input, or report on what it read.~~
    **Done in v0.0.28**: `read_file` + `to_string`, which also retired
    interpolation-as-a-value, the oldest entry on the ledger.
-10. **Next: guaranteed tail calls** (NOVELTY §4). A self-hosted compiler walks
-    trees recursively, and stack overflow is still the only failure Burxt does
-    not name. `musttail` makes the guarantee *checkable* rather than a hope,
-    which is the same move as rounding contracts.
-11. Still unblocked polish: A4.7's units/contracts/pipelines, `.chars()`,
-    `[0; N]` repeat literals, `break`/`continue`, iterative AST walkers.
+10. ~~Guaranteed tail calls (NOVELTY §4).~~ **Done in v0.0.29** as
+    `return tail f(...)` → `musttail`: 50M frames in constant stack, refused
+    with a reason whenever the guarantee cannot be given. The first entry in the
+    novelty register to ship. It also surfaced two region bugs — an early
+    `return` leaked the region, and the return-path prover did not know a region
+    body could return at all.
+11. **Next, in NOVELTY order: §1, exactness that survives the boundary.** It is
+    the strongest unclaimed territory and needs no new theory — type rules at
+    the FFI and serialization edge, on machinery that already exists.
+12. Still unblocked polish: A4.7's units/contracts/pipelines, `.chars()`,
+    `[0; N]` repeat literals, `break`/`continue`, iterative AST walkers, and a
+    NAMED stack-overflow error (tail calls avoid it; they do not name it).
 
 **Priority note:** the stated goal is a compiler written in Burxt. Measured
 against that, A4.7's leftovers (units, contracts, pipelines) add eloquence and

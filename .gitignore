@@ -17,7 +17,9 @@
 /p
 /parser
 /read_file
+/region_released_on_return
 /sample
+/tail_call_constant_stack
 /to_string_builtin
 # transient delivery artifacts, and the marker Windows attaches to downloads
 *.zip

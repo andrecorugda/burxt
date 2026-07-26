@@ -1,0 +1,1 @@
+a guaranteed tail call is limited to scalar parameters and returns for now

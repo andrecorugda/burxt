@@ -241,3 +241,55 @@ fn fail_programs_are_rejected_with_expected_error() {
     let _ = fs::remove_dir_all(&scratch);
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }
+
+/// `return tail` is a GUARANTEE, so it must be visible in the IR as `musttail`
+/// — the marker LLVM refuses to compile unless the call really is a tail call.
+/// A plain `tail` marker, or none, would make the promise a hope. The companion
+/// pass test proves the behavior (50M frames); this proves the mechanism, so a
+/// future refactor cannot quietly downgrade it.
+#[test]
+fn tail_calls_are_emitted_as_musttail() {
+    let scratch = scratch_dir("musttail");
+    fs::create_dir_all(&scratch).unwrap();
+    let program = scratch.join("tail_probe.bx");
+    fs::write(
+        &program,
+        "fn down(n: Int, acc: Int) -> Int {\n\
+         if n <= 0 { return acc; }\n\
+         return tail down(n - 1, acc + 1);\n\
+         }\n\
+         fn plain(n: Int, acc: Int) -> Int {\n\
+         if n <= 0 { return acc; }\n\
+         return plain(n - 1, acc + 1);\n\
+         }\n\
+         print(down(3, 0) + plain(3, 0));\n",
+    )
+    .unwrap();
+
+    let out = burxt("emit-ir", &program, &scratch);
+    let ir = String::from_utf8_lossy(&out.stdout);
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(
+        out.status.success(),
+        "emit-ir failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let musttail: Vec<&str> = ir.lines().filter(|l| l.contains("musttail call")).collect();
+    assert_eq!(
+        musttail.len(),
+        1,
+        "expected exactly one `musttail call` (the `return tail` site), found {:?}",
+        musttail
+    );
+    assert!(
+        musttail[0].contains("@bx.down"),
+        "the musttail call should be the one written with `tail`: {}",
+        musttail[0]
+    );
+    // And the guarantee must NOT be applied to a call nobody asked about.
+    assert!(
+        !ir.contains("musttail call i64 @bx.plain"),
+        "an ordinary recursive call was marked musttail — the guarantee must be \
+         explicit, never inferred"
+    );
+}
