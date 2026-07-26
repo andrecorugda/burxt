@@ -1107,6 +1107,18 @@ impl TypeChecker {
                 self.expr_allocates(lhs) || self.expr_allocates(rhs)
             }
             TypedExprKind::Neg(i) | TypedExprKind::Not(i) => self.expr_allocates(i),
+            // An aggregate is only as safe as what it holds. Without these three, a
+            // struct literal, an enum variant or an array could carry region storage
+            // out of its region unnoticed — which is a use-after-free, and exactly
+            // the silent-wrongness this language exists to refuse. Found by writing a
+            // self-hosted checker and asking what its error type could be.
+            TypedExprKind::StructLit { fields, .. } => {
+                fields.iter().any(|f| self.expr_allocates(f))
+            }
+            TypedExprKind::VariantLit { args, .. } => {
+                args.iter().any(|a| self.expr_allocates(a))
+            }
+            TypedExprKind::ArrayLit(items) => items.iter().any(|i| self.expr_allocates(i)),
             TypedExprKind::Field { base, .. } => self.expr_allocates(base),
             TypedExprKind::Index { base, index, .. } => {
                 self.expr_allocates(base) || self.expr_allocates(index)

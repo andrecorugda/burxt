@@ -1,0 +1,7 @@
+struct Named { word: String }
+fn take(src: String) -> Named {
+    region inner {
+        return Named { word: substring(src, 0, 3) };
+    }
+}
+region outer { print(take("abcdef").word); }

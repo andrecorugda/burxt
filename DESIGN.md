@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.47)
+# Burxt — Design Notes (v0.0.48)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -2335,6 +2335,48 @@ as allocating at the call site, so the caller's escape rules govern the result.
 A trigger firing on its own, from a program written for another reason, is the
 deferred-features ledger working as designed.
 
+### v0.0.48: the escape checker was blind to aggregates
+
+**A soundness hole, and how it was found matters as much as the fix.**
+
+Writing the next self-hosted piece meant deciding how a Burxt checker would report an
+error, and the natural answer is an enum: `Outcome { Good(Ty), Bad(String) }`. Which
+raised a question about my own compiler — *can that message get out of the region it
+was built in?* It could:
+
+```text
+struct Named { word: String }
+
+fn take(src: String) -> Named {
+    region inner {
+        return Named { word: substring(src, 0, 3) };   // accepted. Dangling.
+    }
+}
+```
+
+`no errors`. The region closes at the brace, the struct leaves holding a pointer into
+released storage, and reading it is a use-after-free — **exactly the silent wrongness
+this language exists to refuse**, sitting in the checker meant to prevent it.
+
+The cause was narrow and dull: `expr_allocates` walks an expression asking "did this
+build region storage?", and it knew about concatenation, `substring`, `to_string`,
+`read_file`, `push`, and calls to `allocates` functions — but not about **aggregates
+that contain any of those**. A struct literal, an enum variant and an array literal
+were all transparent to it.
+
+Three arms, and the hole is closed in every form: struct field, enum payload, array
+element. Both directions are now tested — the refusals, and the case that must keep
+working, which is that **inside** a region an aggregate may hold region storage freely.
+That is what a symbol table *is*; only carrying it out is refused.
+
+**Why this is a good argument for self-hosting as a method rather than a milestone.**
+The hole had existed since regions shipped (v0.0.24) and survived 280 test programs,
+because every test that returned an aggregate returned one built from scalars and
+literals. It took writing a *program with a real design question* to walk into it. The
+lexer rewrite found three wrong assumptions, the parser rewrite corrected a
+milestone-blocking claim, and this one found a memory-safety bug. That is three for
+three.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -2399,6 +2441,10 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- FIX (v0.0.48): `expr_allocates` now sees through struct literals, enum payloads and
+  array literals. Region data could previously escape inside an aggregate — a
+  use-after-free the checker accepted, found by designing a self-hosted checker's error
+  type.
 - M4a. Self-hosting, third piece (v0.0.47): `substring`, `allocates` on methods, and
   a symbol table written in Burxt that catches a redeclaration in a real `.bx` file.
 - A2a. Integer division by name (v0.0.46): `div_floor`, `div_trunc`, `rem`, each

@@ -216,6 +216,22 @@ so. Nothing in §4's must-NOT list is weakened: no lifetimes in signatures (it h
 no name and no scope relation), no implicit region (a call that needs one and has
 none is an error), no cross-region references, and no codegen change.
 
+## 6c. A hole in the escape check, found in v0.0.48
+
+The rule in §2 — a value may not outlive its region — was enforced by asking of a
+returned expression, "did this build region storage?". That question was asked of
+concatenations, `substring`, `to_string`, `read_file`, `push` and calls to `allocates`
+functions, and **not** of aggregates containing them. So this was accepted:
+
+```text
+return Named { word: substring(src, 0, 3) };   // inside a region block
+```
+
+A struct, an enum payload or an array element could carry region storage out of its
+region: a use-after-free, silently. Fixed by making the check see through all three
+aggregate forms. It had survived since regions shipped, because every test that
+returned an aggregate built one out of scalars and literals.
+
 ## 7. Consequences to record elsewhere
 
 - `FAR-HORIZON-ROADMAP.md`'s ARC lean is **superseded**. ARC was rejected for
