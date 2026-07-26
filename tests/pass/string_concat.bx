@@ -1,0 +1,24 @@
+// `+` on String joins into the enclosing region. The result is NUL-terminated,
+// so it stays a plain `const char*` at the FFI boundary exactly like a literal.
+extern fn strlen(s: String) -> Int;
+
+region r {
+    let a: String = "Hello, " + "world";
+    print(a);
+    print(len(a));
+    let b: String = a + "!";
+    print(b);
+    // equality compares BYTES, so a joined string equals a literal
+    print(b == "Hello, world!");
+    // building in a loop: each round allocates in the region
+    let mut acc: String = "";
+    let mut i: Int = 0;
+    while i < 5 {
+        acc = acc + "ab";
+        i = i + 1;
+    }
+    print(acc);
+    print(len(acc));
+    // and C sees it as an ordinary string
+    print(strlen(a));
+}

@@ -699,6 +699,32 @@ impl TypeChecker {
         }
     }
 
+    /// Does evaluating this expression produce region-allocated storage? Needed
+    /// because a concatenated String lives in a region while a literal lives in
+    /// .rodata, and the two share one type — so the type alone cannot say.
+    fn expr_allocates(e: &TypedExpr) -> bool {
+        match &e.kind {
+            TypedExprKind::SliceLit(_) | TypedExprKind::Push { .. } => true,
+            TypedExprKind::Binary { op: BinOp::Add, lhs, rhs }
+                if lhs.ty == Type::String && rhs.ty == Type::String =>
+            {
+                true
+            }
+            TypedExprKind::Binary { lhs, rhs, .. } => {
+                Self::expr_allocates(lhs) || Self::expr_allocates(rhs)
+            }
+            TypedExprKind::Neg(i) | TypedExprKind::Not(i) => Self::expr_allocates(i),
+            TypedExprKind::Field { base, .. } => Self::expr_allocates(base),
+            TypedExprKind::Index { base, index, .. } => {
+                Self::expr_allocates(base) || Self::expr_allocates(index)
+            }
+            TypedExprKind::SliceIndex { base, index } => {
+                Self::expr_allocates(base) || Self::expr_allocates(index)
+            }
+            _ => false,
+        }
+    }
+
     /// Does a value of this type have its storage in a region? Region-allocated
     /// values may not outlive their region, which is what the two rules below
     /// enforce. A struct is tainted by any region-allocated field; enum
@@ -1437,6 +1463,16 @@ impl TypeChecker {
                     return Err(format!(
                         "this function returns {}, but the `return` expression has type {}",
                         ret, typed.ty
+                    ));
+                }
+                // Escape checking, the expression-level half: this value's bytes
+                // live in a region, so returning it would outlive that region.
+                if Self::expr_allocates(&typed) {
+                    return Err(format!(
+                        "cannot return this {}: it was built in a region, so its \
+                         storage would not outlive it. Return a scalar summary, or \
+                         fill storage the caller owns.",
+                        typed.ty
                     ));
                 }
                 Ok(TypedStmt::Return(typed))
@@ -2301,13 +2337,19 @@ impl TypeChecker {
             // Integer arithmetic.
             (_, Int, Int) => Ok(Int),
 
-            // String + String is concatenation — deferred until Burxt has an
-            // allocation story. Refuse loudly with the reason.
-            (BinOp::Add, String, String) => Err(
-                "`+` on String is concatenation, which needs memory allocation — \
-                 coming with collections (A4)."
-                    .to_string(),
-            ),
+            // String + String concatenates into the enclosing region. The
+            // result's bytes are region-allocated, so the same escape rules
+            // apply — enforced where the value is bound, not here.
+            (BinOp::Add, String, String) => {
+                if self.current_region.is_none() {
+                    return Err(
+                        "joining strings with `+` allocates, so it needs a region: \
+                         there is none open here. Wrap it in `region name { ... }`."
+                            .to_string(),
+                    );
+                }
+                Ok(String)
+            }
 
             // Decimal +/- Decimal: exact, but the types must match exactly
             // (same scale AND same rounding contract).

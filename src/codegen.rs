@@ -1230,6 +1230,13 @@ impl<'ctx> CodeGen<'ctx> {
                 self.build_checked(BinOp::Sub, zero, v).map(Into::into)
             }
             TypedExprKind::Binary { op, lhs, rhs } => {
+                // String + String concatenates into the region: measure both,
+                // allocate the sum plus a NUL, copy each half in.
+                if lhs.ty == Type::String && rhs.ty == Type::String {
+                    let a = self.gen_expr(lhs)?.into_pointer_value();
+                    let b = self.gen_expr(rhs)?.into_pointer_value();
+                    return self.build_str_concat(a, b).map(Into::into);
+                }
                 let l = self.gen_expr(lhs)?.into_int_value();
                 let r = self.gen_expr(rhs)?.into_int_value();
                 // For our representation (scaled i64), Add/Sub map directly to
@@ -2157,6 +2164,46 @@ impl<'ctx> CodeGen<'ctx> {
         let next = self.module.add_global(i64t, None, "burxt.heap.next");
         next.set_initializer(&i64t.const_zero());
         *self.heap.insert((base, next))
+    }
+
+    /// Concatenate two strings into the current region. The result is
+    /// NUL-terminated so it remains a plain `const char*` at the FFI boundary,
+    /// exactly like a literal.
+    fn build_str_concat(
+        &mut self,
+        a: PointerValue<'ctx>,
+        b: PointerValue<'ctx>,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+        let i8t = self.ctx.i8_type();
+        let la = self.build_str_len(a)?;
+        let lb = self.build_str_len(b)?;
+        let total = self.builder.build_int_add(la, lb, "join_len").map_err(err)?;
+        let with_nul = self
+            .builder
+            .build_int_add(total, i64t.const_int(1, false), "with_nul")
+            .map_err(err)?;
+        let dest = self.build_alloc_bytes(with_nul)?;
+        self.builder.build_memcpy(dest, 1, a, 1, la).map_err(|e| e.to_string())?;
+        let second = unsafe { self.builder.build_gep(i8t, dest, &[la], "second") }.map_err(err)?;
+        self.builder.build_memcpy(second, 1, b, 1, lb).map_err(|e| e.to_string())?;
+        let end = unsafe { self.builder.build_gep(i8t, dest, &[total], "end") }.map_err(err)?;
+        self.builder.build_store(end, i8t.const_zero()).map_err(err)?;
+        Ok(dest)
+    }
+
+    /// Allocate raw bytes in the current region.
+    fn build_alloc_bytes(&mut self, bytes: IntValue<'ctx>) -> Result<PointerValue<'ctx>, String> {
+        let f = self.alloc_fn()?;
+        let call = self
+            .builder
+            .build_call(f, &[bytes.into()], "region_bytes")
+            .map_err(|e| e.to_string())?;
+        match call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => Ok(v.into_pointer_value()),
+            _ => Err("allocator returned void".to_string()),
+        }
     }
 
     /// Allocate `count` elements of `elem` in the current region.

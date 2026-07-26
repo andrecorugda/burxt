@@ -187,7 +187,12 @@ Revised staging:
    reset in O(1). No collector, no refcounts, no scheduler.
 2. **Growable arrays + escape checking, together** — the slice that uncaps the
    self-hosted compiler, and the one that keeps it sound.
-3. **String building** — concatenation and interpolation-as-a-value.
+3. **String building** — concatenation. *Correction found while building it:*
+   **interpolation-as-a-value is not actually memory-blocked.** It needs a
+   number-to-string formatter writing into memory (Int and Decimal both), which
+   is new machinery rather than an ownership question. Reclassified: concat
+   ships here; interpolation-as-a-value moves to its own small slice once a
+   formatter exists, and is no longer an M1 ledger entry.
 4. **Region-allocated `dyn`** — retiring the last two ledger entries.
 
 ## 7. Consequences to record elsewhere

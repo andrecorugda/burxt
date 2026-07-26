@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.24)
+# Burxt — Design Notes (v0.0.25)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1190,6 +1190,32 @@ storage, mutated through a `mut self` method, inside one region — verified at
 abandons the old one, because a bump allocator cannot free an individual
 object. That space returns when the region ends. Documented in the codegen
 rather than hidden, since it is a real cost of the model.
+
+### v0.0.25: string concatenation — M1 slice 3
+
+```text
+region r {
+    let greeting: String = "Hello, " + name + "!";
+    print(len(greeting));
+}
+```
+
+`+` on String joins into the enclosing region, retiring the oldest entry on the
+ownership ledger. The result is NUL-terminated, so a joined string is still a
+plain `const char*` at the FFI boundary — indistinguishable from a literal, and
+a test passes one to C's `strlen` to prove it. Byte equality works across the
+two, since `==` was always about bytes rather than pointers.
+
+Escape checking needed one addition, and the reason is worth recording: a
+concatenated String lives in a region while a literal lives in `.rodata`, and
+**both have type `String`** — so the type alone cannot say whether a value
+escapes. The check therefore inspects the *expression*: `expr_allocates` walks
+the tree, and returning anything it flags is refused.
+
+**A reclassification found while building this:** interpolation-as-a-value was
+recorded as M1-blocked, but it is not. It needs a number-to-string formatter
+writing into memory — new machinery, not an ownership question. It is no longer
+an M1 ledger entry; it becomes its own small slice once a formatter exists.
 
 ## Testing
 
