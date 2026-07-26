@@ -45,9 +45,18 @@ The same principle generalizes. Burxt's identity is: **the compiler refuses to l
 
 Burxt is early and built in small, verified increments. The numeric core is solid and the object model is taking shape. It is **not yet ready for production use** — it is ready to watch, try, and shape.
 
-**Working today:** exact decimal arithmetic with explicit rounding contracts (`RoundHalfEven` / `RoundHalfUp`) and overflow-trapping, checked arithmetic; integers, booleans, and string literals; `let` / `let mut`; functions with recursion; `if` / `else if` / `else` and `while`; nominal structs with value semantics and field mutation; fixed-size arrays with always-on bounds checks; methods with value or mutating receivers; traits with static and `dyn` dispatch; a C FFI (`extern fn`); and native compilation to a standalone executable.
+**Working today:**
 
-**Designed and committed, not yet built:** no null (absence as an explicit `Option<T>` the compiler forces you to handle); errors as values you must handle; exhaustive matching; correctness contracts (`requires` / `ensures`) checked at compile time — the verification layer that is Burxt's eventual differentiator; opt-in safe single inheritance; and the cross-compilation targets above.
+- **Numbers.** Exact decimals with explicit rounding contracts (`RoundHalfEven` / `RoundHalfUp`), money and percent literals (`$19.99`, `8.25%`), overflow-trapping checked arithmetic, i128 intermediates so the overflow error means the *result* does not fit.
+- **The basics.** Integers, booleans, strings (length, byte access, equality, concatenation, interpolation both as a print and as a value), `let` / `let mut`, functions, recursion, `if` / `else if` / `else`, `while`, `&&` / `||` / `!` with real short-circuiting.
+- **Types.** Nominal structs with value semantics, fixed-size and growable arrays with always-on bounds checks, sum types with **exhaustive `match`** (no wildcard, so a new variant breaks every incomplete match), methods with value or mutating receivers, traits with static dispatch by default and `dyn` fat-pointer dispatch only where written.
+- **Memory.** **Regions** as the unit of ownership: a bump allocator, release in O(1), no GC and no refcounts, and compile-time escape checking that refuses returning region storage. Single-owner regions are what make data-race freedom reachable without per-object borrow checking.
+- **Guaranteed tail calls.** `return tail f(...)` is a *checked* guarantee (LLVM `musttail`), not an invisible optimization: 50 million frames in constant stack, or a compile error explaining why the guarantee cannot be given.
+- **The C boundary.** `extern fn`, plus **exactness that survives it**: a `Decimal` crosses only through a declared marshaller (`amount: Decimal<2> as scaled`), a `Decimal` → C `double` crossing is a compile error, and an `Int` → `double` crossing is range-checked at 2^53.
+- **File input.** `read_file` and `to_string`, the two things a self-hosted compiler cannot do without.
+- **Self-hosted pieces.** A Burxt lexer and a Burxt parser (arena AST, growable, no node budget), both written in Burxt and compiled by this compiler.
+
+**Designed and committed, not yet built:** no null (absence as an explicit `Option<T>` the compiler forces you to handle); errors as values you must handle; correctness contracts (`requires` / `ensures`) — the verification layer that is Burxt's eventual differentiator; algebraic effect handlers instead of coloured `async`; opt-in safe single inheritance; and the cross-compilation targets above.
 
 `DESIGN.md` records all of it — the design north star, every milestone, and a ledger of superseded decisions and deliberately deferred features with the trigger that would earn each one a milestone. The distinction between shipped and planned is kept honest there on purpose.
 
@@ -69,17 +78,39 @@ cargo build
 
 Commands:
 ```
-burxt build   <file.bx>     compile to a native executable
-burxt run     <file.bx>     compile, then run
-burxt emit-ir <file.bx>     print the generated LLVM IR
-burxt layout  <file.bx>     print struct layouts (size, alignment, field offsets)
+burxt check   <file.bx>                  parse and typecheck only — no LLVM, no linker
+burxt build   <file.bx> [link args...]   compile to a native executable
+burxt run     <file.bx> [link args...]   compile, then run
+burxt emit-ir <file.bx>                  print the generated LLVM IR
+burxt layout  <file.bx>                  print struct layouts (size, alignment, field offsets)
 ```
+
+Arguments after the source file are passed to the system linker unchanged, so the
+C you declare with `extern fn` can actually be linked:
+`burxt run pay.bx cside.o -lm`.
 
 Run the test suite with `cargo test`. It is data-driven: every program in
 `tests/pass/` must compile and produce exactly its recorded output, every
 program in `tests/fail/` must be *rejected* with its recorded error, and every
 program in `tests/panic/` must compile but die at runtime with its recorded
 message. Adding a test means dropping two files in a directory.
+
+## Editor support
+
+```sh
+ln -s "$PWD/editors/vscode" ~/.vscode/extensions/burxt   # then reload the window
+```
+
+Syntax highlighting for VS Code (and any editor that reads TextMate grammars)
+lives in [`editors/`](editors/), along with what is not built yet and why. The
+grammar is checked against the compiler by a test, so a keyword cannot exist in
+one and not the other.
+
+Diagnostics in the editor need source spans in the compiler first — every error
+today is a precise sentence with no line number attached, which is fine in a
+terminal and useless to an editor. That is the next piece of work, and
+[`editors/README.md`](editors/README.md) records the order the remaining pieces
+depend on each other, plus why `.bx` files are not yet coloured on github.com.
 
 ## Design
 

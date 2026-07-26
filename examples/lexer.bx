@@ -142,7 +142,7 @@ fn tokenize(src: String) -> Int {
 // from disk — the last thing a self-hosted compiler was missing. The bytes live
 // in the region and are released as a unit when it closes.
 region source {
-    let text: String = read_file("examples/sample.bx");
+    let text: String = read_file("examples/inputs/sample.bx");
     print("--- " + to_string(len(text)) + " bytes read");
     let n: Int = tokenize(text);
     print("--- " + to_string(n) + " tokens");

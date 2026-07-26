@@ -1,0 +1,335 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Burxt",
+  "scopeName": "source.burxt",
+  "fileTypes": ["bx"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#declarations" },
+    { "include": "#types" },
+    { "include": "#keywords" },
+    { "include": "#builtins" },
+    { "include": "#constants" },
+    { "include": "#calls" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.burxt",
+          "begin": "//",
+          "end": "$",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.comment.burxt" }
+          }
+        }
+      ]
+    },
+
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.burxt",
+          "begin": "\"",
+          "end": "\"",
+          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.burxt" } },
+          "endCaptures": { "0": { "name": "punctuation.definition.string.end.burxt" } },
+          "patterns": [
+            { "include": "#string-escapes" },
+            { "include": "#interpolation" },
+            {
+              "comment": "A bare `{` is a compile error in Burxt: it must be `\\{` or open an interpolation. Flag it here so the editor says so before the compiler does.",
+              "name": "invalid.illegal.unescaped-brace.burxt",
+              "match": "\\}"
+            }
+          ]
+        }
+      ]
+    },
+    "string-escapes": {
+      "patterns": [
+        {
+          "comment": "The escapes Burxt actually accepts. Anything else is refused by the lexer.",
+          "name": "constant.character.escape.burxt",
+          "match": "\\\\[nt\"\\\\{]"
+        },
+        {
+          "name": "invalid.illegal.unknown-escape.burxt",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "interpolation": {
+      "patterns": [
+        {
+          "comment": "`{expr}` inside a string literal: an ordinary Burxt expression.",
+          "name": "meta.interpolation.burxt",
+          "begin": "\\{",
+          "end": "\\}",
+          "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.burxt" } },
+          "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.burxt" } },
+          "patterns": [
+            { "include": "#numbers" },
+            { "include": "#builtins" },
+            { "include": "#constants" },
+            { "include": "#calls" },
+            { "include": "#operators" },
+            { "include": "#punctuation" }
+          ]
+        }
+      ]
+    },
+
+    "numbers": {
+      "patterns": [
+        {
+          "comment": "Money literal: $19.99. Exact, scaled, never a float.",
+          "name": "constant.numeric.money.burxt",
+          "match": "\\$\\d+(\\.\\d+)?"
+        },
+        {
+          "comment": "Percent literal: 8.25% — two more decimal places than written.",
+          "name": "constant.numeric.percent.burxt",
+          "match": "\\d+(\\.\\d+)?%"
+        },
+        {
+          "comment": "Decimal literal: exact scaled integer, never IEEE-754.",
+          "name": "constant.numeric.decimal.burxt",
+          "match": "\\b\\d+\\.\\d+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.burxt",
+          "match": "\\b\\d+\\b"
+        }
+      ]
+    },
+
+    "declarations": {
+      "patterns": [
+        {
+          "comment": "Method declaration: fn (self: Type) name(...) or fn (mut self: Type) name(...)",
+          "match": "\\b(fn)\\s*\\(\\s*(mut\\s+)?(self)\\s*:\\s*([A-Z][A-Za-z0-9_]*)\\s*\\)\\s*([a-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.function.burxt" },
+            "2": { "name": "storage.modifier.burxt" },
+            "3": { "name": "variable.language.self.burxt" },
+            "4": { "name": "entity.name.type.burxt" },
+            "5": { "name": "entity.name.function.burxt" }
+          }
+        },
+        {
+          "comment": "Function declaration, including `extern fn`.",
+          "match": "\\b(extern\\s+)?(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.modifier.extern.burxt" },
+            "2": { "name": "keyword.declaration.function.burxt" },
+            "3": { "name": "entity.name.function.burxt" }
+          }
+        },
+        {
+          "comment": "Nominal type declarations.",
+          "match": "\\b(struct|enum|trait|interface)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.type.burxt" },
+            "2": { "name": "entity.name.type.burxt" }
+          }
+        },
+        {
+          "comment": "impl Trait for Type",
+          "match": "\\b(impl)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s+(for)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.impl.burxt" },
+            "2": { "name": "entity.name.type.burxt" },
+            "3": { "name": "keyword.declaration.impl.burxt" },
+            "4": { "name": "entity.name.type.burxt" }
+          }
+        },
+        {
+          "comment": "A region is a named allocation scope: the name is a binding, not a type.",
+          "match": "\\b(region)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.region.burxt" },
+            "2": { "name": "entity.name.label.region.burxt" }
+          }
+        },
+        {
+          "comment": "let / let mut bindings.",
+          "match": "\\b(let)\\s+(mut\\s+)?([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.variable.burxt" },
+            "2": { "name": "storage.modifier.mutable.burxt" },
+            "3": { "name": "variable.other.burxt" }
+          }
+        }
+      ]
+    },
+
+    "types": {
+      "patterns": [
+        {
+          "comment": "Decimal<Scale> or Decimal<Scale, Rounding> — the rounding contract is part of the type.",
+          "match": "\\b(Decimal)\\s*(<)\\s*(\\d+)\\s*(?:(,)\\s*(RoundHalfEven|RoundHalfUp)\\s*)?(>)",
+          "captures": {
+            "1": { "name": "support.type.decimal.burxt" },
+            "2": { "name": "punctuation.definition.typeparameters.begin.burxt" },
+            "3": { "name": "constant.numeric.scale.burxt" },
+            "4": { "name": "punctuation.separator.burxt" },
+            "5": { "name": "support.type.rounding.burxt" },
+            "6": { "name": "punctuation.definition.typeparameters.end.burxt" }
+          }
+        },
+        {
+          "comment": "Built-in scalar types. CInt and CDouble exist only at the C boundary.",
+          "name": "support.type.primitive.burxt",
+          "match": "\\b(Int|Bool|String|CInt|CDouble|Decimal)\\b"
+        },
+        {
+          "comment": "`dyn Trait` is the only syntax that asks for runtime dispatch.",
+          "match": "\\b(dyn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.modifier.dyn.burxt" },
+            "2": { "name": "entity.name.type.burxt" }
+          }
+        },
+        {
+          "comment": "A boundary marshaller: `amount: Decimal<2> as scaled`.",
+          "match": "\\b(as)\\s+(scaled)\\b",
+          "captures": {
+            "1": { "name": "keyword.operator.marshal.burxt" },
+            "2": { "name": "support.type.marshal.burxt" }
+          }
+        },
+        {
+          "comment": "Type position after a colon, and named types in general.",
+          "name": "entity.name.type.burxt",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.burxt",
+          "match": "\\b(if|else|while|match|return|for)\\b"
+        },
+        {
+          "comment": "`return tail f(x)` asks for a GUARANTEED tail call: constant stack, or a compile error.",
+          "name": "keyword.control.tail.burxt",
+          "match": "\\btail\\b"
+        },
+        {
+          "name": "keyword.declaration.burxt",
+          "match": "\\b(let|mut|fn|extern|struct|enum|trait|interface|impl|is|region|dyn)\\b"
+        },
+        {
+          "name": "keyword.operator.expression.as.burxt",
+          "match": "\\bas\\b"
+        },
+        {
+          "name": "variable.language.self.burxt",
+          "match": "\\bself\\b"
+        }
+      ]
+    },
+
+    "builtins": {
+      "patterns": [
+        {
+          "comment": "Built-in functions. `print` is a statement keyword; the rest are calls.",
+          "name": "support.function.builtin.burxt",
+          "match": "\\b(print|len|byte_at|push|read_file|to_string)\\b"
+        }
+      ]
+    },
+
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.burxt",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "support.type.rounding.burxt",
+          "match": "\\b(RoundHalfEven|RoundHalfUp)\\b"
+        }
+      ]
+    },
+
+    "calls": {
+      "patterns": [
+        {
+          "comment": "Method call on a receiver.",
+          "match": "(\\.)\\s*([a-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "punctuation.accessor.burxt" },
+            "2": { "name": "entity.name.function.call.burxt" }
+          }
+        },
+        {
+          "comment": "Field access.",
+          "match": "(\\.)\\s*([a-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "punctuation.accessor.burxt" },
+            "2": { "name": "variable.other.member.burxt" }
+          }
+        },
+        {
+          "comment": "Enum variant construction or match pattern: Enum.Variant",
+          "match": "\\b([A-Z][A-Za-z0-9_]*)\\s*(\\.)\\s*([A-Z][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "entity.name.type.burxt" },
+            "2": { "name": "punctuation.accessor.burxt" },
+            "3": { "name": "entity.name.function.variant.burxt" }
+          }
+        },
+        {
+          "comment": "Plain function call.",
+          "name": "entity.name.function.call.burxt",
+          "match": "\\b[a-z_][A-Za-z0-9_]*\\s*(?=\\()"
+        }
+      ]
+    },
+
+    "operators": {
+      "patterns": [
+        {
+          "comment": "`=>` separates a match arm from its body.",
+          "name": "keyword.operator.arrow.burxt",
+          "match": "=>|->"
+        },
+        {
+          "comment": "One equality, no coercion: `==` compares values of the SAME type.",
+          "name": "keyword.operator.comparison.burxt",
+          "match": "==|!=|<=|>=|<|>"
+        },
+        {
+          "name": "keyword.operator.logical.burxt",
+          "match": "&&|\\|\\||!"
+        },
+        {
+          "name": "keyword.operator.assignment.burxt",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.arithmetic.burxt",
+          "match": "\\+|-|\\*|/"
+        }
+      ]
+    },
+
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.terminator.burxt", "match": ";" },
+        { "name": "punctuation.separator.burxt", "match": "[,:]" },
+        { "name": "punctuation.section.braces.burxt", "match": "[{}]" },
+        { "name": "punctuation.section.brackets.burxt", "match": "[\\[\\]]" },
+        { "name": "punctuation.section.parens.burxt", "match": "[()]" }
+      ]
+    }
+  }
+}

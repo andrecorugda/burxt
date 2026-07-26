@@ -1,0 +1,20 @@
+# Burxt source. LF everywhere, so a checkout on Windows still compiles.
+*.bx text eol=lf
+
+# The specs and design notes are documentation, not the language's code. Marked
+# so GitHub's language statistics describe the compiler rather than the prose.
+DESIGN.md      linguist-documentation
+README.md      linguist-documentation
+spec/**        linguist-documentation
+
+# The editor grammar is hand-written, not generated — GitHub's heuristics would
+# otherwise be tempted to treat a large JSON file as vendored.
+editors/vscode/syntaxes/*.json linguist-vendored=false
+
+# NOTE on GitHub language detection: Burxt is not yet in github/linguist, so
+# `.bx` files show as plain text on github.com. That is a popularity gate (the
+# language has to be in use across a few hundred public repositories), not a
+# technical one — the grammar Linguist requires already lives in
+# editors/vscode/syntaxes/burxt.tmLanguage.json. Deliberately NOT worked around
+# by mislabelling `.bx` as another language: a wrong label is worse than no
+# label. See editors/README.md for the submission checklist.

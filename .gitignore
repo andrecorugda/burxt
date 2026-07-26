@@ -22,6 +22,11 @@
 /sample
 /tail_call_constant_stack
 /to_string_builtin
+/tour
+# editor tooling scratch
+node_modules/
+*.vsix
+
 # transient delivery artifacts, and the marker Windows attaches to downloads
 *.zip
 *.tar.gz

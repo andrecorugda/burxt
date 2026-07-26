@@ -1,6 +1,7 @@
 //! The `burxt` compiler driver.
 //!
 //! Usage:
+//!   burxt check <file.bx>                  parse and typecheck only, no codegen
 //!   burxt build <file.bx> [link args...]   compile to a native executable
 //!   burxt run   <file.bx> [link args...]   compile, then run it
 //!   burxt emit-ir <file.bx>                print the LLVM IR (for the curious)
@@ -43,6 +44,7 @@ fn compile_main() {
     if args.len() < 3 {
         eprintln!("burxt {} — the Burxt compiler", env!("CARGO_PKG_VERSION"));
         eprintln!("usage:");
+        eprintln!("  burxt check   <file.bx>                  parse and typecheck only");
         eprintln!("  burxt build   <file.bx> [link args...]   compile to a native executable");
         eprintln!("  burxt run     <file.bx> [link args...]   compile then run");
         eprintln!("  burxt emit-ir <file.bx>                  print LLVM IR");
@@ -70,6 +72,14 @@ fn run(cmd: &str, path: &str, link_args: &[String]) -> Result<(), String> {
     let tokens = lexer::Lexer::new(&src).tokenize()?;
     let program = parser::Parser::new(tokens).parse_program()?;
     let typed = typeck::TypeChecker::new().check_program(&program)?;
+
+    // `check` is the front end and nothing more: no LLVM context, no object
+    // file, no linker. This is what an editor or a CI gate calls, so it must
+    // stay the cheapest way to ask "is this program legal?".
+    if cmd == "check" {
+        eprintln!("{}: no errors", path);
+        return Ok(());
+    }
 
     // ---- back end (LLVM) ----
     let ctx = Context::create();

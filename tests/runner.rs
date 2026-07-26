@@ -375,3 +375,118 @@ fn money_and_integers_cross_into_c_exactly() {
         stderr
     );
 }
+
+/// The editor grammar and the compiler must not drift. A keyword the lexer knows
+/// but the grammar does not is a word that compiles and is not highlighted —
+/// which is how a language starts feeling unfinished. The grammar is also the
+/// artifact GitHub's Linguist consumes, so this keeps that submission honest too.
+///
+/// Deliberately dependency-free: it reads the compiler's own keyword table out of
+/// the source rather than duplicating the list here, because a duplicated list is
+/// the thing that drifts.
+#[test]
+fn editor_grammar_knows_every_keyword_the_compiler_does() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let lexer = fs::read_to_string(root.join("src/lexer.rs")).unwrap();
+    let typeck = fs::read_to_string(root.join("src/typeck.rs")).unwrap();
+    let grammar =
+        fs::read_to_string(root.join("editors/vscode/syntaxes/burxt.tmLanguage.json")).unwrap();
+
+    // Keywords, from the lexer's `"word" => Token::Variant` table.
+    let mut words: Vec<String> = lexer
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            let rest = l.strip_prefix('"')?;
+            let (word, tail) = rest.split_once('"')?;
+            tail.trim_start().starts_with("=> Token::").then(|| word.to_string())
+        })
+        .collect();
+    assert!(
+        words.len() > 20,
+        "failed to read the keyword table out of src/lexer.rs (found {:?})",
+        words
+    );
+
+    // Built-in functions, from the reserved-name check in the typechecker.
+    for chunk in typeck.split("f.name == \"").skip(1) {
+        if let Some((name, _)) = chunk.split_once('"') {
+            words.push(name.to_string());
+        }
+    }
+
+    // Search only the grammar's PATTERNS, never its prose: a keyword mentioned in
+    // a comment is not a keyword that highlights. (Verified by mutation — the
+    // looser "anywhere in the file" version passed after the `tail` rule was
+    // deleted, because the word survived in a comment.)
+    let patterns: String = grammar
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with("\"match\"") || t.starts_with("\"begin\"") || t.starts_with("\"end\"")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        // `\b` is a word-boundary assertion, and its own `b` would otherwise
+        // look like a letter attached to the keyword it precedes.
+        .replace("\\\\b", " ");
+    assert!(
+        patterns.len() > 500,
+        "failed to read the grammar's patterns (got {} bytes)",
+        patterns.len()
+    );
+
+    let known_word = |w: &str| {
+        // A word, not a substring: `as` must not be satisfied by `class`.
+        patterns.match_indices(w).any(|(i, _)| {
+            let before = patterns[..i].chars().next_back();
+            let after = patterns[i + w.len()..].chars().next();
+            let boundary = |c: Option<char>| !c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+            boundary(before) && boundary(after)
+        })
+    };
+
+    let missing: Vec<&String> = words.iter().filter(|w| !known_word(w)).collect();
+    assert!(
+        missing.is_empty(),
+        "these words are known to the compiler but absent from the editor grammar: {:?}\n\
+         Add them to editors/vscode/syntaxes/burxt.tmLanguage.json",
+        missing
+    );
+}
+
+/// Every program in `examples/` must still typecheck. Examples are the first
+/// thing a newcomer reads, and a broken one is worse than none — but nothing was
+/// checking them, so they could rot silently while the suite stayed green.
+///
+/// `check` is used rather than `run` on purpose: it needs no working directory,
+/// no linker, and no LLVM, so this stays fast enough to never be skipped.
+/// Files under `examples/inputs/` are DATA for other examples to read, not
+/// programs, so they are not checked — a directory rather than an exception list,
+/// because exception lists rot.
+#[test]
+fn every_example_still_typechecks() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    let scratch = scratch_dir("examples");
+    fs::create_dir_all(&scratch).unwrap();
+    let mut checked = 0;
+    let mut failures = Vec::new();
+    for entry in fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("bx") {
+            continue;
+        }
+        let out = burxt("check", &path, &scratch);
+        checked += 1;
+        if !out.status.success() {
+            failures.push(format!(
+                "{}: {}",
+                path.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+    }
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(checked >= 3, "expected several examples, checked only {}", checked);
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+}

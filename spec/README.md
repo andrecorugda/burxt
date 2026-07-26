@@ -14,7 +14,7 @@ answers.
 **Read this file first.** The specs were written when Burxt was at roughly
 v0.0.1, so several describe work that is now done, and one describes work that
 was built in a different order than specified. This index records what is
-actually true as of **v0.0.30**, audited by running the compiler — not by
+actually true as of **v0.0.31**, audited by running the compiler — not by
 reading the specs. Where a spec and the implementation disagree, the note says
 which is right.
 
@@ -176,7 +176,15 @@ In dependency order, cheapest and most-unblocking first:
     `spec/N1-BOUNDARY-EXACTNESS.md` records the decisions; the serialization half
     waits for an encoder to guard. Linker pass-through shipped with it, because
     an `extern fn` is only half an FFI.
-12. Still unblocked polish: A4.7's units/contracts/pipelines, `.chars()`,
+12. ~~Editor support: highlighting, and a language GitHub can recognise.~~
+    **Done in v0.0.31** — TextMate grammar + VS Code extension + `burxt check`,
+    with the grammar locked to the compiler's keyword table by a test. See
+    `editors/README.md`.
+13. **Next: source spans in the compiler**, then machine-readable diagnostics,
+    then `burxt lsp`. Every error today is a precise sentence with no position
+    attached — useless to an editor, and the CLI would gain a caret line too.
+    This blocks all editor diagnostics, so it comes before the LSP itself.
+14. Still unblocked polish: A4.7's units/contracts/pipelines, `.chars()`,
     `[0; N]` repeat literals, `break`/`continue`, iterative AST walkers, and a
     NAMED stack-overflow error (tail calls avoid it; they do not name it).
 

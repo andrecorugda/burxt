@@ -1,0 +1,41 @@
+{
+  "name": "burxt",
+  "displayName": "Burxt",
+  "description": "Syntax highlighting and editor support for Burxt — exact decimals, no float, native via LLVM.",
+  "version": "0.1.0",
+  "publisher": "burxt",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/andrecorugda/burxt.git",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": ["Programming Languages"],
+  "keywords": ["burxt", "decimal", "money", "llvm"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "burxt",
+        "aliases": ["Burxt", "burxt"],
+        "extensions": [".bx"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "burxt",
+        "scopeName": "source.burxt",
+        "path": "./syntaxes/burxt.tmLanguage.json"
+      }
+    ],
+    "configurationDefaults": {
+      "[burxt]": {
+        "editor.insertSpaces": true,
+        "editor.tabSize": 4
+      }
+    }
+  }
+}

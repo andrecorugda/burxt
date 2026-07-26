@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.30)
+# Burxt — Design Notes (v0.0.31)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1455,6 +1455,61 @@ Decimal↔double conversion ever, no float type in Burxt, no "close enough" mode
 the range check, and no serialization layer yet (there is no encoder to guard;
 when one is built it inherits these rules).
 
+### v0.0.31: editor support — the half of a language that lives outside the compiler
+
+A language is not real to the people using it until their editor knows it. This
+version is that half, and it is deliberately the *declarative* half first.
+
+**A TextMate grammar** (`editors/vscode/syntaxes/burxt.tmLanguage.json`) plus a
+language configuration, packaged as a VS Code extension with **no JavaScript and
+no build step** — it installs by being symlinked into place. The grammar knows
+what makes Burxt Burxt, not just generic C-family shapes:
+
+- `$19.99` and `8.25%` are numeric literals in their own right.
+- `Decimal<2, RoundHalfEven>` highlights the scale and the rounding contract
+  distinctly, because the contract is part of the type.
+- `{interpolation}` inside a string is embedded code, `\{` is an escape, and a
+  bare `}` is flagged **invalid** — the same thing the lexer does.
+- `return tail f(...)`, `region name`, `dyn Trait`, and
+  `amount: Decimal<2> as scaled` each read as what they are.
+
+The same grammar is the artifact GitHub's Linguist consumes, so this is also step
+one of `.bx` files being coloured on github.com.
+
+**Verified, not assumed.** The grammar was run through the real TextMate engine
+(`vscode-textmate` + Oniguruma) over a program exercising every construct, and
+the token scopes were read back. A dependency-free test then locks the invariant
+permanently: **every keyword and builtin the compiler knows must appear in the
+grammar's patterns** — extracted from `src/lexer.rs` and `src/typeck.rs` at test
+time rather than duplicated, because a duplicated list is the thing that drifts.
+The test searches the grammar's *patterns* and not its prose, which was found by
+mutation: the looser first version passed after the `tail` rule was deleted,
+because the word survived in a comment.
+
+**`burxt check`** — parse and typecheck only, no LLVM context and no linker. This
+is what an editor or a CI gate calls, so it has to stay the cheapest way to ask
+"is this program legal?".
+
+**Two things this exposed, both fixed here:**
+
+- **Nothing was checking the examples.** They are the first thing a newcomer
+  reads, and they could rot silently while the suite stayed green. Every
+  `examples/*.bx` now has to typecheck. Data files that other examples *read*
+  moved to `examples/inputs/` — a directory rather than an exception list,
+  because exception lists rot too.
+- **The README described a version of Burxt that no longer existed** (no enums,
+  no regions, no tail calls, no boundary exactness). Refreshed, since it is the
+  front door.
+
+**What is honestly NOT here:** diagnostics in the editor. Every compiler error
+today is a precise sentence with **no position attached** — fine in a terminal,
+useless to an editor, which needs a line, a column and a length to underline. So
+source spans are the next piece of work, and an LSP after that. Building an LSP
+first would be a shell with nothing inside it. A tree-sitter grammar (Neovim,
+Helix) and a formatter are also recorded as not-built rather than implied;
+`editors/README.md` holds the dependency order and the Linguist checklist,
+including why `.bx` is not mislabelled as another language to fake detection.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -1519,6 +1574,9 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- T1. Editor support (v0.0.31): TextMate grammar, VS Code extension,
+  `burxt check`, and a test locking the grammar to the compiler's keyword table.
+  Diagnostics and an LSP wait on source spans.
 - N1. Boundary exactness, slice 1 (v0.0.30): `CDouble` as a nameable lossy
   foreign type, `Decimal as scaled` marshallers declared on the signature,
   range-checked `Int` → `CDouble`, and linker pass-through so the C being
