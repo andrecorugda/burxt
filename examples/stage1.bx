@@ -3640,7 +3640,8 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
         }
         // The token's span includes its quotes, and the bytes between them are the
         // string. One place knows that, and it is here.
-        return self.intern(src, t.start + 1, t.length - 2);
+        let global: String = self.intern(src, t.start + 1, t.length - 2);
+        return "ptrtoint (ptr " + global + " to i64)";
     }
     if n.kind == 5 {                                 // a name
         let t: Tok = self.toks[n.tok];
@@ -3653,10 +3654,7 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
                                   + "\n");
         return reg;
     }
-    if n.kind == 6 {                                 // (e)
-        return self.emit_expr(src, n.a);
-    }
-    if n.kind == 26 || n.kind == 7 {                 // -e, !e
+    if n.kind == 6 || n.kind == 7 {                  // -e, !e
         let inner: String = self.emit_expr(src, n.a);
         let reg: String = self.fresh();
         if n.kind == 7 {
@@ -3670,6 +3668,13 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
     if n.kind == 8 {                                 // a + b, a - b, a * b
         let left: String = self.emit_expr(src, n.a);
         let right: String = self.emit_expr(src, n.b);
+        if n.value == 25 && self.type_at(n.a).kind == 42 {
+            // `+` on Strings is a join, and the join allocates in the open region.
+            let joined: String = self.fresh();
+            let visited: Int = self.w("  " + joined + " = call i64 @burxt.concat(i64 "
+                                      + left + ", i64 " + right + ")\n");
+            return joined;
+        }
         let mut helper: String = "add";
         if n.value == 26 { helper = "sub"; }
         if n.value == 27 { helper = "mul"; }
@@ -3714,6 +3719,10 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
     if n.kind == 13 {                                // a call
         let t: Tok = self.toks[n.tok];
         let list: Node = self.nodes[n.a];
+        let called: String = substring(src, t.start, t.length);
+        if builtin_arity(called) >= 0 {
+            return self.emit_builtin(src, n, called);
+        }
         let mut args: String = "";
         let mut i: Int = 0;
         while i < list.b {
@@ -3736,6 +3745,69 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
 }
 
 // ---- statements --------------------------------------------------------------
+// The builtins with a runtime helper behind them, and the ones that are a single
+// instruction. Anything else is refused by name.
+fn (mut self: Unit) emit_builtin(src: String, n: Node, called: String) -> String allocates {
+    let list: Node = self.nodes[n.a];
+    let mut first: String = "0";
+    let mut second: String = "0";
+    let mut third: String = "0";
+    if list.b > 0 { first = self.emit_expr(src, self.kids[list.a]); }
+    if list.b > 1 { second = self.emit_expr(src, self.kids[list.a + 1]); }
+    if list.b > 2 { third = self.emit_expr(src, self.kids[list.a + 2]); }
+    let reg: String = self.fresh();
+
+    if called == "to_string" {
+        if self.type_at(self.kids[list.a]).kind == 41 {
+            // A Bool renders to one of two literals, which is why it needs no region.
+            let bit: String = self.fresh();
+            let tested: Int = self.w("  " + bit + " = icmp ne i64 " + first + ", 0\n");
+            let chosen: Int = self.w("  " + reg + " = select i1 " + bit
+                + ", i64 ptrtoint (ptr @str_true to i64), i64 ptrtoint (ptr @str_false to i64)\n");
+            return reg;
+        }
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.to_string_int(i64 "
+                                  + first + ")\n");
+        return reg;
+    }
+    if called == "len" {
+        if self.type_at(self.kids[list.a]).kind == 42 {
+            let visited: Int = self.w("  " + reg + " = call i64 @burxt.len_str(i64 "
+                                      + first + ")\n");
+            return reg;
+        }
+        let e: Int = self.complain_at(src, n.tok,
+            "the Burxt backend does not emit `len` of an array yet");
+        return "0";
+    }
+    if called == "byte_at" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.byte_at(i64 " + first
+                                  + ", i64 " + second + ")\n");
+        return reg;
+    }
+    if called == "substring" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.substring(i64 " + first
+                                  + ", i64 " + second + ", i64 " + third + ")\n");
+        return reg;
+    }
+    if called == "div_trunc" {
+        let visited: Int = self.w("  " + reg + " = sdiv i64 " + first + ", " + second + "\n");
+        return reg;
+    }
+    if called == "rem" {
+        let visited: Int = self.w("  " + reg + " = srem i64 " + first + ", " + second + "\n");
+        return reg;
+    }
+    if called == "div_floor" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.div_floor(i64 " + first
+                                  + ", i64 " + second + ")\n");
+        return reg;
+    }
+    let e: Int = self.complain_at(src, n.tok,
+        "the Burxt backend does not emit `" + called + "` yet");
+    return "0";
+}
+
 fn (mut self: Unit) emit_stmt(src: String, node: Int) -> Int allocates {
     let n: Node = self.nodes[node];
 
@@ -3768,8 +3840,10 @@ fn (mut self: Unit) emit_stmt(src: String, node: Int) -> Int allocates {
             return self.w("  call i32 (ptr, ...) @printf(ptr @fmt_nl)\n");
         }
         if shown.kind == 42 {                        // a String
+            let as_ptr: String = self.fresh();
+            let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + value + " to ptr\n");
             let printed: Int = self.w("  call i32 (ptr, ...) @printf(ptr @fmt_str, ptr "
-                                      + value + ")\n");
+                                      + as_ptr + ")\n");
             return self.w("  call i32 (ptr, ...) @printf(ptr @fmt_nl)\n");
         }
         let printed: Int = self.w("  call i32 (ptr, ...) @printf(ptr @fmt_int, i64 "
@@ -3835,6 +3909,14 @@ fn (mut self: Unit) emit_stmt(src: String, node: Int) -> Int allocates {
         return self.w(dead + ":\n");
     }
 
+    if n.kind == 69 {                                // region
+        // The mark IS the region: closing it releases every allocation at once.
+        let mark: String = self.fresh();
+        let saved: Int = self.w("  " + mark + " = load i64, ptr @bump\n");
+        let body: Int = self.emit_block(src, n.a);
+        return self.w("  store i64 " + mark + ", ptr @bump\n");
+    }
+
     if n.kind == 70 {                                // an expression, for its effect
         let value: String = self.emit_expr(src, n.a);
         return 1;
@@ -3870,6 +3952,7 @@ fn (mut self: Unit) emit_module(src: String) -> Int allocates {
     preamble = self.w(overflow_helper("add", "sadd"));
     preamble = self.w(overflow_helper("sub", "ssub"));
     preamble = self.w(overflow_helper("mul", "smul"));
+    preamble = self.w(runtime_ir());
 
     // Functions first, so a call reads as a call to something already written.
     let mut i: Int = 0;
@@ -3923,6 +4006,101 @@ fn (mut self: Unit) emit_module(src: String) -> Int allocates {
     }
     let closed: Int = self.w("  ret i32 0\n\}\n");
     return 1;
+}
+
+// The runtime, written into every module rather than linked from a library: a bump
+// allocator, and the String operations that build in it. Emitting it means a Burxt
+// program needs nothing on the machine but a C library.
+//
+// A Burxt String is a NUL-terminated pointer, carried as an i64 like every other value
+// — one value type through the whole emitter, cast at the few places a pointer is
+// needed. `len` is therefore strlen, which is also why a String has no length field
+// that could fall out of step with its bytes. The bump allocator's MARK is the region:
+// opening one remembers where the pointer stood, closing it puts the pointer back, and
+// that is the whole of release — O(1) for any number of allocations.
+fn runtime_ir() -> String allocates {
+    return "@arena = global ptr null\n"
+        + "@bump = global i64 0\n"
+        + "declare ptr @malloc(i64)\n"
+        + "declare i64 @strlen(ptr)\n"
+        + "declare ptr @memcpy(ptr, ptr, i64)\n"
+        + "declare i32 @snprintf(ptr, i64, ptr, ...)\n\n"
+        + "define i64 @burxt.alloc(i64 %n) \{\n"
+        + "entry:\n"
+        + "  %a = load ptr, ptr @arena\n"
+        + "  %isnull = icmp eq ptr %a, null\n"
+        + "  br i1 %isnull, label %init, label %go\n"
+        + "init:\n"
+        + "  %m = call ptr @malloc(i64 268435456)\n"
+        + "  store ptr %m, ptr @arena\n"
+        + "  br label %go\n"
+        + "go:\n"
+        + "  %base = load ptr, ptr @arena\n"
+        + "  %off = load i64, ptr @bump\n"
+        + "  %p = getelementptr i8, ptr %base, i64 %off\n"
+        + "  %padded = add i64 %n, 7\n"
+        + "  %rounded = and i64 %padded, -8\n"
+        + "  %next = add i64 %off, %rounded\n"
+        + "  store i64 %next, ptr @bump\n"
+        + "  %asint = ptrtoint ptr %p to i64\n"
+        + "  ret i64 %asint\n\}\n\n"
+        + "define i64 @burxt.concat(i64 %a, i64 %b) \{\n"
+        + "entry:\n"
+        + "  %pa = inttoptr i64 %a to ptr\n"
+        + "  %pb = inttoptr i64 %b to ptr\n"
+        + "  %la = call i64 @strlen(ptr %pa)\n"
+        + "  %lb = call i64 @strlen(ptr %pb)\n"
+        + "  %total = add i64 %la, %lb\n"
+        + "  %size = add i64 %total, 1\n"
+        + "  %out = call i64 @burxt.alloc(i64 %size)\n"
+        + "  %pout = inttoptr i64 %out to ptr\n"
+        + "  %c1 = call ptr @memcpy(ptr %pout, ptr %pa, i64 %la)\n"
+        + "  %tail = getelementptr i8, ptr %pout, i64 %la\n"
+        + "  %c2 = call ptr @memcpy(ptr %tail, ptr %pb, i64 %lb)\n"
+        + "  %end = getelementptr i8, ptr %pout, i64 %total\n"
+        + "  store i8 0, ptr %end\n"
+        + "  ret i64 %out\n\}\n\n"
+        + "define i64 @burxt.substring(i64 %s, i64 %from, i64 %count) \{\n"
+        + "entry:\n"
+        + "  %size = add i64 %count, 1\n"
+        + "  %out = call i64 @burxt.alloc(i64 %size)\n"
+        + "  %pout = inttoptr i64 %out to ptr\n"
+        + "  %ps = inttoptr i64 %s to ptr\n"
+        + "  %from_ptr = getelementptr i8, ptr %ps, i64 %from\n"
+        + "  %copied = call ptr @memcpy(ptr %pout, ptr %from_ptr, i64 %count)\n"
+        + "  %end = getelementptr i8, ptr %pout, i64 %count\n"
+        + "  store i8 0, ptr %end\n"
+        + "  ret i64 %out\n\}\n\n"
+        + "define i64 @burxt.to_string_int(i64 %v) \{\n"
+        + "entry:\n"
+        + "  %out = call i64 @burxt.alloc(i64 24)\n"
+        + "  %p = inttoptr i64 %out to ptr\n"
+        + "  %n = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %p, i64 24, ptr @fmt_int, "
+        + "i64 %v)\n"
+        + "  ret i64 %out\n\}\n\n"
+        + "define i64 @burxt.byte_at(i64 %s, i64 %i) \{\n"
+        + "entry:\n"
+        + "  %p = inttoptr i64 %s to ptr\n"
+        + "  %q = getelementptr i8, ptr %p, i64 %i\n"
+        + "  %b = load i8, ptr %q\n"
+        + "  %z = zext i8 %b to i64\n"
+        + "  ret i64 %z\n\}\n\n"
+        + "define i64 @burxt.len_str(i64 %s) \{\n"
+        + "entry:\n"
+        + "  %p = inttoptr i64 %s to ptr\n"
+        + "  %l = call i64 @strlen(ptr %p)\n"
+        + "  ret i64 %l\n\}\n\n"
+        + "define i64 @burxt.div_floor(i64 %a, i64 %b) \{\n"
+        + "entry:\n"
+        + "  %q = sdiv i64 %a, %b\n"
+        + "  %r = srem i64 %a, %b\n"
+        + "  %nonzero = icmp ne i64 %r, 0\n"
+        + "  %ra = xor i64 %r, %b\n"
+        + "  %opposite = icmp slt i64 %ra, 0\n"
+        + "  %adjust = and i1 %nonzero, %opposite\n"
+        + "  %lower = sub i64 %q, 1\n"
+        + "  %answer = select i1 %adjust, i64 %lower, i64 %q\n"
+        + "  ret i64 %answer\n\}\n\n";
 }
 
 fn overflow_helper(name: String, intrinsic: String) -> String allocates {

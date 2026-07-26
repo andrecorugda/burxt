@@ -33,7 +33,7 @@ language server, JSON layer or diagnostics rendering.
 | Lexer | 661 | 800–1,000 | **376, DONE** (v0.0.52) — came in under estimate |
 | AST + parser | 1,787 | 2,000–2,600 | **~930, DONE** (v0.0.53–54) — under estimate |
 | Typechecker | 3,702 | 4,500–5,500 | **~2,190**, 4b complete (v0.0.64) |
-| Backend (IR text) | 3,924 | 2,500–3,500 | **~450, slice 1 running** (v0.0.65) |
+| Backend (IR text) | 3,924 | 2,500–3,500 | **~630, slices 1–2 running** (v0.0.66) |
 | Driver | 230 | ~150 | 0 |
 | **Total** | | **≈10,000–12,500** | ~680 of real front-end work |
 
@@ -250,8 +250,29 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
    `print("done")` printed `"done"`. Both were found by diffing against stage-0's output
    — the only test that could have found them.
 
-   Still to emit: Decimals and their rounding, regions and the allocator, aggregates,
-   `match`, methods, `tail` with `musttail`, contracts, and the FFI boundary.
+   **Slice 2 SHIPPED (v0.0.66): regions, the bump allocator, and Strings.** The runtime
+   is *emitted into every module* rather than linked from a library, so a Burxt program
+   needs nothing on the machine but a C library:
+   - `burxt.alloc` — one 256 MB mapping taken lazily, and a bump pointer. **The mark IS
+     the region**: opening one remembers where the pointer stood, closing it puts the
+     pointer back, and that is the whole of release, O(1) for any number of allocations.
+     Two IR instructions per region.
+   - A Burxt String is a **NUL-terminated pointer carried as an i64**, like every other
+     value — one value type through the whole emitter, cast at the few places a pointer
+     is needed. `len` is therefore `strlen`, which is also why a String has no length
+     field that could fall out of step with its bytes.
+   - `+` on Strings, `substring`, `byte_at`, `len`, `to_string` of an Int (via
+     `snprintf`) and of a Bool (a `select` between two literals, no allocation), and the
+     named integer divisions — `div_floor` differs from C's truncation exactly when the
+     signs differ and the division is inexact, so it is a helper rather than an `sdiv`.
+
+   An `allocates` function that returns a built String **needed no backend work at all**,
+   which is what M1a §4 predicted when it said "NO change to codegen": the bump allocator
+   and the caller's mark already do it. That prediction is now checked by running one.
+
+   Still to emit: aggregates and growable arrays (the next slice, and the one bootstrap
+   waits on), Decimals and their rounding, `match`, methods, `tail` with `musttail`,
+   contracts, and the FFI boundary.
 6. **Bootstrap and fixpoint.** stage-0 builds stage-1; stage-1 builds stage-1;
    compare.
 

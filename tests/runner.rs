@@ -1136,7 +1136,7 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
 
     // What slice 1 covers: Ints, Bools, String literals, checked arithmetic,
     // comparisons, `if`, `while`, `break`, `continue`, functions, calls, `print`.
-    let programs: [(&str, &str); 4] = [
+    let programs: [(&str, &str); 6] = [
         ("arith.bx", "let a: Int = 6;\nlet b: Int = 7;\nprint(a * b);\nprint(a - b);\n"),
         (
             "loop.bx",
@@ -1150,6 +1150,16 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
         (
             "logic.bx",
             "let n: Int = 5;\nprint(n >= 5 && n <= 5);\nprint(n != 5 || false);\nprint(!true);\n",
+        ),
+        // Strings, the region they are built in, and the `allocates` function that
+        // hands one back — M1a's whole claim, checked by running it.
+        (
+            "strings.bx",
+            "fn describe(line: Int) -> String allocates {\n               return \"line \" + to_string(line) + \": unexpected byte\";\n}\n             region r {\n  print(describe(3));\n  let s: String = \"hello, burxt\";\n               print(len(s));\n  print(byte_at(s, 0));\n  print(substring(s, 7, 5));\n               print(to_string(true) + \"/\" + to_string(false));\n}\n",
+        ),
+        (
+            "division.bx",
+            "print(div_floor(-7, 2));\nprint(div_trunc(-7, 2));\nprint(rem(-7, 2));\n             print(div_floor(7, 2));\n",
         ),
     ];
 
