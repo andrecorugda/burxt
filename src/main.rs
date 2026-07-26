@@ -3,6 +3,7 @@
 //! Usage:
 //!   burxt lsp                              language server over stdio
 //!   burxt check <file.bx>                  parse and typecheck only, no codegen
+//!   burxt check -                          ... reading the program from stdin
 //!   burxt build <file.bx> [link args...]   compile to a native executable
 //!   burxt run   <file.bx> [link args...]   compile, then run it
 //!   burxt emit-ir <file.bx>                print the LLVM IR (for the curious)
@@ -61,6 +62,7 @@ fn compile_main() {
         eprintln!("usage:");
         eprintln!("  burxt check   <file.bx>                  parse and typecheck only");
         eprintln!("                <file.bx> --json         ... as JSON, for editors and CI");
+        eprintln!("                -                        ... reading the program from stdin");
         eprintln!("  burxt lsp                                language server over stdio");
         eprintln!("  burxt build   <file.bx> [link args...]   compile to a native executable");
         eprintln!("  burxt run     <file.bx> [link args...]   compile then run");
@@ -120,8 +122,28 @@ impl From<String> for Failure {
 }
 
 fn run(cmd: &str, path: &str, link_args: &[String], json: bool) -> Result<(), Failure> {
-    let src = std::fs::read_to_string(path)
-        .map_err(|e| format!("cannot read {}: {}", path, e))?;
+    // `-` means "the program is on stdin": what an editor has in its buffer is
+    // not what is on disk, and checking the file would report yesterday's errors.
+    // Only `check` accepts it — there is no sensible name for the executable
+    // otherwise.
+    let src = if path == "-" {
+        if cmd != "check" {
+            return Err(format!(
+                "`{}` needs a file: reading the program from stdin only makes sense \
+                 for `check`, since there would be no name for the output.",
+                cmd
+            )
+            .into());
+        }
+        use std::io::Read;
+        let mut text = String::new();
+        std::io::stdin()
+            .read_to_string(&mut text)
+            .map_err(|e| format!("cannot read stdin: {}", e))?;
+        text
+    } else {
+        std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {}", path, e))?
+    };
 
     // ---- front end (backend-independent) ----
     // Every front-end failure carries a span, so it can be rendered with the

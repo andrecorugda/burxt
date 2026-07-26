@@ -1,7 +1,7 @@
 {
   "name": "burxt",
   "displayName": "Burxt",
-  "description": "Syntax highlighting and editor support for Burxt — exact decimals, no float, native via LLVM.",
+  "description": "Burxt language support: syntax highlighting and live diagnostics from the compiler itself.",
   "version": "0.1.0",
   "publisher": "burxt",
   "license": "MIT OR Apache-2.0",
@@ -72,6 +72,26 @@
           }
         ]
       }
-    ]
-  }
+    ],
+    "commands": [
+      {
+        "command": "burxt.check",
+        "title": "Burxt: Check This File"
+      }
+    ],
+    "configuration": {
+      "title": "Burxt",
+      "properties": {
+        "burxt.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the burxt compiler. Empty means: use ./target/debug/burxt in the workspace if it exists, otherwise `burxt` from PATH."
+        }
+      }
+    }
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:burxt"
+  ]
 }

@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.33)
+# Burxt — Design Notes (v0.0.34)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1632,6 +1632,41 @@ was verified against real compiler output rather than by reading the regex.
 languages), go-to-definition, and a tree-sitter grammar so Neovim and Helix get
 colour and not only errors.
 
+### v0.0.34: live diagnostics in VS Code, with no dependencies at all
+
+Errors appear as you type, and the extension is still a directory you can copy
+into place — no `npm install`, no `node_modules`, no bundler.
+
+**How, given that an LSP client normally means npm.** It does not use the LSP. The
+extension is plain CommonJS against the `vscode` API, which the editor injects at
+runtime, and it runs `burxt check - --json`, feeding the buffer on **stdin**. Same
+squiggles, no toolchain. `burxt lsp` remains the real server for every other
+editor; switching VS Code to it buys hover and go-to-definition *when those exist*,
+at the cost of a build step — worth paying then, not now.
+
+**`burxt check -` reads the program from stdin**, which is the piece that made
+this possible. What an editor has in its buffer is not what is on disk, and
+checking the file would report errors the user already fixed. `run` and `build`
+refuse `-`, because there would be no name for the executable.
+
+**A wire format has consumers, so it is now tested as one.** The `--json`
+diagnostic is read by the extension and will be read by CI gates. Renaming a field
+would break them *silently* — the extension would simply stop showing squiggles,
+with no error anywhere. So one test asserts the field names on **both sides at
+once**: that the compiler emits them, and that `extension.js` reads the same ones.
+It also asserts the positions stay 0-based, and that the extension invokes the
+stdin form rather than checking the file on disk.
+
+**Verified before shipping**, by driving the extension's exact pipeline from node:
+spawn the compiler, feed a buffer, convert the JSON to a range, and print what
+that range underlines. It underlines `let total: Decimal<2> = price * rate;` —
+the offending statement, not the file. And a valid buffer yields zero diagnostics,
+which is what clears the squiggle.
+
+**Not fixed here, and not hidden:** one error at a time (a compiler change, error
+recovery), and statement-level rather than expression-level underlining. Both
+apply to every editor path, so they are recorded once rather than per client.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -1696,6 +1731,9 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- T4. Live diagnostics in VS Code (v0.0.34): `burxt check -` from stdin, a
+  dependency-free extension, and a test locking the JSON wire format on both
+  sides.
 - T3. Language server (v0.0.33): `burxt lsp` over stdio, a hand-written JSON
   reader/writer, editor configs for Neovim and Helix, and a VS Code problem
   matcher. Hover and go-to-definition still to come.

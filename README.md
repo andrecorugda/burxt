@@ -101,11 +101,16 @@ message. Adding a test means dropping two files in a directory.
 ln -s "$PWD/editors/vscode" ~/.vscode/extensions/burxt   # then reload the window
 ```
 
+That gives VS Code syntax highlighting **and errors as you type**, with no
+`npm install` — the extension feeds your buffer to the compiler and shows what it
+says.
+
 Syntax highlighting for VS Code (and any editor that reads TextMate grammars)
 lives in [`editors/`](editors/). The grammar is checked against the compiler by a
 test, so a keyword cannot exist in one and not the other.
 
-**Diagnostics as you type** come from `burxt lsp`, a language server over stdio:
+For every other editor, **diagnostics as you type** come from `burxt lsp`, a
+language server over stdio:
 
 ```lua
 -- Neovim, no plugin manager needed; Helix and Zed configs are in editors/ too

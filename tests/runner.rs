@@ -657,3 +657,76 @@ fn language_server_publishes_and_clears_diagnostics() {
         "an unsupported request must get a MethodNotFound reply, not silence"
     );
 }
+
+/// The `--json` diagnostic is a WIRE FORMAT with consumers outside this repo's
+/// test suite: the VS Code extension reads it, and so will any CI gate. Renaming
+/// a field would break them silently — the extension would simply stop showing
+/// squiggles, with no error anywhere.
+///
+/// So this asserts the field names both ways: the compiler emits them, and
+/// `editors/vscode/extension.js` reads the same ones. The second half is what
+/// catches a rename that updates only one side.
+#[test]
+fn json_diagnostics_keep_the_contract_editors_depend_on() {
+    let scratch = scratch_dir("json-contract");
+    fs::create_dir_all(&scratch).unwrap();
+    let program = scratch.join("broken.bx");
+    // Line 2, so a position of 0 would be indistinguishable from "unset".
+    fs::write(&program, "let a: Int = 1;\nlet b: Bool = 2;\n").unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("check")
+        .arg(&program)
+        .arg("--json")
+        .current_dir(&scratch)
+        .output()
+        .expect("failed to spawn burxt");
+    let json = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let _ = fs::remove_dir_all(&scratch);
+
+    assert!(!out.status.success(), "the probe program must be rejected");
+    for field in [
+        "\"file\":",
+        "\"severity\":\"error\"",
+        "\"message\":",
+        "\"line\":",
+        "\"column\":",
+        "\"endLine\":",
+        "\"endColumn\":",
+        "\"lspStart\":",
+        "\"lspEnd\":",
+        "\"byteStart\":",
+        "\"byteEnd\":",
+    ] {
+        assert!(json.contains(field), "missing {} in {}", field, json);
+    }
+    // The LSP positions are 0-based: the error is on file line 2, so line 1 here.
+    assert!(
+        json.contains("\"lspStart\":{\"line\":1,\"character\":0}"),
+        "0-based positions drifted: {}",
+        json
+    );
+    // And exactly one JSON object, on one line, so a consumer can read it
+    // line-by-line without a streaming parser.
+    assert_eq!(json.lines().count(), 1, "one diagnostic per line: {}", json);
+
+    // Now the consumer side: the extension must read the fields the compiler
+    // writes. A rename on either side fails here.
+    let ext = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("editors/vscode/extension.js"),
+    )
+    .unwrap();
+    for field in ["lspStart", "lspEnd", "message"] {
+        assert!(
+            ext.contains(field),
+            "the VS Code extension does not read `{}`, which the compiler emits",
+            field
+        );
+    }
+    // It must invoke the stdin form, or it would check the file on disk and
+    // report errors about code the user already fixed.
+    assert!(
+        ext.contains("\"check\", \"-\", \"--json\"") || ext.contains("'check', '-', '--json'"),
+        "the extension must check the BUFFER via stdin (`check - --json`)"
+    );
+}

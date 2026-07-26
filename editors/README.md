@@ -7,11 +7,12 @@ directory holds that half of the project.
 |---|---|---|
 | TextMate grammar (highlighting) | **DONE** (v0.0.31) | `vscode/syntaxes/burxt.tmLanguage.json` |
 | Language configuration (comments, brackets, indent) | **DONE** (v0.0.31) | `vscode/language-configuration.json` |
-| VS Code extension | **DONE** (v0.0.31) — declarative, no build step | `vscode/` |
+| VS Code extension | **DONE** (v0.0.31), live diagnostics (v0.0.34) — still no build step | `vscode/` |
 | `burxt check` — front end only, for editors and CI | **DONE** (v0.0.31) | `src/main.rs` |
 | Diagnostics with line/column | **DONE** (v0.0.32) | `src/diag.rs`, `burxt check --json` |
 | Language server (`burxt lsp`) | **DONE** (v0.0.33) — diagnostics on change | `src/lsp.rs` |
-| VS Code problem matcher (squiggles without a client) | **DONE** (v0.0.33) | `vscode/package.json`, `.vscode/tasks.json` |
+| VS Code live diagnostics | **DONE** (v0.0.34) — dependency-free, checks the buffer | `vscode/extension.js` |
+| VS Code problem matcher (for tasks and CI) | **DONE** (v0.0.33) | `vscode/package.json`, `.vscode/tasks.json` |
 | Neovim / Helix configs | **DONE** (v0.0.33) — diagnostics, no highlighting yet | `nvim/`, `helix/` |
 | Tree-sitter grammar (Neovim/Helix colour) | not written | see below |
 | Hover, go-to-definition | not written | see below |
@@ -93,18 +94,23 @@ vim.cmd('source /path/to/burxt/editors/nvim/burxt.lua')
 **Zed, Emacs (eglot/lsp-mode), Sublime LSP, Kate** — any LSP client works; the
 command is `burxt lsp` and the file type is `.bx`.
 
-**VS Code** — the extension is still declarative (no JavaScript), so it does not
-yet *launch* the server. Until it does, squiggles come from a task and a problem
-matcher, which needs no build step:
+**VS Code** — the extension shows errors as you type, and still needs no
+`npm install`. It does *not* use the LSP: it runs `burxt check - --json` and feeds
+it the buffer on stdin, which gets the same squiggles with plain CommonJS against
+the `vscode` API (injected by the editor) instead of `vscode-languageclient`, npm
+and a bundler. Set `burxt.path` in settings if the compiler is not on `PATH` and
+not at `./target/debug/burxt` in the workspace.
 
-- `Ctrl+Shift+B` runs `burxt check` on the current file and populates the Problems
-  panel. `.vscode/tasks.json` in this repo is the working example.
-- The matcher is contributed as `$burxt` by the extension, so any task can use it.
+The compiler emits **0-based LSP positions** in its JSON precisely so no client
+converts them — that conversion is where off-by-ones live. A test asserts the
+field names on both sides at once, so a rename cannot silently stop the squiggles.
 
-Wiring the LSP into VS Code properly needs `vscode-languageclient`, which means
-npm and a bundling step — a real cost against the extension's current property of
-being copyable with no toolchain. It is the next piece here, not a missing one
-elsewhere.
+A `$burxt` problem matcher is also contributed, for tasks and CI:
+`Ctrl+Shift+B` runs `burxt check` on the current file and fills the Problems
+panel; `.vscode/tasks.json` here is the working example.
+
+Switching VS Code to the real LSP would buy hover and go-to-definition when those
+exist — at the cost of a build step. Worth doing then, not now.
 
 ### What the server does NOT do yet
 
@@ -115,7 +121,7 @@ elsewhere.
   than only its result.
 - **More than one error at a time**, which is a *compiler* change (error recovery),
   not a server change. Recorded here so the limitation is not mistaken for a
-  server bug.
+  server bug. It applies to every client, including the VS Code path.
 - **Incremental sync.** The server asks for full-document sync deliberately:
   applying incremental text edits correctly is fiddly, and a server that corrupts
   its own copy of the buffer reports errors about code you never wrote.
