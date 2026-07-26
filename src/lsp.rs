@@ -294,7 +294,7 @@ fn collect_types(text: &str) -> Vec<(Span, Type)> {
     let Ok(tokens) = crate::lexer::Lexer::new(text).tokenize() else {
         return Vec::new();
     };
-    let Ok(program) = crate::parser::Parser::new(tokens).parse() else {
+    let Ok(program) = crate::parser::Parser::with_source(tokens, text).parse() else {
         return Vec::new();
     };
     let mut checker = crate::typeck::TypeChecker::new();
@@ -375,7 +375,7 @@ fn diagnostics_message(uri: &str, diagnostics: Vec<Value>) -> Value {
 /// editor asks "is this legal?" on every keystroke, so this has to stay cheap.
 fn check_source(text: &str) -> Result<(), Vec<Diagnostic>> {
     let tokens = crate::lexer::Lexer::new(text).tokenize().map_err(|d| vec![d])?;
-    let program = crate::parser::Parser::new(tokens).parse().map_err(|d| vec![d])?;
+    let program = crate::parser::Parser::with_source(tokens, text).parse().map_err(|d| vec![d])?;
     crate::typeck::TypeChecker::new().check(&program)?;
     Ok(())
 }

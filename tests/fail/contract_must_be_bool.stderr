@@ -1,0 +1,1 @@
+a contract clause must be a Bool, but `n` has type Int

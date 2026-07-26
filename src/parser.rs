@@ -37,6 +37,8 @@ pub struct Parser {
     /// file reads exactly as it did before spans existed.
     spans: Vec<Span>,
     pos: usize,
+    /// The whole source, for quoting contract clauses back verbatim.
+    src: String,
     /// Struct literals are not allowed directly in an if/while condition —
     /// `while count { ... }` must parse `{` as the loop body, not a literal.
     /// Parenthesizing re-enables them.
@@ -45,8 +47,25 @@ pub struct Parser {
 
 impl Parser {
     pub fn new(tokens: Vec<(Token, Span)>) -> Self {
+        Self::with_source(tokens, "")
+    }
+
+    /// The source is kept so a contract clause can be quoted back exactly as
+    /// written when it fails at runtime. Spans alone are not enough: the message is
+    /// baked into the compiled program, long after the source has gone.
+    pub fn with_source(tokens: Vec<(Token, Span)>, src: &str) -> Self {
         let (toks, spans) = tokens.into_iter().unzip();
-        Parser { toks, spans, pos: 0, allow_struct_lit: true }
+        Parser { toks, spans, pos: 0, allow_struct_lit: true, src: src.to_string() }
+    }
+
+    /// The source text a span covers, trimmed.
+    fn text_of(&self, span: Span) -> String {
+        let (a, b) = (span.start as usize, span.end as usize);
+        if b <= self.src.len() && a < b {
+            self.src[a..b].trim().to_string()
+        } else {
+            String::new()
+        }
     }
 
     /// Wrap an expression with the source range it covers: from `start` to the
@@ -416,8 +435,27 @@ impl Parser {
         if allocates {
             self.bump();
         }
+        // Contract clauses sit between the signature and the body, where a reader
+        // looks for what a function demands and promises.
+        let mut requires = Vec::new();
+        let mut ensures = Vec::new();
+        while self.at(&Token::Requires) || self.at(&Token::Ensures) {
+            let is_pre = self.at(&Token::Requires);
+            self.bump();
+            let start = self.span().start;
+            // A condition, not an expression: `{` after it opens the BODY, so
+            // struct literals are off exactly as in an `if`.
+            let cond = self.parse_cond()?;
+            let span = Span { start, end: self.prev_end().max(start + 1) };
+            let clause = Contract { cond, text: self.text_of(span), span };
+            if is_pre {
+                requires.push(clause);
+            } else {
+                ensures.push(clause);
+            }
+        }
         let body = self.parse_block()?;
-        Ok(FnDef { name, params, ret, allocates, is_pure, body, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok(FnDef { name, params, ret, allocates, is_pure, requires, ensures, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `fn (self: Type) name(params) -> ret { body }`, or `fn (mut self: ...)`

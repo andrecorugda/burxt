@@ -233,6 +233,16 @@
           "match": "\\bpure\\b"
         },
         {
+          "comment": "`requires` / `ensures` — contract clauses on a signature, checked at runtime and quoted back when they fail.",
+          "name": "keyword.other.contract.burxt",
+          "match": "\\b(requires|ensures)\\b"
+        },
+        {
+          "comment": "`result` — the returned value, in scope only inside an `ensures` clause.",
+          "name": "variable.language.result.burxt",
+          "match": "\\bresult\\b"
+        },
+        {
           "name": "keyword.declaration.burxt",
           "match": "\\b(let|mut|fn|extern|struct|enum|trait|interface|impl|is|region|dyn)\\b"
         },

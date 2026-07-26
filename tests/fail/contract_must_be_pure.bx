@@ -1,0 +1,7 @@
+fn log(n: Int) -> Bool { print(n); return true; }
+fn f(n: Int) -> Int
+    requires log(n)
+{
+    return n;
+}
+print(f(1));

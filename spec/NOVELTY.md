@@ -147,6 +147,18 @@ available.
 much sooner and is worth shipping first; the A4.7 amendment already stages
 contracts that way.
 
+**The runtime staging SHIPPED in v0.0.43** — `spec/A5-CONTRACTS.md`. `requires` and
+`ensures` are checked on entry and before every return, the failing clause is quoted
+verbatim with the function's name, and a clause must be `pure` (a check that can
+change the program is a second program). Contracts are always checked: there is no
+build mode that strips them.
+
+**What is still missing for §3 specifically, stated plainly:** `old(...)`, and
+therefore conservation laws. Capturing pre-state only means something for functions
+that mutate, which today means methods with a `mut self` receiver, and neither piece
+exists yet. The novel step — *deriving* mutual exclusion from a declared invariant —
+additionally waits on threads.
+
 ---
 
 ## 4. Guaranteed tail calls — a checked guarantee, not an invisible optimization

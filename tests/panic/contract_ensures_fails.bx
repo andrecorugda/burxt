@@ -1,0 +1,6 @@
+fn always_small(n: Int) -> Int
+    ensures result > 100
+{
+    return n;
+}
+print(always_small(3));

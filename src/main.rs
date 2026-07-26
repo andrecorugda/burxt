@@ -163,7 +163,7 @@ fn run(cmd: &str, path: &str, link_args: &[String], json: bool) -> Result<(), Fa
     let one = |d: diag::Diagnostic| Failure::At(vec![d], src.clone());
     let all = |ds: Vec<diag::Diagnostic>| Failure::At(ds, src.clone());
     let tokens = lexer::Lexer::new(&src).tokenize().map_err(one)?;
-    let program = parser::Parser::new(tokens).parse().map_err(one)?;
+    let program = parser::Parser::with_source(tokens, &src).parse().map_err(one)?;
     let typed = typeck::TypeChecker::new().check(&program).map_err(all)?;
 
     // `check` is the front end and nothing more: no LLVM context, no object

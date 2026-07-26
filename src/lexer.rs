@@ -39,6 +39,10 @@ pub enum Token {
     /// `pure fn` — the result depends only on the arguments, and the compiler
     /// checks it: no I/O, no FFI, no impure calls.
     Pure,
+    /// `requires <bool>` — a precondition, checked on entry.
+    Requires,
+    /// `ensures <bool>` — a postcondition, checked before every return.
+    Ensures,
     If,
     Else,
     While,
@@ -129,6 +133,8 @@ impl Token {
             Token::Tail => "`tail`".to_string(),
             Token::Allocates => "`allocates`".to_string(),
             Token::Pure => "`pure`".to_string(),
+            Token::Requires => "`requires`".to_string(),
+            Token::Ensures => "`ensures`".to_string(),
             Token::If => "`if`".to_string(),
             Token::Else => "`else`".to_string(),
             Token::While => "`while`".to_string(),
@@ -611,6 +617,8 @@ impl<'a> Lexer<'a> {
             "tail" => Token::Tail,
             "allocates" => Token::Allocates,
             "pure" => Token::Pure,
+            "requires" => Token::Requires,
+            "ensures" => Token::Ensures,
             "if" => Token::If,
             "else" => Token::Else,
             "true" => Token::True,

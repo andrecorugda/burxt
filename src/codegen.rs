@@ -97,6 +97,10 @@ pub struct CodeGen<'ctx> {
     /// the hidden sret pointer of the function being generated, if it returns
     /// an aggregate
     current_sret: Option<PointerValue<'ctx>>,
+    /// The postconditions of the function being generated, with the name of that
+    /// function: every `return` has to check them, and the check needs both the
+    /// clause and the name to write its message.
+    current_ensures: Vec<(crate::typeck::TypedContract, String)>,
     /// the bump-cursor mark of the region currently open, so a `return` from
     /// inside it releases the region on the way out. One level, per M1.
     region_mark: Option<IntValue<'ctx>>,
@@ -145,6 +149,7 @@ impl<'ctx> CodeGen<'ctx> {
             trait_slots: HashMap::new(),
             current_sret: None,
             region_mark: None,
+            current_ensures: Vec::new(),
             struct_types: HashMap::new(),
             struct_fields: HashMap::new(),
             enum_types: HashMap::new(),
@@ -335,10 +340,19 @@ impl<'ctx> CodeGen<'ctx> {
             }
         }
 
+        // Preconditions, in the order written, once the parameters are bound.
+        for clause in &f.requires {
+            self.gen_contract_check(clause, &f.name, "requires")?;
+        }
+        // Postconditions travel with the function so every `return` can check them.
+        self.current_ensures =
+            f.ensures.iter().map(|c| (c.clone(), f.name.clone())).collect();
+
         for stmt in &f.body {
             self.gen_stmt(stmt)?;
         }
         self.current_sret = None;
+        self.current_ensures.clear();
         // The typechecker proved every path ends in `return`, so the current
         // block is already terminated — no fallthrough ret is needed.
         Ok(())
@@ -602,6 +616,29 @@ impl<'ctx> CodeGen<'ctx> {
                     self.builder.build_return(None).map_err(|e| e.to_string())?;
                 } else {
                     let val = self.gen_expr(e)?;
+                    // Postconditions run here, with `result` bound to the value
+                    // about to be returned — before the region is released, so a
+                    // clause may still read region storage.
+                    if !self.current_ensures.is_empty() {
+                        let slot = self.create_entry_alloca("result", &e.ty)?;
+                        self.builder.build_store(slot, val).map_err(|e| e.to_string())?;
+                        let shadowed = self.vars.insert(
+                            "result".to_string(),
+                            (slot, e.ty.clone()),
+                        );
+                        let clauses = self.current_ensures.clone();
+                        for (clause, function) in &clauses {
+                            self.gen_contract_check(clause, function, "ensures")?;
+                        }
+                        match shadowed {
+                            Some(prev) => {
+                                self.vars.insert("result".to_string(), prev);
+                            }
+                            None => {
+                                self.vars.remove("result");
+                            }
+                        }
+                    }
                     // Compute FIRST, then release: the expression may still be
                     // reading region storage (a slice's length, say).
                     self.close_open_region()?;
@@ -2615,6 +2652,48 @@ impl<'ctx> CodeGen<'ctx> {
             .build_load(self.ctx.i64_type(), next.as_pointer_value(), "region_mark")
             .map(|v| v.into_int_value())
             .map_err(|e| e.to_string())
+    }
+
+    /// Emit one contract check: evaluate the condition, and if it is false, die
+    /// with the clause quoted exactly as it was written.
+    ///
+    /// Always emitted — there is no build mode that removes contracts. A flag that
+    /// decided whether a program enforces its own stated invariants would make its
+    /// behaviour depend on how it was built.
+    fn gen_contract_check(
+        &mut self,
+        clause: &crate::typeck::TypedContract,
+        function: &str,
+        kind: &str,
+    ) -> Result<(), String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let value = self.gen_expr(&clause.cond)?.into_int_value();
+        let holds = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                value,
+                self.ctx.i64_type().const_zero(),
+                "contract_holds",
+            )
+            .map_err(err)?;
+        let function_value = self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_parent())
+            .ok_or("codegen bug: contract check outside a function")?;
+        let broken = self.ctx.append_basic_block(function_value, "contract_broken");
+        let ok = self.ctx.append_basic_block(function_value, "contract_ok");
+        self.builder.build_conditional_branch(holds, ok, broken).map_err(err)?;
+
+        self.builder.position_at_end(broken);
+        self.build_panic(&format!(
+            "burxt runtime error: `{} {}` failed in `{}`\n",
+            kind, clause.text, function
+        ))?;
+
+        self.builder.position_at_end(ok);
+        Ok(())
     }
 
     /// Leaving a region by `return` releases it exactly as reaching its closing

@@ -1,0 +1,6 @@
+fn f(n: Int) -> Int
+    requires result > 0
+{
+    return n;
+}
+print(f(1));

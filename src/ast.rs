@@ -245,6 +245,18 @@ pub enum ExprKind {
 }
 
 /// Statements. A Burxt v0.0.1 program is just a sequence of these.
+/// One `requires` or `ensures` clause.
+///
+/// `text` is the clause exactly as written, kept so a failure can QUOTE it: a
+/// message that says "precondition violated" makes the reader go and find which
+/// one, and there is usually more than one.
+#[derive(Debug, Clone)]
+pub struct Contract {
+    pub cond: Expr,
+    pub text: String,
+    pub span: Span,
+}
+
 /// A statement, plus where it came from.
 ///
 /// The position lives here rather than inside every variant because a statement
@@ -353,6 +365,10 @@ pub struct FnDef {
     /// Declared `pure`: the result depends only on the arguments. No I/O, no FFI,
     /// and no calls to functions that do not make the same promise.
     pub is_pure: bool,
+    /// Preconditions, checked on entry in the order written.
+    pub requires: Vec<Contract>,
+    /// Postconditions, checked before every return. `result` is in scope.
+    pub ensures: Vec<Contract>,
     pub body: Vec<Stmt>,
     /// Where this item was written, for errors about the item itself.
     pub span: Span,

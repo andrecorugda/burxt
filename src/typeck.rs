@@ -183,6 +183,17 @@ pub struct TypedFn {
     pub params: Vec<(String, Type)>,
     pub ret: Type,
     pub body: Vec<TypedStmt>,
+    /// Preconditions, in the order written: checked on entry.
+    pub requires: Vec<TypedContract>,
+    /// Postconditions: checked before every return, with `result` bound.
+    pub ensures: Vec<TypedContract>,
+}
+
+/// A checked contract clause: the condition, and the text to quote if it fails.
+#[derive(Debug, Clone)]
+pub struct TypedContract {
+    pub cond: TypedExpr,
+    pub text: String,
 }
 
 /// A method, ready for codegen: `self` is always the first bound name, typed
@@ -295,6 +306,10 @@ pub struct TypeChecker {
     /// arguments, checked. Hoisted with the signatures so a call to one can be
     /// judged in a single pass, in either direction.
     pure_fns: HashSet<String>,
+    /// True while checking a contract clause. Clauses are checked under the `pure`
+    /// rule, but they are not `pure fn` bodies — telling a reader to "drop `pure`
+    /// from `f`" when `f` never declared it would be nonsense.
+    in_contract: bool,
     /// The `pure` function being checked, if any. Held by NAME because every
     /// refusal below names both functions — the reader needs to know which promise
     /// is being broken as well as what broke it.
@@ -315,6 +330,7 @@ impl TypeChecker {
             alloc_fns: HashSet::new(),
             pure_fns: HashSet::new(),
             in_pure: None,
+            in_contract: false,
             in_caller_region: false,
             extern_names: HashSet::new(),
             extern_params: HashMap::new(),
@@ -361,16 +377,76 @@ impl TypeChecker {
         out
     }
 
+    /// Check a run of contract clauses. `result_ty` is `Some` for `ensures`, which
+    /// binds `result` to the returned value; `None` for `requires`, where there is
+    /// no result yet — and saying that plainly beats "unknown name `result`".
+    fn check_contracts(
+        &mut self,
+        clauses: &[Contract],
+        result_ty: Option<&Type>,
+    ) -> Result<Vec<TypedContract>, String> {
+        let mut out = Vec::new();
+        for clause in clauses {
+            self.current_span.set(clause.span);
+            if let Some(ty) = result_ty {
+                if self.env.contains_key("result") {
+                    return Err(
+                        "`ensures` binds the name `result` to the returned value, and \
+                         something here is already called `result`. Rename it — Burxt \
+                         does not shadow."
+                            .to_string(),
+                    );
+                }
+                self.env.insert("result".to_string(), (ty.clone(), false));
+            }
+            let checked = self.check_expr(&clause.cond, Some(&Type::Bool));
+            if result_ty.is_some() {
+                self.env.remove("result");
+            }
+            let cond = match checked {
+                Ok(c) => c,
+                Err(message)
+                    if result_ty.is_none() && message.contains("result") =>
+                {
+                    return Err(
+                        "`result` has no meaning in a `requires` clause: it is checked \
+                         on entry, before there is a result. Use `ensures` for a claim \
+                         about the return value."
+                            .to_string(),
+                    )
+                }
+                Err(message) => return Err(message),
+            };
+            if cond.ty != Type::Bool {
+                return Err(format!(
+                    "a contract clause must be a Bool, but `{}` has type {}",
+                    clause.text, cond.ty
+                ));
+            }
+            out.push(TypedContract { cond, text: clause.text.clone() });
+        }
+        Ok(out)
+    }
+
     /// Refuse something a `pure` function may not do, naming both the promise and
     /// what would break it. `None` when we are not in a pure function.
     fn impure(&self, what: &str) -> Option<String> {
         self.in_pure.as_ref().map(|name| {
-            format!(
-                "`pure fn {}` may not {}: a pure function's result must depend only \
-                 on its arguments, which is the whole of what `pure` promises. Pass \
-                 the value in as a parameter instead.",
-                name, what
-            )
+            if self.in_contract {
+                format!(
+                    "a contract clause on `{}` may not {}: a clause that can change \
+                     the program is not a check, it is a second program that runs \
+                     only when someone is looking.",
+                    name, what
+                )
+            } else {
+                format!(
+                    "`pure fn {}` may not {}: a pure function's result must depend \
+                     only on its arguments, which is the whole of what `pure` \
+                     promises. Pass the value in as a parameter instead.",
+                    name, what
+                )
+            }
         })
     }
 
@@ -1246,6 +1322,36 @@ impl TypeChecker {
         self.in_pure = if f.is_pure { Some(f.name.clone()) } else { None };
         self.current_sig =
             Some((f.name.clone(), f.params.iter().map(|p| p.ty.clone()).collect()));
+        // Contracts are checked BEFORE the body, in the parameter scope, because
+        // that is the scope they run in. `requires` sees the arguments; `ensures`
+        // additionally sees `result`.
+        //
+        // Both are checked under the `pure` rule, whatever the function itself is
+        // declared: a clause that can print, read a file or call into C is not a
+        // check, it is a second program that only runs when someone is looking.
+        let saved_pure = self.in_pure.clone();
+        self.in_pure = Some(f.name.clone());
+        self.in_contract = true;
+        let requires = self.check_contracts(&f.requires, None)?;
+        let ensures = if f.ensures.is_empty() {
+            Vec::new()
+        } else if crate::codegen::is_aggregate(&f.ret) {
+            self.current_span.set(f.ensures[0].span);
+            return Err(format!(
+                "`ensures` on `{}` is not supported yet: it returns {} {}, which \
+                 travels through a hidden pointer into the caller's storage, so \
+                 binding `result` to it needs care a scalar does not. Return a \
+                 scalar, or drop the clause.",
+                f.name,
+                f.ret.article(),
+                f.ret
+            ));
+        } else {
+            self.check_contracts(&f.ensures, Some(&f.ret))?
+        };
+        self.in_pure = saved_pure;
+        self.in_contract = false;
+
         let errors_before = self.errors.len();
         let body = self.check_block(&f.body)?;
         self.current_ret = None;
@@ -1268,7 +1374,7 @@ impl TypeChecker {
                 f.ret
             ));
         }
-        Ok(TypedFn { name: f.name.clone(), params, ret: f.ret.clone(), body })
+        Ok(TypedFn { name: f.name.clone(), params, ret: f.ret.clone(), body, requires, ensures })
     }
 
     /// Check a method body. `self` is bound like any parameter, with its
@@ -2388,16 +2494,23 @@ impl TypeChecker {
                             .unwrap_or_default());
                     }
                     if !self.pure_fns.contains(name) && self.fns.contains_key(name) {
-                        return Err(format!(
-                            "`pure fn {}` may not call `{}`, which is not declared \
-                             `pure`: the guarantee cannot rest on a function that does \
-                             not make it. Declare `pure fn {}` too, or drop `pure` \
-                             from `{}`.",
-                            self.in_pure.clone().unwrap_or_default(),
-                            name,
-                            name,
-                            self.in_pure.clone().unwrap_or_default()
-                        ));
+                        let holder = self.in_pure.clone().unwrap_or_default();
+                        return Err(if self.in_contract {
+                            format!(
+                                "a contract clause on `{}` may not call `{}`, which is \
+                                 not declared `pure`: a clause must not be able to \
+                                 change the program it checks. Declare `pure fn {}`.",
+                                holder, name, name
+                            )
+                        } else {
+                            format!(
+                                "`pure fn {}` may not call `{}`, which is not declared \
+                                 `pure`: the guarantee cannot rest on a function that \
+                                 does not make it. Declare `pure fn {}` too, or drop \
+                                 `pure` from `{}`.",
+                                holder, name, name, holder
+                            )
+                        });
                     }
                 }
                 // An `allocates` callee builds in OUR region, so there has to be

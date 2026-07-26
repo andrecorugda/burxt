@@ -1,0 +1,7 @@
+struct P { a: Int }
+fn f(n: Int) -> P
+    ensures result.a > 0
+{
+    return P { a: n };
+}
+print(f(1).a);

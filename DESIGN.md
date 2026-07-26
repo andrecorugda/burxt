@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.42)
+# Burxt — Design Notes (v0.0.43)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -2041,6 +2041,73 @@ is no compiler and no language server to talk to. Now asserted by a test, along 
 the language icon declaration and the existence of every file `pack.py` ships —
 three things whose loss is silent.
 
+### v0.0.43: contracts — `requires` and `ensures`, checked
+
+```text
+fn withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>
+    requires amount > $0.00
+    requires amount <= balance
+    ensures result >= $0.00
+{
+    return balance - amount;
+}
+```
+
+A type says what shape a value has. A contract says what must be **true** about it —
+three claims no type in the language can carry, written where a reader looks for what
+a function demands and promises rather than in a comment or buried in the body.
+
+**When one fails, the message quotes it:**
+
+```text
+burxt runtime error: `requires amount <= balance` failed in `withdraw`
+```
+
+Not "precondition violated" — that makes the reader go and find which one, and there
+is usually more than one. Exit 70, like every other named failure: bounds, overflow,
+division by zero, region exhaustion.
+
+**Always checked, with no mode that removes them.** There is no `--release` that
+strips contracts. A flag deciding whether a program enforces its own stated
+invariants would make behaviour depend on how it was built, which is the class of
+thing this language refuses everywhere. The cost is real and chosen: a `requires` in
+a hot loop is work on every call, and the answer is to put contracts on boundaries
+rather than on everything.
+
+**`ensures` sees `result`**, bound to the value about to be returned, and **every
+return is checked** — not only the last one. `result` is not a keyword: a binding may
+still be called that, it simply collides inside the clause, which is an error naming
+the collision because Burxt does not shadow. In a `requires` clause `result` is
+refused with the reason: *"it is checked on entry, before there is a result."*
+
+**Contracts must be pure, and that fell out of machinery that already existed.** A
+clause is checked under exactly the rule `pure fn` enforces (v0.0.39): no printing,
+no file reads, no FFI, no impure calls. **A clause that can change the program is not
+a check, it is a second program that runs only when someone is looking.** That is the
+second time the effect markers have paid for themselves — `pure` was built on
+`allocates`, and contracts are built on `pure`.
+
+**A wording bug worth recording.** Reusing the purity checker meant a bad clause was
+reported as *"`pure fn f` may not call `log` ... or drop `pure` from `f`"* — on a
+function that never declared `pure`. Nonsense advice, produced by borrowing a
+mechanism and inheriting its vocabulary. There is now a flag distinguishing
+*checking a clause* from *checking a pure body*, and the clause version says what it
+means.
+
+**What this slice deliberately cannot do: express a conservation law.** NOVELTY §3's
+headline needs `old(...)` — values captured at entry and compared at exit — and that
+only means anything for functions that MUTATE, which today means methods with a `mut
+self` receiver. Both are real work; neither is needed for `requires`/`ensures` to be
+useful for bounds, ranges, sign and relations between arguments and result. Stated
+plainly rather than half-built, with a trigger in the spec.
+
+Also refused, with reasons rather than silence: `ensures` on a function returning an
+aggregate (the result travels by hidden pointer, so binding `result` needs care a
+scalar does not), and static proving, which is SMT territory — a checker that is
+right sometimes is worse than a check that is right always.
+
+Spec: `spec/A5-CONTRACTS.md`.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -2105,6 +2172,8 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- A5. Contracts, slice 1 (v0.0.43): `requires` / `ensures` checked at runtime, the
+  clause quoted when it fails, and required to be pure. NOVELTY §3's staging.
 - N2. `pure` functions, slice 1 (v0.0.39): reproducibility checked at the signature
   — no I/O, no FFI, no impure calls. NOVELTY §2.
 - M1a. Caller-region functions (v0.0.38): `allocates` on a signature, which

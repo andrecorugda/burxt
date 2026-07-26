@@ -1,0 +1,47 @@
+// A type says what shape a value has. A contract says what must be TRUE about it —
+// written in the signature, where a reader looks for what a function demands and
+// promises, rather than in a comment or buried in the body.
+fn withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>
+    requires amount > $0.00
+    requires amount <= balance
+    ensures result >= $0.00
+{
+    return balance - amount;
+}
+
+// Contracts compose with the other signature markers.
+pure fn doubled(n: Int) -> Int
+    requires n >= 0
+    ensures result >= n
+{
+    return n * 2;
+}
+
+fn label(n: Int) -> String allocates
+    requires n > 0
+{
+    return "n=" + to_string(n);
+}
+
+// Every return is checked, not just the last one.
+fn clamp(n: Int) -> Int
+    ensures result >= 0
+    ensures result <= 10
+{
+    if n < 0 {
+        return 0;
+    }
+    if n > 10 {
+        return 10;
+    }
+    return n;
+}
+
+let balance: Decimal<2> = $100.00;
+print(withdraw(balance, $30.00));
+print(withdraw(balance, $100.00));
+print(doubled(21));
+print(clamp(-5));
+print(clamp(50));
+print(clamp(7));
+region r { print(label(3)); }
