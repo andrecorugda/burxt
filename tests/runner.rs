@@ -293,3 +293,85 @@ fn tail_calls_are_emitted_as_musttail() {
          explicit, never inferred"
     );
 }
+
+/// NOVELTY §1, the guarantee that has to be checked against a REAL C boundary
+/// rather than described: a `Decimal<2> as scaled` arrives as the exact scaled
+/// integer, an `Int` crossing as `CDouble` arrives as the same number, and an
+/// `Int` too large to be a double exactly dies with a named error instead of
+/// quietly becoming its neighbour.
+///
+/// This also exercises linker pass-through — an `extern fn` is only half an
+/// FFI; the other half is a real object to link against.
+#[test]
+fn money_and_integers_cross_into_c_exactly() {
+    let scratch = scratch_dir("boundary");
+    fs::create_dir_all(&scratch).unwrap();
+
+    fs::write(
+        scratch.join("cside.c"),
+        "#include <stdio.h>\n\
+         long long record_cents(long long scaled) { printf(\"%lld\\n\", scaled); return scaled; }\n\
+         long long take_double(double d) { printf(\"%.0f\\n\", d); return (long long)d; }\n",
+    )
+    .unwrap();
+    let cc = Command::new("cc")
+        .args(["-c", "cside.c", "-o", "cside.o"])
+        .current_dir(&scratch)
+        .status()
+        .expect("failed to invoke cc");
+    assert!(cc.success(), "could not build the C side of the boundary test");
+
+    let program = scratch.join("boundary.bx");
+    fs::write(
+        &program,
+        "extern fn record_cents(amount: Decimal<2> as scaled) -> Int;\n\
+         extern fn take_double(n: CDouble) -> Int;\n\
+         let price: Decimal<2> = $19.99;\n\
+         print(record_cents(price));\n\
+         print(take_double(9007199254740992));\n",
+    )
+    .unwrap();
+
+    let run = |src: &str, args: &[&str]| -> Output {
+        Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("run")
+            .arg(src)
+            .args(args)
+            .current_dir(&scratch)
+            .output()
+            .expect("failed to spawn burxt")
+    };
+
+    let out = run("boundary.bx", &["cside.o"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "boundary program failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // C printed the value it received, then Burxt printed what came back. The
+    // scaled integer must be exactly 1999 — not 1998, not 2000, not 19.99.
+    assert_eq!(
+        stdout, "1999\n1999\n9007199254740992\n9007199254740992\n",
+        "a value changed while crossing into C"
+    );
+
+    // 2^53 + 1 is not representable as a double, so the crossing must be a
+    // named error and exit 70 — never a silently different integer.
+    fs::write(
+        scratch.join("over.bx"),
+        "extern fn take_double(n: CDouble) -> Int;\n\
+         print(take_double(9007199254740993));\n",
+    )
+    .unwrap();
+    let over = run("over.bx", &["cside.o"]);
+    let stderr = String::from_utf8_lossy(&over.stderr);
+    let code = over.status.code();
+    let _ = fs::remove_dir_all(&scratch);
+    assert_eq!(code, Some(70), "an inexact crossing must exit 70, got {:?}", code);
+    assert!(
+        stderr.contains("cannot cross as a C double exactly"),
+        "the failure must name itself, got: {}",
+        stderr
+    );
+}

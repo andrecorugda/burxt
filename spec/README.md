@@ -14,7 +14,7 @@ answers.
 **Read this file first.** The specs were written when Burxt was at roughly
 v0.0.1, so several describe work that is now done, and one describes work that
 was built in a different order than specified. This index records what is
-actually true as of **v0.0.29**, audited by running the compiler — not by
+actually true as of **v0.0.30**, audited by running the compiler — not by
 reading the specs. Where a spec and the implementation disagree, the note says
 which is right.
 
@@ -30,7 +30,8 @@ which is right.
 | [Far-horizon M1–M4](FAR-HORIZON-ROADMAP.md) | **Direction only** | Re-spec each on arrival. **M1's trigger is now MET** — see its amendment; two new criteria argue against the ARC lean. |
 | [A6.0 Sum Types](A6.0-SUM-TYPES.md) | **DONE** (v0.0.20) | Enums, exhaustive `match`. Deferred: wildcards, recursive/aggregate payloads (M1), guards, nested patterns, match-as-expression, generics. |
 | [M1 Memory Model](M1-MEMORY-MODEL.md) | **DONE** (v0.0.24–v0.0.27) | All four slices shipped: regions + bump allocator, growable arrays with escape checking, string concatenation, storable `dyn`. Two of its predictions were corrected rather than forced — see §6a. |
-| [Novelty register](NOVELTY.md) | **Ambition, unscheduled — §4 shipped** | What Burxt is *for*: exactness across boundaries, provable determinism, conservation-law contracts, effects-not-async. **§4 guaranteed tail calls shipped in v0.0.29.** |
+| [Novelty register](NOVELTY.md) | **Ambition — §4 shipped, §1 slice 1 shipped** | What Burxt is *for*: exactness across boundaries, provable determinism, conservation-law contracts, effects-not-async. §4 guaranteed tail calls shipped in v0.0.29; §1's FFI half in v0.0.30. |
+| [N1 Boundary Exactness](N1-BOUNDARY-EXACTNESS.md) | **Slice 1 DONE** (v0.0.30) | `CDouble`, `as scaled` marshallers, range-checked `Int` → `CDouble`, linker pass-through. Remaining: serialization and database boundaries, once an encoder exists to guard. |
 
 ## The audit, in detail
 
@@ -170,9 +171,11 @@ In dependency order, cheapest and most-unblocking first:
     novelty register to ship. It also surfaced two region bugs — an early
     `return` leaked the region, and the return-path prover did not know a region
     body could return at all.
-11. **Next, in NOVELTY order: §1, exactness that survives the boundary.** It is
-    the strongest unclaimed territory and needs no new theory — type rules at
-    the FFI and serialization edge, on machinery that already exists.
+11. ~~NOVELTY §1, exactness that survives the boundary.~~ **Slice 1 done in
+    v0.0.30** — the FFI half, which is the only boundary that exists today.
+    `spec/N1-BOUNDARY-EXACTNESS.md` records the decisions; the serialization half
+    waits for an encoder to guard. Linker pass-through shipped with it, because
+    an `extern fn` is only half an FFI.
 12. Still unblocked polish: A4.7's units/contracts/pipelines, `.chars()`,
     `[0; N]` repeat literals, `break`/`continue`, iterative AST walkers, and a
     NAMED stack-overflow error (tail calls avoid it; they do not name it).

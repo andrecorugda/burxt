@@ -1,9 +1,14 @@
 //! The `burxt` compiler driver.
 //!
 //! Usage:
-//!   burxt build <file.bx>      compile to a native executable (./<file>)
-//!   burxt run   <file.bx>      compile, then run it
-//!   burxt emit-ir <file.bx>    print the LLVM IR (for the curious)
+//!   burxt build <file.bx> [link args...]   compile to a native executable
+//!   burxt run   <file.bx> [link args...]   compile, then run it
+//!   burxt emit-ir <file.bx>                print the LLVM IR (for the curious)
+//!
+//! Anything after the source file is handed to the system linker unchanged
+//! (`cside.o`, `-lm`, `-L/opt/lib -lfoo`). An `extern fn` declaration is only
+//! half of an FFI: the other half is a real object to link against, and Burxt
+//! delegates linking to system tools rather than owning it.
 
 mod ast;
 mod lexer;
@@ -38,22 +43,26 @@ fn compile_main() {
     if args.len() < 3 {
         eprintln!("burxt {} — the Burxt compiler", env!("CARGO_PKG_VERSION"));
         eprintln!("usage:");
-        eprintln!("  burxt build   <file.bx>   compile to a native executable");
-        eprintln!("  burxt run     <file.bx>   compile then run");
-        eprintln!("  burxt emit-ir <file.bx>   print LLVM IR");
-        eprintln!("  burxt layout  <file.bx>   print struct layouts (size/align/offsets)");
+        eprintln!("  burxt build   <file.bx> [link args...]   compile to a native executable");
+        eprintln!("  burxt run     <file.bx> [link args...]   compile then run");
+        eprintln!("  burxt emit-ir <file.bx>                  print LLVM IR");
+        eprintln!("  burxt layout  <file.bx>                  print struct layouts");
+        eprintln!();
+        eprintln!("Arguments after the source file go to the linker unchanged,");
+        eprintln!("e.g. `burxt run pay.bx cside.o -lm` to link the C you call.");
         std::process::exit(2);
     }
     let cmd = &args[1];
     let path = &args[2];
+    let link_args = &args[3..];
 
-    if let Err(e) = run(cmd, path) {
+    if let Err(e) = run(cmd, path, link_args) {
         eprintln!("error: {}", e);
         std::process::exit(1);
     }
 }
 
-fn run(cmd: &str, path: &str) -> Result<(), String> {
+fn run(cmd: &str, path: &str, link_args: &[String]) -> Result<(), String> {
     let src = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read {}: {}", path, e))?;
 
@@ -87,10 +96,12 @@ fn run(cmd: &str, path: &str) -> Result<(), String> {
             let obj = format!("{}.o", stem);
             cg.write_object(&obj)?;
 
-            // link with the system C compiler (for printf + crt startup)
+            // link with the system C compiler (for printf + crt startup), plus
+            // whatever the caller needs for the C it declared.
             let exe = format!("./{}", stem);
             let status = Command::new("cc")
-                .args([&obj, "-o", stem])
+                .args([obj.as_str(), "-o", stem])
+                .args(link_args)
                 .status()
                 .map_err(|e| format!("failed to invoke cc: {}", e))?;
             if !status.success() {

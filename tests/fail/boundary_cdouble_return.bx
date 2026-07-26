@@ -1,0 +1,2 @@
+extern fn rate() -> CDouble;
+print(rate());

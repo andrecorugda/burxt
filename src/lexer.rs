@@ -25,6 +25,8 @@ pub enum Token {
     Fn,
     Extern,
     Return,
+    /// `as` — introduces a boundary marshaller in an `extern fn` signature.
+    As,
     /// `return tail f(x)` — a tail call the compiler must guarantee.
     Tail,
     If,
@@ -54,6 +56,9 @@ pub enum Token {
     TyDecimal,
     /// C's 32-bit int — only meaningful in extern fn signatures.
     TyCInt,
+    /// C's `double` — an FFI-only type, so a lossy crossing can be NAMED and
+    /// therefore refused. Burxt itself still has no float type.
+    TyCDouble,
     RoundHalfEven,
     RoundHalfUp,
     // punctuation
@@ -110,6 +115,7 @@ impl Token {
             Token::Fn => "`fn`".to_string(),
             Token::Extern => "`extern`".to_string(),
             Token::Return => "`return`".to_string(),
+            Token::As => "`as`".to_string(),
             Token::Tail => "`tail`".to_string(),
             Token::If => "`if`".to_string(),
             Token::Else => "`else`".to_string(),
@@ -132,6 +138,7 @@ impl Token {
             Token::TyBool => "`Bool`".to_string(),
             Token::TyString => "`String`".to_string(),
             Token::TyCInt => "`CInt`".to_string(),
+            Token::TyCDouble => "`CDouble`".to_string(),
             Token::TyDecimal => "`Decimal`".to_string(),
             Token::RoundHalfEven => "`RoundHalfEven`".to_string(),
             Token::RoundHalfUp => "`RoundHalfUp`".to_string(),
@@ -558,6 +565,7 @@ impl<'a> Lexer<'a> {
             "fn" => Token::Fn,
             "extern" => Token::Extern,
             "return" => Token::Return,
+            "as" => Token::As,
             "tail" => Token::Tail,
             "if" => Token::If,
             "else" => Token::Else,
@@ -578,6 +586,7 @@ impl<'a> Lexer<'a> {
             "Bool" => Token::TyBool,
             "String" => Token::TyString,
             "CInt" => Token::TyCInt,
+            "CDouble" => Token::TyCDouble,
             "Decimal" => Token::TyDecimal,
             "RoundHalfEven" => Token::RoundHalfEven,
             "RoundHalfUp" => Token::RoundHalfUp,

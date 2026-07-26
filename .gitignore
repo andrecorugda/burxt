@@ -5,6 +5,7 @@
 # working directory, so they are easy to commit by accident. Ignore the ones the
 # examples and tests produce; add a line when a new .bx program appears.
 /bigparse
+/boundary_scaled_marshal
 /enum_basic
 /enum_match_flow
 /enum_payloads

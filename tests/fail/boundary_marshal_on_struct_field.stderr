@@ -1,0 +1,1 @@
+marshalling describes how a value crosses a FOREIGN boundary, not how it is stored

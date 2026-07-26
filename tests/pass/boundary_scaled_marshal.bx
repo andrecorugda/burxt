@@ -1,0 +1,21 @@
+// Money crosses into C only through a declared, exactness-preserving encoding.
+// `as scaled` hands C the exact unscaled integer — llabs/labs/imaxabs are real C
+// functions taking a 64-bit integer, so this is the actual boundary, not a
+// simulation of one.
+extern fn llabs(amount: Decimal<2> as scaled) -> Int;
+extern fn labs(amount: Decimal<4> as scaled) -> Int;
+extern fn imaxabs(n: Int) -> Int;
+
+let price: Decimal<2> = $19.99;
+print(llabs(price));            // 1999 — exact cents, never 19.989999...
+
+let owed: Decimal<2> = -$0.50;
+print(llabs(owed));             // C received -50 and took its magnitude
+
+// The scale is part of the contract, so a different scale gets its own
+// declaration rather than silently reinterpreting the integer.
+let rate: Decimal<4> = 0.0725;
+print(labs(rate));              // 725
+
+// An ordinary Int still crosses as itself.
+print(imaxabs(-7));

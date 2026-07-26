@@ -1,0 +1,2 @@
+extern fn record(amount: Decimal<2>) -> Int;
+print(record($1.00));

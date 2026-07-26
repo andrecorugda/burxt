@@ -50,7 +50,7 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::{AnyType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FloatValue, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use std::collections::HashMap;
 
@@ -70,6 +70,8 @@ pub struct CodeGen<'ctx> {
     extern_sigs: HashMap<String, (Vec<Type>, Type)>,
     /// lazily created i64 -> i32 range-checked truncation helper
     cint_fn: Option<FunctionValue<'ctx>>,
+    /// the range-checked i64 -> double conversion, emitted only if used
+    cdouble_fn: Option<FunctionValue<'ctx>>,
     /// lazily created array bounds-check helper
     index_check_fn: Option<FunctionValue<'ctx>>,
     /// lazily created i128 -> i64 checked narrowing helper
@@ -129,6 +131,7 @@ impl<'ctx> CodeGen<'ctx> {
             user_fns: HashMap::new(),
             extern_sigs: HashMap::new(),
             cint_fn: None,
+            cdouble_fn: None,
             index_check_fn: None,
             narrow_check_fn: None,
             str_len_fn: None,
@@ -970,6 +973,8 @@ impl<'ctx> CodeGen<'ctx> {
             Type::Int | Type::Bool | Type::Decimal { .. } => self.ctx.i64_type().into(),
             Type::String => self.ctx.ptr_type(AddressSpace::default()).into(),
             Type::CInt => self.ctx.i32_type().into(),
+            // FFI-only, so it appears in extern signatures and nowhere else.
+            Type::CDouble => self.ctx.f64_type().into(),
             Type::Named(name) => match self.struct_types.get(name) {
                 Some(st) => (*st).into(),
                 None => self.enum_types[name].0.into(),
@@ -1084,8 +1089,8 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_call(printf, &args, "printf_bool")
                     .map_err(|e| e.to_string())?;
             }
-            Type::Named(_) | Type::CInt | Type::Array { .. } | Type::Dyn(_)
-            | Type::Slice(_) => {
+            Type::Named(_) | Type::CInt | Type::CDouble | Type::Array { .. }
+            | Type::Dyn(_) | Type::Slice(_) => {
                 return Err(format!(
                     "codegen bug: print on {} should have been refused by typeck",
                     e.ty
@@ -1438,8 +1443,22 @@ impl<'ctx> CodeGen<'ctx> {
                     // and truncate — a value that doesn't fit is a loud
                     // runtime error, never a silent wrap.
                     if let Some((ptys, _)) = &extern_sig {
-                        if ptys.get(i) == Some(&Type::CInt) {
-                            v = self.build_to_cint(v.into_int_value())?.into();
+                        match ptys.get(i) {
+                            Some(Type::CInt) => {
+                                v = self.build_to_cint(v.into_int_value())?.into();
+                            }
+                            // A double holds every integer up to 2^53 exactly and
+                            // starts skipping them after that, so the crossing is
+                            // range-checked. Handing C a different integer than
+                            // the one written is the same class of defect as a
+                            // silent rounding.
+                            Some(Type::CDouble) => {
+                                v = self.build_to_cdouble(v.into_int_value())?.into();
+                            }
+                            // `Decimal<S> as scaled` needs NO conversion: the
+                            // value already IS the exact unscaled integer, which
+                            // is the whole reason this encoding was chosen.
+                            _ => {}
                         }
                     }
                     vals.push(v.into());
@@ -3010,6 +3029,74 @@ impl<'ctx> CodeGen<'ctx> {
             self.builder.position_at_end(bb);
         }
         self.cint_fn = Some(f);
+        Ok(f)
+    }
+
+    /// Emit a call to the range-checked i64 -> double conversion used for a
+    /// `CDouble` extern parameter.
+    fn build_to_cdouble(&mut self, v: IntValue<'ctx>) -> Result<FloatValue<'ctx>, String> {
+        let f = self.to_cdouble_fn()?;
+        let call = self
+            .builder
+            .build_call(f, &[v.into()], "to_cdouble")
+            .map_err(|e| e.to_string())?;
+        match call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => Ok(v.into_float_value()),
+            _ => Err("CDouble helper returned void".to_string()),
+        }
+    }
+
+    /// Get (or lazily define) `double @burxt.checked.cdouble(i64)`: the value as
+    /// C's double, or a named panic if the conversion would not be exact.
+    ///
+    /// 2^53 is where doubles stop being able to represent every integer. Below
+    /// it every Int converts exactly; above it some do and some silently become
+    /// their neighbour, and "silently becomes a different number" is precisely
+    /// what Burxt refuses everywhere else. A Decimal never reaches here at all —
+    /// typeck refuses that crossing outright.
+    fn to_cdouble_fn(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        if let Some(f) = self.cdouble_fn {
+            return Ok(f);
+        }
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let saved_block = self.builder.get_insert_block();
+
+        let i64t = self.ctx.i64_type();
+        let f64t = self.ctx.f64_type();
+        let fn_ty = f64t.fn_type(&[i64t.into()], false);
+        let f = self.module.add_function("burxt.checked.cdouble", fn_ty, None);
+        let entry = self.ctx.append_basic_block(f, "entry");
+        let panic_bb = self.ctx.append_basic_block(f, "not_exact");
+        let ok_bb = self.ctx.append_basic_block(f, "ok");
+
+        self.builder.position_at_end(entry);
+        let v = f.get_nth_param(0).unwrap().into_int_value();
+        use inkwell::IntPredicate::*;
+        const EXACT: u64 = 1 << 53;
+        let max = i64t.const_int(EXACT, false);
+        let min = i64t.const_int((-(EXACT as i64)) as u64, true);
+        let too_big = self.builder.build_int_compare(SGT, v, max, "too_big").map_err(err)?;
+        let too_small = self.builder.build_int_compare(SLT, v, min, "too_small").map_err(err)?;
+        let out = self.builder.build_or(too_big, too_small, "not_exact").map_err(err)?;
+        self.builder.build_conditional_branch(out, panic_bb, ok_bb).map_err(err)?;
+
+        self.builder.position_at_end(panic_bb);
+        self.build_panic(
+            "burxt runtime error: this Int cannot cross as a C double exactly — \
+             a double represents every integer only up to 2^53\n",
+        )?;
+
+        self.builder.position_at_end(ok_bb);
+        let converted = self
+            .builder
+            .build_signed_int_to_float(v, f64t, "cdouble")
+            .map_err(err)?;
+        self.builder.build_return(Some(&converted)).map_err(err)?;
+
+        if let Some(bb) = saved_block {
+            self.builder.position_at_end(bb);
+        }
+        self.cdouble_fn = Some(f);
         Ok(f)
     }
 

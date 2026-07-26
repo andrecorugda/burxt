@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.29)
+# Burxt — Design Notes (v0.0.30)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1393,6 +1393,68 @@ Worth stating plainly: **the tail-call work is what surfaced both.** Asking
 "what has to happen between the last statement and the `ret`?", and the second
 one had two wrong answers.
 
+### v0.0.30: exactness that survives the boundary (NOVELTY §1, slice 1)
+
+```text
+extern fn record_cents(amount: Decimal<2> as scaled) -> Int;
+
+print(record_cents($19.99));   // C receives 1999 — exact, by declaration
+```
+
+Until now a Decimal simply could not cross into C. That was safe, but **"Decimals
+cannot cross" is a missing feature; "Decimals cross only through an encoding that
+cannot lose them" is a guarantee.** This slice converts the first into the second,
+and the difference is the whole point of NOVELTY §1: real financial defects
+overwhelmingly live at boundaries, not in arithmetic, and every language guards
+the arithmetic and then abandons the wire.
+
+**`CDouble`, an FFI-only type that models C's `double` honestly** — the same move
+`CInt` made for C's `int`. It exists so a lossy crossing can be *named*, and
+therefore refused. Without a name for the foreign type, "a Decimal may not bind
+to a float" is unspellable, so the guarantee cannot be checked; it is merely
+absent. Burxt still has no float type of its own and this is not one.
+
+- **`Decimal<S>` → `CDouble` is a compile error, always**, with no flag and no
+  escape. The message names the concrete loss and both exact alternatives:
+  *"a C `double` cannot hold Decimal<2> exactly — a value like 0.10 is not
+  representable in binary floating point, so this crossing would silently change
+  the amount."*
+- **`Int` → `CDouble` is allowed but range-checked at runtime.** A double holds
+  every integer up to 2^53 exactly and starts skipping them after that, so
+  `|n| > 2^53` is a named error with exit 70. Handing C a different integer than
+  the one written is the same class of defect as a silent rounding.
+- **A `CDouble` return stays refused.** Burxt has no exact way to receive a real
+  number, and inventing an inexact receiver to complete the matrix would
+  contradict the thesis. The error says how to get the value exactly instead.
+
+**The marshaller is declared on the SIGNATURE, not applied at the call site**, and
+that choice is the load-bearing one. The obvious alternative —
+`record(scaled_of(price))` with `record` taking an `Int` — is weaker in exactly
+the way §1 is about: the scale is gone from the type, so a `Decimal<4>`'s
+unscaled integer type-checks identically, and so does an unrelated `Int`. **The
+scale is lost at the boundary, which is the defect, not the fix.** Declared on
+the signature, the scale IS the contract: `Decimal<4>` where `Decimal<2> as
+scaled` was declared is a compile error, and every call site is then correct by
+construction.
+
+No `as text` marshaller was added: `c_fn(to_string(amount))` already does it
+exactly (v0.0.28), and a feature whose only contribution is a second spelling
+earns no place. The `CDouble` error points there by name.
+
+**Linker pass-through, because an `extern fn` is only half an FFI.** Arguments
+after the source file now go to the system linker unchanged
+(`burxt run pay.bx cside.o -lm`), so the C being declared can actually be linked.
+Burxt delegates linking to system tools and owns only object emission — the
+position the platform roadmap already took. This is what let the guarantee be
+tested against hand-written C rather than described: a test asserts `$19.99`
+arrives as `1999`, that 2^53 crosses unchanged, and that 2^53+1 dies with a named
+error instead of quietly becoming its neighbour.
+
+Spec: `spec/N1-BOUNDARY-EXACTNESS.md`, with its own must-NOT list — no implicit
+Decimal↔double conversion ever, no float type in Burxt, no "close enough" mode on
+the range check, and no serialization layer yet (there is no encoder to guard;
+when one is built it inherits these rules).
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -1457,6 +1519,10 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- N1. Boundary exactness, slice 1 (v0.0.30): `CDouble` as a nameable lossy
+  foreign type, `Decimal as scaled` marshallers declared on the signature,
+  range-checked `Int` → `CDouble`, and linker pass-through so the C being
+  declared can be linked. NOVELTY §1.
 - A4+. OOP by default, SOLID-aligned: by-pointer ABI + receiver methods,
   then interfaces as behavioral contracts (dictionary dispatch). No
   implementation inheritance — a type satisfies an interface exactly or it

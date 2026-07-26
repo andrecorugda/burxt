@@ -48,6 +48,11 @@ pub enum Type {
     /// runtime (a value that doesn't fit is a loud error, never a silent wrap).
     /// In Burxt code the value is always an Int.
     CInt,
+    /// C's `double`, at the FFI boundary only. It exists so that a crossing
+    /// which would LOSE exactness can be named, and therefore refused —
+    /// "a Decimal may not bind to a float" is unspellable without it. Burxt has
+    /// no float type of its own and this is not one.
+    CDouble,
     /// Decimal with a fixed scale S (digits after the decimal point).
     /// Represented at runtime as a scaled i64: stored = value * 10^scale.
     Decimal { scale: u32, rounding: Option<Rounding> },
@@ -87,6 +92,7 @@ impl std::fmt::Display for Type {
             Type::Bool => write!(f, "Bool"),
             Type::String => write!(f, "String"),
             Type::CInt => write!(f, "CInt"),
+            Type::CDouble => write!(f, "CDouble"),
             Type::Decimal { scale, rounding: None } => write!(f, "Decimal<{}>", scale),
             Type::Decimal { scale, rounding: Some(r) } => write!(f, "Decimal<{}, {}>", scale, r),
             Type::Named(name) => write!(f, "{}", name),
@@ -285,6 +291,28 @@ pub enum Stmt {
 pub struct Param {
     pub name: String,
     pub ty: Type,
+    /// How this value is encoded to cross a foreign boundary, when it is not
+    /// something C can hold directly. Only ever `Some` on an `extern fn`
+    /// parameter: a Burxt-to-Burxt call has no encoding question.
+    pub marshal: Option<Marshal>,
+}
+
+/// A declared, exactness-preserving encoding for crossing the C boundary.
+/// Declared on the SIGNATURE, not applied at the call site, so the scale is part
+/// of the contract instead of being lost in an `Int`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Marshal {
+    /// `Decimal<S> as scaled` — C receives the exact unscaled integer. Nothing
+    /// is converted and nothing rounds; the scale lives in the declared type.
+    Scaled,
+}
+
+impl std::fmt::Display for Marshal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Marshal::Scaled => write!(f, "scaled"),
+        }
+    }
 }
 
 /// `fn name(params) -> ret { body }`. Every function returns a value, and the

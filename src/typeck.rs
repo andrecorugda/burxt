@@ -242,6 +242,10 @@ pub struct TypeChecker {
     /// call checking is uniform, but they are NOT Burxt functions — a tail-call
     /// guarantee, for one, stops at the C boundary.
     extern_names: HashSet<String>,
+    /// extern name -> each parameter's DECLARED C-side shape (type, marshaller).
+    /// `fns` holds what Burxt code must pass; this holds what C receives, which
+    /// is what boundary-exactness errors have to talk about.
+    extern_params: HashMap<String, Vec<(Type, Option<Marshal>)>>,
     /// struct name -> fields (name, type) in declaration order; hoisted first.
     structs: HashMap<String, Vec<(String, Type)>>,
     /// enum name -> variants (name, payload types) in declaration order, which
@@ -273,6 +277,7 @@ impl TypeChecker {
             env: HashMap::new(),
             fns: HashMap::new(),
             extern_names: HashSet::new(),
+            extern_params: HashMap::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
             methods: HashMap::new(),
@@ -298,6 +303,14 @@ impl TypeChecker {
                     return Err(format!(
                         "struct `{}` declares the field `{}` twice",
                         s.name, f.name
+                    ));
+                }
+                if let Some(m) = f.marshal {
+                    return Err(format!(
+                        "struct `{}`: field `{}` is marked `as {}`, but marshalling \
+                         describes how a value crosses a FOREIGN boundary, not how \
+                         it is stored. Drop the `as {}`.",
+                        s.name, f.name, m, m
                     ));
                 }
                 fields.push((f.name.clone(), f.ty.clone()));
@@ -434,10 +447,21 @@ impl TypeChecker {
             self.check_extern(e)?;
             // Burxt code always sees CInt as Int; the width conversion is
             // codegen's job at the call site.
-            let seen = |t: &Type| if *t == Type::CInt { Type::Int } else { t.clone() };
+            // What Burxt code must pass, as opposed to what C receives:
+            // - CInt and CDouble are C's widths; Burxt passes an Int.
+            // - `Decimal<S> as scaled` keeps its exact Burxt type, scale and
+            //   all, because the scale IS the contract.
+            let seen = |t: &Type| match t {
+                Type::CInt | Type::CDouble => Type::Int,
+                other => other.clone(),
+            };
             let param_tys: Vec<Type> = e.params.iter().map(|p| seen(&p.ty)).collect();
             self.fns.insert(e.name.clone(), (param_tys, seen(&e.ret)));
             self.extern_names.insert(e.name.clone());
+            self.extern_params.insert(
+                e.name.clone(),
+                e.params.iter().map(|p| (p.ty.clone(), p.marshal)).collect(),
+            );
             externs.push(TypedExtern {
                 name: e.name.clone(),
                 params: e.params.iter().map(|p| p.ty.clone()).collect(),
@@ -952,14 +976,57 @@ impl TypeChecker {
             return Err(format!("function `{}` is defined twice", e.name));
         }
         for p in &e.params {
-            if !matches!(p.ty, Type::Int | Type::String | Type::CInt) {
-                return Err(format!(
-                    "in extern fn `{}`, parameter `{}` has type {}, but only Int, \
-                     CInt and String may cross the C boundary for now — C has no \
-                     {}, and the raw value would silently lose its meaning.",
-                    e.name, p.name, p.ty, p.ty
-                ));
+            match (&p.ty, p.marshal) {
+                // A Decimal crosses ONLY through a declared marshaller. This is
+                // the boundary-exactness rule: not "Decimals cannot cross" (a
+                // missing feature) but "Decimals cross only through an encoding
+                // that cannot lose them" (a guarantee).
+                (Type::Decimal { scale, .. }, Some(Marshal::Scaled)) => {
+                    let _ = scale;
+                }
+                (Type::Decimal { scale, .. }, None) => {
+                    return Err(format!(
+                        "in extern fn `{}`, parameter `{}` is {} and C has no \
+                         decimal type, so the crossing has to say how the value is \
+                         encoded. Declare `{}: {} as scaled` to pass the exact \
+                         unscaled integer (C receives it scaled by 10^{}), or take \
+                         a String and pass `to_string({})` as text.",
+                        e.name, p.name, p.ty, p.name, p.ty, scale, p.name
+                    ))
+                }
+                // A marshaller on anything else is meaningless: there is no
+                // encoding question to answer.
+                (other, Some(m)) => {
+                    return Err(format!(
+                        "in extern fn `{}`, parameter `{}` is {}, which C holds \
+                         directly — `as {}` only means something for a Decimal, \
+                         whose scale C has no way to carry.",
+                        e.name, p.name, other, m
+                    ))
+                }
+                (Type::Int | Type::String | Type::CInt | Type::CDouble, None) => {}
+                (other, None) => {
+                    return Err(format!(
+                        "in extern fn `{}`, parameter `{}` has type {}, but only \
+                         Int, CInt, CDouble, String and a marshalled Decimal may \
+                         cross the C boundary for now — C has no {}, and the raw \
+                         value would silently lose its meaning.",
+                        e.name, p.name, other, other
+                    ))
+                }
             }
+        }
+        // A CDouble return has nowhere exact to land: Burxt has no float type,
+        // and inventing an inexact receiver to complete the matrix would
+        // contradict the thesis. Say how to get the value exactly instead.
+        if e.ret == Type::CDouble {
+            return Err(format!(
+                "extern fn `{}` returns CDouble, but Burxt has no float type to \
+                 receive it exactly — a double cannot hold most decimal amounts. \
+                 Have the C function return the scaled integer (declare `-> Int`), \
+                 or return it as text.",
+                e.name
+            ));
         }
         if !matches!(e.ret, Type::Int | Type::CInt) {
             return Err(format!(
@@ -977,6 +1044,15 @@ impl TypeChecker {
         self.env.clear();
         let mut params = Vec::new();
         for p in &f.params {
+            if let Some(m) = p.marshal {
+                return Err(format!(
+                    "in `fn {}`, parameter `{}` is marked `as {}`, but marshalling \
+                     only exists where there is a foreign encoding to marshal \
+                     into. A Burxt-to-Burxt call passes the value itself, exactly \
+                     — drop the `as {}`.",
+                    f.name, p.name, m, m
+                ));
+            }
             if self.env.insert(p.name.clone(), (p.ty.clone(), false)).is_some() {
                 return Err(format!(
                     "function `{}` has two parameters named `{}`",
@@ -1017,6 +1093,14 @@ impl TypeChecker {
         );
         let mut params = Vec::new();
         for p in &m.params {
+            if let Some(mar) = p.marshal {
+                return Err(format!(
+                    "in `{}.{}`, parameter `{}` is marked `as {}`, but marshalling \
+                     only exists at a foreign boundary. A Burxt-to-Burxt call \
+                     passes the value itself, exactly — drop the `as {}`.",
+                    m.receiver, m.name, p.name, mar, mar
+                ));
+            }
             if p.name == "self" {
                 return Err(format!(
                     "in `{}.{}`: `self` is already the receiver; parameters \
@@ -2055,10 +2139,30 @@ impl TypeChecker {
                         args.len()
                     ));
                 }
+                let declared = self.extern_params.get(name).cloned();
                 let mut typed_args = Vec::new();
                 for (i, (arg, param_ty)) in args.iter().zip(&param_tys).enumerate() {
                     let typed = self.check_expr(arg, Some(param_ty))?;
                     if &typed.ty != param_ty {
+                        // The boundary-exactness case gets its own message,
+                        // because "argument 1 must be Int" would hide WHY: a
+                        // double cannot hold the amount, and there are two
+                        // encodings that can.
+                        if let (Some(d), Type::Decimal { scale, .. }) = (&declared, &typed.ty) {
+                            if d.get(i).map(|(t, _)| t) == Some(&Type::CDouble) {
+                                return Err(format!(
+                                    "a C `double` cannot hold {} exactly — a value \
+                                     like 0.10 is not representable in binary \
+                                     floating point, so this crossing would \
+                                     silently change the amount. Declare the \
+                                     parameter of `{}` as `{} as scaled` to pass \
+                                     the exact unscaled integer (C receives it \
+                                     scaled by 10^{}), or take a String and pass \
+                                     `to_string(...)` as text.",
+                                    typed.ty, name, typed.ty, scale
+                                ));
+                            }
+                        }
                         return Err(format!(
                             "in the call to `{}`, argument {} must be {}, \
                              but it has type {}",

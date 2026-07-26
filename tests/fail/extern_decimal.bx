@@ -1,3 +1,0 @@
-// Decimals do not cross the C boundary: C has no scale or rounding contract.
-extern fn cprice(x: Decimal<2>) -> Int;
-print(cprice(1.00));

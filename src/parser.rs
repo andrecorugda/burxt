@@ -127,7 +127,10 @@ impl Parser {
             };
             self.expect(&Token::Colon)?;
             let ty = self.parse_type()?;
-            fields.push(Param { name: fname, ty });
+            // Accepted here only so the typechecker can explain WHY a field
+            // cannot have one; "expected `}`" would not teach anything.
+            let marshal = self.parse_marshal()?;
+            fields.push(Param { name: fname, ty, marshal });
             if self.at(&Token::Comma) {
                 self.bump(); // trailing comma allowed
             } else {
@@ -264,7 +267,7 @@ impl Parser {
             };
             self.expect(&Token::Colon)?;
             let ty = self.parse_type()?;
-            params.push(Param { name: pname, ty });
+            params.push(Param { name: pname, ty, marshal: None });
         }
         self.expect(&Token::RParen)?;
         if !self.at(&Token::Arrow) {
@@ -378,6 +381,26 @@ impl Parser {
         Ok(MethodDef { receiver, receiver_mut, name, params, ret, body })
     }
 
+    /// `as <marshaller>` declares how a value crosses a foreign boundary.
+    /// Parsed everywhere a type can appear, and refused with an explanation
+    /// wherever it makes no sense — a parse error would say `expected }` and
+    /// teach nothing.
+    fn parse_marshal(&mut self) -> Result<Option<Marshal>, String> {
+        if !self.at(&Token::As) {
+            return Ok(None);
+        }
+        self.bump();
+        match self.bump() {
+            Token::Ident(word) if word == "scaled" => Ok(Some(Marshal::Scaled)),
+            other => Err(format!(
+                "unknown boundary marshaller {} — the only one is `scaled`, as in \
+                 `amount: Decimal<2> as scaled`, which passes the exact unscaled \
+                 integer.",
+                other.describe()
+            )),
+        }
+    }
+
     fn parse_fn_signature(&mut self) -> Result<(String, Vec<Param>, Type), String> {
         let name = match self.bump() {
             Token::Ident(s) => s,
@@ -393,7 +416,8 @@ impl Parser {
                 };
                 self.expect(&Token::Colon)?;
                 let ty = self.parse_type()?;
-                params.push(Param { name: pname, ty });
+                let marshal = self.parse_marshal()?;
+                params.push(Param { name: pname, ty, marshal });
                 if self.at(&Token::Comma) {
                     self.bump();
                 } else {
@@ -725,6 +749,7 @@ impl Parser {
             Token::TyBool => Ok(Type::Bool),
             Token::TyString => Ok(Type::String),
             Token::TyCInt => Ok(Type::CInt),
+            Token::TyCDouble => Ok(Type::CDouble),
             Token::TyDecimal => {
                 self.expect(&Token::Lt)?;
                 let scale = match self.bump() {

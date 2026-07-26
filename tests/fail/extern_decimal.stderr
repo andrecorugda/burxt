@@ -1,1 +1,0 @@
-only Int, CInt and String may cross the C boundary

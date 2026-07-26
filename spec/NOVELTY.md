@@ -61,6 +61,19 @@ foreign type's width honestly).
 **The claim it earns:** *exact end-to-end, not merely exact in memory.* No
 language can say this.
 
+**Slice 1 SHIPPED in v0.0.30** — see `spec/N1-BOUNDARY-EXACTNESS.md`. What landed
+is the FFI half, which is the only boundary that exists today: `CDouble` names
+C's `double` so a lossy crossing can be refused rather than merely absent;
+`Decimal<S>` → `CDouble` is a compile error naming the loss; `Int` → `CDouble` is
+range-checked at 2^53; and a Decimal crosses only through a marshaller declared
+on the SIGNATURE (`amount: Decimal<2> as scaled`), so the scale is part of the
+contract instead of being lost in an `Int` at the call site. A test checks all of
+it against hand-written C.
+
+**Still open in §1:** serialization and database boundaries, which need an
+encoder to exist before there is anything to guard. When one is built it inherits
+these rules rather than inventing its own.
+
 ---
 
 ## 2. Provably deterministic money math (via forbidden effects)
