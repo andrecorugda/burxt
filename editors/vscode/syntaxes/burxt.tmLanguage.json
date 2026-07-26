@@ -215,7 +215,7 @@
       "patterns": [
         {
           "name": "keyword.control.burxt",
-          "match": "\\b(if|else|while|match|return|for)\\b"
+          "match": "\\b(if|else|while|match|return|for|break|continue)\\b"
         },
         {
           "comment": "`return tail f(x)` asks for a GUARANTEED tail call: constant stack, or a compile error.",

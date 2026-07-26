@@ -613,6 +613,16 @@ impl Parser {
         match self.peek() {
             Token::Let => self.parse_let(),
             Token::Print => self.parse_print(),
+            Token::Break => {
+                self.bump();
+                self.expect(&Token::Semicolon)?;
+                Ok(StmtKind::Break)
+            }
+            Token::Continue => {
+                self.bump();
+                self.expect(&Token::Semicolon)?;
+                Ok(StmtKind::Continue)
+            }
             Token::Return => self.parse_return(),
             Token::If => self.parse_if(),
             Token::While => self.parse_while(),

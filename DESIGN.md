@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.49)
+# Burxt — Design Notes (v0.0.50)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -2423,6 +2423,44 @@ compiler will be one file until imports exist. Recorded rather than fixed: a mod
 system is a design question about namespaces and compilation units, and it earns its
 place when a single file stops being tolerable rather than when it stops being pretty.
 
+### v0.0.50: `break` and `continue`, earned by evidence
+
+These had been on the deferred list since v0.0.11 with the note "nothing has needed
+them yet, so they stay deferred rather than speculative". Then the self-hosted code
+started working around their absence, in two different ways:
+
+```text
+let mut running: Bool = true;      // examples/lexer.bx — a flag to leave a loop
+while running { ... running = false; ... }
+
+let mut guard: Int = 0;            // examples/symbols.bx — a counter to bound one
+while cursor < len(src) && guard < 10000 { ... guard = guard + 1; }
+```
+
+That is the ledger's rule working: **a feature earns its place when a program needs
+it**, and three programs needed this one. All three now say what they mean, and the
+workarounds are gone.
+
+**The interesting part was regions.** A jump out of a loop has the same problem
+`return` had in v0.0.29 — if a `region` was opened inside the loop, leaving it must
+release the region, or the bump cursor climbs forever. But a region that *encloses*
+the loop must **not** be released, because the jump stays inside it. Guessing would
+be wrong half the time, so the loop records what was open when it started, and the
+jump compares: region open now, none open at loop entry ⇒ it was opened inside ⇒
+release it.
+
+The test for that runs 30,000 iterations, each opening a region and leaving it by
+`continue`. Without the release it dies of region exhaustion; with it the memory is
+reused. That is the same shape as the v0.0.29 test, for the same reason.
+
+**One distinction that mattered more than it looks.** `break` ends a block, so code
+after it is unreachable — but it must **not** satisfy a function's obligation to
+return a value. Conflating the two would accept `fn f() -> Int { while true { break; } }`.
+So there are now two questions asked of a statement: *does control leave it*
+(`stmt_diverges`, used for unreachable code) and *does it return a value*
+(`stmt_returns`, used for the return-path proof). A test asserts the second still
+refuses a function that ends in `break`.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -2487,6 +2525,9 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- A5.0b. `break` and `continue` (v0.0.50), with the region-release rule a jump out of
+  a loop needs. Deferred since v0.0.11 until three self-hosted programs worked around
+  their absence.
 - M4b. Self-hosting, fourth piece (v0.0.49): the scale rule in Burxt — matching scales
   for `+`, a mandatory rounding contract for `Decimal * Decimal`, and the product's
   exact scale computed. The thesis checking itself.

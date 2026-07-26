@@ -1,0 +1,6 @@
+fn f() -> Int {
+    while true {
+        break;
+    }
+}
+print(f());

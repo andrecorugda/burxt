@@ -1,0 +1,4 @@
+fn f() -> Int {
+    continue;
+}
+print(f());

@@ -309,6 +309,10 @@ pub enum StmtKind {
     Print(Expr),
     /// `return expr;` — only valid inside a function.
     Return(Expr),
+    /// `break;` — leave the enclosing loop.
+    Break,
+    /// `continue;` — jump to the enclosing loop's next test.
+    Continue,
     /// `return tail f(args);` — a call the compiler must turn into a real tail
     /// call (constant stack) or refuse to compile. Never a silent difference
     /// between "optimized" and "hoped for".

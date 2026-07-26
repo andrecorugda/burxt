@@ -375,10 +375,11 @@ region pass {
     let src: String = read_file("examples/inputs/money.bx");
     let mut table: Table = Table { rows: [] };
     let mut cursor: Int = 0;
-    let mut guard: Int = 0;
-    while cursor < len(src) && guard < 20000 {
+    while true {
+        if cursor >= len(src) {
+            break;
+        }
         cursor = table.check_let(src, cursor);
-        guard = guard + 1;
     }
     print("--- checked " + to_string(len(table.rows)) + " declarations");
 }

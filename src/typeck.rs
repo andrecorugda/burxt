@@ -150,6 +150,9 @@ pub enum TypedStmt {
     Match { value: TypedExpr, arms: Vec<TypedArm> },
     /// `print` of an interpolated string: emit each piece in order.
     PrintInterp(Vec<TypedInterpPart>),
+    /// Leave the enclosing loop, or jump to its next test.
+    Break,
+    Continue,
     Return(TypedExpr),
     /// A guaranteed tail call: the frame is replaced, not stacked. Typeck has
     /// already proven the two signatures match, so codegen can emit `musttail`
@@ -329,6 +332,10 @@ pub struct TypeChecker {
     /// arguments, checked. Hoisted with the signatures so a call to one can be
     /// judged in a single pass, in either direction.
     pure_fns: HashSet<String>,
+    /// How many loops enclose the statement being checked. `break` and `continue`
+    /// outside a loop have nothing to act on, and saying so beats generating a jump
+    /// to nowhere.
+    loop_depth: u32,
     /// True while checking an `ensures` clause specifically: only there does
     /// `old(...)` mean anything, and only there is `result` in scope.
     in_ensures: bool,
@@ -360,6 +367,7 @@ impl TypeChecker {
             pure_fns: HashSet::new(),
             in_pure: None,
             in_contract: false,
+            loop_depth: 0,
             in_ensures: false,
             olds: RefCell::new(Vec::new()),
             in_caller_region: false,
@@ -1680,9 +1688,17 @@ impl TypeChecker {
         let mut out: Vec<TypedStmt> = Vec::new();
         let errors_before = self.errors.len();
         for s in stmts {
-            if out.last().is_some_and(stmt_returns) {
+            if out.last().is_some_and(stmt_diverges) {
                 self.current_span.set(s.span);
-                self.record("unreachable statement: this code comes after a `return`");
+                let after = match out.last().map(|p| &*p) {
+                    Some(TypedStmt::Break) => "`break`",
+                    Some(TypedStmt::Continue) => "`continue`",
+                    _ => "`return`",
+                };
+                self.record(format!(
+                    "unreachable statement: this code comes after {}",
+                    after
+                ));
                 // One report is enough: everything after a `return` is
                 // unreachable, and saying so five times is noise.
                 break;
@@ -2029,6 +2045,16 @@ impl TypeChecker {
                 typed_arms.sort_by_key(|a| a.tag);
                 Ok(TypedStmt::Match { value: scrutinee, arms: typed_arms })
             }
+            StmtKind::Break | StmtKind::Continue => {
+                let word = if matches!(s.kind, StmtKind::Break) { "break" } else { "continue" };
+                if self.loop_depth == 0 {
+                    return Err(format!(
+                        "`{}` only means something inside a loop: there is none here.",
+                        word
+                    ));
+                }
+                Ok(if word == "break" { TypedStmt::Break } else { TypedStmt::Continue })
+            }
             StmtKind::While { cond, body } => {
                 let cond = self.check_expr(cond, None)?;
                 if cond.ty != Type::Bool {
@@ -2038,8 +2064,10 @@ impl TypeChecker {
                         cond.ty
                     ));
                 }
-                let body = self.check_block(body)?;
-                Ok(TypedStmt::While { cond, body })
+                self.loop_depth += 1;
+                let body = self.check_block(body);
+                self.loop_depth -= 1;
+                Ok(TypedStmt::While { cond, body: body? })
             }
             StmtKind::Print(e) => {
                 if let Some(why) = self.impure("print") {
@@ -3538,6 +3566,7 @@ fn calls_itself(body: &[Stmt], name: &str) -> bool {
             StmtKind::Match { value, arms } => {
                 in_expr(value, name) || arms.iter().any(|a| block(&a.body))
             }
+            StmtKind::Break | StmtKind::Continue => false,
         }
     }
 
@@ -3572,6 +3601,30 @@ fn mentions(e: &Expr, name: &str) -> bool {
         | ExprKind::BoolLit(_)
         | ExprKind::StrLit(_) => false,
     }
+}
+
+/// Does control leave this statement without falling through — by returning, or by
+/// jumping out of a loop? Used for the unreachable-code check.
+///
+/// Deliberately NOT the same question as `stmt_returns`: a `break` ends a block but
+/// does not satisfy a function's obligation to return a value, and conflating the two
+/// would let a function end in `break` and be accepted.
+fn stmt_diverges(s: &TypedStmt) -> bool {
+    match s {
+        TypedStmt::Break | TypedStmt::Continue => true,
+        TypedStmt::If { then_block, else_block: Some(e), .. } => {
+            block_diverges(then_block) && block_diverges(e)
+        }
+        TypedStmt::Match { arms, .. } => {
+            !arms.is_empty() && arms.iter().all(|a| block_diverges(&a.body))
+        }
+        TypedStmt::Region { body, .. } => block_diverges(body),
+        other => stmt_returns(other),
+    }
+}
+
+fn block_diverges(stmts: &[TypedStmt]) -> bool {
+    stmts.last().is_some_and(stmt_diverges)
 }
 
 /// Does this statement return on every path through it?

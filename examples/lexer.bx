@@ -133,15 +133,16 @@ fn show(t: Token, offset: Int) -> Int allocates {
 fn tokenize(src: String) -> Int allocates {
     let mut pos: Int = 0;
     let mut count: Int = 0;
-    let mut running: Bool = true;
-    while running {
+    // `while true { ... break; }` says "until the end token" directly. Before
+    // v0.0.50 this loop carried a `running: Bool` flag to do the same thing, which
+    // is the evidence that earned `break` its place.
+    while true {
         let s: Scan = next_token(src, pos);
         pos = s.next;
         if show(s.tok, s.next - 1) == 0 {
-            running = false;
-        } else {
-            count = count + 1;
+            break;
         }
+        count = count + 1;
     }
     return count;
 }

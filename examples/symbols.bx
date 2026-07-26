@@ -142,10 +142,11 @@ region pass {
     let mut table: Table = Table { entries: [] };
 
     let mut cursor: Int = 0;
-    let mut guard: Int = 0;
-    while cursor < len(src) && guard < 10000 {
+    while true {
+        if cursor >= len(src) {
+            break;
+        }
         cursor = table.collect(src, cursor);
-        guard = guard + 1;
     }
 
     print("--- " + to_string(len(table.entries)) + " names in scope");

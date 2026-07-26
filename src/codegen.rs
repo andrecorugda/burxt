@@ -109,6 +109,9 @@ pub struct CodeGen<'ctx> {
     /// on entry. A clause reads the slot rather than re-evaluating, which is the
     /// point: the value has to be the one from BEFORE the body ran.
     old_slots: Vec<(PointerValue<'ctx>, Type)>,
+    /// The enclosing loops of the statement being generated: where `continue` goes,
+    /// where `break` goes, and what region was open when the loop started.
+    loop_stack: Vec<(inkwell::basic_block::BasicBlock<'ctx>, inkwell::basic_block::BasicBlock<'ctx>, Option<IntValue<'ctx>>)>,
     /// The postconditions of the function being generated, with the name of that
     /// function: every `return` has to check them, and the check needs both the
     /// clause and the name to write its message.
@@ -162,6 +165,7 @@ impl<'ctx> CodeGen<'ctx> {
             current_sret: None,
             region_mark: None,
             current_ensures: Vec::new(),
+            loop_stack: Vec::new(),
             old_slots: Vec::new(),
             current_measure: None,
             struct_types: HashMap::new(),
@@ -594,6 +598,26 @@ impl<'ctx> CodeGen<'ctx> {
                 }
                 Ok(())
             }
+            // `break` and `continue` are jumps to blocks the enclosing loop set up.
+            // If a `region` was opened INSIDE the loop, leaving it by either jump has
+            // to release it, exactly as `return` does — but a region that ENCLOSES the
+            // loop must not be touched, because the jump stays inside it. The loop
+            // records what was open when it started, so the two cases are
+            // distinguishable rather than guessed.
+            TypedStmt::Break | TypedStmt::Continue => {
+                let (cond_bb, end_bb, mark_at_entry) = *self
+                    .loop_stack
+                    .last()
+                    .ok_or("codegen bug: `break` outside a loop")?;
+                if self.region_mark.is_some() && mark_at_entry.is_none() {
+                    self.close_open_region()?;
+                }
+                let target = if matches!(stmt, TypedStmt::Break) { end_bb } else { cond_bb };
+                self.builder
+                    .build_unconditional_branch(target)
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            }
             TypedStmt::While { cond, body } => self.gen_while(cond, body),
             TypedStmt::Print(e) => self.gen_print(e),
             TypedStmt::PrintInterp(parts) => {
@@ -785,7 +809,13 @@ impl<'ctx> CodeGen<'ctx> {
             .map_err(err)?;
 
         self.builder.position_at_end(body_bb);
-        self.gen_block(body)?;
+        // What `break` and `continue` inside this body will jump to, plus the region
+        // that was open before the loop — so a jump can tell "opened inside the loop"
+        // from "encloses the loop".
+        self.loop_stack.push((cond_bb, end_bb, self.region_mark));
+        let generated = self.gen_block(body);
+        self.loop_stack.pop();
+        generated?;
         if self.current_block_open() {
             self.builder.build_unconditional_branch(cond_bb).map_err(err)?;
         }

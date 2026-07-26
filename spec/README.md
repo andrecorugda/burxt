@@ -14,7 +14,7 @@ answers.
 **Read this file first.** The specs were written when Burxt was at roughly
 v0.0.1, so several describe work that is now done, and one describes work that
 was built in a different order than specified. This index records what is
-actually true as of **v0.0.49**, audited by running the compiler — not by
+actually true as of **v0.0.50**, audited by running the compiler — not by
 reading the specs. Where a spec and the implementation disagree, the note says
 which is right.
 
@@ -62,8 +62,8 @@ Two deviations from the spec worth recording, both deliberate:
 - **`Bool` is an i64 holding 0/1, not an LLVM `i1`** (spec §4). One uniform
   value width keeps variables, parameters, and returns simple; `i1` appears
   only transiently at comparisons and branches. No observable difference.
-- `break` / `continue` are still absent. The spec called them a fast follow;
-  nothing has needed them yet, so they stay deferred rather than speculative.
+- ~~`break` / `continue`~~ — **shipped in v0.0.50**, earned by three self-hosted
+  programs each working around their absence.
 
 ### A4.4 Strings & Collections — arrays done, strings half done
 
@@ -199,7 +199,7 @@ In dependency order, cheapest and most-unblocking first:
     dependency. **Error recovery shipped in v0.0.37**: every type error is
     reported at once, cascade-free because every `let` declares its type.
 14. Still unblocked polish: A4.7's units/contracts/pipelines, `.chars()`,
-    `[0; N]` repeat literals, `break`/`continue`, iterative AST walkers, and a
+    `[0; N]` repeat literals, iterative AST walkers, and a
     NAMED stack-overflow error (tail calls avoid it; they do not name it).
 
 **Priority note:** the stated goal is a compiler written in Burxt. Measured
