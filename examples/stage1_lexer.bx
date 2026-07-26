@@ -1,0 +1,376 @@
+// ============================================================================
+// Stage-1 lexer: the REAL token set, written in Burxt.
+//
+// examples/lexer.bx is a demonstration — ten token kinds, arithmetic only. This is
+// the lexer a self-hosted compiler needs: every punctuation form, the keyword table,
+// exact money and percent literals, string literals with escapes, and comments.
+//
+// Nothing here uses a map, because Burxt has none: the keyword table is an array
+// searched linearly, which is what a compiler's keyword lookup costs anyway.
+// ============================================================================
+
+// ---- token kinds -----------------------------------------------------------
+// Codes rather than an enum: a 60-variant enum would force a 60-arm `match` at
+// every use, and the payloads differ per kind. The names live in `kind_name`.
+//   1 identifier      2 Int literal      3 Decimal literal     4 String literal
+//   10..49 punctuation                   100.. keywords
+struct Tok {
+    kind: Int,
+    start: Int,
+    length: Int,
+    // Int literals: the value. Decimals: the unscaled integer, with `scale` places.
+    value: Int,
+    scale: Int,
+    // A string literal containing `{` opens an interpolation; splitting the pieces
+    // is the parser's job, so the lexer only records that there is one.
+    interpolated: Bool,
+}
+
+struct Kw { word: String, code: Int }
+struct Lexer { toks: [Tok], words: [Kw], errors: Int }
+
+fn is_alpha(b: Int) -> Bool {
+    return (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95;
+}
+
+fn is_digit(b: Int) -> Bool {
+    return b >= 48 && b <= 57;
+}
+
+fn is_name_byte(b: Int) -> Bool {
+    return is_alpha(b) || is_digit(b);
+}
+
+fn is_space(b: Int) -> Bool {
+    return b == 32 || b == 9 || b == 10 || b == 13;
+}
+
+fn at_byte(src: String, i: Int) -> Int {
+    if i < 0 || i >= len(src) {
+        return -1;
+    }
+    return byte_at(src, i);
+}
+
+// Compare a span of the source against a whole word, without allocating.
+fn span_eq(src: String, start: Int, length: Int, word: String) -> Bool {
+    if length != len(word) {
+        return false;
+    }
+    let mut i: Int = 0;
+    while i < length {
+        if byte_at(src, start + i) != byte_at(word, i) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// ---- the keyword table -----------------------------------------------------
+// Codes from 100. Order does not matter; the lookup is a scan.
+fn (mut self: Lexer) add_word(word: String, code: Int) -> Int {
+    push(self.words, Kw { word: word, code: code });
+    return len(self.words);
+}
+
+fn (mut self: Lexer) install_keywords() -> Int {
+    let mut n: Int = 0;
+    n = self.add_word("let", 100);
+    n = self.add_word("mut", 101);
+    n = self.add_word("fn", 102);
+    n = self.add_word("return", 103);
+    n = self.add_word("if", 104);
+    n = self.add_word("else", 105);
+    n = self.add_word("while", 106);
+    n = self.add_word("break", 107);
+    n = self.add_word("continue", 108);
+    n = self.add_word("struct", 109);
+    n = self.add_word("enum", 110);
+    n = self.add_word("match", 111);
+    n = self.add_word("trait", 112);
+    n = self.add_word("impl", 113);
+    n = self.add_word("for", 114);
+    n = self.add_word("dyn", 115);
+    n = self.add_word("extern", 116);
+    n = self.add_word("region", 117);
+    n = self.add_word("print", 118);
+    n = self.add_word("self", 119);
+    n = self.add_word("true", 120);
+    n = self.add_word("false", 121);
+    n = self.add_word("as", 122);
+    n = self.add_word("tail", 123);
+    n = self.add_word("pure", 124);
+    n = self.add_word("allocates", 125);
+    n = self.add_word("requires", 126);
+    n = self.add_word("ensures", 127);
+    n = self.add_word("decreases", 128);
+    n = self.add_word("interface", 129);
+    n = self.add_word("is", 130);
+    // Type names are keywords too: the parser needs them distinguished from
+    // ordinary identifiers, exactly as the Rust lexer does.
+    n = self.add_word("Int", 140);
+    n = self.add_word("Bool", 141);
+    n = self.add_word("String", 142);
+    n = self.add_word("CInt", 143);
+    n = self.add_word("CDouble", 144);
+    n = self.add_word("Decimal", 145);
+    n = self.add_word("RoundHalfEven", 146);
+    n = self.add_word("RoundHalfUp", 147);
+    return n;
+}
+
+// An identifier's span, or a keyword code if the table has it.
+fn (self: Lexer) keyword_code(src: String, start: Int, length: Int) -> Int {
+    let mut i: Int = 0;
+    while i < len(self.words) {
+        if span_eq(src, start, length, self.words[i].word) {
+            return self.words[i].code;
+        }
+        i = i + 1;
+    }
+    return 1;
+}
+
+fn (mut self: Lexer) emit(kind: Int, start: Int, length: Int) -> Int {
+    push(self.toks, Tok {
+        kind: kind, start: start, length: length,
+        value: 0, scale: 0, interpolated: false,
+    });
+    return len(self.toks);
+}
+
+fn (mut self: Lexer) emit_number(kind: Int, start: Int, length: Int, value: Int, scale: Int) -> Int {
+    push(self.toks, Tok {
+        kind: kind, start: start, length: length,
+        value: value, scale: scale, interpolated: false,
+    });
+    return len(self.toks);
+}
+
+fn (mut self: Lexer) emit_string(start: Int, length: Int, interpolated: Bool) -> Int {
+    push(self.toks, Tok {
+        kind: 4, start: start, length: length,
+        value: 0, scale: 0, interpolated: interpolated,
+    });
+    return len(self.toks);
+}
+
+// ---- whitespace and comments ----------------------------------------------
+fn skip_trivia(src: String, from: Int) -> Int {
+    let mut i: Int = from;
+    while true {
+        let mut moved: Bool = false;
+        while i < len(src) && is_space(byte_at(src, i)) {
+            i = i + 1;
+            moved = true;
+        }
+        if at_byte(src, i) == 47 && at_byte(src, i + 1) == 47 {
+            while i < len(src) && byte_at(src, i) != 10 {
+                i = i + 1;
+            }
+            moved = true;
+        }
+        if !moved {
+            break;
+        }
+    }
+    return i;
+}
+
+// ---- numbers ---------------------------------------------------------------
+// `19.99` is the unscaled integer 1999 with scale 2 — accumulated digit by digit,
+// never through a float. `$19.99` is the same. `8.25%` is two places finer.
+fn (mut self: Lexer) scan_number(src: String, from: Int) -> Int allocates {
+    let mut i: Int = from;
+    let money: Bool = byte_at(src, i) == 36;         // '$'
+    if money {
+        i = i + 1;
+    }
+    let mut value: Int = 0;
+    while i < len(src) && is_digit(byte_at(src, i)) {
+        value = value * 10 + (byte_at(src, i) - 48);
+        i = i + 1;
+    }
+    let mut scale: Int = 0;
+    if at_byte(src, i) == 46 && is_digit(at_byte(src, i + 1)) {
+        i = i + 1;
+        while i < len(src) && is_digit(byte_at(src, i)) {
+            value = value * 10 + (byte_at(src, i) - 48);
+            scale = scale + 1;
+            i = i + 1;
+        }
+    }
+    if at_byte(src, i) == 37 {                       // '%'
+        i = i + 1;
+        // A percent is the number divided by a hundred: two more places, exactly.
+        let n: Int = self.emit_number(3, from, i - from, value, scale + 2);
+        return i;
+    }
+    if money || scale > 0 {
+        let n: Int = self.emit_number(3, from, i - from, value, scale);
+        return i;
+    }
+    let n: Int = self.emit_number(2, from, i - from, value, 0);
+    return i;
+}
+
+// ---- strings ---------------------------------------------------------------
+fn (mut self: Lexer) scan_string(src: String, from: Int) -> Int allocates {
+    let mut i: Int = from + 1;
+    let mut interpolated: Bool = false;
+    while true {
+        if i >= len(src) {
+            print("error: unterminated string literal");
+            self.errors = self.errors + 1;
+            break;
+        }
+        let b: Int = byte_at(src, i);
+        if b == 92 {                                 // '\' — an escape, whatever follows
+            i = i + 2;
+            continue;
+        }
+        if b == 123 {                                // '{' opens an interpolation
+            interpolated = true;
+            i = i + 1;
+            continue;
+        }
+        if b == 34 {                                 // '"' closes it
+            i = i + 1;
+            break;
+        }
+        i = i + 1;
+    }
+    let n: Int = self.emit_string(from, i - from, interpolated);
+    return i;
+}
+
+// ---- punctuation -----------------------------------------------------------
+// Two-character forms are tried first: `-` and `->` differ by one byte and mean
+// entirely different things.
+fn (mut self: Lexer) scan_punct(src: String, from: Int) -> Int allocates {
+    let one: Int = byte_at(src, from);
+    let two: Int = at_byte(src, from + 1);
+    if one == 45 && two == 62 { let n: Int = self.emit(10, from, 2); return from + 2; }  // ->
+    if one == 61 && two == 62 { let n: Int = self.emit(11, from, 2); return from + 2; }  // =>
+    if one == 61 && two == 61 { let n: Int = self.emit(12, from, 2); return from + 2; }  // ==
+    if one == 33 && two == 61 { let n: Int = self.emit(13, from, 2); return from + 2; }  // !=
+    if one == 60 && two == 61 { let n: Int = self.emit(14, from, 2); return from + 2; }  // <=
+    if one == 62 && two == 61 { let n: Int = self.emit(15, from, 2); return from + 2; }  // >=
+    if one == 38 && two == 38 { let n: Int = self.emit(16, from, 2); return from + 2; }  // &&
+    if one == 124 && two == 124 { let n: Int = self.emit(17, from, 2); return from + 2; } // ||
+
+    if one == 58 { let n: Int = self.emit(20, from, 1); return from + 1; }   // :
+    if one == 59 { let n: Int = self.emit(21, from, 1); return from + 1; }   // ;
+    if one == 44 { let n: Int = self.emit(22, from, 1); return from + 1; }   // ,
+    if one == 46 { let n: Int = self.emit(23, from, 1); return from + 1; }   // .
+    if one == 61 { let n: Int = self.emit(24, from, 1); return from + 1; }   // =
+    if one == 43 { let n: Int = self.emit(25, from, 1); return from + 1; }   // +
+    if one == 45 { let n: Int = self.emit(26, from, 1); return from + 1; }   // -
+    if one == 42 { let n: Int = self.emit(27, from, 1); return from + 1; }   // *
+    if one == 47 { let n: Int = self.emit(28, from, 1); return from + 1; }   // /
+    if one == 40 { let n: Int = self.emit(29, from, 1); return from + 1; }   // (
+    if one == 41 { let n: Int = self.emit(30, from, 1); return from + 1; }   // )
+    if one == 123 { let n: Int = self.emit(31, from, 1); return from + 1; }  // {
+    if one == 125 { let n: Int = self.emit(32, from, 1); return from + 1; }  // }
+    if one == 91 { let n: Int = self.emit(33, from, 1); return from + 1; }   // [
+    if one == 93 { let n: Int = self.emit(34, from, 1); return from + 1; }   // ]
+    if one == 60 { let n: Int = self.emit(35, from, 1); return from + 1; }   // <
+    if one == 62 { let n: Int = self.emit(36, from, 1); return from + 1; }   // >
+    if one == 33 { let n: Int = self.emit(37, from, 1); return from + 1; }   // !
+
+    print("error: byte " + to_string(one) + " starts no token");
+    self.errors = self.errors + 1;
+    return from + 1;
+}
+
+// ---- the loop --------------------------------------------------------------
+fn (mut self: Lexer) run(src: String) -> Int allocates {
+    let mut i: Int = 0;
+    while true {
+        i = skip_trivia(src, i);
+        if i >= len(src) {
+            break;
+        }
+        let b: Int = byte_at(src, i);
+        if is_alpha(b) {
+            let start: Int = i;
+            while i < len(src) && is_name_byte(byte_at(src, i)) {
+                i = i + 1;
+            }
+            let code: Int = self.keyword_code(src, start, i - start);
+            let n: Int = self.emit(code, start, i - start);
+            continue;
+        }
+        if is_digit(b) || (b == 36 && is_digit(at_byte(src, i + 1))) {
+            i = self.scan_number(src, i);
+            continue;
+        }
+        if b == 34 {
+            i = self.scan_string(src, i);
+            continue;
+        }
+        i = self.scan_punct(src, i);
+    }
+    return len(self.toks);
+}
+
+// ---- reporting -------------------------------------------------------------
+fn kind_name(kind: Int) -> String allocates {
+    if kind == 1 { return "ident"; }
+    if kind == 2 { return "int"; }
+    if kind == 3 { return "decimal"; }
+    if kind == 4 { return "string"; }
+    if kind >= 140 { return "type"; }
+    if kind >= 100 { return "keyword"; }
+    return "punct";
+}
+
+fn (self: Lexer) report(src: String, limit: Int) -> Int allocates {
+    let mut i: Int = 0;
+    while i < len(self.toks) && i < limit {
+        let t: Tok = self.toks[i];
+        let text: String = substring(src, t.start, t.length);
+        if t.kind == 3 {
+            print("  decimal " + text + " -> unscaled " + to_string(t.value)
+                  + " scale " + to_string(t.scale));
+        } else {
+            print("  " + kind_name(t.kind) + " `" + text + "`");
+        }
+        i = i + 1;
+    }
+    return i;
+}
+
+fn (self: Lexer) count_of(kind: Int) -> Int {
+    let mut i: Int = 0;
+    let mut found: Int = 0;
+    while i < len(self.toks) {
+        if self.toks[i].kind == kind {
+            found = found + 1;
+        }
+        i = i + 1;
+    }
+    return found;
+}
+
+region compile {
+    // The file to lex: whatever was asked for, or the tour as a default.
+    let mut path: String = "examples/tour.bx";
+    if arg_count() > 1 {
+        path = arg(1);
+    }
+    let src: String = read_file(path);
+    let mut lexer: Lexer = Lexer { toks: [], words: [], errors: 0 };
+    let installed: Int = lexer.install_keywords();
+    let total: Int = lexer.run(src);
+
+    print("lexed " + path + ": " + to_string(total) + " tokens, "
+          + to_string(installed) + " keywords known");
+    print("  identifiers: " + to_string(lexer.count_of(1)));
+    print("  decimals:    " + to_string(lexer.count_of(3)));
+    print("  strings:     " + to_string(lexer.count_of(4)));
+    print("  errors:      " + to_string(lexer.errors));
+    print("first tokens:");
+    let shown: Int = lexer.report(src, 12);
+}

@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.51)
+# Burxt — Design Notes (v0.0.52)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -2497,6 +2497,42 @@ emits textual LLVM IR.** It cannot drive LLVM's C API, because `extern fn` retur
 describe, so an `LLVMBuilderRef` is unreachable *by construction*. Emitting text is
 simpler anyway: string formatting instead of a builder, and output you can diff.
 
+### v0.0.52: the stage-1 lexer, and it lexes itself
+
+M4 phase 2. `examples/stage1_lexer.bx` is 376 lines of Burxt and is **not** a
+demonstration: every punctuation form including the eight two-character ones, a
+39-entry keyword table with type names distinguished from identifiers, string literals
+with escapes and interpolation detection, comments, and exact money and percent
+literals.
+
+```text
+lexed examples/tour.bx: 393 tokens, 39 keywords known
+  decimal $19.99 -> unscaled 1999 scale 2
+```
+
+`$19.99` becomes the unscaled integer **1999 with scale 2**, accumulated digit by
+digit — the thesis holding inside the self-hosted lexer, not just in the compiler that
+compiled it. A percent literal comes out two places finer, exactly as the Rust lexer
+makes it.
+
+**It lexes its own source**: 3,131 tokens, zero errors. And a new test makes that a
+standing guarantee rather than an anecdote — the Burxt lexer is run over **every
+Burxt source in the repository**, including itself and all 81 programs in the pass
+suite. Those files already compile, so the Rust lexer accepts them by definition;
+any byte the Burxt lexer refuses is a **disagreement between two implementations**,
+and one of them would be wrong. That is the first cross-check between stage-0 and
+stage-1, and the shape every later phase will reuse.
+
+**What the language made awkward, honestly.** Token kinds are `Int` codes rather than
+an enum, because a 60-variant enum would force a 60-arm `match` at every use and the
+payloads differ per kind. That is a real cost of exhaustive matching without a
+wildcard — the rule that has caught genuine bugs elsewhere is a nuisance here. Kept,
+because the alternative is `_`, which v0.0.20 refused on purpose.
+
+**And a small thing the compiler got right unprompted:** three scanners had to be
+declared `allocates`, because building `"error: byte " + to_string(one)` allocates —
+and the compiler said so, naming the fix, in a file it had never seen before.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -2561,6 +2597,9 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- M4 phase 2 (v0.0.52): the stage-1 lexer in Burxt — the real token set, exact money
+  literals, and a cross-check that it accepts every Burxt source in the repository
+  including its own.
 - M4 phase 1 (v0.0.51): `arg`, `arg_count`, `write_file`, and a 1 GB lazily-mapped
   region — the primitives a self-hosted compiler cannot start without. Plan of record:
   `spec/M4-SELF-HOSTING.md`.

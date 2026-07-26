@@ -30,7 +30,7 @@ language server, JSON layer or diagnostics rendering.
 
 | Piece | Rust | Burxt estimate | Written |
 |---|---|---|---|
-| Lexer | 661 | 800–1,000 | 158 (toy: ~10 of ~60 token kinds) |
+| Lexer | 661 | 800–1,000 | **376, DONE** (v0.0.52) — came in under estimate |
 | AST + parser | 1,787 | 2,000–2,600 | 138 (arithmetic only) |
 | Typechecker | 3,702 | 4,500–5,500 | 385 (scale rule, symbol table) |
 | Backend (IR text) | 3,924 | 2,500–3,500 | 0 |
@@ -44,9 +44,12 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
 
 1. **Driver primitives** — `arg(n)`, `arg_count()`, `write_file`, and a region large
    enough to hold a whole compile. **DONE (v0.0.51).**
-2. **A full lexer in Burxt.** Every token kind, string escapes and interpolation
-   fragments, money and percent literals with exact scaling, comments. The output is
-   a token array in an arena, comparable against stage-0's.
+2. **A full lexer in Burxt.** **DONE (v0.0.52)** — `examples/stage1_lexer.bx`, 376
+   lines: every punctuation form, a 39-entry keyword table with type names
+   distinguished, strings with escapes, interpolation *detected* (splitting the pieces
+   is the parser's job), comments, and exact money and percent literals. It lexes its
+   own source and every program in the pass suite, checked by a test as a
+   disagreement-finder between stage-0 and stage-1.
 3. **A full parser in Burxt**, producing an arena AST — children by index, which
    v0.0.22 already proved needs no recursive types.
 4. **A full typechecker in Burxt.** The big one, and the one where the language will

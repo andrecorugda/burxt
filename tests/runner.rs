@@ -896,3 +896,74 @@ fn a_parse_error_is_reported_alone() {
     assert_eq!(json.lines().count(), 1, "one parse error, reported once:\n{}", json);
     assert!(json.contains("expected"), "{}", json);
 }
+
+/// The stage-1 lexer, written in Burxt, must lex every Burxt source in this
+/// repository without an error — including its own source, which is the first real
+/// test of a self-hosted front end.
+///
+/// It is a cross-check, not a unit test: the Rust lexer already accepted these files
+/// (they compile), so any byte the Burxt lexer refuses is a disagreement between the
+/// two, and one of them is wrong.
+#[test]
+fn the_burxt_lexer_accepts_every_burxt_source() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("stage1-lexer");
+    fs::create_dir_all(&scratch).unwrap();
+
+    // Build it once with the Rust compiler, then run it over everything.
+    let build = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("examples/stage1_lexer.bx"))
+        .current_dir(&scratch)
+        .output()
+        .expect("failed to spawn burxt");
+    assert!(
+        build.status.success(),
+        "the stage-1 lexer did not compile:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let mut sources: Vec<PathBuf> = vec![
+        root.join("examples/stage1_lexer.bx"),
+        root.join("examples/checker.bx"),
+        root.join("examples/symbols.bx"),
+        root.join("examples/lexer.bx"),
+        root.join("examples/parser.bx"),
+        root.join("examples/tour.bx"),
+        root.join("money.bx"),
+    ];
+    // Plus every program the suite already accepts.
+    for (program, _) in cases("pass", "stdout") {
+        sources.push(program);
+    }
+
+    let mut failures = Vec::new();
+    for source in &sources {
+        let out = Command::new(scratch.join("stage1_lexer"))
+            .arg(source)
+            .current_dir(&scratch)
+            .output()
+            .expect("failed to run the stage-1 lexer");
+        let text = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if !out.status.success() {
+            failures.push(format!("{}: exited {:?}: {}", source.display(), out.status.code(), stderr));
+            continue;
+        }
+        // "errors: 0" is the lexer's own report of bytes it could not tokenize.
+        if !text.contains("errors:      0") {
+            failures.push(format!(
+                "{}: the Burxt lexer reported an error the Rust lexer did not:\n{}",
+                source.display(),
+                text
+            ));
+        }
+    }
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(
+        sources.len() > 50,
+        "expected to cross-check the whole pass suite, got {}",
+        sources.len()
+    );
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+}

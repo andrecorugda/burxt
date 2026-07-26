@@ -14,7 +14,7 @@ answers.
 **Read this file first.** The specs were written when Burxt was at roughly
 v0.0.1, so several describe work that is now done, and one describes work that
 was built in a different order than specified. This index records what is
-actually true as of **v0.0.51**, audited by running the compiler — not by
+actually true as of **v0.0.52**, audited by running the compiler — not by
 reading the specs. Where a spec and the implementation disagree, the note says
 which is right.
 
@@ -32,7 +32,7 @@ which is right.
 | [M1a Caller-Region Functions](M1a-CALLER-REGION-FUNCTIONS.md) | **DONE** (v0.0.38) | `allocates` on a signature: build in the caller's region, return what you built. Deferred: `allocates` on methods. |
 | [M1 Memory Model](M1-MEMORY-MODEL.md) | **DONE** (v0.0.24–v0.0.27) | All four slices shipped: regions + bump allocator, growable arrays with escape checking, string concatenation, storable `dyn`. Two of its predictions were corrected rather than forced — see §6a. |
 | [Novelty register](NOVELTY.md) | **Ambition — §4, §1, §2, §3 and §5 (runtime forms) shipped** | What Burxt is *for*: exactness across boundaries, provable determinism, conservation-law contracts, effects-not-async. §4 guaranteed tail calls shipped in v0.0.29; §1's FFI half in v0.0.30. |
-| [M4 Self-Hosting](M4-SELF-HOSTING.md) | **Phase 1 DONE** (v0.0.51) | The staging, with measured sizes: ~10–12.5k lines of Burxt for stage-1, a textual-LLVM-IR backend, six phases, and the public milestone at the end of phase 4. |
+| [M4 Self-Hosting](M4-SELF-HOSTING.md) | **Phases 1–2 DONE** (v0.0.51–52) | The staging, with measured sizes: ~10–12.5k lines of Burxt for stage-1, a textual-LLVM-IR backend, six phases, and the public milestone at the end of phase 4. |
 | [N5 Termination](N5-TERMINATION.md) | **Slice 1 DONE** (v0.0.45) | `decreases`, checked at every recursive call site, so it works with `return tail`. Deferred: mutual recursion, methods, lexicographic measures, static proof. |
 | [A5 Contracts](A5-CONTRACTS.md) | **DONE** (v0.0.43–v0.0.44) | `requires` / `ensures` runtime-checked with the clause quoted on failure, clauses must be pure, contracts on methods, and `old(...)` — so NOVELTY §3's conservation laws are checkable. Deferred: static proof, `old` of an aggregate, derived mutual exclusion (needs threads). |
 | [N2 Pure Functions](N2-PURE-FUNCTIONS.md) | **Slice 1 DONE** (v0.0.39) | `pure fn`: no I/O, no FFI, no impure calls. Deferred: pure methods, purity as a parameter requirement, purity-driven optimisation. |
