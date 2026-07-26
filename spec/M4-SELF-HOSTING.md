@@ -32,7 +32,7 @@ language server, JSON layer or diagnostics rendering.
 |---|---|---|---|
 | Lexer | 661 | 800–1,000 | **376, DONE** (v0.0.52) — came in under estimate |
 | AST + parser | 1,787 | 2,000–2,600 | **~930, DONE** (v0.0.53–54) — under estimate |
-| Typechecker | 3,702 | 4,500–5,500 | **~1,050**, the type rules complete (v0.0.60) |
+| Typechecker | 3,702 | 4,500–5,500 | **~1,330**, types + regions + purity (v0.0.61) |
 | Backend (IR text) | 3,924 | 2,500–3,500 | 0 |
 | Driver | 230 | ~150 | 0 |
 | **Total** | | **≈10,000–12,500** | ~680 of real front-end work |
@@ -124,7 +124,35 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
      190 fail programs** on its own. The rest are the rules it does not yet mention —
      regions and escapes, purity, exhaustiveness, arrays, the reserved names, contract
      clauses, unreachable code. Both numbers are now machine-checked: the pass suite is
-     swept in full, and 67 is a floor that may only rise.
+     swept in full, and the fail count is a floor that may only rise.
+
+   - **4b DONE — regions, purity and escapes (v0.0.61):** the rules that make Burxt
+     Burxt rather than a typed calculator. Stage-1 now rejects **94 of the 190 fail
+     programs**, from 67, with **0 false positives** still:
+     - a region opens and closes around a block, regions do not nest, and
+       `has_region()` answers M1's one question — is there anywhere to allocate;
+     - `allocates` on the signature means the caller's region is in effect for the
+       whole body, so a call to an `allocates` function or method needs a region at the
+       call site;
+     - `to_string`, `substring`, `read_file`, joining two Strings and an interpolated
+       String used as a VALUE all need one — but `print("a {b}")` does not, because it
+       writes its pieces in order and joins nothing, and `to_string` of a Bool does
+       not, because it renders to one of two literals;
+     - a `pure` function may not print, read or write a file, call a function that is
+       not `pure`, or call a method at all — `pure` being refused on methods is what
+       makes the last one absolute;
+     - the escape rule, which is M1 in one condition: a built value may leave a
+       function only when it was built in the CALLER's region, meaning `allocates` with
+       no region of the function's own open around the return;
+     - the names the language owns (`print`, `to_string`, `old`, `main`, the int
+       division builtins, …) may not be declared by a program.
+
+     Two mechanisms were needed and both are worth naming. `expr_allocates` walks
+     aggregates — the v0.0.48 lesson, since a struct holding a built String is itself
+     built. And a **type cache** records every expression's type as it is decided,
+     because the escape check asks about expressions the checker has already seen
+     (did that `+` join two Strings?) and re-walking them would report every complaint
+     a second time.
 
 5. **An IR-text backend in Burxt.**
 6. **Bootstrap and fixpoint.** stage-0 builds stage-1; stage-1 builds stage-1;

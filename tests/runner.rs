@@ -1075,7 +1075,7 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
 
     // Direction 2b, a ratchet: how much of the fail suite stage-1 rejects on its own.
     // It is not all of it — regions, purity, exhaustiveness and the reserved names are
-    // still stage-0's alone — so the number is a floor that may only go up. A floor
+    // still partly stage-0's alone — so the number is a floor that may only go up. A floor
     // rather than an exact count, because catching MORE is the goal, not a regression.
     let mut caught = 0;
     let mut total = 0;
@@ -1092,14 +1092,15 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
 
     let _ = fs::remove_dir_all(&scratch);
     assert!(
-        caught >= 67,
-        "stage-1 rejected only {} of {} fail programs, down from 67",
+        caught >= 94,
+        "stage-1 rejected only {} of {} fail programs, down from 94",
         caught,
         total
     );
     assert_eq!(
-        shape_errors, 3,
-        "stage-1 should have caught the arity, the element type and the indexed String"
+        shape_errors, 4,
+        "stage-1 should have caught the arity, the element type, the indexed String, \
+         and the to_string with no region open"
     );
     assert_eq!(
         found, 7,

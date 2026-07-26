@@ -97,7 +97,7 @@ struct TypeDecl { start: Int, length: Int, kind: Int, node: Int }
 struct Method {
     receiver_start: Int, receiver_len: Int,
     start: Int, length: Int,
-    ret: Ty, params: Int, mutating: Int,
+    ret: Ty, params: Int, mutating: Int, flags: Int,
 }
 
 struct Unit {
@@ -128,6 +128,13 @@ struct Unit {
     // Nonzero while parsing an `if`/`while` condition, where a `{` opens the BODY
     // rather than a struct literal. The Rust parser carries the same flag.
     impls: [Impl],
+    typed: [Typed],
+    // How many regions are open, and whether the function being checked declared
+    // `allocates` — which means the caller's region is the region in effect. Together
+    // these answer M1's one question: is there somewhere to allocate?
+    region_depth: Int,
+    in_caller_region: Int,
+    in_pure: Int,
     no_struct: Int,
     // Set while typing the operands of `*`. Multiplication combines a quantity with a
     // rate, so its operand scales differ by nature: a literal that cannot narrow to
@@ -597,8 +604,41 @@ fn (self: Unit) field_type(src: String, holder: Ty, name_tok: Int) -> Ty {
 
 // A builtin's return type. They are not in the function table because they are not
 // declared anywhere — the compiler knows them, so the checker must too.
-fn (mut self: Unit) builtin_type(src: String, name: Tok, args: Int) -> Ty allocates {
-    let visited: Int = self.check_args(src, args);
+fn (mut self: Unit) builtin_type(src: String, name: Tok, at: Int, args: Int) -> Ty allocates {
+    // The arguments are typed here rather than by `check_args`, because the first
+    // one's type decides two of the rules below.
+    let mut first: Ty = ty_unknown();
+    if args >= 0 {
+        let list: Node = self.nodes[args];
+        let mut i: Int = 0;
+        while i < list.b {
+            let t: Ty = self.type_of(src, self.kids[list.a + i], ty_unknown());
+            if i == 0 { first = t; }
+            i = i + 1;
+        }
+    }
+    // Three builtins hand back a freshly built String, so all three need a region —
+    // except `to_string` of a Bool, which renders to one of two literals and so
+    // allocates nothing.
+    let mut builds: Bool = span_eq(src, name.start, name.length, "substring")
+        || span_eq(src, name.start, name.length, "read_file");
+    if span_eq(src, name.start, name.length, "to_string") && first.kind != 41 {
+        builds = true;
+    }
+    if builds {
+        if !self.has_region() {
+            let r: Int = self.needs_region(src, at,
+                substring(src, name.start, name.length) + "(...)");
+        }
+    }
+    if self.in_pure == 1 {
+        if span_eq(src, name.start, name.length, "read_file") {
+            let e: Int = self.not_pure(src, at, "read a file");
+        }
+        if span_eq(src, name.start, name.length, "write_file") {
+            let e: Int = self.not_pure(src, at, "write a file");
+        }
+    }
     if span_eq(src, name.start, name.length, "len") { return ty_simple(40); }
     if span_eq(src, name.start, name.length, "byte_at") { return ty_simple(40); }
     if span_eq(src, name.start, name.length, "push") { return ty_simple(40); }
@@ -750,6 +790,106 @@ fn (mut self: Unit) fits(src: String, got: Ty, want: Ty) -> Bool {
         i = i + 1;
     }
     return false;
+}
+
+// Whether evaluating this expression allocates. The aggregate cases are here for the
+// reason v0.0.48 recorded: a struct or array holding a built String is itself built,
+// and missing that arm let a use-after-free through for four versions.
+fn (mut self: Unit) expr_allocates(src: String, node: Int) -> Bool {
+    if node < 0 {
+        return false;
+    }
+    let n: Node = self.nodes[node];
+    if n.kind == 3 {
+        return self.toks[n.tok].interpolated;
+    }
+    if n.kind == 8 {
+        if n.value == 25 && self.type_at(node).kind == 42 {
+            return true;                             // joining Strings
+        }
+        return self.expr_allocates(src, n.a) || self.expr_allocates(src, n.b);
+    }
+    if n.kind == 6 || n.kind == 7 {
+        return self.expr_allocates(src, n.a);
+    }
+    if n.kind == 17 || n.kind == 19 {                // an array or struct literal
+        let mut i: Int = 0;
+        while i < n.b {
+            if self.expr_allocates(src, self.kids[n.a + i]) {
+                return true;
+            }
+            i = i + 1;
+        }
+        return false;
+    }
+    if n.kind == 13 {                                // a call
+        let name: Tok = self.toks[n.tok];
+        if span_eq(src, name.start, name.length, "substring")
+            || span_eq(src, name.start, name.length, "read_file")
+            || span_eq(src, name.start, name.length, "arg") {
+            return true;
+        }
+        if span_eq(src, name.start, name.length, "to_string") {
+            // Except of a Bool, which renders to a literal.
+            let list: Node = self.nodes[n.a];
+            if list.b == 1 {
+                return self.type_at(self.kids[list.a]).kind != 41;
+            }
+            return true;
+        }
+        let found: Int = self.find_fun(src, name.start, name.length);
+        if found >= 0 {
+            return flag_allocates(self.funs[found].flags) == 1;
+        }
+        // An enum constructor carries its payload, so it is built if the payload is.
+        let list: Node = self.nodes[n.a];
+        let mut i: Int = 0;
+        while i < list.b {
+            if self.expr_allocates(src, self.kids[list.a + i]) {
+                return true;
+            }
+            i = i + 1;
+        }
+        return false;
+    }
+    if n.kind == 14 {                                // a method call
+        let holder: Ty = self.type_at(n.a);
+        let found: Int = self.find_method(src, holder, n.tok);
+        if found >= 0 {
+            return flag_allocates(self.methods[found].flags) == 1;
+        }
+        return false;
+    }
+    return false;
+}
+
+fn (self: Unit) has_region() -> Bool {
+    return self.region_depth > 0 || self.in_caller_region == 1;
+}
+
+// One sentence, and it offers both ways out — the region at the use, or `allocates`
+// on the signature. M1a exists because for a while only the first was available.
+fn (mut self: Unit) needs_region(src: String, at: Int, what: String) -> Int allocates {
+    let e: Int = self.complain_at(src, at,
+        what + " allocates, so it needs a region: there is none open here. Open one "
+        + "with `region r \{ ... \}`, or declare the function `allocates` to build in "
+        + "the caller's region");
+    return 0;
+}
+
+fn (mut self: Unit) not_pure(src: String, at: Int, what: String) -> Int allocates {
+    let e: Int = self.complain_at(src, at,
+        "a `pure` function may not " + what + ": a function that can change the "
+        + "program is not one whose answer depends on its arguments alone");
+    return 0;
+}
+
+// The markers, unpacked from the bits they ride in.
+fn flag_pure(flags: Int) -> Int {
+    return rem(flags, 2);
+}
+fn flag_allocates(flags: Int) -> Int {
+    return rem(div_floor(flags, 2), 2);
 }
 
 // ---- expressions -------------------------------------------------------------
@@ -1573,6 +1713,8 @@ fn is_unknown(t: Ty) -> Bool {
 // The method table already knows what the type can do.
 struct Impl { trait_start: Int, trait_len: Int, type_start: Int, type_len: Int }
 
+struct Typed { node: Int, ty: Ty }
+
 fn ty_same(src: String, a: Ty, b: Ty) -> Bool {
     if a.kind == 0 || b.kind == 0 {
         return false;
@@ -1683,6 +1825,30 @@ fn (self: Unit) find_type(src: String, start: Int, length: Int) -> Int {
 
 // Every signature first, so functions may be declared in any order and call each
 // other — the same two-pass shape stage-0 uses.
+// The names a program may not take: the builtins, `old`, and the two the runtime
+// owns. Stage-0 refuses these because a call site cannot tell a shadowed builtin from
+// the builtin, and a reader cannot either.
+fn is_reserved_name(src: String, start: Int, length: Int) -> Bool {
+    return span_eq(src, start, length, "print")
+        || span_eq(src, start, length, "len")
+        || span_eq(src, start, length, "byte_at")
+        || span_eq(src, start, length, "push")
+        || span_eq(src, start, length, "truncate")
+        || span_eq(src, start, length, "substring")
+        || span_eq(src, start, length, "to_string")
+        || span_eq(src, start, length, "read_file")
+        || span_eq(src, start, length, "write_file")
+        || span_eq(src, start, length, "arg")
+        || span_eq(src, start, length, "arg_count")
+        || span_eq(src, start, length, "div_floor")
+        || span_eq(src, start, length, "div_trunc")
+        || span_eq(src, start, length, "rem")
+        || span_eq(src, start, length, "old")
+        || span_eq(src, start, length, "result")
+        || span_eq(src, start, length, "main")
+        || span_eq(src, start, length, "exit");
+}
+
 fn (mut self: Unit) collect_method(src: String, index: Int) -> Int allocates {
     let item: Node = self.nodes[index];
     let name: Tok = self.toks[item.tok];
@@ -1690,6 +1856,11 @@ fn (mut self: Unit) collect_method(src: String, index: Int) -> Int allocates {
     let receiver: Tok = self.toks[signature.value];
     let mut mutating: Int = 0;
     if item.value >= 4 { mutating = 1; }
+    if flag_pure(item.value) == 1 {
+        let e: Int = self.complain_at(src, item.tok,
+            "`pure` is not available on a method: a receiver is state, and a claim "
+            + "about a function of its arguments cannot be made about one");
+    }
     if self.find_method_named(src, receiver.start, receiver.length,
                               name.start, name.length) >= 0 {
         let e: Int = self.complain_at(src, item.tok, "this method is declared twice");
@@ -1699,7 +1870,7 @@ fn (mut self: Unit) collect_method(src: String, index: Int) -> Int allocates {
         receiver_start: receiver.start, receiver_len: receiver.length,
         start: name.start, length: name.length,
         ret: self.ty_of(src, signature.c), params: item.a,
-        mutating: mutating,
+        mutating: mutating, flags: item.value,
     });
     return 1;
 }
@@ -1738,6 +1909,11 @@ fn (mut self: Unit) collect_declarations(src: String) -> Int allocates {
             }
         }
         if item.kind == 80 || item.kind == 86 {
+            if is_reserved_name(src, name.start, name.length) {
+                let e: Int = self.complain_at(src, item.tok,
+                    "`" + substring(src, name.start, name.length) + "` is a name the "
+                    + "language owns, so a program may not declare it");
+            }
             if self.find_fun(src, name.start, name.length) >= 0 {
                 let e: Int = self.complain_at(src, item.tok, "this function is declared twice");
             } else {
@@ -1765,7 +1941,30 @@ fn (mut self: Unit) collect_declarations(src: String) -> Int allocates {
 // ---- expressions -------------------------------------------------------------
 // `expected` carries the declared type inward, which is how a Decimal product can
 // know whether a rounding contract was supplied — exactly as in stage-0.
+// Every expression's type, recorded as it is decided. The escape check asks about
+// expressions the checker has already seen — whether a `+` joined two Strings, say —
+// and re-walking them would report every complaint a second time.
 fn (mut self: Unit) type_of(src: String, node: Int, expected: Ty) -> Ty allocates {
+    let t: Ty = self.type_of_inner(src, node, expected);
+    push(self.typed, Typed { node: node, ty: t });
+    return t;
+}
+
+fn (self: Unit) type_at(node: Int) -> Ty {
+    // Backwards: the last answer for a node is the one that stands, since a retyped
+    // operand (multiplication does that) settles on its second reading.
+    let mut i: Int = len(self.typed) - 1;
+    while i >= 0 {
+        let entry: Typed = self.typed[i];
+        if entry.node == node {
+            return entry.ty;
+        }
+        i = i - 1;
+    }
+    return ty_unknown();
+}
+
+fn (mut self: Unit) type_of_inner(src: String, node: Int, expected: Ty) -> Ty allocates {
     if node < 0 {
         return ty_unknown();
     }
@@ -1801,7 +2000,18 @@ fn (mut self: Unit) type_of(src: String, node: Int, expected: Ty) -> Ty allocate
             + "money is refused");
         return ty_unknown();
     }
-    if n.kind == 3 { return ty_simple(42); }
+    if n.kind == 3 {                                 // a String literal
+        let t: Tok = self.toks[n.tok];
+        // Interpolation IS `to_string` plus `+`, so it needs what those need. Stage-1
+        // does not split the fragments yet, so any interpolated literal counts as a
+        // join — which errs toward asking for a region, never toward allowing one out.
+        if t.interpolated {
+            if !self.has_region() {
+                let r: Int = self.needs_region(src, n.tok, "this interpolated String");
+            }
+        }
+        return ty_simple(42);
+    }
     if n.kind == 4 { return ty_simple(41); }
 
     if n.kind == 5 {                                 // a name
@@ -1889,6 +2099,12 @@ fn (mut self: Unit) type_of(src: String, node: Int, expected: Ty) -> Ty allocate
                 }
                 return left;
             }
+        }
+        if n.value == 25 && left.kind == 42 && right.kind == 42 {
+            if !self.has_region() {
+                let r: Int = self.needs_region(src, n.tok, "joining two Strings");
+            }
+            return left;
         }
         // `+` and `-` combine like quantities: the types must match exactly.
         if !ty_same(src, left, right) {
@@ -1982,6 +2198,15 @@ fn (mut self: Unit) type_of(src: String, node: Int, expected: Ty) -> Ty allocate
             return ty_unknown();
         }
         let m: Method = self.methods[found];
+        if flag_allocates(m.flags) == 1 && !self.has_region() {
+            let r: Int = self.needs_region(src, n.tok,
+                "`" + substring(src, m.start, m.length) + "`");
+        }
+        if self.in_pure == 1 {
+            // Not "a method that is not pure": `pure` is refused ON methods, so a
+            // method call from a pure function can never be allowed.
+            let e: Int = self.not_pure(src, n.tok, "call a method");
+        }
         let ok: Int = self.check_against_params(src, n.tok, n.b, m.params, "method");
         return m.ret;
     }
@@ -2034,13 +2259,22 @@ fn (mut self: Unit) type_of(src: String, node: Int, expected: Ty) -> Ty allocate
         if found < 0 {
             // A builtin, or a name nobody declared. The compiler knows the builtins,
             // so the checker knows them too rather than staying silent about calls.
-            let builtin: Ty = self.builtin_type(src, t, n.a);
+            let builtin: Ty = self.builtin_type(src, t, n.tok, n.a);
             if is_unknown(builtin) {
                 let e: Int = self.complain_at(src, n.tok, "unknown function");
             }
             return builtin;
         }
         let signature: Fun = self.funs[found];
+        if flag_allocates(signature.flags) == 1 && !self.has_region() {
+            let r: Int = self.needs_region(src, n.tok,
+                "`" + substring(src, signature.start, signature.length) + "`");
+        }
+        if self.in_pure == 1 && flag_pure(signature.flags) == 0 {
+            let e: Int = self.not_pure(src, n.tok,
+                "call `" + substring(src, signature.start, signature.length)
+                + "`, which is not `pure`");
+        }
         let ok: Int = self.check_against_params(src, n.tok, n.a, signature.params,
                                                 "function");
         return signature.ret;
@@ -2194,6 +2428,20 @@ fn (mut self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -> Int allo
         return 1;
     }
 
+    if n.kind == 62 {                                // print
+        if self.in_pure == 1 {
+            let e: Int = self.not_pure(src, n.tok, "print");
+        }
+        let target: Node = self.nodes[n.a];
+        if target.kind == 3 {
+            if self.toks[target.tok].interpolated {
+                // Printing an interpolated string writes its pieces in order, so no
+                // String is built and no region is needed. Interpolation used as a
+                // VALUE is a join, and that one does need one.
+                return 1;
+            }
+        }
+    }
     if n.kind == 62 || n.kind == 70 {                // print, expression statement
         let value: Ty = self.type_of(src, n.a, ty_unknown());
         return 1;
@@ -2205,6 +2453,26 @@ fn (mut self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -> Int allo
             let e: Int = self.complain_at(src, n.tok,
                 "this function returns " + ty_show(src, ret) + ", but the value is "
                 + ty_show(src, value));
+        }
+        // The escape rule, and the whole of M1 in one condition: a built value may
+        // leave a function ONLY when it was built in the CALLER's region — which means
+        // `allocates`, and no region of this function's own open around the return.
+        // A `region` block ends at its closing brace, so anything built inside it
+        // would outlive its storage.
+        if self.expr_allocates(src, n.a) {
+            if self.in_caller_region == 0 {
+                let e: Int = self.complain_at(src, n.tok,
+                    "cannot return this: it allocates, and a function that returns "
+                    + "built data must say `allocates` so the bytes belong to the "
+                    + "caller's region");
+            } else {
+                if self.region_depth > 0 {
+                    let e: Int = self.complain_at(src, n.tok,
+                        "cannot return this: it was built inside a `region` block, "
+                        + "which ends at its closing brace, so its storage would not "
+                        + "outlive it");
+                }
+            }
         }
         return 1;
     }
@@ -2236,7 +2504,14 @@ fn (mut self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -> Int allo
     }
 
     if n.kind == 69 {                                // region
+        if self.region_depth > 0 {
+            let e: Int = self.complain_at(src, n.tok,
+                "regions do not nest: the inner one would end while the outer is still "
+                + "open, and one bump pointer cannot serve two marks");
+        }
+        self.region_depth = self.region_depth + 1;
         let body: Int = self.check_block_nodes(src, n.a, ret);
+        self.region_depth = self.region_depth - 1;
         return 1;
     }
 
@@ -2265,6 +2540,12 @@ fn (mut self: Unit) check_body(src: String, index: Int) -> Int allocates {
     let item: Node = self.nodes[index];
     let base: Int = len(self.syms);
     self.depth = self.depth + 1;
+    // The markers are the body's rules: `allocates` means the caller's region is in
+    // effect throughout, `pure` means the world is off limits.
+    let outer_caller: Int = self.in_caller_region;
+    let outer_pure: Int = self.in_pure;
+    self.in_caller_region = flag_allocates(item.value);
+    self.in_pure = flag_pure(item.value);
     let signature: Node = self.nodes[item.c];
     if item.kind == 81 {
         // `self` is a name like any other once it is bound: the receiver's type is
@@ -2300,6 +2581,8 @@ fn (mut self: Unit) check_body(src: String, index: Int) -> Int allocates {
     let body: Int = self.check_block_nodes(src, item.b, ret);
     let dropped: Int = truncate(self.syms, base);
     self.depth = self.depth - 1;
+    self.in_caller_region = outer_caller;
+    self.in_pure = outer_pure;
     return 1;
 }
 
@@ -2373,7 +2656,7 @@ region compile {
         path = arg(1);
     }
     let src: String = read_file(path);
-    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], impls: [], depth: 0, problems: 0, pos: 0, no_struct: 0, in_mul: 0, errors: 0 };
+    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, depth: 0, problems: 0, pos: 0, no_struct: 0, in_mul: 0, errors: 0 };
     let installed: Int = unit.install_keywords();
     let total: Int = unit.run(src);
 
