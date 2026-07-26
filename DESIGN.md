@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.34)
+# Burxt — Design Notes (v0.0.35)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1667,6 +1667,68 @@ which is what clears the squiggle.
 recovery), and statement-level rather than expression-level underlining. Both
 apply to every editor path, so they are recorded once rather than per client.
 
+### v0.0.35: expression spans, sharper carets, and hover
+
+```text
+error: in the call to `tax`, argument 1 must be Decimal<2>, but it has type Int
+ --> invoice.bx:3:11
+  |
+3 | print(tax(n) + $1.00);
+  |           ^
+```
+
+Statement spans put the caret on the right line (v0.0.32). Expression spans put it
+under the thing that is actually wrong — and they are what makes **hover** possible
+at all, since answering "what is the type here?" means knowing which expression
+*here* is.
+
+**How the caret finds the smallest wrong thing.** `check_expr` became a thin
+wrapper that, on failure, claims the position **unless something further in has
+already claimed it**. A child's wrapper runs before its parent's as the error
+propagates outward, so the innermost failing expression wins automatically — no
+error site had to be touched. Where a parent's own check fails over children that
+were each individually fine (a wrong argument, a value that disagrees with its
+declared type), the parent says so explicitly with `blame(span)`, because there the
+rule would be wrong: `let bad: Int = it.price;` should underline `it.price`, not
+the whole line.
+
+The bookkeeping lives in a `Cell`, not behind `&mut self`. Expression checking is
+`&self`, and threading mutability through every checker method to carry a
+diagnostic detail would claim it was part of the checking. It is not.
+
+**Hover, and why it is worth more in Burxt than elsewhere.**
+
+```text
+Decimal<2, RoundHalfEven>
+
+Exact decimal, 2 decimal places. A result that needs rounding rounds half to even
+(banker's rounding).
+```
+
+The type names the scale; the sentence names what happens when a result does not
+fit that scale, which is the whole question this language exists to make visible.
+`CDouble` says a Decimal may not cross as one. A bare `Decimal<2>` says any
+operation that could round is a compile error until a contract is declared.
+
+The checker now records `(span, type)` for every expression it gets through, and
+hover picks the **smallest** span containing the cursor — because expressions nest,
+and the cursor on `qty` in `price * qty` should say `Int`, not the product's type.
+
+**Two honest limits, both tested rather than footnoted:**
+
+- Hover knows types **up to the first error and nothing past it**, because the
+  compiler stops there. So hover goes quiet below a mistake and returns when it is
+  fixed. That is error recovery's job, not the server's.
+- The `let`-mismatch caret moved from the whole statement to the value, which
+  broke two tests that had recorded the old, coarser positions. Both were updated
+  to the sharper expectation — worth noting because a test that encodes a position
+  is exactly the test that should fail when positions improve.
+
+**And one test caught its own premise being wrong:** the end-to-end session used
+`textDocument/hover` as its "unsupported method" probe. Hover is supported now, so
+the probe moved to `textDocument/definition` and the test gained an assertion that
+hover actually answers with a type.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -1731,6 +1793,9 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- T5. Expression spans, sharper carets and hover (v0.0.35): `blame` for
+  parent-owned errors, a `(span, type)` table, and hover that explains rounding
+  contracts.
 - T4. Live diagnostics in VS Code (v0.0.34): `burxt check -` from stdin, a
   dependency-free extension, and a test locking the JSON wire format on both
   sides.

@@ -49,6 +49,12 @@ impl Parser {
         Parser { toks, spans, pos: 0, allow_struct_lit: true }
     }
 
+    /// Wrap an expression with the source range it covers: from `start` to the
+    /// end of the last token consumed.
+    fn expr(&self, kind: ExprKind, start: u32) -> Expr {
+        Expr { kind, span: Span { start, end: self.prev_end().max(start + 1) } }
+    }
+
     /// The span of the token the parser is looking at. A parse error is always
     /// "this token is not what I needed", so this is where the caret belongs.
     fn span(&self) -> Span {
@@ -526,6 +532,7 @@ impl Parser {
     /// segment is a method name, not a field, and everything read so far
     /// becomes the call's base expression.
     fn parse_assign(&mut self) -> Result<StmtKind, String> {
+        let start = self.span().start;
         let name = match self.bump() {
             Token::Ident(s) => s,
             Token::SelfKw => "self".to_string(),
@@ -535,7 +542,7 @@ impl Parser {
         if self.at(&Token::LParen) {
             let args = self.parse_call_args()?;
             self.expect(&Token::Semicolon)?;
-            return Ok(StmtKind::ExprStmt(Expr::Call { name, args }));
+            return Ok(StmtKind::ExprStmt(self.expr(ExprKind::Call { name, args }, start)));
         }
 
         if self.at(&Token::LBracket) {
@@ -558,11 +565,13 @@ impl Parser {
             if self.at(&Token::LParen) {
                 let args = self.parse_call_args()?;
                 self.expect(&Token::Semicolon)?;
-                let mut base = Expr::Var(name);
+                let mut base = self.expr(ExprKind::Var(name), start);
                 for f in path {
-                    base = Expr::Field { base: Box::new(base), field: f };
+                    base = self.expr(ExprKind::Field { base: Box::new(base), field: f }, start);
                 }
-                return Ok(StmtKind::ExprStmt(Expr::MethodCall { base: Box::new(base), method: seg, args }));
+                return Ok(StmtKind::ExprStmt(
+                    self.expr(ExprKind::MethodCall { base: Box::new(base), method: seg, args }, start),
+                ));
             }
             path.push(seg);
         }
@@ -714,7 +723,7 @@ impl Parser {
         let e = self.parse_expr()?;
         self.expect(&Token::Semicolon)?;
         if tail {
-            if !matches!(e, Expr::Call { .. }) {
+            if !matches!(e.kind, ExprKind::Call { .. }) {
                 return Err(
                     "`return tail` must be followed by a call — a tail call is a \
                      call that replaces this frame, so there has to be one."
@@ -887,34 +896,43 @@ impl Parser {
     /// The loosest level: `||`, then `&&`, then comparison. Both are
     /// left-associative and both short-circuit.
     fn parse_expr(&mut self) -> Result<Expr, String> {
+        let start = self.span().start;
         let mut lhs = self.parse_and()?;
         while self.at(&Token::PipePipe) {
             self.bump();
             let rhs = self.parse_and()?;
-            lhs = Expr::Logical {
-                op: LogicalOp::Or,
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
-            };
+            lhs = self.expr(
+                ExprKind::Logical {
+                    op: LogicalOp::Or,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+                start,
+            );
         }
         Ok(lhs)
     }
 
     fn parse_and(&mut self) -> Result<Expr, String> {
+        let start = self.span().start;
         let mut lhs = self.parse_comparison()?;
         while self.at(&Token::AmpAmp) {
             self.bump();
             let rhs = self.parse_comparison()?;
-            lhs = Expr::Logical {
-                op: LogicalOp::And,
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
-            };
+            lhs = self.expr(
+                ExprKind::Logical {
+                    op: LogicalOp::And,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+                start,
+            );
         }
         Ok(lhs)
     }
 
     fn parse_comparison(&mut self) -> Result<Expr, String> {
+        let start = self.span().start;
         let lhs = self.parse_additive()?;
         let op = match self.peek() {
             Token::EqEq => CmpOp::Eq,
@@ -937,10 +955,11 @@ impl Parser {
                     .to_string(),
             );
         }
-        Ok(Expr::Compare { op, lhs: Box::new(lhs), rhs: Box::new(rhs) })
+        Ok(self.expr(ExprKind::Compare { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }, start))
     }
 
     fn parse_additive(&mut self) -> Result<Expr, String> {
+        let start = self.span().start;
         let mut lhs = self.parse_term()?;
         loop {
             let op = match self.peek() {
@@ -950,12 +969,13 @@ impl Parser {
             };
             self.bump();
             let rhs = self.parse_term()?;
-            lhs = Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+            lhs = self.expr(ExprKind::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }, start);
         }
         Ok(lhs)
     }
 
     fn parse_term(&mut self) -> Result<Expr, String> {
+        let start = self.span().start;
         let mut lhs = self.parse_factor()?;
         loop {
             let op = match self.peek() {
@@ -965,7 +985,7 @@ impl Parser {
             };
             self.bump();
             let rhs = self.parse_factor()?;
-            lhs = Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+            lhs = self.expr(ExprKind::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) }, start);
         }
         Ok(lhs)
     }
@@ -974,15 +994,16 @@ impl Parser {
     /// `.method(args)` calls, optionally negated:
     /// `-item.price` is Neg(Field(item, price)).
     fn parse_factor(&mut self) -> Result<Expr, String> {
+        let start = self.span().start;
         if self.at(&Token::Minus) {
             self.bump();
             let e = self.parse_factor()?;
-            return Ok(Expr::Neg(Box::new(e)));
+            return Ok(self.expr(ExprKind::Neg(Box::new(e)), start));
         }
         if self.at(&Token::Bang) {
             self.bump();
             let e = self.parse_factor()?;
-            return Ok(Expr::Not(Box::new(e)));
+            return Ok(self.expr(ExprKind::Not(Box::new(e)), start));
         }
         let mut e = self.parse_primary()?;
         loop {
@@ -990,7 +1011,7 @@ impl Parser {
                 self.bump();
                 let index = self.parse_expr()?;
                 self.expect(&Token::RBracket)?;
-                e = Expr::Index { base: Box::new(e), index: Box::new(index) };
+                e = self.expr(ExprKind::Index { base: Box::new(e), index: Box::new(index) }, start);
                 continue;
             }
             if !self.at(&Token::Dot) {
@@ -1015,21 +1036,39 @@ impl Parser {
                     }
                 }
                 self.expect(&Token::RParen)?;
-                e = Expr::MethodCall { base: Box::new(e), method: name, args };
+                e = self.expr(ExprKind::MethodCall { base: Box::new(e), method: name, args }, start);
             } else {
-                e = Expr::Field { base: Box::new(e), field: name };
+                e = self.expr(ExprKind::Field { base: Box::new(e), field: name }, start);
             }
         }
         Ok(e)
     }
 
     fn parse_primary(&mut self) -> Result<Expr, String> {
+        let start = self.span().start;
+        // A parenthesised expression keeps ITS OWN span — `(a + b)` should hover
+        // and underline as `a + b`, not as the parentheses.
+        if self.at(&Token::LParen) {
+            self.bump();
+            let saved = self.allow_struct_lit;
+            self.allow_struct_lit = true;
+            let e = self.parse_expr();
+            self.allow_struct_lit = saved;
+            let e = e?;
+            self.expect(&Token::RParen)?;
+            return Ok(e);
+        }
+        let kind = self.parse_primary_kind()?;
+        Ok(self.expr(kind, start))
+    }
+
+    fn parse_primary_kind(&mut self) -> Result<ExprKind, String> {
         match self.bump() {
-            Token::Int(n) => Ok(Expr::IntLit(n)),
-            Token::Decimal(unscaled, scale) => Ok(Expr::DecimalLit { unscaled, scale }),
-            Token::True => Ok(Expr::BoolLit(true)),
-            Token::False => Ok(Expr::BoolLit(false)),
-            Token::Str(s) => Ok(Expr::StrLit(s)),
+            Token::Int(n) => Ok(ExprKind::IntLit(n)),
+            Token::Decimal(unscaled, scale) => Ok(ExprKind::DecimalLit { unscaled, scale }),
+            Token::True => Ok(ExprKind::BoolLit(true)),
+            Token::False => Ok(ExprKind::BoolLit(false)),
+            Token::Str(s) => Ok(ExprKind::StrLit(s)),
             Token::InterpStr(parts) => {
                 // Each `{...}` was captured as source text; parse it now, so an
                 // interpolated expression obeys exactly the same grammar and
@@ -1062,12 +1101,12 @@ impl Parser {
                         }
                     }
                 }
-                Ok(Expr::InterpStr(out))
+                Ok(ExprKind::InterpStr(out))
             }
             // `self` reads as a plain variable in expression position — its
             // meaning (and mutability) comes from the receiver clause, not
             // from special-casing here.
-            Token::SelfKw => Ok(Expr::Var("self".to_string())),
+            Token::SelfKw => Ok(ExprKind::Var("self".to_string())),
             Token::Ident(s) => {
                 if self.at(&Token::LParen) {
                     self.bump();
@@ -1083,7 +1122,7 @@ impl Parser {
                         }
                     }
                     self.expect(&Token::RParen)?;
-                    Ok(Expr::Call { name: s, args })
+                    Ok(ExprKind::Call { name: s, args })
                 } else if self.at(&Token::LBrace) && self.allow_struct_lit {
                     self.bump();
                     let mut fields = Vec::new();
@@ -1107,11 +1146,11 @@ impl Parser {
                         }
                     }
                     self.expect(&Token::RBrace)?;
-                    Ok(Expr::StructLit { name: s, fields })
+                    Ok(ExprKind::StructLit { name: s, fields })
                 } else {
                     // `name[i]` is handled by the postfix loop, so a bare name
                     // is all that is left here.
-                    Ok(Expr::Var(s))
+                    Ok(ExprKind::Var(s))
                 }
             }
             Token::LBracket => {
@@ -1125,17 +1164,7 @@ impl Parser {
                     }
                 }
                 self.expect(&Token::RBracket)?;
-                Ok(Expr::ArrayLit(elems))
-            }
-            Token::LParen => {
-                // parentheses re-enable struct literals inside a condition
-                let saved = self.allow_struct_lit;
-                self.allow_struct_lit = true;
-                let e = self.parse_expr();
-                self.allow_struct_lit = saved;
-                let e = e?;
-                self.expect(&Token::RParen)?;
-                Ok(e)
+                Ok(ExprKind::ArrayLit(elems))
             }
             other => Err(format!("expected an expression, found {}", other.describe())),
         }

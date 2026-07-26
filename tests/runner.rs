@@ -598,9 +598,14 @@ fn language_server_publishes_and_clears_diagnostics() {
         r#"{{"jsonrpc":"2.0","method":"textDocument/didChange","params":{{"textDocument":{{"uri":"{}","version":3}},"contentChanges":[{{"text":"{}"}}]}}}}"#,
         uri, good
     )));
-    // An unknown request must be answered, or a real client waits forever.
-    session.push_str(&frame(r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{}}"#));
-    session.push_str(&frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}"#));
+    // Hover is supported: ask for the type of `a` in `print(a);` on line 2.
+    session.push_str(&frame(&format!(
+        r#"{{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{{"textDocument":{{"uri":"{}"}},"position":{{"line":1,"character":6}}}}}}"#,
+        uri
+    )));
+    // An unknown request must still be answered, or a real client waits forever.
+    session.push_str(&frame(r#"{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{}}"#));
+    session.push_str(&frame(r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":null}"#));
     session.push_str(&frame(r#"{"jsonrpc":"2.0","method":"exit","params":null}"#));
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_burxt"))
@@ -625,6 +630,7 @@ fn language_server_publishes_and_clears_diagnostics() {
     assert!(bodies.len() >= 6, "expected at least 6 messages, got {:?}", bodies);
 
     assert!(bodies[0].contains("\"textDocumentSync\":1"), "initialize reply: {}", bodies[0]);
+    assert!(bodies[0].contains("\"hoverProvider\":true"), "initialize reply: {}", bodies[0]);
     assert!(bodies[0].contains("burxt-lsp"), "initialize reply should name the server");
 
     let published: Vec<&&str> = bodies
@@ -651,6 +657,14 @@ fn language_server_publishes_and_clears_diagnostics() {
         "fixing the code must CLEAR the squiggle, got: {}",
         published[2]
     );
+
+    // Hover answered with the type of `a`, as markdown.
+    let hover = bodies
+        .iter()
+        .find(|b| b.contains("\"contents\""))
+        .unwrap_or_else(|| panic!("no hover reply in {:?}", bodies));
+    assert!(hover.contains("Int"), "hover should report `a: Int`: {}", hover);
+    assert!(hover.contains("markdown"), "hover contents should be markdown: {}", hover);
 
     assert!(
         bodies.iter().any(|b| b.contains("-32601")),
@@ -701,8 +715,10 @@ fn json_diagnostics_keep_the_contract_editors_depend_on() {
         assert!(json.contains(field), "missing {} in {}", field, json);
     }
     // The LSP positions are 0-based: the error is on file line 2, so line 1 here.
+    // Character 14 is the `2` in `let b: Bool = 2;` — the caret blames the VALUE,
+    // not the whole binding, because the declaration is not what is wrong.
     assert!(
-        json.contains("\"lspStart\":{\"line\":1,\"character\":0}"),
+        json.contains("\"lspStart\":{\"line\":1,\"character\":14}"),
         "0-based positions drifted: {}",
         json
     );

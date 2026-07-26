@@ -81,6 +81,25 @@ impl<'a> LineIndex<'a> {
         Location { line: line_ix + 1, col, line_text }
     }
 
+    /// An LSP position (0-based line and character) back to a byte offset — the
+    /// inverse of `locate`, needed to answer a question asked at a cursor.
+    pub fn offset_of(&self, line: usize, character: usize) -> u32 {
+        let start = match self.starts.get(line) {
+            Some(s) => *s,
+            None => return self.src.len() as u32,
+        };
+        let rest = &self.src[start..];
+        let line_end = rest.find('\n').unwrap_or(rest.len());
+        let mut offset = start;
+        for (i, c) in rest[..line_end].chars().enumerate() {
+            if i == character {
+                return offset as u32;
+            }
+            offset += c.len_utf8();
+        }
+        offset as u32
+    }
+
     /// How many characters the span covers on its first line — the width of the
     /// underline. At least 1, so a zero-width span still points somewhere.
     pub fn width(&self, span: Span) -> usize {
@@ -244,6 +263,21 @@ mod tests {
         let code_col = lines[3].find("let b").unwrap();
         let caret_col = lines[4].find('^').unwrap();
         assert_eq!(code_col, caret_col);
+    }
+
+    /// `locate` and `offset_of` must be inverses, including past a multi-byte
+    /// character — a cursor is given in characters and spans are in bytes.
+    #[test]
+    fn positions_round_trip_through_offsets() {
+        let src = "let café: Int = 1;\nlet b: Int = 2;\n";
+        let ix = LineIndex::new(src);
+        for (line, ch) in [(0usize, 0usize), (0, 4), (0, 9), (1, 0), (1, 7)] {
+            let offset = ix.offset_of(line, ch);
+            let back = ix.locate(offset);
+            assert_eq!((back.line - 1, back.col - 1), (line, ch), "at {:?}", (line, ch));
+        }
+        // The `é` is two bytes, so a character offset past it is not a byte offset.
+        assert_eq!(ix.offset_of(0, 9), 10);
     }
 
     #[test]

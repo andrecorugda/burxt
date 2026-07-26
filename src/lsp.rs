@@ -1,9 +1,20 @@
 //! `burxt lsp` — a language server over stdio.
 //!
-//! What it does, and nothing more: it typechecks the buffer you are editing and
-//! underlines the problem. That is the whole of it, deliberately. Hover and
-//! go-to-definition are worth having and are not here yet; a server that showed
-//! hovers while staying silent about errors would have the priorities backwards.
+//! What it does: typechecks the buffer you are editing, underlines the problem,
+//! and answers "what is the type here?" on hover. Go-to-definition is not here
+//! yet — it needs the compiler to keep name resolution rather than only its
+//! result.
+//!
+//! Hover earns its place more here than in most languages: a `Decimal<2,
+//! RoundHalfEven>` tells you the scale AND the rounding contract, and a value
+//! whose contract you cannot see is exactly the kind of thing this language
+//! exists to make visible.
+//!
+//! One consequence of the compiler stopping at the first error: hover knows the
+//! types of expressions checked BEFORE that error and nothing after it. So hover
+//! goes quiet below a mistake and returns when the mistake is fixed. That is
+//! error recovery's job, not the server's, and it is tested rather than
+//! footnoted.
 //!
 //! Design notes worth keeping:
 //!
@@ -19,7 +30,8 @@
 //!   fatal: a language server that dies takes the editor's language support with
 //!   it until a restart.
 
-use crate::diag::{Diagnostic, LineIndex};
+use crate::ast::Type;
+use crate::diag::{Diagnostic, LineIndex, Span};
 use crate::json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -65,6 +77,7 @@ pub fn serve() -> Result<(), String> {
                             // and correctness of the buffer is the one thing this
                             // server cannot get wrong.
                             ("textDocumentSync", Value::num(1)),
+                            ("hoverProvider", Value::Bool(true)),
                         ]),
                     ),
                     (
@@ -137,6 +150,22 @@ pub fn serve() -> Result<(), String> {
                 }
             }
 
+            "textDocument/hover" => {
+                if let Some(id) = id {
+                    let result = msg
+                        .path(&["params", "textDocument", "uri"])
+                        .and_then(|v| v.as_str())
+                        .and_then(|uri| docs.get(uri))
+                        .and_then(|text| {
+                            let line = msg.path(&["params", "position", "line"])?;
+                            let ch = msg.path(&["params", "position", "character"])?;
+                            hover(text, number(line)?, number(ch)?)
+                        })
+                        .unwrap_or(Value::Null);
+                    respond(&mut output, id, result)?;
+                }
+            }
+
             "shutdown" => {
                 shutting_down = true;
                 if let Some(id) = id {
@@ -174,6 +203,104 @@ pub fn serve() -> Result<(), String> {
             }
         }
     }
+}
+
+/// A JSON number as a `usize`, for protocol positions.
+fn number(v: &Value) -> Option<usize> {
+    match v {
+        Value::Num(n) if *n >= 0.0 => Some(*n as usize),
+        _ => None,
+    }
+}
+
+/// The type of the smallest expression under the cursor, if any.
+///
+/// Smallest wins because expressions nest: in `price * qty`, the cursor on `qty`
+/// should say `Int`, not the type of the product it is part of.
+fn hover(text: &str, line: usize, character: usize) -> Option<Value> {
+    let index = LineIndex::new(text);
+    let offset = index.offset_of(line, character);
+    let types = collect_types(text);
+    let (span, ty) = types
+        .into_iter()
+        .filter(|(s, _)| s.start <= offset && offset < s.end)
+        .min_by_key(|(s, _)| s.end - s.start)?;
+
+    let mut value = format!("```burxt\n{}\n```", ty);
+    if let Some(note) = explain(&ty) {
+        value.push('\n');
+        value.push_str(&note);
+    }
+    let start = index.locate(span.start);
+    let end = index.locate(span.end);
+    let position = |l: usize, c: usize| {
+        Value::obj(vec![
+            ("line", Value::num((l - 1) as f64)),
+            ("character", Value::num((c - 1) as f64)),
+        ])
+    };
+    Some(Value::obj(vec![
+        (
+            "contents",
+            Value::obj(vec![("kind", Value::str("markdown")), ("value", Value::str(value))]),
+        ),
+        (
+            "range",
+            Value::obj(vec![
+                ("start", position(start.line, start.col)),
+                ("end", position(end.line, end.col)),
+            ]),
+        ),
+    ]))
+}
+
+/// One sentence about what the type GUARANTEES, where that is not obvious from
+/// its name. This is the part worth hovering for: a scale is visible in the type,
+/// but what happens when a result does not fit that scale is the whole question.
+fn explain(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Decimal { scale, rounding: Some(r) } => Some(format!(
+            "Exact decimal, {} decimal place{}. A result that needs rounding rounds \
+             {}.",
+            scale,
+            if *scale == 1 { "" } else { "s" },
+            match r {
+                crate::ast::Rounding::HalfEven => "half to even (banker's rounding)",
+                crate::ast::Rounding::HalfUp => "half away from zero",
+            }
+        )),
+        Type::Decimal { scale, rounding: None } => Some(format!(
+            "Exact decimal, {} decimal place{} — no rounding contract, so any \
+             operation that could round is a compile error until one is declared.",
+            scale,
+            if *scale == 1 { "" } else { "s" }
+        )),
+        Type::CInt => Some("C's 32-bit `int`, at the FFI boundary only.".to_string()),
+        Type::CDouble => {
+            Some("C's `double`. A Decimal may not cross as one — it would lose \
+                  exactness.".to_string())
+        }
+        Type::Dyn(t) => Some(format!(
+            "A trait object: dispatch to whichever type implements `{}`, decided at \
+             runtime.",
+            t
+        )),
+        _ => None,
+    }
+}
+
+/// Types for every expression the checker got through, even if checking then
+/// failed: hover on the parts that are fine is more useful than nothing.
+fn collect_types(text: &str) -> Vec<(Span, Type)> {
+    let Ok(tokens) = crate::lexer::Lexer::new(text).tokenize() else {
+        return Vec::new();
+    };
+    let Ok(program) = crate::parser::Parser::new(tokens).parse() else {
+        return Vec::new();
+    };
+    let mut checker = crate::typeck::TypeChecker::new();
+    let _ = checker.check(&program);
+    checker.expr_types()
 }
 
 /// Read one `Content-Length`-framed message. `None` means stdin ended.
@@ -306,6 +433,49 @@ mod tests {
         assert!(read_message(&mut cursor).unwrap().is_none());
     }
 
+    /// The smallest expression under the cursor wins, because expressions nest.
+    #[test]
+    fn hover_reports_the_innermost_type() {
+        let src = "let price: Decimal<2, RoundHalfEven> = $19.99;\nlet qty: Int = 3;\nprint(price * qty);\n";
+        // Line 3 (index 2): `print(price * qty);` — the cursor on `qty`.
+        let at_qty = src.lines().nth(2).unwrap().find("qty").unwrap();
+        let v = hover(src, 2, at_qty).expect("expected a hover on `qty`");
+        let text = v.path(&["contents", "value"]).unwrap().as_str().unwrap();
+        assert!(text.contains("Int"), "got {:?}", text);
+        assert!(!text.contains("Decimal"), "the product's type is not `qty`'s: {:?}", text);
+
+        // The cursor on `price` inside the same product.
+        let at_price = src.lines().nth(2).unwrap().find("price").unwrap();
+        let v = hover(src, 2, at_price).expect("expected a hover on `price`");
+        let text = v.path(&["contents", "value"]).unwrap().as_str().unwrap();
+        assert!(text.contains("Decimal<2, RoundHalfEven>"), "got {:?}", text);
+        // The contract is the part worth hovering for.
+        assert!(text.contains("half to even"), "got {:?}", text);
+    }
+
+    /// Hover keeps working in a file that does not compile — but only UP TO the
+    /// first error, because the checker stops there. Recorded as a test rather
+    /// than a footnote, since it is the behaviour a user will notice: hover goes
+    /// quiet below a mistake, and comes back when the mistake is fixed. Fixing
+    /// that properly is error recovery, a compiler change.
+    #[test]
+    fn hover_answers_up_to_the_first_error_and_not_past_it() {
+        let src = "let a: Int = 1;\nlet b: Bool = 2;\nprint(a);\n";
+        // Before the error: checked, so known.
+        let at_a = src.lines().next().unwrap().find("1").unwrap();
+        let v = hover(src, 0, at_a).expect("hover should work above the error");
+        assert!(v.path(&["contents", "value"]).unwrap().as_str().unwrap().contains("Int"));
+        // After it: never checked, so nothing is claimed rather than guessed.
+        let at_print = src.lines().nth(2).unwrap().find('a').unwrap();
+        assert!(hover(src, 2, at_print).is_none());
+    }
+
+    #[test]
+    fn hover_on_whitespace_is_nothing_rather_than_a_guess() {
+        let src = "let a: Int = 1;\n\nprint(a);\n";
+        assert!(hover(src, 1, 0).is_none());
+    }
+
     #[test]
     fn a_valid_buffer_yields_no_diagnostics() {
         assert!(check_source("let a: Int = 1;\nprint(a);\n").is_ok());
@@ -316,9 +486,11 @@ mod tests {
         let src = "let a: Int = 1;\nlet b: Bool = 2;\n";
         let d = check_source(src).unwrap_err();
         let v = as_lsp_diagnostic(src, &d);
-        // Line 2 of the file is line 1 to the protocol.
+        // Line 2 of the file is line 1 to the protocol, and the range covers the
+        // offending VALUE (`2` at character 14) rather than the whole binding —
+        // the declaration is not what is wrong.
         assert_eq!(v.path(&["range", "start", "line"]), Some(&Value::num(1)));
-        assert_eq!(v.path(&["range", "start", "character"]), Some(&Value::num(0)));
+        assert_eq!(v.path(&["range", "start", "character"]), Some(&Value::num(14)));
         assert_eq!(v.get("severity"), Some(&Value::num(SEVERITY_ERROR as f64)));
         assert_eq!(v.get("source").unwrap().as_str(), Some("burxt"));
         assert!(v.get("message").unwrap().as_str().unwrap().contains("declared Bool"));

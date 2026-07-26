@@ -10,7 +10,7 @@ directory holds that half of the project.
 | VS Code extension | **DONE** (v0.0.31), live diagnostics (v0.0.34) — still no build step | `vscode/` |
 | `burxt check` — front end only, for editors and CI | **DONE** (v0.0.31) | `src/main.rs` |
 | Diagnostics with line/column | **DONE** (v0.0.32) | `src/diag.rs`, `burxt check --json` |
-| Language server (`burxt lsp`) | **DONE** (v0.0.33) — diagnostics on change | `src/lsp.rs` |
+| Language server (`burxt lsp`) | **DONE** (v0.0.33) — diagnostics on change, hover (v0.0.35) | `src/lsp.rs` |
 | VS Code live diagnostics | **DONE** (v0.0.34) — dependency-free, checks the buffer | `vscode/extension.js` |
 | VS Code problem matcher (for tasks and CI) | **DONE** (v0.0.33) | `vscode/package.json`, `.vscode/tasks.json` |
 | Neovim / Helix configs | **DONE** (v0.0.33) — diagnostics, no highlighting yet | `nvim/`, `helix/` |
@@ -114,9 +114,10 @@ exist — at the cost of a build step. Worth doing then, not now.
 
 ### What the server does NOT do yet
 
-- **Hover** showing a value's exact type. `Decimal<2, RoundHalfEven>` on hover is
-  worth more in Burxt than in most languages, since the rounding contract is part
-  of the type — so this is the first thing worth adding.
+- ~~**Hover**~~ **shipped in v0.0.35**: the exact type, plus a sentence on what it
+  guarantees — a `Decimal<2, RoundHalfEven>` hover names the scale *and* says
+  results round half to even. It reports the SMALLEST expression under the cursor,
+  and knows types only up to the first error, because the compiler stops there.
 - **Go-to-definition**, which needs the compiler to keep name resolution rather
   than only its result.
 - **More than one error at a time**, which is a *compiler* change (error recovery),

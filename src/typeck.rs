@@ -27,6 +27,7 @@
 
 use crate::diag::{Diagnostic, Span};
 use crate::ast::*;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
 /// A typed expression: the original node plus its resolved type.
@@ -263,8 +264,19 @@ pub struct TypeChecker {
     dyn_traits: HashSet<String>,
     /// return type of the function currently being checked, if any.
     /// Where the checker currently is, for attaching a position to any error it
-    /// returns. Updated on entering a statement or a top-level item.
-    current_span: Span,
+    /// returns. Updated on entering a statement or a top-level item, and refined
+    /// to the exact sub-expression by `check_expr`.
+    ///
+    /// A `Cell` because expression checking is `&self` — the position is
+    /// bookkeeping for diagnostics, not part of the checking itself, and threading
+    /// `&mut` through every checker method to carry it would say otherwise.
+    current_span: Cell<Span>,
+    /// Set once an error has claimed a position, so the INNERMOST failing
+    /// expression keeps it as the error propagates outward.
+    error_located: Cell<bool>,
+    /// Every expression's span and resolved type, in check order. This is what
+    /// answers "what is the type here?" — hover, in the language server.
+    expr_types: RefCell<Vec<(Span, Type)>>,
     current_ret: Option<Type>,
     /// The enclosing function's name and parameter types. A guaranteed tail
     /// call needs them: LLVM only guarantees the call when caller and callee
@@ -288,7 +300,9 @@ impl TypeChecker {
             traits: HashMap::new(),
             impls: HashSet::new(),
             dyn_traits: HashSet::new(),
-            current_span: Span::default(),
+            current_span: Cell::new(Span::default()),
+            error_located: Cell::new(false),
+            expr_types: RefCell::new(Vec::new()),
             current_ret: None,
             current_sig: None,
             current_region: None,
@@ -301,21 +315,36 @@ impl TypeChecker {
     /// — so every one of the ~160 error sites inside stays a plain sentence, and
     /// a nested statement naturally yields the most precise position because it
     /// was the last thing entered.
-    pub fn check(mut self, prog: &Program) -> Result<TypedProgram, Diagnostic> {
+    pub fn check(&mut self, prog: &Program) -> Result<TypedProgram, Diagnostic> {
         match self.check_program_inner(prog) {
             Ok(t) => Ok(t),
-            Err(message) => {
-                let span = self.current_span;
-                Err(Diagnostic::new(message, span))
-            }
+            Err(message) => Err(Diagnostic::new(message, self.current_span.get())),
         }
+    }
+
+    /// Blame a particular sub-expression for the error about to be returned, and
+    /// stop any enclosing expression from taking the blame instead.
+    ///
+    /// Needed because `check_expr`'s "innermost failing expression claims the
+    /// position" rule is about expressions that FAILED — when a parent's own check
+    /// fails over a child that was individually fine (a wrong argument, a value
+    /// that does not match its declared type), the parent knows better than the
+    /// rule does.
+    fn blame(&self, span: Span) {
+        self.current_span.set(span);
+        self.error_located.set(true);
+    }
+
+    /// Every expression's span and type, innermost last — the table hover reads.
+    pub fn expr_types(&self) -> Vec<(Span, Type)> {
+        self.expr_types.borrow().clone()
     }
 
     fn check_program_inner(&mut self, prog: &Program) -> Result<TypedProgram, String> {
         // Pass 0: hoist struct declarations, then validate them (field types
         // must exist; no struct may contain itself, directly or transitively).
         for s in &prog.structs {
-            self.current_span = s.span;
+            self.current_span.set(s.span);
             if self.structs.contains_key(&s.name) {
                 return Err(format!("struct `{}` is defined twice", s.name));
             }
@@ -342,7 +371,7 @@ impl TypeChecker {
         // Enum names must be known before any type is validated, exactly like
         // struct names — a payload or field may name an enum declared later.
         for e in &prog.enums {
-            self.current_span = e.span;
+            self.current_span.set(e.span);
             if self.enums.contains_key(&e.name) || self.structs.contains_key(&e.name) {
                 return Err(format!("`{}` is declared twice", e.name));
             }
@@ -372,7 +401,7 @@ impl TypeChecker {
         }
         // Traits: signature sets only, hoisted so impls may precede them.
         for t in &prog.traits {
-            self.current_span = t.span;
+            self.current_span.set(t.span);
             if self.traits.contains_key(&t.name) {
                 return Err(format!("trait `{}` is defined twice", t.name));
             }
@@ -397,7 +426,7 @@ impl TypeChecker {
         // Validate the types inside the signatures only once every trait name
         // is known, so traits may reference each other in any order.
         for t in &prog.traits {
-            self.current_span = t.span;
+            self.current_span.set(t.span);
             for sig in &t.methods {
                 for p in &sig.params {
                     self.validate_type(&p.ty)?;
@@ -410,7 +439,7 @@ impl TypeChecker {
         // the recursive-size question (an enum containing itself is infinite),
         // which needs indirection and therefore M1.
         for e in &prog.enums {
-            self.current_span = e.span;
+            self.current_span.set(e.span);
             for v in &e.variants {
                 for (i, t) in v.payload.iter().enumerate() {
                     match t {
@@ -452,7 +481,7 @@ impl TypeChecker {
             .collect();
 
         for s in &prog.structs {
-            self.current_span = s.span;
+            self.current_span.set(s.span);
             for f in &s.fields {
 
                 self.validate_type(&f.ty)?;
@@ -471,7 +500,7 @@ impl TypeChecker {
         // Pass 1: collect every signature, so order of definition never matters.
         let mut externs = Vec::new();
         for e in &prog.externs {
-            self.current_span = e.span;
+            self.current_span.set(e.span);
             self.check_extern(e)?;
             // Burxt code always sees CInt as Int; the width conversion is
             // codegen's job at the call site.
@@ -497,7 +526,7 @@ impl TypeChecker {
             });
         }
         for f in &prog.fns {
-            self.current_span = f.span;
+            self.current_span.set(f.span);
             if self.fns.contains_key(&f.name) {
                 return Err(format!("function `{}` is defined twice", f.name));
             }
@@ -554,7 +583,7 @@ impl TypeChecker {
         // toward a contract, so it uses the SAME machinery.
         let mut all_methods: Vec<&MethodDef> = prog.methods.iter().collect();
         for im in &prog.impls {
-            self.current_span = im.span;
+            self.current_span.set(im.span);
             for m in &im.methods {
                 all_methods.push(m);
             }
@@ -596,7 +625,7 @@ impl TypeChecker {
         // matching receiver form and types. A partial or mismatched impl names
         // the offending method.
         for im in &prog.impls {
-            self.current_span = im.span;
+            self.current_span.set(im.span);
             self.check_impl(im)?;
             self.impls.insert((im.trait_name.clone(), im.type_name.clone()));
         }
@@ -604,7 +633,7 @@ impl TypeChecker {
         // Pass 2: check each function body.
         let mut fns = Vec::new();
         for f in &prog.fns {
-            self.current_span = f.span;
+            self.current_span.set(f.span);
             fns.push(self.check_fn(f)?);
         }
         let mut methods = Vec::new();
@@ -622,7 +651,7 @@ impl TypeChecker {
         // — if a type never becomes a trait object, it costs nothing.
         let mut vtables = Vec::new();
         for im in &prog.impls {
-            self.current_span = im.span;
+            self.current_span.set(im.span);
             if !self.dyn_traits.contains(&im.trait_name) {
                 continue;
             }
@@ -749,7 +778,7 @@ impl TypeChecker {
         trait_name: &str,
         e: &Expr,
     ) -> Result<TypedExpr, String> {
-        let Expr::Var(var) = e else {
+        let ExprKind::Var(var) = &e.kind else {
             return Err(format!(
                 "a `dyn {}` must come from a variable — a trait object borrows the \
                  storage of the value it refers to, and an expression has none.",
@@ -798,8 +827,8 @@ impl TypeChecker {
     fn require_mutable_place(&self, e: &Expr) -> Result<(), String> {
         let mut cur = e;
         loop {
-            match cur {
-                Expr::Var(name) => {
+            match &cur.kind {
+                ExprKind::Var(name) => {
                     let (ty, mutable) = self
                         .env
                         .get(name)
@@ -813,8 +842,8 @@ impl TypeChecker {
                     }
                     return Ok(());
                 }
-                Expr::Field { base, .. } => cur = base,
-                Expr::Index { base, .. } => cur = base,
+                ExprKind::Field { base, .. } => cur = base,
+                ExprKind::Index { base, .. } => cur = base,
                 _ => {
                     return Err(
                         "this can only modify a variable, or a field or element of \
@@ -1074,7 +1103,7 @@ impl TypeChecker {
     }
 
     fn check_fn(&mut self, f: &FnDef) -> Result<TypedFn, String> {
-        self.current_span = f.span;
+        self.current_span.set(f.span);
         self.env.clear();
         let mut params = Vec::new();
         for p in &f.params {
@@ -1120,7 +1149,7 @@ impl TypeChecker {
     /// mutability set from `receiver_mut` — so `self.field = ...` obeys the
     /// exact same AssignField rule an ordinary `let mut` binding would.
     fn check_method(&mut self, m: &MethodDef) -> Result<TypedMethod, String> {
-        self.current_span = m.span;
+        self.current_span.set(m.span);
         self.env.clear();
         self.env.insert(
             "self".to_string(),
@@ -1192,8 +1221,8 @@ impl TypeChecker {
         let (caller, caller_params) = self.current_sig.clone().ok_or_else(|| {
             "a guaranteed tail call only makes sense inside a function".to_string()
         })?;
-        let (name, args) = match e {
-            Expr::Call { name, args } => (name.clone(), args),
+        let (name, args) = match &e.kind {
+            ExprKind::Call { name, args } => (name.clone(), args),
             // The parser already refused anything else.
             _ => return Err("`return tail` must be followed by a call".to_string()),
         };
@@ -1324,7 +1353,9 @@ impl TypeChecker {
         // the position is attached once, at the boundary — so a nested statement
         // naturally reports the innermost (most precise) position, and no error
         // site has to thread a span through.
-        self.current_span = s.span;
+        self.current_span.set(s.span);
+        // A fresh statement, so the next error is free to claim its own position.
+        self.error_located.set(false);
         match &s.kind {
             StmtKind::Let { name, mutable, declared, value } => {
                 if self.env.contains_key(name) {
@@ -1350,7 +1381,7 @@ impl TypeChecker {
                 }
                 // An array exists only behind a binding: it must be created
                 // right here, from a literal (whole-array copies are deferred).
-                if matches!(declared, Type::Array { .. }) && !matches!(value, Expr::ArrayLit(_))
+                if matches!(declared, Type::Array { .. }) && !matches!(value.kind, ExprKind::ArrayLit(_))
                 {
                     return Err(format!(
                         "`let {}: {}` must be initialized with an array literal, \
@@ -1360,6 +1391,8 @@ impl TypeChecker {
                 }
                 let typed = self.check_expr(value, Some(declared))?;
                 if &typed.ty != declared {
+                    // The declaration is fine; it is the value that disagrees.
+                    self.blame(value.span);
                     return Err(format!(
                         "type mismatch in `let {}`: declared {}, but expression has type {}",
                         name, declared, typed.ty
@@ -1653,7 +1686,7 @@ impl TypeChecker {
                 // An interpolated string prints its pieces in order, which
                 // needs no allocation — so it is handled here rather than as a
                 // String-valued expression.
-                if let Expr::InterpStr(parts) = e {
+                if let ExprKind::InterpStr(parts) = &e.kind {
                     let mut typed_parts = Vec::new();
                     for p in parts {
                         match p {
@@ -1723,6 +1756,7 @@ impl TypeChecker {
                 })?;
                 let typed = self.check_expr(e, Some(&ret))?;
                 if typed.ty != ret {
+                    self.blame(e.span);
                     return Err(format!(
                         "this function returns {}, but the `return` expression has type {}",
                         ret, typed.ty
@@ -1762,25 +1796,46 @@ impl TypeChecker {
 
     /// `expected` is the type context (the declared type of the enclosing
     /// `let`), used to normalize decimal literals to the right scale.
+    /// Check an expression, and on the way record two things the checking itself
+    /// does not need: this expression's resolved type (for hover), and — if it
+    /// failed — its position, unless something further in has already claimed it.
+    ///
+    /// "Innermost claims it" is what makes the caret land on the sub-expression
+    /// that is actually wrong instead of the whole statement: a child's wrapper
+    /// runs before its parent's as the error propagates out.
     fn check_expr(&self, e: &Expr, expected: Option<&Type>) -> Result<TypedExpr, String> {
+        let result = self.check_expr_kind(e, expected);
+        match &result {
+            Ok(typed) => self.expr_types.borrow_mut().push((e.span, typed.ty.clone())),
+            Err(_) => {
+                if !self.error_located.get() {
+                    self.error_located.set(true);
+                    self.current_span.set(e.span);
+                }
+            }
+        }
+        result
+    }
+
+    fn check_expr_kind(&self, e: &Expr, expected: Option<&Type>) -> Result<TypedExpr, String> {
         // A concrete value becomes a trait object wherever one is expected.
         if let Some(Type::Dyn(t)) = expected {
-            let already = match e {
-                Expr::Var(n) => {
+            let already = match &e.kind {
+                ExprKind::Var(n) => {
                     matches!(self.env.get(n), Some((Type::Dyn(have), _)) if have == t)
                 }
                 _ => false,
             };
-            if !already && !matches!(e, Expr::MethodCall { .. } | Expr::Call { .. }) {
+            if !already && !matches!(e.kind, ExprKind::MethodCall { .. } | ExprKind::Call { .. }) {
                 return self.coerce_dyn(t, e);
             }
         }
-        match e {
-            Expr::IntLit(n) => Ok(TypedExpr { ty: Type::Int, kind: TypedExprKind::IntLit(*n) }),
+        match &e.kind {
+            ExprKind::IntLit(n) => Ok(TypedExpr { ty: Type::Int, kind: TypedExprKind::IntLit(*n) }),
 
-            Expr::BoolLit(b) => Ok(TypedExpr { ty: Type::Bool, kind: TypedExprKind::BoolLit(*b) }),
+            ExprKind::BoolLit(b) => Ok(TypedExpr { ty: Type::Bool, kind: TypedExprKind::BoolLit(*b) }),
 
-            Expr::StrLit(s) => {
+            ExprKind::StrLit(s) => {
                 Ok(TypedExpr { ty: Type::String, kind: TypedExprKind::StrLit(s.clone()) })
             }
 
@@ -1789,7 +1844,7 @@ impl TypeChecker {
             // second lowering. One formatter, one concatenation, no drift: an
             // interpolated value and the hand-written join it stands for are the
             // same program by construction.
-            Expr::InterpStr(parts) => {
+            ExprKind::InterpStr(parts) => {
                 if self.current_region.is_none() {
                     return Err(
                         "building a String from interpolation allocates, so it needs a \
@@ -1845,7 +1900,7 @@ impl TypeChecker {
                 }))
             }
 
-            Expr::DecimalLit { unscaled, scale } => {
+            ExprKind::DecimalLit { unscaled, scale } => {
                 // Determine the target scale (and rounding contract) from
                 // context if available. The contract never rounds the literal
                 // itself — literals must be exactly representable.
@@ -1868,7 +1923,7 @@ impl TypeChecker {
                 })
             }
 
-            Expr::Var(name) => {
+            ExprKind::Var(name) => {
                 let (ty, _) = self
                     .env
                     .get(name)
@@ -1877,7 +1932,7 @@ impl TypeChecker {
                 Ok(TypedExpr { ty, kind: TypedExprKind::Var(name.clone()) })
             }
 
-            Expr::Neg(inner) => {
+            ExprKind::Neg(inner) => {
                 let t = self.check_expr(inner, expected)?;
                 match &t.ty {
                     Type::Int | Type::Decimal { .. } => {}
@@ -1902,7 +1957,7 @@ impl TypeChecker {
                 Ok(TypedExpr { ty: t.ty, kind })
             }
 
-            Expr::Not(inner) => {
+            ExprKind::Not(inner) => {
                 let t = self.check_expr(inner, None)?;
                 if t.ty != Type::Bool {
                     return Err(format!(
@@ -1914,7 +1969,7 @@ impl TypeChecker {
                 Ok(TypedExpr { ty: Type::Bool, kind: TypedExprKind::Not(Box::new(t)) })
             }
 
-            Expr::Logical { op, lhs, rhs } => {
+            ExprKind::Logical { op, lhs, rhs } => {
                 // Both sides must be Bool: `&&`/`||` are not a coercion site.
                 let l = self.check_expr(lhs, None)?;
                 if l.ty != Type::Bool {
@@ -1942,7 +1997,7 @@ impl TypeChecker {
                 })
             }
 
-            Expr::Binary { op, lhs, rhs } => {
+            ExprKind::Binary { op, lhs, rhs } => {
                 // Multiplication may mix scales (money × rate), so a literal
                 // operand must not be forced to the result's scale — that is
                 // what used to make `price * 8.25%` fail, since 0.0825 cannot
@@ -1974,7 +2029,7 @@ impl TypeChecker {
                 })
             }
 
-            Expr::Compare { op, lhs, rhs } => {
+            ExprKind::Compare { op, lhs, rhs } => {
                 // The left side sets the type; the right side is checked
                 // against it, so a literal like `0.00` adopts the money type
                 // it is compared with (`balance > 0.00` just works).
@@ -1991,7 +2046,7 @@ impl TypeChecker {
                 })
             }
 
-            Expr::Call { name, args } => {
+            ExprKind::Call { name, args } => {
                 // `len` is a builtin over both arrays and strings, but the two
                 // are different KINDS of length, and the difference is worth
                 // keeping visible:
@@ -2184,6 +2239,8 @@ impl TypeChecker {
                 for (i, (arg, param_ty)) in args.iter().zip(&param_tys).enumerate() {
                     let typed = self.check_expr(arg, Some(param_ty))?;
                     if &typed.ty != param_ty {
+                        // Point at the argument, not at the whole call.
+                        self.blame(arg.span);
                         // The boundary-exactness case gets its own message,
                         // because "argument 1 must be Int" would hide WHY: a
                         // double cannot hold the amount, and there are two
@@ -2217,7 +2274,7 @@ impl TypeChecker {
                 Ok(TypedExpr { ty: ret, kind: TypedExprKind::Call { name: name.clone(), args: typed_args } })
             }
 
-            Expr::StructLit { name, fields } => {
+            ExprKind::StructLit { name, fields } => {
                 let declared = self
                     .structs
                     .get(name)
@@ -2277,7 +2334,7 @@ impl TypeChecker {
                 })
             }
 
-            Expr::Field { base, field } => {
+            ExprKind::Field { base, field } => {
                 if let Some(r) = self.check_variant_lit(base, field, &[]) {
                     return r;
                 }
@@ -2289,7 +2346,7 @@ impl TypeChecker {
                 })
             }
 
-            Expr::MethodCall { base, method, args } => {
+            ExprKind::MethodCall { base, method, args } => {
                 if let Some(r) = self.check_variant_lit(base, method, args) {
                     return r;
                 }
@@ -2387,7 +2444,7 @@ impl TypeChecker {
                     // A mutating method is passed a true reference, so the
                     // base MUST be the actual mutable binding — exactly the
                     // rule AssignField already enforces for `item.field = v`.
-                    let Expr::Var(name) = base.as_ref() else {
+                    let ExprKind::Var(name) = &base.as_ref().kind else {
                         return Err(format!(
                             "`{}` is a mutating method (`fn (mut self: {}) ...`); \
                              it can only be called on a variable, not an \
@@ -2446,7 +2503,7 @@ impl TypeChecker {
                 })
             }
 
-            Expr::ArrayLit(elems) => {
+            ExprKind::ArrayLit(elems) => {
                 if let Some(Type::Slice(elem_ty)) = expected {
                     let elem_ty = elem_ty.as_ref().clone();
                     let mut typed = Vec::new();
@@ -2503,7 +2560,7 @@ impl TypeChecker {
                 })
             }
 
-            Expr::Index { base, index } => {
+            ExprKind::Index { base, index } => {
                 let typed_base = self.check_expr(base, None)?;
                 if let Type::Slice(elem) = typed_base.ty.clone() {
                     let idx = self.check_expr(index, None)?;
@@ -2593,7 +2650,7 @@ impl TypeChecker {
         variant: &str,
         args: &[Expr],
     ) -> Option<Result<TypedExpr, String>> {
-        let Expr::Var(enum_name) = base else { return None };
+        let ExprKind::Var(enum_name) = &base.kind else { return None };
         // A local binding wins over an enum of the same name: shadowing is
         // refused elsewhere, so this can only be a genuine variable.
         if self.env.contains_key(enum_name) {

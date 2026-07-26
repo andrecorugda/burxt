@@ -175,9 +175,20 @@ impl std::fmt::Display for CmpOp {
     }
 }
 
+/// An expression, plus where it came from.
+///
+/// Statement spans (v0.0.32) put the caret on the right line; these put it under
+/// the right *sub-expression*, and they are what makes hover possible at all —
+/// answering "what is the type here?" means knowing which expression `here` is.
+#[derive(Debug, Clone)]
+pub struct Expr {
+    pub kind: ExprKind,
+    pub span: Span,
+}
+
 /// Expressions.
 #[derive(Debug, Clone)]
-pub enum Expr {
+pub enum ExprKind {
     /// An integer literal, e.g. `3`.
     IntLit(i64),
     /// A decimal literal captured EXACTLY as (unscaled_value, scale).
