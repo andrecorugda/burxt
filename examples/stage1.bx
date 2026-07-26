@@ -896,6 +896,311 @@ fn (mut self: Unit) parse_stmt(src: String) -> Int allocates {
     return self.add(70, target, 0, 0, 0, here);
 }
 
+
+// ============================================================================
+// PHASE 3b: items. fn, struct, enum, trait, impl, extern — with the markers and
+// contract clauses that make a Burxt signature say what it promises.
+// ============================================================================
+//   80 fn        81 method    82 struct   83 enum   84 trait   85 impl   86 extern
+//   90 parameter (type in `a`, marshalled in `value`, name token on the node)
+//   91 field     92 variant (payload list in (b, c))
+//   93 contract clause (expression in `a`, which clause in `value`)
+
+// A parameter list: `(name: Type, name: Type as scaled)`. Returns (start, count).
+fn (mut self: Unit) parse_params(src: String) -> Int allocates {
+    let here: Int = self.pos;
+    if !self.eat(src, 29, "`(` opening the parameters") { return -1; }
+    let start: Int = len(self.kids);
+    let mut count: Int = 0;
+    while !self.at(30) {                             // until ')'
+        if !self.at(1) {
+            return self.complain(src, "a parameter name");
+        }
+        let name_tok: Int = self.pos;
+        let n: Int = self.advance();
+        if !self.eat(src, 20, "`:` and the parameter's type") { return -1; }
+        let ty: Int = self.parse_type(src);
+        if ty < 0 { return -1; }
+        // `amount: Decimal<2> as scaled` — a boundary marshaller.
+        let mut marshalled: Int = 0;
+        if self.at(122) {                            // as
+            let a: Int = self.advance();
+            if !self.at(1) {
+                return self.complain(src, "a marshaller name, e.g. `scaled`");
+            }
+            marshalled = 1;
+            let m: Int = self.advance();
+        }
+        let param: Int = self.add(90, ty, 0, 0, marshalled, name_tok);
+        push(self.kids, param);
+        count = count + 1;
+        if self.at(22) {                             // ','
+            let c: Int = self.advance();
+            continue;
+        }
+        break;
+    }
+    if !self.eat(src, 30, "`)` closing the parameters") { return -1; }
+    return self.add(15, start, count, 0, 0, here);
+}
+
+// `requires`, `ensures` and `decreases`, between the signature and the body.
+fn (mut self: Unit) parse_clauses(src: String) -> Int allocates {
+    let here: Int = self.pos;
+    let start: Int = len(self.kids);
+    let mut count: Int = 0;
+    while self.at(126) || self.at(127) || self.at(128) {
+        let which: Int = self.kind_at(0);
+        let n: Int = self.advance();
+        // A clause is a condition, so a `{` after it opens the BODY.
+        self.no_struct = self.no_struct + 1;
+        let cond: Int = self.parse_expr(src);
+        self.no_struct = self.no_struct - 1;
+        if cond < 0 { return -1; }
+        let clause: Int = self.add(93, cond, 0, 0, which, here);
+        push(self.kids, clause);
+        count = count + 1;
+    }
+    return self.add(15, start, count, 0, 0, here);
+}
+
+// `fn name(params) -> Type [allocates] [clauses] { body }`, or a method when a
+// receiver clause follows `fn`. `pure` precedes the whole thing.
+fn (mut self: Unit) parse_fn(src: String, is_pure: Int) -> Int allocates {
+    let here: Int = self.pos;
+    if !self.eat(src, 102, "`fn`") { return -1; }
+
+    // `fn (self: T) name(...)` and `fn (mut self: T) name(...)` are methods: the
+    // `(` right after `fn` is the tell, exactly as in the Rust parser.
+    let mut receiver_tok: Int = -1;
+    let mut receiver_mut: Int = 0;
+    if self.at(29) {
+        let n: Int = self.advance();
+        if self.at(101) {                            // mut
+            receiver_mut = 1;
+            let m: Int = self.advance();
+        }
+        if !self.eat(src, 119, "`self` in the receiver clause") { return -1; }
+        if !self.eat(src, 20, "`:` and the receiver's type") { return -1; }
+        if !self.at(1) {
+            return self.complain(src, "a struct name after `self:`");
+        }
+        receiver_tok = self.pos;
+        let r: Int = self.advance();
+        if !self.eat(src, 30, "`)` closing the receiver clause") { return -1; }
+    }
+
+    if !self.at(1) {
+        return self.complain(src, "a function name");
+    }
+    let name_tok: Int = self.pos;
+    let n2: Int = self.advance();
+    let params: Int = self.parse_params(src);
+    if params < 0 { return -1; }
+    if !self.eat(src, 10, "`->` and a return type — every Burxt function returns one") {
+        return -1;
+    }
+    let ret: Int = self.parse_type(src);
+    if ret < 0 { return -1; }
+    let mut builds_in_caller: Int = 0;
+    if self.at(125) {                                // `allocates` — not usable as a
+        builds_in_caller = 1;                        // name here, because it is a
+        let a: Int = self.advance();                 // keyword. The language is right.
+    }
+    let clauses: Int = self.parse_clauses(src);
+    if clauses < 0 { return -1; }
+    let body: Int = self.parse_block(src);
+    if body < 0 { return -1; }
+
+    // The markers ride in `value` as bits: pure, allocates, mutating receiver.
+    let mut flags: Int = 0;
+    if is_pure == 1 { flags = flags + 1; }
+    if builds_in_caller == 1 { flags = flags + 2; }
+    if receiver_mut == 1 { flags = flags + 4; }
+    if receiver_tok >= 0 {
+        // A method: the receiver's token goes in `c`, so nothing is lost.
+        let m: Int = self.add(81, params, body, receiver_tok, flags, name_tok);
+        return m;
+    }
+    let f: Int = self.add(80, params, body, clauses, flags, name_tok);
+    return f;
+}
+
+// `struct Name { field: Type, ... }`
+fn (mut self: Unit) parse_struct(src: String) -> Int allocates {
+    if !self.eat(src, 109, "`struct`") { return -1; }
+    if !self.at(1) { return self.complain(src, "a struct name"); }
+    let name_tok: Int = self.pos;
+    let n: Int = self.advance();
+    if !self.eat(src, 31, "`\{` opening the fields") { return -1; }
+    let start: Int = len(self.kids);
+    let mut count: Int = 0;
+    while !self.at(32) && !self.done() {
+        if !self.at(1) { return self.complain(src, "a field name"); }
+        let field_tok: Int = self.pos;
+        let f: Int = self.advance();
+        if !self.eat(src, 20, "`:` and the field's type") { return -1; }
+        let ty: Int = self.parse_type(src);
+        if ty < 0 { return -1; }
+        let field: Int = self.add(91, ty, 0, 0, 0, field_tok);
+        push(self.kids, field);
+        count = count + 1;
+        if self.at(22) {
+            let c: Int = self.advance();
+            continue;
+        }
+        break;
+    }
+    if !self.eat(src, 32, "`\}` closing the fields") { return -1; }
+    return self.add(82, start, count, 0, 0, name_tok);
+}
+
+// `enum Name { Variant, Variant(Type, Type), ... }`
+fn (mut self: Unit) parse_enum(src: String) -> Int allocates {
+    if !self.eat(src, 110, "`enum`") { return -1; }
+    if !self.at(1) { return self.complain(src, "an enum name"); }
+    let name_tok: Int = self.pos;
+    let n: Int = self.advance();
+    if !self.eat(src, 31, "`\{` opening the variants") { return -1; }
+    let start: Int = len(self.kids);
+    let mut count: Int = 0;
+    while !self.at(32) && !self.done() {
+        if !self.at(1) { return self.complain(src, "a variant name"); }
+        let variant_tok: Int = self.pos;
+        let v: Int = self.advance();
+        let payload_start: Int = len(self.kids);
+        let mut payload: Int = 0;
+        if self.at(29) {                             // '(' — a payload
+            let p: Int = self.advance();
+            while !self.at(30) {
+                let ty: Int = self.parse_type(src);
+                if ty < 0 { return -1; }
+                push(self.kids, ty);
+                payload = payload + 1;
+                if self.at(22) {
+                    let c: Int = self.advance();
+                    continue;
+                }
+                break;
+            }
+            if !self.eat(src, 30, "`)` closing the payload") { return -1; }
+        }
+        let variant: Int = self.add(92, 0, payload_start, payload, 0, variant_tok);
+        push(self.kids, variant);
+        count = count + 1;
+        if self.at(22) {
+            let c: Int = self.advance();
+            continue;
+        }
+        break;
+    }
+    if !self.eat(src, 32, "`\}` closing the variants") { return -1; }
+    return self.add(83, start, count, 0, 0, name_tok);
+}
+
+// `trait Name { fn sig(self) -> Type }` — signatures only, no bodies.
+fn (mut self: Unit) parse_trait(src: String) -> Int allocates {
+    if !self.eat(src, 112, "`trait`") { return -1; }
+    if !self.at(1) { return self.complain(src, "a trait name"); }
+    let name_tok: Int = self.pos;
+    let n: Int = self.advance();
+    if !self.eat(src, 31, "`\{` opening the trait") { return -1; }
+    let start: Int = len(self.kids);
+    let mut count: Int = 0;
+    while !self.at(32) && !self.done() {
+        if !self.eat(src, 102, "`fn` — a trait holds signatures") { return -1; }
+        if !self.at(1) { return self.complain(src, "a method name"); }
+        let method_tok: Int = self.pos;
+        let m: Int = self.advance();
+        if !self.eat(src, 29, "`(` and a receiver") { return -1; }
+        let mut receiver_mut: Int = 0;
+        if self.at(101) {
+            receiver_mut = 1;
+            let mu: Int = self.advance();
+        }
+        if !self.eat(src, 119, "`self`") { return -1; }
+        // A trait signature may take parameters after `self`.
+        let extra_start: Int = len(self.kids);
+        let mut extra: Int = 0;
+        while self.at(22) {                          // ',' more parameters
+            let c: Int = self.advance();
+            if !self.at(1) { return self.complain(src, "a parameter name"); }
+            let pname: Int = self.pos;
+            let pn: Int = self.advance();
+            if !self.eat(src, 20, "`:` and the parameter's type") { return -1; }
+            let ty: Int = self.parse_type(src);
+            if ty < 0 { return -1; }
+            let param: Int = self.add(90, ty, 0, 0, 0, pname);
+            push(self.kids, param);
+            extra = extra + 1;
+        }
+        if !self.eat(src, 30, "`)`") { return -1; }
+        if !self.eat(src, 10, "`->` and a return type") { return -1; }
+        let ret: Int = self.parse_type(src);
+        if ret < 0 { return -1; }
+        let sig: Int = self.add(94, ret, extra_start, extra, receiver_mut, method_tok);
+        push(self.kids, sig);
+        count = count + 1;
+    }
+    if !self.eat(src, 32, "`\}` closing the trait") { return -1; }
+    return self.add(84, start, count, 0, 0, name_tok);
+}
+
+// `impl Trait for Type { methods }`
+fn (mut self: Unit) parse_impl(src: String) -> Int allocates {
+    if !self.eat(src, 113, "`impl`") { return -1; }
+    if !self.at(1) { return self.complain(src, "a trait name"); }
+    let trait_tok: Int = self.pos;
+    let t: Int = self.advance();
+    if !self.eat(src, 114, "`for`") { return -1; }
+    if !self.at(1) { return self.complain(src, "the type implementing the trait"); }
+    let type_tok: Int = self.pos;
+    let ty: Int = self.advance();
+    if !self.eat(src, 31, "`\{` opening the impl") { return -1; }
+    let start: Int = len(self.kids);
+    let mut count: Int = 0;
+    while !self.at(32) && !self.done() {
+        let method: Int = self.parse_fn(src, 0);
+        if method < 0 { return -1; }
+        push(self.kids, method);
+        count = count + 1;
+    }
+    if !self.eat(src, 32, "`\}` closing the impl") { return -1; }
+    return self.add(85, start, count, type_tok, 0, trait_tok);
+}
+
+// `extern fn name(params) -> Type;` — no body, and none allowed.
+fn (mut self: Unit) parse_extern(src: String) -> Int allocates {
+    if !self.eat(src, 116, "`extern`") { return -1; }
+    if !self.eat(src, 102, "`fn` after `extern`") { return -1; }
+    if !self.at(1) { return self.complain(src, "a function name"); }
+    let name_tok: Int = self.pos;
+    let n: Int = self.advance();
+    let params: Int = self.parse_params(src);
+    if params < 0 { return -1; }
+    if !self.eat(src, 10, "`->` and a return type") { return -1; }
+    let ret: Int = self.parse_type(src);
+    if ret < 0 { return -1; }
+    if !self.eat(src, 21, "`;` — an extern declaration has no body") { return -1; }
+    return self.add(86, params, ret, 0, 0, name_tok);
+}
+
+// One item, or a top-level statement: the same dispatch the Rust parser makes.
+fn (mut self: Unit) parse_item(src: String) -> Int allocates {
+    let k: Int = self.kind_at(0);
+    if k == 124 {                                    // pure fn
+        let n: Int = self.advance();
+        return self.parse_fn(src, 1);
+    }
+    if k == 102 { return self.parse_fn(src, 0); }
+    if k == 109 { return self.parse_struct(src); }
+    if k == 110 { return self.parse_enum(src); }
+    if k == 112 { return self.parse_trait(src); }
+    if k == 113 { return self.parse_impl(src); }
+    if k == 116 { return self.parse_extern(src); }
+    return self.parse_stmt(src);
+}
+
 // Step over an item without reading it: phase 3b parses these, and until then the
 // driver must not mistake a function body for top-level code.
 fn (mut self: Unit) skip_item() -> Int {
@@ -985,24 +1290,16 @@ region compile {
     print("first tokens:");
     let shown: Int = unit.report(src, 8);
 
-    // ---- phase 3: parse the statements the tokens describe ----
-    // Only top-level statements for now: items (fn, struct, enum, trait, impl) are
-    // phase 3b, and the loop skips past them rather than pretending to read them.
-    let mut statements: Int = 0;
+    // ---- phase 3: parse everything the tokens describe ----
+    let mut items: Int = 0;
     while !unit.done() {
-        let k: Int = unit.kind_at(0);
-        // An item starts with one of these; step over it by matching braces.
-        if k == 102 || k == 109 || k == 110 || k == 112 || k == 113 || k == 116 || k == 124 {
-            let skipped: Int = unit.skip_item();
-            continue;
-        }
-        let stmt: Int = unit.parse_stmt(src);
-        if stmt < 0 {
+        let item: Int = unit.parse_item(src);
+        if item < 0 {
             break;
         }
-        statements = statements + 1;
+        items = items + 1;
     }
-    print("parsed " + to_string(statements) + " top-level statements into "
+    print("parsed " + to_string(items) + " items and statements into "
           + to_string(len(unit.nodes)) + " nodes, "
           + to_string(len(unit.kids)) + " child slots");
     print("  parse errors: " + to_string(unit.errors));

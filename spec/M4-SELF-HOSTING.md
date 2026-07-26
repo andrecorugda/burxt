@@ -31,7 +31,7 @@ language server, JSON layer or diagnostics rendering.
 | Piece | Rust | Burxt estimate | Written |
 |---|---|---|---|
 | Lexer | 661 | 800–1,000 | **376, DONE** (v0.0.52) — came in under estimate |
-| AST + parser | 1,787 | 2,000–2,600 | **633 for 3a** (v0.0.53); items remain |
+| AST + parser | 1,787 | 2,000–2,600 | **~930, DONE** (v0.0.53–54) — under estimate |
 | Typechecker | 3,702 | 4,500–5,500 | 385 (scale rule, symbol table) |
 | Backend (IR text) | 3,924 | 2,500–3,500 | 0 |
 | Driver | 230 | ~150 | 0 |
@@ -56,8 +56,11 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
      literals, and every statement form including `match` with bindings. Child lists
      live contiguously in a side array, so nothing needs back-patching. Parses every
      source in the repository, including its own.
-   - **3b:** items — `fn`, `struct`, `enum`, `trait`, `impl`, `extern` — with their
-     markers and contract clauses. The driver currently steps over them.
+   - **3b DONE (v0.0.54):** items — `fn`, `pure fn`, methods, `struct`, `enum` with
+     payloads, `trait`, `impl`, `extern fn` — with `allocates`, `requires`, `ensures`,
+     `decreases` and `as scaled`. **stage-1 parses its own source**: 6,610 nodes, no
+     errors. Still open: splitting interpolation fragments into pieces, and a trait
+     signature's parameters beyond the receiver.
 4. **A full typechecker in Burxt.** The big one, and the one where the language will
    hurt most: 4,500 lines of rules with linear-search symbol tables and one source
    file.

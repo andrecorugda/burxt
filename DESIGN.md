@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.53)
+# Burxt — Design Notes (v0.0.54)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -2580,6 +2580,43 @@ parentheses and brackets too. A heuristic that had to meet real syntax to fail.
 Items — `fn`, `struct`, `enum`, `trait`, `impl`, `extern` — are phase 3b. The driver
 steps over them rather than pretending to read them.
 
+### v0.0.54: stage-1 parses items — and parses itself
+
+M4 phase 3b. `fn`, `pure fn`, methods with `mut self` receivers, `struct`, `enum` with
+payloads, `trait` signatures, `impl Trait for Type`, `extern fn` — with the markers and
+contract clauses that make a Burxt signature say what it promises: `allocates`,
+`requires`, `ensures`, `decreases`, and `as scaled` on a parameter.
+
+**The number that matters:**
+
+```text
+parsed 55 items and statements into 6610 nodes, 2263 child slots
+  parse errors: 0            <- stage1.bx, parsing its own 1,300 lines
+```
+
+Every function, every method, every struct, every contract clause in the stage-1
+compiler, read by the stage-1 compiler. The front end is now **self-parsing**, and the
+cross-check test holds it to that over every source in the repository.
+
+**The language caught me using its own keyword.** `let mut allocates: Int = 0;` — refused,
+because `allocates` became a keyword in v0.0.38 and Burxt does not let a name shadow one.
+The variable is now `builds_in_caller`, and the refusal was correct: a local called
+`allocates` inside the parser that *handles* `allocates` is exactly the confusion the rule
+exists to prevent.
+
+**Markers ride as bits, and that is a deliberate arena decision.** `pure`, `allocates` and
+a mutating receiver are three flags in one integer field rather than three fields, because
+a node is a fixed-size struct in an array and every field is paid for by *every* node.
+The same reasoning that makes real compilers pack their AST.
+
+**What is left of the front end:** interpolation fragments are detected but not split into
+pieces, and the parser records enough to rebuild a signature but not the receiver's
+parameter list on a trait signature. Both are named in the spec rather than left to be
+discovered.
+
+Next is phase 4, the typechecker, which the plan calls the hardest and the largest — and
+which is where the public milestone sits.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -2644,6 +2681,8 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- M4 phase 3b (v0.0.54): items, markers and contract clauses — stage-1 parses its own
+  source into 6,610 nodes with no errors.
 - M4 phase 3a (v0.0.53): the stage-1 parser — all types, the full expression ladder,
   every statement form, in an arena with contiguous child lists. Parses its own source.
 - M4 phase 2 (v0.0.52): the stage-1 lexer in Burxt — the real token set, exact money
