@@ -29,6 +29,7 @@ which is right.
 | [A5.0 Control Flow](A5.0-CONTROL-FLOW.md) | **DONE** (v0.0.3–v0.0.4, v0.0.15) | — |
 | [Far-horizon M1–M4](FAR-HORIZON-ROADMAP.md) | **Direction only** | Re-spec each on arrival. **M1's trigger is now MET** — see its amendment; two new criteria argue against the ARC lean. |
 | [A6.0 Sum Types](A6.0-SUM-TYPES.md) | **DONE** (v0.0.20) | Enums, exhaustive `match`. Deferred: wildcards, recursive/aggregate payloads (M1), guards, nested patterns, match-as-expression, generics. |
+| [M1 Memory Model](M1-MEMORY-MODEL.md) | **DECIDED, to implement** | Regions as the unit of ownership. Unblocks List<T>, string building, storable `dyn`, and an uncapped self-hosted compiler. |
 | [Novelty register](NOVELTY.md) | **Ambition, unscheduled** | What Burxt is *for*: exactness across boundaries, provable determinism, conservation-law contracts, effects-not-async. |
 
 ## The audit, in detail

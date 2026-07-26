@@ -103,9 +103,18 @@ at all. Under that reading a green-thread scheduler can be a *library* that only
 programs using it pay for, which keeps the pillar intact without foreclosing
 concurrency.
 
-**Still deliberately not decided here.** M1 remains its own deep, spec-first
-session. The point of this amendment is that when that session happens, it
-happens with these criteria in view rather than rediscovering them afterward.
+**DECIDED (2026-07-25) — see `spec/M1-MEMORY-MODEL.md`.** The answer was
+neither of the three options above: **regions, with the region as the unit of
+ownership.** A region has one owner, so everything inside it is reachable by
+one thread and data races are impossible by construction — WITHOUT per-object
+borrow checking. Prior art: Project Verona, Pony.
+
+This **supersedes the ARC lean recorded above.** ARC was rejected for exactly
+the criterion added in this amendment: it cannot deliver data-race freedom,
+which is now a must-have rather than an aspiration. GC was rejected for
+pauses. Full per-object ownership was rejected as more granularity than
+Burxt's transaction-shaped workloads need, at a cost in ceremony and solo
+implementation time that region granularity avoids.
 
 **Deferred within M1:** whichever two options you don't pick get recorded with why.
 

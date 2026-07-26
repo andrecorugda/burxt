@@ -112,13 +112,18 @@ thesis generalized: **dangerous defaults become compile errors.**
   dates/timezones, when they come, arrive timezone-explicit or not at all.
 - **Deterministic builds**: when Burxt grows dependencies, resolution is
   locked and reproducible from day one.
+- **Data races as compile errors** (promoted from aspiration, 2026-07-25).
+  The mechanism is decided: **region ownership** — a region has exactly one
+  owner, so everything inside it is reachable by one thread and a race cannot
+  be expressed. No per-object borrow checking, no collector, no refcounts.
+  See `spec/M1-MEMORY-MODEL.md`.
 
-### Aspiration — the strongest differentiator, flagged without a timeline
+### Aspiration — flagged without a timeline
 
-- **Data races as compile errors.** A corrupted balance from two threads is
-  the same disease as float money. This is genuinely hard (it is Rust's
-  headline achievement); Burxt designs toward it (value semantics and
-  immutability-by-default are the right substrate) but commits no date.
+- *(Data races as compile errors moved to COMMITTED — see below.)*
+- **Full static verification of contracts.** `requires`/`ensures` are checked
+  at runtime today; proving them at compile time is SMT-solver territory and
+  gets its own phase.
 
 ### Known interim measures — working, but not the final answer
 
