@@ -52,6 +52,61 @@ when the first program you genuinely need cannot be written without heap allocat
 Until then, the near-term milestones deliberately stay on the safe side of the heap
 boundary (see A4.4's line).
 
+### AMENDMENT (2026-07-25) — the trigger has been met, and two new criteria apply
+
+**The gate is open.** The ledger now carries at least five ownership-blocked
+entries: string concatenation, mutating methods through `dyn`, returning or
+storing a `dyn`, interpolation producing a String *value* (v0.0.17), and
+growable collections. M1 is no longer premature.
+
+Two criteria have emerged since this file was written, and **both argue against
+the ARC lean recorded above.** They should be weighed before deciding:
+
+**Criterion 1 — concurrency correctness needs ownership.** The aspiration
+already in DESIGN.md ("data races as compile errors") is achievable *only* under
+ownership/borrowing. ARC and GC both deliver memory safety while leaving data
+races fully possible. For a money language the differentiated concurrency pitch
+is "two threads cannot corrupt a balance," not "you can await many sockets" — so
+choosing ARC as "the pragmatic middle" would quietly foreclose the aspiration.
+
+Note also the separation this clarified: **memory ownership and concurrency
+scheduling are different axes.** OS threads need no scheduler and no runtime
+baggage under *any* M1 choice; green threads need a scheduler under *every* M1
+choice. M1 does not decide whether concurrency exists — it decides whether
+**sharing** is safe.
+
+**Criterion 2 — effect handlers are the intended concurrency mechanism** (see
+`spec/NOVELTY.md` §4), and they capture state across suspension points. That
+couples them to the memory model exactly as async couples to it: under
+ownership, state living across a suspension is the hardest case (it is what
+forced `Pin` and `Send`/`Sync` on Rust); under ARC or GC it is much easier.
+**M1 must therefore be decided knowing effects are the target**, not in
+ignorance of it.
+
+**The honest trilemma, stated plainly:**
+
+| Want | Points to |
+|---|---|
+| Data races as compile errors (on-thesis for money) | ownership |
+| Maximum approachability | ARC or GC |
+| No *mandatory* runtime | rules out GC; makes ARC's atomic refcount traffic real |
+
+Ownership + OS threads + *optional, library-level* schedulers satisfies both
+pillars — no baggage, no function coloring, races caught at compile time — at
+the cost of the steepest learning curve, which is precisely the easy↔safe
+tension the North Star says will be managed forever.
+
+**A reframing of "no runtime baggage" that this exposed:** it should mean **no
+*mandatory* runtime**, not "no runtime ever." Burxt already applies exactly this
+principle — write `dyn` and a vtable is emitted; write none and no vtable exists
+at all. Under that reading a green-thread scheduler can be a *library* that only
+programs using it pay for, which keeps the pillar intact without foreclosing
+concurrency.
+
+**Still deliberately not decided here.** M1 remains its own deep, spec-first
+session. The point of this amendment is that when that session happens, it
+happens with these criteria in view rather than rediscovering them afterward.
+
 **Deferred within M1:** whichever two options you don't pick get recorded with why.
 
 ---

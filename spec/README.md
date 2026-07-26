@@ -4,6 +4,13 @@ The specs in this folder are the roadmap. Each one is written the same way:
 decisions with reasoning, an explicit **must NOT do** section, and a deferred
 ledger with the trigger that would earn each deferral a future milestone.
 
+**Two different disciplines live here, and they must not be confused.** The
+milestone specs govern **implementation** — what gets built next, and the
+scope rules that keep it sound. [`NOVELTY.md`](NOVELTY.md) holds **ambition** —
+what Burxt exists to solve that other languages do not. Scope discipline
+applies to the former only; applied to the latter it just produces incremental
+answers.
+
 **Read this file first.** The specs were written when Burxt was at roughly
 v0.0.1, so several describe work that is now done, and one describes work that
 was built in a different order than specified. This index records what is
@@ -20,7 +27,8 @@ which is right.
 | [A4.6 Interfaces & Dispatch](A4.6-INTERFACES-DISPATCH.md) | **DONE** (v0.0.14) | Traits, `impl`, static + `dyn` dispatch shipped. `class` / `open` inheritance from the North Star is separate and still unbuilt. |
 | [A4.7 Signature Grammar](A4.7-SIGNATURE-GRAMMAR.md) | **Not started** | All six deliverables. This is the "eloquence" / demo milestone. |
 | [A5.0 Control Flow](A5.0-CONTROL-FLOW.md) | **DONE** (v0.0.3–v0.0.4, v0.0.15) | — |
-| [Far-horizon M1–M4](FAR-HORIZON-ROADMAP.md) | **Direction only** | Re-spec each on arrival. M1 (memory model) is the gate. |
+| [Far-horizon M1–M4](FAR-HORIZON-ROADMAP.md) | **Direction only** | Re-spec each on arrival. **M1's trigger is now MET** — see its amendment; two new criteria argue against the ARC lean. |
+| [Novelty register](NOVELTY.md) | **Ambition, unscheduled** | What Burxt is *for*: exactness across boundaries, provable determinism, conservation-law contracts, effects-not-async. |
 
 ## The audit, in detail
 
