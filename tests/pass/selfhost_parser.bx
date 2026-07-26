@@ -6,8 +6,9 @@
 // by INDEX. That is how Zig and Carbon build their ASTs — and it means the
 // parser was never blocked on the memory model, only on believing it was.
 //
-// The arena is a struct holding fixed storage, mutated through a `mut self`
-// method — the by-reference receiver Burxt already had. No new semantics.
+// The arena is a struct holding GROWABLE storage (`[Node]`), mutated through a
+// `mut self` method and allocated in a region — so there is no fixed node
+// budget at all. Before M1 this was capped at [Node; 64].
 //
 //   expr   := term (('+' | '-') term)*
 //   term   := factor ('*' factor)*
@@ -22,7 +23,7 @@ struct Node {
 }
 
 struct Arena {
-    nodes: [Node; 64],
+    nodes: [Node],
     count: Int,
     pos: Int,       // scan position, carried here so it survives calls
     last: Int,      // index of the node just produced
@@ -30,7 +31,7 @@ struct Arena {
 
 fn (mut self: Arena) push(kind: Int, value: Decimal<2, RoundHalfEven>, lhs: Int, rhs: Int) -> Int {
     let at: Int = self.count;
-    self.nodes[at] = Node { kind: kind, value: value, lhs: lhs, rhs: rhs };
+    push(self.nodes, Node { kind: kind, value: value, lhs: lhs, rhs: rhs });
     self.count = at + 1;
     self.last = at;
     return at;
@@ -127,24 +128,11 @@ fn (self: Arena) eval(at: Int) -> Decimal<2, RoundHalfEven> {
     return l * r;
 }
 
-fn empty() -> Node {
-    return Node { kind: 0, value: 0.00, lhs: -1, rhs: -1 };
-}
-
 let src: String = "1.00 + 2.00 * 3.00";
-let mut a: Arena = Arena {
-    nodes: [empty(), empty(), empty(), empty(), empty(), empty(), empty(), empty(),
-            empty(), empty(), empty(), empty(), empty(), empty(), empty(), empty(),
-            empty(), empty(), empty(), empty(), empty(), empty(), empty(), empty(),
-            empty(), empty(), empty(), empty(), empty(), empty(), empty(), empty(),
-            empty(), empty(), empty(), empty(), empty(), empty(), empty(), empty(),
-            empty(), empty(), empty(), empty(), empty(), empty(), empty(), empty(),
-            empty(), empty(), empty(), empty(), empty(), empty(), empty(), empty(),
-            empty(), empty(), empty(), empty(), empty(), empty(), empty(), empty()],
-    count: 0,
-    pos: 0,
-    last: -1,
-};
-let root: Int = a.expr(src);
-print("{src} = {a.eval(root)}");
-print("nodes used: {a.count}");
+region parse {
+    let mut a: Arena = Arena { nodes: [], count: 0, pos: 0, last: -1 };
+    let root: Int = a.expr(src);
+    print("{src} = {a.eval(root)}");
+    print("nodes used: {a.count}");
+    print("capacity was never declared");
+}

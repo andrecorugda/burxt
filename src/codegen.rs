@@ -1921,6 +1921,18 @@ impl<'ctx> CodeGen<'ctx> {
         .map_err(|e| e.to_string())
     }
 
+    /// Get (or declare once) libc `fprintf`. Declaring it twice makes LLVM
+    /// rename the second, which surfaces as an undefined symbol at link time.
+    fn fprintf_fn(&mut self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("fprintf") {
+            return f;
+        }
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+        let i32t = self.ctx.i32_type();
+        self.module
+            .add_function("fprintf", i32t.fn_type(&[ptr.into(), ptr.into()], true), None)
+    }
+
     /// Declare (once) the libc pieces every runtime error needs.
     fn panic_deps(
         &mut self,
@@ -2008,11 +2020,7 @@ impl<'ctx> CodeGen<'ctx> {
         let saved_block = self.builder.get_insert_block();
 
         let i64t = self.ctx.i64_type();
-        let ptr = self.ctx.ptr_type(AddressSpace::default());
-        let i32t = self.ctx.i32_type();
-        // i32 @fprintf(ptr, ptr, ...)
-        let fprintf_ty = i32t.fn_type(&[ptr.into(), ptr.into()], true);
-        let fprintf = self.module.add_function("fprintf", fprintf_ty, None);
+        let fprintf = self.fprintf_fn();
         let (stderr_g, _, exit) = self.panic_deps();
 
         let fn_ty = i64t.fn_type(&[i64t.into(), i64t.into()], false);
@@ -2519,14 +2527,7 @@ impl<'ctx> CodeGen<'ctx> {
         let saved = self.builder.get_insert_block();
 
         let i64t = self.ctx.i64_type();
-        let ptr = self.ctx.ptr_type(AddressSpace::default());
-        let i32t = self.ctx.i32_type();
-        let fprintf = match self.module.get_function("fprintf") {
-            Some(f) => f,
-            None => self
-                .module
-                .add_function("fprintf", i32t.fn_type(&[ptr.into(), ptr.into()], true), None),
-        };
+        let fprintf = self.fprintf_fn();
         let (stderr_g, _, exit) = self.panic_deps();
 
         let f = self.module.add_function(

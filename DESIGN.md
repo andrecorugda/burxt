@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.26)
+# Burxt — Design Notes (v0.0.27)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1252,6 +1252,35 @@ So the remaining two ledger entries are re-diagnosed rather than retired:
 - **Mutating methods through a `dyn`** — needs to know the value behind the
   object was declared mutable. Regions bound its *lifetime*, not its
   *mutability*. The error now says exactly that.
+
+### v0.0.27: the self-hosted parser is uncapped — M1 complete
+
+```text
+region parse {
+    let mut a: Arena = Arena { nodes: [], count: 0, pos: 0, last: -1 };
+    let root: Int = a.expr(src);
+    print("{src} = {a.eval(root)}");
+}
+```
+
+`examples/parser.bx` now uses `[Node]` instead of `[Node; 64]`, so **no node
+budget is declared anywhere.** Verified on a 300-term expression: 599 nodes, all
+allocated in one region and released together. That is what the memory model was
+for.
+
+**A link-time bug this found**, worth recording because it is a repeat of a
+class already seen: two helpers each declared libc `fprintf`, so LLVM renamed
+the second and the program failed to link against `fprintf.4`. Same collision
+class as the reserved `main`/`stderr` symbols. There is now a single
+get-or-declare helper, which is the general fix rather than a patch — any
+runtime symbol declared in more than one place will do this.
+
+**M1 is complete.** All four slices shipped: regions with a bump allocator,
+growable arrays with escape checking, string concatenation, and storable trait
+objects. Two of the spec's predictions were corrected along the way rather than
+forced to come true (interpolation-as-a-value was never memory-blocked;
+returnable `dyn` was never going to be fixed by regions), and both corrections
+are recorded in the spec they came from.
 
 ## Testing
 
