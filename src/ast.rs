@@ -346,6 +346,10 @@ pub struct FnDef {
     pub name: String,
     pub params: Vec<Param>,
     pub ret: Type,
+    /// Declared `allocates`: builds values in the CALLER's region, so it may
+    /// allocate without opening one and may return what it built. One bit, not a
+    /// lifetime — there is no name and no scope relation to unify.
+    pub allocates: bool,
     pub body: Vec<Stmt>,
     /// Where this item was written, for errors about the item itself.
     pub span: Span,

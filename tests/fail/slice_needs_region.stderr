@@ -1,1 +1,1 @@
-needs a region: a growable array lives in one, and there is none open here
+`let xs: [Int]` holds a growable array, which lives in a region, so it needs a region

@@ -1,0 +1,9 @@
+fn label(n: Int) -> String allocates {
+    return "n=" + to_string(n);
+}
+fn wrap(n: Int) -> String {
+    region r {
+        return label(n);
+    }
+}
+region outer { print(wrap(1)); }

@@ -1,4 +1,4 @@
-// A small input for the self-hosted lexer to read and tokenize.
+// A small input for the self-hosted lexer, with one byte it does not know —
+// so the lexer has a real diagnostic to build and report.
 let price = 250;
-let qty = 4;
-let total = price * qty + 99;
+let total = price * 4 @ 99;

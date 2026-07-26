@@ -286,6 +286,14 @@ pub struct TypeChecker {
     /// call needs them: LLVM only guarantees the call when caller and callee
     /// prototypes match, so that has to be checked before promising it.
     current_sig: Option<(String, Vec<Type>)>,
+    /// Function names declared `allocates`: they build values in their CALLER's
+    /// region, so they may allocate without opening one and may return what they
+    /// built. Hoisted with the signatures, so call sites can be checked in one
+    /// pass.
+    alloc_fns: HashSet<String>,
+    /// True while checking the body of an `allocates` function: the caller's
+    /// region is the region in effect, even though none is open here.
+    in_caller_region: bool,
     /// the region currently open, if any. One level only in this slice, so
     /// this doubles as the nesting guard.
     current_region: Option<String>,
@@ -296,6 +304,8 @@ impl TypeChecker {
         TypeChecker {
             env: HashMap::new(),
             fns: HashMap::new(),
+            alloc_fns: HashSet::new(),
+            in_caller_region: false,
             extern_names: HashSet::new(),
             extern_params: HashMap::new(),
             structs: HashMap::new(),
@@ -339,6 +349,25 @@ impl TypeChecker {
         let mut out = std::mem::take(&mut self.errors);
         out.sort_by_key(|d| (d.span.start, d.span.end));
         out
+    }
+
+    /// Is there a region to allocate in at this point?
+    ///
+    /// Either one is lexically open, or we are inside an `allocates` function and
+    /// the caller's region is in effect. The two are the same question everywhere
+    /// allocation is checked, so they are answered in one place.
+    fn has_region(&self) -> bool {
+        self.current_region.is_some() || self.in_caller_region
+    }
+
+    /// The sentence that tells a reader how to get a region, written once.
+    fn needs_region(&self, what: &str) -> String {
+        format!(
+            "{}, so it needs a region: there is none open here. Wrap it in \
+             `region name {{ ... }}`, or declare the enclosing function \
+             `-> ... allocates` to build in the caller's region.",
+            what
+        )
     }
 
     /// Record a problem at wherever the checker currently is, and keep going.
@@ -620,6 +649,9 @@ impl TypeChecker {
             }
             let param_tys = f.params.iter().map(|p| p.ty.clone()).collect();
             self.fns.insert(f.name.clone(), (param_tys, f.ret.clone()));
+            if f.allocates {
+                self.alloc_fns.insert(f.name.clone());
+            }
         }
 
         // Collect the methods declared inside impl blocks alongside the
@@ -914,11 +946,14 @@ impl TypeChecker {
     /// Does evaluating this expression produce region-allocated storage? Needed
     /// because a concatenated String lives in a region while a literal lives in
     /// .rodata, and the two share one type — so the type alone cannot say.
-    fn expr_allocates(e: &TypedExpr) -> bool {
+    fn expr_allocates(&self, e: &TypedExpr) -> bool {
         match &e.kind {
             TypedExprKind::SliceLit(_)
             | TypedExprKind::Push { .. }
             | TypedExprKind::ReadFile(_) => true,
+            // A call to an `allocates` function built its result in OUR region, so
+            // it is region storage here and the same escape rules apply to it.
+            TypedExprKind::Call { name, .. } => self.alloc_fns.contains(name),
             // Bool renders to a literal; the others allocate.
             TypedExprKind::ToString(v) => v.ty != Type::Bool,
             TypedExprKind::Binary { op: BinOp::Add, lhs, rhs }
@@ -927,15 +962,15 @@ impl TypeChecker {
                 true
             }
             TypedExprKind::Binary { lhs, rhs, .. } => {
-                Self::expr_allocates(lhs) || Self::expr_allocates(rhs)
+                self.expr_allocates(lhs) || self.expr_allocates(rhs)
             }
-            TypedExprKind::Neg(i) | TypedExprKind::Not(i) => Self::expr_allocates(i),
-            TypedExprKind::Field { base, .. } => Self::expr_allocates(base),
+            TypedExprKind::Neg(i) | TypedExprKind::Not(i) => self.expr_allocates(i),
+            TypedExprKind::Field { base, .. } => self.expr_allocates(base),
             TypedExprKind::Index { base, index, .. } => {
-                Self::expr_allocates(base) || Self::expr_allocates(index)
+                self.expr_allocates(base) || self.expr_allocates(index)
             }
             TypedExprKind::SliceIndex { base, index } => {
-                Self::expr_allocates(base) || Self::expr_allocates(index)
+                self.expr_allocates(base) || self.expr_allocates(index)
             }
             _ => false,
         }
@@ -1181,11 +1216,13 @@ impl TypeChecker {
             params.push((p.name.clone(), p.ty.clone()));
         }
         self.current_ret = Some(f.ret.clone());
+        self.in_caller_region = f.allocates;
         self.current_sig =
             Some((f.name.clone(), f.params.iter().map(|p| p.ty.clone()).collect()));
         let errors_before = self.errors.len();
         let body = self.check_block(&f.body)?;
         self.current_ret = None;
+        self.in_caller_region = false;
         self.current_sig = None;
         self.env.clear();
 
@@ -1439,12 +1476,11 @@ impl TypeChecker {
                 // escape their block, this single rule stops region data from
                 // outliving its region by assignment — there is nowhere outside
                 // to put it.
-                if self.region_allocated(declared) && self.current_region.is_none() {
-                    return Err(format!(
-                        "`let {}: {}` needs a region: a growable array lives in one, \
-                         and there is none open here. Wrap it in `region name {{ ... }}`.",
+                if self.region_allocated(declared) && !self.has_region() {
+                    return Err(self.needs_region(&format!(
+                        "`let {}: {}` holds a growable array, which lives in a region",
                         name, declared
-                    ));
+                    )));
                 }
                 // An array exists only behind a binding: it must be created
                 // right here, from a literal (whole-array copies are deferred).
@@ -1649,6 +1685,11 @@ impl TypeChecker {
 
                 let mut typed_arms: Vec<TypedArm> = Vec::new();
                 for arm in arms {
+                    // Checking the previous arm's body moved the position; an error
+                    // about THIS arm's pattern belongs to the match, not to the arm
+                    // above it. (Found by shadowing a name in examples/lexer.bx and
+                    // being pointed at the wrong line.)
+                    self.current_span.set(s.span);
                     if arm.variant == "_" {
                         return Err(
                             "Burxt has no `_` wildcard arm: it would silently absorb \
@@ -1829,13 +1870,21 @@ impl TypeChecker {
                         ret, typed.ty
                     ));
                 }
-                // Escape checking, the expression-level half: this value's bytes
-                // live in a region, so returning it would outlive that region.
-                if Self::expr_allocates(&typed) {
+                // Escape checking, the expression-level half. Which region the value
+                // was built in decides everything:
+                //
+                //   - inside a `region` block THIS function opened: that region ends
+                //     at the closing brace, so returning it dangles. Refused.
+                //   - inside an `allocates` function with no local region: the bytes
+                //     are the CALLER's, and the caller's region is still open when it
+                //     receives them. Fine — this is the whole point of `allocates`.
+                if self.expr_allocates(&typed) && !(self.in_caller_region && self.current_region.is_none())
+                {
                     return Err(format!(
                         "cannot return this {}: it was built in a region, so its \
-                         storage would not outlive it. Return a scalar summary, or \
-                         fill storage the caller owns.",
+                         storage would not outlive it. Return a scalar summary, fill \
+                         storage the caller owns, or move the allocation out of the \
+                         `region` block and declare the function `allocates`.",
                         typed.ty
                     ));
                 }
@@ -1912,14 +1961,11 @@ impl TypeChecker {
             // interpolated value and the hand-written join it stands for are the
             // same program by construction.
             ExprKind::InterpStr(parts) => {
-                if self.current_region.is_none() {
-                    return Err(
-                        "building a String from interpolation allocates, so it needs a \
-                         region: there is none open here. Wrap it in \
-                         `region name { ... }`, or print it directly — \
-                         `print(\"...\")` needs no allocation."
-                            .to_string(),
-                    );
+                if !self.has_region() {
+                    return Err(self.needs_region(
+                        "building a String from interpolation allocates (printing one \
+                         directly does not)",
+                    ));
                 }
                 let mut joined: Option<TypedExpr> = None;
                 for part in parts {
@@ -2179,13 +2225,10 @@ impl TypeChecker {
                             path.ty
                         ));
                     }
-                    if self.current_region.is_none() {
-                        return Err(
-                            "read_file(...) allocates the file's bytes, so it needs a \
-                             region: there is none open here. Wrap it in \
-                             `region name { ... }`."
-                                .to_string(),
-                        );
+                    if !self.has_region() {
+                        return Err(self.needs_region(
+                            "read_file(...) allocates the file's bytes",
+                        ));
                     }
                     return Ok(TypedExpr {
                         ty: Type::String,
@@ -2218,13 +2261,12 @@ impl TypeChecker {
                         }
                     }
                     // Bool needs no allocation: both spellings are literals.
-                    if v.ty != Type::Bool && self.current_region.is_none() {
-                        return Err(format!(
-                            "to_string(...) on {} {} allocates, so it needs a region: \
-                             there is none open here.",
+                    if v.ty != Type::Bool && !self.has_region() {
+                        return Err(self.needs_region(&format!(
+                            "to_string(...) on {} {} allocates",
                             v.ty.article(),
                             v.ty
-                        ));
+                        )));
                     }
                     return Ok(TypedExpr {
                         ty: Type::String,
@@ -2299,6 +2341,18 @@ impl TypeChecker {
                         name,
                         param_tys.len(),
                         args.len()
+                    ));
+                }
+                // An `allocates` callee builds in OUR region, so there has to be
+                // one. Checked here rather than inside the callee, because this is
+                // the site that can be wrapped.
+                if self.alloc_fns.contains(name) && !self.has_region() {
+                    return Err(format!(
+                        "`{}` is declared `allocates`, so it builds its result in the \
+                         caller's region — and there is none open here. Wrap the call \
+                         in `region name {{ ... }}`, or declare this function \
+                         `allocates` too.",
+                        name
                     ));
                 }
                 let declared = self.extern_params.get(name).cloned();
@@ -2880,12 +2934,8 @@ impl TypeChecker {
             // result's bytes are region-allocated, so the same escape rules
             // apply — enforced where the value is bound, not here.
             (BinOp::Add, String, String) => {
-                if self.current_region.is_none() {
-                    return Err(
-                        "joining strings with `+` allocates, so it needs a region: \
-                         there is none open here. Wrap it in `region name { ... }`."
-                            .to_string(),
-                    );
+                if !self.has_region() {
+                    return Err(self.needs_region("joining strings with `+` allocates"));
                 }
                 Ok(String)
             }

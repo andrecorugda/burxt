@@ -1,1 +1,1 @@
-`let h: Holder` needs a region
+`let h: Holder` holds a growable array, which lives in a region, so it needs a region

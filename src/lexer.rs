@@ -34,6 +34,8 @@ pub enum Token {
     As,
     /// `return tail f(x)` — a tail call the compiler must guarantee.
     Tail,
+    /// `-> T allocates` — this function builds values in its CALLER's region.
+    Allocates,
     If,
     Else,
     While,
@@ -122,6 +124,7 @@ impl Token {
             Token::Return => "`return`".to_string(),
             Token::As => "`as`".to_string(),
             Token::Tail => "`tail`".to_string(),
+            Token::Allocates => "`allocates`".to_string(),
             Token::If => "`if`".to_string(),
             Token::Else => "`else`".to_string(),
             Token::While => "`while`".to_string(),
@@ -602,6 +605,7 @@ impl<'a> Lexer<'a> {
             "return" => Token::Return,
             "as" => Token::As,
             "tail" => Token::Tail,
+            "allocates" => Token::Allocates,
             "if" => Token::If,
             "else" => Token::Else,
             "true" => Token::True,

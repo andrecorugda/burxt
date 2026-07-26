@@ -203,6 +203,19 @@ Revised staging:
    source binding, which is a stack local — so regions were never the blocker
    for either.** §3 overclaimed; this is the correction.
 
+## 6b. Amendment: functions that allocate in the caller's region (v0.0.38)
+
+§2's rule "a value may not outlive its region" was implemented conservatively: a
+function could not build a value and return it at all, because the checker could
+not tell which region the value belonged to. It belongs to the CALLER's — a bump
+allocator hands out the caller's region to any callee that allocates while it is
+open.
+
+`spec/M1a-CALLER-REGION-FUNCTIONS.md` adds one declared bit, `allocates`, that says
+so. Nothing in §4's must-NOT list is weakened: no lifetimes in signatures (it has
+no name and no scope relation), no implicit region (a call that needs one and has
+none is an error), no cross-region references, and no codegen change.
+
 ## 7. Consequences to record elsewhere
 
 - `FAR-HORIZON-ROADMAP.md`'s ARC lean is **superseded**. ARC was rejected for

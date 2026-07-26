@@ -223,6 +223,11 @@
           "match": "\\btail\\b"
         },
         {
+          "comment": "`-> T allocates` — this function builds values in its CALLER's region, so every call site needs one.",
+          "name": "storage.modifier.allocates.burxt",
+          "match": "\\ballocates\\b"
+        },
+        {
           "name": "keyword.declaration.burxt",
           "match": "\\b(let|mut|fn|extern|struct|enum|trait|interface|impl|is|region|dyn)\\b"
         },

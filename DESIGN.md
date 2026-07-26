@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.37)
+# Burxt — Design Notes (v0.0.38)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1821,6 +1821,72 @@ The language server publishes all of them, so an editor underlines every place a
 once; `--json` emits one object per line, already in source order, each error only
 once.
 
+### v0.0.38: functions that allocate in the caller's region
+
+```text
+fn describe(line: Int, byte: Int) -> String allocates {
+    return "line " + to_string(line) + ": unexpected byte " + to_string(byte);
+}
+
+region source { print(describe(3, 108)); }
+```
+
+**A helper could not build a String and return it, and that blocked the
+self-hosted compiler more than anything else.** Every error message, every rendered
+type name, every `Int`-to-text conversion in a library function needs exactly this
+shape — and both routes were closed. A plain function body has no region, so the
+allocation was refused; opening one inside the function meant the result could not
+be returned, because that region ends at the closing brace.
+
+**The fix rests on something that was already true.** A function called from inside
+a region *already* allocates in that region — the allocator is a bump pointer, and
+the mark belongs to the caller. So the value never outlives its region and M1's rule
+was satisfied all along. The compiler simply had no way to know a function intended
+this, and refused conservatively.
+
+`allocates` on the signature says it: **this function builds values in its caller's
+region.** It may allocate without opening one, it may return what it built, and
+every call site must have a region open.
+
+**Declared, not inferred, and the reason matters.** Inference is entirely possible —
+walk the call graph, propagate. It was rejected because it would be the only
+invisible contract in the language. Every other guarantee Burxt makes is written
+where it applies: a rounding contract in the type, `dyn` at the dispatch site,
+`tail` at the call, `as scaled` at the boundary. A function that quietly acquires a
+requirement on all its callers because someone added a `+` deep inside it is the
+action-at-a-distance the rest of the language refuses. Being declared also makes it
+decidable in one pass, since signatures are hoisted before any body is checked.
+
+It is **not a lifetime** — no name, no scope relation, nothing to unify. One bit,
+which is why it can be a keyword rather than a parameter, and why M1's "no lifetimes
+in signatures" still holds.
+
+**What still fails, and must:** a value built inside a `region` block the function
+itself opened cannot be returned (that region really does end); and a caller cannot
+return an `allocates` call's result out of its own region, because such a call now
+*counts* as allocating at the call site, so the caller's escape rules govern it
+exactly as if it had built the value itself.
+
+**Codegen did not change at all.** If it had needed to, the reasoning above would
+have been wrong.
+
+**The payoff, in the self-hosted lexer:** `examples/lexer.bx` now reports
+`byte 64 at offset 177 starts no token` — a message *built* by Burxt code rather
+than printed piecemeal. The requirement is visible up the whole chain: `unexpected`,
+`show` and `tokenize` each say `allocates`, because each calls something that does.
+
+**Two things this shook out:**
+
+- **Every "needs a region" message is now written once**, in one helper, and offers
+  both fixes. They had drifted into four slightly different sentences.
+- **A `match` arm's pattern error pointed at the previous arm.** Checking the
+  arm above had moved the recorded position. Found the honest way: by shadowing a
+  name in `examples/lexer.bx` and being sent to the wrong line.
+
+Spec: `spec/M1a-CALLER-REGION-FUNCTIONS.md`, with its own must-NOT list — no
+inference, no region names in signatures, no implicit region at a call site, no
+`allocates` on `extern fn`, and no codegen change.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -1885,6 +1951,9 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- M1a. Caller-region functions (v0.0.38): `allocates` on a signature, which
+  unblocks returning built values — the biggest remaining obstacle to a
+  Burxt-hosted compiler.
 - T7. Error recovery (v0.0.37): every type error at once, cascade-free because
   `let` always declares its type. Parse and declaration errors still report alone,
   on purpose.

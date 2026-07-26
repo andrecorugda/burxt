@@ -1,0 +1,6 @@
+fn label(n: Int) -> String allocates {
+    region inner {
+        return "n=" + to_string(n);
+    }
+}
+region r { print(label(1)); }

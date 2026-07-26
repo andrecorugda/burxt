@@ -387,8 +387,13 @@ impl Parser {
         let start = self.span().start;
         self.expect(&Token::Fn)?;
         let (name, params, ret) = self.parse_fn_signature()?;
+        // `-> T allocates` reads as what it is: returns a T, and allocates.
+        let allocates = self.at(&Token::Allocates);
+        if allocates {
+            self.bump();
+        }
         let body = self.parse_block()?;
-        Ok(FnDef { name, params, ret, body, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok(FnDef { name, params, ret, allocates, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `fn (self: Type) name(params) -> ret { body }`, or `fn (mut self: ...)`
