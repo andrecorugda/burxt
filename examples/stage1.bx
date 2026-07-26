@@ -138,6 +138,9 @@ struct Unit {
     loop_depth: Int,
     in_contract: Int,
     in_ensures: Int,
+    // Which function is being checked, so a `tail` call can be compared with the
+    // signature it must replace. -1 at top level and inside a method.
+    current_fn: Int,
     in_function: Int,
     no_struct: Int,
     // Set while typing the operands of `*`. Multiplication combines a quantity with a
@@ -1013,6 +1016,9 @@ fn (mut self: Unit) expr_allocates(src: String, node: Int) -> Bool {
         return self.expr_allocates(src, n.a);
     }
     if n.kind == 17 || n.kind == 19 {                // an array or struct literal
+        if self.type_at(node).kind == 47 {
+            return true;                             // a growable array lives in a region
+        }
         let mut i: Int = 0;
         while i < n.b {
             if self.expr_allocates(src, self.kids[n.a + i]) {
@@ -1144,6 +1150,9 @@ fn flag_pure(flags: Int) -> Int {
 }
 fn flag_allocates(flags: Int) -> Int {
     return rem(div_floor(flags, 2), 2);
+}
+fn flag_extern(flags: Int) -> Int {
+    return rem(div_floor(flags, 8), 2);
 }
 
 // ---- expressions -------------------------------------------------------------
@@ -2159,6 +2168,57 @@ fn (mut self: Unit) collect_declarations(src: String) -> Int allocates {
                 v = v + 1;
             }
         }
+        if item.kind == 82 {                         // struct: fields
+            let mut f: Int = 0;
+            while f < item.b {
+                let field: Node = self.nodes[self.kids[item.a + f]];
+                let shaped: Int = self.check_type_shape(src, field.a, field.tok);
+                let held: Node = self.nodes[field.a];
+                if held.kind == 46 {
+                    let held_name: Tok = self.toks[held.tok];
+                    if spans_eq(src, held_name.start, held_name.length,
+                                name.start, name.length) {
+                        // By value, always: a struct that contains itself has no size.
+                        let e: Int = self.complain_at(src, field.tok,
+                            "a struct cannot contain itself: its size would have to be "
+                            + "bigger than itself");
+                    }
+                }
+                f = f + 1;
+            }
+        }
+        if item.kind == 83 {                         // enum: payloads
+            let mut v: Int = 0;
+            while v < item.b {
+                let variant: Node = self.nodes[self.kids[item.a + v]];
+                let mut p: Int = 0;
+                while p < variant.c {
+                    let payload: Int = self.subs[variant.b + p];
+                    let shaped: Int = self.check_type_shape(src, payload, variant.tok);
+                    let held: Node = self.nodes[payload];
+                    if held.kind == 46 {
+                        let held_name: Tok = self.toks[held.tok];
+                        if spans_eq(src, held_name.start, held_name.length,
+                                    name.start, name.length) {
+                            let e: Int = self.complain_at(src, variant.tok,
+                                "an enum cannot carry itself: its size would have to be "
+                                + "bigger than itself");
+                        }
+                        let inner: Int = self.find_type(src, held_name.start, held_name.length);
+                        if inner >= 0 {
+                            if self.types[inner].kind == 82 {
+                                let e: Int = self.complain_at(src, variant.tok,
+                                    "a variant carries a scalar or a String for now: an "
+                                    + "aggregate payload needs a layout rule that is not "
+                                    + "written");
+                            }
+                        }
+                    }
+                    p = p + 1;
+                }
+                v = v + 1;
+            }
+        }
         if item.kind == 82 || item.kind == 83 {
             if self.find_type(src, name.start, name.length) >= 0 {
                 let e: Int = self.complain_at(src, item.tok, "this type is declared twice");
@@ -2207,8 +2267,10 @@ fn (mut self: Unit) collect_declarations(src: String) -> Int allocates {
                     // Ints rather than mixing a CInt with one.
                     ret = as_burxt_sees(ret);
                 }
+                let mut flags: Int = item.value;
+                if item.kind == 86 { flags = 8; }    // the extern marker
                 push(self.funs, Fun { start: name.start, length: name.length,
-                                      ret: ret, params: item.a, flags: item.value });
+                                      ret: ret, params: item.a, flags: flags });
             }
         }
         i = i + 1;
@@ -2437,6 +2499,34 @@ fn (mut self: Unit) type_of_inner(src: String, node: Int, expected: Ty) -> Ty al
         }
     }
 
+    if n.kind == 17 {                                // an array literal
+        if expected.kind != 47 && expected.kind != 48 {
+            let visited: Int = self.visit_children(src, node);
+            return ty_unknown();
+        }
+        let want: Ty = self.ty_of(src, expected.scale);
+        if expected.kind == 47 && !self.has_region() {
+            let r: Int = self.needs_region(src, n.tok, "a growable array");
+        }
+        if expected.kind == 48 && n.b != expected.contract {
+            let e: Int = self.complain_at(src, n.tok,
+                "this array holds " + to_string(expected.contract) + " element(s), and "
+                + "the literal has " + to_string(n.b) + ": a fixed array's length is "
+                + "part of its type");
+        }
+        let mut i: Int = 0;
+        while i < n.b {
+            let got: Ty = self.type_of(src, self.kids[n.a + i], want);
+            if !is_unknown(got) && !self.fits(src, got, want) {
+                let e: Int = self.complain_at(src, n.tok,
+                    "element " + to_string(i + 1) + " should be " + ty_show(src, want)
+                    + ", but it is " + ty_show(src, got));
+            }
+            i = i + 1;
+        }
+        return expected;
+    }
+
     if n.kind == 12 {                                // xs[i]
         let holder: Ty = self.type_of(src, n.a, ty_unknown());
         let index: Ty = self.type_of(src, n.b, ty_simple(40));
@@ -2455,6 +2545,19 @@ fn (mut self: Unit) type_of_inner(src: String, node: Int, expected: Ty) -> Ty al
             let e: Int = self.complain_at(src, n.tok,
                 "indexing needs an array, but this is " + ty_show(src, holder));
             return ty_unknown();
+        }
+        if holder.kind == 48 {
+            let index_node: Node = self.nodes[n.b];
+            if index_node.kind == 1 {
+                // A literal index is known now, so the bounds check is a compile error
+                // rather than an exit 70 later. The runtime check stays for the rest.
+                if index_node.value >= holder.contract || index_node.value < 0 {
+                    let e: Int = self.complain_at(src, n.tok,
+                        "this array holds " + to_string(holder.contract)
+                        + " element(s), so " + to_string(index_node.value)
+                        + " is past its end");
+                }
+            }
         }
         return self.ty_of(src, holder.scale);
     }
@@ -2814,6 +2917,9 @@ fn (mut self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -> Int allo
                 "this function returns " + ty_show(src, ret) + ", but the value is "
                 + ty_show(src, value));
         }
+        if n.kind == 64 {
+            let checked: Int = self.check_tail(src, n, ret);
+        }
         // The escape rule, and the whole of M1 in one condition: a built value may
         // leave a function ONLY when it was built in the CALLER's region — which means
         // `allocates`, and no region of this function's own open around the return.
@@ -2997,6 +3103,12 @@ fn (mut self: Unit) check_body(src: String, index: Int) -> Int allocates {
     let clauses: Int = self.check_clauses(src, index, signature, ret);
     let outer_function: Int = self.in_function;
     let outer_loop: Int = self.loop_depth;
+    let outer_fn: Int = self.current_fn;
+    self.current_fn = -1;
+    if item.kind == 80 {
+        self.current_fn = self.find_fun(src, self.toks[item.tok].start,
+                                       self.toks[item.tok].length);
+    }
     self.in_function = 1;
     self.loop_depth = 0;
     let body: Int = self.check_block_nodes(src, item.b, ret);
@@ -3009,6 +3121,7 @@ fn (mut self: Unit) check_body(src: String, index: Int) -> Int allocates {
     }
     self.in_function = outer_function;
     self.loop_depth = outer_loop;
+    self.current_fn = outer_fn;
     let dropped: Int = truncate(self.syms, base);
     self.depth = self.depth - 1;
     self.in_caller_region = outer_caller;
@@ -3110,6 +3223,73 @@ fn find_text(src: String, needle: String) -> Int {
         i = i + 1;
     }
     return -1;
+}
+
+// `return tail f(...)` is a guarantee, not a hope: the frame is REPLACED. Everything
+// below is a condition for that being possible at all, which is why each one is a
+// compile error rather than a quiet fallback to an ordinary call.
+fn (mut self: Unit) check_tail(src: String, n: Node, ret: Ty) -> Int allocates {
+    let value: Node = self.nodes[n.a];
+    if value.kind != 13 {
+        let e: Int = self.complain_at(src, n.tok,
+            "`tail` names the call whose frame replaces this one, and this is not a call");
+        return 0;
+    }
+    if self.region_depth > 0 {
+        let e: Int = self.complain_at(src, n.tok,
+            "a `tail` call inside a `region` would jump past the region's close, and "
+            + "the bytes would never be released");
+    }
+    if ret.kind == 46 || ret.kind == 47 || ret.kind == 48 {
+        let e: Int = self.complain_at(src, n.tok,
+            "a `tail` call cannot return " + ty_show(src, ret) + ": an aggregate travels "
+            + "through the caller's storage, and the frame that owns it is the one being "
+            + "replaced");
+    }
+    let called: Tok = self.toks[value.tok];
+    let target: Int = self.find_fun(src, called.start, called.length);
+    if target < 0 {
+        let e: Int = self.complain_at(src, n.tok,
+            "`tail` calls a Burxt function, and this is not one");
+        return 0;
+    }
+    let callee: Fun = self.funs[target];
+    if flag_extern(callee.flags) == 1 {
+        let e: Int = self.complain_at(src, n.tok,
+            "`tail` into C is not a tail call: the C side has its own calling "
+            + "convention, and nothing here can guarantee the frame is replaced");
+        return 0;
+    }
+    if self.current_fn < 0 {
+        return 0;
+    }
+    let here: Fun = self.funs[self.current_fn];
+    if !ty_same(src, callee.ret, here.ret) {
+        let e: Int = self.complain_at(src, n.tok,
+            "a `tail` call must answer what this function answers: " + ty_show(src, here.ret)
+            + ", not " + ty_show(src, callee.ret));
+    }
+    let mine: Node = self.nodes[here.params];
+    let theirs: Node = self.nodes[callee.params];
+    if mine.b != theirs.b {
+        let e: Int = self.complain_at(src, n.tok,
+            "a `tail` call replaces this frame, so the signatures must match: this "
+            + "function takes " + to_string(mine.b) + " parameter(s), and that one takes "
+            + to_string(theirs.b));
+        return 0;
+    }
+    let mut i: Int = 0;
+    while i < mine.b {
+        let want: Ty = self.ty_of(src, self.nodes[self.kids[mine.a + i]].a);
+        let got: Ty = self.ty_of(src, self.nodes[self.kids[theirs.a + i]].a);
+        if !ty_same(src, got, want) {
+            let e: Int = self.complain_at(src, n.tok,
+                "parameter " + to_string(i + 1) + " is " + ty_show(src, want) + " here and "
+                + ty_show(src, got) + " there, and a replaced frame has one shape");
+        }
+        i = i + 1;
+    }
+    return 1;
 }
 
 // Whether a body calls this name — the token scan is exact, because Burxt has no
@@ -3243,6 +3423,32 @@ fn (mut self: Unit) check_impl(src: String, index: Int) -> Int allocates {
     return 1;
 }
 
+// The shapes a type may not have. Both refusals are about storage: a nested array would
+// need a layout rule for arrays of arrays that M1 does not have, and a zero-length array
+// describes nothing. A growable array inside a struct is fine — stage-1's own Unit is
+// made of them — and what it costs is that the struct must be built in a region.
+fn (mut self: Unit) check_type_shape(src: String, node: Int, at: Int) -> Int allocates {
+    if node < 0 {
+        return 0;
+    }
+    let n: Node = self.nodes[node];
+    if n.kind != 47 && n.kind != 48 {
+        return 0;
+    }
+    if n.kind == 48 && n.b <= 0 {
+        let e: Int = self.complain_at(src, at,
+            "an array of no elements describes nothing, and nothing can be read from it");
+    }
+    let element: Node = self.nodes[n.a];
+    if element.kind == 47 || element.kind == 48 {
+        let e: Int = self.complain_at(src, at,
+            "arrays do not nest yet: an array of arrays needs a layout rule the memory "
+            + "model does not have");
+        return 0;
+    }
+    return self.check_type_shape(src, n.a, at);
+}
+
 fn (mut self: Unit) check(src: String) -> Int allocates {
     let collected: Int = self.collect_declarations(src);
     let mut i: Int = 0;
@@ -3314,7 +3520,7 @@ region compile {
         path = arg(1);
     }
     let src: String = read_file(path);
-    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, in_function: 0, depth: 0, problems: 0, pos: 0, no_struct: 0, in_mul: 0, errors: 0 };
+    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_fn: -1, in_function: 0, depth: 0, problems: 0, pos: 0, no_struct: 0, in_mul: 0, errors: 0 };
     let installed: Int = unit.install_keywords();
     let total: Int = unit.run(src);
 

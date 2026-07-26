@@ -32,7 +32,7 @@ language server, JSON layer or diagnostics rendering.
 |---|---|---|---|
 | Lexer | 661 | 800–1,000 | **376, DONE** (v0.0.52) — came in under estimate |
 | AST + parser | 1,787 | 2,000–2,600 | **~930, DONE** (v0.0.53–54) — under estimate |
-| Typechecker | 3,702 | 4,500–5,500 | **~1,990**, 4b complete (v0.0.63) |
+| Typechecker | 3,702 | 4,500–5,500 | **~2,190**, 4b complete (v0.0.64) |
 | Backend (IR text) | 3,924 | 2,500–3,500 | 0 |
 | Driver | 230 | ~150 | 0 |
 | **Total** | | **≈10,000–12,500** | ~680 of real front-end work |
@@ -200,6 +200,26 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
      needs, is answered by scanning the body's tokens between its braces: exact, because
      Burxt has no first-class functions, so a name followed by `(` is a call to the one
      function that has it.
+
+   - **4b DONE — arrays, layout and `tail` (v0.0.64):** **154 of the 190 fail programs**
+     rejected, from 140, still **0 false positives**. Arrays: a literal is checked
+     element by element against the declared element type, a fixed array's length is
+     part of its type so a literal of the wrong length is refused, a literal index past
+     the end is a COMPILE error rather than an exit 70 later, arrays do not nest, an
+     array of no elements is refused, and building a growable array needs a region.
+     Layout: a struct cannot contain itself and an enum cannot carry itself, because the
+     size would have to exceed itself; an aggregate payload is refused with the layout
+     rule that is not written. And `tail`, whose five conditions are each a compile
+     error rather than a quiet fallback to an ordinary call: it names a call, not inside
+     a region (the jump would pass the region's close), not returning an aggregate (that
+     travels through the frame being replaced), not into C (which has its own calling
+     convention), and matching the enclosing signature exactly — parameter count,
+     parameter types, return type.
+
+     One correction worth recording: I first wrote the rule that a growable array in a
+     struct is refused. The pass suite answered immediately — stage-1's own `Unit` is
+     made of them. The real rule is that such a struct must be BUILT in a region, which
+     is a statement about the literal, not the declaration.
 
 5. **An IR-text backend in Burxt.**
 6. **Bootstrap and fixpoint.** stage-0 builds stage-1; stage-1 builds stage-1;
