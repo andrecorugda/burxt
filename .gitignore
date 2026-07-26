@@ -2,8 +2,25 @@
 *.o
 *.ll
 # Compiled Burxt outputs are bare, extensionless executables written into the
-# working directory, so they are easy to commit by accident. Ignore the ones the
-# examples and tests produce; add a line when a new .bx program appears.
+# working directory, so they are easy to commit by accident. Two slipped into
+# v0.0.40 this way. Ignore anything with no extension at the repository root, then
+# re-admit the files that genuinely belong there — a rule that holds for programs
+# nobody has written yet, rather than a list that has to be remembered.
+/*
+!/*.*
+!/.gitignore
+!/.gitattributes
+!/LICENSE-APACHE
+!/LICENSE-MIT
+!/assets/
+!/editors/
+!/examples/
+!/spec/
+!/src/
+!/tests/
+
+# The named outputs below are redundant under the rule above, and kept only so the
+# intent is readable at a glance.
 /bigparse
 /boundary_scaled_marshal
 /enum_basic
