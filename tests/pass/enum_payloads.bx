@@ -1,0 +1,17 @@
+// Payloads of every scalar kind, bound by name inside their arm.
+enum Cell { Empty, Count(Int), Label(String), Money(Decimal<2>), Pair(Int, Int) }
+
+fn show(c: Cell) -> Int {
+    match c {
+        Empty => { print("empty"); return 0; }
+        Count(n) => { print("count {n}"); return n; }
+        Label(s) => { print("label {s} len {len(s)}"); return len(s); }
+        Money(m) => { print("money {m}"); return 1; }
+        Pair(a, b) => { print("pair {a},{b}"); return a + b; }
+    }
+}
+print(show(Cell.Empty));
+print(show(Cell.Count(7)));
+print(show(Cell.Label("hi")));
+print(show(Cell.Money(19.99)));
+print(show(Cell.Pair(3, 4)));

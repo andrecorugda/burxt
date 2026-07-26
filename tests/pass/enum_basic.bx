@@ -1,0 +1,18 @@
+// The acceptance program from spec/A6.0-SUM-TYPES.md §7 — the shape of a real
+// lexer's inner loop. Construction is qualified (`Token.Plus`); patterns are
+// not, because the matched value's type already says which enum it is.
+enum Token { Plus, Number(Int), End }
+
+fn describe(t: Token) -> Int {
+    match t {
+        Plus => { return 1; }
+        Number(n) => { return n; }
+        End => { return 0; }
+    }
+}
+print(describe(Token.Plus));
+print(describe(Token.Number(42)));
+print(describe(Token.End));
+// enums are values: locals, parameters, returns, all via the existing ABI
+let t: Token = Token.Number(7);
+print(describe(t));

@@ -45,6 +45,7 @@ impl Parser {
 
     pub fn parse_program(mut self) -> Result<Program, String> {
         let mut structs = Vec::new();
+        let mut enums = Vec::new();
         let mut traits = Vec::new();
         let mut impls = Vec::new();
         let mut externs = Vec::new();
@@ -54,6 +55,8 @@ impl Parser {
         while !self.at(&Token::Eof) {
             if self.at(&Token::Struct) {
                 structs.push(self.parse_struct()?);
+            } else if self.at(&Token::Enum) {
+                enums.push(self.parse_enum()?);
             } else if self.at(&Token::Trait) {
                 traits.push(self.parse_trait()?);
             } else if self.at(&Token::Impl) {
@@ -72,7 +75,7 @@ impl Parser {
                 stmts.push(self.parse_stmt()?);
             }
         }
-        Ok(Program { structs, traits, impls, externs, fns, methods, stmts })
+        Ok(Program { structs, enums, traits, impls, externs, fns, methods, stmts })
     }
 
     // ---- helpers ----
@@ -133,6 +136,58 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
         Ok(StructDef { name, fields })
+    }
+
+    /// `enum Name { Unit, WithPayload(Int, String), }`
+    fn parse_enum(&mut self) -> Result<EnumDef, String> {
+        self.expect(&Token::Enum)?;
+        let name = match self.bump() {
+            Token::Ident(s) => s,
+            other => {
+                return Err(format!(
+                    "expected an enum name after 'enum', found {}",
+                    other.describe()
+                ))
+            }
+        };
+        self.expect(&Token::LBrace)?;
+        let mut variants = Vec::new();
+        while !self.at(&Token::RBrace) {
+            if self.at(&Token::Eof) {
+                return Err(format!("unclosed enum `{}`: expected `}}`", name));
+            }
+            let vname = match self.bump() {
+                Token::Ident(s) => s,
+                other => {
+                    return Err(format!(
+                        "expected a variant name in enum `{}`, found {}",
+                        name,
+                        other.describe()
+                    ))
+                }
+            };
+            let mut payload = Vec::new();
+            if self.at(&Token::LParen) {
+                self.bump();
+                loop {
+                    payload.push(self.parse_type()?);
+                    if self.at(&Token::Comma) {
+                        self.bump();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(&Token::RParen)?;
+            }
+            variants.push(Variant { name: vname, payload });
+            if self.at(&Token::Comma) {
+                self.bump(); // trailing comma allowed
+            } else {
+                break;
+            }
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(EnumDef { name, variants })
     }
 
     // ---- traits and impls ----
@@ -382,6 +437,7 @@ impl Parser {
             Token::Return => self.parse_return(),
             Token::If => self.parse_if(),
             Token::While => self.parse_while(),
+            Token::Match => self.parse_match(),
             Token::Ident(_) | Token::SelfKw => self.parse_assign(),
             other => Err(format!("expected statement, found {}", other.describe())),
         }
@@ -465,6 +521,69 @@ impl Parser {
         }
         self.expect(&Token::RParen)?;
         Ok(args)
+    }
+
+    /// `match value { Variant => { .. }  Other(a, b) => { .. } }`
+    /// Patterns are UNQUALIFIED: the matched value's type already says which
+    /// enum it is, so repeating it would be noise.
+    fn parse_match(&mut self) -> Result<Stmt, String> {
+        self.expect(&Token::Match)?;
+        let value = self.parse_cond()?; // no struct literal before the `{`
+        self.expect(&Token::LBrace)?;
+        let mut arms = Vec::new();
+        while !self.at(&Token::RBrace) {
+            if self.at(&Token::Eof) {
+                return Err("unclosed `match`: expected `}`".to_string());
+            }
+            let variant = match self.bump() {
+                Token::Ident(s) => s,
+                // `_` would lex as an identifier, so a wildcard cannot reach
+                // here as a distinct token; every other token is a real slip.
+                other => {
+                    return Err(format!(
+                        "expected a variant name to match on, found {}",
+                        other.describe()
+                    ))
+                }
+            };
+            let mut bindings = Vec::new();
+            if self.at(&Token::LParen) {
+                self.bump();
+                loop {
+                    match self.bump() {
+                        Token::Ident(b) => bindings.push(b),
+                        other => {
+                            return Err(format!(
+                                "expected a name for `{}`'s payload, found {}",
+                                variant,
+                                other.describe()
+                            ))
+                        }
+                    }
+                    if self.at(&Token::Comma) {
+                        self.bump();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(&Token::RParen)?;
+            }
+            if !self.at(&Token::FatArrow) {
+                return Err(format!(
+                    "expected `=>` after the pattern `{}`, found {}",
+                    variant,
+                    self.peek().describe()
+                ));
+            }
+            self.bump();
+            let body = self.parse_block()?;
+            arms.push(MatchArm { variant, bindings, body });
+            if self.at(&Token::Comma) {
+                self.bump(); // a separating comma is allowed
+            }
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(Stmt::Match { value, arms })
     }
 
     fn parse_while(&mut self) -> Result<Stmt, String> {

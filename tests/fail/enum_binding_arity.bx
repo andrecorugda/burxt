@@ -1,0 +1,3 @@
+enum Token { Plus, Minus, Number(Int) }
+let t: Token = Token.Plus;
+match t { Plus => {print(1);} Minus => {print(2);} Number => {print(3);} }

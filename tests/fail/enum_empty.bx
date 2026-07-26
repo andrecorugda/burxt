@@ -1,0 +1,2 @@
+enum Void { }
+print(1);

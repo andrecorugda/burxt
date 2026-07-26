@@ -31,6 +31,9 @@ pub enum Token {
     True,
     False,
     Struct,
+    Enum,
+    Match,
+    FatArrow,
     // reserved today for the OOP layers (methods, interfaces), so no program
     // written now breaks when they land
     /// `interface` stays reserved (v0.0.8) but `trait` is the chosen keyword.
@@ -110,6 +113,9 @@ impl Token {
             Token::True => "`true`".to_string(),
             Token::False => "`false`".to_string(),
             Token::Struct => "`struct`".to_string(),
+            Token::Enum => "`enum`".to_string(),
+            Token::Match => "`match`".to_string(),
+            Token::FatArrow => "`=>`".to_string(),
             Token::Interface => "`interface`".to_string(),
             Token::Trait => "`trait`".to_string(),
             Token::Impl => "`impl`".to_string(),
@@ -198,6 +204,7 @@ impl<'a> Lexer<'a> {
             '=' => {
                 self.chars.next();
                 if self.chars.peek() == Some(&'=') { self.chars.next(); return Ok(Token::EqEq); }
+                if self.chars.peek() == Some(&'>') { self.chars.next(); return Ok(Token::FatArrow); }
                 return Ok(Token::Equals);
             }
             '+' => { self.chars.next(); return Ok(Token::Plus); }
@@ -551,6 +558,8 @@ impl<'a> Lexer<'a> {
             "true" => Token::True,
             "false" => Token::False,
             "struct" => Token::Struct,
+            "enum" => Token::Enum,
+            "match" => Token::Match,
             "interface" => Token::Interface,
             "is" => Token::Is,
             "self" => Token::SelfKw,

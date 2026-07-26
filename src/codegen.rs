@@ -92,6 +92,9 @@ pub struct CodeGen<'ctx> {
     struct_types: HashMap<String, StructType<'ctx>>,
     /// struct name -> field types in declaration order (for GEP walks)
     struct_fields: HashMap<String, Vec<Type>>,
+    /// enum name -> (its LLVM `{ i64 tag, [N x i64] payload }` type,
+    /// payload types per variant in tag order)
+    enum_types: HashMap<String, (StructType<'ctx>, Vec<Vec<Type>>)>,
     /// libc printf, declared once in compile()
     printf: Option<FunctionValue<'ctx>>,
     /// libc pieces for runtime errors: (stderr global, fputs, exit)
@@ -127,6 +130,7 @@ impl<'ctx> CodeGen<'ctx> {
             current_sret: None,
             struct_types: HashMap::new(),
             struct_fields: HashMap::new(),
+            enum_types: HashMap::new(),
             printf: None,
             panic_deps: None,
         }
@@ -153,6 +157,22 @@ impl<'ctx> CodeGen<'ctx> {
             let body: Vec<BasicTypeEnum> =
                 s.fields.iter().map(|t| self.llvm_type(t)).collect();
             self.struct_types[&s.name].set_body(&body, false);
+        }
+
+        // Enums are a tag plus an inline payload area: `{ i64, [N x i64] }`,
+        // where N is the largest payload slot count. Every payload field is 8
+        // bytes (payloads are scalars), so slots need no size computation.
+        for en in &prog.enums {
+            let i64t = self.ctx.i64_type();
+            let slots = en.variants.iter().map(|p| p.len()).max().unwrap_or(0) as u32;
+            let st = self.ctx.opaque_struct_type(&format!("bx.enum.{}", en.name));
+            if slots == 0 {
+                st.set_body(&[i64t.into()], false);
+            } else {
+                st.set_body(&[i64t.into(), i64t.array_type(slots).into()], false);
+            }
+            self.enum_types
+                .insert(en.name.clone(), (st, en.variants.clone()));
         }
 
         // Declare extern fns under their real symbol names — no mangling is
@@ -371,6 +391,101 @@ impl<'ctx> CodeGen<'ctx> {
             }
             TypedStmt::ExprStmt(e) => {
                 self.gen_expr(e)?;
+                Ok(())
+            }
+            TypedStmt::Match { value, arms } => {
+                let err = |e: inkwell::builder::BuilderError| e.to_string();
+                let i64t = self.ctx.i64_type();
+                let enum_name = match &value.ty {
+                    Type::Named(n) => n.clone(),
+                    other => {
+                        return Err(format!("codegen bug: match on {}", other))
+                    }
+                };
+                let (st, variants) = self.enum_types[enum_name.as_str()].clone();
+                let slots =
+                    variants.iter().map(|p| p.len()).max().unwrap_or(0) as u32;
+
+                // The value needs an address so payload slots can be read out.
+                let slot = self.gen_aggregate_addr(value)?;
+                let tag_ptr =
+                    self.builder.build_struct_gep(st, slot, 0, "tag_ptr").map_err(err)?;
+                let tag = self
+                    .builder
+                    .build_load(i64t, tag_ptr, "tag")
+                    .map_err(err)?
+                    .into_int_value();
+
+                let function = self
+                    .builder
+                    .get_insert_block()
+                    .and_then(|b| b.get_parent())
+                    .ok_or("codegen bug: match outside a function")?;
+                let merge_bb = self.ctx.append_basic_block(function, "match.end");
+
+                let mut cases = Vec::new();
+                let mut bodies = Vec::new();
+                for arm in arms {
+                    let bb = self
+                        .ctx
+                        .append_basic_block(function, &format!("match.arm{}", arm.tag));
+                    cases.push((i64t.const_int(arm.tag as u64, false), bb));
+                    bodies.push((arm, bb));
+                }
+
+                // Exhaustiveness was proven by typeck, so no case can be
+                // missing — but LLVM still needs a default block, and the only
+                // honest one is unreachable.
+                let default_bb = self.ctx.append_basic_block(function, "match.impossible");
+                self.builder.build_switch(tag, default_bb, &cases).map_err(err)?;
+                self.builder.position_at_end(default_bb);
+                self.builder.build_unreachable().map_err(err)?;
+
+                let mut any_fallthrough = false;
+                for (arm, bb) in bodies {
+                    self.builder.position_at_end(bb);
+                    let saved = self.vars.clone();
+                    if !arm.bindings.is_empty() {
+                        let payload_ptr = self
+                            .builder
+                            .build_struct_gep(st, slot, 1, "payload_ptr")
+                            .map_err(err)?;
+                        let arr_ty = i64t.array_type(slots);
+                        for (i, (name, ty)) in arm.bindings.iter().enumerate() {
+                            let p = unsafe {
+                                self.builder.build_in_bounds_gep(
+                                    arr_ty,
+                                    payload_ptr,
+                                    &[i64t.const_zero(), i64t.const_int(i as u64, false)],
+                                    "slot",
+                                )
+                            }
+                            .map_err(err)?;
+                            // The slot is 8 bytes; load it at the binding's own
+                            // type so a String comes back as a pointer.
+                            let v = self
+                                .builder
+                                .build_load(self.llvm_type(ty), p, name)
+                                .map_err(err)?;
+                            let local = self.create_entry_alloca(name, ty)?;
+                            self.builder.build_store(local, v).map_err(err)?;
+                            self.vars.insert(name.clone(), (local, ty.clone()));
+                        }
+                    }
+                    let r = arm.body.iter().try_for_each(|s| self.gen_stmt(s));
+                    self.vars = saved;
+                    r?;
+                    if self.current_block_open() {
+                        self.builder.build_unconditional_branch(merge_bb).map_err(err)?;
+                        any_fallthrough = true;
+                    }
+                }
+
+                self.builder.position_at_end(merge_bb);
+                if !any_fallthrough {
+                    // every arm returned, so nothing reaches here
+                    self.builder.build_unreachable().map_err(err)?;
+                }
                 Ok(())
             }
             TypedStmt::While { cond, body } => self.gen_while(cond, body),
@@ -681,6 +796,16 @@ impl<'ctx> CodeGen<'ctx> {
     /// target.
     pub fn layout_of(&self, ty: &Type) -> Layout {
         match ty {
+            Type::Named(name) if self.enum_types.contains_key(name) => {
+                // tag + payload slots, all 8-byte
+                let slots = self.enum_types[name]
+                    .1
+                    .iter()
+                    .map(|p| p.len())
+                    .max()
+                    .unwrap_or(0) as u64;
+                Layout { size: 8 * (1 + slots), align: 8, field_offsets: vec![] }
+            }
             Type::Named(name) => {
                 let fields = &self.struct_fields[name];
                 let mut offsets = Vec::with_capacity(fields.len());
@@ -730,7 +855,10 @@ impl<'ctx> CodeGen<'ctx> {
             Type::Int | Type::Bool | Type::Decimal { .. } => self.ctx.i64_type().into(),
             Type::String => self.ctx.ptr_type(AddressSpace::default()).into(),
             Type::CInt => self.ctx.i32_type().into(),
-            Type::Named(name) => self.struct_types[name].into(),
+            Type::Named(name) => match self.struct_types.get(name) {
+                Some(st) => (*st).into(),
+                None => self.enum_types[name].0.into(),
+            },
             Type::Array { elem, len } => self.llvm_type(elem).array_type(*len).into(),
             // A trait object is a fat pointer: { data, vtable }. The vtable
             // lives OUTSIDE the data, which is why becoming a trait object
@@ -1201,6 +1329,50 @@ impl<'ctx> CodeGen<'ctx> {
                         .map_err(|e| e.to_string());
                 }
                 Ok(result)
+            }
+            TypedExprKind::VariantLit { enum_name, tag, args } => {
+                let (st, _) = self.enum_types[enum_name.as_str()];
+                let slot = self.create_entry_alloca("variant", &e.ty)?;
+                // tag first
+                let tag_ptr = self
+                    .builder
+                    .build_struct_gep(st, slot, 0, "tag_ptr")
+                    .map_err(|e| e.to_string())?;
+                self.builder
+                    .build_store(tag_ptr, i64t.const_int(*tag as u64, false))
+                    .map_err(|e| e.to_string())?;
+                // then each payload value into its slot
+                if !args.is_empty() {
+                    let payload_ptr = self
+                        .builder
+                        .build_struct_gep(st, slot, 1, "payload_ptr")
+                        .map_err(|e| e.to_string())?;
+                    let arr_ty = i64t.array_type(
+                        self.enum_types[enum_name.as_str()]
+                            .1
+                            .iter()
+                            .map(|p| p.len())
+                            .max()
+                            .unwrap_or(0) as u32,
+                    );
+                    for (i, a) in args.iter().enumerate() {
+                        let v = self.gen_expr(a)?;
+                        let idx = i64t.const_int(i as u64, false);
+                        let p = unsafe {
+                            self.builder.build_in_bounds_gep(
+                                arr_ty,
+                                payload_ptr,
+                                &[i64t.const_zero(), idx],
+                                "slot",
+                            )
+                        }
+                        .map_err(|e| e.to_string())?;
+                        self.builder.build_store(p, v).map_err(|e| e.to_string())?;
+                    }
+                }
+                self.builder
+                    .build_load(st, slot, "variant_val")
+                    .map_err(|e| e.to_string())
             }
             TypedExprKind::StructLit { name, fields } => {
                 // Build the aggregate value field by field; storing it (in

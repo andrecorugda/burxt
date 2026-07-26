@@ -51,9 +51,10 @@ pub enum Type {
     /// Decimal with a fixed scale S (digits after the decimal point).
     /// Represented at runtime as a scaled i64: stored = value * 10^scale.
     Decimal { scale: u32, rounding: Option<Rounding> },
-    /// A struct type, by name. Typing is NOMINAL: two structs with identical
-    /// fields are different types — the name is a contract, exactly as
-    /// Decimal<2> and Decimal<2, RoundHalfEven> are kept apart.
+    /// A struct OR enum type, by name. Typing is NOMINAL: two declarations with
+    /// identical shape are different types — the name is a contract, exactly as
+    /// Decimal<2> and Decimal<2, RoundHalfEven> are kept apart. Which table the
+    /// name lives in (struct or enum) is the typechecker's business.
     Named(String),
     /// A fixed-size stack array `[T; N]`. Arrays exist only behind bindings
     /// in this slice: indexed reads/writes and `len(a)` — never a bare value.
@@ -244,6 +245,8 @@ pub enum Stmt {
     /// this is not a general expression-statement; the parser only builds it
     /// from a call or method-call shape.
     ExprStmt(Expr),
+    /// `match value { Variant => { .. } .. }` — must cover every variant.
+    Match { value: Expr, arms: Vec<MatchArm> },
     /// `while cond { ... }` — the condition must be a Bool; braces required.
     While { cond: Expr, body: Vec<Stmt> },
     /// `print(expr);`
@@ -330,6 +333,29 @@ pub struct ExternFn {
     pub ret: Type,
 }
 
+/// One variant of an enum: a name plus zero or more positional payload types.
+#[derive(Debug, Clone)]
+pub struct Variant {
+    pub name: String,
+    pub payload: Vec<Type>,
+}
+
+/// `enum Name { Unit, WithPayload(Int), ... }` — a sum type. Nominal, hoisted.
+#[derive(Debug, Clone)]
+pub struct EnumDef {
+    pub name: String,
+    pub variants: Vec<Variant>,
+}
+
+/// One arm of a `match`: an unqualified variant name, names for its payload,
+/// and the block to run.
+#[derive(Debug, Clone)]
+pub struct MatchArm {
+    pub variant: String,
+    pub bindings: Vec<String>,
+    pub body: Vec<Stmt>,
+}
+
 /// `struct Name { field: Type, ... }` — the nominal record type and the
 /// substrate for Burxt's OOP layers (methods, then interfaces).
 #[derive(Debug, Clone)]
@@ -344,6 +370,7 @@ pub struct StructDef {
 #[derive(Debug, Clone)]
 pub struct Program {
     pub structs: Vec<StructDef>,
+    pub enums: Vec<EnumDef>,
     pub traits: Vec<TraitDef>,
     pub impls: Vec<ImplBlock>,
     pub externs: Vec<ExternFn>,

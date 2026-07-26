@@ -1,0 +1,1 @@
+`Token.Number` carries 1 value(s), but this pattern names 0. Name every payload value, so nothing is silently dropped.

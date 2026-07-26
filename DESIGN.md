@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.19)
+# Burxt — Design Notes (v0.0.20)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -984,6 +984,51 @@ both signs, checked against an independent exact-decimal implementation; the
 scale-18 × scale-18 extreme where the intermediate needs 36 decimal places; the
 widening direction; and a result that genuinely cannot fit a scaled i64, which
 still traps loudly.
+
+### v0.0.20: sum types and exhaustive matching (A6.0)
+
+The milestone that makes a compiler expressible in Burxt — a `Token`, an
+`Expr`, a `Type` are all sum types — and that delivers **exhaustiveness**, the
+correctness-family feature committed long ago.
+
+```text
+enum Token { Plus, Number(Int), End }
+
+fn describe(t: Token) -> Int {
+    match t {
+        Plus      => { return 1; }
+        Number(n) => { return n; }
+        End       => { return 0; }
+    }
+}
+```
+
+- **Construction is qualified, patterns are not.** `Token.Plus` needs its enum
+  because nothing else says which type is meant; inside `match t {}` the
+  scrutinee's type already says, so repeating it would be noise. The asymmetry
+  is deliberate. A bare `Plus` is refused with advice naming the qualified form.
+- **Every variant must be handled.** A missing variant is a compile error that
+  *names the ones left out* — so adding a variant later turns every incomplete
+  match into a list of what to fix, instead of a silent fall-through.
+- **No `_` wildcard, and this is the load-bearing refusal.** A wildcard would
+  silently absorb variants added later, which is exactly the guarantee
+  exhaustive matching exists to provide. Refused with that reason, so the
+  deferral is enforced rather than aspirational.
+- **An exhaustive match whose arms all return IS a return.** The return-path
+  prover learned this, by the same reasoning as an if/else where both branches
+  return: exhaustiveness means the arms *are* all the paths.
+- Layout is a tag plus an inline payload area, `{ i64, [N x i64] }`. Enums are
+  aggregates, so the v0.0.12 ABI carries them unchanged — `byval` parameters,
+  `sret` returns, value semantics — and `match` lowers to a `switch` whose
+  default block is `unreachable`, because typeck already proved no tag is
+  missing.
+
+**The self-hosting consequence, and it is the useful finding here:** payloads
+are scalars only, because an enum containing an enum has no finite size without
+heap indirection. A lexer's `Token` is flat, so **the lexer is expressible
+today** — but an AST node is recursive, so **the parser is M1-blocked.** That
+sharpens the self-hosting path: the partial self-host can begin now and stops
+precisely at the parser.
 
 ## Testing
 

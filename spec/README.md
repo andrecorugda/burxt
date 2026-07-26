@@ -14,7 +14,7 @@ answers.
 **Read this file first.** The specs were written when Burxt was at roughly
 v0.0.1, so several describe work that is now done, and one describes work that
 was built in a different order than specified. This index records what is
-actually true as of **v0.0.16**, audited by running the compiler — not by
+actually true as of **v0.0.20**, audited by running the compiler — not by
 reading the specs. Where a spec and the implementation disagree, the note says
 which is right.
 
@@ -28,6 +28,7 @@ which is right.
 | [A4.7 Signature Grammar](A4.7-SIGNATURE-GRAMMAR.md) | **Not started** | All six deliverables. This is the "eloquence" / demo milestone. |
 | [A5.0 Control Flow](A5.0-CONTROL-FLOW.md) | **DONE** (v0.0.3–v0.0.4, v0.0.15) | — |
 | [Far-horizon M1–M4](FAR-HORIZON-ROADMAP.md) | **Direction only** | Re-spec each on arrival. **M1's trigger is now MET** — see its amendment; two new criteria argue against the ARC lean. |
+| [A6.0 Sum Types](A6.0-SUM-TYPES.md) | **DONE** (v0.0.20) | Enums, exhaustive `match`. Deferred: wildcards, recursive/aggregate payloads (M1), guards, nested patterns, match-as-expression, generics. |
 | [Novelty register](NOVELTY.md) | **Ambition, unscheduled** | What Burxt is *for*: exactness across boundaries, provable determinism, conservation-law contracts, effects-not-async. |
 
 ## The audit, in detail
@@ -127,10 +128,19 @@ In dependency order, cheapest and most-unblocking first:
 2. ~~Advance A4.4's strings: length and equality.~~ **Done in v0.0.16.**
    Equality landed inside the existing one-equality rule rather than beside
    it, which was the point of doing it while String was still small.
-3. **A4.7 Signature Grammar.** The demo milestone, and the biggest remaining
-   near-term chunk. Sequence within it: fix the brace hazard, then money and
-   percent literals, then `requires` / `ensures` runtime-checked, then
-   interpolation. Units and pipelines last — they are the most deferrable.
+3. ~~A4.7 Signature Grammar.~~ **Mostly done** (v0.0.17–v0.0.19): the brace
+   hazard, interpolation, money and percent literals, and mixed-scale
+   multiplication all shipped. Remaining and unblocked: unit literals
+   (`5.km`), `requires`/`ensures` as runtime-checked grammar, pipelines.
+4. ~~A6.0 sum types + exhaustive matching.~~ **Done in v0.0.20.**
+5. **String byte access** — the other thing a lexer needs. Unblocked.
+6. **The partial self-host: a Burxt lexer in Burxt.** Reachable once (5) lands.
+   It stops at the parser, which needs recursive enums and therefore M1.
+
+**Priority note:** the stated goal is a compiler written in Burxt. Measured
+against that, A4.7's leftovers (units, contracts, pipelines) add eloquence and
+verification but no capability, so they rank below string bytes and the
+self-host attempt.
 
 M1 (the memory model) stays deliberately unopened. Its trigger is "~4+ ledger
 entries blocked on ownership" — currently at three (concatenation, mutable

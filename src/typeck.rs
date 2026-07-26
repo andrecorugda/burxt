@@ -92,6 +92,8 @@ pub enum TypedExprKind {
     Field { base: Box<TypedExpr>, index: u32 },
     /// Array literal (only ever a `let` initializer).
     ArrayLit(Vec<TypedExpr>),
+    /// Enum construction: the variant's index plus its payload values.
+    VariantLit { enum_name: String, tag: u32, args: Vec<TypedExpr> },
     /// Bounds-checked indexed read; `len` carried for the runtime check.
     Index { name: String, len: u32, index: Box<TypedExpr> },
 }
@@ -107,6 +109,9 @@ pub enum TypedStmt {
     /// Bounds-checked element assignment.
     AssignIndex { name: String, len: u32, index: TypedExpr, value: TypedExpr },
     Print(TypedExpr),
+    /// `match` on an enum: arms in TAG order, each with the names bound to its
+    /// payload slots. Exhaustiveness was proven by the typechecker.
+    Match { value: TypedExpr, arms: Vec<TypedArm> },
     /// `print` of an interpolated string: emit each piece in order.
     PrintInterp(Vec<TypedInterpPart>),
     Return(TypedExpr),
@@ -116,6 +121,22 @@ pub enum TypedStmt {
         then_block: Vec<TypedStmt>,
         else_block: Option<Vec<TypedStmt>>,
     },
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedArm {
+    pub tag: u32,
+    /// (name, type) for each payload slot this arm binds.
+    pub bindings: Vec<(String, Type)>,
+    pub body: Vec<TypedStmt>,
+}
+
+/// An enum, ready for codegen: variants in declaration order, which fixes the
+/// tag values.
+#[derive(Debug, Clone)]
+pub struct TypedEnum {
+    pub name: String,
+    pub variants: Vec<Vec<Type>>,
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +194,7 @@ pub struct TypedVTable {
 #[derive(Debug, Clone)]
 pub struct TypedProgram {
     pub structs: Vec<TypedStruct>,
+    pub enums: Vec<TypedEnum>,
     pub externs: Vec<TypedExtern>,
     pub fns: Vec<TypedFn>,
     pub methods: Vec<TypedMethod>,
@@ -188,6 +210,9 @@ pub struct TypeChecker {
     fns: HashMap<String, (Vec<Type>, Type)>,
     /// struct name -> fields (name, type) in declaration order; hoisted first.
     structs: HashMap<String, Vec<(String, Type)>>,
+    /// enum name -> variants (name, payload types) in declaration order, which
+    /// is what fixes each variant's tag.
+    enums: HashMap<String, Vec<(String, Vec<Type>)>>,
     /// (receiver, method name) -> (is mutating, param types, return type)
     methods: HashMap<(String, String), (bool, Vec<Type>, Type)>,
     /// trait name -> its method signatures, in declaration order (slot order)
@@ -207,6 +232,7 @@ impl TypeChecker {
             env: HashMap::new(),
             fns: HashMap::new(),
             structs: HashMap::new(),
+            enums: HashMap::new(),
             methods: HashMap::new(),
             traits: HashMap::new(),
             impls: HashSet::new(),
@@ -234,6 +260,80 @@ impl TypeChecker {
             }
             self.structs.insert(s.name.clone(), fields);
         }
+        // Enum names must be known before any type is validated, exactly like
+        // struct names — a payload or field may name an enum declared later.
+        for e in &prog.enums {
+            if self.enums.contains_key(&e.name) || self.structs.contains_key(&e.name) {
+                return Err(format!("`{}` is declared twice", e.name));
+            }
+            if e.variants.is_empty() {
+                return Err(format!(
+                    "enum `{}` has no variants, so no value of it could ever exist",
+                    e.name
+                ));
+            }
+            let mut seen: Vec<&str> = Vec::new();
+            for v in &e.variants {
+                if seen.contains(&v.name.as_str()) {
+                    return Err(format!(
+                        "enum `{}` declares the variant `{}` twice",
+                        e.name, v.name
+                    ));
+                }
+                seen.push(&v.name);
+            }
+            self.enums.insert(
+                e.name.clone(),
+                e.variants
+                    .iter()
+                    .map(|v| (v.name.clone(), v.payload.clone()))
+                    .collect(),
+            );
+        }
+        // Payloads are scalars only in this cut: an aggregate payload reopens
+        // the recursive-size question (an enum containing itself is infinite),
+        // which needs indirection and therefore M1.
+        for e in &prog.enums {
+            for v in &e.variants {
+                for (i, t) in v.payload.iter().enumerate() {
+                    match t {
+                        Type::Int | Type::Bool | Type::String | Type::Decimal { .. } => {}
+                        Type::Named(n) if self.enums.contains_key(n) => {
+                            return Err(format!(
+                                "`{}.{}` payload {} is the enum `{}` — an enum inside \
+                                 an enum needs indirection to have a finite size, \
+                                 which arrives with the memory model. Carry the \
+                                 parts as scalars for now.",
+                                e.name,
+                                v.name,
+                                i + 1,
+                                n
+                            ))
+                        }
+                        other => {
+                            return Err(format!(
+                                "`{}.{}` payload {} is {} {} — variant payloads must \
+                                 be Int, Bool, String or Decimal for now.",
+                                e.name,
+                                v.name,
+                                i + 1,
+                                other.article(),
+                                other
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+        let enums: Vec<TypedEnum> = prog
+            .enums
+            .iter()
+            .map(|e| TypedEnum {
+                name: e.name.clone(),
+                variants: e.variants.iter().map(|v| v.payload.clone()).collect(),
+            })
+            .collect();
+
         for s in &prog.structs {
             for f in &s.fields {
                 if matches!(f.ty, Type::Array { .. }) {
@@ -433,7 +533,7 @@ impl TypeChecker {
             });
         }
 
-        Ok(TypedProgram { structs, externs, fns, methods, vtables, stmts })
+        Ok(TypedProgram { structs, enums, externs, fns, methods, vtables, stmts })
     }
 
     /// An impl must satisfy its trait EXACTLY: every declared method present,
@@ -552,10 +652,15 @@ impl TypeChecker {
             return Ok(());
         }
         match ty {
-            Type::Named(name) if !self.structs.contains_key(name) => Err(format!(
-                "unknown type `{}` — declare it with `struct {} {{ ... }}`",
-                name, name
-            )),
+            Type::Named(name)
+                if !self.structs.contains_key(name) && !self.enums.contains_key(name) =>
+            {
+                Err(format!(
+                    "unknown type `{}` — declare it with `struct {} {{ ... }}` or \
+                     `enum {} {{ ... }}`",
+                    name, name, name
+                ))
+            }
             Type::CInt => Err(
                 "CInt only exists at the C boundary (extern fn signatures) — \
                  use Int in Burxt code; values convert at the call."
@@ -675,10 +780,12 @@ impl TypeChecker {
 
         if !block_returns(&body) {
             return Err(format!(
-                "function `{}` must end by returning a {} on every path \
+                "function `{}` must end by returning {} {} on every path \
                  (its last statement must be a `return`, or an if/else where \
                  both branches return)",
-                f.name, f.ret
+                f.name,
+                f.ret.article(),
+                f.ret
             ));
         }
         Ok(TypedFn { name: f.name.clone(), params, ret: f.ret.clone(), body })
@@ -717,10 +824,13 @@ impl TypeChecker {
 
         if !block_returns(&body) {
             return Err(format!(
-                "method `{}.{}` must end by returning a {} on every path \
+                "method `{}.{}` must end by returning {} {} on every path \
                  (its last statement must be a `return`, or an if/else where \
                  both branches return)",
-                m.receiver, m.name, m.ret
+                m.receiver,
+                m.name,
+                m.ret.article(),
+                m.ret
             ));
         }
         Ok(TypedMethod {
@@ -939,6 +1049,110 @@ impl TypeChecker {
                 let typed = self.check_expr(e, None)?;
                 Ok(TypedStmt::ExprStmt(typed))
             }
+            Stmt::Match { value, arms } => {
+                let scrutinee = self.check_expr(value, None)?;
+                let enum_name = match &scrutinee.ty {
+                    Type::Named(n) if self.enums.contains_key(n) => n.clone(),
+                    other => {
+                        return Err(format!(
+                            "`match` needs an enum value, but this has type {}. \
+                             Use `if` to branch on other types.",
+                            other
+                        ))
+                    }
+                };
+                let variants = self.enums[&enum_name].clone();
+
+                let mut typed_arms: Vec<TypedArm> = Vec::new();
+                for arm in arms {
+                    if arm.variant == "_" {
+                        return Err(
+                            "Burxt has no `_` wildcard arm: it would silently absorb \
+                             variants added later, which is the one thing exhaustive \
+                             matching exists to prevent. List the remaining variants."
+                                .to_string(),
+                        );
+                    }
+                    let tag = variants
+                        .iter()
+                        .position(|(n, _)| *n == arm.variant)
+                        .ok_or_else(|| {
+                            format!(
+                                "`{}` has no variant named `{}`. Its variants are: {}.",
+                                enum_name,
+                                arm.variant,
+                                variants
+                                    .iter()
+                                    .map(|(n, _)| n.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        })? as u32;
+                    if typed_arms.iter().any(|a| a.tag == tag) {
+                        return Err(format!(
+                            "`{}` is matched twice in this `match`",
+                            arm.variant
+                        ));
+                    }
+                    let payload = &variants[tag as usize].1;
+                    if arm.bindings.len() != payload.len() {
+                        return Err(format!(
+                            "`{}.{}` carries {} value(s), but this pattern names {}. \
+                             Name every payload value, so nothing is silently \
+                             dropped.",
+                            enum_name,
+                            arm.variant,
+                            payload.len(),
+                            arm.bindings.len()
+                        ));
+                    }
+
+                    // Payload names are ordinary immutable locals, scoped to the arm.
+                    let saved = self.env.clone();
+                    let mut bindings = Vec::new();
+                    for (name, ty) in arm.bindings.iter().zip(payload) {
+                        if self.env.contains_key(name) {
+                            self.env = saved;
+                            return Err(format!(
+                                "`{}` is already declared — a pattern binding may not \
+                                 shadow it, the same rule `let` follows.",
+                                name
+                            ));
+                        }
+                        self.env.insert(name.clone(), (ty.clone(), false));
+                        bindings.push((name.clone(), ty.clone()));
+                    }
+                    let body = self.check_block(&arm.body);
+                    self.env = saved;
+                    typed_arms.push(TypedArm { tag, bindings, body: body? });
+                }
+
+                // THE feature: every variant must be handled. Add a variant to
+                // the enum later and every incomplete match becomes an error
+                // naming exactly what to handle.
+                let missing: Vec<&str> = variants
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| !typed_arms.iter().any(|a| a.tag == *i as u32))
+                    .map(|(_, (n, _))| n.as_str())
+                    .collect();
+                if !missing.is_empty() {
+                    return Err(format!(
+                        "this `match` on `{}` does not handle {}. Every variant must \
+                         be handled — that is what makes adding a variant later a \
+                         compile error instead of a silent fall-through.",
+                        enum_name,
+                        missing
+                            .iter()
+                            .map(|m| format!("`{}`", m))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+
+                typed_arms.sort_by_key(|a| a.tag);
+                Ok(TypedStmt::Match { value: scrutinee, arms: typed_arms })
+            }
             Stmt::While { cond, body } => {
                 let cond = self.check_expr(cond, None)?;
                 if cond.ty != Type::Bool {
@@ -987,6 +1201,13 @@ impl TypeChecker {
                 }
                 let typed = self.check_expr(e, None)?;
                 match &typed.ty {
+                    Type::Named(n) if self.enums.contains_key(n) => {
+                        return Err(format!(
+                            "print does not know how to show a {} — `match` on it and \
+                             print what each variant carries.",
+                            n
+                        ))
+                    }
                     Type::Named(n) => {
                         return Err(format!(
                             "print does not know how to show a {} — print its fields.",
@@ -1094,7 +1315,7 @@ impl TypeChecker {
                 let (ty, _) = self
                     .env
                     .get(name)
-                    .ok_or_else(|| format!("unknown variable: {}", name))?
+                    .ok_or_else(|| self.unknown_name(name))?
                     .clone();
                 Ok(TypedExpr { ty, kind: TypedExprKind::Var(name.clone()) })
             }
@@ -1335,6 +1556,9 @@ impl TypeChecker {
             }
 
             Expr::Field { base, field } => {
+                if let Some(r) = self.check_variant_lit(base, field, &[]) {
+                    return r;
+                }
                 let typed_base = self.check_expr(base, None)?;
                 let (index, ty) = self.resolve_field(&typed_base.ty, field)?;
                 Ok(TypedExpr {
@@ -1344,6 +1568,9 @@ impl TypeChecker {
             }
 
             Expr::MethodCall { base, method, args } => {
+                if let Some(r) = self.check_variant_lit(base, method, args) {
+                    return r;
+                }
                 let typed_base = self.check_expr(base, None)?;
 
                 // A call on a `dyn Trait` is the ONE place dispatch happens at
@@ -1583,6 +1810,93 @@ impl TypeChecker {
         Ok(typed)
     }
 
+    /// "unknown variable", but if the name is some enum's variant, say how to
+    /// write it — bare `Plus` is a natural slip when `Token.Plus` is meant.
+    fn unknown_name(&self, name: &str) -> String {
+        for (en, variants) in &self.enums {
+            if variants.iter().any(|(v, _)| v == name) {
+                return format!(
+                    "unknown variable: {} — did you mean `{}.{}`? Enum variants are \
+                     always written with their enum.",
+                    name, en, name
+                );
+            }
+        }
+        format!("unknown variable: {}", name)
+    }
+
+    /// Resolve `Enum.Variant` construction. Returns None when the base is not
+    /// an enum name, so ordinary field access and method calls fall through
+    /// unchanged.
+    fn check_variant_lit(
+        &self,
+        base: &Expr,
+        variant: &str,
+        args: &[Expr],
+    ) -> Option<Result<TypedExpr, String>> {
+        let Expr::Var(enum_name) = base else { return None };
+        // A local binding wins over an enum of the same name: shadowing is
+        // refused elsewhere, so this can only be a genuine variable.
+        if self.env.contains_key(enum_name) {
+            return None;
+        }
+        let variants = self.enums.get(enum_name)?;
+        Some(self.build_variant(enum_name, variants.clone(), variant, args))
+    }
+
+    fn build_variant(
+        &self,
+        enum_name: &str,
+        variants: Vec<(String, Vec<Type>)>,
+        variant: &str,
+        args: &[Expr],
+    ) -> Result<TypedExpr, String> {
+        let tag = variants
+            .iter()
+            .position(|(n, _)| n == variant)
+            .ok_or_else(|| {
+                format!(
+                    "`{}` has no variant named `{}`. Its variants are: {}.",
+                    enum_name,
+                    variant,
+                    variants.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+                )
+            })?;
+        let payload = &variants[tag].1;
+        if args.len() != payload.len() {
+            return Err(format!(
+                "`{}.{}` carries {} value(s), but {} were given",
+                enum_name,
+                variant,
+                payload.len(),
+                args.len()
+            ));
+        }
+        let mut typed_args = Vec::new();
+        for (i, (arg, want)) in args.iter().zip(payload).enumerate() {
+            let t = self.check_expr(arg, Some(want))?;
+            if &t.ty != want {
+                return Err(format!(
+                    "in `{}.{}`, payload {} must be {}, but it has type {}",
+                    enum_name,
+                    variant,
+                    i + 1,
+                    want,
+                    t.ty
+                ));
+            }
+            typed_args.push(t);
+        }
+        Ok(TypedExpr {
+            ty: Type::Named(enum_name.to_string()),
+            kind: TypedExprKind::VariantLit {
+                enum_name: enum_name.to_string(),
+                tag: tag as u32,
+                args: typed_args,
+            },
+        })
+    }
+
     /// Resolve `.field` on a value of type `ty` to (positional index, type).
     fn resolve_field(&self, ty: &Type, field: &str) -> Result<(u32, Type), String> {
         let name = match ty {
@@ -1812,6 +2126,13 @@ fn stmt_returns(s: &TypedStmt) -> bool {
         TypedStmt::Return(_) => true,
         TypedStmt::If { then_block, else_block: Some(e), .. } => {
             block_returns(then_block) && block_returns(e)
+        }
+        // An exhaustive match is a return when every arm is. Exhaustiveness is
+        // already proven, so the arms ARE all the paths — the same reasoning as
+        // an if/else where both branches return. A `while` never counts, since
+        // its condition may be false at entry.
+        TypedStmt::Match { arms, .. } => {
+            !arms.is_empty() && arms.iter().all(|a| block_returns(&a.body))
         }
         _ => false,
     }

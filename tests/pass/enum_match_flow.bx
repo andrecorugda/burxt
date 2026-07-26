@@ -1,0 +1,31 @@
+// `match` as a statement composes with the rest of the language: loops,
+// mutation, and arms that fall through rather than returning.
+enum Step { Go(Int), Stop }
+
+let mut total: Int = 0;
+let mut i: Int = 0;
+while i < 4 {
+    let s: Step = Step.Go(i);
+    match s {
+        Go(n) => { total = total + n; }
+        Stop => { total = 0; }
+    }
+    i = i + 1;
+}
+print(total);
+// a match whose arms all return IS a return, so this typechecks
+fn pick(s: Step) -> Int {
+    match s {
+        Go(n) => { return n * 2; }
+        Stop => { return -1; }
+    }
+}
+print(pick(Step.Go(5)));
+print(pick(Step.Stop));
+// enums declared after use — declarations are hoisted
+let later: Mood = Mood.Happy;
+match later {
+    Happy => { print(1); }
+    Sad => { print(2); }
+}
+enum Mood { Happy, Sad }

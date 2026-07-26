@@ -1,0 +1,2 @@
+enum L { Nil, Cons(Int, L) }
+print(1);
