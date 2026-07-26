@@ -102,15 +102,23 @@ ln -s "$PWD/editors/vscode" ~/.vscode/extensions/burxt   # then reload the windo
 ```
 
 Syntax highlighting for VS Code (and any editor that reads TextMate grammars)
-lives in [`editors/`](editors/), along with what is not built yet and why. The
-grammar is checked against the compiler by a test, so a keyword cannot exist in
-one and not the other.
+lives in [`editors/`](editors/). The grammar is checked against the compiler by a
+test, so a keyword cannot exist in one and not the other.
 
-Diagnostics in the editor need source spans in the compiler first — every error
-today is a precise sentence with no line number attached, which is fine in a
-terminal and useless to an editor. That is the next piece of work, and
-[`editors/README.md`](editors/README.md) records the order the remaining pieces
-depend on each other, plus why `.bx` files are not yet coloured on github.com.
+**Diagnostics as you type** come from `burxt lsp`, a language server over stdio:
+
+```lua
+-- Neovim, no plugin manager needed; Helix and Zed configs are in editors/ too
+vim.lsp.start({ name = "burxt-lsp", cmd = { "burxt", "lsp" } })
+```
+
+Errors carry a position, so the terminal prints the offending line with a caret
+under it, and `burxt check file.bx --json` gives editors and CI the same
+diagnostic with LSP-ready positions.
+
+[`editors/README.md`](editors/README.md) records what is still missing (hover,
+go-to-definition, a tree-sitter grammar for Neovim/Helix colour) and why `.bx`
+files are not yet coloured on github.com.
 
 ## Design
 

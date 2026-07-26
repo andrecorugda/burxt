@@ -13,14 +13,26 @@
   "engines": {
     "vscode": "^1.75.0"
   },
-  "categories": ["Programming Languages"],
-  "keywords": ["burxt", "decimal", "money", "llvm"],
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "burxt",
+    "decimal",
+    "money",
+    "llvm"
+  ],
   "contributes": {
     "languages": [
       {
         "id": "burxt",
-        "aliases": ["Burxt", "burxt"],
-        "extensions": [".bx"],
+        "aliases": [
+          "Burxt",
+          "burxt"
+        ],
+        "extensions": [
+          ".bx"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -36,6 +48,30 @@
         "editor.insertSpaces": true,
         "editor.tabSize": 4
       }
-    }
+    },
+    "problemMatchers": [
+      {
+        "name": "burxt",
+        "owner": "burxt",
+        "source": "burxt",
+        "fileLocation": [
+          "autoDetect",
+          "${workspaceFolder}"
+        ],
+        "severity": "error",
+        "pattern": [
+          {
+            "regexp": "^error: (.*)$",
+            "message": 1
+          },
+          {
+            "regexp": "^\\s*-->\\s+(.+):(\\d+):(\\d+)$",
+            "file": 1,
+            "line": 2,
+            "column": 3
+          }
+        ]
+      }
+    ]
   }
 }

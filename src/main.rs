@@ -1,6 +1,7 @@
 //! The `burxt` compiler driver.
 //!
 //! Usage:
+//!   burxt lsp                              language server over stdio
 //!   burxt check <file.bx>                  parse and typecheck only, no codegen
 //!   burxt build <file.bx> [link args...]   compile to a native executable
 //!   burxt run   <file.bx> [link args...]   compile, then run it
@@ -13,6 +14,8 @@
 
 mod ast;
 mod diag;
+mod json;
+mod lsp;
 mod lexer;
 mod parser;
 mod typeck;
@@ -42,10 +45,23 @@ fn main() {
 
 fn compile_main() {
     let args: Vec<String> = std::env::args().collect();
+
+    // `lsp` takes no file: the editor sends the buffers. Handled before the
+    // usage check for that reason.
+    if args.len() == 2 && args[1] == "lsp" {
+        if let Err(e) = lsp::serve() {
+            eprintln!("burxt lsp: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+
     if args.len() < 3 {
         eprintln!("burxt {} — the Burxt compiler", env!("CARGO_PKG_VERSION"));
         eprintln!("usage:");
         eprintln!("  burxt check   <file.bx>                  parse and typecheck only");
+        eprintln!("                <file.bx> --json         ... as JSON, for editors and CI");
+        eprintln!("  burxt lsp                                language server over stdio");
         eprintln!("  burxt build   <file.bx> [link args...]   compile to a native executable");
         eprintln!("  burxt run     <file.bx> [link args...]   compile then run");
         eprintln!("  burxt emit-ir <file.bx>                  print LLVM IR");

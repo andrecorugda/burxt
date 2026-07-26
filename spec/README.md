@@ -14,7 +14,7 @@ answers.
 **Read this file first.** The specs were written when Burxt was at roughly
 v0.0.1, so several describe work that is now done, and one describes work that
 was built in a different order than specified. This index records what is
-actually true as of **v0.0.32**, audited by running the compiler — not by
+actually true as of **v0.0.33**, audited by running the compiler — not by
 reading the specs. Where a spec and the implementation disagree, the note says
 which is right.
 
@@ -184,7 +184,10 @@ In dependency order, cheapest and most-unblocking first:
     **Spans and diagnostics done in v0.0.32** — caret rendering in the terminal,
     `--json` with LSP positions for editors, and a test asserting every rejection
     points at real code (it found five position-less errors on its first run).
-    **`burxt lsp` is next**, and now has something to serve.
+    **`burxt lsp` shipped in v0.0.33**: diagnostics on change in any LSP-speaking
+    editor, with a hand-written JSON layer so the compiler keeps its single
+    dependency. Remaining editor work is hover, go-to-definition, a tree-sitter
+    grammar, and a VS Code LSP client (which needs npm).
 14. Still unblocked polish: A4.7's units/contracts/pipelines, `.chars()`,
     `[0; N]` repeat literals, `break`/`continue`, iterative AST walkers, and a
     NAMED stack-overflow error (tail calls avoid it; they do not name it).

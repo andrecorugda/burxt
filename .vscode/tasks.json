@@ -1,0 +1,30 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "burxt: check this file",
+      "type": "shell",
+      "command": "${workspaceFolder}/target/debug/burxt",
+      "args": ["check", "${file}"],
+      "problemMatcher": "$burxt",
+      "presentation": { "reveal": "silent", "clear": true },
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "burxt: run this file",
+      "type": "shell",
+      "command": "${workspaceFolder}/target/debug/burxt",
+      "args": ["run", "${file}"],
+      "problemMatcher": "$burxt",
+      "presentation": { "reveal": "always", "clear": true }
+    },
+    {
+      "label": "burxt: test suite",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["test"],
+      "problemMatcher": "$rustc",
+      "presentation": { "reveal": "always", "clear": true }
+    }
+  ]
+}

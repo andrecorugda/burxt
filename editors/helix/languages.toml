@@ -1,0 +1,18 @@
+# Helix: drop these two blocks into ~/.config/helix/languages.toml
+#
+# Diagnostics come from `burxt lsp`, the same server every LSP client uses.
+# Highlighting in Helix needs a tree-sitter grammar, which does not exist yet —
+# so this gives you errors as you type, but not colour. Recorded, not pretended.
+
+[language-server.burxt-lsp]
+command = "burxt"
+args = ["lsp"]
+
+[[language]]
+name = "burxt"
+scope = "source.burxt"
+file-types = ["bx"]
+comment-token = "//"
+indent = { tab-width = 4, unit = "    " }
+language-servers = ["burxt-lsp"]
+roots = []

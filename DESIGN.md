@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.32)
+# Burxt — Design Notes (v0.0.33)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1577,6 +1577,61 @@ message but points at the string literal, because the interpolated fragment is
 re-lexed on its own and its offsets are relative to the fragment. Both are
 refinements of a working position, not missing positions.
 
+### v0.0.33: a language server
+
+```bash
+burxt lsp      # diagnostics as you type, in any LSP-speaking editor
+```
+
+Positions existed as of v0.0.32, so the server has something to serve. It
+typechecks the **buffer**, not the file on disk — which is the entire point of an
+editor integration — and publishes one diagnostic or none.
+
+**One diagnostic, honestly.** The compiler stops at the first error, so the server
+does not pretend to a list. Reporting several is a *compiler* change (error
+recovery), not a server change, and it is recorded that way so the limitation is
+not mistaken for a server bug. **Publishing the empty list matters as much as
+publishing an error**: it is what clears the squiggle when the code becomes valid,
+and a server that only ever reports problems looks correct in a unit test while
+leaving stale underlines in a real editor. The end-to-end test asserts exactly
+that sequence — open valid (empty), break it (one error at the right line), fix it
+(empty again).
+
+**A JSON reader, written rather than depended on.** The compiler has exactly one
+dependency (LLVM) and that restraint is worth keeping. The alternative people
+reach for at this size — finding fields with string search — is wrong the moment a
+document contains a quote or a backslash, which Burxt source does constantly. A
+language server that mangles the buffer it was sent is worse than none. So
+`src/json.rs` is a small, correct reader and writer, including surrogate pairs
+(that is how an emoji in a document arrives) and integers that do not serialize as
+`1.0` (some clients are strict). Its tests cover the malformed inputs too, because
+a server that panics takes the editor's language support down with it.
+
+**Details that are easy to get wrong and were tested instead of assumed:**
+
+- `Content-Length` counts **bytes**, not characters — a message with a non-ASCII
+  identifier would otherwise be truncated at the client.
+- An unknown **request** must be answered (`-32601`), or a real client waits
+  forever. An unknown **notification** must be ignored. The `id` field is the
+  only difference.
+- Full-document sync is requested deliberately: applying incremental text edits
+  correctly is fiddly, and a server that corrupts its own copy of the buffer
+  reports errors about code nobody wrote.
+
+**Reaching editors.** Neovim (`editors/nvim/burxt.lua`, no plugin manager) and
+Helix (`editors/helix/languages.toml`) attach the server directly; Zed, Emacs,
+Sublime LSP and Kate need only the command. VS Code is the awkward one: launching
+a server requires `vscode-languageclient`, which means npm and bundling — a real
+cost against the extension's current property of being copyable with no
+toolchain. Until that is paid, VS Code gets squiggles from a **problem matcher**
+(`$burxt`) plus a task, which is declarative and needs no build step. The matcher
+was verified against real compiler output rather than by reading the regex.
+
+**Honest gaps, recorded rather than implied:** hover (the first thing worth adding
+— `Decimal<2, RoundHalfEven>` on hover is worth more in Burxt than in most
+languages), go-to-definition, and a tree-sitter grammar so Neovim and Helix get
+colour and not only errors.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -1641,6 +1696,9 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- T3. Language server (v0.0.33): `burxt lsp` over stdio, a hand-written JSON
+  reader/writer, editor configs for Neovim and Helix, and a VS Code problem
+  matcher. Hover and go-to-definition still to come.
 - T2. Diagnostics with positions (v0.0.32): spans through lexer/parser/typeck,
   a caret rendering, `--json` output with LSP positions, and a suite-wide test
   that every rejection points at real code.

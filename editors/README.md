@@ -10,7 +10,11 @@ directory holds that half of the project.
 | VS Code extension | **DONE** (v0.0.31) — declarative, no build step | `vscode/` |
 | `burxt check` — front end only, for editors and CI | **DONE** (v0.0.31) | `src/main.rs` |
 | Diagnostics with line/column | **DONE** (v0.0.32) | `src/diag.rs`, `burxt check --json` |
-| Language server (`burxt lsp`) | **NEXT** — spans exist now | see below |
+| Language server (`burxt lsp`) | **DONE** (v0.0.33) — diagnostics on change | `src/lsp.rs` |
+| VS Code problem matcher (squiggles without a client) | **DONE** (v0.0.33) | `vscode/package.json`, `.vscode/tasks.json` |
+| Neovim / Helix configs | **DONE** (v0.0.33) — diagnostics, no highlighting yet | `nvim/`, `helix/` |
+| Tree-sitter grammar (Neovim/Helix colour) | not written | see below |
+| Hover, go-to-definition | not written | see below |
 | GitHub language detection | blocked on a popularity gate, not on us | see below |
 
 ## Installing the VS Code extension
@@ -54,31 +58,67 @@ editors want:
 
 ## What is deliberately NOT here yet
 
-**A tree-sitter grammar.** Neovim, Helix, and GitHub's own newer highlighting
-path all want one. It is a real gap; writing two grammars that can disagree is
-also a real cost, so it waits until something needs it.
+**A tree-sitter grammar.** Neovim and Helix want one for *highlighting* — they
+get diagnostics from the LSP today but no colour. It is the largest remaining gap
+in editor support; writing two grammars that can disagree is also a real cost,
+which is why the TextMate one came first (it serves VS Code, Sublime, Zed,
+JetBrains, and Linguist from a single file).
 
 **Formatting (`burxt fmt`).** A formatter is a design decision about the
 language's canonical shape, not a tooling detail — it deserves its own spec
 rather than being improvised.
 
-## Diagnostics and the language server
+## The language server
 
-The plan, in dependency order, because the pieces genuinely block each other:
+`burxt lsp` speaks the Language Server Protocol over stdio. It typechecks the
+buffer you are editing — not the file on disk — and publishes one diagnostic or
+none, because the compiler stops at the first error and pretending to a list would
+be a lie. Publishing the empty list matters as much as publishing an error: it is
+what clears the squiggle when the code becomes valid again.
 
-1. **Source spans in the compiler.** Every error today is a bare string:
-   `error: this function returns Int, but ...`. Useful in a terminal, useless to
-   an editor, which needs a line, a column, and a length to underline. This is
-   the blocker for everything below, and it improves the CLI at the same time —
-   real compilers print the offending line with a caret.
-2. **Machine-readable diagnostics** from `burxt check`, so any editor with a
-   problem matcher gets squiggles without an LSP at all.
-3. **`burxt lsp`** — a language server over stdio: diagnostics on change,
-   hover showing a value's exact type (a `Decimal<2, RoundHalfEven>` hover is
-   worth more here than in most languages), and go-to-definition.
+```bash
+cargo build && sudo ln -sf "$PWD/target/debug/burxt" /usr/local/bin/burxt
+```
 
-The order mattered: an LSP that cannot say *where* a problem is would have been a
-shell with nothing inside it. It can now.
+**Neovim** — `editors/nvim/burxt.lua`, no plugin manager and no `nvim-lspconfig`
+needed:
+
+```lua
+vim.cmd('source /path/to/burxt/editors/nvim/burxt.lua')
+```
+
+**Helix** — append `editors/helix/languages.toml` to
+`~/.config/helix/languages.toml`.
+
+**Zed, Emacs (eglot/lsp-mode), Sublime LSP, Kate** — any LSP client works; the
+command is `burxt lsp` and the file type is `.bx`.
+
+**VS Code** — the extension is still declarative (no JavaScript), so it does not
+yet *launch* the server. Until it does, squiggles come from a task and a problem
+matcher, which needs no build step:
+
+- `Ctrl+Shift+B` runs `burxt check` on the current file and populates the Problems
+  panel. `.vscode/tasks.json` in this repo is the working example.
+- The matcher is contributed as `$burxt` by the extension, so any task can use it.
+
+Wiring the LSP into VS Code properly needs `vscode-languageclient`, which means
+npm and a bundling step — a real cost against the extension's current property of
+being copyable with no toolchain. It is the next piece here, not a missing one
+elsewhere.
+
+### What the server does NOT do yet
+
+- **Hover** showing a value's exact type. `Decimal<2, RoundHalfEven>` on hover is
+  worth more in Burxt than in most languages, since the rounding contract is part
+  of the type — so this is the first thing worth adding.
+- **Go-to-definition**, which needs the compiler to keep name resolution rather
+  than only its result.
+- **More than one error at a time**, which is a *compiler* change (error recovery),
+  not a server change. Recorded here so the limitation is not mistaken for a
+  server bug.
+- **Incremental sync.** The server asks for full-document sync deliberately:
+  applying incremental text edits correctly is fiddly, and a server that corrupts
+  its own copy of the buffer reports errors about code you never wrote.
 
 ## GitHub language detection
 

@@ -562,3 +562,98 @@ fn every_rejection_reports_a_position_that_points_at_code() {
     assert!(checked > 50, "expected the whole fail suite, checked {}", checked);
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }
+
+/// A real client session against `burxt lsp`: initialize, open a good file, break
+/// it, fix it, shut down. Unit tests cover the framing and the diagnostic shape;
+/// this covers the thing they cannot — that the process actually speaks the
+/// protocol over a pipe, in order, and exits cleanly.
+///
+/// The sequence matters: publishing an EMPTY diagnostics array is what clears the
+/// squiggle, so a server that only ever reports errors looks fine in a unit test
+/// and leaves stale underlines in a real editor.
+#[test]
+fn language_server_publishes_and_clears_diagnostics() {
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+
+    let frame = |body: &str| format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
+    let uri = "file:///tmp/burxt-lsp-probe.bx";
+    let good = "let a: Int = 1;\\nprint(a);\\n";
+    let bad = "let a: Int = 1;\\nlet b: Bool = 2;\\nprint(a);\\n";
+
+    let mut session = String::new();
+    session.push_str(&frame(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#,
+    ));
+    session.push_str(&frame(r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#));
+    session.push_str(&frame(&format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{}","languageId":"burxt","version":1,"text":"{}"}}}}}}"#,
+        uri, good
+    )));
+    session.push_str(&frame(&format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didChange","params":{{"textDocument":{{"uri":"{}","version":2}},"contentChanges":[{{"text":"{}"}}]}}}}"#,
+        uri, bad
+    )));
+    session.push_str(&frame(&format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didChange","params":{{"textDocument":{{"uri":"{}","version":3}},"contentChanges":[{{"text":"{}"}}]}}}}"#,
+        uri, good
+    )));
+    // An unknown request must be answered, or a real client waits forever.
+    session.push_str(&frame(r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{}}"#));
+    session.push_str(&frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}"#));
+    session.push_str(&frame(r#"{"jsonrpc":"2.0","method":"exit","params":null}"#));
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn burxt lsp");
+    child.stdin.as_mut().unwrap().write_all(session.as_bytes()).unwrap();
+    let mut out = String::new();
+    child.stdout.as_mut().unwrap().read_to_string(&mut out).unwrap();
+    let status = child.wait().unwrap();
+
+    assert!(status.success(), "the server must exit cleanly after shutdown/exit");
+
+    // Split the framed replies apart and keep the bodies.
+    let bodies: Vec<&str> = out
+        .split("Content-Length: ")
+        .filter_map(|chunk| chunk.split_once("\r\n\r\n").map(|(_, body)| body))
+        .collect();
+    assert!(bodies.len() >= 6, "expected at least 6 messages, got {:?}", bodies);
+
+    assert!(bodies[0].contains("\"textDocumentSync\":1"), "initialize reply: {}", bodies[0]);
+    assert!(bodies[0].contains("burxt-lsp"), "initialize reply should name the server");
+
+    let published: Vec<&&str> = bodies
+        .iter()
+        .filter(|b| b.contains("publishDiagnostics"))
+        .collect();
+    assert_eq!(
+        published.len(),
+        3,
+        "one publish per open/change, got {:?}",
+        published
+    );
+    // Open (valid) -> empty. Change (broken) -> one error. Change back -> empty.
+    assert!(published[0].contains("\"diagnostics\":[]"), "first: {}", published[0]);
+    assert!(
+        published[1].contains("declared Bool") && published[1].contains("\"severity\":1"),
+        "second: {}",
+        published[1]
+    );
+    // Line 2 of the file is line 1 to the protocol.
+    assert!(published[1].contains("\"line\":1"), "second: {}", published[1]);
+    assert!(
+        published[2].contains("\"diagnostics\":[]"),
+        "fixing the code must CLEAR the squiggle, got: {}",
+        published[2]
+    );
+
+    assert!(
+        bodies.iter().any(|b| b.contains("-32601")),
+        "an unsupported request must get a MethodNotFound reply, not silence"
+    );
+}
