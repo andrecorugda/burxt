@@ -144,8 +144,13 @@ struct Unit {
     // The backend's state: the IR text, the constants it referred to, a counter for
     // registers and one for labels, the locals' allocas, and the enclosing loops'
     // labels so `break` and `continue` know where to jump.
-    out: String,
+    chunks: [String],
+    pending: String,
     globals: String,
+    // The caller's storage for an aggregate return, while a function that has one is
+    // being emitted, and how many cells it holds.
+    sret: String,
+    sret_cells: Int,
     fn_entry: String,
     fn_body: String,
     next_tmp: Int,
@@ -3556,9 +3561,34 @@ fn (mut self: Unit) w(text: String) -> Int allocates {
 // Module-level text — the declarations and the runtime — goes straight to the module,
 // not through a function's buffer: `open_fn` clears those, and a preamble written into
 // one would be discarded when the first function opened.
+// The module's text, in CHUNKS. `a = a + b` copies the whole left side, so appending
+// fifty thousand times to one growing String copies gigabytes — which is exactly how
+// this compiler first exhausted its region while emitting its own source. Chunks bound
+// each copy to the chunk size, and the joins at the end are few.
+//
+// The real fix is a byte buffer that grows in place, which needs a builtin that writes
+// one. Recorded rather than pretended away: this is a cost, not a design.
 fn (mut self: Unit) w_out(text: String) -> Int allocates {
-    self.out = self.out + text;
+    self.pending = self.pending + text;
+    if len(self.pending) > 4096 {
+        push(self.chunks, self.pending);
+        self.pending = "";
+    }
     return 0;
+}
+
+fn (mut self: Unit) finish() -> String allocates {
+    if len(self.pending) > 0 {
+        push(self.chunks, self.pending);
+        self.pending = "";
+    }
+    let mut joined: String = "";
+    let mut i: Int = 0;
+    while i < len(self.chunks) {
+        joined = joined + self.chunks[i];
+        i = i + 1;
+    }
+    return joined;
 }
 
 fn (mut self: Unit) w_entry(text: String) -> Int allocates {
@@ -3573,7 +3603,9 @@ fn (mut self: Unit) open_fn(header: String) -> Int allocates {
 }
 
 fn (mut self: Unit) close_fn(closing: String) -> Int allocates {
-    self.out = self.out + self.fn_entry + self.fn_body + closing;
+    let entry_written: Int = self.w_out(self.fn_entry);
+    let body_written: Int = self.w_out(self.fn_body);
+    let closed: Int = self.w_out(closing);
     self.fn_entry = "";
     self.fn_body = "";
     return 0;
@@ -3808,9 +3840,23 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
         let holder: Ty = self.type_at(n.a);
         let base: String = self.emit_expr(src, n.a);
         let index: String = self.emit_expr(src, n.b);
+        if holder.kind == 47 {
+            let element: Ty = self.ty_of(src, holder.scale);
+            let at: String = self.fresh();
+            let found: Int = self.w("  " + at + " = call i64 @burxt.slot(i64 " + base
+                                    + ", i64 " + index + ")\n");
+            if self.is_aggregate(element) {
+                return at;
+            }
+            let as_ptr: String = self.fresh();
+            let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + at + " to ptr\n");
+            let reg: String = self.fresh();
+            let loaded: Int = self.w("  " + reg + " = load i64, ptr " + as_ptr + "\n");
+            return reg;
+        }
         if holder.kind != 48 {
             let e: Int = self.complain_at(src, n.tok,
-                "the Burxt backend does not index a growable array yet");
+                "the Burxt backend cannot index this");
             return "0";
         }
         let element: Ty = self.ty_of(src, holder.scale);
@@ -3868,9 +3914,24 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
 
     if n.kind == 17 {                                // an array literal
         let mine: Ty = self.type_at(node);
+        if mine.kind == 47 {                         // [T] — a header in the region
+            let element: Ty = self.ty_of(src, mine.scale);
+            let reg: String = self.fresh();
+            let made: Int = self.w("  " + reg + " = call i64 @burxt.new_array(i64 "
+                                   + to_string(self.cells_of(src, element)) + ")\n");
+            let mut k: Int = 0;
+            while k < n.b {
+                let value: String = self.emit_expr(src, self.kids[n.a + k]);
+                let pushed: String = self.fresh();
+                let added: Int = self.w("  " + pushed + " = call i64 @burxt.push(i64 "
+                                        + reg + ", i64 " + value + ")\n");
+                k = k + 1;
+            }
+            return reg;
+        }
         if mine.kind != 48 {
             let e: Int = self.complain_at(src, n.tok,
-                "the Burxt backend does not build a growable array yet");
+                "the Burxt backend cannot build this array");
             return "0";
         }
         let element: Ty = self.ty_of(src, mine.scale);
@@ -3927,6 +3988,22 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
     if n.kind == 9 {                                 // a comparison
         let left: String = self.emit_expr(src, n.a);
         let right: String = self.emit_expr(src, n.b);
+        if self.type_at(n.a).kind == 42 {
+            // Strings compare by BYTES. Comparing the i64s would compare pointers, which
+            // is true only when two Strings are the same object — a bug that reads as a
+            // working program right up until two equal Strings were built separately.
+            let order: String = self.fresh();
+            let compared: Int = self.w("  " + order + " = call i64 @burxt.strcmp(i64 "
+                                       + left + ", i64 " + right + ")\n");
+            let bit: String = self.fresh();
+            let mut op: String = "eq";
+            if n.value == 13 { op = "ne"; }
+            let tested: Int = self.w("  " + bit + " = icmp " + op + " i64 " + order
+                                     + ", 0\n");
+            let reg: String = self.fresh();
+            let widened: Int = self.w("  " + reg + " = zext i1 " + bit + " to i64\n");
+            return reg;
+        }
         // The token codes, not invented ones: `==` is 12, `!=` 13, `<=` 14, `>=` 15,
         // and the single-character `<` and `>` are 35 and 36.
         let mut op: String = "eq";
@@ -3949,12 +4026,46 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
         let left: String = self.emit_expr(src, n.a);
         let right: String = self.emit_expr(src, n.b);
         let reg: String = self.fresh();
+        // The parser records the OPERATOR'S BYTE — 124 for `|`, 38 for `&` — not the
+        // token kind. Reading it as a token kind made every `||` an `and`, and the first
+        // test to notice agreed with stage-0 by accident: `5 != 5 || false` is false
+        // either way. A predicate over letters is what caught it.
         let mut op: String = "and";
-        if n.value == 17 { op = "or"; }
+        if n.value == 124 { op = "or"; }
         let visited: Int = self.w("  " + reg + " = " + op + " i64 " + left + ", "
                                   + right + "\n");
         return reg;
     }
+    if n.kind == 14 {                                // a method call
+        let holder: Ty = self.type_at(n.a);
+        let receiver: String = self.emit_expr(src, n.a);
+        let list: Node = self.nodes[n.b];
+        let mut args: String = "i64 " + receiver;
+        let mut k: Int = 0;
+        while k < list.b {
+            let value: String = self.emit_expr(src, self.kids[list.a + k]);
+            args = args + ", i64 " + value;
+            k = k + 1;
+        }
+        let answers: Ty = self.type_at(node);
+        if self.is_aggregate(answers) {
+            let storage: String = self.scratch(self.cells_of(src, answers));
+            let dropped: String = self.fresh();
+            let called_it: Int = self.w("  " + dropped + " = call i64 @"
+                                        + method_symbol(src, holder, self.toks[n.tok])
+                                        + "(ptr " + storage + ", " + args + ")\n");
+            let reg: String = self.fresh();
+            let address: Int = self.w("  " + reg + " = ptrtoint ptr " + storage
+                                      + " to i64\n");
+            return reg;
+        }
+        let reg: String = self.fresh();
+        let visited: Int = self.w("  " + reg + " = call i64 @"
+                                  + method_symbol(src, holder, self.toks[n.tok])
+                                  + "(" + args + ")\n");
+        return reg;
+    }
+
     if n.kind == 13 {                                // a call
         let t: Tok = self.toks[n.tok];
         let list: Node = self.nodes[n.a];
@@ -3971,6 +4082,22 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
             }
             args = args + "i64 " + value;
             i = i + 1;
+        }
+        let answers: Ty = self.type_at(node);
+        if self.is_aggregate(answers) {
+            let storage: String = self.scratch(self.cells_of(src, answers));
+            let mut all: String = "ptr " + storage;
+            if args != "" {
+                all = all + ", " + args;
+            }
+            let dropped: String = self.fresh();
+            let called_it: Int = self.w("  " + dropped + " = call i64 @"
+                                        + substring(src, t.start, t.length)
+                                        + "(" + all + ")\n");
+            let reg: String = self.fresh();
+            let address: Int = self.w("  " + reg + " = ptrtoint ptr " + storage
+                                      + " to i64\n");
+            return reg;
         }
         let reg: String = self.fresh();
         let visited: Int = self.w("  " + reg + " = call i64 @" + substring(src, t.start,
@@ -4009,13 +4136,21 @@ fn (mut self: Unit) place_of(src: String, node: Int) -> String allocates {
     }
     if n.kind == 12 {                                // xs[i]
         let holder: Ty = self.type_at(n.a);
-        if holder.kind != 48 {
-            let e: Int = self.complain_at(src, n.tok,
-                "the Burxt backend does not write into a growable array yet");
-            return "";
-        }
         let base: String = self.emit_expr(src, n.a);
         let index: String = self.emit_expr(src, n.b);
+        if holder.kind == 47 {
+            let at: String = self.fresh();
+            let found: Int = self.w("  " + at + " = call i64 @burxt.slot(i64 " + base
+                                    + ", i64 " + index + ")\n");
+            let as_ptr: String = self.fresh();
+            let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + at + " to ptr\n");
+            return as_ptr;
+        }
+        if holder.kind != 48 {
+            let e: Int = self.complain_at(src, n.tok,
+                "the Burxt backend cannot write into this");
+            return "";
+        }
         let stride: Int = self.cells_of(src, self.ty_of(src, holder.scale));
         let checked: Int = self.w("  call void @burxt.bounds(i64 " + index + ", i64 "
                                   + to_string(holder.contract) + ")\n");
@@ -4031,6 +4166,13 @@ fn (mut self: Unit) place_of(src: String, node: Int) -> String allocates {
     }
     let e: Int = self.complain_at(src, n.tok, "this is not something to assign to");
     return "";
+}
+
+// A method's symbol: the receiver's type, a dot, the method's name. Two types may both
+// have a `label`, and the linker needs to tell them apart.
+fn method_symbol(src: String, holder: Ty, name: Tok) -> String allocates {
+    return substring(src, holder.name_start, holder.name_len) + "."
+        + substring(src, name.start, name.length);
 }
 
 fn (mut self: Unit) copy_cells(src: String, destination: String, source: String,
@@ -4065,14 +4207,34 @@ fn (mut self: Unit) emit_builtin(src: String, n: Node, called: String) -> String
         return reg;
     }
     if called == "len" {
-        if self.type_at(self.kids[list.a]).kind == 42 {
+        let held: Ty = self.type_at(self.kids[list.a]);
+        if held.kind == 42 {
             let visited: Int = self.w("  " + reg + " = call i64 @burxt.len_str(i64 "
                                       + first + ")\n");
             return reg;
         }
-        let e: Int = self.complain_at(src, n.tok,
-            "the Burxt backend does not emit `len` of an array yet");
+        if held.kind == 47 {
+            let visited: Int = self.w("  " + reg + " = call i64 @burxt.array_len(i64 "
+                                      + first + ")\n");
+            return reg;
+        }
+        if held.kind == 48 {
+            // A fixed array's length is part of its type, so it is known here and
+            // costs no instruction at all.
+            return to_string(held.contract);
+        }
+        let e: Int = self.complain_at(src, n.tok, "the Burxt backend cannot take this len");
         return "0";
+    }
+    if called == "push" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.push(i64 " + first
+                                  + ", i64 " + second + ")\n");
+        return reg;
+    }
+    if called == "truncate" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.truncate(i64 " + first
+                                  + ", i64 " + second + ")\n");
+        return reg;
     }
     if called == "byte_at" {
         let visited: Int = self.w("  " + reg + " = call i64 @burxt.byte_at(i64 " + first
@@ -4082,6 +4244,24 @@ fn (mut self: Unit) emit_builtin(src: String, n: Node, called: String) -> String
     if called == "substring" {
         let visited: Int = self.w("  " + reg + " = call i64 @burxt.substring(i64 " + first
                                   + ", i64 " + second + ", i64 " + third + ")\n");
+        return reg;
+    }
+    if called == "arg_count" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.arg_count()\n");
+        return reg;
+    }
+    if called == "arg" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.arg(i64 " + first + ")\n");
+        return reg;
+    }
+    if called == "read_file" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.read_file(i64 " + first
+                                  + ")\n");
+        return reg;
+    }
+    if called == "write_file" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.write_file(i64 " + first
+                                  + ", i64 " + second + ")\n");
         return reg;
     }
     if called == "div_trunc" {
@@ -4172,6 +4352,10 @@ fn (mut self: Unit) emit_stmt(src: String, node: Int) -> Int allocates {
 
     if n.kind == 63 {                                // return
         let value: String = self.emit_expr(src, n.a);
+        if self.sret != "" {
+            let copied: Int = self.copy_cells(src, self.sret, value, self.sret_cells);
+            return self.w("  ret i64 0\n");
+        }
         return self.w("  ret i64 " + value + "\n");
     }
 
@@ -4263,6 +4447,103 @@ fn (mut self: Unit) emit_block(src: String, block: Int) -> Int allocates {
 }
 
 // ---- the module --------------------------------------------------------------
+// One function or method, from its signature to its closing brace. A method is a
+// function whose first parameter is the receiver — `mut self` is handed the ADDRESS and
+// writes through it, plain `self` gets a copy, which is exactly what the two spellings
+// promise a reader.
+fn (mut self: Unit) emit_function(src: String, index: Int) -> Int allocates {
+    let item: Node = self.nodes[index];
+    let name: Tok = self.toks[item.tok];
+    let params: Node = self.nodes[item.a];
+    let signature_node: Node = self.nodes[item.c];
+    let base: Int = len(self.slots);
+    let is_method: Bool = item.kind == 81;
+
+    // An aggregate return travels through the CALLER's storage: the caller hands over a
+    // pointer as the first argument and the callee copies into it. Returning a pointer
+    // into the callee's own frame would be a dangling one, which is why this is not an
+    // optimisation but the only correct shape.
+    let answers: Ty = self.ty_of(src, signature_node.c);
+    let outer_sret: String = self.sret;
+    self.sret = "";
+    let mut signature: String = "";
+    let mut first: Int = 0;
+    if self.is_aggregate(answers) {
+        self.sret = "%sret";
+        self.sret_cells = self.cells_of(src, answers);
+        signature = "ptr %sret";
+        first = 1;
+    }
+
+    let mut symbol: String = substring(src, name.start, name.length);
+    if is_method {
+        let receiver: Tok = self.toks[signature_node.value];
+        let holder: Ty = Ty { kind: 46, scale: 0, contract: 0,
+                              name_start: receiver.start, name_len: receiver.length };
+        symbol = method_symbol(src, holder, name);
+        if first > 0 {
+            signature = signature + ", ";
+        }
+        signature = signature + "i64 %a" + to_string(first);
+        first = first + 1;
+    }
+    let mut p: Int = 0;
+    while p < params.b {
+        if p + first > 0 {
+            signature = signature + ", ";
+        }
+        signature = signature + "i64 %a" + to_string(p + first);
+        p = p + 1;
+    }
+    let opened: Int = self.open_fn("define i64 @" + symbol + "(" + signature
+                                   + ") \{\nentry:\n");
+    if is_method {
+        let receiver: Tok = self.toks[signature_node.value];
+        let word: Tok = self.toks[signature_node.value - 2];
+        // The receiver arrives as an address either way. `mut self` keeps it, so writes
+        // reach the caller's value; plain `self` copies, so they cannot.
+        let receiver_arg: String = "%a" + to_string(first - 1);
+        if item.value >= 4 {
+            let slot: Int = self.declare_slot(src, word.start, word.length, 1);
+            let stored: Int = self.w("  store i64 " + receiver_arg + ", ptr %v"
+                                     + to_string(slot) + "\n");
+        } else {
+            let holder: Ty = Ty { kind: 46, scale: 0, contract: 0,
+                                  name_start: receiver.start, name_len: receiver.length };
+            let cells: Int = self.cells_of(src, holder);
+            let slot: Int = self.declare_slot(src, word.start, word.length, cells);
+            let copied: Int = self.copy_cells(src, "%v" + to_string(slot), receiver_arg,
+                                              cells);
+        }
+    }
+    p = 0;
+    while p < params.b {
+        let param: Node = self.nodes[self.kids[params.a + p]];
+        let pname: Tok = self.toks[param.tok];
+        let declared: Ty = self.ty_of(src, param.a);
+        if self.is_aggregate(declared) {
+            // By value across a call too: the callee copies what it was handed, so
+            // writing to a parameter cannot reach back into the caller.
+            let cells: Int = self.cells_of(src, declared);
+            let slot: Int = self.declare_slot(src, pname.start, pname.length, cells);
+            let copied: Int = self.copy_cells(src, "%v" + to_string(slot),
+                                              "%a" + to_string(p + first), cells);
+        } else {
+            let slot: Int = self.declare_slot(src, pname.start, pname.length, 1);
+            let stored: Int = self.w("  store i64 %a" + to_string(p + first) + ", ptr %v"
+                                     + to_string(slot) + "\n");
+        }
+        p = p + 1;
+    }
+    let body: Int = self.emit_block(src, item.b);
+    // Unreachable, since the checker proved every path returns — but LLVM requires every
+    // block to end in a terminator, and a module that does not verify is not a program.
+    let closed: Int = self.close_fn("  ret i64 0\n\}\n\n");
+    let dropped: Int = truncate(self.slots, base);
+    self.sret = outer_sret;
+    return 1;
+}
+
 fn (mut self: Unit) emit_module(src: String) -> Int allocates {
     let mut preamble: Int = self.w_out("declare i32 @printf(ptr, ...)\n");
     preamble = self.w_out("declare void @exit(i32)\n\n");
@@ -4278,63 +4559,26 @@ fn (mut self: Unit) emit_module(src: String) -> Int allocates {
     while i < len(self.items) {
         let index: Int = self.items[i];
         let item: Node = self.nodes[index];
-        if item.kind == 80 {
-            let name: Tok = self.toks[item.tok];
-            let params: Node = self.nodes[item.a];
-            let base: Int = len(self.slots);
-            let mut signature: String = "";
-            let mut p: Int = 0;
-            while p < params.b {
-                if p > 0 {
-                    signature = signature + ", ";
-                }
-                signature = signature + "i64 %a" + to_string(p);
-                p = p + 1;
+        if item.kind == 85 {                         // an impl block's methods
+            let mut k: Int = 0;
+            while k < item.b {
+                let done: Int = self.emit_function(src, self.kids[item.a + k]);
+                k = k + 1;
             }
-            // An aggregate return travels through the CALLER's storage, and this slice
-            // has no sret: emitting a pointer into the callee's frame would be a
-            // dangling one. Refused by name, like everything else not yet emitted.
-            let signature_node: Node = self.nodes[item.c];
-            let answers: Ty = self.ty_of(src, signature_node.c);
-            if self.is_aggregate(answers) {
-                let e: Int = self.complain_at(src, item.tok,
-                    "the Burxt backend does not return an aggregate yet: it needs the "
-                    + "caller's storage, which this slice does not pass");
-            }
-            let opened: Int = self.open_fn("define i64 @"
-                                     + substring(src, name.start, name.length)
-                                     + "(" + signature + ") \{\nentry:\n");
-            p = 0;
-            while p < params.b {
-                let param: Node = self.nodes[self.kids[params.a + p]];
-                let pname: Tok = self.toks[param.tok];
-                let declared: Ty = self.ty_of(src, param.a);
-                if self.is_aggregate(declared) {
-                    // By value across a call too: the callee copies what it was handed,
-                    // so writing to a parameter cannot reach back into the caller.
-                    let cells: Int = self.cells_of(src, declared);
-                    let slot: Int = self.declare_slot(src, pname.start, pname.length, cells);
-                    let copied: Int = self.copy_cells(src, "%v" + to_string(slot),
-                                                      "%a" + to_string(p), cells);
-                } else {
-                    let slot: Int = self.declare_slot(src, pname.start, pname.length, 1);
-                    let stored: Int = self.w("  store i64 %a" + to_string(p) + ", ptr %v"
-                                             + to_string(slot) + "\n");
-                }
-                p = p + 1;
-            }
-            let body: Int = self.emit_block(src, item.b);
-            // Unreachable, since the checker proved every path returns — but LLVM
-            // requires every block to end in a terminator, and a module that does not
-            // verify is not a program.
-            let closed: Int = self.close_fn("  ret i64 0\n\}\n\n");
-            let dropped: Int = truncate(self.slots, base);
+        }
+        if item.kind == 80 || item.kind == 81 {
+            let done: Int = self.emit_function(src, index);
         }
         i = i + 1;
     }
 
     // Then main, which is the top-level statements in order.
     let opened: Int = self.open_fn("define i32 @main(i32 %argc, ptr %argv) \{\nentry:\n");
+    // The arguments are recorded once, where they arrive, so `arg(n)` is a load rather
+    // than a parameter threaded through every function that might want it.
+    let widened: Int = self.w("  %argc64 = sext i32 %argc to i64\n");
+    let kept: Int = self.w("  store i64 %argc64, ptr @burxt.argc\n");
+    let kept_argv: Int = self.w("  store ptr %argv, ptr @burxt.argv\n");
     i = 0;
     while i < len(self.items) {
         let index: Int = self.items[i];
@@ -4363,6 +4607,7 @@ fn runtime_ir() -> String allocates {
         + "@bump = global i64 0\n"
         + "declare ptr @malloc(i64)\n"
         + "declare i64 @strlen(ptr)\n"
+        + "declare i32 @strcmp(ptr, ptr)\n"
         + "declare ptr @memcpy(ptr, ptr, i64)\n"
         + "declare i32 @snprintf(ptr, i64, ptr, ...)\n"
         + "declare i32 @fprintf(ptr, ptr, ...)\n"
@@ -4427,11 +4672,174 @@ fn runtime_ir() -> String allocates {
         + "  %b = load i8, ptr %q\n"
         + "  %z = zext i8 %b to i64\n"
         + "  ret i64 %z\n\}\n\n"
+        + "define i64 @burxt.strcmp(i64 %a, i64 %b) \{\n"
+        + "entry:\n"
+        + "  %pa = inttoptr i64 %a to ptr\n"
+        + "  %pb = inttoptr i64 %b to ptr\n"
+        + "  %r = call i32 @strcmp(ptr %pa, ptr %pb)\n"
+        + "  %answer = sext i32 %r to i64\n"
+        + "  ret i64 %answer\n\}\n\n"
         + "define i64 @burxt.len_str(i64 %s) \{\n"
         + "entry:\n"
         + "  %p = inttoptr i64 %s to ptr\n"
         + "  %l = call i64 @strlen(ptr %p)\n"
         + "  ret i64 %l\n\}\n\n"
+        // A growable array is a four-cell header in the region: length, capacity, the
+        // data pointer, and the ELEMENT WIDTH in cells. The width is stored rather than
+        // baked into the call, so one `push` serves scalars and structs both — it copies
+        // eight bytes or the whole element depending on what the header says.
+        + "define i64 @burxt.new_array(i64 %elem) \{\n"
+        + "entry:\n"
+        + "  %h = call i64 @burxt.alloc(i64 32)\n"
+        + "  %p = inttoptr i64 %h to ptr\n"
+        + "  store i64 0, ptr %p\n"
+        + "  %capp = getelementptr i64, ptr %p, i64 1\n"
+        + "  store i64 0, ptr %capp\n"
+        + "  %datap = getelementptr i64, ptr %p, i64 2\n"
+        + "  store i64 0, ptr %datap\n"
+        + "  %elemp = getelementptr i64, ptr %p, i64 3\n"
+        + "  store i64 %elem, ptr %elemp\n"
+        + "  ret i64 %h\n\}\n\n"
+        + "define i64 @burxt.push(i64 %xs, i64 %value) \{\n"
+        + "entry:\n"
+        + "  %p = inttoptr i64 %xs to ptr\n"
+        + "  %capp = getelementptr i64, ptr %p, i64 1\n"
+        + "  %datap = getelementptr i64, ptr %p, i64 2\n"
+        + "  %elemp = getelementptr i64, ptr %p, i64 3\n"
+        + "  %len = load i64, ptr %p\n"
+        + "  %cap = load i64, ptr %capp\n"
+        + "  %elem = load i64, ptr %elemp\n"
+        + "  %full = icmp sge i64 %len, %cap\n"
+        + "  br i1 %full, label %grow, label %place\n"
+        + "grow:\n"
+        + "  %doubled = mul i64 %cap, 2\n"
+        + "  %small = icmp slt i64 %doubled, 8\n"
+        + "  %newcap = select i1 %small, i64 8, i64 %doubled\n"
+        + "  %cells = mul i64 %newcap, %elem\n"
+        + "  %bytes = mul i64 %cells, 8\n"
+        + "  %fresh = call i64 @burxt.alloc(i64 %bytes)\n"
+        + "  %freshp = inttoptr i64 %fresh to ptr\n"
+        + "  %old = load i64, ptr %datap\n"
+        + "  %empty = icmp eq i64 %old, 0\n"
+        + "  br i1 %empty, label %installed, label %move\n"
+        + "move:\n"
+        + "  %oldp = inttoptr i64 %old to ptr\n"
+        + "  %usedcells = mul i64 %len, %elem\n"
+        + "  %usedbytes = mul i64 %usedcells, 8\n"
+        + "  %moved = call ptr @memcpy(ptr %freshp, ptr %oldp, i64 %usedbytes)\n"
+        + "  br label %installed\n"
+        + "installed:\n"
+        + "  store i64 %fresh, ptr %datap\n"
+        + "  store i64 %newcap, ptr %capp\n"
+        + "  br label %place\n"
+        + "place:\n"
+        + "  %data = load i64, ptr %datap\n"
+        + "  %dp = inttoptr i64 %data to ptr\n"
+        + "  %offset = mul i64 %len, %elem\n"
+        + "  %slot = getelementptr i64, ptr %dp, i64 %offset\n"
+        + "  %wide = icmp sgt i64 %elem, 1\n"
+        + "  br i1 %wide, label %copy, label %store_one\n"
+        + "copy:\n"
+        + "  %vp = inttoptr i64 %value to ptr\n"
+        + "  %vbytes = mul i64 %elem, 8\n"
+        + "  %copied = call ptr @memcpy(ptr %slot, ptr %vp, i64 %vbytes)\n"
+        + "  br label %done\n"
+        + "store_one:\n"
+        + "  store i64 %value, ptr %slot\n"
+        + "  br label %done\n"
+        + "done:\n"
+        + "  %next = add i64 %len, 1\n"
+        + "  store i64 %next, ptr %p\n"
+        + "  ret i64 %next\n\}\n\n"
+        + "define i64 @burxt.truncate(i64 %xs, i64 %n) \{\n"
+        + "entry:\n"
+        + "  %p = inttoptr i64 %xs to ptr\n"
+        + "  %len = load i64, ptr %p\n"
+        + "  %shorter = icmp slt i64 %n, %len\n"
+        + "  %answer = select i1 %shorter, i64 %n, i64 %len\n"
+        + "  store i64 %answer, ptr %p\n"
+        + "  ret i64 %answer\n\}\n\n"
+        + "define i64 @burxt.array_len(i64 %xs) \{\n"
+        + "entry:\n"
+        + "  %p = inttoptr i64 %xs to ptr\n"
+        + "  %len = load i64, ptr %p\n"
+        + "  ret i64 %len\n\}\n\n"
+        // The address of element i, bounds-checked against the LENGTH — not the
+        // capacity, which is an implementation detail no program can see.
+        + "define i64 @burxt.slot(i64 %xs, i64 %i) \{\n"
+        + "entry:\n"
+        + "  %p = inttoptr i64 %xs to ptr\n"
+        + "  %len = load i64, ptr %p\n"
+        + "  call void @burxt.bounds(i64 %i, i64 %len)\n"
+        + "  %datap = getelementptr i64, ptr %p, i64 2\n"
+        + "  %elemp = getelementptr i64, ptr %p, i64 3\n"
+        + "  %data = load i64, ptr %datap\n"
+        + "  %elem = load i64, ptr %elemp\n"
+        + "  %offset = mul i64 %i, %elem\n"
+        + "  %dp = inttoptr i64 %data to ptr\n"
+        + "  %slot = getelementptr i64, ptr %dp, i64 %offset\n"
+        + "  %answer = ptrtoint ptr %slot to i64\n"
+        + "  ret i64 %answer\n\}\n\n"
+        // The driver's four: the arguments the program was started with, and the two
+        // file operations. `read_file` reads into the region, so the text it answers has
+        // the lifetime the region does — which is why it needs one open.
+        + "@burxt.argc = global i64 0\n"
+        + "@burxt.argv = global ptr null\n"
+        + "declare ptr @fopen(ptr, ptr)\n"
+        + "declare i64 @fread(ptr, i64, i64, ptr)\n"
+        + "declare i64 @fwrite(ptr, i64, i64, ptr)\n"
+        + "declare i32 @fclose(ptr)\n"
+        + "declare i32 @fseek(ptr, i64, i32)\n"
+        + "declare i64 @ftell(ptr)\n"
+        + "@mode_read = private unnamed_addr constant [2 x i8] c\"r\\00\"\n"
+        + "@mode_write = private unnamed_addr constant [2 x i8] c\"w\\00\"\n\n"
+        + "define i64 @burxt.arg_count() \{\n"
+        + "entry:\n  %n = load i64, ptr @burxt.argc\n  ret i64 %n\n\}\n\n"
+        + "define i64 @burxt.arg(i64 %i) \{\n"
+        + "entry:\n"
+        + "  %n = load i64, ptr @burxt.argc\n"
+        + "  call void @burxt.bounds(i64 %i, i64 %n)\n"
+        + "  %argv = load ptr, ptr @burxt.argv\n"
+        + "  %at = getelementptr ptr, ptr %argv, i64 %i\n"
+        + "  %s = load ptr, ptr %at\n"
+        + "  %answer = ptrtoint ptr %s to i64\n"
+        + "  ret i64 %answer\n\}\n\n"
+        + "define i64 @burxt.read_file(i64 %path) \{\n"
+        + "entry:\n"
+        + "  %p = inttoptr i64 %path to ptr\n"
+        + "  %f = call ptr @fopen(ptr %p, ptr @mode_read)\n"
+        + "  %missing = icmp eq ptr %f, null\n"
+        + "  br i1 %missing, label %nothing, label %read\n"
+        + "nothing:\n"
+        + "  %empty = call i64 @burxt.alloc(i64 1)\n"
+        + "  %ep = inttoptr i64 %empty to ptr\n"
+        + "  store i8 0, ptr %ep\n"
+        + "  ret i64 %empty\n"
+        + "read:\n"
+        + "  %sought = call i32 @fseek(ptr %f, i64 0, i32 2)\n"
+        + "  %size = call i64 @ftell(ptr %f)\n"
+        + "  %rewound = call i32 @fseek(ptr %f, i64 0, i32 0)\n"
+        + "  %room = add i64 %size, 1\n"
+        + "  %buffer = call i64 @burxt.alloc(i64 %room)\n"
+        + "  %bp = inttoptr i64 %buffer to ptr\n"
+        + "  %got = call i64 @fread(ptr %bp, i64 1, i64 %size, ptr %f)\n"
+        + "  %closed = call i32 @fclose(ptr %f)\n"
+        + "  %end = getelementptr i8, ptr %bp, i64 %got\n"
+        + "  store i8 0, ptr %end\n"
+        + "  ret i64 %buffer\n\}\n\n"
+        + "define i64 @burxt.write_file(i64 %path, i64 %text) \{\n"
+        + "entry:\n"
+        + "  %p = inttoptr i64 %path to ptr\n"
+        + "  %t = inttoptr i64 %text to ptr\n"
+        + "  %f = call ptr @fopen(ptr %p, ptr @mode_write)\n"
+        + "  %missing = icmp eq ptr %f, null\n"
+        + "  br i1 %missing, label %refused, label %write\n"
+        + "refused:\n  ret i64 0\n"
+        + "write:\n"
+        + "  %size = call i64 @strlen(ptr %t)\n"
+        + "  %written = call i64 @fwrite(ptr %t, i64 1, i64 %size, ptr %f)\n"
+        + "  %closed = call i32 @fclose(ptr %f)\n"
+        + "  ret i64 %written\n\}\n\n"
         + "define void @burxt.bounds(i64 %i, i64 %limit) \{\n"
         + "entry:\n"
         + "  %low = icmp slt i64 %i, 0\n"
@@ -4480,7 +4888,7 @@ region compile {
         path = arg(1);
     }
     let src: String = read_file(path);
-    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_fn: -1, out: "", globals: "", fn_entry: "", fn_body: "", next_tmp: 0, next_label: 0, slots: [], strings: [], loop_conds: [], loop_ends: [], in_function: 0, depth: 0, problems: 0, pos: 0, no_struct: 0, in_mul: 0, errors: 0 };
+    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_fn: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, fn_entry: "", fn_body: "", next_tmp: 0, next_label: 0, slots: [], strings: [], loop_conds: [], loop_ends: [], in_function: 0, depth: 0, problems: 0, pos: 0, no_struct: 0, in_mul: 0, errors: 0 };
     let installed: Int = unit.install_keywords();
     let total: Int = unit.run(src);
 
@@ -4529,7 +4937,7 @@ region compile {
                     + "c\"burxt runtime error: arithmetic overflow\\0A\\00\"\n"
                     + "@bounds_msg = private unnamed_addr constant [46 x i8] "
                     + "c\"burxt runtime error: index outside the array\\0A\\00\"\n"
-                    + unit.globals + "\n" + unit.out;
+                    + unit.globals + "\n" + unit.finish();
                 let wrote: Int = write_file(arg(2), text);
                 print("wrote " + arg(2) + ", " + to_string(len(text)) + " bytes of IR");
             } else {

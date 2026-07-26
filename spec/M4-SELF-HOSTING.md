@@ -33,7 +33,7 @@ language server, JSON layer or diagnostics rendering.
 | Lexer | 661 | 800–1,000 | **376, DONE** (v0.0.52) — came in under estimate |
 | AST + parser | 1,787 | 2,000–2,600 | **~930, DONE** (v0.0.53–54) — under estimate |
 | Typechecker | 3,702 | 4,500–5,500 | **~2,190**, 4b complete (v0.0.64) |
-| Backend (IR text) | 3,924 | 2,500–3,500 | **~1,000, slices 1–3 running** (v0.0.67) |
+| Backend (IR text) | 3,924 | 2,500–3,500 | **~1,400, self-compiling** (v0.0.68) |
 | Driver | 230 | ~150 | 0 |
 | **Total** | | **≈10,000–12,500** | ~680 of real front-end work |
 
@@ -298,9 +298,55 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
    `open_fn` clears — `llc` caught it as an undefined `@burxt.bounds`. Module-level text
    now has its own way out.
 
-   Still to emit: growable arrays with `push` and `truncate` (the last piece bootstrap
-   waits on), methods, Decimals and their rounding, `match`, `tail` with `musttail`,
-   contracts, and the FFI boundary.
+   **Slice 4 SHIPPED (v0.0.68): growable arrays, methods, aggregate returns, and the
+   driver builtins — and with them, stage-1 emits its own source.**
+   - A growable array is a **four-cell header** in the region: length, capacity, the data
+     pointer, and the ELEMENT WIDTH in cells. The width is stored rather than baked into
+     each call, so one `push` serves scalars and structs both — it copies eight bytes or
+     the whole element depending on what the header says. Growth doubles from eight, and
+     `burxt.slot` bounds-checks against the LENGTH, never the capacity, which is an
+     implementation detail no program can see.
+   - A method is a function whose first parameter is the receiver, and the two spellings
+     mean what they say: `mut self` is handed the address and writes through it, plain
+     `self` gets a copy. The symbol is `Type.method`, because two types may both have a
+     `label`.
+   - An **aggregate return travels through the caller's storage**: the caller hands over
+     a pointer as the first argument and the callee copies into it. Returning a pointer
+     into the callee's own frame would dangle, so this is not an optimisation but the
+     only correct shape.
+   - The driver's four — `arg`, `arg_count`, `read_file`, `write_file` — with argc and
+     argv recorded once where they arrive, and `read_file` reading into the region, so
+     the text it answers lives exactly as long as the region does.
+
+## 3a. The bootstrap, as far as it goes (v0.0.68)
+
+**stage-1 emits IR for its own 4,948 lines with zero refusals — 1.14 MB of it — and that
+IR becomes a program, stage-2, which answers exactly what stage-1 answers.** Checked by
+`stage_1_compiles_itself_into_a_working_compiler`. stage-2 then lexes AND parses stage-1's
+own source with **zero errors**, and dies inside the checker with a bounds panic. That
+last bug, and the byte-identical fixpoint behind it, is what phase 6 is now.
+
+Three defects found on the way, each one only findable by running:
+
+1. **`||` was emitted as `and`.** The parser records the operator's BYTE (124 for `|`,
+   38 for `&`), not the token kind, and the emitter read it as a token kind. The first
+   test to exercise it agreed with stage-0 *by accident* — `5 != 5 || false` is false
+   either way — and what caught it was a predicate over letters: stage-2's lexer replied
+   "byte 108 starts no token" to every letter in the file. A test can pass for the wrong
+   reason, and only a second program disagreeing shows it.
+2. **String `==` compared pointers.** `icmp eq` on two i64s holding pointers is true only
+   when two Strings are the same object — a bug that reads as a working program right up
+   until two equal Strings are built separately. Equality now calls `strcmp`.
+3. **The string builder was quadratic**, and exhausted a **1 GB** region while emitting
+   1.1 MB of text: `a = a + b` copies the whole left side, so fifty thousand appends copy
+   gigabytes. Output now accumulates in bounded chunks, joined once. The real fix is a
+   byte buffer that grows in place, which needs a builtin to write one — recorded as a
+   cost, not pretended away. (Stage-0's exhaustion message still claimed 64 MB, four
+   versions after the reservation became 1 GB. Corrected.)
+
+   Still to emit: Decimals and their rounding, `match`, `tail` with `musttail`, contracts,
+   and the FFI boundary — none of which stage-1's own source uses, which is why the
+   bootstrap can be reached before them.
 6. **Bootstrap and fixpoint.** stage-0 builds stage-1; stage-1 builds stage-1;
    compare.
 

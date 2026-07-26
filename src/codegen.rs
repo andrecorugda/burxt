@@ -3258,7 +3258,7 @@ impl<'ctx> CodeGen<'ctx> {
 
         self.builder.position_at_end(full_bb);
         self.build_panic(
-            "burxt runtime error: region memory exhausted — this build reserves 64 MB \
+            "burxt runtime error: region memory exhausted — this build reserves 1 GB \
              per process for region allocation\n",
         )?;
 

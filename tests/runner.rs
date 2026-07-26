@@ -1286,3 +1286,81 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
     );
     assert_eq!(code, Some(70), "a named runtime failure exits 70");
 }
+
+/// The bootstrap, as far as it goes today: stage-1 (the Burxt compiler, compiled by the
+/// Rust one) emits LLVM IR for ITS OWN source with no refusals, that IR becomes a
+/// program — stage-2 — and stage-2 answers exactly what stage-1 answers for the same
+/// input. The fixpoint (stage-2 emitting byte-identical IR for stage-1's source) is not
+/// reached yet: stage-2 lexes and parses its own 4,900 lines and then dies in the
+/// checker, which is the bug this test will grow to cover.
+#[test]
+fn stage_1_compiles_itself_into_a_working_compiler() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    if !llc.exists() {
+        eprintln!("skipping: {} is not installed", llc.display());
+        return;
+    }
+    let scratch = scratch_dir("bootstrap");
+    fs::create_dir_all(&scratch).unwrap();
+    assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("examples/stage1.bx"))
+        .current_dir(&scratch)
+        .status()
+        .expect("burxt")
+        .success());
+
+    // stage-1 emits its own source. "backend refusals" in the output would mean a
+    // construct it cannot lower, and there must be none.
+    let ll = scratch.join("self.ll");
+    let emitted = Command::new(scratch.join("stage1"))
+        .arg(root.join("examples/stage1.bx"))
+        .arg(&ll)
+        .current_dir(&scratch)
+        .output()
+        .expect("stage-1");
+    let said = String::from_utf8_lossy(&emitted.stdout).to_string();
+    assert!(
+        said.contains("bytes of IR") && !said.contains("backend refusals"),
+        "stage-1 could not emit its own source:\n{}",
+        said
+    );
+
+    let obj = scratch.join("self.o");
+    let compiled = Command::new(llc)
+        .args(["-relocation-model=pic", "-filetype=obj", "-o"])
+        .arg(&obj)
+        .arg(&ll)
+        .output()
+        .expect("llc");
+    assert!(
+        compiled.status.success(),
+        "llc rejected the self-compiled IR:\n{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let stage2 = scratch.join("stage2");
+    assert!(Command::new("cc")
+        .arg("-o")
+        .arg(&stage2)
+        .arg(&obj)
+        .status()
+        .expect("cc")
+        .success());
+
+    // The two compilers must answer the same thing for the same program.
+    let sample = scratch.join("sample.bx");
+    fs::write(
+        &sample,
+        "let mut i: Int = 0;\nwhile i < 3 {\n  print(i * 2);\n  i = i + 1;\n}\n         print(true);\n",
+    )
+    .unwrap();
+    let one = Command::new(scratch.join("stage1")).arg(&sample).output().expect("stage-1");
+    let two = Command::new(&stage2).arg(&sample).output().expect("stage-2");
+    let _ = fs::remove_dir_all(&scratch);
+    assert_eq!(
+        String::from_utf8_lossy(&one.stdout),
+        String::from_utf8_lossy(&two.stdout),
+        "stage-2 disagreed with stage-1 about the same program"
+    );
+}
