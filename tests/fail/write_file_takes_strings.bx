@@ -1,0 +1,1 @@
+print(write_file("out.txt", 7));

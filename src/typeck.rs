@@ -49,6 +49,12 @@ pub enum TypedExprKind {
     /// Negation of a non-literal (literals are folded at check time).
     Neg(Box<TypedExpr>),
     Not(Box<TypedExpr>),
+    /// `arg_count()` and `arg(n)` — the command line. A compiler needs to know which
+    /// file it was asked to compile.
+    ArgCount,
+    Arg(Box<TypedExpr>),
+    /// `write_file(path, contents)` — how a backend emits anything.
+    WriteFile { path: Box<TypedExpr>, contents: Box<TypedExpr> },
     /// `substring(s, at, len)` — a copy of part of a String, in the current region.
     Substring { source: Box<TypedExpr>, at: Box<TypedExpr>, len: Box<TypedExpr> },
     /// `div_floor`, `div_trunc` or `rem` on two Ints. Three names rather than one
@@ -743,7 +749,7 @@ impl TypeChecker {
             if self.fns.contains_key(&f.name) {
                 return Err(format!("function `{}` is defined twice", f.name));
             }
-            if f.name == "len" || f.name == "byte_at" || f.name == "push" || f.name == "read_file" || f.name == "to_string" || f.name == "old" || f.name == "substring" || f.name == "div_floor" || f.name == "div_trunc" || f.name == "rem" {
+            if f.name == "len" || f.name == "byte_at" || f.name == "push" || f.name == "read_file" || f.name == "to_string" || f.name == "old" || f.name == "substring" || f.name == "write_file" || f.name == "arg" || f.name == "arg_count" || f.name == "div_floor" || f.name == "div_trunc" || f.name == "rem" {
                 return Err(format!(
                     "the name `{}` is reserved for a built-in",
                     f.name
@@ -1277,7 +1283,7 @@ impl TypeChecker {
     /// function returns.
     fn check_extern(&self, e: &ExternFn) -> Result<(), String> {
         const RESERVED: [&str; 6] = ["printf", "fprintf", "fputs", "exit", "stderr", "main"];
-        if e.name == "len" || e.name == "byte_at" || e.name == "push" || e.name == "read_file" || e.name == "to_string" || e.name == "old" || e.name == "substring" || e.name == "div_floor" || e.name == "div_trunc" || e.name == "rem" {
+        if e.name == "len" || e.name == "byte_at" || e.name == "push" || e.name == "read_file" || e.name == "to_string" || e.name == "old" || e.name == "substring" || e.name == "write_file" || e.name == "arg" || e.name == "arg_count" || e.name == "div_floor" || e.name == "div_trunc" || e.name == "rem" {
             return Err(format!("the name `{}` is reserved for a built-in", e.name));
         }
         if RESERVED.contains(&e.name.as_str()) {
@@ -2498,6 +2504,57 @@ impl TypeChecker {
                 // region. A builtin rather than user FFI because the result must
                 // be region-allocated to be escape-checked; a raw `extern` that
                 // returned a pointer could not be.
+                // The command line, and writing a file: between them, a program can be
+                // a compiler rather than a demonstration.
+                if name == "arg_count" {
+                    if !args.is_empty() {
+                        return Err("arg_count() takes no arguments".to_string());
+                    }
+                    return Ok(TypedExpr { ty: Type::Int, kind: TypedExprKind::ArgCount });
+                }
+                if name == "arg" {
+                    if args.len() != 1 {
+                        return Err("arg(n) takes one Int".to_string());
+                    }
+                    let index = self.check_expr(&args[0], Some(&Type::Int))?;
+                    if index.ty != Type::Int {
+                        return Err(format!(
+                            "arg(n) takes an Int, but this has type {}",
+                            index.ty
+                        ));
+                    }
+                    // No region: the C runtime's argument strings outlive the program,
+                    // so this borrows rather than copies.
+                    return Ok(TypedExpr {
+                        ty: Type::String,
+                        kind: TypedExprKind::Arg(Box::new(index)),
+                    });
+                }
+                if name == "write_file" {
+                    if args.len() != 2 {
+                        return Err("write_file(path, contents) takes two Strings".to_string());
+                    }
+                    let path = self.check_expr(&args[0], Some(&Type::String))?;
+                    let contents = self.check_expr(&args[1], Some(&Type::String))?;
+                    for (which, side) in [("path", &path), ("contents", &contents)] {
+                        if side.ty != Type::String {
+                            return Err(format!(
+                                "write_file(...) takes a String {}, but this has type {}",
+                                which, side.ty
+                            ));
+                        }
+                    }
+                    if let Some(why) = self.impure("write a file") {
+                        return Err(why);
+                    }
+                    return Ok(TypedExpr {
+                        ty: Type::Int,
+                        kind: TypedExprKind::WriteFile {
+                            path: Box::new(path),
+                            contents: Box::new(contents),
+                        },
+                    });
+                }
                 // `substring(s, at, len)` — the primitive a symbol table needs. A
                 // lexer can already compare a span against a literal byte by byte;
                 // what it could not do was KEEP the text, which is what a table of

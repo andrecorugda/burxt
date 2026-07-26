@@ -1,0 +1,1 @@
+print(arg_count(1));

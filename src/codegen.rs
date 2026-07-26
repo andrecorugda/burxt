@@ -116,6 +116,8 @@ pub struct CodeGen<'ctx> {
     /// function: every `return` has to check them, and the check needs both the
     /// clause and the name to write its message.
     current_ensures: Vec<(crate::typeck::TypedContract, String)>,
+    /// argc and argv, stashed by `main` so any function can read them
+    args: Option<(inkwell::values::GlobalValue<'ctx>, inkwell::values::GlobalValue<'ctx>)>,
     /// the bump-cursor mark of the region currently open, so a `return` from
     /// inside it releases the region on the way out. One level, per M1.
     region_mark: Option<IntValue<'ctx>>,
@@ -163,6 +165,7 @@ impl<'ctx> CodeGen<'ctx> {
             vtables: HashMap::new(),
             trait_slots: HashMap::new(),
             current_sret: None,
+            args: None,
             region_mark: None,
             current_ensures: Vec::new(),
             loop_stack: Vec::new(),
@@ -304,12 +307,29 @@ impl<'ctx> CodeGen<'ctx> {
             self.gen_method(m)?;
         }
 
-        // define: i32 @main()
-        let main_ty = i32t.fn_type(&[], false);
+        // define: i32 @main(i32 %argc, ptr %argv)
+        //
+        // Taken even by programs that never look at them: a compiler needs to know
+        // which file it was asked to compile, and the C runtime only offers that here.
+        let ptr_ty = self.ctx.ptr_type(AddressSpace::default());
+        let main_ty = i32t.fn_type(&[i32t.into(), ptr_ty.into()], false);
         let main_fn = self.module.add_function("main", main_ty, None);
         let entry = self.ctx.append_basic_block(main_fn, "entry");
         self.builder.position_at_end(entry);
         self.vars.clear();
+
+        let (argc_g, argv_g) = self.args_globals();
+        let argc = main_fn.get_nth_param(0).unwrap().into_int_value();
+        let argc64 = self
+            .builder
+            .build_int_s_extend(argc, self.ctx.i64_type(), "argc64")
+            .map_err(|e| e.to_string())?;
+        self.builder
+            .build_store(argc_g.as_pointer_value(), argc64)
+            .map_err(|e| e.to_string())?;
+        self.builder
+            .build_store(argv_g.as_pointer_value(), main_fn.get_nth_param(1).unwrap())
+            .map_err(|e| e.to_string())?;
 
         for stmt in &prog.stmts {
             self.gen_stmt(stmt)?;
@@ -1294,6 +1314,16 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_int_z_extend(b, i64t, "byte_i64")
                     .map(Into::into)
                     .map_err(|e| e.to_string())
+            }
+            TypedExprKind::ArgCount => self.build_arg_count().map(Into::into),
+            TypedExprKind::Arg(index) => {
+                let i = self.gen_expr(index)?.into_int_value();
+                self.build_arg(i).map(Into::into)
+            }
+            TypedExprKind::WriteFile { path, contents } => {
+                let p = self.gen_expr(path)?.into_pointer_value();
+                let c = self.gen_expr(contents)?.into_pointer_value();
+                self.build_write_file(p, c).map(Into::into)
             }
             TypedExprKind::Substring { source, at, len } => {
                 let bytes = self.gen_expr(source)?.into_pointer_value();
@@ -2552,6 +2582,157 @@ impl<'ctx> CodeGen<'ctx> {
         *self.heap.insert((base, next))
     }
 
+    /// Where `main` stashed its arguments, so `arg_count()` and `arg(n)` can read
+    /// them from anywhere in the program.
+    fn args_globals(
+        &mut self,
+    ) -> (
+        inkwell::values::GlobalValue<'ctx>,
+        inkwell::values::GlobalValue<'ctx>,
+    ) {
+        if let Some(g) = self.args {
+            return g;
+        }
+        let i64t = self.ctx.i64_type();
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+        let argc = self.module.add_global(i64t, None, "burxt.argc");
+        argc.set_initializer(&i64t.const_zero());
+        let argv = self.module.add_global(ptr, None, "burxt.argv");
+        argv.set_initializer(&ptr.const_null());
+        *self.args.insert((argc, argv))
+    }
+
+    /// `arg(n)` — the n-th command-line argument, bounds-checked.
+    ///
+    /// No allocation: the C runtime's strings outlive the program, so this hands back
+    /// a borrowed pointer that is already NUL-terminated. That is why it needs no
+    /// region, unlike everything else that produces a String.
+    fn build_arg(&mut self, index: IntValue<'ctx>) -> Result<PointerValue<'ctx>, String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+        let (argc_g, argv_g) = self.args_globals();
+        let argc = self
+            .builder
+            .build_load(i64t, argc_g.as_pointer_value(), "argc")
+            .map_err(err)?
+            .into_int_value();
+        let checked = self.build_checked_arg_index(index, argc)?;
+        let argv = self
+            .builder
+            .build_load(ptr, argv_g.as_pointer_value(), "argv")
+            .map_err(err)?
+            .into_pointer_value();
+        let slot = unsafe { self.builder.build_gep(ptr, argv, &[checked], "argslot") }.map_err(err)?;
+        self.builder
+            .build_load(ptr, slot, "arg")
+            .map(|v| v.into_pointer_value())
+            .map_err(err)
+    }
+
+    fn build_arg_count(&mut self) -> Result<IntValue<'ctx>, String> {
+        let (argc_g, _) = self.args_globals();
+        self.builder
+            .build_load(self.ctx.i64_type(), argc_g.as_pointer_value(), "argc")
+            .map(|v| v.into_int_value())
+            .map_err(|e| e.to_string())
+    }
+
+    /// The same shape as every other bounds check, with a message about arguments.
+    fn build_checked_arg_index(
+        &mut self,
+        i: IntValue<'ctx>,
+        n: IntValue<'ctx>,
+    ) -> Result<IntValue<'ctx>, String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        use inkwell::IntPredicate::*;
+        let i64t = self.ctx.i64_type();
+        let neg = self.builder.build_int_compare(SLT, i, i64t.const_zero(), "neg").map_err(err)?;
+        let big = self.builder.build_int_compare(SGE, i, n, "too_big").map_err(err)?;
+        let bad = self.builder.build_or(neg, big, "oob").map_err(err)?;
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_parent())
+            .ok_or("codegen bug: arg() outside a function")?;
+        let broken = self.ctx.append_basic_block(function, "arg_oob");
+        let ok = self.ctx.append_basic_block(function, "arg_ok");
+        self.builder.build_conditional_branch(bad, broken, ok).map_err(err)?;
+
+        self.builder.position_at_end(broken);
+        let fprintf = self.fprintf_fn();
+        let (stderr_g, _, exit) = self.panic_deps();
+        let fmt = self.global_str(
+            "burxt runtime error: arg(%lld) does not exist — this program was given \
+             %lld arguments (0 is its own name)\n",
+            "fmt_arg_oob",
+        );
+        let stream = self.load_stderr(stderr_g)?;
+        let args: Vec<BasicMetadataValueEnum> = vec![stream.into(), fmt.into(), i.into(), n.into()];
+        self.builder.build_call(fprintf, &args, "fprintf").map_err(err)?;
+        self.build_exit70(exit)?;
+
+        self.builder.position_at_end(ok);
+        Ok(i)
+    }
+
+    /// `write_file(path, contents)` — the whole String, replacing whatever was there.
+    /// Returns the number of bytes written, so a caller can check.
+    fn build_write_file(
+        &mut self,
+        path: PointerValue<'ctx>,
+        contents: PointerValue<'ctx>,
+    ) -> Result<IntValue<'ctx>, String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+        let i32t = self.ctx.i32_type();
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+        let fopen = self.libc("fopen", ptr.fn_type(&[ptr.into(), ptr.into()], false));
+        let fwrite = self.libc(
+            "fwrite",
+            i64t.fn_type(&[ptr.into(), i64t.into(), i64t.into(), ptr.into()], false),
+        );
+        let fclose = self.libc("fclose", i32t.fn_type(&[ptr.into()], false));
+
+        let mode = self.global_str("wb", "mode_wb");
+        let handle = self
+            .builder
+            .build_call(fopen, &[path.into(), mode.into()], "out")
+            .map_err(err)?;
+        let file = match handle.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => v.into_pointer_value(),
+            _ => return Err("fopen returned void".to_string()),
+        };
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_parent())
+            .ok_or("codegen bug: write_file outside a function")?;
+        let missing = self.ctx.append_basic_block(function, "cannot_write");
+        let opened = self.ctx.append_basic_block(function, "opened");
+        let is_null = self.builder.build_is_null(file, "no_handle").map_err(err)?;
+        self.builder.build_conditional_branch(is_null, missing, opened).map_err(err)?;
+
+        self.builder.position_at_end(missing);
+        self.build_panic("burxt runtime error: cannot open file for writing\n")?;
+
+        self.builder.position_at_end(opened);
+        let count = self.build_str_len(contents)?;
+        let written = self
+            .builder
+            .build_call(
+                fwrite,
+                &[contents.into(), i64t.const_int(1, false).into(), count.into(), file.into()],
+                "written",
+            )
+            .map_err(err)?;
+        self.builder.build_call(fclose, &[file.into()], "close").map_err(err)?;
+        match written.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => Ok(v.into_int_value()),
+            _ => Err("fwrite returned void".to_string()),
+        }
+    }
+
     /// Concatenate two strings into the current region. The result is
     /// NUL-terminated so it remains a plain `const char*` at the FFI boundary,
     /// exactly like a literal.
@@ -2936,7 +3117,15 @@ impl<'ctx> CodeGen<'ctx> {
         if let Some(f) = self.alloc_fn {
             return Ok(f);
         }
-        const CHUNK: u64 = 64 * 1024 * 1024;
+        // One reservation, sized for the workload this language is heading toward: a
+        // self-hosted compiler holds an arena of AST nodes, a symbol table and every
+        // interned name for one whole compile inside a single region. 64 MB was
+        // comfortable for test programs and would not survive that.
+        //
+        // The cost is virtual, not resident: `malloc` of this size hands back lazily
+        // mapped pages, so a program that touches a kilobyte pays for a kilobyte.
+        // Exhaustion is still a named error rather than an overrun.
+        const CHUNK: u64 = 1024 * 1024 * 1024;
         let err = |e: inkwell::builder::BuilderError| e.to_string();
         let saved = self.builder.get_insert_block();
         let (base, next) = self.heap_globals();

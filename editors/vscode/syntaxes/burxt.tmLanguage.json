@@ -262,7 +262,7 @@
         {
           "comment": "Built-in functions. `print` is a statement keyword; the rest are calls.",
           "name": "support.function.builtin.burxt",
-          "match": "\\b(print|len|byte_at|push|read_file|to_string|old|div_floor|div_trunc|rem|substring)\\b"
+          "match": "\\b(print|len|byte_at|push|read_file|to_string|old|div_floor|div_trunc|rem|substring|write_file|arg|arg_count)\\b"
         }
       ]
     },

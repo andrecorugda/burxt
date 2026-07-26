@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.50)
+# Burxt — Design Notes (v0.0.51)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -2461,6 +2461,42 @@ So there are now two questions asked of a statement: *does control leave it*
 (`stmt_returns`, used for the return-path proof). A test asserts the second still
 refuses a function that ends in `break`.
 
+### v0.0.51: the primitives that make a program a tool
+
+Phase 1 of `spec/M4-SELF-HOSTING.md`, which is now the plan of record with measured
+numbers in it rather than an intention.
+
+**`arg_count()` and `arg(n)`.** A compiler has to know which file it was asked to
+compile, and the C runtime only offers that to `main` — so `main` now takes `argc` and
+`argv` and stashes them where any function can read them. `arg(n)` is bounds-checked
+like everything else, and needs **no region**: the runtime's argument strings outlive
+the program, so it borrows rather than copies. That is the first String-producing
+builtin that does not allocate, and the reason is worth stating rather than looking
+like an oversight.
+
+**`write_file(path, contents)`** returns the number of bytes written, so a caller can
+check rather than hope. Refused inside a `pure` function, for the reason every effect
+is: a function whose result depends only on its arguments does not leave marks.
+
+**A region a compiler can live in.** The bump allocator's chunk went from 64 MB to
+1 GB. Stage-1 holds an arena of AST nodes, a symbol table and every interned name for
+one whole compile inside a single region, and 64 MB would not have survived it. The
+cost is **virtual, not resident** — `malloc` of that size hands back lazily mapped
+pages, so a program that touches a kilobyte pays for a kilobyte. Exhaustion is still a
+named error rather than an overrun.
+
+**And the plan itself is now in the repository**, with the sizes measured from the
+Rust compiler (11.5k lines; stage-1 needs ~10–12.5k of Burxt), the phases, the public
+milestone at the end of phase 4, and the risks named — including the one that quietly
+kills bootstraps, which v0.0.50 verified is absent: three compiles of the same file
+produce byte-identical IR, and no HashMap is iterated to produce output.
+
+The spec also records the decision that makes the backend feasible at all: **stage-1
+emits textual LLVM IR.** It cannot drive LLVM's C API, because `extern fn` returns are
+`Int`/`CInt` only — Burxt refuses to receive a pointer whose ownership it cannot
+describe, so an `LLVMBuilderRef` is unreachable *by construction*. Emitting text is
+simpler anyway: string formatting instead of a builder, and output you can diff.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -2525,6 +2561,9 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- M4 phase 1 (v0.0.51): `arg`, `arg_count`, `write_file`, and a 1 GB lazily-mapped
+  region — the primitives a self-hosted compiler cannot start without. Plan of record:
+  `spec/M4-SELF-HOSTING.md`.
 - A5.0b. `break` and `continue` (v0.0.50), with the region-release rule a jump out of
   a loop needs. Deferred since v0.0.11 until three self-hosted programs worked around
   their absence.

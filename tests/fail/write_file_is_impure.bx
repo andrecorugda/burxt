@@ -1,0 +1,4 @@
+pure fn save(text: String) -> Int {
+    return write_file("out.txt", text);
+}
+print(save("x"));

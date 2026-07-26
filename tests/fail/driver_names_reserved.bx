@@ -1,0 +1,2 @@
+fn arg(n: Int) -> String { return "x"; }
+print(arg(0));
