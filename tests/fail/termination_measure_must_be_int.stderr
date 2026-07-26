@@ -1,0 +1,1 @@
+a termination measure must be an Int, but `x` has type Decimal<2>

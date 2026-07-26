@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.44)
+# Burxt — Design Notes (v0.0.45)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -2159,6 +2159,63 @@ failure.** `grep -c` was chosen to keep output short, and it removed the one
 distinction that mattered. The suite has a rule about this for the language — errors
 must name themselves — and I broke it in my own tooling.
 
+### v0.0.45: `decreases` — termination the compiler checks (NOVELTY §5)
+
+```text
+fn sum_to(n: Int, acc: Int) -> Int
+    decreases n
+{
+    if n <= 0 { return acc; }
+    return tail sum_to(n - 1, acc + n);
+}
+```
+
+The register pairs §5 with §3 exactly: **one says the answer is right, the other says
+an answer arrives.** A `decreases` measure names a quantity that must shrink on every
+recursive call — and an infinite loop in a payment processor is a real failure mode
+that nothing else checks for.
+
+**The design decision that made this small: check at the CALL SITE.** At a recursive
+call the measure is evaluated *with the new arguments* and compared against the
+calling invocation's measure. Both are known right there.
+
+The obvious alternative — each invocation recording its measure for the next one to
+read — needs per-invocation state that must be restored on the way out, and **a
+guaranteed tail call has no way out to restore from**: the frame is gone. Checking at
+the call site works with `return tail` for free, needs no global state, and is correct
+at any depth. Two of my own features would otherwise have collided.
+
+**And the substitution costs nothing.** The measure is written in terms of the
+parameters, so evaluating it for the callee means binding the parameter names to the
+argument values and generating the same expression again. No rewriting, no
+substitution pass over the AST — just a shadowed scope around one `gen_expr`.
+
+**Two conditions, because one is not enough.** Strictly smaller at every call (equal
+is how a loop that never ends looks), and never negative — a measure that can fall
+below zero is not a ladder to the floor, it is a hole.
+
+**The measure must be an `Int`**, and the error says why: a `Decimal` measure can
+shrink forever without arriving — `1.00`, `0.50`, `0.25` — which is precisely the
+failure the clause exists to rule out.
+
+**A bug avoided, and worth recording because it nearly shipped.** The measure check
+needs the *Burxt* argument values, while the call already had ABI-shaped ones
+(truncated `CInt`s, converted doubles, an `sret` slot occupying index 0). My first
+version simply generated the arguments a second time for the measure — which would
+have run their **side effects twice**. Now each argument is generated once and kept in
+both shapes.
+
+Refused with reasons rather than silence: a non-recursive function with a measure (a
+claim with nothing to check reads as if it meant something), two measures (that would
+be a lexicographic measure, which is not built), an impure measure, and `decreases` on
+a method — one step behind contracts on methods, which shipped last version.
+
+**Honest limit, stated in the clause's own spec:** direct recursion only. `f` → `g` →
+`f` is not checked, because the two would need a shared measure and there is nothing
+to compare `g`'s state against.
+
+Spec: `spec/N5-TERMINATION.md`.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -2223,6 +2280,8 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- N5. Termination measures (v0.0.45): `decreases`, checked at every recursive call
+  site — which is what makes it work with guaranteed tail calls. NOVELTY §5.
 - A5a. `old(...)` and method contracts (v0.0.44): NOVELTY §3's conservation laws,
   checked at runtime with the law quoted on failure.
 - A5. Contracts, slice 1 (v0.0.43): `requires` / `ensures` checked at runtime, the

@@ -1,0 +1,1 @@
+`f` never calls itself, so `decreases n` has nothing to check

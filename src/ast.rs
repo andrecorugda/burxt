@@ -369,6 +369,10 @@ pub struct FnDef {
     pub requires: Vec<Contract>,
     /// Postconditions, checked before every return. `result` is in scope.
     pub ensures: Vec<Contract>,
+    /// A termination measure: an Int that must strictly shrink at every recursive
+    /// call and never be negative. One says the answer is right; this says an
+    /// answer arrives.
+    pub decreases: Option<Contract>,
     pub body: Vec<Stmt>,
     /// Where this item was written, for errors about the item itself.
     pub span: Span,

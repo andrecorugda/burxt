@@ -1,0 +1,32 @@
+// `decreases` names a quantity that must shrink on every recursive call. An
+// infinite loop in a payment processor is a real failure mode, and nothing else
+// checks for it.
+fn sum_to(n: Int, acc: Int) -> Int
+    decreases n
+{
+    if n <= 0 { return acc; }
+    return tail sum_to(n - 1, acc + n);
+}
+
+// Non-tail recursion, and all four signature markers on one function.
+pure fn countdown(n: Int) -> Int
+    requires n >= 0
+    ensures result == 0
+    decreases n
+{
+    if n == 0 { return 0; }
+    return countdown(n - 1);
+}
+
+// The measure can be an expression over the parameters, not just one of them.
+fn walk(from: Int, to: Int) -> Int
+    decreases to - from
+{
+    if from >= to { return from; }
+    return walk(from + 1, to);
+}
+
+print(sum_to(100, 0));
+print(sum_to(1000000, 0));
+print(countdown(500));
+print(walk(0, 40));

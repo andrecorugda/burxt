@@ -43,6 +43,9 @@ pub enum Token {
     Requires,
     /// `ensures <bool>` — a postcondition, checked before every return.
     Ensures,
+    /// `decreases <Int>` — a termination measure: it must shrink on every
+    /// recursive call, and never go negative.
+    Decreases,
     If,
     Else,
     While,
@@ -135,6 +138,7 @@ impl Token {
             Token::Pure => "`pure`".to_string(),
             Token::Requires => "`requires`".to_string(),
             Token::Ensures => "`ensures`".to_string(),
+            Token::Decreases => "`decreases`".to_string(),
             Token::If => "`if`".to_string(),
             Token::Else => "`else`".to_string(),
             Token::While => "`while`".to_string(),
@@ -619,6 +623,7 @@ impl<'a> Lexer<'a> {
             "pure" => Token::Pure,
             "requires" => Token::Requires,
             "ensures" => Token::Ensures,
+            "decreases" => Token::Decreases,
             "if" => Token::If,
             "else" => Token::Else,
             "true" => Token::True,

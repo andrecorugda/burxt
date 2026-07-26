@@ -97,6 +97,14 @@ pub struct CodeGen<'ctx> {
     /// the hidden sret pointer of the function being generated, if it returns
     /// an aggregate
     current_sret: Option<PointerValue<'ctx>>,
+    /// The termination measure of the function being generated: its slot (holding
+    /// this invocation's value), the measure expression, the parameter names it is
+    /// written in terms of, the clause text, and the function's name.
+    ///
+    /// The parameter names are the whole trick: at a recursive call, binding them to
+    /// the ARGUMENTS and re-evaluating the measure gives the callee's measure without
+    /// rewriting a single expression.
+    current_measure: Option<MeasureState<'ctx>>,
     /// One slot per `old(...)` expression in the function being generated, filled
     /// on entry. A clause reads the slot rather than re-evaluating, which is the
     /// point: the value has to be the one from BEFORE the body ran.
@@ -155,6 +163,7 @@ impl<'ctx> CodeGen<'ctx> {
             region_mark: None,
             current_ensures: Vec::new(),
             old_slots: Vec::new(),
+            current_measure: None,
             struct_types: HashMap::new(),
             struct_fields: HashMap::new(),
             enum_types: HashMap::new(),
@@ -346,6 +355,7 @@ impl<'ctx> CodeGen<'ctx> {
         }
 
         self.gen_contract_prologue(&f.requires, &f.ensures, &f.olds, &f.name)?;
+        self.gen_measure_prologue(f)?;
 
         for stmt in &f.body {
             self.gen_stmt(stmt)?;
@@ -353,6 +363,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.current_sret = None;
         self.current_ensures.clear();
         self.old_slots.clear();
+        self.current_measure = None;
         // The typechecker proved every path ends in `return`, so the current
         // block is already terminated — no fallthrough ret is needed.
         Ok(())
@@ -659,10 +670,15 @@ impl<'ctx> CodeGen<'ctx> {
                     .user_fns
                     .get(name.as_str())
                     .ok_or_else(|| format!("codegen bug: unknown function {}", name))?;
-                let mut vals: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
+                let mut plain: Vec<BasicValueEnum> = Vec::new();
                 for a in args {
-                    vals.push(self.gen_expr(a)?.into());
+                    plain.push(self.gen_expr(a)?);
                 }
+                // Before the call, because after it there is no frame to be in: a
+                // guaranteed tail call replaces this one.
+                self.gen_measure_check(name, &plain)?;
+                let vals: Vec<inkwell::values::BasicMetadataValueEnum> =
+                    plain.iter().map(|v| (*v).into()).collect();
                 let call = self
                     .builder
                     .build_call(f, &vals, "tailcall")
@@ -1482,15 +1498,25 @@ impl<'ctx> CodeGen<'ctx> {
                     _ => None,
                 };
 
+                // Kept alongside `vals` so a recursive call can re-evaluate the
+                // termination measure with these arguments. `vals` holds ABI-shaped
+                // values (truncated CInts, doubles); the measure needs the Burxt
+                // ones, and an sret slot at index 0 would misalign the parameters.
+                let mut plain: Vec<BasicValueEnum> = Vec::new();
                 for (i, a) in args.iter().enumerate() {
                     // Aggregate arguments pass as an address; LLVM's byval
                     // makes the callee's copy.
                     if is_aggregate(&a.ty) {
                         let addr = self.gen_aggregate_addr(a)?;
                         vals.push(addr.into());
+                        plain.push(addr.into());
                         continue;
                     }
-                    let mut v = self.gen_expr(a)?;
+                    // Generated ONCE: an argument can have side effects, and
+                    // evaluating it again for the measure check would run them twice.
+                    let raw = self.gen_expr(a)?;
+                    plain.push(raw);
+                    let mut v = raw;
                     // A CInt parameter is 32-bit on the C side: range-check
                     // and truncate — a value that doesn't fit is a loud
                     // runtime error, never a silent wrap.
@@ -1515,6 +1541,7 @@ impl<'ctx> CodeGen<'ctx> {
                     }
                     vals.push(v.into());
                 }
+                self.gen_measure_check(name, &plain)?;
                 let call = self
                     .builder
                     .build_call(f, &vals, "call")
@@ -2692,8 +2719,110 @@ impl<'ctx> CodeGen<'ctx> {
         for clause in requires {
             self.gen_contract_check(clause, name, "requires")?;
         }
+
         self.current_ensures =
             ensures.iter().map(|c| (c.clone(), name.to_string())).collect();
+        Ok(())
+    }
+
+    /// Capture this invocation's termination measure, and refuse a negative one.
+    ///
+    /// A measure that can fall below zero is not a ladder to the floor, it is a
+    /// hole: "strictly smaller" alone would let it descend forever.
+    fn gen_measure_prologue(&mut self, f: &crate::typeck::TypedFn) -> Result<(), String> {
+        self.current_measure = None;
+        let Some(clause) = &f.decreases else { return Ok(()) };
+        let value = self.gen_expr(&clause.cond)?.into_int_value();
+        let slot = self.create_entry_alloca("measure", &Type::Int)?;
+        self.builder.build_store(slot, value).map_err(|e| e.to_string())?;
+        self.check_or_die(
+            inkwell::IntPredicate::SGE,
+            value,
+            self.ctx.i64_type().const_zero(),
+            &format!(
+                "burxt runtime error: `decreases {}` is negative in `{}`\n",
+                clause.text, f.name
+            ),
+        )?;
+        self.current_measure = Some(MeasureState {
+            slot,
+            measure: clause.cond.clone(),
+            params: f.params.clone(),
+            text: clause.text.clone(),
+            function: f.name.clone(),
+        });
+        Ok(())
+    }
+
+    /// At a recursive call: does the measure actually get smaller?
+    ///
+    /// The callee's measure is this function's measure evaluated with the arguments,
+    /// which is obtained by binding the parameter names to the argument values and
+    /// generating the same expression again. No substitution pass, no rewritten AST.
+    fn gen_measure_check(
+        &mut self,
+        callee: &str,
+        args: &[BasicValueEnum<'ctx>],
+    ) -> Result<(), String> {
+        let Some(state) = self.current_measure.clone() else { return Ok(()) };
+        if state.function != callee || args.len() != state.params.len() {
+            return Ok(());
+        }
+        let saved = self.vars.clone();
+        for ((name, ty), value) in state.params.iter().zip(args) {
+            if is_aggregate(ty) {
+                // An aggregate argument is already a pointer to our own copy.
+                self.vars.insert(name.clone(), (value.into_pointer_value(), ty.clone()));
+            } else {
+                let slot = self.create_entry_alloca(&format!("arg_{}", name), ty)?;
+                self.builder.build_store(slot, *value).map_err(|e| e.to_string())?;
+                self.vars.insert(name.clone(), (slot, ty.clone()));
+            }
+        }
+        let next = self.gen_expr(&state.measure);
+        self.vars = saved;
+        let next = next?.into_int_value();
+
+        let mine = self
+            .builder
+            .build_load(self.ctx.i64_type(), state.slot, "measure_now")
+            .map_err(|e| e.to_string())?
+            .into_int_value();
+        self.check_or_die(
+            inkwell::IntPredicate::SLT,
+            next,
+            mine,
+            &format!(
+                "burxt runtime error: `decreases {}` did not decrease on a recursive \
+                 call to `{}`\n",
+                state.text, state.function
+            ),
+        )?;
+        Ok(())
+    }
+
+    /// `left <pred> right`, or die with `message`. The shape every runtime check in
+    /// the compiler has: a comparison, a branch, and a named failure.
+    fn check_or_die(
+        &mut self,
+        pred: inkwell::IntPredicate,
+        left: IntValue<'ctx>,
+        right: IntValue<'ctx>,
+        message: &str,
+    ) -> Result<(), String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let holds = self.builder.build_int_compare(pred, left, right, "holds").map_err(err)?;
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_parent())
+            .ok_or("codegen bug: check outside a function")?;
+        let broken = self.ctx.append_basic_block(function, "check_broken");
+        let ok = self.ctx.append_basic_block(function, "check_ok");
+        self.builder.build_conditional_branch(holds, ok, broken).map_err(err)?;
+        self.builder.position_at_end(broken);
+        self.build_panic(message)?;
+        self.builder.position_at_end(ok);
         Ok(())
     }
 
@@ -3507,6 +3636,16 @@ impl<'ctx> CodeGen<'ctx> {
 /// Is this type an aggregate (multi-field or multi-element)?
 /// The boundary is decided by the TYPE, never by size, so it is identical on
 /// every target.
+/// What a `decreases` measure needs at a recursive call site.
+#[derive(Clone)]
+struct MeasureState<'ctx> {
+    slot: PointerValue<'ctx>,
+    measure: crate::typeck::TypedExpr,
+    params: Vec<(String, Type)>,
+    text: String,
+    function: String,
+}
+
 pub fn is_aggregate(ty: &Type) -> bool {
     matches!(
         ty,

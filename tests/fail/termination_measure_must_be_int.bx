@@ -1,0 +1,7 @@
+fn f(x: Decimal<2>) -> Int
+    decreases x
+{
+    if x <= $0.00 { return 0; }
+    return f(x - $0.01);
+}
+print(f($0.05));

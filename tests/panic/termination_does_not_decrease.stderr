@@ -1,0 +1,1 @@
+`decreases n` did not decrease on a recursive call to `spin`

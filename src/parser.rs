@@ -423,11 +423,17 @@ impl Parser {
     /// Contract clauses sit between the signature and the body, where a reader
     /// looks for what a function demands and promises. Shared by functions and
     /// methods, so the two can never drift.
-    fn parse_contracts(&mut self) -> Result<(Vec<Contract>, Vec<Contract>), String> {
+    fn parse_contracts(
+        &mut self,
+    ) -> Result<(Vec<Contract>, Vec<Contract>, Option<Contract>), String> {
         let mut requires = Vec::new();
         let mut ensures = Vec::new();
-        while self.at(&Token::Requires) || self.at(&Token::Ensures) {
-            let is_pre = self.at(&Token::Requires);
+        let mut decreases = None;
+        while self.at(&Token::Requires)
+            || self.at(&Token::Ensures)
+            || self.at(&Token::Decreases)
+        {
+            let which = self.peek().clone();
             self.bump();
             let start = self.span().start;
             // A condition, not an expression: a `{` after it opens the BODY, so
@@ -435,13 +441,22 @@ impl Parser {
             let cond = self.parse_cond()?;
             let span = Span { start, end: self.prev_end().max(start + 1) };
             let clause = Contract { cond, text: self.text_of(span), span };
-            if is_pre {
-                requires.push(clause);
-            } else {
-                ensures.push(clause);
+            match which {
+                Token::Requires => requires.push(clause),
+                Token::Ensures => ensures.push(clause),
+                _ => {
+                    if decreases.is_some() {
+                        return Err(
+                            "a function may have one `decreases` measure. Two would be \
+                             a lexicographic measure, which is not built."
+                                .to_string(),
+                        );
+                    }
+                    decreases = Some(clause);
+                }
             }
         }
-        Ok((requires, ensures))
+        Ok((requires, ensures, decreases))
     }
 
     fn parse_fn(&mut self) -> Result<FnDef, String> {
@@ -459,9 +474,9 @@ impl Parser {
         if allocates {
             self.bump();
         }
-        let (requires, ensures) = self.parse_contracts()?;
+        let (requires, ensures, decreases) = self.parse_contracts()?;
         let body = self.parse_block()?;
-        Ok(FnDef { name, params, ret, allocates, is_pure, requires, ensures, body, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok(FnDef { name, params, ret, allocates, is_pure, requires, ensures, decreases, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `fn (self: Type) name(params) -> ret { body }`, or `fn (mut self: ...)`
@@ -496,7 +511,15 @@ impl Parser {
         };
         self.expect(&Token::RParen)?;
         let (name, params, ret) = self.parse_fn_signature()?;
-        let (requires, ensures) = self.parse_contracts()?;
+        let (requires, ensures, decreases) = self.parse_contracts()?;
+        if let Some(d) = &decreases {
+            let _ = d;
+            return Err(
+                "`decreases` on a method is not built yet — the measure goes on a free \
+                 function for now."
+                    .to_string(),
+            );
+        }
         let body = self.parse_block()?;
         Ok(MethodDef { receiver, receiver_mut, name, params, ret, requires, ensures, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }

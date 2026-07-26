@@ -1,0 +1,9 @@
+// Strictly smaller is not enough on its own: a measure that can fall below zero is
+// not a ladder to the floor, it is a hole.
+fn dive(n: Int) -> Int
+    decreases n
+{
+    if n < -3 { return 0; }
+    return dive(n - 1);
+}
+print(dive(2));

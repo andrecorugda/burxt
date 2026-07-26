@@ -190,6 +190,11 @@ pub struct TypedFn {
     pub requires: Vec<TypedContract>,
     /// Postconditions: checked before every return, with `result` bound.
     pub ensures: Vec<TypedContract>,
+    /// The termination measure, if one was declared, with the clause text for the
+    /// message. Checked at every recursive CALL SITE rather than in the callee: the
+    /// caller knows both measures, and a guaranteed tail call has no way back in to
+    /// restore per-invocation state.
+    pub decreases: Option<TypedContract>,
     /// The expressions inside `old(...)`, hoisted out in the order they appear.
     /// Evaluated once on ENTRY and stored; a clause reads the stored value. That is
     /// the whole mechanism behind a conservation law: compare after against before.
@@ -1369,6 +1374,34 @@ impl TypeChecker {
         } else {
             self.check_contracts(&f.ensures, Some(&f.ret))?
         };
+        // The measure lives in the same scope and under the same rule as a clause:
+        // parameters only, and pure. A measure that could read state outside the
+        // call would make the call-site substitution a lie.
+        let decreases = match &f.decreases {
+            None => None,
+            Some(clause) => {
+                self.current_span.set(clause.span);
+                if !calls_itself(&f.body, &f.name) {
+                    return Err(format!(
+                        "`{}` never calls itself, so `decreases {}` has nothing to \
+                         check. A reader would take it to mean something; drop it, or \
+                         make the recursion real.",
+                        f.name, clause.text
+                    ));
+                }
+                let measure = self.check_expr(&clause.cond, Some(&Type::Int))?;
+                if measure.ty != Type::Int {
+                    return Err(format!(
+                        "a termination measure must be an Int, but `{}` has type {}. A \
+                         Decimal measure can shrink forever without arriving — 1.00, \
+                         0.50, 0.25 — which is the failure `decreases` exists to rule \
+                         out.",
+                        clause.text, measure.ty
+                    ));
+                }
+                Some(TypedContract { cond: measure, text: clause.text.clone() })
+            }
+        };
         self.in_pure = saved_pure;
         self.in_contract = false;
 
@@ -1395,7 +1428,7 @@ impl TypeChecker {
             ));
         }
         let olds = std::mem::take(&mut *self.olds.borrow_mut());
-        Ok(TypedFn { name: f.name.clone(), params, ret: f.ret.clone(), body, requires, ensures, olds })
+        Ok(TypedFn { name: f.name.clone(), params, ret: f.ret.clone(), body, requires, ensures, decreases, olds })
     }
 
     /// Check a method body. `self` is bound like any parameter, with its
@@ -3334,6 +3367,63 @@ impl TypeChecker {
             other => unreachable!("require_rounding called on {}", other),
         }
     }
+}
+
+/// Does this body contain a call to `name`? Used to refuse a `decreases` measure on
+/// a function that never recurses — a claim with nothing to check reads as if it
+/// meant something.
+fn calls_itself(body: &[Stmt], name: &str) -> bool {
+    fn in_expr(e: &Expr, name: &str) -> bool {
+        let any = |list: &[Expr]| list.iter().any(|x| in_expr(x, name));
+        match &e.kind {
+            ExprKind::Call { name: callee, args } => callee == name || any(args),
+            ExprKind::Neg(i) | ExprKind::Not(i) => in_expr(i, name),
+            ExprKind::Logical { lhs, rhs, .. }
+            | ExprKind::Binary { lhs, rhs, .. }
+            | ExprKind::Compare { lhs, rhs, .. } => in_expr(lhs, name) || in_expr(rhs, name),
+            ExprKind::MethodCall { base, args, .. } => in_expr(base, name) || any(args),
+            ExprKind::StructLit { fields, .. } => fields.iter().any(|(_, v)| in_expr(v, name)),
+            ExprKind::Field { base, .. } => in_expr(base, name),
+            ExprKind::ArrayLit(items) => any(items),
+            ExprKind::Index { base, index } => in_expr(base, name) || in_expr(index, name),
+            ExprKind::InterpStr(parts) => parts.iter().any(|p| match p {
+                InterpPart::Expr(x) => in_expr(x, name),
+                InterpPart::Lit(_) => false,
+            }),
+            _ => false,
+        }
+    }
+
+    fn in_stmt(s: &Stmt, name: &str) -> bool {
+        let block = |b: &[Stmt]| b.iter().any(|x| in_stmt(x, name));
+        match &s.kind {
+            StmtKind::Let { value, .. }
+            | StmtKind::Print(value)
+            | StmtKind::Return(value)
+            | StmtKind::ExprStmt(value)
+            | StmtKind::Assign { value, .. } => in_expr(value, name),
+            StmtKind::TailReturn(value) => in_expr(value, name),
+            StmtKind::AssignField { value, .. } => in_expr(value, name),
+            StmtKind::AssignIndex { index, value, .. } => {
+                in_expr(index, name) || in_expr(value, name)
+            }
+            StmtKind::AssignFieldIndex { index, value, .. } => {
+                in_expr(index, name) || in_expr(value, name)
+            }
+            StmtKind::If { cond, then_block, else_block } => {
+                in_expr(cond, name)
+                    || block(then_block)
+                    || else_block.as_deref().is_some_and(block)
+            }
+            StmtKind::While { cond, body } => in_expr(cond, name) || block(body),
+            StmtKind::Region { body, .. } => block(body),
+            StmtKind::Match { value, arms } => {
+                in_expr(value, name) || arms.iter().any(|a| block(&a.body))
+            }
+        }
+    }
+
+    body.iter().any(|s| in_stmt(s, name))
 }
 
 /// Does this expression mention a name anywhere inside it?

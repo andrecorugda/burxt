@@ -233,9 +233,9 @@
           "match": "\\bpure\\b"
         },
         {
-          "comment": "`requires` / `ensures` — contract clauses on a signature, checked at runtime and quoted back when they fail.",
+          "comment": "`requires` / `ensures` / `decreases` — contract clauses on a signature, checked at runtime and quoted back when they fail.",
           "name": "keyword.other.contract.burxt",
-          "match": "\\b(requires|ensures)\\b"
+          "match": "\\b(requires|ensures|decreases)\\b"
         },
         {
           "comment": "`result` — the returned value, in scope only inside an `ensures` clause.",

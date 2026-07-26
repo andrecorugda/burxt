@@ -1,0 +1,6 @@
+fn f(n: Int) -> Int
+    decreases n
+{
+    return n;
+}
+print(f(1));

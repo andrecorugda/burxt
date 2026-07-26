@@ -225,6 +225,16 @@ recorded in DESIGN.md's interim ledger.
 
 **Novelty: high (in this combination). Buildability: low — needs the verifier.**
 
+**Slice 1 SHIPPED in v0.0.45** — `spec/N5-TERMINATION.md`. `decreases <Int>` is
+checked at every recursive **call site**: the measure is evaluated with the new
+arguments and compared against the calling invocation's, which is why it works with
+`return tail` (a replaced frame has nowhere to restore per-invocation state from).
+Strictly smaller and never negative, both checked, always on.
+
+Direct recursion only — `f` → `g` → `f` needs a shared measure and is deferred. Static
+proof stays SMT territory, as with §3; what exists is a check that is never wrong when
+it fires.
+
 An extension of §3 rather than a separate idea: a recursive function may carry a
 **termination measure** — a `decreases` clause naming a quantity that provably
 shrinks on every call, as Dafny and ACL2 do. For money code this is not
