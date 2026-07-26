@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.40)
+# Burxt — Design Notes (v0.0.41)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1969,6 +1969,34 @@ The extension keeps its own copies of two files, because VS Code resolves
 contributed paths relative to the extension directory rather than the repository;
 `assets/README.md` records the two `cp` commands to re-run if the artwork changes,
 next to Andre's original notes rather than edited into them.
+
+### v0.0.41: the mark on `.bx` files
+
+The extension declared an icon for the `burxt` language in v0.0.40 and nothing
+appeared, which is worth recording because it looks like a bug and is not.
+
+**VS Code has no supported way to add one icon on top of another icon theme.** A
+file icon theme is monolithic. The default **Seti** theme ignores
+language-contributed icons entirely, and the built-in **Minimal** theme does too —
+its `languageIds` map is literally empty, which I checked in the shipped theme file
+rather than assuming. So the declaration alone can never show anything.
+
+So the extension now ships a **file icon theme**: the copper mark for `.bx`, and a
+plain document, folder and open-folder for everything else. It sets
+`showLanguageModeIcons: true`, so any language that contributes its own icon gets
+it — and the reason a default document glyph is needed at all is that **zero
+built-in languages contribute one** (also measured, by scanning every built-in
+extension's manifest). A `showLanguageModeIcons` theme with no fallback would leave
+every other file blank.
+
+Deliberately minimal, and it says so in the docs rather than pretending: this is not
+an attempt at a four-hundred-glyph icon set, it is three utility shapes and the
+brand mark. `editors/README.md` records the two alternatives that keep rich icons
+for everything else — `vscode-icons`' custom icon folder, or any theme that already
+opts into language icons.
+
+This repository turns the theme on in `.vscode/settings.json`, which is
+workspace-scoped: it applies here, nowhere else, and one deleted line reverts it.
 
 ## Testing
 

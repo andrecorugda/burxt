@@ -14,6 +14,7 @@ directory holds that half of the project.
 | VS Code diagnostics + hover | **DONE** (v0.0.36) — hand-written LSP client, still no npm | `vscode/extension.js` |
 | VS Code problem matcher (for tasks and CI) | **DONE** (v0.0.33) | `vscode/package.json`, `.vscode/tasks.json` |
 | Neovim / Helix configs | **DONE** (v0.0.33) — diagnostics, no highlighting yet | `nvim/`, `helix/` |
+| `.bx` file icon in the explorer | **DONE** (v0.0.41) — needs a theme that shows it, see below | `vscode/fileicons/` |
 | Tree-sitter grammar (Neovim/Helix colour) | not written | see below |
 | Hover, go-to-definition | not written | see below |
 | GitHub language detection | blocked on a popularity gate, not on us | see below |
@@ -44,6 +45,33 @@ To package it as a `.vsix` instead (requires `npm i -g @vscode/vsce`):
 ```bash
 cd editors/vscode && vsce package
 ```
+
+## Getting the Burxt icon on `.bx` files
+
+This one has a wrinkle worth stating plainly, because it looks like a bug otherwise:
+**VS Code has no supported way to add a single icon on top of another icon theme.**
+A file icon theme is monolithic. The extension contributes an icon for the `burxt`
+language, but the default **Seti** theme ignores language-contributed icons entirely,
+and the built-in **Minimal** theme does too (its `languageIds` map is empty). So the
+declaration alone shows nothing.
+
+Three ways to actually see it, in order of how little they cost you:
+
+1. **Switch to the theme this extension ships.** *Preferences: File Icon Theme →
+   Burxt*, or `"workbench.iconTheme": "burxt"`. `.bx` files get the mark; everything
+   else gets a plain document or folder. Deliberately minimal — it is not an attempt
+   to be a full icon set, and it says so rather than shipping four hundred glyphs
+   nobody asked for. **This repository turns it on in `.vscode/settings.json`**, so
+   it applies here and nowhere else; delete that line to opt out.
+2. **Use an icon theme with custom associations.** `vscode-icons` supports a custom
+   icon folder (`vsicons.customIconFolderPath`): drop `file_type_bx.png` in it and
+   you keep rich icons for everything else.
+3. **Any theme that sets `showLanguageModeIcons: true`** will pick up the
+   contributed icon automatically. Worth knowing if you already use one.
+
+Zero built-in languages contribute an icon today, which is why option 1 needs its
+own default document glyph at all — a `showLanguageModeIcons` theme with no
+fallback would leave every other file blank.
 
 ## Other editors
 

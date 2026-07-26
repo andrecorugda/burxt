@@ -92,7 +92,14 @@
           "description": "Path to the burxt compiler, which also hosts the language server (`burxt lsp`). Empty means: use ./target/debug/burxt in the workspace if it exists, otherwise `burxt` from PATH."
         }
       }
-    }
+    },
+    "iconThemes": [
+      {
+        "id": "burxt",
+        "label": "Burxt",
+        "path": "./fileicons/burxt-icon-theme.json"
+      }
+    ]
   },
   "main": "./extension.js",
   "activationEvents": [

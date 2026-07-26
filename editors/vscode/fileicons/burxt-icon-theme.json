@@ -1,0 +1,29 @@
+{
+  "hidesExplorerArrows": false,
+  "showLanguageModeIcons": true,
+  "iconDefinitions": {
+    "_file": {
+      "iconPath": "./document.svg"
+    },
+    "_folder": {
+      "iconPath": "./folder.svg"
+    },
+    "_folder_open": {
+      "iconPath": "./folder-open.svg"
+    },
+    "_burxt": {
+      "iconPath": "../file-icon.png"
+    }
+  },
+  "file": "_file",
+  "folder": "_folder",
+  "folderExpanded": "_folder_open",
+  "rootFolder": "_folder",
+  "rootFolderExpanded": "_folder_open",
+  "fileExtensions": {
+    "bx": "_burxt"
+  },
+  "languageIds": {
+    "burxt": "_burxt"
+  }
+}
