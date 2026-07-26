@@ -1,0 +1,15 @@
+// A cent goes missing on the way. The law catches it, and the message quotes the
+// law itself — which is the point: the reader sees the invariant that was broken.
+struct Ledger { checking: Decimal<2>, savings: Decimal<2> }
+
+fn (mut self: Ledger) leaky_move(amount: Decimal<2>) -> Int
+    ensures self.checking + self.savings == old(self.checking + self.savings)
+{
+    self.checking = self.checking - amount;
+    self.savings = self.savings + amount - $0.01;
+    return 0;
+}
+
+let mut book: Ledger = Ledger { checking: $100.00, savings: $20.00 };
+let bad: Int = book.leaky_move($10.00);
+print(book.savings);

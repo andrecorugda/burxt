@@ -97,6 +97,10 @@ pub struct CodeGen<'ctx> {
     /// the hidden sret pointer of the function being generated, if it returns
     /// an aggregate
     current_sret: Option<PointerValue<'ctx>>,
+    /// One slot per `old(...)` expression in the function being generated, filled
+    /// on entry. A clause reads the slot rather than re-evaluating, which is the
+    /// point: the value has to be the one from BEFORE the body ran.
+    old_slots: Vec<(PointerValue<'ctx>, Type)>,
     /// The postconditions of the function being generated, with the name of that
     /// function: every `return` has to check them, and the check needs both the
     /// clause and the name to write its message.
@@ -150,6 +154,7 @@ impl<'ctx> CodeGen<'ctx> {
             current_sret: None,
             region_mark: None,
             current_ensures: Vec::new(),
+            old_slots: Vec::new(),
             struct_types: HashMap::new(),
             struct_fields: HashMap::new(),
             enum_types: HashMap::new(),
@@ -340,19 +345,14 @@ impl<'ctx> CodeGen<'ctx> {
             }
         }
 
-        // Preconditions, in the order written, once the parameters are bound.
-        for clause in &f.requires {
-            self.gen_contract_check(clause, &f.name, "requires")?;
-        }
-        // Postconditions travel with the function so every `return` can check them.
-        self.current_ensures =
-            f.ensures.iter().map(|c| (c.clone(), f.name.clone())).collect();
+        self.gen_contract_prologue(&f.requires, &f.ensures, &f.olds, &f.name)?;
 
         for stmt in &f.body {
             self.gen_stmt(stmt)?;
         }
         self.current_sret = None;
         self.current_ensures.clear();
+        self.old_slots.clear();
         // The typechecker proved every path ends in `return`, so the current
         // block is already terminated — no fallthrough ret is needed.
         Ok(())
@@ -937,10 +937,15 @@ impl<'ctx> CodeGen<'ctx> {
             }
         }
 
+        let label = format!("{}.{}", m.receiver, m.name);
+        self.gen_contract_prologue(&m.requires, &m.ensures, &m.olds, &label)?;
+
         for stmt in &m.body {
             self.gen_stmt(stmt)?;
         }
         self.current_sret = None;
+        self.current_ensures.clear();
+        self.old_slots.clear();
         Ok(())
     }
 
@@ -1242,6 +1247,16 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder
                     .build_int_z_extend(b, i64t, "byte_i64")
                     .map(Into::into)
+                    .map_err(|e| e.to_string())
+            }
+            TypedExprKind::Old(index) => {
+                let (slot, ty) = self
+                    .old_slots
+                    .get(*index)
+                    .cloned()
+                    .ok_or("codegen bug: `old` slot missing")?;
+                self.builder
+                    .build_load(self.llvm_type(&ty), slot, "old")
                     .map_err(|e| e.to_string())
             }
             TypedExprKind::ReadFile(path) => {
@@ -2652,6 +2667,34 @@ impl<'ctx> CodeGen<'ctx> {
             .build_load(self.ctx.i64_type(), next.as_pointer_value(), "region_mark")
             .map(|v| v.into_int_value())
             .map_err(|e| e.to_string())
+    }
+
+    /// Set up a function's contracts: capture every `old(...)` value, check the
+    /// preconditions, and hand the postconditions to `return`.
+    ///
+    /// Order matters. `old` is captured FIRST, because a precondition that fails
+    /// should fail on the state as it arrived; and the captures must happen before
+    /// any of the body runs, or they would not be "old" at all.
+    fn gen_contract_prologue(
+        &mut self,
+        requires: &[crate::typeck::TypedContract],
+        ensures: &[crate::typeck::TypedContract],
+        olds: &[crate::typeck::TypedExpr],
+        name: &str,
+    ) -> Result<(), String> {
+        self.old_slots.clear();
+        for (i, expr) in olds.iter().enumerate() {
+            let value = self.gen_expr(expr)?;
+            let slot = self.create_entry_alloca(&format!("old{}", i), &expr.ty)?;
+            self.builder.build_store(slot, value).map_err(|e| e.to_string())?;
+            self.old_slots.push((slot, expr.ty.clone()));
+        }
+        for clause in requires {
+            self.gen_contract_check(clause, name, "requires")?;
+        }
+        self.current_ensures =
+            ensures.iter().map(|c| (c.clone(), name.to_string())).collect();
+        Ok(())
     }
 
     /// Emit one contract check: evaluate the condition, and if it is false, die

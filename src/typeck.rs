@@ -49,6 +49,9 @@ pub enum TypedExprKind {
     /// Negation of a non-literal (literals are folded at check time).
     Neg(Box<TypedExpr>),
     Not(Box<TypedExpr>),
+    /// `old(expr)` in an `ensures` clause: the value that expression had on
+    /// ENTRY, by index into the function's hoisted list.
+    Old(usize),
     /// `read_file(path)`: the file's bytes as a region-allocated String.
     ReadFile(Box<TypedExpr>),
     /// `to_string(v)`: the value's exact display form, region-allocated.
@@ -187,6 +190,10 @@ pub struct TypedFn {
     pub requires: Vec<TypedContract>,
     /// Postconditions: checked before every return, with `result` bound.
     pub ensures: Vec<TypedContract>,
+    /// The expressions inside `old(...)`, hoisted out in the order they appear.
+    /// Evaluated once on ENTRY and stored; a clause reads the stored value. That is
+    /// the whole mechanism behind a conservation law: compare after against before.
+    pub olds: Vec<TypedExpr>,
 }
 
 /// A checked contract clause: the condition, and the text to quote if it fails.
@@ -206,6 +213,9 @@ pub struct TypedMethod {
     pub params: Vec<(String, Type)>,
     pub ret: Type,
     pub body: Vec<TypedStmt>,
+    pub requires: Vec<TypedContract>,
+    pub ensures: Vec<TypedContract>,
+    pub olds: Vec<TypedExpr>,
 }
 
 /// An extern declaration, ready for codegen: the unmangled symbol name and
@@ -306,6 +316,11 @@ pub struct TypeChecker {
     /// arguments, checked. Hoisted with the signatures so a call to one can be
     /// judged in a single pass, in either direction.
     pure_fns: HashSet<String>,
+    /// True while checking an `ensures` clause specifically: only there does
+    /// `old(...)` mean anything, and only there is `result` in scope.
+    in_ensures: bool,
+    /// The `old(...)` expressions collected for the function being checked.
+    olds: RefCell<Vec<TypedExpr>>,
     /// True while checking a contract clause. Clauses are checked under the `pure`
     /// rule, but they are not `pure fn` bodies — telling a reader to "drop `pure`
     /// from `f`" when `f` never declared it would be nonsense.
@@ -331,6 +346,8 @@ impl TypeChecker {
             pure_fns: HashSet::new(),
             in_pure: None,
             in_contract: false,
+            in_ensures: false,
+            olds: RefCell::new(Vec::new()),
             in_caller_region: false,
             extern_names: HashSet::new(),
             extern_params: HashMap::new(),
@@ -386,6 +403,7 @@ impl TypeChecker {
         result_ty: Option<&Type>,
     ) -> Result<Vec<TypedContract>, String> {
         let mut out = Vec::new();
+        self.in_ensures = result_ty.is_some();
         for clause in clauses {
             self.current_span.set(clause.span);
             if let Some(ty) = result_ty {
@@ -425,6 +443,7 @@ impl TypeChecker {
             }
             out.push(TypedContract { cond, text: clause.text.clone() });
         }
+        self.in_ensures = false;
         Ok(out)
     }
 
@@ -702,7 +721,7 @@ impl TypeChecker {
             if self.fns.contains_key(&f.name) {
                 return Err(format!("function `{}` is defined twice", f.name));
             }
-            if f.name == "len" || f.name == "byte_at" || f.name == "push" || f.name == "read_file" || f.name == "to_string" {
+            if f.name == "len" || f.name == "byte_at" || f.name == "push" || f.name == "read_file" || f.name == "to_string" || f.name == "old" {
                 return Err(format!(
                     "the name `{}` is reserved for a built-in",
                     f.name
@@ -1217,7 +1236,7 @@ impl TypeChecker {
     /// function returns.
     fn check_extern(&self, e: &ExternFn) -> Result<(), String> {
         const RESERVED: [&str; 6] = ["printf", "fprintf", "fputs", "exit", "stderr", "main"];
-        if e.name == "len" || e.name == "byte_at" || e.name == "push" || e.name == "read_file" || e.name == "to_string" {
+        if e.name == "len" || e.name == "byte_at" || e.name == "push" || e.name == "read_file" || e.name == "to_string" || e.name == "old" {
             return Err(format!("the name `{}` is reserved for a built-in", e.name));
         }
         if RESERVED.contains(&e.name.as_str()) {
@@ -1332,6 +1351,7 @@ impl TypeChecker {
         let saved_pure = self.in_pure.clone();
         self.in_pure = Some(f.name.clone());
         self.in_contract = true;
+        self.olds.borrow_mut().clear();
         let requires = self.check_contracts(&f.requires, None)?;
         let ensures = if f.ensures.is_empty() {
             Vec::new()
@@ -1374,7 +1394,8 @@ impl TypeChecker {
                 f.ret
             ));
         }
-        Ok(TypedFn { name: f.name.clone(), params, ret: f.ret.clone(), body, requires, ensures })
+        let olds = std::mem::take(&mut *self.olds.borrow_mut());
+        Ok(TypedFn { name: f.name.clone(), params, ret: f.ret.clone(), body, requires, ensures, olds })
     }
 
     /// Check a method body. `self` is bound like any parameter, with its
@@ -1413,6 +1434,36 @@ impl TypeChecker {
             params.push((p.name.clone(), p.ty.clone()));
         }
         self.current_ret = Some(m.ret.clone());
+
+        // Contracts, in the receiver-and-parameter scope, under the `pure` rule —
+        // exactly as on a free function. A MUTATING method is where they earn the
+        // most: `old(...)` compares the state after against the state before.
+        let saved_pure = self.in_pure.clone();
+        self.in_pure = Some(format!("{}.{}", m.receiver, m.name));
+        self.in_contract = true;
+        self.olds.borrow_mut().clear();
+        let requires = self.check_contracts(&m.requires, None)?;
+        let ensures = if m.ensures.is_empty() {
+            Vec::new()
+        } else if crate::codegen::is_aggregate(&m.ret) {
+            self.current_span.set(m.ensures[0].span);
+            return Err(format!(
+                "`ensures` on `{}.{}` is not supported yet: it returns {} {}, which \
+                 travels through a hidden pointer into the caller's storage, so \
+                 binding `result` to it needs care a scalar does not. Return a \
+                 scalar, or drop the clause.",
+                m.receiver,
+                m.name,
+                m.ret.article(),
+                m.ret
+            ));
+        } else {
+            self.check_contracts(&m.ensures, Some(&m.ret))?
+        };
+        self.in_pure = saved_pure;
+        self.in_contract = false;
+        let olds = std::mem::take(&mut *self.olds.borrow_mut());
+
         let body = self.check_block(&m.body)?;
         self.current_ret = None;
         self.env.clear();
@@ -1435,6 +1486,9 @@ impl TypeChecker {
             params,
             ret: m.ret.clone(),
             body,
+            requires,
+            ensures,
+            olds,
         })
     }
 
@@ -2353,6 +2407,47 @@ impl TypeChecker {
                 // region. A builtin rather than user FFI because the result must
                 // be region-allocated to be escape-checked; a raw `extern` that
                 // returned a pointer could not be.
+                // `old(expr)` — the value `expr` had on entry. Hoisted out of the
+                // clause here, so codegen can evaluate it once at the top of the
+                // function and the clause can compare against what it stored.
+                if name == "old" {
+                    if !self.in_ensures {
+                        return Err(
+                            "`old(...)` only means something in an `ensures` clause: it \
+                             is the value an expression had on ENTRY, and there is no \
+                             entry to refer back to anywhere else."
+                                .to_string(),
+                        );
+                    }
+                    if args.len() != 1 {
+                        return Err("old(...) takes one expression".to_string());
+                    }
+                    // `result` has no meaning inside `old`: the point of `old` is the
+                    // state BEFORE the call, and there was no result then. Checked on
+                    // the expression as written, which gives a better message than
+                    // letting name resolution fail.
+                    if mentions(&args[0], "result") {
+                        return Err(
+                            "`old(result)` is a contradiction: `old` is the state \
+                             before the call, and there was no result then."
+                                .to_string(),
+                        );
+                    }
+                    let inner = self.check_expr(&args[0], None)?;
+                    if crate::codegen::is_aggregate(&inner.ty) {
+                        return Err(format!(
+                            "`old(...)` holds {} {} at the moment of entry, and copying \
+                             an aggregate to do that is not built yet. Take `old` of a \
+                             field, or of a sum of fields — a Decimal or an Int.",
+                            inner.ty.article(),
+                            inner.ty
+                        ));
+                    }
+                    let ty = inner.ty.clone();
+                    let mut olds = self.olds.borrow_mut();
+                    olds.push(inner);
+                    return Ok(TypedExpr { ty, kind: TypedExprKind::Old(olds.len() - 1) });
+                }
                 if name == "read_file" {
                     if let Some(why) = self.impure("read a file") {
                         return Err(why);
@@ -3238,6 +3333,36 @@ impl TypeChecker {
             )),
             other => unreachable!("require_rounding called on {}", other),
         }
+    }
+}
+
+/// Does this expression mention a name anywhere inside it?
+///
+/// Used for one thing: refusing `old(result)` with an explanation instead of a
+/// name-resolution failure. Worth a walker rather than a message that reads like a
+/// bug report.
+fn mentions(e: &Expr, name: &str) -> bool {
+    let any = |list: &[Expr]| list.iter().any(|x| mentions(x, name));
+    match &e.kind {
+        ExprKind::Var(n) => n == name,
+        ExprKind::Neg(i) | ExprKind::Not(i) => mentions(i, name),
+        ExprKind::Logical { lhs, rhs, .. }
+        | ExprKind::Binary { lhs, rhs, .. }
+        | ExprKind::Compare { lhs, rhs, .. } => mentions(lhs, name) || mentions(rhs, name),
+        ExprKind::Call { args, .. } => any(args),
+        ExprKind::MethodCall { base, args, .. } => mentions(base, name) || any(args),
+        ExprKind::StructLit { fields, .. } => fields.iter().any(|(_, v)| mentions(v, name)),
+        ExprKind::Field { base, .. } => mentions(base, name),
+        ExprKind::ArrayLit(items) => any(items),
+        ExprKind::Index { base, index } => mentions(base, name) || mentions(index, name),
+        ExprKind::InterpStr(parts) => parts.iter().any(|p| match p {
+            InterpPart::Expr(x) => mentions(x, name),
+            InterpPart::Lit(_) => false,
+        }),
+        ExprKind::IntLit(_)
+        | ExprKind::DecimalLit { .. }
+        | ExprKind::BoolLit(_)
+        | ExprKind::StrLit(_) => false,
     }
 }
 

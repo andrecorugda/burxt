@@ -1,0 +1,6 @@
+fn f(n: Int) -> Int
+    ensures result == old(result)
+{
+    return n;
+}
+print(f(1));

@@ -1,0 +1,1 @@
+`ensures self.checking + self.savings == old(self.checking + self.savings)` failed in `Ledger.leaky_move`

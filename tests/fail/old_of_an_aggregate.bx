@@ -1,0 +1,7 @@
+struct L { a: Int }
+fn (mut self: L) go(n: Int) -> Int
+    ensures old(self) == old(self)
+{
+    return n;
+}
+print(1);

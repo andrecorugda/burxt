@@ -1,0 +1,2 @@
+fn old(n: Int) -> Int { return n; }
+print(old(1));

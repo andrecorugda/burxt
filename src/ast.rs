@@ -387,6 +387,11 @@ pub struct MethodDef {
     pub name: String,
     pub params: Vec<Param>,
     pub ret: Type,
+    /// Preconditions and postconditions, exactly as on a free function. A
+    /// mutating method is where contracts get interesting: `old(...)` in an
+    /// `ensures` clause can compare the state after against the state before.
+    pub requires: Vec<Contract>,
+    pub ensures: Vec<Contract>,
     pub body: Vec<Stmt>,
     /// Where this item was written, for errors about the item itself.
     pub span: Span,

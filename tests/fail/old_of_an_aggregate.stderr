@@ -1,0 +1,1 @@
+`old(...)` holds a L at the moment of entry, and copying an aggregate to do that is not built yet

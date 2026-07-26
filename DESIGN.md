@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.43)
+# Burxt — Design Notes (v0.0.44)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -2108,6 +2108,57 @@ right sometimes is worse than a check that is right always.
 
 Spec: `spec/A5-CONTRACTS.md`.
 
+### v0.0.44: conservation laws, checked (NOVELTY §3's headline)
+
+```text
+fn (mut self: Ledger) move_to_savings(amount: Decimal<2>) -> Int
+    requires amount > $0.00
+    requires amount <= self.checking
+    ensures self.checking + self.savings == old(self.checking + self.savings)
+```
+
+**That last line is the invariant that actually defines correctness for a ledger** —
+money moves, and nothing is created or destroyed. It is not a comment and not a test;
+it is part of the signature, and every call checks it. When a version of the same
+method loses a cent on the way:
+
+```text
+burxt runtime error: `ensures self.checking + self.savings == old(self.checking +
+self.savings)` failed in `Ledger.leaky_move`
+```
+
+The message quotes **the law itself**, which is the point: the reader sees the
+invariant that broke, not a line number.
+
+Two pieces landed to get here, and v0.0.43 predicted both would take longer.
+
+**Contracts on methods.** The same clauses, on the receiver-and-parameter scope. A
+*mutating* method is where contracts earn the most, because it is the only place in
+the language where the state can differ before and after.
+
+**`old(...)`, hoisted rather than re-evaluated.** The expressions inside `old` are
+lifted out of the clause by the typechecker, evaluated **once on entry**, and stored;
+the clause reads what was stored. Order matters and is deliberate: captures happen
+before the preconditions are checked, so a failing `requires` reports the state as it
+arrived, and before any of the body runs, or the values would not be "old" at all.
+
+`old` is refused where it would be meaningless, each with its reason: outside an
+`ensures` clause (there is no entry to refer back to), `old(result)` (the state before
+the call had no result), and `old` of an aggregate (copying a whole struct at entry is
+not built — take `old` of a field, or of a sum of fields). It is also a reserved name
+now, so `fn old(...)` cannot shadow it.
+
+**A process failure worth recording, because it cost real time.** I checked build
+results with `cargo build | grep -c '^(error|warning)'` and read the answer — `2` — as
+two warnings. They were two *errors*. So for several minutes I tested a **stale
+binary**, watched a conservation law silently not fire, and went looking for the bug
+in the parser, the typechecker and the code generator in turn. All three were fine.
+
+The lesson is exact: **never gate on a count that cannot distinguish success from
+failure.** `grep -c` was chosen to keep output short, and it removed the one
+distinction that mattered. The suite has a rule about this for the language — errors
+must name themselves — and I broke it in my own tooling.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -2172,6 +2223,8 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- A5a. `old(...)` and method contracts (v0.0.44): NOVELTY §3's conservation laws,
+  checked at runtime with the law quoted on failure.
 - A5. Contracts, slice 1 (v0.0.43): `requires` / `ensures` checked at runtime, the
   clause quoted when it fails, and required to be pure. NOVELTY §3's staging.
 - N2. `pure` functions, slice 1 (v0.0.39): reproducibility checked at the signature

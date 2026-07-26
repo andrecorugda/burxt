@@ -1,6 +1,11 @@
 # Burxt — Contracts, Runtime-Checked (A5 slice 1, NOVELTY §3 staging)
 
-> Status: **specified, to implement.** `NOVELTY.md` §3 wants conservation laws
+> Status: **slice 1 SHIPPED in v0.0.43; `old(...)` and method contracts SHIPPED in
+> v0.0.44**, which makes NOVELTY §3's conservation laws expressible and checked. §1's
+> "cannot express a conservation law" no longer holds and is kept below for the
+> record, marked.
+>
+> Original status: **specified, to implement.** `NOVELTY.md` §3 wants conservation laws
 > proven statically and says so honestly: *"static proof of arbitrary contracts is
 > SMT-solver territory... Runtime-checked contracts plus derived locking is
 > reachable much sooner and is worth shipping first."* This is that first step, and
@@ -66,6 +71,11 @@ This falls out of machinery that already exists, which is the second time the
 
 ### Decision 5 — `old(...)` is deferred, and that means conservation laws are too
 
+> **Superseded in v0.0.44.** Both pieces shipped: contracts on methods, and
+> `old(...)` hoisted out of the clause and evaluated once on entry. The paragraph
+> below is what was believed when the first slice shipped, kept because the reasoning
+> was right — it just turned out to be one version of work rather than several.
+
 §3's headline example needs the *pre-state*:
 
 ```text
@@ -99,9 +109,10 @@ result, which is most of what contracts are used for in practice.
 
 | Feature | Why deferred | Earns its place when |
 |---|---|---|
-| `old(expr)` in `ensures` | Needs pre-state capture, and only matters with mutation | Mutating methods carry contracts |
-| Contracts on methods | The receiver clause needs the same treatment | A required program needs one |
-| Conservation laws (§3's headline) | Needs `old` **and** mutation | Both of the above exist |
+| ~~`old(expr)` in `ensures`~~ | **DONE** (v0.0.44) | — |
+| ~~Contracts on methods~~ | **DONE** (v0.0.44) | — |
+| ~~Conservation laws (§3's headline)~~ | **DONE** (v0.0.44) | — |
+| `old(...)` of an aggregate | Needs a copy of the whole value at entry | A required program needs the whole struct, not fields |
 | Derived mutual exclusion from an invariant (§3's novel step) | Needs threads | Concurrency exists |
 | Static proof | SMT territory | The runtime form has proven the grammar |
 | `ensures` on aggregate returns | `result` binding needs sret care | A required program needs it |
@@ -119,3 +130,18 @@ result, which is most of what contracts are used for in practice.
 7. `result` in a `requires` clause is a compile error: there is no result yet.
 8. `ensures` on a function returning a struct is refused with the reason from §2.
 9. Contracts compose with `pure` and `allocates` on the same signature.
+
+## 5a. Acceptance for `old(...)` and method contracts (v0.0.44)
+
+10. A `mut self` method carries `requires` and `ensures`, checked like a function's.
+11. `ensures self.a + self.b == old(self.a + self.b)` holds for a transfer that
+    conserves, and fails — quoting the clause and naming the method — for one that
+    loses a cent.
+12. `old(...)` is evaluated ONCE on entry, before the body runs and before the
+    preconditions are checked, so a failing precondition reports the state as it
+    arrived.
+13. More than one `old` in a clause, and more than one clause using `old`, both work.
+14. `old(...)` outside an `ensures` clause is refused with the reason.
+15. `old(result)` is refused as a contradiction.
+16. `old(...)` of an aggregate is refused, naming the copy that is not built.
+17. `old` is a reserved name: `fn old(...)` is refused.

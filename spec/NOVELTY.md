@@ -153,11 +153,15 @@ verbatim with the function's name, and a clause must be `pure` (a check that can
 change the program is a second program). Contracts are always checked: there is no
 build mode that strips them.
 
-**What is still missing for §3 specifically, stated plainly:** `old(...)`, and
-therefore conservation laws. Capturing pre-state only means something for functions
-that mutate, which today means methods with a `mut self` receiver, and neither piece
-exists yet. The novel step — *deriving* mutual exclusion from a declared invariant —
-additionally waits on threads.
+**Conservation laws SHIPPED in v0.0.44.** `old(...)` and contracts on mutating
+methods both landed, so §3's headline example is expressible and checked:
+`ensures self.checking + self.savings == old(self.checking + self.savings)` passes for
+a transfer that conserves and fails — quoting the law — for one that loses a cent.
+
+**What is still missing for §3, stated plainly:** the genuinely novel step, which is
+*deriving* mutual exclusion from a declared invariant. That waits on threads: there is
+nothing to exclude yet. And static proof of these laws remains SMT territory; what
+exists is a runtime check that is always on.
 
 ---
 

@@ -1,0 +1,32 @@
+// The invariant that actually defines correctness for a ledger: money moves, and
+// nothing is created or destroyed. Written in the signature, checked on every call.
+struct Ledger { checking: Decimal<2>, savings: Decimal<2> }
+
+fn (mut self: Ledger) move_to_savings(amount: Decimal<2>) -> Int
+    requires amount > $0.00
+    requires amount <= self.checking
+    ensures self.checking + self.savings == old(self.checking + self.savings)
+{
+    self.checking = self.checking - amount;
+    self.savings = self.savings + amount;
+    return 0;
+}
+
+// `old` of a single field works too, and so does more than one `old` in a clause.
+fn (mut self: Ledger) deposit(amount: Decimal<2>) -> Int
+    requires amount > $0.00
+    ensures self.checking == old(self.checking) + amount
+    ensures self.savings == old(self.savings)
+{
+    self.checking = self.checking + amount;
+    return 0;
+}
+
+let mut book: Ledger = Ledger { checking: $100.00, savings: $20.00 };
+let a: Int = book.move_to_savings($30.00);
+print(book.checking);
+print(book.savings);
+print(book.checking + book.savings);
+let b: Int = book.deposit($5.50);
+print(book.checking);
+print(book.savings);

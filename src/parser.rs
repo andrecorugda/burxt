@@ -420,6 +420,30 @@ impl Parser {
         Ok(ExternFn { name, params, ret, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
+    /// Contract clauses sit between the signature and the body, where a reader
+    /// looks for what a function demands and promises. Shared by functions and
+    /// methods, so the two can never drift.
+    fn parse_contracts(&mut self) -> Result<(Vec<Contract>, Vec<Contract>), String> {
+        let mut requires = Vec::new();
+        let mut ensures = Vec::new();
+        while self.at(&Token::Requires) || self.at(&Token::Ensures) {
+            let is_pre = self.at(&Token::Requires);
+            self.bump();
+            let start = self.span().start;
+            // A condition, not an expression: a `{` after it opens the BODY, so
+            // struct literals are off exactly as in an `if`.
+            let cond = self.parse_cond()?;
+            let span = Span { start, end: self.prev_end().max(start + 1) };
+            let clause = Contract { cond, text: self.text_of(span), span };
+            if is_pre {
+                requires.push(clause);
+            } else {
+                ensures.push(clause);
+            }
+        }
+        Ok((requires, ensures))
+    }
+
     fn parse_fn(&mut self) -> Result<FnDef, String> {
         let start = self.span().start;
         // `pure fn ...` — a prefix, because it is a statement about the whole
@@ -435,25 +459,7 @@ impl Parser {
         if allocates {
             self.bump();
         }
-        // Contract clauses sit between the signature and the body, where a reader
-        // looks for what a function demands and promises.
-        let mut requires = Vec::new();
-        let mut ensures = Vec::new();
-        while self.at(&Token::Requires) || self.at(&Token::Ensures) {
-            let is_pre = self.at(&Token::Requires);
-            self.bump();
-            let start = self.span().start;
-            // A condition, not an expression: `{` after it opens the BODY, so
-            // struct literals are off exactly as in an `if`.
-            let cond = self.parse_cond()?;
-            let span = Span { start, end: self.prev_end().max(start + 1) };
-            let clause = Contract { cond, text: self.text_of(span), span };
-            if is_pre {
-                requires.push(clause);
-            } else {
-                ensures.push(clause);
-            }
-        }
+        let (requires, ensures) = self.parse_contracts()?;
         let body = self.parse_block()?;
         Ok(FnDef { name, params, ret, allocates, is_pure, requires, ensures, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
@@ -490,8 +496,9 @@ impl Parser {
         };
         self.expect(&Token::RParen)?;
         let (name, params, ret) = self.parse_fn_signature()?;
+        let (requires, ensures) = self.parse_contracts()?;
         let body = self.parse_block()?;
-        Ok(MethodDef { receiver, receiver_mut, name, params, ret, body, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok(MethodDef { receiver, receiver_mut, name, params, ret, requires, ensures, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `as <marshaller>` declares how a value crosses a foreign boundary.

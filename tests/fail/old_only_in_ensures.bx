@@ -1,0 +1,7 @@
+struct L { a: Int }
+fn (mut self: L) go(n: Int) -> Int
+    requires old(self.a) > 0
+{
+    return n;
+}
+print(1);
