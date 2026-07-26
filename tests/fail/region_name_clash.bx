@@ -1,0 +1,2 @@
+let tx: Int = 1;
+region tx { print(1); }

@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.22)
+# Burxt — Design Notes (v0.0.23)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1104,6 +1104,41 @@ fixed `[Node; 64]`, so a real compiler needs either a larger fixed budget or
 heap growth. That is a genuine M1 dependency — but it is now a question of
 *scale*, not of *expressibility*, which is a far smaller wall than the one
 recorded two versions ago.
+
+### v0.0.23: regions — M1 slice 1
+
+```text
+region tx {
+    let inner: Int = outer + 1;
+    print(inner);
+}   // everything allocated here released in O(1)
+```
+
+The first slice of the memory model decided in `spec/M1-MEMORY-MODEL.md`:
+**regions as the unit of ownership.** Opening a region records where the bump
+cursor stands; closing it resets the cursor. That reset *is* the deallocation —
+no per-object free, no refcount, no collector, no scheduler. The
+no-runtime-baggage pillar holds without reinterpretation, because a pointer
+that moves forward is not a runtime.
+
+Region memory exhaustion is a named runtime error, not a silent overrun,
+holding the same standard as every other check.
+
+Refused with reasons, per the spec's must-NOT list: nested regions (one level
+for now), and a region whose name collides with a variable.
+
+**Two staging corrections the build immediately exposed**, both recorded in the
+spec rather than worked around:
+
+- **`List<T>` as specified needs generics, which Burxt deliberately does not
+  have.** So the next slice is **built-in growable arrays** — a dynamic `[T]`
+  beside the fixed `[T; N]`, element type from the annotation — not a generic
+  library type. Go's slices are built in for exactly this reason.
+- **Escape checking cannot come after the first allocation.** The spec had it
+  as a later slice, but a region-allocated value that escapes is a
+  use-after-free — the silently-wrong behaviour Burxt refuses everywhere. So it
+  ships in the *same commit* as the first thing that allocates. "We will add
+  the check next" is not a standard this project applies to anything else.
 
 ## Testing
 

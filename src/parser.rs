@@ -438,6 +438,7 @@ impl Parser {
             Token::If => self.parse_if(),
             Token::While => self.parse_while(),
             Token::Match => self.parse_match(),
+            Token::Region => self.parse_region(),
             Token::Ident(_) | Token::SelfKw => self.parse_assign(),
             other => Err(format!("expected statement, found {}", other.describe())),
         }
@@ -593,6 +594,23 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
         Ok(Stmt::Match { value, arms })
+    }
+
+    /// `region name { ... }`
+    fn parse_region(&mut self) -> Result<Stmt, String> {
+        self.expect(&Token::Region)?;
+        let name = match self.bump() {
+            Token::Ident(s) => s,
+            other => {
+                return Err(format!(
+                    "expected a name for the region, as in `region tx {{ ... }}`, \
+                     found {}",
+                    other.describe()
+                ))
+            }
+        };
+        let body = self.parse_block()?;
+        Ok(Stmt::Region { name, body })
     }
 
     fn parse_while(&mut self) -> Result<Stmt, String> {

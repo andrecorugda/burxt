@@ -1,0 +1,21 @@
+// A region is a named allocation scope. Opening one marks where the bump
+// cursor stands; closing it resets the cursor — the whole region released in
+// O(1), with no collector, no refcounts and no per-object free.
+let outer: Int = 1;
+region tx {
+    // ordinary code, plus a real scope: bindings here do not escape
+    let inner: Int = outer + 1;
+    print(inner);
+}
+print(outer);
+// regions are sequential, and the same name may be reused after one closes
+region tx {
+    print(3);
+}
+region other {
+    let mut n: Int = 0;
+    while n < 3 {
+        n = n + 1;
+    }
+    print(n);
+}

@@ -250,6 +250,10 @@ pub enum Stmt {
     /// this is not a general expression-statement; the parser only builds it
     /// from a call or method-call shape.
     ExprStmt(Expr),
+    /// `region name { .. }` — a named allocation scope. Everything allocated
+    /// inside is released as a unit in O(1) when it ends. The name exists so
+    /// escape errors can say which region a value would outlive.
+    Region { name: String, body: Vec<Stmt> },
     /// `match value { Variant => { .. } .. }` — must cover every variant.
     Match { value: Expr, arms: Vec<MatchArm> },
     /// `while cond { ... }` — the condition must be a Bool; braces required.

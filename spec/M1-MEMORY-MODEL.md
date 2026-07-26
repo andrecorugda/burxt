@@ -162,6 +162,34 @@ before the next begins:
 Concurrency (ownership transfer) is explicitly NOT in this milestone; §2
 specifies the single-owner rule only so nothing built here forecloses it.
 
+## 6a. Staging corrections, found by building slice 1
+
+Two things the staging in §6 got wrong, discovered immediately:
+
+**`List<T>` as written needs generics, which Burxt does not have** (A6.0's
+must-NOT list defers them explicitly). So slice 2 is **built-in growable
+arrays** — a dynamic `[T]` alongside the existing fixed `[T; N]`, with the
+element type known from the annotation — not a generic library type. Go's
+slices are built in for the same reason. Generics remain their own milestone,
+and `List<T>` can become a library type once they exist.
+
+**Escape checking cannot come after the first allocation.** §6 listed it as
+slice 3, but a region-allocated value that escapes its region is a
+use-after-free — precisely the silently-wrong behaviour Burxt refuses
+everywhere. So **escape checking ships WITH slice 2**, in the same commit as
+the first thing that allocates. Shipping allocation without it would be
+unsound, and "we'll add the check next" is not a standard this project applies
+to anything else.
+
+Revised staging:
+
+1. **`region` blocks + bump allocator** — done. Mark the cursor, run the body,
+   reset in O(1). No collector, no refcounts, no scheduler.
+2. **Growable arrays + escape checking, together** — the slice that uncaps the
+   self-hosted compiler, and the one that keeps it sound.
+3. **String building** — concatenation and interpolation-as-a-value.
+4. **Region-allocated `dyn`** — retiring the last two ledger entries.
+
 ## 7. Consequences to record elsewhere
 
 - `FAR-HORIZON-ROADMAP.md`'s ARC lean is **superseded**. ARC was rejected for

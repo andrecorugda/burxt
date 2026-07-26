@@ -1,0 +1,3 @@
+region a {
+  region b { print(1); }
+}

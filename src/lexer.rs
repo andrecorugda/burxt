@@ -32,6 +32,7 @@ pub enum Token {
     False,
     Struct,
     Enum,
+    Region,
     Match,
     FatArrow,
     // reserved today for the OOP layers (methods, interfaces), so no program
@@ -113,6 +114,7 @@ impl Token {
             Token::True => "`true`".to_string(),
             Token::False => "`false`".to_string(),
             Token::Struct => "`struct`".to_string(),
+            Token::Region => "`region`".to_string(),
             Token::Enum => "`enum`".to_string(),
             Token::Match => "`match`".to_string(),
             Token::FatArrow => "`=>`".to_string(),
@@ -558,6 +560,7 @@ impl<'a> Lexer<'a> {
             "true" => Token::True,
             "false" => Token::False,
             "struct" => Token::Struct,
+            "region" => Token::Region,
             "enum" => Token::Enum,
             "match" => Token::Match,
             "interface" => Token::Interface,

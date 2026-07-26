@@ -76,6 +76,12 @@ pub struct CodeGen<'ctx> {
     narrow_check_fn: Option<FunctionValue<'ctx>>,
     /// lazily created string byte-scan helpers
     str_len_fn: Option<FunctionValue<'ctx>>,
+    /// (heap base, bump cursor) globals for region allocation
+    heap: Option<(
+        inkwell::values::GlobalValue<'ctx>,
+        inkwell::values::GlobalValue<'ctx>,
+    )>,
+    alloc_fn: Option<FunctionValue<'ctx>>,
     byte_index_check_fn: Option<FunctionValue<'ctx>>,
     str_eq_fn: Option<FunctionValue<'ctx>>,
     /// user fn name -> (param types, return type), for aggregate call lowering
@@ -123,6 +129,8 @@ impl<'ctx> CodeGen<'ctx> {
             index_check_fn: None,
             narrow_check_fn: None,
             str_len_fn: None,
+            heap: None,
+            alloc_fn: None,
             byte_index_check_fn: None,
             str_eq_fn: None,
             fn_sigs: HashMap::new(),
@@ -437,6 +445,21 @@ impl<'ctx> CodeGen<'ctx> {
             }
             TypedStmt::ExprStmt(e) => {
                 self.gen_expr(e)?;
+                Ok(())
+            }
+            TypedStmt::Region { name, body } => {
+                // Mark where the bump pointer stands, run the body, then reset
+                // to the mark — the whole region released in O(1), with no
+                // per-object free, no refcount, and no collector.
+                let _ = name;
+                let mark = self.build_region_open()?;
+                let saved = self.vars.clone();
+                let r = body.iter().try_for_each(|s| self.gen_stmt(s));
+                self.vars = saved;
+                r?;
+                if self.current_block_open() {
+                    self.build_region_close(mark)?;
+                }
                 Ok(())
             }
             TypedStmt::Match { value, arms } => {
@@ -2035,6 +2058,149 @@ impl<'ctx> CodeGen<'ctx> {
             self.builder.position_at_end(bb);
         }
         self.checked_fns.insert(op, f);
+        Ok(f)
+    }
+
+    /// Lazily create the bump heap: one chunk, a cursor into it, and its size.
+    /// This is NOT a runtime — no collector, no scheduler, no refcounts. Just a
+    /// pointer that moves forward and resets when a region ends.
+    fn heap_globals(
+        &mut self,
+    ) -> (
+        inkwell::values::GlobalValue<'ctx>,
+        inkwell::values::GlobalValue<'ctx>,
+    ) {
+        if let Some(g) = self.heap {
+            return g;
+        }
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+        let i64t = self.ctx.i64_type();
+        let base = self.module.add_global(ptr, None, "burxt.heap.base");
+        base.set_initializer(&ptr.const_null());
+        let next = self.module.add_global(i64t, None, "burxt.heap.next");
+        next.set_initializer(&i64t.const_zero());
+        *self.heap.insert((base, next))
+    }
+
+    /// `open` is just "remember where the cursor is".
+    fn build_region_open(&mut self) -> Result<IntValue<'ctx>, String> {
+        // Opening a region brings its allocator into the module: a region and
+        // the bump allocator are one mechanism, not two.
+        self.alloc_fn()?;
+        let (_, next) = self.heap_globals();
+        self.builder
+            .build_load(self.ctx.i64_type(), next.as_pointer_value(), "region_mark")
+            .map(|v| v.into_int_value())
+            .map_err(|e| e.to_string())
+    }
+
+    /// `close` is "put the cursor back" — that is the entire deallocation.
+    fn build_region_close(&mut self, mark: IntValue<'ctx>) -> Result<(), String> {
+        let (_, next) = self.heap_globals();
+        self.builder
+            .build_store(next.as_pointer_value(), mark)
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Get (or lazily define) `ptr @burxt.alloc(i64 bytes)`: bump the cursor,
+    /// 8-byte aligned. Exhaustion is a named runtime error, never a silent
+    /// overrun — the same standard every other check in Burxt meets.
+    fn alloc_fn(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        if let Some(f) = self.alloc_fn {
+            return Ok(f);
+        }
+        const CHUNK: u64 = 64 * 1024 * 1024;
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let saved = self.builder.get_insert_block();
+        let (base, next) = self.heap_globals();
+
+        let i64t = self.ctx.i64_type();
+        let i8t = self.ctx.i8_type();
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+        let malloc = match self.module.get_function("malloc") {
+            Some(f) => f,
+            None => self
+                .module
+                .add_function("malloc", ptr.fn_type(&[i64t.into()], false), None),
+        };
+
+        let f = self
+            .module
+            .add_function("burxt.alloc", ptr.fn_type(&[i64t.into()], false), None);
+        let entry = self.ctx.append_basic_block(f, "entry");
+        let init_bb = self.ctx.append_basic_block(f, "init_chunk");
+        let have_bb = self.ctx.append_basic_block(f, "have_chunk");
+        let full_bb = self.ctx.append_basic_block(f, "exhausted");
+        let ok_bb = self.ctx.append_basic_block(f, "ok");
+
+        self.builder.position_at_end(entry);
+        let want = f.get_nth_param(0).unwrap().into_int_value();
+        // round the request up to 8 bytes so every value stays aligned
+        let seven = i64t.const_int(7, false);
+        let bumped = self.builder.build_int_add(want, seven, "bumped").map_err(err)?;
+        let mask = i64t.const_int(!7u64, false);
+        let size = self.builder.build_and(bumped, mask, "aligned").map_err(err)?;
+        let cur_base = self
+            .builder
+            .build_load(ptr, base.as_pointer_value(), "base")
+            .map_err(err)?
+            .into_pointer_value();
+        let is_null = self.builder.build_is_null(cur_base, "no_chunk").map_err(err)?;
+        self.builder.build_conditional_branch(is_null, init_bb, have_bb).map_err(err)?;
+
+        // one chunk, allocated on first use
+        self.builder.position_at_end(init_bb);
+        let chunk = self
+            .builder
+            .build_call(malloc, &[i64t.const_int(CHUNK, false).into()], "chunk")
+            .map_err(err)?;
+        let chunk_ptr = match chunk.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => v.into_pointer_value(),
+            _ => return Err("malloc returned void".to_string()),
+        };
+        self.builder.build_store(base.as_pointer_value(), chunk_ptr).map_err(err)?;
+        self.builder.build_unconditional_branch(have_bb).map_err(err)?;
+
+        self.builder.position_at_end(have_bb);
+        let real_base = self
+            .builder
+            .build_load(ptr, base.as_pointer_value(), "base2")
+            .map_err(err)?
+            .into_pointer_value();
+        let cursor = self
+            .builder
+            .build_load(i64t, next.as_pointer_value(), "cursor")
+            .map_err(err)?
+            .into_int_value();
+        let after = self.builder.build_int_add(cursor, size, "after").map_err(err)?;
+        let over = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::UGT,
+                after,
+                i64t.const_int(CHUNK, false),
+                "over",
+            )
+            .map_err(err)?;
+        self.builder.build_conditional_branch(over, full_bb, ok_bb).map_err(err)?;
+
+        self.builder.position_at_end(full_bb);
+        self.build_panic(
+            "burxt runtime error: region memory exhausted — this build reserves 64 MB \
+             per process for region allocation\n",
+        )?;
+
+        self.builder.position_at_end(ok_bb);
+        self.builder.build_store(next.as_pointer_value(), after).map_err(err)?;
+        let out = unsafe { self.builder.build_gep(i8t, real_base, &[cursor], "cell") }
+            .map_err(err)?;
+        self.builder.build_return(Some(&out)).map_err(err)?;
+
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        self.alloc_fn = Some(f);
         Ok(f)
     }
 

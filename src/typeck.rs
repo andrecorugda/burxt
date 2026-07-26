@@ -120,6 +120,8 @@ pub enum TypedStmt {
     /// Bounds-checked element assignment.
     AssignIndex { name: String, len: u32, index: TypedExpr, value: TypedExpr },
     Print(TypedExpr),
+    /// `region name { .. }`: open a region, run the body, release as a unit.
+    Region { name: String, body: Vec<TypedStmt> },
     /// `match` on an enum: arms in TAG order, each with the names bound to its
     /// payload slots. Exhaustiveness was proven by the typechecker.
     Match { value: TypedExpr, arms: Vec<TypedArm> },
@@ -235,6 +237,9 @@ pub struct TypeChecker {
     dyn_traits: HashSet<String>,
     /// return type of the function currently being checked, if any.
     current_ret: Option<Type>,
+    /// the region currently open, if any. One level only in this slice, so
+    /// this doubles as the nesting guard.
+    current_region: Option<String>,
 }
 
 impl TypeChecker {
@@ -249,6 +254,7 @@ impl TypeChecker {
             impls: HashSet::new(),
             dyn_traits: HashSet::new(),
             current_ret: None,
+            current_region: None,
         }
     }
 
@@ -1117,6 +1123,29 @@ impl TypeChecker {
             Stmt::ExprStmt(e) => {
                 let typed = self.check_expr(e, None)?;
                 Ok(TypedStmt::ExprStmt(typed))
+            }
+            Stmt::Region { name, body } => {
+                // One level only in this slice — nesting is deferred with a
+                // reason rather than half-supported.
+                if let Some(open) = &self.current_region {
+                    return Err(format!(
+                        "`region {}` cannot open inside `region {}` — nested regions \
+                         are not available yet. Close the outer one first, or use a \
+                         single region for both.",
+                        name, open
+                    ));
+                }
+                if self.env.contains_key(name) {
+                    return Err(format!(
+                        "`{}` is already a variable, so it cannot name a region too \
+                         — pick a different name.",
+                        name
+                    ));
+                }
+                self.current_region = Some(name.clone());
+                let checked = self.check_block(body);
+                self.current_region = None;
+                Ok(TypedStmt::Region { name: name.clone(), body: checked? })
             }
             Stmt::Match { value, arms } => {
                 let scrutinee = self.check_expr(value, None)?;
