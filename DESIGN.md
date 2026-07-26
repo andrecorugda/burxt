@@ -2693,7 +2693,7 @@ a bug report six months later. That is worth more than the milestone.
 
 ### v0.0.57: `truncate`, and stage-1 typechecks itself
 
-M4 phase 4a. The stage-1 compiler is 1,758 lines of Burxt and now **typechecks**: it
+M4 phase 4a. The stage-1 compiler is 1,894 lines of Burxt and now **typechecks**: it
 collects every declaration, walks every expression and statement, and refuses what
 stage-0 refuses.
 
@@ -2707,7 +2707,7 @@ error: unknown name (at `nobody_declared_this`)
 ```
 
 **The thesis, enforced by a Burxt program, over a real AST.** And the strongest single
-case: `stage1.bx` typechecks **its own 1,758 lines with zero complaints.** A test holds
+case: `stage1.bx` typechecks **its own 1,894 lines with zero complaints.** A test holds
 it to both directions — silent on what stage-0 accepts, and catching all seven mistakes
 in a program written to break every rule this phase implements, inventing none.
 
