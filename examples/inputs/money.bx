@@ -1,0 +1,10 @@
+// Input for the self-hosted scale checker. Three of these are legal Burxt and
+// three are exactly what the language refuses.
+let price: Decimal<2> = $19.99;
+let qty: Int = 3;
+let rate: Decimal<4> = 0.0825;
+let subtotal: Decimal<2> = price * qty;
+let broken: Decimal<2> = price + rate;
+let tax: Decimal<2> = price * rate;
+let tax_ok: Decimal<2, RoundHalfEven> = price * rate;
+let mixed: Int = price;

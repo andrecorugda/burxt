@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.48)
+# Burxt — Design Notes (v0.0.49)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -2377,6 +2377,52 @@ lexer rewrite found three wrong assumptions, the parser rewrite corrected a
 milestone-blocking claim, and this one found a memory-safety bug. That is three for
 three.
 
+### v0.0.49: the scale rule, enforced by Burxt
+
+`examples/checker.bx` reads a real `.bx` file and refuses what the language refuses:
+
+```text
+let broken : Decimal<2>
+  cannot apply `+` to Decimal<2> and Decimal<4>: addition combines like quantities,
+  so the scales must match
+let tax : Decimal<2>
+  `*` on Decimal<2> and Decimal<4> needs a rounding contract on the result: the
+  exact product has 6 decimal places
+let tax_ok : Decimal<2, RoundHalfEven>          <- accepted
+let mixed : Int
+  type mismatch: declared Int, but the expression has type Decimal<2>
+```
+
+**This is the thesis checking itself.** Not the arithmetic — a Burxt program applying
+Burxt's own scale rules to Burxt source: addition needs matching scales, a Decimal
+product needs a rounding contract, and the product's exact scale is the sum of the
+operands' (2 + 4 = 6, computed by the checker).
+
+Types are a sum type here, as they are in the Rust compiler: `enum Ty { Unknown, IntTy,
+BoolTy, StringTy, Dec(Int, Bool) }` — scale, and whether a contract was written. Struct
+fields hold those enums, a growable array holds those structs, and every name and type
+in the table is a `substring` of the source.
+
+**One bug in the Burxt code, worth keeping because it is a real typechecker lesson.**
+The first version suppressed cascades with `!ty_eq(found, Ty.Unknown)` and printed a
+second complaint for every first one. `ty_eq` answers *false* for `Unknown` against
+anything — deliberately, because **an unknown type must never compare equal to
+anything, including another unknown**, or one bad expression makes every later
+comparison succeed. Suppressing the cascade therefore needs its own predicate,
+`is_unknown`. The Rust compiler learned the same distinction two versions ago from the
+other end, when recovery needed a failed `let` to still bind its declared type.
+
+**Where self-hosting now stands:** lexer (v0.0.21), parser (v0.0.22), symbol table
+(v0.0.47) and the scale rule (v0.0.49) are written in Burxt — 600-odd lines of it,
+compiled by the Rust compiler and run against real source files.
+
+**The next constraint is already visible, and it is not a missing feature:** Burxt has
+**no module system**, so `checker.bx` carries its own copy of `is_alpha`, `skip_spaces`
+and `word_at` rather than sharing the lexer's. One file works, and the real self-hosted
+compiler will be one file until imports exist. Recorded rather than fixed: a module
+system is a design question about namespaces and compilation units, and it earns its
+place when a single file stops being tolerable rather than when it stops being pretty.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -2441,6 +2487,9 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- M4b. Self-hosting, fourth piece (v0.0.49): the scale rule in Burxt — matching scales
+  for `+`, a mandatory rounding contract for `Decimal * Decimal`, and the product's
+  exact scale computed. The thesis checking itself.
 - FIX (v0.0.48): `expr_allocates` now sees through struct literals, enum payloads and
   array literals. Region data could previously escape inside an aggregate — a
   use-after-free the checker accepted, found by designing a self-hosted checker's error

@@ -1,0 +1,384 @@
+// ============================================================================
+// The scale rule, enforced by Burxt.
+//
+// This is the piece of the typechecker that carries the thesis: Decimals of
+// different scales may not be added, and a Decimal product needs a rounding
+// contract on the result. The Rust compiler refuses both; so does this, reading a
+// real .bx file.
+//
+// Types are a sum type here, which is what they are in the Rust compiler too.
+// ============================================================================
+
+enum Ty {
+    Unknown,
+    IntTy,
+    BoolTy,
+    StringTy,
+    // scale, and whether the declaration carried a rounding contract
+    Dec(Int, Bool),
+}
+
+struct Sym { name: String, ty: Ty }
+struct Table { rows: [Sym] }
+
+// A scan result: what was read, and where to continue from.
+struct Scan { ty: Ty, next: Int }
+
+fn is_alpha(b: Int) -> Bool {
+    return (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95;
+}
+
+fn is_digit(b: Int) -> Bool {
+    return b >= 48 && b <= 57;
+}
+
+fn is_space(b: Int) -> Bool {
+    return b == 32 || b == 9 || b == 10 || b == 13;
+}
+
+fn skip_spaces(src: String, from: Int) -> Int {
+    let mut i: Int = from;
+    while i < len(src) && is_space(byte_at(src, i)) {
+        i = i + 1;
+    }
+    return i;
+}
+
+fn name_length(src: String, from: Int) -> Int {
+    let mut i: Int = from;
+    if i >= len(src) || !is_alpha(byte_at(src, i)) {
+        return 0;
+    }
+    while i < len(src) && (is_alpha(byte_at(src, i)) || is_digit(byte_at(src, i))) {
+        i = i + 1;
+    }
+    return i - from;
+}
+
+fn word_at(src: String, from: Int, word: String) -> Bool {
+    if from + len(word) > len(src) {
+        return false;
+    }
+    let mut i: Int = 0;
+    while i < len(word) {
+        if byte_at(src, from + i) != byte_at(word, i) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn digits_at(src: String, from: Int) -> Int {
+    let mut i: Int = from;
+    let mut value: Int = 0;
+    while i < len(src) && is_digit(byte_at(src, i)) {
+        value = value * 10 + (byte_at(src, i) - 48);
+        i = i + 1;
+    }
+    return value;
+}
+
+fn digit_count(src: String, from: Int) -> Int {
+    let mut i: Int = from;
+    while i < len(src) && is_digit(byte_at(src, i)) {
+        i = i + 1;
+    }
+    return i - from;
+}
+
+// How a type is written back out, for a message.
+fn ty_name(t: Ty) -> String allocates {
+    match t {
+        Unknown => { return "?"; }
+        IntTy => { return "Int"; }
+        BoolTy => { return "Bool"; }
+        StringTy => { return "String"; }
+        Dec(scale, contract) => {
+            if contract {
+                return "Decimal<" + to_string(scale) + ", RoundHalfEven>";
+            }
+            return "Decimal<" + to_string(scale) + ">";
+        }
+    }
+}
+
+// Exactly equal, contract included: that is the language's own rule.
+fn ty_eq(a: Ty, b: Ty) -> Bool {
+    match a {
+        Unknown => { return false; }
+        IntTy => {
+            match b {
+                IntTy => { return true; }
+                Unknown => { return false; }
+                BoolTy => { return false; }
+                StringTy => { return false; }
+                Dec(s, c) => { return false; }
+            }
+        }
+        BoolTy => {
+            match b {
+                BoolTy => { return true; }
+                Unknown => { return false; }
+                IntTy => { return false; }
+                StringTy => { return false; }
+                Dec(s, c) => { return false; }
+            }
+        }
+        StringTy => {
+            match b {
+                StringTy => { return true; }
+                Unknown => { return false; }
+                IntTy => { return false; }
+                BoolTy => { return false; }
+                Dec(s, c) => { return false; }
+            }
+        }
+        Dec(scale, contract) => {
+            match b {
+                Dec(other_scale, other_contract) => {
+                    return scale == other_scale && contract == other_contract;
+                }
+                Unknown => { return false; }
+                IntTy => { return false; }
+                BoolTy => { return false; }
+                StringTy => { return false; }
+            }
+        }
+    }
+}
+
+// Deliberately NOT `ty_eq(t, Ty.Unknown)`: an unknown type must never compare equal
+// to anything, including another unknown, or one bad expression makes every later
+// comparison succeed. Suppressing the cascade needs its own predicate.
+fn is_unknown(t: Ty) -> Bool {
+    match t {
+        Unknown => { return true; }
+        IntTy => { return false; }
+        BoolTy => { return false; }
+        StringTy => { return false; }
+        Dec(s, c) => { return false; }
+    }
+}
+
+fn is_decimal(t: Ty) -> Bool {
+    match t {
+        Dec(s, c) => { return true; }
+        Unknown => { return false; }
+        IntTy => { return false; }
+        BoolTy => { return false; }
+        StringTy => { return false; }
+    }
+}
+
+fn decimal_scale(t: Ty) -> Int {
+    match t {
+        Dec(scale, contract) => { return scale; }
+        Unknown => { return -1; }
+        IntTy => { return -1; }
+        BoolTy => { return -1; }
+        StringTy => { return -1; }
+    }
+}
+
+fn decimal_has_contract(t: Ty) -> Bool {
+    match t {
+        Dec(scale, contract) => { return contract; }
+        Unknown => { return false; }
+        IntTy => { return false; }
+        BoolTy => { return false; }
+        StringTy => { return false; }
+    }
+}
+
+// `Int`, `Bool`, `String`, `Decimal<S>`, `Decimal<S, RoundHalfEven>`.
+fn parse_ty(src: String, from: Int) -> Scan {
+    let at: Int = skip_spaces(src, from);
+    if word_at(src, at, "Int") {
+        return Scan { ty: Ty.IntTy, next: at + 3 };
+    }
+    if word_at(src, at, "Bool") {
+        return Scan { ty: Ty.BoolTy, next: at + 4 };
+    }
+    if word_at(src, at, "String") {
+        return Scan { ty: Ty.StringTy, next: at + 6 };
+    }
+    if !word_at(src, at, "Decimal<") {
+        return Scan { ty: Ty.Unknown, next: at };
+    }
+    let scale_at: Int = at + 8;
+    let scale: Int = digits_at(src, scale_at);
+    let mut cursor: Int = skip_spaces(src, scale_at + digit_count(src, scale_at));
+    let mut contract: Bool = false;
+    if byte_at(src, cursor) == 44 {                 // ','
+        contract = true;
+        cursor = skip_spaces(src, cursor + 1);
+        cursor = cursor + name_length(src, cursor);
+        cursor = skip_spaces(src, cursor);
+    }
+    if byte_at(src, cursor) == 62 {                 // '>'
+        cursor = cursor + 1;
+    }
+    return Scan { ty: Ty.Dec(scale, contract), next: cursor };
+}
+
+// A literal's type. `$19.99` is a Decimal whose scale is the digits written after
+// the point — the same rule the lexer uses, and the reason money literals never
+// pass through a float.
+fn literal_ty(src: String, from: Int) -> Scan {
+    let at: Int = skip_spaces(src, from);
+    if at >= len(src) {
+        return Scan { ty: Ty.Unknown, next: at };
+    }
+    let first: Int = byte_at(src, at);
+    if first == 34 {                                // '"'
+        let mut i: Int = at + 1;
+        while i < len(src) && byte_at(src, i) != 34 {
+            i = i + 1;
+        }
+        return Scan { ty: Ty.StringTy, next: i + 1 };
+    }
+    if word_at(src, at, "true") {
+        return Scan { ty: Ty.BoolTy, next: at + 4 };
+    }
+    if word_at(src, at, "false") {
+        return Scan { ty: Ty.BoolTy, next: at + 5 };
+    }
+    let mut cursor: Int = at;
+    if first == 36 {                                // '$'
+        cursor = cursor + 1;
+    }
+    if cursor >= len(src) || !is_digit(byte_at(src, cursor)) {
+        return Scan { ty: Ty.Unknown, next: at };
+    }
+    cursor = cursor + digit_count(src, cursor);
+    if cursor < len(src) && byte_at(src, cursor) == 46 {   // '.'
+        let frac_at: Int = cursor + 1;
+        let places: Int = digit_count(src, frac_at);
+        return Scan { ty: Ty.Dec(places, false), next: frac_at + places };
+    }
+    if first == 36 {
+        return Scan { ty: Ty.Dec(0, false), next: cursor };
+    }
+    return Scan { ty: Ty.IntTy, next: cursor };
+}
+
+fn (self: Table) find(name: String) -> Int {
+    let mut i: Int = 0;
+    while i < len(self.rows) {
+        if self.rows[i].name == name {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// An operand is a declared name or a literal.
+fn (self: Table) operand_ty(src: String, from: Int) -> Scan allocates {
+    let at: Int = skip_spaces(src, from);
+    let n: Int = name_length(src, at);
+    if n == 0 {
+        return literal_ty(src, at);
+    }
+    let word: String = substring(src, at, n);
+    if word_at(src, at, "true") || word_at(src, at, "false") {
+        return literal_ty(src, at);
+    }
+    let found: Int = self.find(word);
+    if found < 0 {
+        print("  unknown name `" + word + "`");
+        return Scan { ty: Ty.Unknown, next: at + n };
+    }
+    return Scan { ty: self.rows[found].ty, next: at + n };
+}
+
+// The rule this whole language exists for, applied to one expression.
+fn combine(op: Int, left: Ty, right: Ty, declared: Ty) -> Ty allocates {
+    if op == 42 {                                   // '*'
+        if is_decimal(left) && is_decimal(right) {
+            if !decimal_has_contract(declared) {
+                print("  `*` on " + ty_name(left) + " and " + ty_name(right)
+                      + " needs a rounding contract on the result: the exact product "
+                      + "has " + to_string(decimal_scale(left) + decimal_scale(right))
+                      + " decimal places");
+                return Ty.Unknown;
+            }
+            return declared;
+        }
+        if is_decimal(left) {
+            return left;
+        }
+        if is_decimal(right) {
+            return right;
+        }
+        return Ty.IntTy;
+    }
+    // `+` and `-` combine like quantities, so the types must match exactly.
+    if !ty_eq(left, right) {
+        print("  cannot apply `+` to " + ty_name(left) + " and " + ty_name(right)
+              + ": addition combines like quantities, so the scales must match");
+        return Ty.Unknown;
+    }
+    return left;
+}
+
+// `let [mut] NAME : TYPE = OPERAND [op OPERAND] ;`
+fn (mut self: Table) check_let(src: String, from: Int) -> Int allocates {
+    let at: Int = skip_spaces(src, from);
+    if at >= len(src) {
+        return at;
+    }
+    if !word_at(src, at, "let ") {
+        return at + 1;
+    }
+    let mut cursor: Int = skip_spaces(src, at + 4);
+    if word_at(src, cursor, "mut ") {
+        cursor = skip_spaces(src, cursor + 4);
+    }
+    let name_len: Int = name_length(src, cursor);
+    if name_len == 0 {
+        return at + 1;
+    }
+    let name: String = substring(src, cursor, name_len);
+    cursor = skip_spaces(src, cursor + name_len);
+    if byte_at(src, cursor) != 58 {                 // ':'
+        return at + 1;
+    }
+    let declared: Scan = parse_ty(src, cursor + 1);
+    cursor = skip_spaces(src, declared.next);
+    if byte_at(src, cursor) != 61 {                 // '='
+        return at + 1;
+    }
+
+    print("let " + name + " : " + ty_name(declared.ty));
+    let left: Scan = self.operand_ty(src, cursor + 1);
+    let mut found: Ty = left.ty;
+    cursor = skip_spaces(src, left.next);
+    let op: Int = byte_at(src, cursor);
+    if op == 43 || op == 45 || op == 42 {           // '+' '-' '*'
+        let right: Scan = self.operand_ty(src, cursor + 1);
+        found = combine(op, left.ty, right.ty, declared.ty);
+        cursor = right.next;
+    }
+
+    // One report per mistake: an expression that already failed says nothing more.
+    if !ty_eq(found, declared.ty) && !is_unknown(found) {
+        print("  type mismatch: declared " + ty_name(declared.ty)
+              + ", but the expression has type " + ty_name(found));
+    }
+    push(self.rows, Sym { name: name, ty: declared.ty });
+    return cursor;
+}
+
+region pass {
+    let src: String = read_file("examples/inputs/money.bx");
+    let mut table: Table = Table { rows: [] };
+    let mut cursor: Int = 0;
+    let mut guard: Int = 0;
+    while cursor < len(src) && guard < 20000 {
+        cursor = table.check_let(src, cursor);
+        guard = guard + 1;
+    }
+    print("--- checked " + to_string(len(table.rows)) + " declarations");
+}
