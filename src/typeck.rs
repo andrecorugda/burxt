@@ -316,6 +316,40 @@ impl TypeChecker {
                     .collect(),
             );
         }
+        // Traits: signature sets only, hoisted so impls may precede them.
+        for t in &prog.traits {
+            if self.traits.contains_key(&t.name) {
+                return Err(format!("trait `{}` is defined twice", t.name));
+            }
+            if self.structs.contains_key(&t.name) {
+                return Err(format!(
+                    "`{}` is already a struct — a trait cannot reuse the name",
+                    t.name
+                ));
+            }
+            let mut seen: Vec<&str> = Vec::new();
+            for sig in &t.methods {
+                if seen.contains(&sig.name.as_str()) {
+                    return Err(format!(
+                        "trait `{}` declares the method `{}` twice",
+                        t.name, sig.name
+                    ));
+                }
+                seen.push(&sig.name);
+            }
+            self.traits.insert(t.name.clone(), t.methods.clone());
+        }
+        // Validate the types inside the signatures only once every trait name
+        // is known, so traits may reference each other in any order.
+        for t in &prog.traits {
+            for sig in &t.methods {
+                for p in &sig.params {
+                    self.validate_type(&p.ty)?;
+                }
+                self.validate_type(&sig.ret)?;
+            }
+        }
+
         // Payloads are scalars only in this cut: an aggregate payload reopens
         // the recursive-size question (an enum containing itself is infinite),
         // which needs indirection and therefore M1.
@@ -362,14 +396,7 @@ impl TypeChecker {
 
         for s in &prog.structs {
             for f in &s.fields {
-                if matches!(f.ty, Type::Dyn(_)) {
-                    return Err(format!(
-                        "in struct `{}`: a field cannot hold a trait object — it \
-                         borrows the value it refers to, and a struct may outlive \
-                         it. Storing trait objects needs borrow tracking.",
-                        s.name
-                    ));
-                }
+
                 self.validate_type(&f.ty)?;
             }
             self.check_struct_finite(&s.name, &mut Vec::new())?;
@@ -382,40 +409,6 @@ impl TypeChecker {
                 fields: s.fields.iter().map(|f| f.ty.clone()).collect(),
             })
             .collect();
-
-        // Traits: signature sets only, hoisted so impls may precede them.
-        for t in &prog.traits {
-            if self.traits.contains_key(&t.name) {
-                return Err(format!("trait `{}` is defined twice", t.name));
-            }
-            if self.structs.contains_key(&t.name) {
-                return Err(format!(
-                    "`{}` is already a struct — a trait cannot reuse the name",
-                    t.name
-                ));
-            }
-            let mut seen: Vec<&str> = Vec::new();
-            for sig in &t.methods {
-                if seen.contains(&sig.name.as_str()) {
-                    return Err(format!(
-                        "trait `{}` declares the method `{}` twice",
-                        t.name, sig.name
-                    ));
-                }
-                seen.push(&sig.name);
-            }
-            self.traits.insert(t.name.clone(), t.methods.clone());
-        }
-        // Validate the types inside the signatures only once every trait name
-        // is known, so traits may reference each other in any order.
-        for t in &prog.traits {
-            for sig in &t.methods {
-                for p in &sig.params {
-                    self.validate_type(&p.ty)?;
-                }
-                self.validate_type(&sig.ret)?;
-            }
-        }
 
         // Pass 1: collect every signature, so order of definition never matters.
         let mut externs = Vec::new();
@@ -467,12 +460,15 @@ impl TypeChecker {
                     f.name, f.ret
                 ));
             }
-            // A trait object borrows its data. Returning one would outlive the
-            // storage it points at, and Burxt has no borrow tracking yet.
+            // Returning a trait object stays refused. A `dyn` borrows its source
+            // BINDING, which is a local — so the borrow dangles on return
+            // whether or not a region is involved. Regions bound
+            // region-allocated data's lifetime; they do not change what a trait
+            // object points at.
             if matches!(f.ret, Type::Dyn(_)) {
                 return Err(format!(
-                    "fn `{}` cannot return a trait object — it borrows the value \
-                     it refers to, which would not outlive the call. Take one as a \
+                    "fn `{}` cannot return a trait object — it borrows the value it \
+                     refers to, which would not outlive the call. Take one as a \
                      parameter instead.",
                     f.name
                 ));
@@ -665,6 +661,61 @@ impl TypeChecker {
             }
         }
         Ok(())
+    }
+
+    /// Coerce a concrete struct value to a trait object where one is expected.
+    /// Lives here rather than in `let` so that struct fields, call arguments
+    /// and returns all coerce too — every site that knows its expected type.
+    /// The source must be a plain variable: the fat pointer borrows its storage,
+    /// and an expression has none.
+    fn coerce_dyn(
+        &self,
+        trait_name: &str,
+        e: &Expr,
+    ) -> Result<TypedExpr, String> {
+        let Expr::Var(var) = e else {
+            return Err(format!(
+                "a `dyn {}` must come from a variable — a trait object borrows the \
+                 storage of the value it refers to, and an expression has none.",
+                trait_name
+            ));
+        };
+        let (src_ty, _) = self
+            .env
+            .get(var)
+            .ok_or_else(|| self.unknown_name(var))?
+            .clone();
+        let concrete = match &src_ty {
+            Type::Named(c) if self.structs.contains_key(c) => c.clone(),
+            Type::Dyn(_) => {
+                return Err(format!(
+                    "`{}` is already a trait object; re-borrowing one is deferred \
+                     until Burxt tracks borrows.",
+                    var
+                ))
+            }
+            other => {
+                return Err(format!(
+                    "`{}` has type {}, which cannot be a `dyn {}` — only a struct \
+                     that implements the trait can.",
+                    var, other, trait_name
+                ))
+            }
+        };
+        if !self.impls.contains(&(trait_name.to_string(), concrete.clone())) {
+            return Err(format!(
+                "`{}` does not implement `{}` — add `impl {} for {} {{ ... }}`.",
+                concrete, trait_name, trait_name, concrete
+            ));
+        }
+        Ok(TypedExpr {
+            ty: Type::Dyn(trait_name.to_string()),
+            kind: TypedExprKind::DynCoerce {
+                trait_name: trait_name.to_string(),
+                concrete,
+                var: var.clone(),
+            },
+        })
     }
 
     /// The place a mutation targets must bottom out in a `let mut` binding.
@@ -1039,61 +1090,6 @@ impl TypeChecker {
                          e.g. [1, 2, 3] — copying a whole array is deferred.",
                         name, declared
                     ));
-                }
-                // `let d: dyn Trait = concrete;` builds a trait object. The
-                // source must be a plain variable: the fat pointer borrows its
-                // storage, and an expression has none.
-                if let Type::Dyn(trait_name) = declared {
-                    let Expr::Var(var) = value else {
-                        return Err(format!(
-                            "`let {}: {}` must be initialized from a variable — a \
-                             trait object borrows the storage of the value it \
-                             refers to, and an expression has none.",
-                            name, declared
-                        ));
-                    };
-                    let (src_ty, _) = self
-                        .env
-                        .get(var)
-                        .ok_or_else(|| format!("unknown variable: {}", var))?
-                        .clone();
-                    let concrete = match &src_ty {
-                        Type::Named(c) => c.clone(),
-                        Type::Dyn(_) => {
-                            return Err(format!(
-                                "`{}` is already a trait object; re-borrowing one \
-                                 is deferred until Burxt tracks borrows.",
-                                var
-                            ))
-                        }
-                        other => {
-                            return Err(format!(
-                                "`{}` has type {}, which cannot be a `{}` — only a \
-                                 struct that implements the trait can.",
-                                var, other, declared
-                            ))
-                        }
-                    };
-                    if !self.impls.contains(&(trait_name.clone(), concrete.clone())) {
-                        return Err(format!(
-                            "`{}` does not implement `{}` — add `impl {} for {} \
-                             {{ ... }}`.",
-                            concrete, trait_name, trait_name, concrete
-                        ));
-                    }
-                    self.env.insert(name.clone(), (declared.clone(), *mutable));
-                    return Ok(TypedStmt::Let {
-                        name: name.clone(),
-                        ty: declared.clone(),
-                        value: TypedExpr {
-                            ty: declared.clone(),
-                            kind: TypedExprKind::DynCoerce {
-                                trait_name: trait_name.clone(),
-                                concrete,
-                                var: var.clone(),
-                            },
-                        },
-                    });
                 }
                 let typed = self.check_expr(value, Some(declared))?;
                 if &typed.ty != declared {
@@ -1499,6 +1495,18 @@ impl TypeChecker {
     /// `expected` is the type context (the declared type of the enclosing
     /// `let`), used to normalize decimal literals to the right scale.
     fn check_expr(&self, e: &Expr, expected: Option<&Type>) -> Result<TypedExpr, String> {
+        // A concrete value becomes a trait object wherever one is expected.
+        if let Some(Type::Dyn(t)) = expected {
+            let already = match e {
+                Expr::Var(n) => {
+                    matches!(self.env.get(n), Some((Type::Dyn(have), _)) if have == t)
+                }
+                _ => false,
+            };
+            if !already && !matches!(e, Expr::MethodCall { .. } | Expr::Call { .. }) {
+                return self.coerce_dyn(t, e);
+            }
+        }
         match e {
             Expr::IntLit(n) => Ok(TypedExpr { ty: Type::Int, kind: TypedExprKind::IntLit(*n) }),
 
@@ -1905,9 +1913,11 @@ impl TypeChecker {
                     if sig.receiver_mut {
                         return Err(format!(
                             "`{}` takes `mut self`, and calling a mutating method \
-                             through a trait object is not available yet — the \
-                             compiler cannot tell whether the borrowed value is \
-                             itself mutable. Call it on the concrete type.",
+                             through a trait object is not available yet: the \
+                             compiler still cannot tell whether the value behind \
+                             the object was declared mutable. Regions bound its \
+                             LIFETIME, not its mutability. Call it on the concrete \
+                             type.",
                             method
                         ));
                     }

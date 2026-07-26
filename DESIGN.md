@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.25)
+# Burxt — Design Notes (v0.0.26)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1216,6 +1216,42 @@ the tree, and returning anything it flags is refused.
 recorded as M1-blocked, but it is not. It needs a number-to-string formatter
 writing into memory — new machinery, not an ownership question. It is no longer
 an M1 ledger entry; it becomes its own small slice once a formatter exists.
+
+### v0.0.26: storable trait objects — M1 slice 4, and a corrected claim
+
+```text
+struct Holder { item: dyn Priced, label: Int }
+let h: Holder = Holder { item: book, label: 1 };   // previously refused
+print(h.item.price());
+```
+
+**A struct field may now hold a trait object.** The old refusal said a struct
+"may outlive" what the object borrows — but when both are scoped to the same
+block, it cannot. Block scoping was already doing the work; the refusal was
+broader than the reason behind it.
+
+This also fixed a real gap: **the concrete-to-`dyn` coercion only happened in
+`let`**, so `Holder { item: book }` failed even though the equivalent binding
+worked. The coercion now lives in `check_expr`, where every site that knows its
+expected type passes through — struct fields, call arguments, returns — instead
+of being special-cased in one place.
+
+**A claim I got wrong, corrected here.** The M1 spec listed returnable and
+storable `dyn` as things regions would unblock. Storable: yes. **Returnable:
+no, and regions were never going to help.** A `dyn` borrows its *source
+binding*, which is an ordinary stack local — so returning one dangles whether
+or not a region is involved. Regions bound the lifetime of *region-allocated*
+data; they do not change what a trait object points at. I briefly marked `dyn`
+as region-allocated to force it, which broke every existing `dyn` test and was
+the right kind of failure: the tests caught a category error.
+
+So the remaining two ledger entries are re-diagnosed rather than retired:
+
+- **Returning a `dyn`** — needs borrow tracking, not memory. Regions cannot fix
+  it.
+- **Mutating methods through a `dyn`** — needs to know the value behind the
+  object was declared mutable. Regions bound its *lifetime*, not its
+  *mutability*. The error now says exactly that.
 
 ## Testing
 

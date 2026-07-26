@@ -1,1 +1,1 @@
-must be initialized from a variable — a trait object borrows the storage
+a `dyn Priced` must come from a variable — a trait object borrows the storage

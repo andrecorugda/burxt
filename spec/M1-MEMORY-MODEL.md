@@ -109,8 +109,11 @@ Every ledger entry that was waiting on ownership:
 - growable `List<T>`, and therefore a self-hosted compiler that is not capped
   at a fixed `[Node; 64]`
 - string builders
-- returning and storing a `dyn` (a trait object living in a region)
-- mutating methods through `dyn`
+- storing a `dyn` in a struct (though the real enabler was block scoping, not
+  regions — see §6a)
+- ~~returning a `dyn`~~ and ~~mutating methods through `dyn`~~ — **these were
+  overclaimed.** A trait object borrows its source binding, a stack local, so
+  neither was ever memory-blocked. Both need borrow/mutability tracking.
 
 ## 4. What M1 must NOT do
 
@@ -193,7 +196,12 @@ Revised staging:
    is new machinery rather than an ownership question. Reclassified: concat
    ships here; interpolation-as-a-value moves to its own small slice once a
    formatter exists, and is no longer an M1 ledger entry.
-4. **Region-allocated `dyn`** — retiring the last two ledger entries.
+4. **Storable `dyn`** — done, but NOT as predicted. A struct field may hold a
+   trait object (block scoping already bounded it). The other two entries are
+   re-diagnosed rather than retired: returning a `dyn` needs borrow tracking,
+   and mutating through one needs mutability tracking. **A `dyn` borrows its
+   source binding, which is a stack local — so regions were never the blocker
+   for either.** §3 overclaimed; this is the correction.
 
 ## 7. Consequences to record elsewhere
 
