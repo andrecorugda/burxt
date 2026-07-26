@@ -102,6 +102,24 @@ impl Parser {
                 impls.push(self.parse_impl()?);
             } else if self.at(&Token::Extern) {
                 externs.push(self.parse_extern()?);
+            } else if self.at(&Token::Pure) {
+                // `pure` only precedes a free function: a method cannot carry the
+                // marker yet, and saying so beats a confusing parse error.
+                if self.peek_at(1) != &Token::Fn {
+                    return Err(format!(
+                        "`pure` must be followed by `fn`, but found {}",
+                        self.peek_at(1).describe()
+                    ));
+                }
+                if self.peek_at(2) == &Token::LParen {
+                    return Err(
+                        "a method cannot be declared `pure` yet — the marker goes on \
+                         a free function for now. Move the calculation into one, or \
+                         drop `pure`."
+                            .to_string(),
+                    );
+                }
+                fns.push(self.parse_fn()?);
             } else if self.at(&Token::Fn) {
                 // `fn (self: T) name(...)` is a method; `fn name(...)` is a
                 // free function — the `(` right after `fn` is the tell.
@@ -385,6 +403,12 @@ impl Parser {
 
     fn parse_fn(&mut self) -> Result<FnDef, String> {
         let start = self.span().start;
+        // `pure fn ...` — a prefix, because it is a statement about the whole
+        // function rather than about its result.
+        let is_pure = self.at(&Token::Pure);
+        if is_pure {
+            self.bump();
+        }
         self.expect(&Token::Fn)?;
         let (name, params, ret) = self.parse_fn_signature()?;
         // `-> T allocates` reads as what it is: returns a T, and allocates.
@@ -393,7 +417,7 @@ impl Parser {
             self.bump();
         }
         let body = self.parse_block()?;
-        Ok(FnDef { name, params, ret, allocates, body, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok(FnDef { name, params, ret, allocates, is_pure, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `fn (self: Type) name(params) -> ret { body }`, or `fn (mut self: ...)`

@@ -228,6 +228,11 @@
           "match": "\\ballocates\\b"
         },
         {
+          "comment": "`pure fn` — the result depends only on the arguments: no I/O, no FFI, no impure calls. Checked, not documented.",
+          "name": "storage.modifier.pure.burxt",
+          "match": "\\bpure\\b"
+        },
+        {
           "name": "keyword.declaration.burxt",
           "match": "\\b(let|mut|fn|extern|struct|enum|trait|interface|impl|is|region|dyn)\\b"
         },

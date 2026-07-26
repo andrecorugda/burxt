@@ -1,0 +1,6 @@
+struct M { v: Int }
+fn (self: M) get() -> Int { return self.v; }
+pure fn f(m: M) -> Int {
+    return m.get();
+}
+print(f(M { v: 1 }));

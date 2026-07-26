@@ -1,0 +1,5 @@
+extern fn strlen(s: String) -> CInt;
+pure fn f(s: String) -> Int {
+    return strlen(s);
+}
+print(f("hi"));

@@ -1,0 +1,3 @@
+struct M { v: Int }
+pure fn (self: M) get() -> Int { return self.v; }
+print(1);

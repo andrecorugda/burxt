@@ -350,6 +350,9 @@ pub struct FnDef {
     /// allocate without opening one and may return what it built. One bit, not a
     /// lifetime — there is no name and no scope relation to unify.
     pub allocates: bool,
+    /// Declared `pure`: the result depends only on the arguments. No I/O, no FFI,
+    /// and no calls to functions that do not make the same promise.
+    pub is_pure: bool,
     pub body: Vec<Stmt>,
     /// Where this item was written, for errors about the item itself.
     pub span: Span,

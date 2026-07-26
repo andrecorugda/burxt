@@ -291,6 +291,14 @@ pub struct TypeChecker {
     /// built. Hoisted with the signatures, so call sites can be checked in one
     /// pass.
     alloc_fns: HashSet<String>,
+    /// Function names declared `pure`: their result depends only on their
+    /// arguments, checked. Hoisted with the signatures so a call to one can be
+    /// judged in a single pass, in either direction.
+    pure_fns: HashSet<String>,
+    /// The `pure` function being checked, if any. Held by NAME because every
+    /// refusal below names both functions — the reader needs to know which promise
+    /// is being broken as well as what broke it.
+    in_pure: Option<String>,
     /// True while checking the body of an `allocates` function: the caller's
     /// region is the region in effect, even though none is open here.
     in_caller_region: bool,
@@ -305,6 +313,8 @@ impl TypeChecker {
             env: HashMap::new(),
             fns: HashMap::new(),
             alloc_fns: HashSet::new(),
+            pure_fns: HashSet::new(),
+            in_pure: None,
             in_caller_region: false,
             extern_names: HashSet::new(),
             extern_params: HashMap::new(),
@@ -349,6 +359,19 @@ impl TypeChecker {
         let mut out = std::mem::take(&mut self.errors);
         out.sort_by_key(|d| (d.span.start, d.span.end));
         out
+    }
+
+    /// Refuse something a `pure` function may not do, naming both the promise and
+    /// what would break it. `None` when we are not in a pure function.
+    fn impure(&self, what: &str) -> Option<String> {
+        self.in_pure.as_ref().map(|name| {
+            format!(
+                "`pure fn {}` may not {}: a pure function's result must depend only \
+                 on its arguments, which is the whole of what `pure` promises. Pass \
+                 the value in as a parameter instead.",
+                name, what
+            )
+        })
     }
 
     /// Is there a region to allocate in at this point?
@@ -651,6 +674,9 @@ impl TypeChecker {
             self.fns.insert(f.name.clone(), (param_tys, f.ret.clone()));
             if f.allocates {
                 self.alloc_fns.insert(f.name.clone());
+            }
+            if f.is_pure {
+                self.pure_fns.insert(f.name.clone());
             }
         }
 
@@ -1217,12 +1243,14 @@ impl TypeChecker {
         }
         self.current_ret = Some(f.ret.clone());
         self.in_caller_region = f.allocates;
+        self.in_pure = if f.is_pure { Some(f.name.clone()) } else { None };
         self.current_sig =
             Some((f.name.clone(), f.params.iter().map(|p| p.ty.clone()).collect()));
         let errors_before = self.errors.len();
         let body = self.check_block(&f.body)?;
         self.current_ret = None;
         self.in_caller_region = false;
+        self.in_pure = None;
         self.current_sig = None;
         self.env.clear();
 
@@ -1791,6 +1819,11 @@ impl TypeChecker {
                 Ok(TypedStmt::While { cond, body })
             }
             StmtKind::Print(e) => {
+                if let Some(why) = self.impure("print") {
+                    // Output is an effect: a pure function computes its result and
+                    // does nothing else.
+                    return Err(why);
+                }
                 // An interpolated string prints its pieces in order, which
                 // needs no allocation — so it is handled here rather than as a
                 // String-valued expression.
@@ -2215,6 +2248,9 @@ impl TypeChecker {
                 // be region-allocated to be escape-checked; a raw `extern` that
                 // returned a pointer could not be.
                 if name == "read_file" {
+                    if let Some(why) = self.impure("read a file") {
+                        return Err(why);
+                    }
                     if args.len() != 1 {
                         return Err("read_file(...) takes one path".to_string());
                     }
@@ -2343,6 +2379,27 @@ impl TypeChecker {
                         args.len()
                     ));
                 }
+                // Purity is transitive without being inferred: a pure function may
+                // only call functions that make the same promise.
+                if self.in_pure.is_some() {
+                    if self.extern_names.contains(name) {
+                        return Err(self
+                            .impure(&format!("call `{}`, which crosses into C", name))
+                            .unwrap_or_default());
+                    }
+                    if !self.pure_fns.contains(name) && self.fns.contains_key(name) {
+                        return Err(format!(
+                            "`pure fn {}` may not call `{}`, which is not declared \
+                             `pure`: the guarantee cannot rest on a function that does \
+                             not make it. Declare `pure fn {}` too, or drop `pure` \
+                             from `{}`.",
+                            self.in_pure.clone().unwrap_or_default(),
+                            name,
+                            name,
+                            self.in_pure.clone().unwrap_or_default()
+                        ));
+                    }
+                }
                 // An `allocates` callee builds in OUR region, so there has to be
                 // one. Checked here rather than inside the callee, because this is
                 // the site that can be wrapped.
@@ -2468,6 +2525,18 @@ impl TypeChecker {
             }
 
             ExprKind::MethodCall { base, method, args } => {
+                // Methods cannot carry the marker yet, so a pure function cannot
+                // call one. Said plainly, with the reason, rather than by letting
+                // some later check produce something confusing.
+                if let Some(name) = &self.in_pure {
+                    return Err(format!(
+                        "`pure fn {}` may not call the method `.{}()`: a method cannot \
+                         be declared `pure` yet, so there is no promise to rely on. \
+                         Move the calculation into a `pure fn`, passing the fields it \
+                         needs.",
+                        name, method
+                    ));
+                }
                 if let Some(r) = self.check_variant_lit(base, method, args) {
                     return r;
                 }

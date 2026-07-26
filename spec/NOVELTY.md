@@ -103,6 +103,18 @@ Composes directly with the existing byte-identical-across-targets property:
 same inputs, same result, on web and desktop and mobile, *and* nothing hidden
 feeding in.
 
+**Slice 1 SHIPPED in v0.0.39** — `spec/N2-PURE-FUNCTIONS.md`. The illustrative
+syntax above is the actual syntax. It needed **less** than an effect system: the
+first declared effect marker arrived in v0.0.38 (`allocates`), and `pure` is the
+same shape pointed the other way — one that forbids rather than permits. A `pure fn`
+may not print, read a file, call into C, or call a function that is not `pure`.
+
+Stated honestly: Burxt has no clock, no random, no locale and no ambient
+configuration, so today the rule bites on I/O and the FFI, and is otherwise a
+forward guarantee — a clock will be added *behind* it. Purity-driven optimisation is
+deliberately excluded from the slice that introduces the marker, so it changes what
+compiles and nothing else.
+
 ---
 
 ## 3. Contracts as conservation laws, with atomicity derived from them

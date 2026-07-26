@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.38)
+# Burxt — Design Notes (v0.0.39)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1887,6 +1887,62 @@ Spec: `spec/M1a-CALLER-REGION-FUNCTIONS.md`, with its own must-NOT list — no
 inference, no region names in signatures, no implicit region at a call site, no
 `allocates` on `extern fn`, and no codegen change.
 
+### v0.0.39: `pure` — reproducibility the compiler checks (NOVELTY §2, slice 1)
+
+```text
+pure fn interest(balance: Decimal<2, RoundHalfEven>, rate: Decimal<4>)
+    -> Decimal<2, RoundHalfEven>
+{
+    return balance * rate;
+}
+```
+
+> **This function's result depends only on its arguments. The compiler checked.**
+
+Auditors and regulators care intensely whether a calculation is reproducible, and
+today the honest answer in every language is *"we believe so."* A hidden
+`DateTime.Now`, a locale-dependent parse, or a config lookup three calls down
+silently makes a computation irreproducible, and nothing catches it. Burxt already
+guarantees the arithmetic is exact and byte-identical across targets; `pure` extends
+that to the **inputs** — nothing may enter the calculation except through a
+parameter.
+
+**The register listed this as needing an effect system first. It needed less than
+that**, because v0.0.38 introduced the first declared effect marker (`allocates`).
+`pure` is the same shape pointed the other way: a marker that **forbids** rather than
+permits. A `pure fn` may not print, may not read a file, may not call into C, and may
+not call a function that is not itself `pure` — which makes the property transitive
+without inferring anything.
+
+**What it may do, deliberately: allocate.** A bump allocator observes nothing about
+the outside world and returns the same layout for the same sequence of calls, so
+`pure fn render(...) -> String allocates` is legal and useful — a pure function that
+builds a string. The two markers compose because they describe different things: one
+says *where memory comes from*, the other says *what may influence the result*.
+
+**Purity constrains the callee, never the caller.** Any function may call a pure one,
+nothing propagates upward, and the marker can be adopted one function at a time.
+
+**Honest about today's teeth, because overselling this would be worse than not
+shipping it.** Burxt has no clock, no random, no locale, no environment access and no
+ambient configuration. So the rules bite on **I/O and the FFI** — which is where
+nondeterminism actually enters a Burxt program today — and are otherwise a **forward
+guarantee**: when a clock is added it will be added *behind* this rule rather than in
+front of it.
+
+**Deliberately not done:** no inference (`pure` is written where it applies, like
+every other guarantee in the language), no opt-out inside a pure function, and **no
+purity-driven optimisation**. Memoisation and common-subexpression elimination are
+things this guarantee enables, and doing them now would mean the marker changes
+behaviour as well as legality. In the version that introduces it, it must only ever
+change what compiles.
+
+Methods cannot carry the marker yet, so a pure function cannot call one — refused
+with that reason stated, and `pure fn (self: T) ...` is refused at the parser with
+the same explanation rather than a confusing message about tokens.
+
+Spec: `spec/N2-PURE-FUNCTIONS.md`.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -1951,6 +2007,8 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- N2. `pure` functions, slice 1 (v0.0.39): reproducibility checked at the signature
+  — no I/O, no FFI, no impure calls. NOVELTY §2.
 - M1a. Caller-region functions (v0.0.38): `allocates` on a signature, which
   unblocks returning built values — the biggest remaining obstacle to a
   Burxt-hosted compiler.

@@ -1,0 +1,5 @@
+pure fn f(n: Int) -> Int {
+    print(n);
+    return n;
+}
+print(f(1));

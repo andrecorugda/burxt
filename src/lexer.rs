@@ -36,6 +36,9 @@ pub enum Token {
     Tail,
     /// `-> T allocates` — this function builds values in its CALLER's region.
     Allocates,
+    /// `pure fn` — the result depends only on the arguments, and the compiler
+    /// checks it: no I/O, no FFI, no impure calls.
+    Pure,
     If,
     Else,
     While,
@@ -125,6 +128,7 @@ impl Token {
             Token::As => "`as`".to_string(),
             Token::Tail => "`tail`".to_string(),
             Token::Allocates => "`allocates`".to_string(),
+            Token::Pure => "`pure`".to_string(),
             Token::If => "`if`".to_string(),
             Token::Else => "`else`".to_string(),
             Token::While => "`while`".to_string(),
@@ -606,6 +610,7 @@ impl<'a> Lexer<'a> {
             "as" => Token::As,
             "tail" => Token::Tail,
             "allocates" => Token::Allocates,
+            "pure" => Token::Pure,
             "if" => Token::If,
             "else" => Token::Else,
             "true" => Token::True,

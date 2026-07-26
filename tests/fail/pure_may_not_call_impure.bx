@@ -1,0 +1,5 @@
+fn helper(n: Int) -> Int { return n + 1; }
+pure fn f(n: Int) -> Int {
+    return helper(n);
+}
+print(f(1));
