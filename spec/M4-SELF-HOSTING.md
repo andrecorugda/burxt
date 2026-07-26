@@ -32,7 +32,7 @@ language server, JSON layer or diagnostics rendering.
 |---|---|---|---|
 | Lexer | 661 | 800–1,000 | **376, DONE** (v0.0.52) — came in under estimate |
 | AST + parser | 1,787 | 2,000–2,600 | **~930, DONE** (v0.0.53–54) — under estimate |
-| Typechecker | 3,702 | 4,500–5,500 | **~470 for 4a** (v0.0.57); 4b remains |
+| Typechecker | 3,702 | 4,500–5,500 | **~800**, 4a + most of 4b (v0.0.59) |
 | Backend (IR text) | 3,924 | 2,500–3,500 | 0 |
 | Driver | 230 | ~150 | 0 |
 | **Total** | | **≈10,000–12,500** | ~680 of real front-end work |
@@ -76,6 +76,26 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
      which is the honest direction). Remaining: methods on values, match bindings
      against variant payloads, indexing element types, and the region and purity
      rules.
+   - **4b, part DONE (v0.0.59):** match arms bind their variant's payload types (and
+     an arm that binds the wrong number of names is refused), indexing answers the
+     element type, a String reports that it is read with `byte_at`, and a method call
+     on a value is resolved against a method table. **False positives: 19 of 88**,
+     down from 24 while *adding* rules.
+
+     This is also where self-hosting found its sixth defect — in stage-1 itself, and
+     a structural one: **a child list built by pushing into the shared `kids` array is
+     not contiguous**, because parsing element two pushes element two's own children
+     first. v0.0.57 fixed three symptoms of this by moving nested lists to a second
+     array; the disease was the pattern. Every list now goes through a scratch
+     **stack**: children are pushed there, and `commit` moves them into `kids` in one
+     block once they all exist. A stack is the right shape because an inner list is
+     committed and popped before an outer list continues, at any nesting depth.
+
+     The reason it hid so long is worth recording: reading a garbage child index
+     yields a node of some other kind, and a checker that dispatches on kind then
+     *checks nothing* — silence that looks exactly like agreement. Match arms were the
+     first rule whose failure could not be silent, because a binding that never
+     entered the symbol table becomes "unknown name".
 5. **An IR-text backend in Burxt.**
 6. **Bootstrap and fixpoint.** stage-0 builds stage-1; stage-1 builds stage-1;
    compare.
@@ -126,12 +146,16 @@ Every self-hosted piece so far has found a real defect in the Rust compiler:
 - designing the checker's error type (v0.0.48) found a **use-after-free** the escape
   checker had accepted since regions shipped.
 
+- in v0.0.59 the first rule with an observable failure — match bindings — exposed a
+  **non-contiguous child list** in stage-1's own arena, a defect whose only symptom
+  until then was a checker quietly skipping statements,
+
 - and in v0.0.56 the front-end cross-check caught **stage-0 and stage-1 disagreeing
   about the language itself**, one version after a change to it: stage-1 still treated
   four contextual marker words as reserved, so it rejected a program stage-0 had just
   started accepting.
 
-Five for five. Self-hosting is the best test suite this project has, and the second
+Six for six. Self-hosting is the best test suite this project has, and the second
 implementation is a **differential test** as well as a certificate: from here on, a
 change to the language has two places that must agree, and disagreement arrives as a
 failing test rather than a bug report. That is the argument for doing it now rather

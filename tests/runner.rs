@@ -1015,6 +1015,8 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
         "tests/pass/contracts.bx",
         "tests/pass/int_division.bx",
         "tests/pass/termination_measure.bx",
+        "tests/pass/enum_match_flow.bx",
+        "tests/pass/method_basic.bx",
     ] {
         let found = errors_reported(&root.join(name));
         assert_eq!(found, 0, "stage-1 complained about {}, which stage-0 accepts", name);
@@ -1040,7 +1042,32 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     )
     .unwrap();
     let found = errors_reported(&wrong);
+
+    // Direction 3: the rules v0.0.59 added — a match arm's bindings against the
+    // variant's payload, an element type read through an index, and the String that
+    // is deliberately not indexable.
+    let shapes = scratch.join("shapes.bx");
+    fs::write(
+        &shapes,
+        "enum Step { Go(Int), Stop }\n\
+         let s: Step = Step.Go(2);\n\
+         match s {\n\
+         Go(a, b) => { print(\"two\"); }\n\
+         Stop => { print(\"stop\"); }\n\
+         }\n\
+         let xs: [Int; 3] = [1, 2, 3];\n\
+         let bad: String = xs[0];\n\
+         let text: String = \"hi\";\n\
+         print(to_string(text[0]));\n",
+    )
+    .unwrap();
+    let shape_errors = errors_reported(&shapes);
+
     let _ = fs::remove_dir_all(&scratch);
+    assert_eq!(
+        shape_errors, 3,
+        "stage-1 should have caught the arity, the element type and the indexed String"
+    );
     assert_eq!(
         found, 7,
         "expected stage-1 to catch all seven mistakes and invent none, got {}",
