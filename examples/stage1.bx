@@ -141,6 +141,17 @@ struct Unit {
     // Which function is being checked, so a `tail` call can be compared with the
     // signature it must replace. -1 at top level and inside a method.
     current_fn: Int,
+    // The backend's state: the IR text, the constants it referred to, a counter for
+    // registers and one for labels, the locals' allocas, and the enclosing loops'
+    // labels so `break` and `continue` know where to jump.
+    out: String,
+    globals: String,
+    next_tmp: Int,
+    next_label: Int,
+    slots: [Slot],
+    strings: [Int],
+    loop_conds: [String],
+    loop_ends: [String],
     in_function: Int,
     no_struct: Int,
     // Set while typing the operands of `*`. Multiplication combines a quantity with a
@@ -3513,6 +3524,422 @@ fn (self: Unit) count_of(kind: Int) -> Int {
     return found;
 }
 
+
+// =============================================================================
+// PHASE 5: the backend. Textual LLVM IR, for the reason M4 §1 gives — an
+// `extern fn` returns an Int or a CInt, never a pointer whose ownership Burxt
+// cannot describe, so an LLVMBuilderRef is unreachable BY CONSTRUCTION. Emitting
+// text is not a workaround: it is string formatting instead of an API, and the
+// output is readable, diffable and testable without a debugger.
+//
+// Slice 1 covers Ints, Bools, String literals, arithmetic with the overflow
+// checks the thesis requires, comparisons, `if`, `while`, `break`, `continue`,
+// functions, calls and `print`. Decimals, regions and aggregates follow; what is
+// not covered is refused by name rather than emitted wrongly.
+// =============================================================================
+
+struct Slot { start: Int, length: Int, index: Int }
+
+fn (mut self: Unit) w(text: String) -> Int allocates {
+    self.out = self.out + text;
+    return 0;
+}
+
+fn (mut self: Unit) fresh() -> String allocates {
+    self.next_tmp = self.next_tmp + 1;
+    return "%t" + to_string(self.next_tmp);
+}
+
+fn (mut self: Unit) fresh_label(stem: String) -> String allocates {
+    self.next_label = self.next_label + 1;
+    return stem + to_string(self.next_label);
+}
+
+// A local's alloca, named by its position in the table rather than by the source
+// name, so two blocks that both say `x` cannot collide in the IR.
+fn (mut self: Unit) declare_slot(src: String, start: Int, length: Int) -> Int allocates {
+    let index: Int = len(self.slots);
+    push(self.slots, Slot { start: start, length: length, index: index });
+    let visited: Int = self.w("  %v" + to_string(index) + " = alloca i64\n");
+    return index;
+}
+
+fn (self: Unit) find_slot(src: String, start: Int, length: Int) -> Int {
+    let mut i: Int = len(self.slots) - 1;
+    while i >= 0 {
+        let slot: Slot = self.slots[i];
+        if spans_eq(src, slot.start, slot.length, start, length) {
+            return slot.index;
+        }
+        i = i - 1;
+    }
+    return -1;
+}
+
+// Every byte as a hex escape. LLVM accepts c"\68\69\00", and emitting only escapes
+// means no byte needs a character to stand for it — which matters in a language whose
+// own `to_string` answers with digits, not letters.
+fn hex_of(value: Int) -> String allocates {
+    let digits: String = "0123456789abcdef";
+    return "\\" + substring(digits, div_floor(value, 16), 1)
+                + substring(digits, rem(value, 16), 1);
+}
+
+// A private constant for these bytes, answering the global's name. The bytes are the
+// STRING as the lexer read it, escapes and all, so what the program prints is what the
+// source said.
+fn (mut self: Unit) intern(src: String, start: Int, length: Int) -> String allocates {
+    let name: String = "@s" + to_string(len(self.strings));
+    push(self.strings, start);
+    let mut body: String = "";
+    let mut count: Int = 0;
+    let mut i: Int = 0;
+    while i < length {
+        let byte: Int = byte_at(src, start + i);
+        if byte == 92 && i + 1 < length {            // a backslash: the lexer's escape
+            let next: Int = byte_at(src, start + i + 1);
+            let mut resolved: Int = next;
+            if next == 110 { resolved = 10; }        // \n
+            if next == 116 { resolved = 9; }         // \t
+            if next == 48 { resolved = 0; }          // \0
+            body = body + hex_of(resolved);
+            count = count + 1;
+            i = i + 2;
+        } else {
+            body = body + hex_of(byte);
+            count = count + 1;
+            i = i + 1;
+        }
+    }
+    self.globals = self.globals + name + " = private unnamed_addr constant ["
+        + to_string(count + 1) + " x i8] c\"" + body + hex_of(0) + "\"\n";
+    return name;
+}
+
+// ---- expressions -------------------------------------------------------------
+// Each one answers an OPERAND: a register like %t7, or a literal like 42. The caller
+// does not care which, which is what keeps the emitter free of a value type.
+fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
+    let n: Node = self.nodes[node];
+    if n.kind == 1 {                                 // an Int literal
+        return to_string(n.value);
+    }
+    if n.kind == 4 {                                 // a Bool literal
+        if n.value == 1 {
+            return "1";
+        }
+        return "0";
+    }
+    if n.kind == 3 {                                 // a String literal
+        let t: Tok = self.toks[n.tok];
+        if t.interpolated {
+            let e: Int = self.complain_at(src, n.tok,
+                "the Burxt backend does not emit interpolation yet: it desugars to "
+                + "`to_string` and `+`, and neither is emitted in this slice");
+            return "@str_true";
+        }
+        // The token's span includes its quotes, and the bytes between them are the
+        // string. One place knows that, and it is here.
+        return self.intern(src, t.start + 1, t.length - 2);
+    }
+    if n.kind == 5 {                                 // a name
+        let t: Tok = self.toks[n.tok];
+        let slot: Int = self.find_slot(src, t.start, t.length);
+        if slot < 0 {
+            return "0";
+        }
+        let reg: String = self.fresh();
+        let visited: Int = self.w("  " + reg + " = load i64, ptr %v" + to_string(slot)
+                                  + "\n");
+        return reg;
+    }
+    if n.kind == 6 {                                 // (e)
+        return self.emit_expr(src, n.a);
+    }
+    if n.kind == 26 || n.kind == 7 {                 // -e, !e
+        let inner: String = self.emit_expr(src, n.a);
+        let reg: String = self.fresh();
+        if n.kind == 7 {
+            let visited: Int = self.w("  " + reg + " = xor i64 " + inner + ", 1\n");
+        } else {
+            let visited: Int = self.w("  " + reg + " = call i64 @burxt.checked.sub(i64 0, "
+                                      + "i64 " + inner + ")\n");
+        }
+        return reg;
+    }
+    if n.kind == 8 {                                 // a + b, a - b, a * b
+        let left: String = self.emit_expr(src, n.a);
+        let right: String = self.emit_expr(src, n.b);
+        let mut helper: String = "add";
+        if n.value == 26 { helper = "sub"; }
+        if n.value == 27 { helper = "mul"; }
+        let reg: String = self.fresh();
+        // Through the checked helper, always. An arithmetic result that silently wraps
+        // is the same class of wrong as a rounded cent.
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.checked." + helper
+                                  + "(i64 " + left + ", i64 " + right + ")\n");
+        return reg;
+    }
+    if n.kind == 9 {                                 // a comparison
+        let left: String = self.emit_expr(src, n.a);
+        let right: String = self.emit_expr(src, n.b);
+        // The token codes, not invented ones: `==` is 12, `!=` 13, `<=` 14, `>=` 15,
+        // and the single-character `<` and `>` are 35 and 36.
+        let mut op: String = "eq";
+        if n.value == 13 { op = "ne"; }
+        if n.value == 14 { op = "sle"; }
+        if n.value == 15 { op = "sge"; }
+        if n.value == 35 { op = "slt"; }
+        if n.value == 36 { op = "sgt"; }
+        let bit: String = self.fresh();
+        let visited: Int = self.w("  " + bit + " = icmp " + op + " i64 " + left + ", "
+                                  + right + "\n");
+        let reg: String = self.fresh();
+        // A Bool is an i64 in Burxt's ABI, so a comparison widens once, here.
+        let widened: Int = self.w("  " + reg + " = zext i1 " + bit + " to i64\n");
+        return reg;
+    }
+    if n.kind == 10 {                                // && and ||
+        // Both sides are evaluated: Burxt has no short-circuit yet, and pretending
+        // otherwise in the backend would make the two implementations disagree.
+        let left: String = self.emit_expr(src, n.a);
+        let right: String = self.emit_expr(src, n.b);
+        let reg: String = self.fresh();
+        let mut op: String = "and";
+        if n.value == 17 { op = "or"; }
+        let visited: Int = self.w("  " + reg + " = " + op + " i64 " + left + ", "
+                                  + right + "\n");
+        return reg;
+    }
+    if n.kind == 13 {                                // a call
+        let t: Tok = self.toks[n.tok];
+        let list: Node = self.nodes[n.a];
+        let mut args: String = "";
+        let mut i: Int = 0;
+        while i < list.b {
+            let value: String = self.emit_expr(src, self.kids[list.a + i]);
+            if i > 0 {
+                args = args + ", ";
+            }
+            args = args + "i64 " + value;
+            i = i + 1;
+        }
+        let reg: String = self.fresh();
+        let visited: Int = self.w("  " + reg + " = call i64 @" + substring(src, t.start,
+                                  t.length) + "(" + args + ")\n");
+        return reg;
+    }
+    // Anything this slice does not cover is named rather than emitted wrongly.
+    let e: Int = self.complain_at(src, n.tok,
+        "the Burxt backend does not emit this expression yet");
+    return "0";
+}
+
+// ---- statements --------------------------------------------------------------
+fn (mut self: Unit) emit_stmt(src: String, node: Int) -> Int allocates {
+    let n: Node = self.nodes[node];
+
+    if n.kind == 60 {                                // let
+        let name: Tok = self.toks[n.tok];
+        let value: String = self.emit_expr(src, n.b);
+        let slot: Int = self.declare_slot(src, name.start, name.length);
+        return self.w("  store i64 " + value + ", ptr %v" + to_string(slot) + "\n");
+    }
+
+    if n.kind == 61 {                                // assignment
+        let target: Node = self.nodes[n.a];
+        let name: Tok = self.toks[target.tok];
+        let value: String = self.emit_expr(src, n.b);
+        let slot: Int = self.find_slot(src, name.start, name.length);
+        return self.w("  store i64 " + value + ", ptr %v" + to_string(slot) + "\n");
+    }
+
+    if n.kind == 62 {                                // print
+        let shown: Ty = self.type_at(n.a);
+        let value: String = self.emit_expr(src, n.a);
+        if shown.kind == 41 {                        // a Bool renders as a word
+            let bit: String = self.fresh();
+            let visited: Int = self.w("  " + bit + " = icmp ne i64 " + value + ", 0\n");
+            let text: String = self.fresh();
+            let chosen: Int = self.w("  " + text + " = select i1 " + bit
+                                     + ", ptr @str_true, ptr @str_false\n");
+            let printed: Int = self.w("  call i32 (ptr, ...) @printf(ptr @fmt_str, ptr "
+                                      + text + ")\n");
+            return self.w("  call i32 (ptr, ...) @printf(ptr @fmt_nl)\n");
+        }
+        if shown.kind == 42 {                        // a String
+            let printed: Int = self.w("  call i32 (ptr, ...) @printf(ptr @fmt_str, ptr "
+                                      + value + ")\n");
+            return self.w("  call i32 (ptr, ...) @printf(ptr @fmt_nl)\n");
+        }
+        let printed: Int = self.w("  call i32 (ptr, ...) @printf(ptr @fmt_int, i64 "
+                                  + value + ")\n");
+        return self.w("  call i32 (ptr, ...) @printf(ptr @fmt_nl)\n");
+    }
+
+    if n.kind == 63 {                                // return
+        let value: String = self.emit_expr(src, n.a);
+        return self.w("  ret i64 " + value + "\n");
+    }
+
+    if n.kind == 65 {                                // if
+        let cond: String = self.emit_expr(src, n.a);
+        let bit: String = self.fresh();
+        let tested: Int = self.w("  " + bit + " = icmp ne i64 " + cond + ", 0\n");
+        let then_label: String = self.fresh_label("if.then");
+        let else_label: String = self.fresh_label("if.else");
+        let end_label: String = self.fresh_label("if.end");
+        let branched: Int = self.w("  br i1 " + bit + ", label %" + then_label
+                                   + ", label %" + else_label + "\n");
+        let opened: Int = self.w(then_label + ":\n");
+        let then_body: Int = self.emit_block(src, n.b);
+        let closed: Int = self.w("  br label %" + end_label + "\n" + else_label + ":\n");
+        if n.c >= 0 {
+            let else_body: Int = self.emit_block(src, n.c);
+        }
+        let joined: Int = self.w("  br label %" + end_label + "\n" + end_label + ":\n");
+        return 1;
+    }
+
+    if n.kind == 66 {                                // while
+        let cond_label: String = self.fresh_label("while.cond");
+        let body_label: String = self.fresh_label("while.body");
+        let end_label: String = self.fresh_label("while.end");
+        let entered: Int = self.w("  br label %" + cond_label + "\n" + cond_label + ":\n");
+        let cond: String = self.emit_expr(src, n.a);
+        let bit: String = self.fresh();
+        let tested: Int = self.w("  " + bit + " = icmp ne i64 " + cond + ", 0\n");
+        let branched: Int = self.w("  br i1 " + bit + ", label %" + body_label
+                                   + ", label %" + end_label + "\n" + body_label + ":\n");
+        // A stack, because `break` inside a nested loop leaves the INNER one.
+        push(self.loop_conds, cond_label);
+        push(self.loop_ends, end_label);
+        let body: Int = self.emit_block(src, n.b);
+        let dropped_cond: Int = truncate(self.loop_conds, len(self.loop_conds) - 1);
+        let dropped_end: Int = truncate(self.loop_ends, len(self.loop_ends) - 1);
+        return self.w("  br label %" + cond_label + "\n" + end_label + ":\n");
+    }
+
+    if n.kind == 67 || n.kind == 68 {                // break, continue
+        let depth: Int = len(self.loop_ends);
+        if depth == 0 {
+            return 0;
+        }
+        let mut target: String = self.loop_ends[depth - 1];
+        if n.kind == 68 {
+            target = self.loop_conds[depth - 1];
+        }
+        let jumped: Int = self.w("  br label %" + target + "\n");
+        // The block after an unconditional branch needs a label, and nothing reaches it.
+        let dead: String = self.fresh_label("after");
+        return self.w(dead + ":\n");
+    }
+
+    if n.kind == 70 {                                // an expression, for its effect
+        let value: String = self.emit_expr(src, n.a);
+        return 1;
+    }
+
+    let e: Int = self.complain_at(src, n.tok,
+        "the Burxt backend does not emit this statement yet");
+    return 0;
+}
+
+fn (mut self: Unit) emit_block(src: String, block: Int) -> Int allocates {
+    if block < 0 {
+        return 0;
+    }
+    let n: Node = self.nodes[block];
+    if n.kind != 16 {
+        return self.emit_stmt(src, block);
+    }
+    let mut i: Int = 0;
+    while i < n.b {
+        let emitted: Int = self.emit_stmt(src, self.kids[n.a + i]);
+        i = i + 1;
+    }
+    return 1;
+}
+
+// ---- the module --------------------------------------------------------------
+fn (mut self: Unit) emit_module(src: String) -> Int allocates {
+    let mut preamble: Int = self.w("declare i32 @printf(ptr, ...)\n");
+    preamble = self.w("declare void @exit(i32)\n\n");
+    // The overflow helpers, written once. They are what makes `a + b` a claim rather
+    // than a hope, and they exit 70 like every other named runtime failure.
+    preamble = self.w(overflow_helper("add", "sadd"));
+    preamble = self.w(overflow_helper("sub", "ssub"));
+    preamble = self.w(overflow_helper("mul", "smul"));
+
+    // Functions first, so a call reads as a call to something already written.
+    let mut i: Int = 0;
+    while i < len(self.items) {
+        let index: Int = self.items[i];
+        let item: Node = self.nodes[index];
+        if item.kind == 80 {
+            let name: Tok = self.toks[item.tok];
+            let params: Node = self.nodes[item.a];
+            let base: Int = len(self.slots);
+            let mut signature: String = "";
+            let mut p: Int = 0;
+            while p < params.b {
+                if p > 0 {
+                    signature = signature + ", ";
+                }
+                signature = signature + "i64 %a" + to_string(p);
+                p = p + 1;
+            }
+            let opened: Int = self.w("define i64 @" + substring(src, name.start, name.length)
+                                     + "(" + signature + ") \{\nentry:\n");
+            p = 0;
+            while p < params.b {
+                let param: Node = self.nodes[self.kids[params.a + p]];
+                let pname: Tok = self.toks[param.tok];
+                let slot: Int = self.declare_slot(src, pname.start, pname.length);
+                let stored: Int = self.w("  store i64 %a" + to_string(p) + ", ptr %v"
+                                         + to_string(slot) + "\n");
+                p = p + 1;
+            }
+            let body: Int = self.emit_block(src, item.b);
+            // Unreachable, since the checker proved every path returns — but LLVM
+            // requires every block to end in a terminator, and a module that does not
+            // verify is not a program.
+            let closed: Int = self.w("  ret i64 0\n\}\n\n");
+            let dropped: Int = truncate(self.slots, base);
+        }
+        i = i + 1;
+    }
+
+    // Then main, which is the top-level statements in order.
+    let opened: Int = self.w("define i32 @main(i32 %argc, ptr %argv) \{\nentry:\n");
+    i = 0;
+    while i < len(self.items) {
+        let index: Int = self.items[i];
+        let item: Node = self.nodes[index];
+        if item.kind >= 60 && item.kind <= 71 {
+            let emitted: Int = self.emit_stmt(src, index);
+        }
+        i = i + 1;
+    }
+    let closed: Int = self.w("  ret i32 0\n\}\n");
+    return 1;
+}
+
+fn overflow_helper(name: String, intrinsic: String) -> String allocates {
+    return "define i64 @burxt.checked." + name + "(i64 %a, i64 %b) \{\n"
+        + "entry:\n"
+        + "  %r = call \{i64, i1\} @llvm." + intrinsic + ".with.overflow.i64(i64 %a, i64 %b)\n"
+        + "  %v = extractvalue \{i64, i1\} %r, 0\n"
+        + "  %o = extractvalue \{i64, i1\} %r, 1\n"
+        + "  br i1 %o, label %overflowed, label %ok\n"
+        + "ok:\n  ret i64 %v\n"
+        + "overflowed:\n"
+        + "  call i32 (ptr, ...) @printf(ptr @overflow_msg)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n\}\n"
+        + "declare \{i64, i1\} @llvm." + intrinsic + ".with.overflow.i64(i64, i64)\n\n";
+}
+
 region compile {
     // The file to lex: whatever was asked for, or the tour as a default.
     let mut path: String = "examples/tour.bx";
@@ -3520,7 +3947,7 @@ region compile {
         path = arg(1);
     }
     let src: String = read_file(path);
-    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_fn: -1, in_function: 0, depth: 0, problems: 0, pos: 0, no_struct: 0, in_mul: 0, errors: 0 };
+    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_fn: -1, out: "", globals: "", next_tmp: 0, next_label: 0, slots: [], strings: [], loop_conds: [], loop_ends: [], in_function: 0, depth: 0, problems: 0, pos: 0, no_struct: 0, in_mul: 0, errors: 0 };
     let installed: Int = unit.install_keywords();
     let total: Int = unit.run(src);
 
@@ -3554,5 +3981,25 @@ region compile {
         print("checked " + to_string(len(unit.funs)) + " functions and "
               + to_string(len(unit.types)) + " types");
         print("  type errors: " + to_string(problems));
+
+        // ---- phase 5: emit LLVM IR, when a second argument says where ----
+        if problems == 0 && arg_count() > 2 {
+            let emitted: Int = unit.emit_module(src);
+            if unit.problems == 0 {
+                let text: String = "; LLVM IR written by the Burxt compiler, in Burxt.\n"
+                    + "@fmt_int = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n"
+                    + "@fmt_str = private unnamed_addr constant [3 x i8] c\"%s\\00\"\n"
+                    + "@fmt_nl = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n"
+                    + "@str_true = private unnamed_addr constant [5 x i8] c\"true\\00\"\n"
+                    + "@str_false = private unnamed_addr constant [6 x i8] c\"false\\00\"\n"
+                    + "@overflow_msg = private unnamed_addr constant [42 x i8] "
+                    + "c\"burxt runtime error: arithmetic overflow\\0A\\00\"\n"
+                    + unit.globals + "\n" + unit.out;
+                let wrote: Int = write_file(arg(2), text);
+                print("wrote " + arg(2) + ", " + to_string(len(text)) + " bytes of IR");
+            } else {
+                print("  backend refusals: " + to_string(unit.problems));
+            }
+        }
     }
 }

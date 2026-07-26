@@ -33,7 +33,7 @@ language server, JSON layer or diagnostics rendering.
 | Lexer | 661 | 800–1,000 | **376, DONE** (v0.0.52) — came in under estimate |
 | AST + parser | 1,787 | 2,000–2,600 | **~930, DONE** (v0.0.53–54) — under estimate |
 | Typechecker | 3,702 | 4,500–5,500 | **~2,190**, 4b complete (v0.0.64) |
-| Backend (IR text) | 3,924 | 2,500–3,500 | 0 |
+| Backend (IR text) | 3,924 | 2,500–3,500 | **~450, slice 1 running** (v0.0.65) |
 | Driver | 230 | ~150 | 0 |
 | **Total** | | **≈10,000–12,500** | ~680 of real front-end work |
 
@@ -221,7 +221,37 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
      made of them. The real rule is that such a struct must be BUILT in a region, which
      is a statement about the literal, not the declaration.
 
-5. **An IR-text backend in Burxt.**
+5. **An IR-text backend in Burxt.** **Slice 1 SHIPPED (v0.0.65):** a program compiled
+   by the compiler written in Burxt runs, and prints exactly what stage-0's build of the
+   same source prints. That is checked by a test — `programs_compiled_by_the_burxt_
+   backend_run_and_agree_with_stage_0` — which takes stage-1's `.ll` through `llc` and
+   the system linker, runs the result, and compares it with stage-0's answer.
+
+   What slice 1 emits: Ints, Bools, String literals, `+ - *` **through the overflow
+   helpers** (an arithmetic result that silently wraps is the same class of wrong as a
+   rounded cent, so the helpers are written into every module), comparisons, `&&`/`||`,
+   `if`/`else`, `while` with `break` and `continue`, functions, calls, recursion, and
+   `print` of each covered type. Locals are allocas named by their slot index rather
+   than their source name, so two blocks that both say `x` cannot collide.
+
+   Decisions worth recording:
+   - **Every string byte is emitted as a hex escape** (`c"\68\69\00"`). LLVM accepts
+     that, and it means no byte needs a character to stand for it — which matters in a
+     language whose own `to_string` answers with digits, not letters.
+   - **Anything not covered is refused by name**, never emitted wrongly: interpolation
+     says it desugars to `to_string` and `+` and that neither is emitted in this slice.
+     A backend that half-emits is worse than one that says what it cannot do.
+   - The emitter answers **operands** — `%t7` or `42`, the caller cannot tell which —
+     which is what keeps it free of a value type.
+
+   Two defects the running program found, which reading the IR had not: comparison
+   opcodes were mapped to invented token numbers rather than the lexer's (`<` is 35, not
+   13), so `i < 3` emitted `icmp eq`; and a String token's span includes its quotes, so
+   `print("done")` printed `"done"`. Both were found by diffing against stage-0's output
+   — the only test that could have found them.
+
+   Still to emit: Decimals and their rounding, regions and the allocator, aggregates,
+   `match`, methods, `tail` with `musttail`, contracts, and the FFI boundary.
 6. **Bootstrap and fixpoint.** stage-0 builds stage-1; stage-1 builds stage-1;
    compare.
 

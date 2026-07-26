@@ -1108,3 +1108,117 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
         found
     );
 }
+
+/// The proof that phase 5 is real: a program compiled by the compiler written IN
+/// BURXT runs, and prints exactly what stage-0's build of the same source prints.
+///
+/// Stage-1 writes textual LLVM IR — M4 §1's decision, forced by `extern fn` returns
+/// being Int and CInt only, so an LLVMBuilderRef is unreachable by construction. `llc`
+/// and the system linker turn that text into a program, which is the same path any
+/// other compiler's output takes.
+#[test]
+fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    if !llc.exists() {
+        eprintln!("skipping: {} is not installed", llc.display());
+        return;
+    }
+    let scratch = scratch_dir("stage1-backend");
+    fs::create_dir_all(&scratch).unwrap();
+    let build = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("examples/stage1.bx"))
+        .current_dir(&scratch)
+        .output()
+        .expect("failed to spawn burxt");
+    assert!(build.status.success(), "stage-1 did not compile");
+
+    // What slice 1 covers: Ints, Bools, String literals, checked arithmetic,
+    // comparisons, `if`, `while`, `break`, `continue`, functions, calls, `print`.
+    let programs: [(&str, &str); 4] = [
+        ("arith.bx", "let a: Int = 6;\nlet b: Int = 7;\nprint(a * b);\nprint(a - b);\n"),
+        (
+            "loop.bx",
+            "let mut i: Int = 0;\nwhile i < 4 {\n  if i == 2 { i = i + 1; continue; }\n               print(i * 10);\n  i = i + 1;\n}\nprint(\"end\");\n",
+        ),
+        (
+            "calls.bx",
+            "fn fact(n: Int) -> Int {\n  if n <= 1 { return 1; }\n  return n * fact(n - 1);\n}\n\
+             print(fact(6));\n",
+        ),
+        (
+            "logic.bx",
+            "let n: Int = 5;\nprint(n >= 5 && n <= 5);\nprint(n != 5 || false);\nprint(!true);\n",
+        ),
+    ];
+
+    let mut failures = Vec::new();
+    for (name, source) in programs {
+        let src = scratch.join(name);
+        fs::write(&src, source).unwrap();
+
+        // stage-0's answer, which is the one to match.
+        let expected = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("run")
+            .arg(&src)
+            .current_dir(&scratch)
+            .output()
+            .expect("failed to run stage-0");
+        let expected_out = String::from_utf8_lossy(&expected.stdout)
+            .lines()
+            .filter(|l| !l.starts_with("compiled "))
+            .map(|l| format!("{}\n", l))
+            .collect::<String>();
+
+        // stage-1: source -> IR text -> object -> program.
+        let ll = scratch.join(format!("{}.ll", name));
+        let emit = Command::new(scratch.join("stage1"))
+            .arg(&src)
+            .arg(&ll)
+            .current_dir(&scratch)
+            .output()
+            .expect("failed to run stage-1");
+        let emit_out = String::from_utf8_lossy(&emit.stdout);
+        if !emit_out.contains("bytes of IR") {
+            failures.push(format!("{}: stage-1 emitted nothing\n{}", name, emit_out));
+            continue;
+        }
+        let obj = scratch.join(format!("{}.o", name));
+        let compiled = Command::new(llc)
+            .args(["-relocation-model=pic", "-filetype=obj", "-o"])
+            .arg(&obj)
+            .arg(&ll)
+            .output()
+            .expect("failed to run llc");
+        if !compiled.status.success() {
+            failures.push(format!(
+                "{}: llc rejected the IR\n{}",
+                name,
+                String::from_utf8_lossy(&compiled.stderr)
+            ));
+            continue;
+        }
+        let exe = scratch.join(format!("{}.exe", name));
+        let linked = Command::new("cc").arg("-o").arg(&exe).arg(&obj).output().expect("cc");
+        if !linked.status.success() {
+            failures.push(format!(
+                "{}: link failed\n{}",
+                name,
+                String::from_utf8_lossy(&linked.stderr)
+            ));
+            continue;
+        }
+        let ran = Command::new(&exe).output().expect("failed to run the program");
+        let got = String::from_utf8_lossy(&ran.stdout).to_string();
+        if got != expected_out {
+            failures.push(format!(
+                "{}: stage-1's program printed {:?}, stage-0's printed {:?}",
+                name, got, expected_out
+            ));
+        }
+    }
+
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
