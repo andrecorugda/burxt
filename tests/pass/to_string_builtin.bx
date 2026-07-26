@@ -1,0 +1,19 @@
+region r {
+    print(to_string(42));
+    print(to_string(-7));
+    print(to_string(0));
+    let m: Decimal<2> = $19.99;
+    print(to_string(m));
+    let neg: Decimal<2> = -$0.50;
+    print(to_string(neg));
+    let whole: Decimal<0> = 42.0;
+    print(to_string(whole));
+    let rate: Decimal<4> = 0.0725;
+    print(to_string(rate));
+    // The point of it: a message assembled from values.
+    let line: Int = 3;
+    print("line " + to_string(line) + ": unexpected byte " + to_string(108));
+}
+// Bool renders to a literal, so it needs no region at all.
+print(to_string(true));
+print(to_string(false));

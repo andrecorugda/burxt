@@ -9,6 +9,10 @@
 //! Each program is compiled with the real `burxt` binary (CARGO_BIN_EXE_burxt)
 //! inside a scratch directory, so executables and object files never land in
 //! the repository. Adding a test = dropping two files in the right directory.
+//!
+//! Any non-.bx, non-expectation file in a test directory is a *fixture*: it is
+//! copied into the scratch directory before the programs run, so a program that
+//! reads a file has something to read.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -44,6 +48,20 @@ fn burxt(cmd: &str, program: &Path, workdir: &Path) -> Output {
         .expect("failed to spawn burxt")
 }
 
+/// Copy tests/<dir>'s fixture files (anything that is not a program or an
+/// expectation) into the scratch directory the programs run in.
+fn install_fixtures(dir: &str, workdir: &Path) {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join(dir);
+    fs::create_dir_all(workdir).unwrap();
+    for entry in fs::read_dir(&root).unwrap() {
+        let path = entry.unwrap().path();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if !matches!(ext, "bx" | "stdout" | "stderr") {
+            fs::copy(&path, workdir.join(path.file_name().unwrap())).unwrap();
+        }
+    }
+}
+
 fn scratch_dir(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("burxt-tests-{}-{}", std::process::id(), tag))
 }
@@ -51,6 +69,7 @@ fn scratch_dir(tag: &str) -> PathBuf {
 #[test]
 fn pass_programs_produce_expected_stdout() {
     let scratch = scratch_dir("pass");
+    install_fixtures("pass", &scratch);
     let mut failures = Vec::new();
     for (program, expected) in cases("pass", "stdout") {
         let out = burxt("run", &program, &scratch);
@@ -77,6 +96,7 @@ fn pass_programs_produce_expected_stdout() {
 #[test]
 fn panic_programs_die_cleanly_at_runtime() {
     let scratch = scratch_dir("panic");
+    install_fixtures("panic", &scratch);
     let mut failures = Vec::new();
     for (program, expected) in cases("panic", "stderr") {
         let needle = expected.trim();

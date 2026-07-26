@@ -1,0 +1,5 @@
+// A file that cannot be opened is a named error, not a silent empty string.
+region r {
+    let text: String = read_file("no_such_file_exists.txt");
+    print(len(text));
+}

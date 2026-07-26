@@ -1,0 +1,21 @@
+// Interpolation as a VALUE, not just as a print. It desugars to to_string + `+`,
+// so it must be byte-identical to the join it stands for.
+let n: Int = 5;
+let m: Decimal<2> = $19.99;
+let ok: Bool = n > 3;
+let who: String = "burxt";
+region r {
+    let s: String = "n is {n}, money {m}, ok {ok}, from {who}";
+    print(s);
+    print(len(s));
+    let joined: String = "n is " + to_string(n) + ", money " + to_string(m)
+        + ", ok " + to_string(ok) + ", from " + who;
+    print(s == joined);
+    // a single interpolation, and one with no pieces at all
+    let bare: String = "{n}";
+    print(bare);
+    let none: String = "";
+    print(len(none));
+}
+// print(...) still takes the no-allocation path, so it needs no region.
+print("outside: {n} {m}");

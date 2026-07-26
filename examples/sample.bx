@@ -1,0 +1,4 @@
+// A small input for the self-hosted lexer to read and tokenize.
+let price = 250;
+let qty = 4;
+let total = price * qty + 99;

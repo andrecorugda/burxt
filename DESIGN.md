@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.27)
+# Burxt — Design Notes (v0.0.28)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1282,6 +1282,51 @@ forced to come true (interpolation-as-a-value was never memory-blocked;
 returnable `dyn` was never going to be fixed by regions), and both corrections
 are recorded in the spec they came from.
 
+### v0.0.28: reading a file, and rendering a value
+
+```text
+region source {
+    let text: String = read_file("examples/sample.bx");
+    print("--- {len(text)} bytes read");
+    let n: Int = tokenize(text);
+}
+```
+
+Two builtins, chosen because they were the two things a Burxt-hosted compiler
+literally could not do: **it could not read its own input, and it could not build
+an error message.**
+
+- **`read_file(path) -> String`** reads a whole file into the current region,
+  NUL-terminated, so it is an ordinary Burxt String afterwards. A file that
+  cannot be opened is a *named* runtime error, not a silent empty string — the
+  same standard bounds checks and overflow already meet. Why a builtin rather
+  than FFI: `extern fn` returns are Int/CInt only, because a C function that
+  returns a pointer returns memory belonging to nobody. `read_file` allocates in
+  a region the compiler can see, so ownership stays answerable.
+- **`to_string(v) -> String`** renders Int, Bool and Decimal into region storage
+  using the *same format strings the printer uses* — one formatter, so a printed
+  value and a rendered one can never disagree. `Bool` allocates nothing (both
+  spellings are literals) and therefore needs no region. `to_string` on a String
+  is refused: it would only copy it.
+
+**And that retired the oldest entry on the ledger.** Interpolation-as-a-value
+was reclassified at v0.0.25 as needing a formatter rather than memory. The
+formatter now exists, so `let s: String = "n is {n}"` compiles — and it
+**desugars to `to_string` + `+`** rather than getting a lowering of its own. A
+test asserts the interpolation is byte-equal to the hand-written join, which is
+the property the desugaring buys: they are the same program by construction.
+`print("...{x}")` keeps its no-allocation path and still needs no region, so
+nothing that used to compile got slower or stricter.
+
+Escape checking needed no new rule — `expr_allocates` already flagged `+` on
+Strings, so an interpolated value cannot outlive its region for the same reason
+a concatenated one cannot.
+
+**A repo hygiene fix shipped here too:** eight compiled example/test
+executables had been committed. They are untracked now, with `.gitignore`
+covering the bare, extensionless outputs `burxt build` writes into the working
+directory.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -1339,8 +1384,11 @@ it travels.
 - A4.6. Composition-first OOP: receiver methods (v0.0.13), traits + `dyn`
   dispatch (v0.0.14) — DONE. `class` and `open` single inheritance still to
   come (see "The OOP model") <- IN PROGRESS
-- A4.7. Signature grammar: money/unit literals (`$19.99`, `8.25%`, `5.km`),
-  string interpolation, pipelines
+- A4.7. Signature grammar: money/unit literals (`$19.99`, `8.25%`), string
+  interpolation as a print (v0.0.17) and as a value (v0.0.28) — DONE. Unit
+  literals (`5.km`) and pipelines still to come.
+- A4.8. File input: `read_file` and `to_string` (v0.0.28) — the two things a
+  self-hosted compiler could not do without.
 - A4+. OOP by default, SOLID-aligned: by-pointer ABI + receiver methods,
   then interfaces as behavioral contracts (dictionary dispatch). No
   implementation inheritance — a type satisfies an interface exactly or it

@@ -1,0 +1,5 @@
+let a: [Int; 2] = [1, 2];
+region r {
+    let s: String = "array: {a}";
+    print(s);
+}

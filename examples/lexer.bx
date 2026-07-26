@@ -2,10 +2,10 @@
 // A Burxt lexer, written in Burxt.
 //
 // This is the first piece of the compiler to be self-hosted. It tokenizes real
-// Burxt-ish source and needs NO heap: a token that refers to source text
-// carries a (start, length) span rather than an owned substring, and numbers
-// are accumulated arithmetically as digits arrive. That is why this runs today,
-// before the memory model exists.
+// Burxt source read from disk. A token that refers to source text carries a
+// (start, length) span rather than an owned substring, and numbers are
+// accumulated arithmetically as digits arrive — so the only allocation in the
+// whole program is the file's bytes, which live in one region.
 // ============================================================================
 
 enum Token {
@@ -16,6 +16,7 @@ enum Token {
     LParen,
     RParen,
     Semi,
+    Assign,
     // a literal value, accumulated digit by digit — no string building
     Number(Int),
     // a span into the source: start byte and length, so no allocation
@@ -42,16 +43,29 @@ fn is_space(b: Int) -> Bool {
     return b == 32 || b == 9 || b == 10 || b == 13;
 }
 
-fn skip_spaces(src: String, from: Int) -> Int {
+// Whitespace and `// line comments` are both trivia: skip them together, and
+// keep going, because a comment can be followed by more of either.
+fn skip_trivia(src: String, from: Int) -> Int {
     let mut i: Int = from;
-    while i < len(src) && is_space(byte_at(src, i)) {
-        i = i + 1;
+    let mut moving: Bool = true;
+    while moving {
+        moving = false;
+        while i < len(src) && is_space(byte_at(src, i)) {
+            i = i + 1;
+            moving = true;
+        }
+        if i + 1 < len(src) && byte_at(src, i) == 47 && byte_at(src, i + 1) == 47 {
+            while i < len(src) && byte_at(src, i) != 10 {
+                i = i + 1;
+            }
+            moving = true;
+        }
     }
     return i;
 }
 
 fn next_token(src: String, from: Int) -> Scan {
-    let start: Int = skip_spaces(src, from);
+    let start: Int = skip_trivia(src, from);
     if start >= len(src) {
         return Scan { tok: Token.End, next: start };
     }
@@ -85,6 +99,7 @@ fn next_token(src: String, from: Int) -> Scan {
     if b == 40 { return Scan { tok: Token.LParen, next: after }; }
     if b == 41 { return Scan { tok: Token.RParen, next: after }; }
     if b == 59 { return Scan { tok: Token.Semi,   next: after }; }
+    if b == 61 { return Scan { tok: Token.Assign, next: after }; }
     return Scan { tok: Token.Unknown(b), next: after };
 }
 
@@ -99,6 +114,7 @@ fn show(t: Token) -> Int {
         LParen => { print("LPAREN"); return 1; }
         RParen => { print("RPAREN"); return 1; }
         Semi => { print("SEMI"); return 1; }
+        Assign => { print("ASSIGN"); return 1; }
         Number(v) => { print("NUMBER {v}"); return 1; }
         Name(at, n) => { print("NAME at {at} len {n}"); return 1; }
         Unknown(b) => { print("UNKNOWN byte {b}"); return 1; }
@@ -122,7 +138,12 @@ fn tokenize(src: String) -> Int {
     return count;
 }
 
-let source: String = "let total = price * 3 + 42;";
-print("--- source: {source}");
-let n: Int = tokenize(source);
-print("--- {n} tokens");
+// The payoff: the lexer no longer has its input baked in. It reads a real file
+// from disk — the last thing a self-hosted compiler was missing. The bytes live
+// in the region and are released as a unit when it closes.
+region source {
+    let text: String = read_file("examples/sample.bx");
+    print("--- " + to_string(len(text)) + " bytes read");
+    let n: Int = tokenize(text);
+    print("--- " + to_string(n) + " tokens");
+}

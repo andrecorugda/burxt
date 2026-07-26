@@ -1157,6 +1157,14 @@ impl<'ctx> CodeGen<'ctx> {
                     .map(Into::into)
                     .map_err(|e| e.to_string())
             }
+            TypedExprKind::ReadFile(path) => {
+                let p = self.gen_expr(path)?.into_pointer_value();
+                self.build_read_file(p).map(Into::into)
+            }
+            TypedExprKind::ToString(v) => {
+                let val = self.gen_expr(v)?;
+                self.build_to_string(&v.ty, val).map(Into::into)
+            }
             TypedExprKind::StrLen(inner) => {
                 let s = self.gen_expr(inner)?.into_pointer_value();
                 self.build_str_len(s).map(Into::into)
@@ -1919,6 +1927,192 @@ impl<'ctx> CodeGen<'ctx> {
             )
         }
         .map_err(|e| e.to_string())
+    }
+
+    /// A libc function, declared exactly once. Declaring one twice makes LLVM
+    /// rename the second, which surfaces as an undefined symbol at link time.
+    fn libc(&mut self, name: &str, ty: inkwell::types::FunctionType<'ctx>) -> FunctionValue<'ctx> {
+        match self.module.get_function(name) {
+            Some(f) => f,
+            None => self.module.add_function(name, ty, None),
+        }
+    }
+
+    /// Read a whole file into the current region and return it as a String.
+    /// NUL-terminated, so it is an ordinary Burxt String afterwards.
+    fn build_read_file(&mut self, path: PointerValue<'ctx>) -> Result<PointerValue<'ctx>, String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+        let i32t = self.ctx.i32_type();
+        let i8t = self.ctx.i8_type();
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+
+        let fopen = self.libc("fopen", ptr.fn_type(&[ptr.into(), ptr.into()], false));
+        let fseek = self.libc(
+            "fseek",
+            i32t.fn_type(&[ptr.into(), i64t.into(), i32t.into()], false),
+        );
+        let ftell = self.libc("ftell", i64t.fn_type(&[ptr.into()], false));
+        let fread = self.libc(
+            "fread",
+            i64t.fn_type(&[ptr.into(), i64t.into(), i64t.into(), ptr.into()], false),
+        );
+        let fclose = self.libc("fclose", i32t.fn_type(&[ptr.into()], false));
+
+        let mode = self.global_str("rb", "mode_rb");
+        let handle = self
+            .builder
+            .build_call(fopen, &[path.into(), mode.into()], "fh")
+            .map_err(err)?;
+        let fh = match handle.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => v.into_pointer_value(),
+            _ => return Err("fopen returned void".to_string()),
+        };
+
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_parent())
+            .ok_or("codegen bug: read_file outside a function")?;
+        let missing_bb = self.ctx.append_basic_block(function, "no_file");
+        let open_bb = self.ctx.append_basic_block(function, "file_open");
+        let is_null = self.builder.build_is_null(fh, "no_handle").map_err(err)?;
+        self.builder.build_conditional_branch(is_null, missing_bb, open_bb).map_err(err)?;
+
+        // An unreadable file is a named error, not a silent empty string.
+        self.builder.position_at_end(missing_bb);
+        self.build_panic("burxt runtime error: cannot open file for reading\n")?;
+
+        self.builder.position_at_end(open_bb);
+        // SEEK_END is 2; measure, then rewind.
+        self.builder
+            .build_call(
+                fseek,
+                &[fh.into(), i64t.const_zero().into(), i32t.const_int(2, false).into()],
+                "to_end",
+            )
+            .map_err(err)?;
+        let size_call = self.builder.build_call(ftell, &[fh.into()], "size").map_err(err)?;
+        let size = match size_call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => v.into_int_value(),
+            _ => return Err("ftell returned void".to_string()),
+        };
+        self.builder
+            .build_call(
+                fseek,
+                &[fh.into(), i64t.const_zero().into(), i32t.const_zero().into()],
+                "rewind",
+            )
+            .map_err(err)?;
+
+        let with_nul = self
+            .builder
+            .build_int_add(size, i64t.const_int(1, false), "with_nul")
+            .map_err(err)?;
+        let buf = self.build_alloc_bytes(with_nul)?;
+        self.builder
+            .build_call(
+                fread,
+                &[buf.into(), i64t.const_int(1, false).into(), size.into(), fh.into()],
+                "read",
+            )
+            .map_err(err)?;
+        self.builder.build_call(fclose, &[fh.into()], "close").map_err(err)?;
+        let end = unsafe { self.builder.build_gep(i8t, buf, &[size], "end") }.map_err(err)?;
+        self.builder.build_store(end, i8t.const_zero()).map_err(err)?;
+        Ok(buf)
+    }
+
+    /// Render a value to a region-allocated String, using the SAME format the
+    /// printer uses so the two can never disagree.
+    fn build_to_string(
+        &mut self,
+        ty: &Type,
+        val: BasicValueEnum<'ctx>,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+
+        // Bool renders to one of two literals — no allocation needed at all.
+        if *ty == Type::Bool {
+            let is_true = self
+                .builder
+                .build_int_compare(
+                    inkwell::IntPredicate::NE,
+                    val.into_int_value(),
+                    i64t.const_zero(),
+                    "is_true",
+                )
+                .map_err(err)?;
+            let t = self.global_str("true", "s_true");
+            let f = self.global_str("false", "s_false");
+            return Ok(self
+                .builder
+                .build_select(is_true, t, f, "bool_str")
+                .map_err(err)?
+                .into_pointer_value());
+        }
+
+        let snprintf = self.libc(
+            "snprintf",
+            self.ctx
+                .i32_type()
+                .fn_type(&[ptr.into(), i64t.into(), ptr.into()], true),
+        );
+
+        // Build the same argument list the printer would, then size it with a
+        // dry run before allocating.
+        let (fmt, args): (PointerValue<'ctx>, Vec<BasicMetadataValueEnum>) = match ty {
+            Type::Int => (self.global_str("%lld", "f_int"), vec![val.into()]),
+            Type::Decimal { scale, .. } => {
+                let v = val.into_int_value();
+                let is_neg = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, v, i64t.const_zero(), "neg")
+                    .map_err(err)?;
+                let wide = self.widen(v)?;
+                let abs = self.build_abs_wide(wide)?;
+                let minus = self.global_str("-", "s_minus");
+                let empty = self.global_str("", "s_empty");
+                let sign = self
+                    .builder
+                    .build_select(is_neg, minus, empty, "sign")
+                    .map_err(err)?;
+                if *scale == 0 {
+                    let whole = self.builder.build_int_truncate(abs, i64t, "whole").map_err(err)?;
+                    (self.global_str("%s%llu", "f_dec0"), vec![sign.into(), whole.into()])
+                } else {
+                    let pow = self.pow10_i128(*scale);
+                    let iw = self.builder.build_int_unsigned_div(abs, pow, "iw").map_err(err)?;
+                    let fw = self.builder.build_int_unsigned_rem(abs, pow, "fw").map_err(err)?;
+                    let ip = self.builder.build_int_truncate(iw, i64t, "ip").map_err(err)?;
+                    let fp = self.builder.build_int_truncate(fw, i64t, "fp").map_err(err)?;
+                    let f = self.global_str(&format!("%s%llu.%0{}llu", scale), "f_dec");
+                    (f, vec![sign.into(), ip.into(), fp.into()])
+                }
+            }
+            other => return Err(format!("codegen bug: to_string of {}", other)),
+        };
+
+        let mut dry: Vec<BasicMetadataValueEnum> =
+            vec![ptr.const_null().into(), i64t.const_zero().into(), fmt.into()];
+        dry.extend(args.iter().cloned());
+        let need = self.builder.build_call(snprintf, &dry, "need").map_err(err)?;
+        let n32 = match need.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => v.into_int_value(),
+            _ => return Err("snprintf returned void".to_string()),
+        };
+        let n = self.builder.build_int_s_extend(n32, i64t, "need64").map_err(err)?;
+        let cap = self
+            .builder
+            .build_int_add(n, i64t.const_int(1, false), "cap")
+            .map_err(err)?;
+        let buf = self.build_alloc_bytes(cap)?;
+        let mut real: Vec<BasicMetadataValueEnum> = vec![buf.into(), cap.into(), fmt.into()];
+        real.extend(args);
+        self.builder.build_call(snprintf, &real, "render").map_err(err)?;
+        Ok(buf)
     }
 
     /// Get (or declare once) libc `fprintf`. Declaring it twice makes LLVM

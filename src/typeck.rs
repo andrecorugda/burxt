@@ -47,6 +47,10 @@ pub enum TypedExprKind {
     /// Negation of a non-literal (literals are folded at check time).
     Neg(Box<TypedExpr>),
     Not(Box<TypedExpr>),
+    /// `read_file(path)`: the file's bytes as a region-allocated String.
+    ReadFile(Box<TypedExpr>),
+    /// `to_string(v)`: the value's exact display form, region-allocated.
+    ToString(Box<TypedExpr>),
     /// `byte_at(s, i)`: the i-th byte as an Int, bounds-checked at runtime.
     ByteAt { s: Box<TypedExpr>, index: Box<TypedExpr> },
     /// `len(s)` on a String: a runtime byte scan (an array's length folds to a
@@ -429,7 +433,7 @@ impl TypeChecker {
             if self.fns.contains_key(&f.name) {
                 return Err(format!("function `{}` is defined twice", f.name));
             }
-            if f.name == "len" || f.name == "byte_at" || f.name == "push" {
+            if f.name == "len" || f.name == "byte_at" || f.name == "push" || f.name == "read_file" || f.name == "to_string" {
                 return Err(format!(
                     "the name `{}` is reserved for a built-in",
                     f.name
@@ -755,7 +759,11 @@ impl TypeChecker {
     /// .rodata, and the two share one type — so the type alone cannot say.
     fn expr_allocates(e: &TypedExpr) -> bool {
         match &e.kind {
-            TypedExprKind::SliceLit(_) | TypedExprKind::Push { .. } => true,
+            TypedExprKind::SliceLit(_)
+            | TypedExprKind::Push { .. }
+            | TypedExprKind::ReadFile(_) => true,
+            // Bool renders to a literal; the others allocate.
+            TypedExprKind::ToString(v) => v.ty != Type::Bool,
             TypedExprKind::Binary { op: BinOp::Add, lhs, rhs }
                 if lhs.ty == Type::String && rhs.ty == Type::String =>
             {
@@ -915,7 +923,7 @@ impl TypeChecker {
     /// function returns.
     fn check_extern(&self, e: &ExternFn) -> Result<(), String> {
         const RESERVED: [&str; 6] = ["printf", "fprintf", "fputs", "exit", "stderr", "main"];
-        if e.name == "len" || e.name == "byte_at" || e.name == "push" {
+        if e.name == "len" || e.name == "byte_at" || e.name == "push" || e.name == "read_file" || e.name == "to_string" {
             return Err(format!("the name `{}` is reserved for a built-in", e.name));
         }
         if RESERVED.contains(&e.name.as_str()) {
@@ -1516,16 +1524,66 @@ impl TypeChecker {
                 Ok(TypedExpr { ty: Type::String, kind: TypedExprKind::StrLit(s.clone()) })
             }
 
-            // Producing a String VALUE from interpolation means building new
-            // bytes, which needs allocation — the same wall concatenation hits.
-            // Printing the pieces in order needs none, so that is where it
-            // works for now.
-            Expr::InterpStr(_) => Err(
-                "interpolation currently works only directly inside `print(...)` — \
-                 producing a String value from it needs memory allocation, coming \
-                 with the memory model."
-                    .to_string(),
-            ),
+            // Producing a String VALUE from interpolation is exactly joining the
+            // pieces, so it desugars to `to_string` + `+` rather than getting a
+            // second lowering. One formatter, one concatenation, no drift: an
+            // interpolated value and the hand-written join it stands for are the
+            // same program by construction.
+            Expr::InterpStr(parts) => {
+                if self.current_region.is_none() {
+                    return Err(
+                        "building a String from interpolation allocates, so it needs a \
+                         region: there is none open here. Wrap it in \
+                         `region name { ... }`, or print it directly — \
+                         `print(\"...\")` needs no allocation."
+                            .to_string(),
+                    );
+                }
+                let mut joined: Option<TypedExpr> = None;
+                for part in parts {
+                    let piece = match part {
+                        InterpPart::Lit(text) => TypedExpr {
+                            ty: Type::String,
+                            kind: TypedExprKind::StrLit(text.clone()),
+                        },
+                        InterpPart::Expr(inner) => {
+                            let t = self.check_expr(inner, None)?;
+                            match &t.ty {
+                                // Already bytes — join it as it stands.
+                                Type::String => t,
+                                Type::Int | Type::Bool | Type::Decimal { .. } => TypedExpr {
+                                    ty: Type::String,
+                                    kind: TypedExprKind::ToString(Box::new(t)),
+                                },
+                                other => {
+                                    return Err(format!(
+                                        "cannot interpolate {} {} — only Int, Bool, \
+                                         String and Decimal have a display form so far.",
+                                        other.article(),
+                                        other
+                                    ))
+                                }
+                            }
+                        }
+                    };
+                    joined = Some(match joined {
+                        None => piece,
+                        Some(acc) => TypedExpr {
+                            ty: Type::String,
+                            kind: TypedExprKind::Binary {
+                                op: BinOp::Add,
+                                lhs: Box::new(acc),
+                                rhs: Box::new(piece),
+                            },
+                        },
+                    });
+                }
+                // `""` interpolates to the empty string, which is a literal.
+                Ok(joined.unwrap_or(TypedExpr {
+                    ty: Type::String,
+                    kind: TypedExprKind::StrLit(String::new()),
+                }))
+            }
 
             Expr::DecimalLit { unscaled, scale } => {
                 // Determine the target scale (and rounding contract) from
@@ -1722,6 +1780,73 @@ impl TypeChecker {
                             place: Box::new(place),
                             value: Box::new(value),
                         },
+                    });
+                }
+                // `read_file(path)` — the whole file as a String in the current
+                // region. A builtin rather than user FFI because the result must
+                // be region-allocated to be escape-checked; a raw `extern` that
+                // returned a pointer could not be.
+                if name == "read_file" {
+                    if args.len() != 1 {
+                        return Err("read_file(...) takes one path".to_string());
+                    }
+                    let path = self.check_expr(&args[0], Some(&Type::String))?;
+                    if path.ty != Type::String {
+                        return Err(format!(
+                            "read_file(...) takes a String path, but this has type {}",
+                            path.ty
+                        ));
+                    }
+                    if self.current_region.is_none() {
+                        return Err(
+                            "read_file(...) allocates the file's bytes, so it needs a \
+                             region: there is none open here. Wrap it in \
+                             `region name { ... }`."
+                                .to_string(),
+                        );
+                    }
+                    return Ok(TypedExpr {
+                        ty: Type::String,
+                        kind: TypedExprKind::ReadFile(Box::new(path)),
+                    });
+                }
+                // `to_string(v)` — a value's exact display form, as a String.
+                // Same formatting the printer uses, so the two can never drift.
+                if name == "to_string" {
+                    if args.len() != 1 {
+                        return Err("to_string(...) takes one value".to_string());
+                    }
+                    let v = self.check_expr(&args[0], None)?;
+                    match &v.ty {
+                        Type::Int | Type::Bool | Type::Decimal { .. } => {}
+                        Type::String => {
+                            return Err(
+                                "to_string(...) on a String would just copy it — use \
+                                 the value directly."
+                                    .to_string(),
+                            )
+                        }
+                        other => {
+                            return Err(format!(
+                                "to_string(...) has no display form for {} {} yet — \
+                                 only Int, Bool and Decimal.",
+                                other.article(),
+                                other
+                            ))
+                        }
+                    }
+                    // Bool needs no allocation: both spellings are literals.
+                    if v.ty != Type::Bool && self.current_region.is_none() {
+                        return Err(format!(
+                            "to_string(...) on {} {} allocates, so it needs a region: \
+                             there is none open here.",
+                            v.ty.article(),
+                            v.ty
+                        ));
+                    }
+                    return Ok(TypedExpr {
+                        ty: Type::String,
+                        kind: TypedExprKind::ToString(Box::new(v)),
                     });
                 }
                 if name == "byte_at" {

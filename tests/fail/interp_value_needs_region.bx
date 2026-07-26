@@ -1,0 +1,4 @@
+// Printing an interpolation allocates nothing; producing a String from one does.
+let n: Int = 1;
+let s: String = "value {n}";
+print(s);

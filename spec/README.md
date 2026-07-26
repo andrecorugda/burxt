@@ -14,7 +14,7 @@ answers.
 **Read this file first.** The specs were written when Burxt was at roughly
 v0.0.1, so several describe work that is now done, and one describes work that
 was built in a different order than specified. This index records what is
-actually true as of **v0.0.22**, audited by running the compiler — not by
+actually true as of **v0.0.28**, audited by running the compiler — not by
 reading the specs. Where a spec and the implementation disagree, the note says
 which is right.
 
@@ -22,14 +22,14 @@ which is right.
 
 | Spec | State | What remains |
 |---|---|---|
-| [A4.4 Strings & Collections](A4.4-STRINGS-COLLECTIONS.md) | **Partial** | Arrays done. Strings: literals, printing, FFI, length, equality, **`byte_at` (v0.0.21)**. Remaining: `.chars()`; concatenation heap-blocked (M1). |
+| [A4.4 Strings & Collections](A4.4-STRINGS-COLLECTIONS.md) | **DONE bar one view** | Arrays fixed (v0.0.10) and growable (v0.0.24). Strings: literals, printing, FFI, length, equality, `byte_at` (v0.0.21), **concatenation (v0.0.25)**, **`read_file` / `to_string` (v0.0.28)**. Remaining: `.chars()`. |
 | [A4.5 Aggregate ABI](A4.5-AGGREGATE-ABI.md) | **DONE** (v0.0.12) | — |
 | [A4.6 Interfaces & Dispatch](A4.6-INTERFACES-DISPATCH.md) | **DONE** (v0.0.14) | Traits, `impl`, static + `dyn` dispatch shipped. `class` / `open` inheritance from the North Star is separate and still unbuilt. |
-| [A4.7 Signature Grammar](A4.7-SIGNATURE-GRAMMAR.md) | **Not started** | All six deliverables. This is the "eloquence" / demo milestone. |
+| [A4.7 Signature Grammar](A4.7-SIGNATURE-GRAMMAR.md) | **Mostly done** (v0.0.17–v0.0.19, v0.0.28) | Brace hazard, interpolation (as a print, then as a value), money and percent literals, mixed-scale `*` all shipped. Remaining: unit literals (`5.km`), `requires`/`ensures`, pipelines. |
 | [A5.0 Control Flow](A5.0-CONTROL-FLOW.md) | **DONE** (v0.0.3–v0.0.4, v0.0.15) | — |
 | [Far-horizon M1–M4](FAR-HORIZON-ROADMAP.md) | **Direction only** | Re-spec each on arrival. **M1's trigger is now MET** — see its amendment; two new criteria argue against the ARC lean. |
 | [A6.0 Sum Types](A6.0-SUM-TYPES.md) | **DONE** (v0.0.20) | Enums, exhaustive `match`. Deferred: wildcards, recursive/aggregate payloads (M1), guards, nested patterns, match-as-expression, generics. |
-| [M1 Memory Model](M1-MEMORY-MODEL.md) | **DECIDED, to implement** | Regions as the unit of ownership. Unblocks List<T>, string building, storable `dyn`, and an uncapped self-hosted compiler. |
+| [M1 Memory Model](M1-MEMORY-MODEL.md) | **DONE** (v0.0.24–v0.0.27) | All four slices shipped: regions + bump allocator, growable arrays with escape checking, string concatenation, storable `dyn`. Two of its predictions were corrected rather than forced — see §6a. |
 | [Novelty register](NOVELTY.md) | **Ambition, unscheduled** | What Burxt is *for*: exactness across boundaries, provable determinism, conservation-law contracts, effects-not-async. |
 
 ## The audit, in detail
@@ -74,10 +74,16 @@ printing, immutability, and passing to C as `const char*` all work. Missing:
 - ~~**Length**~~ and ~~**equality**~~ — **shipped in v0.0.16** as generated
   byte-scan helpers, exactly as this audit predicted. `==` slots into the one
   equality rule; comparison is by bytes, not pointers.
-- **`.bytes()` / `.chars()` views** — still not built. Bare `s[i]` is
-  correctly absent, per the spec's byte-vs-char decision.
-- **Concatenation** — refused, and *correctly* so: it needs allocation, which
-  is M1's job.
+- ~~**`.bytes()`**~~ — **shipped in v0.0.21** as `byte_at(s, i)`, named for
+  bytes so the byte-vs-char ambiguity cannot hide. Bare `s[i]` stays correctly
+  absent, per the spec's byte-vs-char decision. **`.chars()` is the one
+  remaining gap in A4.4.**
+- ~~**Concatenation**~~ — **shipped in v0.0.25**, once regions existed. It was
+  correctly refused before that: it needs allocation, which was M1's job.
+- **Beyond the spec, because self-hosting needed it (v0.0.28):**
+  `read_file(path)` reads a file into the current region, and `to_string(v)`
+  renders Int/Bool/Decimal into one. A compiler that cannot read its input or
+  build an error message is not a compiler.
 
 **The important audit finding:** the spec bundles these four together, but
 they are not equally blocked. Length and equality need **no heap at all** — a
@@ -92,6 +98,11 @@ would otherwise defer more than necessary.
 None of the six deliverables exist. `$19.99` fails at the lexer; `requires` /
 `ensures` are not keywords; `|>` does not parse.
 
+**The hazard below was fixed as specified, in v0.0.17:** a bare `{` in a string
+literal is now a compile error demanding `\{`, so no existing program changed
+meaning silently. Interpolation works in `print` (v0.0.17, no allocation) and as
+a String value (v0.0.28, desugared to `to_string` + `+`). Kept for the record:
+
 **Hazard to fix before interpolation ships:** `print("hi {name}")` compiles
 today and prints `hi {name}` **literally**. Braces are ordinary characters in
 a string literal right now, so introducing interpolation *changes the meaning
@@ -99,6 +110,10 @@ of existing valid programs* — silently, which is precisely what Burxt refuses
 elsewhere. When interpolation lands, `{` in a literal must either become
 interpolation or be a compile error demanding an escape (`\{`). It must not
 stay ambiguous.
+
+**The inference note below still stands** — `$19.99` shipped in v0.0.18 with
+its type taken from the annotation, so local inference was deliberately NOT
+smuggled in. Kept for the record:
 
 **Note on `$19.99` and inference:** `let price = $19.99;` requires inferring a
 binding's type from its initializer. Every `let` in Burxt currently *demands*
@@ -142,19 +157,27 @@ In dependency order, cheapest and most-unblocking first:
    An arena AST (children by index, not pointer) needs no recursive types and
    no heap, so `examples/parser.bx` parses and evaluates in Burxt today. It
    needed three conservative restrictions lifted, none semantic.
-8. **Next, and now genuinely M1-shaped: growable storage.** The arena is a
-   fixed `[Node; 64]`; a real compiler needs growth. That is a question of
-   SCALE rather than expressibility — a much smaller wall than "the parser
-   cannot be written."
-9. Still unblocked polish: A4.7's units/contracts/pipelines, `.chars()`,
-   `[0; N]` repeat literals, `break`/`continue`, iterative AST walkers.
+8. ~~Growable storage — genuinely M1-shaped.~~ **Done in v0.0.24–v0.0.27.**
+   Regions, growable `[T]` with escape checking, concatenation, storable `dyn`.
+   `examples/parser.bx` declares no node budget at all: 599 nodes on a 300-term
+   expression, all released as a unit.
+9. ~~The compiler cannot read its own input, or report on what it read.~~
+   **Done in v0.0.28**: `read_file` + `to_string`, which also retired
+   interpolation-as-a-value, the oldest entry on the ledger.
+10. **Next: guaranteed tail calls** (NOVELTY §4). A self-hosted compiler walks
+    trees recursively, and stack overflow is still the only failure Burxt does
+    not name. `musttail` makes the guarantee *checkable* rather than a hope,
+    which is the same move as rounding contracts.
+11. Still unblocked polish: A4.7's units/contracts/pipelines, `.chars()`,
+    `[0; N]` repeat literals, `break`/`continue`, iterative AST walkers.
 
 **Priority note:** the stated goal is a compiler written in Burxt. Measured
 against that, A4.7's leftovers (units, contracts, pipelines) add eloquence and
 verification but no capability, so they rank below string bytes and the
 self-host attempt.
 
-M1 (the memory model) stays deliberately unopened. Its trigger is "~4+ ledger
-entries blocked on ownership" — currently at three (concatenation, mutable
-`dyn`, storable/returnable `dyn`), so the gate is close but not met, and every
-milestone above stays on the safe side of the heap boundary.
+M1 (the memory model) is **decided and shipped** — regions as the unit of
+ownership, so data races are unrepresentable without per-object borrow checking.
+What remains ownership-shaped is not memory: returning a `dyn` needs borrow
+tracking, and mutating through one needs mutability tracking. Both were
+re-diagnosed in v0.0.26 rather than left on the memory ledger.

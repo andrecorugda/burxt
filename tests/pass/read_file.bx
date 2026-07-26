@@ -1,0 +1,7 @@
+// read_file gives a compiler its input; to_string lets it report on it.
+region source {
+    let text: String = read_file("source_fixture.txt");
+    print(len(text));
+    print(byte_at(text, 0));
+    print(text);
+}

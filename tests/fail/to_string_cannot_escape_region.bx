@@ -1,0 +1,7 @@
+fn label(n: Int) -> String {
+    region r {
+        return to_string(n);
+    }
+    return "unreachable";
+}
+print(label(1));
