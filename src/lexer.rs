@@ -34,22 +34,13 @@ pub enum Token {
     As,
     /// `return tail f(x)` — a tail call the compiler must guarantee.
     Tail,
-    /// `-> T allocates` — this function builds values in its CALLER's region.
-    Allocates,
     /// `pure fn` — the result depends only on the arguments, and the compiler
     /// checks it: no I/O, no FFI, no impure calls.
     Pure,
-    /// `requires <bool>` — a precondition, checked on entry.
-    Requires,
-    /// `ensures <bool>` — a postcondition, checked before every return.
-    Ensures,
     /// `break` — leave the enclosing loop.
     Break,
     /// `continue` — go straight to the enclosing loop's next test.
     Continue,
-    /// `decreases <Int>` — a termination measure: it must shrink on every
-    /// recursive call, and never go negative.
-    Decreases,
     If,
     Else,
     While,
@@ -138,11 +129,7 @@ impl Token {
             Token::Return => "`return`".to_string(),
             Token::As => "`as`".to_string(),
             Token::Tail => "`tail`".to_string(),
-            Token::Allocates => "`allocates`".to_string(),
             Token::Pure => "`pure`".to_string(),
-            Token::Requires => "`requires`".to_string(),
-            Token::Ensures => "`ensures`".to_string(),
-            Token::Decreases => "`decreases`".to_string(),
             Token::Break => "`break`".to_string(),
             Token::Continue => "`continue`".to_string(),
             Token::If => "`if`".to_string(),
@@ -625,11 +612,16 @@ impl<'a> Lexer<'a> {
             "return" => Token::Return,
             "as" => Token::As,
             "tail" => Token::Tail,
-            "allocates" => Token::Allocates,
+            // `allocates`, `requires`, `ensures` and `decreases` are deliberately
+            // ABSENT from this table: they are contextual, recognised by the parser
+            // where they are the only thing that can appear, and ordinary
+            // identifiers everywhere else. `let allocates: Int = 0;` is legal.
+            //
+            // Reserving a word globally to recognise it in one position is
+            // over-collection, and the list only grows: every guarantee this language
+            // adds is a declared word. `scaled` in `as scaled` was contextual from
+            // the start; these follow it.
             "pure" => Token::Pure,
-            "requires" => Token::Requires,
-            "ensures" => Token::Ensures,
-            "decreases" => Token::Decreases,
             "break" => Token::Break,
             "continue" => Token::Continue,
             "if" => Token::If,

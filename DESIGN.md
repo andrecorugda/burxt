@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.54)
+# Burxt — Design Notes (v0.0.55)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -2617,6 +2617,50 @@ discovered.
 Next is phase 4, the typechecker, which the plan calls the hardest and the largest — and
 which is where the public milestone sits.
 
+### v0.0.55: the marker words become contextual
+
+```text
+let mut allocates: Int = 0;          // legal now — an ordinary name
+fn label(n: Int) -> String allocates // still the marker, in the one place it means one
+```
+
+**Prompted by a question from Andre**, after v0.0.54 hit the collision: PHP's `$var`
+makes reserved-word conflicts impossible, so why doesn't everyone do that?
+
+The answer is where the cost lands. A sigil taxes **every variable reference** —
+millions across a codebase — to refund a problem that happens a dozen times in a
+language's life, and it does not even remove the reserved list (PHP still forbids
+`class class`, and `$this` is reserved). Perl's sigils at least encode *type*;
+PHP inherited them and they encode nothing. The interpolation benefit that makes
+sigils worth it in shell, Burxt already gets from a delimiter — `"total {amount}"`
+with `\{` for a literal — which costs something only inside strings.
+
+The languages that took the problem seriously solved it precisely: **contextual
+keywords** (C#'s `async`, `await`, `yield`, `value` are all legal identifiers) and
+**raw identifiers** (Rust `r#type`, Swift backticks). Both pay only at the collision.
+
+**And Burxt has the problem worse than most**, because its philosophy makes it worse:
+every guarantee is a declared word, so the list grows with every feature — `pure`,
+`allocates`, `tail`, `requires`, `ensures`, `decreases`, and more to come.
+
+So `allocates`, `requires`, `ensures` and `decreases` left the keyword table. Each
+appears in exactly **one** position — after a return type, or between a signature and
+a body — where nothing else can appear, so the parser recognises them by place rather
+than by reservation. Everywhere else they are names.
+
+**There was already a precedent in the language:** `scaled` in `as scaled` was
+contextual from the day it shipped (v0.0.30) and never reserved. This makes the rest
+consistent with it.
+
+**Strictly loosening, which is why it is safe.** Programs that were errors become
+legal; no valid program changes meaning. That is what the v0.0.17 syntax-change law
+requires, and it is the opposite direction from the change that law was written for.
+
+**What stays reserved, and why:** `pure`, `tail`, `let`, `if`, `break` and the rest can
+begin a statement or an expression, where an identifier can also begin one. Recognising
+those by position would be genuine ambiguity rather than free precision. The line is not
+"which words are keywords" but "which words have exactly one possible position".
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -2681,6 +2725,8 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- A4.7b. Contextual marker words (v0.0.55): `allocates`, `requires`, `ensures` and
+  `decreases` are recognised by position, not reserved — so they are usable as names.
 - M4 phase 3b (v0.0.54): items, markers and contract clauses — stage-1 parses its own
   source into 6,610 nodes with no errors.
 - M4 phase 3a (v0.0.53): the stage-1 parser — all types, the full expression ladder,

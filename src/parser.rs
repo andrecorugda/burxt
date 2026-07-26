@@ -58,6 +58,14 @@ impl Parser {
         Parser { toks, spans, pos: 0, allow_struct_lit: true, src: src.to_string() }
     }
 
+    /// Is the current token the contextual word `word`?
+    ///
+    /// Contextual rather than reserved: these appear in exactly one position each, so
+    /// recognising them there costs nothing and leaves the name free everywhere else.
+    fn at_word(&self, word: &str) -> bool {
+        matches!(self.peek(), Token::Ident(name) if name == word)
+    }
+
     /// The source text a span covers, trimmed.
     fn text_of(&self, span: Span) -> String {
         let (a, b) = (span.start as usize, span.end as usize);
@@ -429,11 +437,13 @@ impl Parser {
         let mut requires = Vec::new();
         let mut ensures = Vec::new();
         let mut decreases = None;
-        while self.at(&Token::Requires)
-            || self.at(&Token::Ensures)
-            || self.at(&Token::Decreases)
+        while self.at_word("requires") || self.at_word("ensures") || self.at_word("decreases")
         {
-            let which = self.peek().clone();
+            // Which clause it is, decided before the word is consumed.
+            let which = match self.peek() {
+                Token::Ident(name) => name.clone(),
+                _ => unreachable!("at_word matched a non-identifier"),
+            };
             self.bump();
             let start = self.span().start;
             // A condition, not an expression: a `{` after it opens the BODY, so
@@ -441,9 +451,9 @@ impl Parser {
             let cond = self.parse_cond()?;
             let span = Span { start, end: self.prev_end().max(start + 1) };
             let clause = Contract { cond, text: self.text_of(span), span };
-            match which {
-                Token::Requires => requires.push(clause),
-                Token::Ensures => ensures.push(clause),
+            match which.as_str() {
+                "requires" => requires.push(clause),
+                "ensures" => ensures.push(clause),
                 _ => {
                     if decreases.is_some() {
                         return Err(
@@ -470,7 +480,7 @@ impl Parser {
         self.expect(&Token::Fn)?;
         let (name, params, ret) = self.parse_fn_signature()?;
         // `-> T allocates` reads as what it is: returns a T, and allocates.
-        let allocates = self.at(&Token::Allocates);
+        let allocates = self.at_word("allocates");
         if allocates {
             self.bump();
         }
@@ -511,7 +521,7 @@ impl Parser {
         };
         self.expect(&Token::RParen)?;
         let (name, params, ret) = self.parse_fn_signature()?;
-        let allocates = self.at(&Token::Allocates);
+        let allocates = self.at_word("allocates");
         if allocates {
             self.bump();
         }
