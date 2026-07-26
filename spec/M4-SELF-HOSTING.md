@@ -32,7 +32,7 @@ language server, JSON layer or diagnostics rendering.
 |---|---|---|---|
 | Lexer | 661 | 800–1,000 | **376, DONE** (v0.0.52) — came in under estimate |
 | AST + parser | 1,787 | 2,000–2,600 | **~930, DONE** (v0.0.53–54) — under estimate |
-| Typechecker | 3,702 | 4,500–5,500 | **~1,720**, 4b complete (v0.0.62) |
+| Typechecker | 3,702 | 4,500–5,500 | **~1,990**, 4b complete (v0.0.63) |
 | Backend (IR text) | 3,924 | 2,500–3,500 | 0 |
 | Driver | 230 | ~150 | 0 |
 | **Total** | | **≈10,000–12,500** | ~680 of real front-end work |
@@ -177,6 +177,29 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
        every variant with no arm twice — there is no `_` to hide behind — and an enum
        may not be empty or declare a variant twice. Plus `print` of a struct, an enum,
        a `dyn` or an array, which has no rendering the language could choose.
+
+   - **4b DONE — contracts and traits (v0.0.63):** **140 of the 190 fail programs**
+     rejected, from 125, still **0 false positives**.
+     - **the clauses**: `requires`, `ensures` and `decreases` are checked at all, under
+       the `pure` rule A5 gives the reason for — a contract that can change the program
+       is not a check. A clause must be a Bool; a measure must be an `Int`; `result` is
+       bound inside `ensures` and nowhere else; `old(...)` outside an `ensures` is
+       refused, `old(result)` is refused as a contradiction, and `old` of an aggregate
+       is refused naming the copy that is not built; `ensures` on a function returning
+       an aggregate is refused for the reason A5 §2 states; one `decreases` per
+       function, none on a method, and none on a function that never calls itself.
+     - **the impls**: every signature the trait declares, no extras, and the same shape
+       for each — receiver form (`self` and `mut self` are different promises),
+       parameter count, parameter types, return type. A trait is a promise a `dyn` value
+       makes on the implementor's behalf, so a mismatch here is a promise nobody keeps.
+
+     Two mechanisms worth naming. Binding `result` needs a *span whose bytes spell it*,
+     because a symbol is a span into the source and the program never wrote the word
+     where the clause is — so `find_text` finds any occurrence, and if there is none,
+     nothing can refer to it. And "does this function call itself", which `decreases`
+     needs, is answered by scanning the body's tokens between its braces: exact, because
+     Burxt has no first-class functions, so a name followed by `(` is a call to the one
+     function that has it.
 
 5. **An IR-text backend in Burxt.**
 6. **Bootstrap and fixpoint.** stage-0 builds stage-1; stage-1 builds stage-1;
