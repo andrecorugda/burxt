@@ -1,0 +1,2 @@
+let s: String = "abc";
+print(substring(s, 0, 2));

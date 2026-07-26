@@ -1,0 +1,4 @@
+region r {
+    let s: String = "abc";
+    print(substring(s, -1, 2));
+}

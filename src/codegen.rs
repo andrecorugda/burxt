@@ -1265,6 +1265,12 @@ impl<'ctx> CodeGen<'ctx> {
                     .map(Into::into)
                     .map_err(|e| e.to_string())
             }
+            TypedExprKind::Substring { source, at, len } => {
+                let bytes = self.gen_expr(source)?.into_pointer_value();
+                let at = self.gen_expr(at)?.into_int_value();
+                let count = self.gen_expr(len)?.into_int_value();
+                self.build_substring(bytes, at, count).map(Into::into)
+            }
             TypedExprKind::IntDiv { kind, lhs, rhs } => {
                 let a = self.gen_expr(lhs)?.into_int_value();
                 let b = self.gen_expr(rhs)?.into_int_value();
@@ -3286,6 +3292,69 @@ impl<'ctx> CodeGen<'ctx> {
         }
         self.cint_fn = Some(f);
         Ok(f)
+    }
+
+    /// Copy `count` bytes from `at` into the current region, NUL-terminated.
+    ///
+    /// The result is an ordinary Burxt String: indistinguishable from a literal, so
+    /// it can be compared, printed, joined, or handed to C. Bounds are checked
+    /// against the source's length, and the failure names the numbers rather than
+    /// saying "out of range".
+    fn build_substring(
+        &mut self,
+        bytes: PointerValue<'ctx>,
+        at: IntValue<'ctx>,
+        count: IntValue<'ctx>,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+        let i8t = self.ctx.i8_type();
+        let source_len = self.build_str_len(bytes)?;
+        let end = self.builder.build_int_add(at, count, "end").map_err(err)?;
+
+        use inkwell::IntPredicate::*;
+        let neg_at = self.builder.build_int_compare(SLT, at, i64t.const_zero(), "neg_at").map_err(err)?;
+        let neg_len = self.builder.build_int_compare(SLT, count, i64t.const_zero(), "neg_len").map_err(err)?;
+        let past = self.builder.build_int_compare(SGT, end, source_len, "past_end").map_err(err)?;
+        let bad = self.builder.build_or(neg_at, neg_len, "bad_offsets").map_err(err)?;
+        let bad = self.builder.build_or(bad, past, "out_of_range").map_err(err)?;
+
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_parent())
+            .ok_or("codegen bug: substring outside a function")?;
+        let broken = self.ctx.append_basic_block(function, "substring_oob");
+        let ok = self.ctx.append_basic_block(function, "substring_ok");
+        self.builder.build_conditional_branch(bad, broken, ok).map_err(err)?;
+
+        self.builder.position_at_end(broken);
+        let fprintf = self.fprintf_fn();
+        let (stderr_g, _, exit) = self.panic_deps();
+        let fmt = self.global_str(
+            "burxt runtime error: substring(s, %lld, %lld) does not fit — this string \
+             has %lld bytes\n",
+            "fmt_substring_oob",
+        );
+        let stream = self.load_stderr(stderr_g)?;
+        let args: Vec<BasicMetadataValueEnum> =
+            vec![stream.into(), fmt.into(), at.into(), count.into(), source_len.into()];
+        self.builder.build_call(fprintf, &args, "fprintf").map_err(err)?;
+        self.build_exit70(exit)?;
+
+        self.builder.position_at_end(ok);
+        let with_nul = self
+            .builder
+            .build_int_add(count, i64t.const_int(1, false), "with_nul")
+            .map_err(err)?;
+        let out = self.build_alloc_bytes(with_nul)?;
+        let from = unsafe { self.builder.build_gep(i8t, bytes, &[at], "from") }.map_err(err)?;
+        self.builder
+            .build_memcpy(out, 1, from, 1, count)
+            .map_err(|e| e.to_string())?;
+        let tail = unsafe { self.builder.build_gep(i8t, out, &[count], "tail") }.map_err(err)?;
+        self.builder.build_store(tail, i8t.const_zero()).map_err(err)?;
+        Ok(out)
     }
 
     /// Integer division and remainder, in three named forms.

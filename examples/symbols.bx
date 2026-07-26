@@ -1,0 +1,152 @@
+// ============================================================================
+// A symbol table, written in Burxt.
+//
+// This is the first piece of the TYPECHECKER to be self-hosted, and the piece
+// that needed `substring`: a lexer can compare a span against a keyword byte by
+// byte, but a symbol table is made of names it kept.
+//
+// It reads a real .bx file, finds every `let NAME: TYPE`, interns the names, and
+// reports a redeclaration — which is exactly what the Rust typechecker does when
+// it refuses shadowing.
+// ============================================================================
+
+struct Symbol { name: String, type_name: String, at: Int }
+
+// A table is a growable array plus the operations that keep it honest.
+struct Table { entries: [Symbol] }
+
+fn is_alpha(b: Int) -> Bool {
+    return (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95;
+}
+
+fn is_digit(b: Int) -> Bool {
+    return b >= 48 && b <= 57;
+}
+
+fn is_name_byte(b: Int) -> Bool {
+    return is_alpha(b) || is_digit(b);
+}
+
+fn is_space(b: Int) -> Bool {
+    return b == 32 || b == 9 || b == 10 || b == 13;
+}
+
+fn skip_spaces(src: String, from: Int) -> Int {
+    let mut i: Int = from;
+    while i < len(src) && is_space(byte_at(src, i)) {
+        i = i + 1;
+    }
+    return i;
+}
+
+// How far a name runs from `from`. Zero means there is no name here.
+fn name_length(src: String, from: Int) -> Int {
+    let mut i: Int = from;
+    if i >= len(src) || !is_alpha(byte_at(src, i)) {
+        return 0;
+    }
+    while i < len(src) && is_name_byte(byte_at(src, i)) {
+        i = i + 1;
+    }
+    return i - from;
+}
+
+// Does the source say `word` at this offset? Compared byte by byte, so it needs
+// no allocation — the reason keyword matching worked before `substring` existed.
+fn word_at(src: String, from: Int, word: String) -> Bool {
+    if from + len(word) > len(src) {
+        return false;
+    }
+    let mut i: Int = 0;
+    while i < len(word) {
+        if byte_at(src, from + i) != byte_at(word, i) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// A declared name is one already in the table. Linear search: a compiler's scope
+// is small, and an honest O(n) beats a hash table nobody has needed yet.
+fn (self: Table) find(name: String) -> Int {
+    let mut i: Int = 0;
+    while i < len(self.entries) {
+        if self.entries[i].name == name {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn (mut self: Table) declare(name: String, type_name: String, at: Int) -> Int
+    ensures len(self.entries) >= old(len(self.entries))
+{
+    push(self.entries, Symbol { name: name, type_name: type_name, at: at });
+    return len(self.entries);
+}
+
+// `let NAME: TYPE` — the only declaration form this pass understands. Returns the
+// offset to continue from, so the caller stays a simple loop.
+//
+// A METHOD rather than a function, and not by preference: Burxt has no mutable
+// parameters — mutation goes through a `mut self` receiver, so a pass that fills a
+// table has to be a method on it. Writing this file is what surfaced that, and it
+// also fired the trigger the M1a spec recorded for `allocates` on methods.
+fn (mut self: Table) collect(src: String, from: Int) -> Int allocates {
+    let at: Int = skip_spaces(src, from);
+    if at >= len(src) {
+        return at;
+    }
+    if !word_at(src, at, "let ") {
+        return at + 1;
+    }
+
+    let mut cursor: Int = skip_spaces(src, at + 4);
+    // `let mut NAME` declares too; the `mut` is not part of the name.
+    if word_at(src, cursor, "mut ") {
+        cursor = skip_spaces(src, cursor + 4);
+    }
+
+    let name_len: Int = name_length(src, cursor);
+    if name_len == 0 {
+        return at + 1;
+    }
+    let name: String = substring(src, cursor, name_len);
+
+    let mut after: Int = skip_spaces(src, cursor + name_len);
+    if byte_at(src, after) != 58 {          // ':'
+        return at + 1;
+    }
+    after = skip_spaces(src, after + 1);
+    let type_len: Int = name_length(src, after);
+    if type_len == 0 {
+        return at + 1;
+    }
+    let type_name: String = substring(src, after, type_len);
+
+    let seen: Int = self.find(name);
+    if seen >= 0 {
+        print("redeclared: `" + name + "` was already declared at offset "
+              + to_string(self.entries[seen].at));
+    } else {
+        let count: Int = self.declare(name, type_name, cursor);
+        print("declared `" + name + "` : " + type_name);
+    }
+    return after + type_len;
+}
+
+region pass {
+    let src: String = read_file("examples/inputs/declarations.bx");
+    let mut table: Table = Table { entries: [] };
+
+    let mut cursor: Int = 0;
+    let mut guard: Int = 0;
+    while cursor < len(src) && guard < 10000 {
+        cursor = table.collect(src, cursor);
+        guard = guard + 1;
+    }
+
+    print("--- " + to_string(len(table.entries)) + " names in scope");
+}

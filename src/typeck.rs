@@ -49,6 +49,8 @@ pub enum TypedExprKind {
     /// Negation of a non-literal (literals are folded at check time).
     Neg(Box<TypedExpr>),
     Not(Box<TypedExpr>),
+    /// `substring(s, at, len)` — a copy of part of a String, in the current region.
+    Substring { source: Box<TypedExpr>, at: Box<TypedExpr>, len: Box<TypedExpr> },
     /// `div_floor`, `div_trunc` or `rem` on two Ints. Three names rather than one
     /// operator, because they disagree on negatives.
     IntDiv { kind: crate::codegen::IntDiv, lhs: Box<TypedExpr>, rhs: Box<TypedExpr> },
@@ -269,6 +271,9 @@ pub struct TypeChecker {
     /// function name -> (parameter types, return type); collected up front so
     /// functions may be defined in any order and call each other.
     fns: HashMap<String, (Vec<Type>, Type)>,
+    /// (receiver, method) pairs declared `allocates`, so a call site can be checked
+    /// for an open region in the same one pass the free-function form uses.
+    alloc_methods: HashSet<(String, String)>,
     /// which of those names are `extern fn` declarations. They share `fns` so
     /// call checking is uniform, but they are NOT Burxt functions — a tail-call
     /// guarantee, for one, stops at the C boundary.
@@ -351,6 +356,7 @@ impl TypeChecker {
             env: HashMap::new(),
             fns: HashMap::new(),
             alloc_fns: HashSet::new(),
+            alloc_methods: HashSet::new(),
             pure_fns: HashSet::new(),
             in_pure: None,
             in_contract: false,
@@ -729,7 +735,7 @@ impl TypeChecker {
             if self.fns.contains_key(&f.name) {
                 return Err(format!("function `{}` is defined twice", f.name));
             }
-            if f.name == "len" || f.name == "byte_at" || f.name == "push" || f.name == "read_file" || f.name == "to_string" || f.name == "old" || f.name == "div_floor" || f.name == "div_trunc" || f.name == "rem" {
+            if f.name == "len" || f.name == "byte_at" || f.name == "push" || f.name == "read_file" || f.name == "to_string" || f.name == "old" || f.name == "substring" || f.name == "div_floor" || f.name == "div_trunc" || f.name == "rem" {
                 return Err(format!(
                     "the name `{}` is reserved for a built-in",
                     f.name
@@ -823,6 +829,9 @@ impl TypeChecker {
                 ));
             }
             let param_tys = m.params.iter().map(|p| p.ty.clone()).collect();
+            if m.allocates {
+                self.alloc_methods.insert(key.clone());
+            }
             self.methods.insert(key, (m.receiver_mut, param_tys, m.ret.clone()));
         }
 
@@ -1079,10 +1088,14 @@ impl TypeChecker {
         match &e.kind {
             TypedExprKind::SliceLit(_)
             | TypedExprKind::Push { .. }
-            | TypedExprKind::ReadFile(_) => true,
-            // A call to an `allocates` function built its result in OUR region, so
-            // it is region storage here and the same escape rules apply to it.
+            | TypedExprKind::ReadFile(_)
+            | TypedExprKind::Substring { .. } => true,
+            // A call to an `allocates` function or method built its result in OUR
+            // region, so it is region storage here and the same escape rules apply.
             TypedExprKind::Call { name, .. } => self.alloc_fns.contains(name),
+            TypedExprKind::MethodCall { receiver, method, .. } => {
+                self.alloc_methods.contains(&(receiver.clone(), method.clone()))
+            }
             // Bool renders to a literal; the others allocate.
             TypedExprKind::ToString(v) => v.ty != Type::Bool,
             TypedExprKind::Binary { op: BinOp::Add, lhs, rhs }
@@ -1244,7 +1257,7 @@ impl TypeChecker {
     /// function returns.
     fn check_extern(&self, e: &ExternFn) -> Result<(), String> {
         const RESERVED: [&str; 6] = ["printf", "fprintf", "fputs", "exit", "stderr", "main"];
-        if e.name == "len" || e.name == "byte_at" || e.name == "push" || e.name == "read_file" || e.name == "to_string" || e.name == "old" || e.name == "div_floor" || e.name == "div_trunc" || e.name == "rem" {
+        if e.name == "len" || e.name == "byte_at" || e.name == "push" || e.name == "read_file" || e.name == "to_string" || e.name == "old" || e.name == "substring" || e.name == "div_floor" || e.name == "div_trunc" || e.name == "rem" {
             return Err(format!("the name `{}` is reserved for a built-in", e.name));
         }
         if RESERVED.contains(&e.name.as_str()) {
@@ -1470,6 +1483,7 @@ impl TypeChecker {
             params.push((p.name.clone(), p.ty.clone()));
         }
         self.current_ret = Some(m.ret.clone());
+        self.in_caller_region = m.allocates;
 
         // Contracts, in the receiver-and-parameter scope, under the `pure` rule —
         // exactly as on a free function. A MUTATING method is where they earn the
@@ -1502,6 +1516,7 @@ impl TypeChecker {
 
         let body = self.check_block(&m.body)?;
         self.current_ret = None;
+        self.in_caller_region = false;
         self.env.clear();
 
         if !block_returns(&body) {
@@ -2443,6 +2458,47 @@ impl TypeChecker {
                 // region. A builtin rather than user FFI because the result must
                 // be region-allocated to be escape-checked; a raw `extern` that
                 // returned a pointer could not be.
+                // `substring(s, at, len)` — the primitive a symbol table needs. A
+                // lexer can already compare a span against a literal byte by byte;
+                // what it could not do was KEEP the text, which is what a table of
+                // names is made of.
+                if name == "substring" {
+                    if args.len() != 3 {
+                        return Err(
+                            "substring(...) takes a String, a start offset and a length"
+                                .to_string(),
+                        );
+                    }
+                    let source = self.check_expr(&args[0], Some(&Type::String))?;
+                    if source.ty != Type::String {
+                        return Err(format!(
+                            "substring(...) reads a String, but the first argument has \
+                             type {}",
+                            source.ty
+                        ));
+                    }
+                    let at = self.check_expr(&args[1], Some(&Type::Int))?;
+                    let len = self.check_expr(&args[2], Some(&Type::Int))?;
+                    for (which, side) in [("offset", &at), ("length", &len)] {
+                        if side.ty != Type::Int {
+                            return Err(format!(
+                                "substring(...) takes an Int {}, but this one has type {}",
+                                which, side.ty
+                            ));
+                        }
+                    }
+                    if !self.has_region() {
+                        return Err(self.needs_region("substring(...) copies bytes"));
+                    }
+                    return Ok(TypedExpr {
+                        ty: Type::String,
+                        kind: TypedExprKind::Substring {
+                            source: Box::new(source),
+                            at: Box::new(at),
+                            len: Box::new(len),
+                        },
+                    });
+                }
                 // Integer division, by name. `/` on two Ints stays refused: one
                 // operator cannot say which way it rounds, and for negatives the
                 // answers differ.
@@ -2933,6 +2989,19 @@ impl TypeChecker {
                     }
                 }
 
+                // An `allocates` method builds in OUR region, same rule as the
+                // free-function form.
+                if self.alloc_methods.contains(&(receiver.clone(), method.clone()))
+                    && !self.has_region()
+                {
+                    return Err(format!(
+                        "`{}.{}` is declared `allocates`, so it builds its result in \
+                         the caller's region — and there is none open here. Wrap the \
+                         call in `region name {{ ... }}`, or declare the enclosing \
+                         function `allocates` too.",
+                        receiver, method
+                    ));
+                }
                 if args.len() != param_tys.len() {
                     return Err(format!(
                         "method `{}.{}` takes {} argument(s), but {} were given",

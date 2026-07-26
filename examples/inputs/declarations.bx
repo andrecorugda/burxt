@@ -1,0 +1,7 @@
+// Input for the self-hosted symbol table: a few declarations, one of them a
+// redeclaration, which is what the pass exists to catch.
+let price: Decimal<2> = $19.99;
+let qty: Int = 3;
+let mut total: Decimal<2> = $0.00;
+let label: String = "widget";
+let qty: Int = 4;

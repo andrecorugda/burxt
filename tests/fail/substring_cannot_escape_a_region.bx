@@ -1,0 +1,6 @@
+fn take(s: String) -> String {
+    region r {
+        return substring(s, 0, 1);
+    }
+}
+region outer { print(take("abc")); }

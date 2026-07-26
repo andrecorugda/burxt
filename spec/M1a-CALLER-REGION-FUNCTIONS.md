@@ -112,7 +112,7 @@ rather than a parameter.
 
 | Feature | Why deferred | Earns its place when |
 |---|---|---|
-| `allocates` on methods | `fn` first; methods need the same treatment on the receiver clause | A required program needs an allocating method |
+| ~~`allocates` on methods~~ | **DONE** (v0.0.47) — the trigger fired: `examples/symbols.bx` needs a method that builds names and messages, because Burxt has no mutable parameters and a pass that fills a table must be a method on it | — |
 | Inference as an opt-in check | Would be a nice lint ("this could be `allocates`") | The annotation proves burdensome in real code |
 | Returning region data *out* of a region block | Genuinely needs region relations | Cross-region references are designed |
 

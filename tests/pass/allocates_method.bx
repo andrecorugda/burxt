@@ -1,0 +1,25 @@
+// `allocates` on a method: it builds in the CALLER's region, exactly as the
+// free-function form does. The M1a spec deferred this with the trigger "a required
+// program needs an allocating method" — a symbol table written in Burxt was it,
+// because Burxt has no mutable parameters and a pass that fills a table must
+// therefore be a method on it.
+struct Row { id: Int }
+struct Log { rows: [Row] }
+
+fn (mut self: Log) record(id: Int) -> String allocates
+    ensures len(self.rows) >= old(len(self.rows))
+{
+    push(self.rows, Row { id: id });
+    return "row " + to_string(id) + " of " + to_string(len(self.rows));
+}
+
+fn (self: Log) describe() -> String allocates {
+    return to_string(len(self.rows)) + " rows";
+}
+
+region r {
+    let mut log: Log = Log { rows: [] };
+    print(log.record(1));
+    print(log.record(2));
+    print(log.describe());
+}

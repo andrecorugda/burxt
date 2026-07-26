@@ -511,6 +511,10 @@ impl Parser {
         };
         self.expect(&Token::RParen)?;
         let (name, params, ret) = self.parse_fn_signature()?;
+        let allocates = self.at(&Token::Allocates);
+        if allocates {
+            self.bump();
+        }
         let (requires, ensures, decreases) = self.parse_contracts()?;
         if let Some(d) = &decreases {
             let _ = d;
@@ -521,7 +525,7 @@ impl Parser {
             );
         }
         let body = self.parse_block()?;
-        Ok(MethodDef { receiver, receiver_mut, name, params, ret, requires, ensures, body, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok(MethodDef { receiver, receiver_mut, name, params, ret, allocates, requires, ensures, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `as <marshaller>` declares how a value crosses a foreign boundary.

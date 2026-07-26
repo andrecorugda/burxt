@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.46)
+# Burxt — Design Notes (v0.0.47)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -2278,6 +2278,63 @@ what was considered — including the SOLID table, where Liskov moves from
 type satisfies a trait exactly or it is a compile error, and there is no subtype to
 weaken a contract.
 
+### v0.0.47: `substring`, allocating methods, and a symbol table in Burxt
+
+The self-hosting track, and it behaved exactly the way this track is supposed to:
+**writing real Burxt found real gaps.**
+
+**`substring(s, at, len)`** — a copy of part of a String, in the current region,
+NUL-terminated, so the result is an ordinary Burxt String: comparable, joinable,
+printable, and passable to C. Bounds are checked against the source and the failure
+names the numbers:
+
+```text
+burxt runtime error: substring(s, 2, 5) does not fit — this string has 3 bytes
+```
+
+Why this was the blocker rather than a convenience: a lexer could already *compare* a
+span against a keyword byte by byte, which is why keyword matching worked without it.
+What it could not do was **keep** a name — and a symbol table is made of kept names.
+
+**A symbol table, written in Burxt** (`examples/symbols.bx`). It reads a real `.bx`
+file, finds every `let NAME: TYPE`, interns the names, and reports a redeclaration —
+the same rule the Rust typechecker enforces:
+
+```text
+declared `price` : Decimal
+declared `qty` : Int
+redeclared: `qty` was already declared at offset 171
+--- 4 names in scope
+```
+
+This is the first piece of the *typechecker* to be self-hosted, after the lexer
+(v0.0.21) and the parser (v0.0.22).
+
+**Two findings it produced, which is the point of the exercise.**
+
+**1. Burxt has no mutable parameters, and that is now a stated decision rather than
+an accident.** `fn collect(src: String, mut table: Table, ...)` does not parse:
+mutation goes through a `mut self` receiver. So a pass that fills a table has to *be a
+method on the table*. Discovered by writing the obvious thing and having it refused.
+
+Kept as-is deliberately. One way to mutate — through a receiver, callable only on a
+`let mut` binding — is the rule the whole aggregate ABI was built around (v0.0.14's
+correction: receivers pass as a plain pointer, ordinary aggregates as `byval` copies).
+Adding `mut` parameters would mean two mechanisms with different aliasing stories, and
+it would quietly undo the property that a function cannot alter its caller's values.
+The constraint also pushes code toward methods, which matches the OOP-by-default
+stance rather than fighting it.
+
+**2. `allocates` on methods, which the M1a spec had deferred with the trigger "a
+required program needs an allocating method".** The symbol table was it: `collect`
+builds names with `substring` and messages with `to_string`, so it must allocate in the
+caller's region. Implemented for methods exactly as for functions — the flag is hoisted
+with the signature, call sites are checked for an open region, and a call to one counts
+as allocating at the call site, so the caller's escape rules govern the result.
+
+A trigger firing on its own, from a program written for another reason, is the
+deferred-features ledger working as designed.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -2342,6 +2399,8 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- M4a. Self-hosting, third piece (v0.0.47): `substring`, `allocates` on methods, and
+  a symbol table written in Burxt that catches a redeclaration in a real `.bx` file.
 - A2a. Integer division by name (v0.0.46): `div_floor`, `div_trunc`, `rem`, each
   checked for zero and for the one quotient an i64 cannot hold.
 - A4.6 CLOSED (v0.0.46): `class` / `open` inheritance dropped; composition-only final.

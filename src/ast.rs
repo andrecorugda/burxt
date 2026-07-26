@@ -391,6 +391,10 @@ pub struct MethodDef {
     pub name: String,
     pub params: Vec<Param>,
     pub ret: Type,
+    /// Declared `allocates`: builds values in the CALLER's region, exactly as on a
+    /// free function. The M1a spec deferred this with the trigger "a required
+    /// program needs an allocating method" — `examples/symbols.bx` was it.
+    pub allocates: bool,
     /// Preconditions and postconditions, exactly as on a free function. A
     /// mutating method is where contracts get interesting: `old(...)` in an
     /// `ensures` clause can compare the state after against the state before.

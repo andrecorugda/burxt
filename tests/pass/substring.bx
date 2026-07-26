@@ -1,0 +1,24 @@
+// The primitive a symbol table needs. A lexer could already COMPARE a span against
+// a literal byte by byte; what it could not do was keep the text, and a table of
+// names is made of kept text.
+region r {
+    let src: String = "let total = price * 3;";
+    print(substring(src, 0, 3));
+    print(substring(src, 4, 5));
+    print(len(substring(src, 4, 5)));
+    // The result is an ordinary String: comparable, joinable, printable.
+    print(substring(src, 4, 5) == "total");
+    print(substring(src, 0, len(src)));
+    print(len(substring(src, 3, 0)));
+    let name: String = substring(src, 12, 5);
+    print("found `" + name + "`");
+    print(name == "price");
+}
+
+// It can be built in the caller's region, like any other allocation.
+fn word_at(src: String, at: Int, n: Int) -> String allocates {
+    return substring(src, at, n);
+}
+region r2 {
+    print(word_at("keyword soup", 8, 4));
+}
