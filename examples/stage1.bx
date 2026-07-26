@@ -552,6 +552,55 @@ fn (mut self: Unit) parse_type(src: String) -> Int allocates {
     return self.complain(src, "a type");
 }
 
+// The type of `Name.field`, found by walking the struct's declaration. Linear, like
+// every other lookup here: a struct has a handful of fields, and a map would be a
+// dependency on machinery the language does not have.
+fn (self: Unit) field_type(src: String, holder: Ty, name_tok: Int) -> Ty {
+    if holder.kind != 46 {
+        return ty_unknown();
+    }
+    let found: Int = self.find_type(src, holder.name_start, holder.name_len);
+    if found < 0 {
+        return ty_unknown();
+    }
+    let decl: TypeDecl = self.types[found];
+    if decl.kind != 82 {
+        return ty_unknown();
+    }
+    let item: Node = self.nodes[decl.node];
+    let wanted: Tok = self.toks[name_tok];
+    let mut i: Int = 0;
+    while i < item.b {
+        let field: Node = self.nodes[self.kids[item.a + i]];
+        let field_name: Tok = self.toks[field.tok];
+        if spans_eq(src, field_name.start, field_name.length, wanted.start, wanted.length) {
+            return self.ty_of(src, field.a);
+        }
+        i = i + 1;
+    }
+    return ty_unknown();
+}
+
+// A builtin's return type. They are not in the function table because they are not
+// declared anywhere — the compiler knows them, so the checker must too.
+fn (mut self: Unit) builtin_type(src: String, name: Tok, args: Int) -> Ty allocates {
+    let visited: Int = self.check_args(src, args);
+    if span_eq(src, name.start, name.length, "len") { return ty_simple(40); }
+    if span_eq(src, name.start, name.length, "byte_at") { return ty_simple(40); }
+    if span_eq(src, name.start, name.length, "push") { return ty_simple(40); }
+    if span_eq(src, name.start, name.length, "truncate") { return ty_simple(40); }
+    if span_eq(src, name.start, name.length, "arg_count") { return ty_simple(40); }
+    if span_eq(src, name.start, name.length, "write_file") { return ty_simple(40); }
+    if span_eq(src, name.start, name.length, "div_floor") { return ty_simple(40); }
+    if span_eq(src, name.start, name.length, "div_trunc") { return ty_simple(40); }
+    if span_eq(src, name.start, name.length, "rem") { return ty_simple(40); }
+    if span_eq(src, name.start, name.length, "to_string") { return ty_simple(42); }
+    if span_eq(src, name.start, name.length, "read_file") { return ty_simple(42); }
+    if span_eq(src, name.start, name.length, "substring") { return ty_simple(42); }
+    if span_eq(src, name.start, name.length, "arg") { return ty_simple(42); }
+    return ty_unknown();
+}
+
 // ---- expressions -------------------------------------------------------------
 // Precedence climbs the way the Rust parser's does: or, and, comparison, additive,
 // term, unary, postfix, primary.
@@ -1562,14 +1611,79 @@ fn (mut self: Unit) type_of(src: String, node: Int, expected: Ty) -> Ty allocate
         return ty_simple(41);
     }
 
+    // `Enum.Variant` and `Enum.Variant(payload)` — the base names a TYPE, not a
+    // variable, so typing it as one reported an unknown name. An enum constructor
+    // looks exactly like a field access or a method call until you check the base.
+    if n.kind == 11 || n.kind == 14 {
+        let base: Node = self.nodes[n.a];
+        if base.kind == 5 {
+            let base_name: Tok = self.toks[base.tok];
+            let declared: Int = self.find_type(src, base_name.start, base_name.length);
+            if declared >= 0 {
+                if self.types[declared].kind == 83 {
+                    if n.kind == 14 {
+                        let visited: Int = self.check_args(src, n.b);
+                    }
+                    return Ty { kind: 46, scale: 0, contract: 0,
+                                name_start: base_name.start, name_len: base_name.length };
+                }
+            }
+        }
+    }
+
+    if n.kind == 11 {                                // a field access
+        let holder: Ty = self.type_of(src, n.a, ty_unknown());
+        if is_unknown(holder) {
+            return ty_unknown();
+        }
+        let field: Ty = self.field_type(src, holder, n.tok);
+        if is_unknown(field) {
+            let e: Int = self.complain_at(src, n.tok,
+                ty_show(src, holder) + " has no such field");
+        }
+        return field;
+    }
+
+    if n.kind == 19 {                                // a struct literal
+        let name: Tok = self.toks[n.tok];
+        let found: Int = self.find_type(src, name.start, name.length);
+        if found < 0 {
+            let e: Int = self.complain_at(src, n.tok, "unknown type");
+            let visited: Int = self.visit_children(src, node);
+            return ty_unknown();
+        }
+        let holder: Ty = Ty { kind: 46, scale: 0, contract: 0,
+                              name_start: name.start, name_len: name.length };
+        let mut i: Int = 0;
+        while i < n.b {
+            let pair: Node = self.nodes[self.kids[n.a + i]];
+            let want: Ty = self.field_type(src, holder, pair.tok);
+            if is_unknown(want) {
+                let e: Int = self.complain_at(src, pair.tok,
+                    ty_show(src, holder) + " has no such field");
+            }
+            let got: Ty = self.type_of(src, pair.a, want);
+            if !is_unknown(got) && !is_unknown(want) && !ty_same(src, got, want) {
+                let e: Int = self.complain_at(src, pair.tok,
+                    "this field is " + ty_show(src, want) + ", but the value is "
+                    + ty_show(src, got));
+            }
+            i = i + 1;
+        }
+        return holder;
+    }
+
     if n.kind == 13 {                                // a call
         let t: Tok = self.toks[n.tok];
         let found: Int = self.find_fun(src, t.start, t.length);
         if found < 0 {
-            // Builtins are not in the table: `len`, `to_string`, `print` and friends
-            // are checked in phase 4b, so their arguments are visited and let be.
-            let args: Int = self.check_args(src, n.a);
-            return ty_unknown();
+            // A builtin, or a name nobody declared. The compiler knows the builtins,
+            // so the checker knows them too rather than staying silent about calls.
+            let builtin: Ty = self.builtin_type(src, t, n.a);
+            if is_unknown(builtin) {
+                let e: Int = self.complain_at(src, n.tok, "unknown function");
+            }
+            return builtin;
         }
         let signature: Fun = self.funs[found];
         let list: Node = self.nodes[n.a];

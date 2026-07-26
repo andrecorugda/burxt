@@ -69,8 +69,13 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
      mutability, `return` against the signature, and conditions. **stage-1 typechecks
      its own source with zero complaints.** 22 of 87 pass programs still draw a
      complaint stage-0 does not — that is the progress bar for 4b.
-   - **4b:** field access and struct literals, methods, match bindings against variant
-     payloads, and the builtins (`len`, `to_string`, `push`, `substring`, …).
+   - **4b, part DONE (v0.0.58):** field access, struct literals, the builtins, and
+     enum constructors — `Cell.Number(3)` is indistinguishable from a field access
+     until you check whether the base names a type. False positives across the pass
+     suite: **24 of 88**, from 22 before (adding checks made it worse before better,
+     which is the honest direction). Remaining: methods on values, match bindings
+     against variant payloads, indexing element types, and the region and purity
+     rules.
 5. **An IR-text backend in Burxt.**
 6. **Bootstrap and fixpoint.** stage-0 builds stage-1; stage-1 builds stage-1;
    compare.

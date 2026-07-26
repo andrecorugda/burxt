@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.57)
+# Burxt — Design Notes (v0.0.58)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -2736,6 +2736,35 @@ lists now have their own array, and the comment above it says why it is correctn
 rather than tidiness. Three places had the same shape: match bindings, enum payload
 types, trait signature parameters.
 
+### v0.0.58: stage-1 learns fields, struct literals, builtins and constructors
+
+M4 phase 4b, partly. The stage-1 typechecker now types **field access** (walking the
+struct's declaration to find the field's type), **struct literals** (every field
+checked against what was declared, and a name that is not a field is refused), the
+**builtins** (`len`, `to_string`, `substring`, `push`, `truncate`, `div_floor`, `arg`,
+`read_file`, `write_file` and the rest — they are not in the function table because
+nothing declares them, so the checker has to know them the way the compiler does), and
+**enum constructors**.
+
+**That last one is the interesting case.** `Cell.Number(3)` parses as a field access —
+or a method call — on `Cell`, and the checker typed `Cell` as a variable and reported
+an unknown name. An enum constructor is *syntactically indistinguishable* from a field
+access until you look at whether the base names a type. The fix is three lines and one
+check, and it is the kind of thing only real programs reveal: nothing in the hand-made
+tests looked like this.
+
+**The measure moved the honest way.** Adding checks made the count *worse* first — 22
+false positives became 26, because a checker that types more things has more chances to
+be wrong. Handling constructors brought it to **24 of 88**. Reporting the number that
+went up is the point: the alternative is a checker that stays silent and scores well.
+
+`stage1.bx` still typechecks **its own 2,000 lines with zero complaints**, which is the
+case that matters most.
+
+What remains for 4b: methods (`x.m()` where the base is a value), match bindings against
+variant payloads, indexing element types, and the region and purity rules — which
+stage-0 enforces and stage-1 does not yet mention.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:
@@ -2800,6 +2829,8 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
+- M4 phase 4b, part (v0.0.58): fields, struct literals, builtins and enum
+  constructors; false positives 24 of 88 and falling.
 - M4 phase 4a (v0.0.57): the stage-1 typechecker — declarations, expressions,
   statements, the scale rules. Typechecks its own source. Plus `truncate(xs, n)`, which
   a scope-based checker cannot do without.
