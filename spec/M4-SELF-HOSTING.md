@@ -326,6 +326,15 @@ IR becomes a program, stage-2, which answers exactly what stage-1 answers.** Che
 own source with **zero errors**, and dies inside the checker with a bounds panic. That
 last bug, and the byte-identical fixpoint behind it, is what phase 6 is now.
 
+**Measured, for tomorrow:** stage-2 agrees with stage-1 exactly on **73 of the 88 pass
+programs**. The 15 that differ all diverge *early* — the token dump already differs, so
+the fault is in lexing or in the first pass over the tokens, not in the checker where the
+bounds panic surfaces. The smallest case is `tests/pass/allocates_in_caller_region.bx`:
+stage-2 prints a different first-eight token list and then reports parse errors where
+stage-1 reports none. `Unit.report`'s emitted IR reads correctly, which points at what it
+calls rather than at the loop. That file, and the token dump either side of it, is the
+place to start.
+
 Three defects found on the way, each one only findable by running:
 
 1. **`||` was emitted as `and`.** The parser records the operator's BYTE (124 for `|`,
