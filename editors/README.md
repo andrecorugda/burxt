@@ -152,13 +152,14 @@ is met:
 - [x] Real sample programs to contribute as Linguist samples — `examples/` and
       the 230+ programs under `tests/`.
 - [x] A licence Linguist accepts (MIT OR Apache-2.0).
+- [x] A brand colour taken from the artwork: `#b26436` (see `assets/README.md`).
 - [ ] Usage across enough public repositories. **This is the only open item.**
 - [ ] The `languages.yml` entry, submitted as a PR:
 
 ```yaml
 Burxt:
   type: programming
-  color: "#2f6f4f"
+  color: "#b26436"
   extensions:
     - ".bx"
   tm_scope: source.burxt

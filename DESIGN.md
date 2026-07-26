@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.39)
+# Burxt — Design Notes (v0.0.40)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1942,6 +1942,33 @@ with that reason stated, and `pure fn (self: T) ...` is refused at the parser wi
 the same explanation rather than a confusing message about tokens.
 
 Spec: `spec/N2-PURE-FUNCTIONS.md`.
+
+### v0.0.40: the brand, in place
+
+Andre's artwork, organised and wired in. The mark is `><` — two chevrons converging
+— and the wordmark is `Burxt` with that mark **as** its `x`. Reading the name and
+seeing the logo are one act, and what the mark means is *exact*: two things meeting
+at a position that is fixed rather than approximate.
+
+- `assets/` holds the kit: the icon at favicon sizes, transparent and on an obsidian
+  tile, a multi-size `.ico`, the wordmark, and lockups on transparent, light and
+  dark grounds.
+- The VS Code extension uses the **tile** for its marketplace icon (the extensions
+  list shows it on its own background, so a filled tile is right) and the
+  transparent 48px icon for `.bx` files in the explorer. Copper reads on both light
+  and dark themes, so one file serves both.
+- The README banner switches on `prefers-color-scheme`.
+
+**The palette was sampled from the artwork, not eyeballed**: copper `#b26436`,
+obsidian `#232320`, read pixel by pixel out of `burxt-favicon-512.png`. Anything
+that needs the brand colour as *text* — the GitHub Linguist entry, a future
+stylesheet — now uses the value the artwork actually contains, instead of the
+placeholder green I had guessed earlier.
+
+The extension keeps its own copies of two files, because VS Code resolves
+contributed paths relative to the extension directory rather than the repository;
+`assets/README.md` records the two `cp` commands to re-run if the artwork changes,
+next to Andre's original notes rather than edited into them.
 
 ## Testing
 
