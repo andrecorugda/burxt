@@ -145,6 +145,20 @@ Listed so they are not mistaken for finished work:
 - **Array returns.** Array PARAMETERS work (v0.0.12); returning one needs
   whole-array binding at the call site, which is the copy question deferred
   with collections.
+- **Stack overflow is the one failure Burxt does not name.** Measured at
+  v0.0.23: recursion 100,000 deep works; 1,000,000 deep dies with a raw
+  SIGSEGV (exit 139), not a named error and not exit 70. Every other failure
+  mode — array bounds, integer overflow, division by zero, region exhaustion —
+  reports itself and exits 70. Honest severity: this is LOUD, so it is a
+  diagnostics gap rather than a correctness hole like a wrong number would be.
+  Fix is either a guard-page signal handler (what Rust does) or a depth counter
+  in codegen. Worth doing so nothing in the language fails anonymously.
+- **Tail calls are not optimized** (measured at v0.0.23): a tail-recursive loop
+  dies at exactly the same depth as a non-tail one, so recursion cannot
+  currently substitute for iteration. That matters more than it looks in a
+  language with immutability by default, where a functional style is otherwise
+  natural. The intended answer is a *guaranteed, checked* tail call rather than
+  an invisible optimization — see `spec/NOVELTY.md`.
 - **Multiplication scale rule refined** (v0.0.19), superseding "operands of
   `*` must have matching scales": `*` permits mixed operand scales when the
   result binding supplies a rounding contract; `+`/`-` remain strict; `/` is

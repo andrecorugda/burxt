@@ -18,16 +18,17 @@ because a novel thing that cannot ship is not yet novelty, it is a wish.
 
 ## The through-line: determinism
 
-The three candidates below look unrelated and are not. They are all the same
-claim in different places:
+The candidates below look unrelated and are not. They are all the same claim in
+different places:
 
 > **The same inputs produce the same money, everywhere, provably — and nothing
 > silently intervenes.**
 
 Exact scaled integers give it *in memory*. Byte-identical semantics across
 targets give it *across platforms*. What follows extends it across
-**boundaries**, across **effects**, and across **concurrency**. That is a
-coherent identity, not three features.
+**boundaries**, across **effects**, across **concurrency**, and across **cost**
+(a guaranteed tail call is determinism about stack usage). That is a coherent
+identity, not a list of features.
 
 ---
 
@@ -66,7 +67,7 @@ language can say this.
 
 **Novelty: high. Buildability: medium — needs an effect system first.**
 
-If a function's effects are part of its type (see §4), they can be *forbidden*,
+If a function's effects are part of its type (see §6), they can be *forbidden*,
 not merely documented:
 
 ```text
@@ -123,7 +124,61 @@ contracts that way.
 
 ---
 
-## 4. The concurrency mechanism: effect handlers, not `async`
+## 4. Guaranteed tail calls — a checked guarantee, not an invisible optimization
+
+**Novelty: moderate-high. Buildability: high — LLVM already provides the
+mechanism.**
+
+Most languages take one of two bad options: optimize tail calls invisibly, so a
+programmer cannot tell whether they got it and a small edit silently reintroduces
+stack growth; or do not optimize them at all, so recursion is unusable for
+iteration. Scheme mandates proper tail calls, which settles the *semantics* —
+but in a systems language with no runtime, the fresher move is to make the
+guarantee **checkable at the call site**.
+
+LLVM's `musttail` **fails at compile time if the call is not genuinely in tail
+position.** So Burxt can offer exactly the pattern it uses everywhere else:
+
+> Declare the intent, and the compiler either guarantees it or refuses to
+> compile with an explanation. Never a silent difference between "optimized"
+> and "hoped for."
+
+```text
+// illustrative, not settled syntax
+fn sum_to(n: Int, acc: Int) -> Int {
+    if n <= 0 { return acc; }
+    return tail sum_to(n - 1, acc + 1);   // constant stack, or a compile error
+}
+```
+
+Why this is on-thesis rather than a borrowed convenience:
+
+- It converts a *performance hope* into a *checked property*, which is the same
+  move as rounding contracts and exhaustive matching.
+- It makes deep recursion **safe** rather than usually-fine, which matters
+  because stack overflow is currently the only failure Burxt does not name
+  (see DESIGN.md's interim ledger).
+- Immutability-by-default makes a functional style natural, and that style is
+  only viable when recursion does not grow the stack.
+- Self-hosting needs recursion for tree walking; a guarantee about its cost is
+  worth having before the compiler is written in Burxt.
+
+Measured state at v0.0.23: no TCO at all — a tail-recursive loop segfaults at
+the same depth as a non-tail one.
+
+## 5. Termination as a contract
+
+**Novelty: high (in this combination). Buildability: low — needs the verifier.**
+
+An extension of §3 rather than a separate idea: a recursive function may carry a
+**termination measure** — a `decreases` clause naming a quantity that provably
+shrinks on every call, as Dafny and ACL2 do. For money code this is not
+academic: an infinite loop in a payment processor is a real failure mode, and
+"this function provably terminates" is exactly the class of claim the
+verification layer exists to make. Pairs naturally with the conservation laws in
+§3: one says the answer is right, the other says an answer arrives.
+
+## 6. The concurrency mechanism: effect handlers, not `async`
 
 **Novelty: moderate — real prior art, little adoption. Buildability: medium-low.**
 
@@ -176,7 +231,8 @@ Kept explicit so the register stays honest:
 - **Not a feature list.** These are claims Burxt intends to be able to make.
   Each needs its own spec, with a must-NOT list, before any of it is built.
 - **Effects are a means, not the novelty.** OCaml and Koka have them. Burxt's
-  novelty is §1–§3; effects are the mechanism that makes §2 possible.
+  novelty is §1–§3 and §4; effects (§6) are the mechanism that makes §2
+  possible.
 - **Nothing here overrides the numeric core.** Exact decimals, no silent
   rounding, no float remain the foundation. Everything above extends that
   guarantee outward — none of it relaxes it.
