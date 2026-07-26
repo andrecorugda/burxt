@@ -135,6 +135,8 @@ struct Unit {
     region_depth: Int,
     in_caller_region: Int,
     in_pure: Int,
+    loop_depth: Int,
+    in_function: Int,
     no_struct: Int,
     // Set while typing the operands of `*`. Multiplication combines a quantity with a
     // rate, so its operand scales differ by nature: a literal that cannot narrow to
@@ -604,19 +606,172 @@ fn (self: Unit) field_type(src: String, holder: Ty, name_tok: Int) -> Ty {
 
 // A builtin's return type. They are not in the function table because they are not
 // declared anywhere — the compiler knows them, so the checker must too.
+// How many arguments each builtin takes, and -1 for a name that is not one. Kept as a
+// table rather than folded into the checks below, because "wrong number of arguments"
+// is one message and reporting it once is what stops the type errors that follow it
+// from being noise.
+fn builtin_arity(name: String) -> Int {
+    if name == "arg_count" { return 0; }
+    if name == "len" { return 1; }
+    if name == "to_string" { return 1; }
+    if name == "read_file" { return 1; }
+    if name == "arg" { return 1; }
+    if name == "byte_at" { return 2; }
+    if name == "push" { return 2; }
+    if name == "truncate" { return 2; }
+    if name == "write_file" { return 2; }
+    if name == "div_floor" { return 2; }
+    if name == "div_trunc" { return 2; }
+    if name == "rem" { return 2; }
+    if name == "substring" { return 3; }
+    return -1;
+}
+
+fn builtin_result(name: String) -> Ty {
+    if name == "to_string" { return ty_simple(42); }
+    if name == "read_file" { return ty_simple(42); }
+    if name == "substring" { return ty_simple(42); }
+    if name == "arg" { return ty_simple(42); }
+    if name == "len" { return ty_simple(40); }
+    if name == "byte_at" { return ty_simple(40); }
+    if name == "push" { return ty_simple(40); }
+    if name == "truncate" { return ty_simple(40); }
+    if name == "arg_count" { return ty_simple(40); }
+    if name == "write_file" { return ty_simple(40); }
+    if name == "div_floor" { return ty_simple(40); }
+    if name == "div_trunc" { return ty_simple(40); }
+    if name == "rem" { return ty_simple(40); }
+    return ty_unknown();
+}
+
+// What each builtin will accept. The receiver-shaped ones — `push` and `truncate` —
+// also need a MUTABLE binding, because they change the array in place.
+fn (mut self: Unit) check_builtin_args(src: String, at: Int, called: String, first: Ty,
+                                       second: Ty, first_node: Int) -> Int allocates {
+    if called == "len" {
+        if !is_unknown(first) && first.kind != 47 && first.kind != 48 && first.kind != 42 {
+            let e: Int = self.complain_at(src, at,
+                "`len` counts the elements of an array or the bytes of a String, but "
+                + "this is " + ty_show(src, first));
+        }
+        return 1;
+    }
+    if called == "byte_at" || called == "substring" {
+        if !is_unknown(first) && first.kind != 42 {
+            let e: Int = self.complain_at(src, at,
+                "`" + called + "` reads a String, but this is " + ty_show(src, first));
+        }
+        return 1;
+    }
+    if called == "to_string" {
+        if first.kind == 42 {
+            let e: Int = self.complain_at(src, at,
+                "`to_string` of a String is a copy with a name that says otherwise");
+        }
+        if first.kind == 46 || first.kind == 49 || first.kind == 47 || first.kind == 48 {
+            let e: Int = self.complain_at(src, at,
+                "`to_string` renders a number, a Bool or a Decimal — " + ty_show(src, first)
+                + " has no one rendering the language can choose for it");
+        }
+        return 1;
+    }
+    if called == "div_floor" || called == "div_trunc" || called == "rem" {
+        if !is_unknown(first) && first.kind != 40 {
+            let e: Int = self.complain_at(src, at,
+                "`" + called + "` divides Ints, but the left side is " + ty_show(src, first));
+        }
+        if !is_unknown(second) && second.kind != 40 {
+            let e: Int = self.complain_at(src, at,
+                "`" + called + "` divides Ints, but the right side is " + ty_show(src, second));
+        }
+        return 1;
+    }
+    if called == "read_file" || called == "write_file" {
+        if !is_unknown(first) && first.kind != 42 {
+            let e: Int = self.complain_at(src, at,
+                "a path is a String, but this is " + ty_show(src, first));
+        }
+        if called == "write_file" && !is_unknown(second) && second.kind != 42 {
+            let e: Int = self.complain_at(src, at,
+                "`write_file` writes a String, but this is " + ty_show(src, second));
+        }
+        return 1;
+    }
+    if called == "arg" {
+        if !is_unknown(first) && first.kind != 40 {
+            let e: Int = self.complain_at(src, at, "`arg` takes an Int index");
+        }
+        return 1;
+    }
+    if called == "push" || called == "truncate" {
+        if !is_unknown(first) && first.kind != 47 {
+            let e: Int = self.complain_at(src, at,
+                "`" + called + "` needs a growable array — a `[T]` — but this is "
+                + ty_show(src, first));
+            return 1;
+        }
+        // In place means the binding itself changes, so it must be one that may.
+        if first_node >= 0 {
+            let base: Node = self.nodes[first_node];
+            if base.kind == 5 {
+                let t: Tok = self.toks[base.tok];
+                let found: Int = self.find_sym(src, t.start, t.length);
+                if found >= 0 {
+                    if self.syms[found].mutable == 0 {
+                        let e: Int = self.complain_at(src, at,
+                            "`" + called + "` changes the array in place, so `"
+                            + substring(src, t.start, t.length)
+                            + "` has to be declared `let mut`");
+                    }
+                }
+            }
+        }
+        if called == "push" && !is_unknown(first) {
+            let want: Ty = self.ty_of(src, first.scale);
+            if !is_unknown(second) && !ty_same(src, second, want) {
+                let e: Int = self.complain_at(src, at,
+                    "this array holds " + ty_show(src, want) + ", but the value is "
+                    + ty_show(src, second));
+            }
+        }
+        if called == "truncate" && !is_unknown(second) && second.kind != 40 {
+            let e: Int = self.complain_at(src, at, "`truncate` takes an Int length");
+        }
+        return 1;
+    }
+    return 1;
+}
+
 fn (mut self: Unit) builtin_type(src: String, name: Tok, at: Int, args: Int) -> Ty allocates {
-    // The arguments are typed here rather than by `check_args`, because the first
-    // one's type decides two of the rules below.
+    // The arguments are typed here rather than by `check_args`, because their types
+    // and their count decide most of the rules below.
     let mut first: Ty = ty_unknown();
+    let mut second: Ty = ty_unknown();
+    let mut count: Int = 0;
+    let mut first_node: Int = -1;
     if args >= 0 {
         let list: Node = self.nodes[args];
+        count = list.b;
         let mut i: Int = 0;
         while i < list.b {
             let t: Ty = self.type_of(src, self.kids[list.a + i], ty_unknown());
-            if i == 0 { first = t; }
+            if i == 0 {
+                first = t;
+                first_node = self.kids[list.a];
+            }
+            if i == 1 { second = t; }
             i = i + 1;
         }
     }
+    let called: String = substring(src, name.start, name.length);
+    let wanted: Int = builtin_arity(called);
+    if wanted >= 0 && count != wanted {
+        let e: Int = self.complain_at(src, at,
+            "`" + called + "` takes " + to_string(wanted) + " argument(s), but this "
+            + "call passes " + to_string(count));
+        return builtin_result(called);
+    }
+    let checked: Int = self.check_builtin_args(src, at, called, first, second, first_node);
     // Three builtins hand back a freshly built String, so all three need a region —
     // except `to_string` of a Bool, which renders to one of two literals and so
     // allocates nothing.
@@ -723,6 +878,49 @@ fn (self: Unit) find_method(src: String, holder: Ty, name_tok: Int) -> Int {
     let wanted: Tok = self.toks[name_tok];
     return self.find_method_named(src, holder.name_start, holder.name_len,
                                   wanted.start, wanted.length);
+}
+
+// `Enum.Variant(payload)`: the variant has to exist, and the payload has to match it.
+// A constructor is the mirror of a match arm, so the two read alike on purpose.
+fn (mut self: Unit) check_construction(src: String, holder: Ty, call: Node) -> Int allocates {
+    let variant_name: Tok = self.toks[call.tok];
+    let found: Int = self.find_type(src, holder.name_start, holder.name_len);
+    let item: Node = self.nodes[self.types[found].node];
+    let mut i: Int = 0;
+    while i < item.b {
+        let variant: Node = self.nodes[self.kids[item.a + i]];
+        let named: Tok = self.toks[variant.tok];
+        if spans_eq(src, named.start, named.length, variant_name.start, variant_name.length) {
+            let mut given: Int = 0;
+            if call.kind == 14 && call.b >= 0 {
+                given = self.nodes[call.b].b;
+            }
+            if given != variant.c {
+                let e: Int = self.complain_at(src, call.tok,
+                    "`" + substring(src, named.start, named.length) + "` carries "
+                    + to_string(variant.c) + " value(s), but this passes "
+                    + to_string(given));
+                return 0;
+            }
+            let list: Node = self.nodes[call.b];
+            let mut p: Int = 0;
+            while p < given {
+                let want: Ty = self.ty_of(src, self.subs[variant.b + p]);
+                let got: Ty = self.type_of(src, self.kids[list.a + p], want);
+                if !is_unknown(got) && !self.fits(src, got, want) {
+                    let e: Int = self.complain_at(src, call.tok,
+                        "this variant carries " + ty_show(src, want) + ", but the value "
+                        + "is " + ty_show(src, got));
+                }
+                p = p + 1;
+            }
+            return 1;
+        }
+        i = i + 1;
+    }
+    let e: Int = self.complain_at(src, call.tok,
+        ty_show(src, holder) + " has no variant of this name");
+    return 0;
 }
 
 // The payload types of `Enum.Variant`, bound to an arm's names.
@@ -861,6 +1059,60 @@ fn (mut self: Unit) expr_allocates(src: String, node: Int) -> Bool {
         return false;
     }
     return false;
+}
+
+// Whether this statement always leaves the block it is in. Used twice: to find code
+// after it that can never run, and to find a function that can fall off its end.
+// `while` is deliberately absent — a loop with a `return` inside it may also run zero
+// times, and claiming otherwise would be a guess about the condition.
+fn (self: Unit) stmt_exits(node: Int) -> Bool {
+    if node < 0 {
+        return false;
+    }
+    let n: Node = self.nodes[node];
+    if n.kind == 63 || n.kind == 64 || n.kind == 67 || n.kind == 68 {
+        return true;                                 // return, tail return, break, continue
+    }
+    if n.kind == 65 {                                // if: only when BOTH sides do
+        if n.c < 0 {
+            return false;
+        }
+        return self.block_exits(n.b) && self.block_exits(n.c);
+    }
+    if n.kind == 69 {                                // region
+        return self.block_exits(n.a);
+    }
+    if n.kind == 71 {                                // match: only when every arm does
+        if n.c == 0 {
+            return false;
+        }
+        let mut i: Int = 0;
+        while i < n.c {
+            let arm: Node = self.nodes[self.kids[n.b + i]];
+            if !self.block_exits(arm.a) {
+                return false;
+            }
+            i = i + 1;
+        }
+        return true;
+    }
+    return false;
+}
+
+fn (self: Unit) block_exits(block: Int) -> Bool {
+    if block < 0 {
+        return false;
+    }
+    let b: Node = self.nodes[block];
+    if b.kind != 16 {
+        // `else if` puts a statement where a block usually goes, so a branch is asked
+        // the same question either way rather than the shape deciding the answer.
+        return self.stmt_exits(block);
+    }
+    if b.b == 0 {
+        return false;
+    }
+    return self.stmt_exits(self.kids[b.a + b.b - 1]);
 }
 
 fn (self: Unit) has_region() -> Bool {
@@ -1881,6 +2133,30 @@ fn (mut self: Unit) collect_declarations(src: String) -> Int allocates {
         let index: Int = self.items[i];
         let item: Node = self.nodes[index];
         let name: Tok = self.toks[item.tok];
+        if item.kind == 83 {
+            if item.b == 0 {
+                let e: Int = self.complain_at(src, item.tok,
+                    "an enum with no variants describes nothing, and no value of it "
+                    + "could ever be made");
+            }
+            let mut v: Int = 0;
+            while v < item.b {
+                let variant: Node = self.nodes[self.kids[item.a + v]];
+                let named: Tok = self.toks[variant.tok];
+                let mut w: Int = v + 1;
+                while w < item.b {
+                    let other: Node = self.nodes[self.kids[item.a + w]];
+                    let other_name: Tok = self.toks[other.tok];
+                    if spans_eq(src, named.start, named.length,
+                                other_name.start, other_name.length) {
+                        let e: Int = self.complain_at(src, other.tok,
+                            "this variant is declared twice");
+                    }
+                    w = w + 1;
+                }
+                v = v + 1;
+            }
+        }
         if item.kind == 82 || item.kind == 83 {
             if self.find_type(src, name.start, name.length) >= 0 {
                 let e: Int = self.complain_at(src, item.tok, "this type is declared twice");
@@ -2149,11 +2425,11 @@ fn (mut self: Unit) type_of_inner(src: String, node: Int, expected: Ty) -> Ty al
             let declared: Int = self.find_type(src, base_name.start, base_name.length);
             if declared >= 0 {
                 if self.types[declared].kind == 83 {
-                    if n.kind == 14 {
-                        let visited: Int = self.check_args(src, n.b);
-                    }
-                    return Ty { kind: 46, scale: 0, contract: 0,
-                                name_start: base_name.start, name_len: base_name.length };
+                    let holder: Ty = Ty { kind: 46, scale: 0, contract: 0,
+                                          name_start: base_name.start,
+                                          name_len: base_name.length };
+                    let checked: Int = self.check_construction(src, holder, n);
+                    return holder;
                 }
             }
         }
@@ -2249,6 +2525,32 @@ fn (mut self: Unit) type_of_inner(src: String, node: Int, expected: Ty) -> Ty al
                     + ty_show(src, got));
             }
             i = i + 1;
+        }
+        // Every field, not just the ones a writer remembered: a struct with a hole in
+        // it has no value the compiler could invent that would be right.
+        let decl: TypeDecl = self.types[found];
+        let item: Node = self.nodes[decl.node];
+        let mut f: Int = 0;
+        while f < item.b {
+            let field: Node = self.nodes[self.kids[item.a + f]];
+            let field_name: Tok = self.toks[field.tok];
+            let mut given: Bool = false;
+            let mut g: Int = 0;
+            while g < n.b {
+                let pair: Node = self.nodes[self.kids[n.a + g]];
+                let pair_name: Tok = self.toks[pair.tok];
+                if spans_eq(src, pair_name.start, pair_name.length,
+                            field_name.start, field_name.length) {
+                    given = true;
+                }
+                g = g + 1;
+            }
+            if !given {
+                let e: Int = self.complain_at(src, n.tok,
+                    "this literal leaves out `"
+                    + substring(src, field_name.start, field_name.length) + "`");
+            }
+            f = f + 1;
         }
         return holder;
     }
@@ -2369,7 +2671,16 @@ fn (mut self: Unit) check_block_nodes(src: String, block: Int, ret: Ty) -> Int a
     self.depth = self.depth + 1;
     let mut i: Int = 0;
     while i < node.b {
-        let checked: Int = self.check_stmt_node(src, self.kids[node.a + i], ret);
+        let stmt: Int = self.kids[node.a + i];
+        let checked: Int = self.check_stmt_node(src, stmt, ret);
+        // Anything after a statement that always leaves the block can never run, and
+        // a reader who wrote it believed otherwise. Reported once, at the first one.
+        if self.stmt_exits(stmt) && i + 1 < node.b {
+            let next: Node = self.nodes[self.kids[node.a + i + 1]];
+            let e: Int = self.complain_at(src, next.tok,
+                "this can never run: the statement before it always leaves the block");
+            i = node.b;
+        }
         i = i + 1;
     }
     // Everything declared inside the block leaves scope at the closing brace. One
@@ -2432,6 +2743,13 @@ fn (mut self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -> Int allo
         if self.in_pure == 1 {
             let e: Int = self.not_pure(src, n.tok, "print");
         }
+        let shown: Ty = self.type_at(n.a);
+        if shown.kind == 46 || shown.kind == 49 || shown.kind == 47 || shown.kind == 48 {
+            let e: Int = self.complain_at(src, n.tok,
+                "`print` renders a number, a Bool, a Decimal or a String — "
+                + ty_show(src, shown) + " has no one rendering the language can choose "
+                + "for it");
+        }
         let target: Node = self.nodes[n.a];
         if target.kind == 3 {
             if self.toks[target.tok].interpolated {
@@ -2448,6 +2766,13 @@ fn (mut self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -> Int allo
     }
 
     if n.kind == 63 || n.kind == 64 {                // return, return tail
+        if self.in_function == 0 {
+            let e: Int = self.complain_at(src, n.tok,
+                "there is nothing here to return from: top-level code runs, it does "
+                + "not answer");
+            let visited: Ty = self.type_of(src, n.a, ty_unknown());
+            return 1;
+        }
         let value: Ty = self.type_of(src, n.a, ret);
         if !is_unknown(value) && !is_unknown(ret) && !self.fits(src, value, ret) {
             let e: Int = self.complain_at(src, n.tok,
@@ -2499,7 +2824,18 @@ fn (mut self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -> Int allo
         if !is_unknown(cond) && cond.kind != 41 {
             let e: Int = self.complain_at(src, n.tok, "a `while` condition must be a Bool");
         }
+        self.loop_depth = self.loop_depth + 1;
         let body: Int = self.check_block_nodes(src, n.b, ret);
+        self.loop_depth = self.loop_depth - 1;
+        return 1;
+    }
+
+    if n.kind == 67 || n.kind == 68 {                // break, continue
+        if self.loop_depth == 0 {
+            let e: Int = self.complain_at(src, n.tok,
+                "there is no loop here to leave: `break` and `continue` only mean "
+                + "something inside `while`");
+        }
         return 1;
     }
 
@@ -2517,6 +2853,51 @@ fn (mut self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -> Int allo
 
     if n.kind == 71 {                                // match
         let value: Ty = self.type_of(src, n.a, ty_unknown());
+        let mut enum_decl: Int = -1;
+        if value.kind == 46 {
+            let declared: Int = self.find_type(src, value.name_start, value.name_len);
+            if declared >= 0 {
+                if self.types[declared].kind == 83 { enum_decl = declared; }
+            }
+        }
+        if !is_unknown(value) && enum_decl < 0 {
+            let e: Int = self.complain_at(src, n.tok,
+                "`match` chooses between an enum's variants, and " + ty_show(src, value)
+                + " has none");
+        }
+        if enum_decl >= 0 {
+            // Every variant needs an arm, and no variant twice: exhaustiveness is what
+            // makes a match an answer rather than a guess, and there is no `_` to hide
+            // behind. Both questions are the same walk.
+            let decl: Node = self.nodes[self.types[enum_decl].node];
+            let mut v: Int = 0;
+            while v < decl.b {
+                let variant: Node = self.nodes[self.kids[decl.a + v]];
+                let named: Tok = self.toks[variant.tok];
+                let mut seen: Int = 0;
+                let mut a: Int = 0;
+                while a < n.c {
+                    let arm: Node = self.nodes[self.kids[n.b + a]];
+                    let arm_name: Tok = self.toks[arm.tok];
+                    if spans_eq(src, arm_name.start, arm_name.length,
+                                named.start, named.length) {
+                        seen = seen + 1;
+                    }
+                    a = a + 1;
+                }
+                if seen == 0 {
+                    let e: Int = self.complain_at(src, n.tok,
+                        "this match has no arm for `"
+                        + substring(src, named.start, named.length) + "`");
+                }
+                if seen > 1 {
+                    let e: Int = self.complain_at(src, n.tok,
+                        "`" + substring(src, named.start, named.length)
+                        + "` has more than one arm, and only the first could ever run");
+                }
+                v = v + 1;
+            }
+        }
         let mut i: Int = 0;
         while i < n.c {
             let arm: Node = self.nodes[self.kids[n.b + i]];
@@ -2578,7 +2959,20 @@ fn (mut self: Unit) check_body(src: String, index: Int) -> Int allocates {
         p = p + 1;
     }
     let ret: Ty = self.ty_of(src, signature.c);
+    let outer_function: Int = self.in_function;
+    let outer_loop: Int = self.loop_depth;
+    self.in_function = 1;
+    self.loop_depth = 0;
     let body: Int = self.check_block_nodes(src, item.b, ret);
+    if !self.block_exits(item.b) {
+        // Every Burxt function returns a value, so falling off the end is not a
+        // silent zero — it is a missing answer, and the compiler says which function.
+        let e: Int = self.complain_at(src, item.tok,
+            "this function can reach its closing brace without returning, and every "
+            + "Burxt function answers with a value");
+    }
+    self.in_function = outer_function;
+    self.loop_depth = outer_loop;
     let dropped: Int = truncate(self.syms, base);
     self.depth = self.depth - 1;
     self.in_caller_region = outer_caller;
@@ -2656,7 +3050,7 @@ region compile {
         path = arg(1);
     }
     let src: String = read_file(path);
-    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, depth: 0, problems: 0, pos: 0, no_struct: 0, in_mul: 0, errors: 0 };
+    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_function: 0, depth: 0, problems: 0, pos: 0, no_struct: 0, in_mul: 0, errors: 0 };
     let installed: Int = unit.install_keywords();
     let total: Int = unit.run(src);
 

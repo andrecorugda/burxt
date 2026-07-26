@@ -32,7 +32,7 @@ language server, JSON layer or diagnostics rendering.
 |---|---|---|---|
 | Lexer | 661 | 800–1,000 | **376, DONE** (v0.0.52) — came in under estimate |
 | AST + parser | 1,787 | 2,000–2,600 | **~930, DONE** (v0.0.53–54) — under estimate |
-| Typechecker | 3,702 | 4,500–5,500 | **~1,330**, types + regions + purity (v0.0.61) |
+| Typechecker | 3,702 | 4,500–5,500 | **~1,720**, 4b complete (v0.0.62) |
 | Backend (IR text) | 3,924 | 2,500–3,500 | 0 |
 | Driver | 230 | ~150 | 0 |
 | **Total** | | **≈10,000–12,500** | ~680 of real front-end work |
@@ -153,6 +153,30 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
      because the escape check asks about expressions the checker has already seen
      (did that `+` join two Strings?) and re-walking them would report every complaint
      a second time.
+
+   - **4b DONE — the rest of the rules (v0.0.62):** **125 of the 190 fail programs**
+     rejected, from 94, with **0 false positives** across all 88 pass programs and its
+     own 3,088 lines. Three groups:
+     - **the builtins**, table-driven: how many arguments each takes, and what it will
+       accept — `len` of a non-array, `byte_at` of a non-String, `to_string` of a String
+       or an aggregate, integer division of non-Ints, a path that is not a String,
+       `push`/`truncate` on something that is not growable **or not `let mut`**, and a
+       pushed value against the array's element type. Arity is reported first and alone,
+       because the type errors that follow a miscount are noise;
+     - **control flow**: `break` and `continue` with no loop to leave, `return` with no
+       function to return from, a body that can reach its closing brace without
+       returning, and code after a statement that always leaves the block. All four
+       come from one question — *does this statement always exit?* — answered for `if`
+       only when both sides do, for `match` only when every arm does, and never for
+       `while`, since a loop may run zero times and claiming otherwise would be a guess
+       about the condition. `else if` puts a statement where a block usually goes, so a
+       branch is asked the same question either way;
+     - **the aggregates**: a struct literal must set every field, an enum constructor's
+       payload is checked against the variant it names (a constructor is the mirror of a
+       match arm, and the two read alike), `match` needs an enum and needs an arm for
+       every variant with no arm twice — there is no `_` to hide behind — and an enum
+       may not be empty or declare a variant twice. Plus `print` of a struct, an enum,
+       a `dyn` or an array, which has no rendering the language could choose.
 
 5. **An IR-text backend in Burxt.**
 6. **Bootstrap and fixpoint.** stage-0 builds stage-1; stage-1 builds stage-1;
