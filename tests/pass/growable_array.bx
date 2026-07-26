@@ -1,0 +1,30 @@
+// `[T]` is a growable array allocated in the enclosing region — distinct from
+// the fixed `[T; N]`, which lives on the stack. No generics involved: the
+// element type comes from the annotation, the way Go's slices work.
+region work {
+    let mut xs: [Int] = [];
+    print(len(xs));
+    push(xs, 10);
+    push(xs, 20);
+    push(xs, 30);
+    print(len(xs));
+    print(xs[0]);
+    print(xs[2]);
+    // grow well past the initial capacity — doubling, copied into the region
+    let mut i: Int = 0;
+    while i < 100 {
+        push(xs, i);
+        i = i + 1;
+    }
+    print(len(xs));
+    print(xs[102]);
+    // a literal with initial contents, and elements that are themselves values
+    let ys: [String] = ["a", "bb", "ccc"];
+    print(len(ys));
+    print(ys[1]);
+    print(len(ys[2]));
+    let mut money: [Decimal<2>] = [];
+    push(money, $19.99);
+    push(money, $0.01);
+    print(money[0] + money[1]);
+}

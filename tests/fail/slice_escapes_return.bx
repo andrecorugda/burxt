@@ -1,0 +1,3 @@
+fn build() -> [Int] {
+  region r { let mut xs: [Int] = []; return xs; }
+}

@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.23)
+# Burxt — Design Notes (v0.0.24)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -1153,6 +1153,43 @@ spec rather than worked around:
   use-after-free — the silently-wrong behaviour Burxt refuses everywhere. So it
   ships in the *same commit* as the first thing that allocates. "We will add
   the check next" is not a standard this project applies to anything else.
+
+### v0.0.24: growable arrays + escape checking — M1 slice 2
+
+```text
+region parse {
+    let mut nodes: [Node] = [];
+    push(nodes, n);          // grows in the region
+    print(len(nodes));
+}                            // all of it released in O(1)
+```
+
+`[T]` is a growable array living in the enclosing region — distinct from the
+fixed, stack-resident `[T; N]`. **No generics involved:** the element type comes
+from the annotation, exactly as Go's slices are built in rather than generic.
+Represented as `{ data, len, cap }`; `push` doubles capacity in the region when
+full; indexing bounds-checks against the RUNTIME length.
+
+**Escape checking ships in the same commit**, because allocation without it
+would be a use-after-free. Two rules turn out to be sufficient:
+
+1. **A region-allocated value may only be bound inside a region.** Since block
+   bindings already do not escape their block, this single rule removes every
+   assignment route out — there is nowhere outside to put it.
+2. **A function may not return a region-allocated type.** That is the only other
+   way the value could outlive the region its caller opened.
+
+Taint propagates: a struct with a `[T]` field is itself region-allocated, so
+`Holder { xs: [] }` outside a region is refused too. Both rules name the fix.
+
+**The arena pattern self-hosting needs now works**: a struct holding growable
+storage, mutated through a `mut self` method, inside one region — verified at
+500 nodes, where the parser was previously capped at a fixed 64.
+
+**The arena tradeoff, paid visibly:** growing copies into a fresh block and
+abandons the old one, because a bump allocator cannot free an individual
+object. That space returns when the region ends. Documented in the codegen
+rather than hidden, since it is a real cost of the model.
 
 ## Testing
 

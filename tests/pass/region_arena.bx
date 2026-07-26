@@ -1,0 +1,21 @@
+// The pattern self-hosting needs: a struct holding growable storage, mutated
+// through a `mut self` method, all inside one region that releases at the end.
+struct Arena { nodes: [Int], count: Int }
+
+fn (mut self: Arena) add(v: Int) -> Int {
+    push(self.nodes, v);
+    self.count = self.count + 1;
+    return self.count;
+}
+
+region parse {
+    let mut a: Arena = Arena { nodes: [], count: 0 };
+    let mut i: Int = 0;
+    while i < 500 {
+        a.add(i * 2);
+        i = i + 1;
+    }
+    print(a.count);
+    print(a.nodes[499]);
+    print(len(a.nodes));
+}

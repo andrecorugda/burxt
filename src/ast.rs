@@ -56,6 +56,10 @@ pub enum Type {
     /// Decimal<2> and Decimal<2, RoundHalfEven> are kept apart. Which table the
     /// name lives in (struct or enum) is the typechecker's business.
     Named(String),
+    /// A growable array `[T]`, allocated in the enclosing region. Represented
+    /// as { data pointer, length, capacity }. Distinct from `[T; N]`, which is
+    /// fixed-size and lives on the stack.
+    Slice(Box<Type>),
     /// A fixed-size stack array `[T; N]`. Arrays exist only behind bindings
     /// in this slice: indexed reads/writes and `len(a)` — never a bare value.
     Array { elem: Box<Type>, len: u32 },
@@ -86,6 +90,7 @@ impl std::fmt::Display for Type {
             Type::Decimal { scale, rounding: None } => write!(f, "Decimal<{}>", scale),
             Type::Decimal { scale, rounding: Some(r) } => write!(f, "Decimal<{}, {}>", scale, r),
             Type::Named(name) => write!(f, "{}", name),
+            Type::Slice(elem) => write!(f, "[{}]", elem),
             Type::Array { elem, len } => write!(f, "[{}; {}]", elem, len),
             Type::Dyn(name) => write!(f, "dyn {}", name),
         }

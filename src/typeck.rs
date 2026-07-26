@@ -94,6 +94,15 @@ pub enum TypedExprKind {
     Field { base: Box<TypedExpr>, index: u32 },
     /// Array literal (only ever a `let` initializer).
     ArrayLit(Vec<TypedExpr>),
+    /// A growable-array literal: allocate in the region, then fill.
+    SliceLit(Vec<TypedExpr>),
+    /// `push(xs, v)` — append, growing in the region if needed. Returns the
+    /// new length.
+    Push { place: Box<TypedExpr>, value: Box<TypedExpr> },
+    /// `len(xs)` on a growable array: a runtime field read.
+    SliceLen(Box<TypedExpr>),
+    /// Growable-array element read, bounds-checked against the runtime length.
+    SliceIndex { base: Box<TypedExpr>, index: Box<TypedExpr> },
     /// Enum construction: the variant's index plus its payload values.
     VariantLit { enum_name: String, tag: u32, args: Vec<TypedExpr> },
     /// Bounds-checked indexed read from a place; `len` is the static length.
@@ -427,7 +436,7 @@ impl TypeChecker {
             if self.fns.contains_key(&f.name) {
                 return Err(format!("function `{}` is defined twice", f.name));
             }
-            if f.name == "len" || f.name == "byte_at" {
+            if f.name == "len" || f.name == "byte_at" || f.name == "push" {
                 return Err(format!(
                     "the name `{}` is reserved for a built-in",
                     f.name
@@ -446,6 +455,16 @@ impl TypeChecker {
                      whole-array binding, which arrives with collections. Return \
                      a struct, or fill an array the caller owns.",
                     f.name
+                ));
+            }
+            // RULE 2 of escape checking: returning region data would let it
+            // outlive the region the caller opened.
+            if self.region_allocated(&f.ret) {
+                return Err(format!(
+                    "fn `{}` cannot return {}, because its storage lives in a region \
+                     and would not outlive it. Fill an array the caller owns, or \
+                     return a scalar summary.",
+                    f.name, f.ret
                 ));
             }
             // A trait object borrows its data. Returning one would outlive the
@@ -648,6 +667,55 @@ impl TypeChecker {
         Ok(())
     }
 
+    /// The place a mutation targets must bottom out in a `let mut` binding.
+    fn require_mutable_place(&self, e: &Expr) -> Result<(), String> {
+        let mut cur = e;
+        loop {
+            match cur {
+                Expr::Var(name) => {
+                    let (ty, mutable) = self
+                        .env
+                        .get(name)
+                        .ok_or_else(|| self.unknown_name(name))?;
+                    if !*mutable {
+                        return Err(format!(
+                            "cannot modify `{}`: it was declared immutable. Declare \
+                             it `let mut {}: {}` to allow it.",
+                            name, name, ty
+                        ));
+                    }
+                    return Ok(());
+                }
+                Expr::Field { base, .. } => cur = base,
+                Expr::Index { base, .. } => cur = base,
+                _ => {
+                    return Err(
+                        "this can only modify a variable, or a field or element of \
+                         one — not a temporary value."
+                            .to_string(),
+                    )
+                }
+            }
+        }
+    }
+
+    /// Does a value of this type have its storage in a region? Region-allocated
+    /// values may not outlive their region, which is what the two rules below
+    /// enforce. A struct is tainted by any region-allocated field; enum
+    /// payloads are scalars, so an enum never is.
+    fn region_allocated(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Slice(_) => true,
+            Type::Named(n) => self
+                .structs
+                .get(n)
+                .map(|fs| fs.iter().any(|(_, t)| self.region_allocated(t)))
+                .unwrap_or(false),
+            Type::Array { elem, .. } => self.region_allocated(elem),
+            _ => false,
+        }
+    }
+
     /// A Named type must refer to a declared struct; CInt never leaves the
     /// C boundary. `dyn Trait` must name a declared trait — and using one
     /// records that the trait needs vtables.
@@ -684,6 +752,23 @@ impl TypeChecker {
             // written — indexing takes a binding name, not an expression — and
             // trait objects, because they borrow and storing a borrow needs
             // tracking Burxt does not have.
+            Type::Slice(elem) => match elem.as_ref() {
+                Type::Slice(_) | Type::Array { .. } => Err(
+                    "a growable array cannot hold another array yet — its element \
+                     would need its own region reasoning. Use a struct element."
+                        .to_string(),
+                ),
+                Type::Dyn(t) => Err(format!(
+                    "a growable array cannot hold `dyn {}` yet — region-allocated \
+                     trait objects arrive in a later slice.",
+                    t
+                )),
+                Type::CInt => Err(
+                    "CInt only exists at the C boundary — use Int for elements"
+                        .to_string(),
+                ),
+                other => self.validate_type(&other.clone()),
+            },
             Type::Array { elem, .. } => match elem.as_ref() {
                 Type::Array { .. } => Err(
                     "arrays of arrays are not available yet — `a[i][j]` cannot be \
@@ -753,7 +838,7 @@ impl TypeChecker {
     /// function returns.
     fn check_extern(&self, e: &ExternFn) -> Result<(), String> {
         const RESERVED: [&str; 6] = ["printf", "fprintf", "fputs", "exit", "stderr", "main"];
-        if e.name == "len" || e.name == "byte_at" {
+        if e.name == "len" || e.name == "byte_at" || e.name == "push" {
             return Err(format!("the name `{}` is reserved for a built-in", e.name));
         }
         if RESERVED.contains(&e.name.as_str()) {
@@ -907,6 +992,18 @@ impl TypeChecker {
                     ));
                 }
                 self.validate_type(declared)?;
+                // RULE 1 of escape checking: a region-allocated value may only
+                // be bound inside a region. Because block bindings do not
+                // escape their block, this single rule stops region data from
+                // outliving its region by assignment — there is nowhere outside
+                // to put it.
+                if self.region_allocated(declared) && self.current_region.is_none() {
+                    return Err(format!(
+                        "`let {}: {}` needs a region: a growable array lives in one, \
+                         and there is none open here. Wrap it in `region name {{ ... }}`.",
+                        name, declared
+                    ));
+                }
                 // An array exists only behind a binding: it must be created
                 // right here, from a literal (whole-array copies are deferred).
                 if matches!(declared, Type::Array { .. }) && !matches!(value, Expr::ArrayLit(_))
@@ -1543,6 +1640,46 @@ impl TypeChecker {
                 // `byte_at(s, i)` — the i-th BYTE of a string, bounds-checked.
                 // Named for bytes on purpose: A4.4 refused a bare `s[i]`
                 // because it would hide whether you get a byte or a character.
+                // `push(xs, v)` appends to a growable array, growing it in the
+                // region when it is full. It needs a mutable PLACE, the same
+                // rule element assignment follows.
+                if name == "push" {
+                    if args.len() != 2 {
+                        return Err(
+                            "push(...) takes a growable array and a value: \
+                             push(xs, v)"
+                                .to_string(),
+                        );
+                    }
+                    let place = self.check_expr(&args[0], None)?;
+                    let elem = match &place.ty {
+                        Type::Slice(e) => e.as_ref().clone(),
+                        other => {
+                            return Err(format!(
+                                "push(...) needs a growable array `[T]`, but this has \
+                                 type {}",
+                                other
+                            ))
+                        }
+                    };
+                    self.require_mutable_place(&args[0])?;
+                    let value = self.check_expr(&args[1], Some(&elem))?;
+                    if value.ty != elem {
+                        return Err(format!(
+                            "push(...) appends {} to a {}, but the value has type {}",
+                            elem,
+                            place.ty,
+                            value.ty
+                        ));
+                    }
+                    return Ok(TypedExpr {
+                        ty: Type::Int,
+                        kind: TypedExprKind::Push {
+                            place: Box::new(place),
+                            value: Box::new(value),
+                        },
+                    });
+                }
                 if name == "byte_at" {
                     if args.len() != 2 {
                         return Err(
@@ -1588,6 +1725,11 @@ impl TypeChecker {
                         Type::String => Ok(TypedExpr {
                             ty: Type::Int,
                             kind: TypedExprKind::StrLen(Box::new(arg)),
+                        }),
+                        // a growable array knows its length at runtime
+                        Type::Slice(_) => Ok(TypedExpr {
+                            ty: Type::Int,
+                            kind: TypedExprKind::SliceLen(Box::new(arg)),
                         }),
                         other => Err(format!(
                             "len(...) needs an array or a string, but this has type {}",
@@ -1854,6 +1996,25 @@ impl TypeChecker {
             }
 
             Expr::ArrayLit(elems) => {
+                if let Some(Type::Slice(elem_ty)) = expected {
+                    let elem_ty = elem_ty.as_ref().clone();
+                    let mut typed = Vec::new();
+                    for (i, e) in elems.iter().enumerate() {
+                        let t = self.check_expr(e, Some(&elem_ty))?;
+                        if t.ty != elem_ty {
+                            return Err(format!(
+                                "in this growable array, element {} must be {}, but it \
+                                 has type {}",
+                                i, elem_ty, t.ty
+                            ));
+                        }
+                        typed.push(t);
+                    }
+                    return Ok(TypedExpr {
+                        ty: Type::Slice(Box::new(elem_ty)),
+                        kind: TypedExprKind::SliceLit(typed),
+                    });
+                }
                 let (elem_ty, len) = match expected {
                     Some(Type::Array { elem, len }) => (elem.as_ref().clone(), *len),
                     _ => {
@@ -1893,6 +2054,22 @@ impl TypeChecker {
 
             Expr::Index { base, index } => {
                 let typed_base = self.check_expr(base, None)?;
+                if let Type::Slice(elem) = typed_base.ty.clone() {
+                    let idx = self.check_expr(index, None)?;
+                    if idx.ty != Type::Int {
+                        return Err(format!(
+                            "an index must be an Int, but this one has type {}",
+                            idx.ty
+                        ));
+                    }
+                    return Ok(TypedExpr {
+                        ty: elem.as_ref().clone(),
+                        kind: TypedExprKind::SliceIndex {
+                            base: Box::new(typed_base),
+                            index: Box::new(idx),
+                        },
+                    });
+                }
                 let (elem, len) = match &typed_base.ty {
                     Type::Array { elem, len } => (elem.as_ref().clone(), *len),
                     other => {

@@ -1,0 +1,3 @@
+region r {
+  let mut xs: [[Int]] = [];
+}

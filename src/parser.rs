@@ -756,6 +756,11 @@ impl Parser {
             // [T; N] — fixed-size array
             Token::LBracket => {
                 let elem = self.parse_type()?;
+                // `[T]` is growable and region-allocated; `[T; N]` is fixed.
+                if self.at(&Token::RBracket) {
+                    self.bump();
+                    return Ok(Type::Slice(Box::new(elem)));
+                }
                 self.expect(&Token::Semicolon)?;
                 let len = match self.bump() {
                     Token::Int(0) => {

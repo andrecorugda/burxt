@@ -865,6 +865,7 @@ impl<'ctx> CodeGen<'ctx> {
     /// target.
     pub fn layout_of(&self, ty: &Type) -> Layout {
         match ty {
+            Type::Slice(_) => Layout { size: 24, align: 8, field_offsets: vec![] },
             Type::Named(name) if self.enum_types.contains_key(name) => {
                 // tag + payload slots, all 8-byte
                 let slots = self.enum_types[name]
@@ -928,6 +929,13 @@ impl<'ctx> CodeGen<'ctx> {
                 Some(st) => (*st).into(),
                 None => self.enum_types[name].0.into(),
             },
+            Type::Slice(_) => {
+                let ptr = self.ctx.ptr_type(AddressSpace::default());
+                let i64t = self.ctx.i64_type();
+                self.ctx
+                    .struct_type(&[ptr.into(), i64t.into(), i64t.into()], false)
+                    .into()
+            }
             Type::Array { elem, len } => self.llvm_type(elem).array_type(*len).into(),
             // A trait object is a fat pointer: { data, vtable }. The vtable
             // lives OUTSIDE the data, which is why becoming a trait object
@@ -1031,7 +1039,8 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_call(printf, &args, "printf_bool")
                     .map_err(|e| e.to_string())?;
             }
-            Type::Named(_) | Type::CInt | Type::Array { .. } | Type::Dyn(_) => {
+            Type::Named(_) | Type::CInt | Type::Array { .. } | Type::Dyn(_)
+            | Type::Slice(_) => {
                 return Err(format!(
                     "codegen bug: print on {} should have been refused by typeck",
                     e.ty
@@ -1702,6 +1711,74 @@ impl<'ctx> CodeGen<'ctx> {
             TypedExprKind::ArrayLit(_) => {
                 Err("codegen bug: array literal outside a let initializer".to_string())
             }
+            TypedExprKind::SliceLit(elems) => {
+                // Allocate room in the region, fill it, and build the triple.
+                let elem_ty = match &e.ty {
+                    Type::Slice(t) => t.as_ref().clone(),
+                    other => return Err(format!("codegen bug: slice literal of {}", other)),
+                };
+                let n = elems.len() as u64;
+                let cap = if n == 0 { 4 } else { n };
+                let data = self.build_alloc_array(&elem_ty, i64t.const_int(cap, false))?;
+                let ll_elem = self.llvm_type(&elem_ty);
+                for (i, el) in elems.iter().enumerate() {
+                    let v = self.gen_expr(el)?;
+                    let p = unsafe {
+                        self.builder.build_gep(
+                            ll_elem,
+                            data,
+                            &[i64t.const_int(i as u64, false)],
+                            "init",
+                        )
+                    }
+                    .map_err(|e| e.to_string())?;
+                    self.builder.build_store(p, v).map_err(|e| e.to_string())?;
+                }
+                self.build_slice_value(&e.ty, data, i64t.const_int(n, false), i64t.const_int(cap, false))
+            }
+            TypedExprKind::SliceLen(inner) => {
+                let sl = self.gen_expr(inner)?.into_struct_value();
+                self.builder
+                    .build_extract_value(sl, 1, "slice_len")
+                    .map_err(|e| e.to_string())
+            }
+            TypedExprKind::SliceIndex { base, index } => {
+                let elem_ty = match &base.ty {
+                    Type::Slice(t) => t.as_ref().clone(),
+                    other => return Err(format!("codegen bug: indexing {}", other)),
+                };
+                let sl = self.gen_expr(base)?.into_struct_value();
+                let data = self
+                    .builder
+                    .build_extract_value(sl, 0, "data")
+                    .map_err(|e| e.to_string())?
+                    .into_pointer_value();
+                let n = self
+                    .builder
+                    .build_extract_value(sl, 1, "len")
+                    .map_err(|e| e.to_string())?
+                    .into_int_value();
+                let idx = self.gen_expr(index)?.into_int_value();
+                // bounds are the RUNTIME length, not a static one
+                let checked = self.build_checked_index(idx, n)?;
+                let ll_elem = self.llvm_type(&elem_ty);
+                let p = unsafe {
+                    self.builder.build_gep(ll_elem, data, &[checked], "elem_ptr")
+                }
+                .map_err(|e| e.to_string())?;
+                self.builder
+                    .build_load(ll_elem, p, "elem")
+                    .map_err(|e| e.to_string())
+            }
+            TypedExprKind::Push { place, value } => {
+                let elem_ty = match &place.ty {
+                    Type::Slice(t) => t.as_ref().clone(),
+                    other => return Err(format!("codegen bug: push to {}", other)),
+                };
+                let slot = self.gen_place_addr(place)?;
+                let v = self.gen_expr(value)?;
+                self.build_push(&place.ty, &elem_ty, slot, v)
+            }
             TypedExprKind::Index { base, len, index } => {
                 let elem_ty = match &base.ty {
                     Type::Array { elem, .. } => self.llvm_type(elem),
@@ -2080,6 +2157,139 @@ impl<'ctx> CodeGen<'ctx> {
         let next = self.module.add_global(i64t, None, "burxt.heap.next");
         next.set_initializer(&i64t.const_zero());
         *self.heap.insert((base, next))
+    }
+
+    /// Allocate `count` elements of `elem` in the current region.
+    fn build_alloc_array(
+        &mut self,
+        elem: &Type,
+        count: IntValue<'ctx>,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let f = self.alloc_fn()?;
+        let i64t = self.ctx.i64_type();
+        let size = self.layout_of(elem).size;
+        let bytes = self
+            .builder
+            .build_int_mul(count, i64t.const_int(size, false), "bytes")
+            .map_err(|e| e.to_string())?;
+        let call = self
+            .builder
+            .build_call(f, &[bytes.into()], "region_alloc")
+            .map_err(|e| e.to_string())?;
+        match call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => Ok(v.into_pointer_value()),
+            _ => Err("allocator returned void".to_string()),
+        }
+    }
+
+    /// Build a `{ data, len, cap }` triple as a value.
+    fn build_slice_value(
+        &mut self,
+        ty: &Type,
+        data: PointerValue<'ctx>,
+        len: IntValue<'ctx>,
+        cap: IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let st = self.llvm_type(ty).into_struct_type();
+        let mut v = st.get_undef();
+        let parts: [BasicValueEnum<'ctx>; 3] = [data.into(), len.into(), cap.into()];
+        for (i, part) in parts.into_iter().enumerate() {
+            v = self
+                .builder
+                .build_insert_value(v, part, i as u32, "slice")
+                .map_err(|e| e.to_string())?
+                .into_struct_value();
+        }
+        Ok(v.into())
+    }
+
+    /// Append to a growable array in place, doubling its capacity in the region
+    /// when it is full. Returns the new length.
+    ///
+    /// Honest note on arenas: growing copies into a fresh block and abandons the
+    /// old one, because a bump allocator cannot free an individual object. That
+    /// space is reclaimed when the region ends — the arena tradeoff, paid
+    /// visibly rather than hidden.
+    fn build_push(
+        &mut self,
+        slice_ty: &Type,
+        elem_ty: &Type,
+        slot: PointerValue<'ctx>,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+        let st = self.llvm_type(slice_ty).into_struct_type();
+        let ll_elem = self.llvm_type(elem_ty);
+
+        let data_p = self.builder.build_struct_gep(st, slot, 0, "data_p").map_err(err)?;
+        let len_p = self.builder.build_struct_gep(st, slot, 1, "len_p").map_err(err)?;
+        let cap_p = self.builder.build_struct_gep(st, slot, 2, "cap_p").map_err(err)?;
+        let ptr_ty = self.ctx.ptr_type(AddressSpace::default());
+        let len = self.builder.build_load(i64t, len_p, "len").map_err(err)?.into_int_value();
+        let cap = self.builder.build_load(i64t, cap_p, "cap").map_err(err)?.into_int_value();
+
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_parent())
+            .ok_or("codegen bug: push outside a function")?;
+        let grow_bb = self.ctx.append_basic_block(function, "push.grow");
+        let store_bb = self.ctx.append_basic_block(function, "push.store");
+
+        let full = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGE, len, cap, "full")
+            .map_err(err)?;
+        self.builder.build_conditional_branch(full, grow_bb, store_bb).map_err(err)?;
+
+        // grow: double, allocate fresh, copy the live elements over
+        self.builder.position_at_end(grow_bb);
+        let two = i64t.const_int(2, false);
+        let doubled = self.builder.build_int_mul(cap, two, "doubled").map_err(err)?;
+        let min = i64t.const_int(4, false);
+        let is_small = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, doubled, min, "small")
+            .map_err(err)?;
+        let new_cap = self
+            .builder
+            .build_select(is_small, min, doubled, "new_cap")
+            .map_err(err)?
+            .into_int_value();
+        let fresh = self.build_alloc_array(elem_ty, new_cap)?;
+        let old = self
+            .builder
+            .build_load(ptr_ty, data_p, "old_data")
+            .map_err(err)?
+            .into_pointer_value();
+        let esize = self.layout_of(elem_ty).size;
+        let copy_bytes = self
+            .builder
+            .build_int_mul(len, i64t.const_int(esize, false), "copy_bytes")
+            .map_err(err)?;
+        self.builder
+            .build_memcpy(fresh, 8, old, 8, copy_bytes)
+            .map_err(|e| e.to_string())?;
+        self.builder.build_store(data_p, fresh).map_err(err)?;
+        self.builder.build_store(cap_p, new_cap).map_err(err)?;
+        self.builder.build_unconditional_branch(store_bb).map_err(err)?;
+
+        // store the new element and bump the length
+        self.builder.position_at_end(store_bb);
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_p, "data")
+            .map_err(err)?
+            .into_pointer_value();
+        let at = unsafe { self.builder.build_gep(ll_elem, data, &[len], "at") }.map_err(err)?;
+        self.builder.build_store(at, value).map_err(err)?;
+        let new_len = self
+            .builder
+            .build_int_add(len, i64t.const_int(1, false), "new_len")
+            .map_err(err)?;
+        self.builder.build_store(len_p, new_len).map_err(err)?;
+        Ok(new_len.into())
     }
 
     /// `open` is just "remember where the cursor is".
@@ -2791,7 +3001,10 @@ impl<'ctx> CodeGen<'ctx> {
 /// The boundary is decided by the TYPE, never by size, so it is identical on
 /// every target.
 pub fn is_aggregate(ty: &Type) -> bool {
-    matches!(ty, Type::Named(_) | Type::Array { .. } | Type::Dyn(_))
+    matches!(
+        ty,
+        Type::Named(_) | Type::Array { .. } | Type::Dyn(_) | Type::Slice(_)
+    )
 }
 
 /// The memory layout of an aggregate: exactly its declared fields, in

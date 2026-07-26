@@ -1,0 +1,4 @@
+region r {
+  let xs: [Int] = [];
+  push(xs, 1);
+}
