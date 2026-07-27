@@ -3844,7 +3844,8 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
             let element: Ty = self.ty_of(src, holder.scale);
             let at: String = self.fresh();
             let found: Int = self.w("  " + at + " = call i64 @burxt.slot(i64 " + base
-                                    + ", i64 " + index + ")\n");
+                                    + ", i64 " + index + ", i64 "
+                                    + to_string(self.toks[n.tok].start) + ")\n");
             if self.is_aggregate(element) {
                 return at;
             }
@@ -3864,7 +3865,8 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
         // The bounds check is not optional and not a build mode: an index past the end
         // is a named failure, exit 70, like every other one.
         let checked: Int = self.w("  call void @burxt.bounds(i64 " + index + ", i64 "
-                                  + to_string(holder.contract) + ")\n");
+                                  + to_string(holder.contract) + ", i64 "
+                                  + to_string(self.toks[n.tok].start) + ")\n");
         let scaled: String = self.fresh();
         let multiplied: Int = self.w("  " + scaled + " = mul i64 " + index + ", "
                                      + to_string(stride) + "\n");
@@ -4021,19 +4023,40 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
         return reg;
     }
     if n.kind == 10 {                                // && and ||
-        // Both sides are evaluated: Burxt has no short-circuit yet, and pretending
-        // otherwise in the backend would make the two implementations disagree.
-        let left: String = self.emit_expr(src, n.a);
-        let right: String = self.emit_expr(src, n.b);
-        let reg: String = self.fresh();
+        // These SHORT-CIRCUIT: the right side is evaluated only when the left has not
+        // already decided the answer. That is not an optimisation, it is what makes
+        // `while keep > 0 && self.syms[keep - 1].depth >= self.depth` safe to write —
+        // and this compiler's own symbol table is written exactly that way, which is how
+        // a backend that evaluated both sides was caught: by indexing at -1.
+        //
+        // The answer lives in one cell: store the left value, and overwrite it only if
+        // the right side runs. For `&&` a false left IS the answer; for `||` a true left
+        // is; and when the right side runs, it is the answer for both.
+        //
         // The parser records the OPERATOR'S BYTE — 124 for `|`, 38 for `&` — not the
         // token kind. Reading it as a token kind made every `||` an `and`, and the first
         // test to notice agreed with stage-0 by accident: `5 != 5 || false` is false
-        // either way. A predicate over letters is what caught it.
-        let mut op: String = "and";
-        if n.value == 124 { op = "or"; }
-        let visited: Int = self.w("  " + reg + " = " + op + " i64 " + left + ", "
-                                  + right + "\n");
+        // either way.
+        let answer: String = self.scratch(1);
+        let left: String = self.emit_expr(src, n.a);
+        let kept: Int = self.w("  store i64 " + left + ", ptr " + answer + "\n");
+        let bit: String = self.fresh();
+        let tested: Int = self.w("  " + bit + " = icmp ne i64 " + left + ", 0\n");
+        let rhs_label: String = self.fresh_label("logic.rhs");
+        let end_label: String = self.fresh_label("logic.end");
+        if n.value == 124 {                          // ||: a true left is the answer
+            let branched: Int = self.w("  br i1 " + bit + ", label %" + end_label
+                                       + ", label %" + rhs_label + "\n");
+        } else {                                     // &&: a false left is the answer
+            let branched: Int = self.w("  br i1 " + bit + ", label %" + rhs_label
+                                       + ", label %" + end_label + "\n");
+        }
+        let opened: Int = self.w(rhs_label + ":\n");
+        let right: String = self.emit_expr(src, n.b);
+        let stored: Int = self.w("  store i64 " + right + ", ptr " + answer + "\n");
+        let joined: Int = self.w("  br label %" + end_label + "\n" + end_label + ":\n");
+        let reg: String = self.fresh();
+        let loaded: Int = self.w("  " + reg + " = load i64, ptr " + answer + "\n");
         return reg;
     }
     if n.kind == 14 {                                // a method call
@@ -4141,7 +4164,8 @@ fn (mut self: Unit) place_of(src: String, node: Int) -> String allocates {
         if holder.kind == 47 {
             let at: String = self.fresh();
             let found: Int = self.w("  " + at + " = call i64 @burxt.slot(i64 " + base
-                                    + ", i64 " + index + ")\n");
+                                    + ", i64 " + index + ", i64 "
+                                    + to_string(self.toks[n.tok].start) + ")\n");
             let as_ptr: String = self.fresh();
             let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + at + " to ptr\n");
             return as_ptr;
@@ -4153,7 +4177,8 @@ fn (mut self: Unit) place_of(src: String, node: Int) -> String allocates {
         }
         let stride: Int = self.cells_of(src, self.ty_of(src, holder.scale));
         let checked: Int = self.w("  call void @burxt.bounds(i64 " + index + ", i64 "
-                                  + to_string(holder.contract) + ")\n");
+                                  + to_string(holder.contract) + ", i64 "
+                                  + to_string(self.toks[n.tok].start) + ")\n");
         let scaled: String = self.fresh();
         let multiplied: Int = self.w("  " + scaled + " = mul i64 " + index + ", "
                                      + to_string(stride) + "\n");
@@ -4612,25 +4637,41 @@ fn runtime_ir() -> String allocates {
         + "declare i32 @snprintf(ptr, i64, ptr, ...)\n"
         + "declare i32 @fprintf(ptr, ptr, ...)\n"
         + "@stderr = external global ptr\n\n"
+        // One gigabyte, the same reservation stage-0 makes, and the SAME refusal when it
+        // runs out. A bump allocator that does not check its limit does not fail — it
+        // writes past the mapping and the program dies with a signal, which is the one
+        // outcome this language is supposed to make impossible. Exit 70 and a named
+        // error, like every other runtime failure.
         + "define i64 @burxt.alloc(i64 %n) \{\n"
         + "entry:\n"
         + "  %a = load ptr, ptr @arena\n"
         + "  %isnull = icmp eq ptr %a, null\n"
         + "  br i1 %isnull, label %init, label %go\n"
         + "init:\n"
-        + "  %m = call ptr @malloc(i64 268435456)\n"
+        + "  %m = call ptr @malloc(i64 1073741824)\n"
+        + "  %failed = icmp eq ptr %m, null\n"
+        + "  br i1 %failed, label %exhausted, label %mapped\n"
+        + "mapped:\n"
         + "  store ptr %m, ptr @arena\n"
         + "  br label %go\n"
         + "go:\n"
         + "  %base = load ptr, ptr @arena\n"
         + "  %off = load i64, ptr @bump\n"
-        + "  %p = getelementptr i8, ptr %base, i64 %off\n"
         + "  %padded = add i64 %n, 7\n"
         + "  %rounded = and i64 %padded, -8\n"
         + "  %next = add i64 %off, %rounded\n"
+        + "  %over = icmp ugt i64 %next, 1073741824\n"
+        + "  br i1 %over, label %exhausted, label %hand_out\n"
+        + "hand_out:\n"
+        + "  %p = getelementptr i8, ptr %base, i64 %off\n"
         + "  store i64 %next, ptr @bump\n"
         + "  %asint = ptrtoint ptr %p to i64\n"
-        + "  ret i64 %asint\n\}\n\n"
+        + "  ret i64 %asint\n"
+        + "exhausted:\n"
+        + "  %err = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @region_msg)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n\}\n\n"
         + "define i64 @burxt.concat(i64 %a, i64 %b) \{\n"
         + "entry:\n"
         + "  %pa = inttoptr i64 %a to ptr\n"
@@ -4766,11 +4807,11 @@ fn runtime_ir() -> String allocates {
         + "  ret i64 %len\n\}\n\n"
         // The address of element i, bounds-checked against the LENGTH — not the
         // capacity, which is an implementation detail no program can see.
-        + "define i64 @burxt.slot(i64 %xs, i64 %i) \{\n"
+        + "define i64 @burxt.slot(i64 %xs, i64 %i, i64 %at) \{\n"
         + "entry:\n"
         + "  %p = inttoptr i64 %xs to ptr\n"
         + "  %len = load i64, ptr %p\n"
-        + "  call void @burxt.bounds(i64 %i, i64 %len)\n"
+        + "  call void @burxt.bounds(i64 %i, i64 %len, i64 %at)\n"
         + "  %datap = getelementptr i64, ptr %p, i64 2\n"
         + "  %elemp = getelementptr i64, ptr %p, i64 3\n"
         + "  %data = load i64, ptr %datap\n"
@@ -4798,7 +4839,7 @@ fn runtime_ir() -> String allocates {
         + "define i64 @burxt.arg(i64 %i) \{\n"
         + "entry:\n"
         + "  %n = load i64, ptr @burxt.argc\n"
-        + "  call void @burxt.bounds(i64 %i, i64 %n)\n"
+        + "  call void @burxt.bounds(i64 %i, i64 %n, i64 0)\n"
         + "  %argv = load ptr, ptr @burxt.argv\n"
         + "  %at = getelementptr ptr, ptr %argv, i64 %i\n"
         + "  %s = load ptr, ptr %at\n"
@@ -4840,7 +4881,7 @@ fn runtime_ir() -> String allocates {
         + "  %written = call i64 @fwrite(ptr %t, i64 1, i64 %size, ptr %f)\n"
         + "  %closed = call i32 @fclose(ptr %f)\n"
         + "  ret i64 %written\n\}\n\n"
-        + "define void @burxt.bounds(i64 %i, i64 %limit) \{\n"
+        + "define void @burxt.bounds(i64 %i, i64 %limit, i64 %at) \{\n"
         + "entry:\n"
         + "  %low = icmp slt i64 %i, 0\n"
         + "  %high = icmp sge i64 %i, %limit\n"
@@ -4849,7 +4890,10 @@ fn runtime_ir() -> String allocates {
         + "ok:\n  ret void\n"
         + "oops:\n"
         + "  %err = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @bounds_msg)\n"
+        // The numbers, because "outside the array" leaves a reader to guess which index
+        // and how long the array was — and the two together usually name the bug.
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @bounds_msg, i64 %i, "
+        + "i64 %limit, i64 %at)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n\}\n\n"
         + "define i64 @burxt.div_floor(i64 %a, i64 %b) \{\n"
@@ -4935,8 +4979,12 @@ region compile {
                     + "@str_false = private unnamed_addr constant [6 x i8] c\"false\\00\"\n"
                     + "@overflow_msg = private unnamed_addr constant [42 x i8] "
                     + "c\"burxt runtime error: arithmetic overflow\\0A\\00\"\n"
-                    + "@bounds_msg = private unnamed_addr constant [46 x i8] "
-                    + "c\"burxt runtime error: index outside the array\\0A\\00\"\n"
+                    + "@region_msg = private unnamed_addr constant [87 x i8] "
+                    + "c\"burxt runtime error: region memory exhausted — this build "
+                    + "reserves 1 GB per process\\0A\\00\"\n"
+                    + "@bounds_msg = private unnamed_addr constant [76 x i8] "
+                    + "c\"burxt runtime error: index %lld is outside an array of %lld"
+                    + " (at byte %lld)\\0A\\00\"\n"
                     + unit.globals + "\n" + unit.finish();
                 let wrote: Int = write_file(arg(2), text);
                 print("wrote " + arg(2) + ", " + to_string(len(text)) + " bytes of IR");

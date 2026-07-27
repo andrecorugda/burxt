@@ -1,6 +1,11 @@
 # Burxt — Self-Hosting: The Staging
 
-> Status: **in progress.** The far-horizon roadmap describes M4 as *"a capability
+> Status: **ACHIEVED (v0.0.73).** stage-1 compiles its own source, stage-2 emits
+> byte-identical IR for it, and stage-2 answers exactly what stage-1 answers for all 88
+> programs in the pass suite. Checked on every `cargo test` by
+> `burxt_compiles_burxt_and_reaches_the_fixpoint`. What it does not claim is in §3b.
+>
+> Original status: **in progress.** The far-horizon roadmap describes M4 as *"a capability
 > certificate, not a feature"*. This file is the plan with numbers in it, written
 > after measuring the compiler rather than guessing at it.
 
@@ -34,7 +39,7 @@ language server, JSON layer or diagnostics rendering.
 | AST + parser | 1,787 | 2,000–2,600 | **~930, DONE** (v0.0.53–54) — under estimate |
 | Typechecker | 3,702 | 4,500–5,500 | **~2,190**, 4b complete (v0.0.64) |
 | Backend (IR text) | 3,924 | 2,500–3,500 | **~1,400, self-compiling** (v0.0.68) |
-| Driver | 230 | ~150 | 0 |
+| Driver | 230 | ~150 | **done, counted above** |
 | **Total** | | **≈10,000–12,500** | ~680 of real front-end work |
 
 Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closures, no
@@ -318,49 +323,69 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
      argv recorded once where they arrive, and `read_file` reading into the region, so
      the text it answers lives exactly as long as the region does.
 
-## 3a. The bootstrap, as far as it goes (v0.0.68)
+## 3a. The bootstrap, reached (v0.0.73)
 
-**stage-1 emits IR for its own 4,948 lines with zero refusals — 1.14 MB of it — and that
-IR becomes a program, stage-2, which answers exactly what stage-1 answers.** Checked by
-`stage_1_compiles_itself_into_a_working_compiler`. stage-2 then lexes AND parses stage-1's
-own source with **zero errors**, and dies inside the checker with a bounds panic. That
-last bug, and the byte-identical fixpoint behind it, is what phase 6 is now.
+```
+stage-0 (Rust)  --builds-->  stage-1 (the Burxt compiler, written in Burxt)
+stage-1         --emits--->  1,208,254 bytes of IR for its OWN source, 0 refusals
+                --becomes->  stage-2
+stage-2         --emits--->  the same 1,208,254 bytes, BYTE-IDENTICAL
+                --becomes->  stage-3, whose machine code matches stage-2's
+```
 
-**Measured, for tomorrow:** stage-2 agrees with stage-1 exactly on **73 of the 88 pass
-programs**. The 15 that differ all diverge *early* — the token dump already differs, so
-the fault is in lexing or in the first pass over the tokens, not in the checker where the
-bounds panic surfaces. The smallest case is `tests/pass/allocates_in_caller_region.bx`:
-stage-2 prints a different first-eight token list and then reports parse errors where
-stage-1 reports none. `Unit.report`'s emitted IR reads correctly, which points at what it
-calls rather than at the loop. That file, and the token dump either side of it, is the
-place to start.
+The fixpoint is the certificate. Byte-identical output means the two implementations agree
+about the **whole language they share**, not merely about the programs someone thought to
+test: a disagreement anywhere in 4,900 lines of lexer, parser, checker and backend would
+show up as a different byte. stage-2 also answers exactly what stage-1 answers for all 88
+programs in the pass suite.
 
-Three defects found on the way, each one only findable by running:
+The linked binaries differ in 3,260 bytes, all of them in `.strtab`, `.symtab`, `.shstrtab`
+and the build-id note: an object file's *name* travels into the symbol table, and `self.o`
+is not `self2.o`. The disassembly is identical.
 
-1. **`||` was emitted as `and`.** The parser records the operator's BYTE (124 for `|`,
-   38 for `&`), not the token kind, and the emitter read it as a token kind. The first
-   test to exercise it agreed with stage-0 *by accident* — `5 != 5 || false` is false
-   either way — and what caught it was a predicate over letters: stage-2's lexer replied
-   "byte 108 starts no token" to every letter in the file. A test can pass for the wrong
-   reason, and only a second program disagreeing shows it.
-2. **String `==` compared pointers.** `icmp eq` on two i64s holding pointers is true only
-   when two Strings are the same object — a bug that reads as a working program right up
-   until two equal Strings are built separately. Equality now calls `strcmp`.
-3. **The string builder was quadratic**, and exhausted a **1 GB** region while emitting
-   1.1 MB of text: `a = a + b` copies the whole left side, so fifty thousand appends copy
-   gigabytes. Output now accumulates in bounded chunks, joined once. The real fix is a
-   byte buffer that grows in place, which needs a builtin to write one — recorded as a
-   cost, not pretended away. (Stage-0's exhaustion message still claimed 64 MB, four
-   versions after the reservation became 1 GB. Corrected.)
+### The two defects that stood between v0.0.68 and here
 
-   Still to emit: Decimals and their rounding, `match`, `tail` with `musttail`, contracts,
-   and the FFI boundary — none of which stage-1's own source uses, which is why the
-   bootstrap can be reached before them.
-6. **Bootstrap and fixpoint.** stage-0 builds stage-1; stage-1 builds stage-1;
-   compare.
+**1. `&&` and `||` did not short-circuit in the emitted code.** Burxt's do — stage-0 emits
+branches — and the backend evaluated both sides. It is not an optimisation: this compiler's
+own symbol table is written
 
-**The public milestone (Andre's decision, v0.0.46) is the end of phase 4**, not phase
-6: a Burxt-written lexer, parser and typechecker running under the Rust compiler.
+```text
+while keep > 0 && self.syms[keep - 1].depth >= self.depth { keep = keep - 1; }
+```
+
+and with both sides evaluated, `keep = 0` indexes at **-1**. The answer now lives in one
+cell: store the left value, overwrite it only if the right side runs — for `&&` a false
+left IS the answer, for `||` a true left is, and when the right side runs it is the answer
+for both.
+
+Finding it took making the failure talk. `index outside the array` became **`index -1 is
+outside an array of 1 (at byte 118938)`**, and byte 118938 is that line. A bounds failure
+that names the index, the length and the position is a better error for every Burxt
+program, not only for this one — so it stayed.
+
+**2. The emitted allocator had no limit.** `burxt.alloc` bumped a pointer into a 256 MB
+mapping and never checked it, so stage-2 compiling 4,900 lines ran off the end and died
+with **SIGSEGV** — the one outcome this language exists to make impossible. It now reserves
+1 GB like stage-0, checks the bump against it, and refuses with a named error and exit 70.
+A bump allocator that does not check its limit does not fail; it corrupts.
+
+Both were the same shape as v0.0.68's `||`-as-`and` and String-`==`-as-pointer-compare: the
+second implementation **guessing a semantic instead of matching it**. Four for four, and
+each one invisible until a program ran.
+
+## 3b. What self-hosting here does NOT claim
+
+Stated plainly, because the honest scope is the interesting part:
+
+- **stage-1 cannot compile every Burxt program.** Its backend does not emit Decimals and
+  their rounding, `match`, `tail` with `musttail`, contracts, or the FFI boundary. Its own
+  source uses none of them, which is exactly why the certificate arrives before they do.
+  Anything it cannot lower is **refused by name**, never emitted wrongly.
+- **stage-0 is not retired**, and §5 says why: it is the trust anchor and the differential
+  test. Two implementations that must agree turn a language change into a failing test
+  rather than a bug report.
+- **The front end is complete; the backend is a slice.** stage-1 accepts every program
+  stage-0 accepts — 0 false positives across 88 — and rejects 154 of the 190 it should.
 
 ## 4. Risks, named
 

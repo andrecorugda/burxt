@@ -1289,90 +1289,137 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
     let _ = fs::remove_dir_all(&scratch);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     assert_eq!(out, "1\n2\n3\n", "the reads before the bad one must still print");
+    // The message carries the numbers and the position, because "outside the array" left
+    // a reader to guess which index and how long the array was — and the two together
+    // are usually the whole diagnosis. That improvement is what found the short-circuit
+    // bug in v0.0.73, so it is asserted rather than assumed.
     assert!(
-        err.contains("index outside the array"),
-        "the failure belongs on stderr, named: {:?}",
+        err.contains("index 3 is outside an array of 3"),
+        "the failure belongs on stderr, with the index and the length: {:?}",
         err
     );
+    assert!(err.contains("(at byte "), "and with the position in the source: {:?}", err);
     assert_eq!(code, Some(70), "a named runtime failure exits 70");
 }
 
-/// The bootstrap, as far as it goes today: stage-1 (the Burxt compiler, compiled by the
-/// Rust one) emits LLVM IR for ITS OWN source with no refusals, that IR becomes a
-/// program — stage-2 — and stage-2 answers exactly what stage-1 answers for the same
-/// input. The fixpoint (stage-2 emitting byte-identical IR for stage-1's source) is not
-/// reached yet: stage-2 lexes and parses its own 4,900 lines and then dies in the
-/// checker, which is the bug this test will grow to cover.
+/// **Burxt compiles Burxt, and the result is fixed.** The self-hosting certificate, run
+/// end to end on every `cargo test`:
+///
+/// 1. stage-0 (this Rust compiler) builds **stage-1** from `examples/stage1.bx`.
+/// 2. stage-1 emits LLVM IR for **its own source**, with no construct refused.
+/// 3. That IR is assembled and linked into **stage-2** — a Burxt compiler built by a
+///    Burxt compiler.
+/// 4. stage-2 emits IR for the same source, and it must be **byte-identical** to
+///    stage-1's. That is the fixpoint: the compiler has stopped changing its own output,
+///    which is what says the two implementations agree about the whole language they
+///    share, not just about the programs someone thought to test.
+/// 5. stage-2 answers exactly what stage-1 answers for every program in the pass suite.
+///
+/// What this does NOT claim: that stage-1 can compile every Burxt program. Its backend
+/// does not emit Decimals, `match`, `tail` or contracts yet — none of which its own
+/// source uses. The certificate is that it compiles ITSELF and reaches a fixpoint.
 #[test]
-fn stage_1_compiles_itself_into_a_working_compiler() {
+fn burxt_compiles_burxt_and_reaches_the_fixpoint() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let llc = Path::new("/usr/lib/llvm-18/bin/llc");
     if !llc.exists() {
         eprintln!("skipping: {} is not installed", llc.display());
         return;
     }
-    let scratch = scratch_dir("bootstrap");
+    let scratch = scratch_dir("fixpoint");
     fs::create_dir_all(&scratch).unwrap();
+    let stage1 = scratch.join("stage1");
     assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
         .arg(root.join("examples/stage1.bx"))
-        .current_dir(&scratch)
+        .arg("-o")
+        .arg(&stage1)
         .status()
         .expect("burxt")
         .success());
 
-    // stage-1 emits its own source. "backend refusals" in the output would mean a
-    // construct it cannot lower, and there must be none.
-    let ll = scratch.join("self.ll");
-    let emitted = Command::new(scratch.join("stage1"))
-        .arg(root.join("examples/stage1.bx"))
-        .arg(&ll)
-        .current_dir(&scratch)
-        .output()
-        .expect("stage-1");
-    let said = String::from_utf8_lossy(&emitted.stdout).to_string();
-    assert!(
-        said.contains("bytes of IR") && !said.contains("backend refusals"),
-        "stage-1 could not emit its own source:\n{}",
+    // A Burxt program from a Burxt compiler: source -> IR text -> object -> program.
+    let build_stage = |compiler: &Path, ir: &PathBuf, exe: &PathBuf| -> String {
+        let emitted = Command::new(compiler)
+            .arg(root.join("examples/stage1.bx"))
+            .arg(ir)
+            .output()
+            .expect("a compiler");
+        let said = String::from_utf8_lossy(&emitted.stdout).to_string();
+        assert!(
+            said.contains("bytes of IR") && !said.contains("backend refusals"),
+            "{} could not emit stage-1's source:\n{}",
+            compiler.display(),
+            said
+        );
+        let obj = ir.with_extension("o");
+        let compiled = Command::new(llc)
+            .args(["-relocation-model=pic", "-filetype=obj", "-o"])
+            .arg(&obj)
+            .arg(ir)
+            .output()
+            .expect("llc");
+        assert!(
+            compiled.status.success(),
+            "llc rejected the IR from {}:\n{}",
+            compiler.display(),
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+        assert!(Command::new("cc")
+            .arg("-o")
+            .arg(exe)
+            .arg(&obj)
+            .status()
+            .expect("cc")
+            .success());
         said
-    );
+    };
 
-    let obj = scratch.join("self.o");
-    let compiled = Command::new(llc)
-        .args(["-relocation-model=pic", "-filetype=obj", "-o"])
-        .arg(&obj)
-        .arg(&ll)
-        .output()
-        .expect("llc");
-    assert!(
-        compiled.status.success(),
-        "llc rejected the self-compiled IR:\n{}",
-        String::from_utf8_lossy(&compiled.stderr)
-    );
+    let ir1 = scratch.join("self.ll");
     let stage2 = scratch.join("stage2");
-    assert!(Command::new("cc")
-        .arg("-o")
-        .arg(&stage2)
-        .arg(&obj)
-        .status()
-        .expect("cc")
-        .success());
+    build_stage(&stage1, &ir1, &stage2);
 
-    // The two compilers must answer the same thing for the same program.
-    let sample = scratch.join("sample.bx");
-    fs::write(
-        &sample,
-        "let mut i: Int = 0;\nwhile i < 3 {\n  print(i * 2);\n  i = i + 1;\n}\n         print(true);\n",
-    )
-    .unwrap();
-    let one = Command::new(scratch.join("stage1")).arg(&sample).output().expect("stage-1");
-    let two = Command::new(&stage2).arg(&sample).output().expect("stage-2");
+    let ir2 = scratch.join("self2.ll");
+    let stage3 = scratch.join("stage3");
+    build_stage(&stage2, &ir2, &stage3);
+
+    let first = fs::read(&ir1).unwrap();
+    let second = fs::read(&ir2).unwrap();
+
+    // Every program in the pass suite, through both compilers.
+    let mut disagreements = Vec::new();
+    let mut checked = 0;
+    for entry in fs::read_dir(root.join("tests/pass")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("bx") {
+            continue;
+        }
+        checked += 1;
+        let one = Command::new(&stage1).arg(&path).output().expect("stage-1");
+        let two = Command::new(&stage2).arg(&path).output().expect("stage-2");
+        if one.stdout != two.stdout {
+            disagreements.push(path.file_name().unwrap().to_string_lossy().into_owned());
+        }
+    }
+
     let _ = fs::remove_dir_all(&scratch);
     assert_eq!(
-        String::from_utf8_lossy(&one.stdout),
-        String::from_utf8_lossy(&two.stdout),
-        "stage-2 disagreed with stage-1 about the same program"
+        first.len(),
+        second.len(),
+        "stage-2's output is a different SIZE from stage-1's: no fixpoint"
     );
+    assert!(
+        first == second,
+        "stage-1 and stage-2 emit different IR for the same source: no fixpoint"
+    );
+    assert!(
+        disagreements.is_empty(),
+        "stage-2 disagreed with stage-1 about {} of {} programs: {:?}",
+        disagreements.len(),
+        checked,
+        disagreements
+    );
+    assert!(checked >= 88, "the pass suite shrank: only {} programs", checked);
 }
 
 /// The repository root holds only what belongs there. Not a style preference: `burxt

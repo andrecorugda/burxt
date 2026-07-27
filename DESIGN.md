@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.72)
+# Burxt — Design Notes (v0.0.73)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -357,9 +357,12 @@ to Cranelift or add an interpreter, only codegen.rs changes.
 
 - Stage 0: this compiler, written in **Rust**, emitting via **LLVM 18**
   (inkwell).
-- Stage 1 (future): rewrite the Burxt compiler in Burxt; compile it with
-  stage 0. The day "Burxt compiles Burxt" = self-hosting = the language is
-  real.
+- Stage 1: **DONE (v0.0.73)** — the Burxt compiler rewritten in Burxt,
+  compiled by stage 0, and then compiled by *itself*: stage-2's IR is
+  byte-identical to stage-1's, which is the fixpoint. "Burxt compiles Burxt" is
+  true, with the scope stated honestly in `spec/M4-SELF-HOSTING.md` §3b — the
+  Burxt backend does not emit every construct yet, and stage 0 stays as the
+  trust anchor and the differential test.
 
 ## Milestone log
 
@@ -377,7 +380,7 @@ how it got here, and finding an entry meant searching rather than navigating.
 | **v0.0.38–v0.0.42** | `allocates`, `pure`, and the mark | [read](docs/log/05-allocates-pure-and-the-brand.md) |
 | **v0.0.43–v0.0.50** | Contracts, conservation laws, and termination | [read](docs/log/06-contracts-and-termination.md) |
 | **v0.0.51–v0.0.58** | The front end, in Burxt | [read](docs/log/07-the-self-hosted-front-end.md) |
-| **v0.0.69–v0.0.72** | The mark, and the shape of the repository | [read](docs/log/08-the-mark-and-the-tree.md) |
+| **v0.0.69–v0.0.73** | The mark, the shape of the repository, and the fixpoint | [read](docs/log/08-the-mark-and-the-tree.md) |
 
 v0.0.59–v0.0.68 and v0.0.70 have no log entry: they were ten consecutive versions of one
 milestone, recorded in [`spec/M4-SELF-HOSTING.md`](spec/M4-SELF-HOSTING.md) next to the plan

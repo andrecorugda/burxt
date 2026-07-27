@@ -48,6 +48,10 @@ The same principle generalizes. Burxt's identity is: **the compiler refuses to l
 
 Burxt is early and built in small, verified increments. The numeric core is solid and the object model is taking shape. It is **not yet ready for production use** — it is ready to watch, try, and shape.
 
+**Burxt compiles Burxt.** As of v0.0.73 the compiler is written in Burxt — lexer, parser, typechecker and an LLVM-IR backend, 4,900 lines of it — and it compiles its own source. The compiler *it* produces emits **byte-identical** output for that same source, which is the fixpoint that says the two implementations agree about the whole language rather than about the programs someone thought to test. A test runs the chain on every commit.
+
+The honest scope, because it matters: the Burxt backend does not emit Decimals, `match`, `tail` or contracts yet — none of which its own source uses — and anything it cannot lower is refused by name rather than emitted wrongly. The Rust compiler stays as the trust anchor and as a differential test, so a change to the language now has two implementations that must agree. Details in [`spec/M4-SELF-HOSTING.md`](spec/M4-SELF-HOSTING.md).
+
 **Working today:**
 
 - **Numbers.** Exact decimals with explicit rounding contracts (`RoundHalfEven` / `RoundHalfUp`), money and percent literals (`$19.99`, `8.25%`), overflow-trapping checked arithmetic, i128 intermediates so the overflow error means the *result* does not fit.
@@ -57,9 +61,10 @@ Burxt is early and built in small, verified increments. The numeric core is soli
 - **Guaranteed tail calls.** `return tail f(...)` is a *checked* guarantee (LLVM `musttail`), not an invisible optimization: 50 million frames in constant stack, or a compile error explaining why the guarantee cannot be given.
 - **The C boundary.** `extern fn`, plus **exactness that survives it**: a `Decimal` crosses only through a declared marshaller (`amount: Decimal<2> as scaled`), a `Decimal` → C `double` crossing is a compile error, and an `Int` → `double` crossing is range-checked at 2^53.
 - **File input.** `read_file` and `to_string`, the two things a self-hosted compiler cannot do without.
-- **Self-hosted pieces.** A Burxt lexer and a Burxt parser (arena AST, growable, no node budget), both written in Burxt and compiled by this compiler.
+- **Contracts, checked.** `requires` / `ensures` / `decreases` on a signature, checked at runtime with no build mode that strips them, `old(...)` in an `ensures` so a conservation law is expressible (`ensures from + to == old(from + to)`), and `pure` as a compiler-checked claim that a function's answer depends on its arguments alone.
+- **Self-hosting.** The whole compiler, in Burxt: a lexer, a parser building an arena AST, a typechecker that agrees with this one on every program in the suite, and an LLVM-IR backend — compiling itself to a fixpoint.
 
-**Designed and committed, not yet built:** no null (absence as an explicit `Option<T>` the compiler forces you to handle); errors as values you must handle; correctness contracts (`requires` / `ensures`) — the verification layer that is Burxt's eventual differentiator; algebraic effect handlers instead of coloured `async`; opt-in safe single inheritance; and the cross-compilation targets above.
+**Designed and committed, not yet built:** no null (absence as an explicit `Option<T>` the compiler forces you to handle); errors as values you must handle; *static proof* of the contracts that are checked at runtime today — the verification layer that is Burxt's eventual differentiator; algebraic effect handlers instead of coloured `async`; and the cross-compilation targets above. Single inheritance was **dropped**, not deferred: composition and traits do the work, and the reasoning is recorded rather than reversed quietly.
 
 `DESIGN.md` records the design north star and a ledger of superseded decisions and deliberately deferred features, each with the trigger that would earn it a milestone. Every version's entry — what it decided and what it cost — is in [`docs/log/`](docs/log/). The distinction between shipped and planned is kept honest in both, on purpose.
 
