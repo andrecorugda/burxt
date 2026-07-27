@@ -24,8 +24,8 @@ directory holds that half of the project.
 Package it and install it — no npm, no `vsce`, no bundler:
 
 ```bash
-python3 editors/vscode/pack.py                                  # writes burxt-0.1.0.vsix
-code --install-extension editors/vscode/burxt-0.1.0.vsix
+python3 editors/vscode/pack.py                                  # writes burxt-0.1.1.vsix
+code --install-extension editors/vscode/burxt-0.1.1.vsix
 ```
 
 `pack.py` is a .vsix writer in the standard library: a .vsix is a ZIP holding an OPC

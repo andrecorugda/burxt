@@ -761,6 +761,16 @@ fn vscode_extension_speaks_to_the_language_server() {
     ] {
         assert!(manifest.contains(needle), "{}", why);
     }
+    // The package version has to move when what it carries moves. VS Code keys its
+    // upgrade on the version alone: a rebuilt `.vsix` with the same number installs as
+    // "already installed", which is how a stale icon survives a reinstall (v0.0.69's
+    // artwork swap did exactly that, and the installed copy kept the old mark).
+    assert!(
+        !manifest.contains("\"version\": \"0.1.0\""),
+        "bump the extension version when its contents change: VS Code will not reinstall \
+         the same number"
+    );
+
     // Everything the packager ships has to exist, or `pack.py` fails at the worst
     // possible moment — when someone is trying to install it.
     let packer = fs::read_to_string(root.join("editors/vscode/pack.py")).unwrap();

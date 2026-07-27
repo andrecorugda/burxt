@@ -2799,6 +2799,15 @@ What changed, and nothing more:
 The palette, for anything that needs it in text: ember `#E8502A`, white `#FFFFFF`
 inside the bowl, obsidian `#232320` for the dark lockup's ground.
 
+**And the swap was not done until it was installed.** The repository had the new mark,
+the rebuilt `.vsix` had it, and the *installed* extension still showed the old one —
+because VS Code keys its upgrade on the version number, and a rebuilt package with the
+same number installs as "already installed". The version moved to `0.1.1`, the package
+was reinstalled, the orphaned `0.1.0` directory was removed, and a test now refuses the
+number that shipped the stale artwork. The general rule, which is the same one this
+project keeps relearning: **a change that is only in the repository is not a change** —
+check the artifact a user actually runs.
+
 **The one new fact worth recording:** this is the first Burxt artwork that exists as
 vector. `burxt-b-icon.svg` is 445 bytes — a bar, a bowl, and two crossing polygons — so
 every raster size in the kit can be regenerated from it, and a size nobody has cut yet
