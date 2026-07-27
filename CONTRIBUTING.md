@@ -12,7 +12,7 @@ If a feature is merely convenient, it is deferred and written into the deferred-
 
 Two consequences for contributors:
 - **Small, focused PRs win.** A PR that adds one well-scoped capability with tests is easy to review and merge. A PR that adds five is not.
-- **Design changes need discussion first.** For anything touching the type system, grammar, or object model, open an issue describing the problem before writing code. The design is recorded in `DESIGN.md` and the milestone specs; changes to it are deliberate and get documented (superseded decisions are marked, not silently swapped).
+- **Design changes need discussion first.** For anything touching the type system, grammar, or object model, open an issue describing the problem before writing code. The design is recorded in `DESIGN.md`, the milestone log in `docs/log/`, and the milestone specs in `spec/`; changes to it are deliberate and get documented (superseded decisions are marked, not silently swapped).
 
 ## How the code is structured
 

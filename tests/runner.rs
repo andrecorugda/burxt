@@ -1406,7 +1406,7 @@ fn the_repository_root_holds_only_what_belongs_there() {
         // everything else lives in a directory that says what it is
         "",
     ];
-    const DIRS: [&str; 6] = ["src", "spec", "tests", "examples", "editors", "assets"];
+    const DIRS: [&str; 7] = ["src", "spec", "tests", "examples", "editors", "assets", "docs"];
 
     let mut strays = Vec::new();
     for entry in fs::read_dir(root).unwrap() {
@@ -1423,5 +1423,46 @@ fn the_repository_root_holds_only_what_belongs_there() {
         "these do not belong at the repository root — build with `-o <path>` and move \
          sources into a directory: {:?}",
         strays
+    );
+}
+
+/// The milestone log is split across files, so the index and the files must agree. Two
+/// ways to drift, both silent: a log file nobody links to, and a link to a file that was
+/// renamed. Checked because the log's whole value is that an entry can be found later.
+#[test]
+fn every_log_file_is_linked_from_its_index() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = root.join("docs/log");
+    let index = fs::read_to_string(dir.join("README.md")).expect("docs/log/README.md");
+
+    let mut files = Vec::new();
+    for entry in fs::read_dir(&dir).unwrap() {
+        let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+        if name.ends_with(".md") && name != "README.md" {
+            files.push(name);
+        }
+    }
+    assert!(files.len() >= 8, "the log lost files: {:?}", files);
+    for name in &files {
+        assert!(index.contains(name.as_str()), "docs/log/README.md does not link {}", name);
+    }
+    // And the other direction: every link in the index resolves.
+    for piece in index.split('(').skip(1) {
+        let target = piece.split(')').next().unwrap_or("");
+        if target.ends_with(".md") && !target.starts_with("../") && !target.contains('#') {
+            assert!(
+                dir.join(target).exists(),
+                "docs/log/README.md links {}, which does not exist",
+                target
+            );
+        }
+    }
+    // DESIGN.md must point at the log rather than holding it: the split is the point.
+    let design = fs::read_to_string(root.join("DESIGN.md")).unwrap();
+    assert!(design.contains("docs/log/"), "DESIGN.md must link the log");
+    assert!(
+        design.lines().count() < 1200,
+        "DESIGN.md is growing back into a log: {} lines",
+        design.lines().count()
     );
 }

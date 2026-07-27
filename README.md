@@ -61,7 +61,7 @@ Burxt is early and built in small, verified increments. The numeric core is soli
 
 **Designed and committed, not yet built:** no null (absence as an explicit `Option<T>` the compiler forces you to handle); errors as values you must handle; correctness contracts (`requires` / `ensures`) — the verification layer that is Burxt's eventual differentiator; algebraic effect handlers instead of coloured `async`; opt-in safe single inheritance; and the cross-compilation targets above.
 
-`DESIGN.md` records all of it — the design north star, every milestone, and a ledger of superseded decisions and deliberately deferred features with the trigger that would earn each one a milestone. The distinction between shipped and planned is kept honest there on purpose.
+`DESIGN.md` records the design north star and a ledger of superseded decisions and deliberately deferred features, each with the trigger that would earn it a milestone. Every version's entry — what it decided and what it cost — is in [`docs/log/`](docs/log/). The distinction between shipped and planned is kept honest in both, on purpose.
 
 ## Building
 
@@ -141,7 +141,7 @@ files are not yet coloured on github.com.
 
 ## Design
 
-Burxt is designed deliberately, with decisions recorded rather than improvised. `DESIGN.md` holds the design north star (identity, OOP model, SOLID stance, correctness principles, signature grammar) and the roadmap. Milestone specs (aggregate ABI, interfaces) and a superseded/deferred-features ledger keep the reasoning trail auditable — the language stays small on purpose.
+Burxt is designed deliberately, with decisions recorded rather than improvised. `DESIGN.md` holds the design north star (identity, OOP model, SOLID stance, correctness principles, signature grammar) and the roadmap; [`docs/log/`](docs/log/) holds the milestone log, one file per stretch of versions. Milestone specs (aggregate ABI, interfaces) and a superseded/deferred-features ledger keep the reasoning trail auditable — the language stays small on purpose.
 
 ## Contributing
 
