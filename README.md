@@ -76,7 +76,7 @@ Requirements:
 export LLVM_SYS_181_PREFIX=/usr/lib/llvm-18     # or $(brew --prefix llvm@18) on macOS
 
 cargo build
-./target/debug/burxt run money.bx               # prints 59.97
+./target/debug/burxt run examples/money.bx      # prints 59.97
 ```
 
 Commands:

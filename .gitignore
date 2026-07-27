@@ -1,11 +1,12 @@
 /target
 *.o
 *.ll
-# Compiled Burxt outputs are bare, extensionless executables written into the
-# working directory, so they are easy to commit by accident. Two slipped into
-# v0.0.40 this way. Ignore anything with no extension at the repository root, then
-# re-admit the files that genuinely belong there — a rule that holds for programs
-# nobody has written yet, rather than a list that has to be remembered.
+# Compiled Burxt outputs are bare, extensionless executables. `burxt build -o <path>`
+# is the way to keep them out of the tree; without it they land in the working
+# directory, where they are easy to commit by accident — two slipped into v0.0.40 that
+# way, and by v0.0.70 the root held twenty-six. Ignore anything with no extension at the
+# repository root, then re-admit the files that genuinely belong there: a rule that
+# holds for programs nobody has written yet, rather than a list to be remembered.
 /*
 !/*.*
 !/.gitignore
@@ -19,27 +20,6 @@
 !/src/
 !/tests/
 
-# The named outputs below are redundant under the rule above, and kept only so the
-# intent is readable at a glance.
-/bigparse
-/boundary_scaled_marshal
-/enum_basic
-/enum_match_flow
-/enum_payloads
-/interp_value
-/io
-/lexer
-/mixed_scale_mul
-/money
-/order
-/p
-/parser
-/read_file
-/region_released_on_return
-/sample
-/tail_call_constant_stack
-/to_string_builtin
-/tour
 # editor tooling scratch
 node_modules/
 *.vsix

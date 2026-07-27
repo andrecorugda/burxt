@@ -2814,6 +2814,46 @@ every raster size in the kit can be regenerated from it, and a size nobody has c
 is not a blocker. The previous mark was pixels all the way down, which is why the kit
 had to arrive as a set.
 
+### v0.0.71: the repository root, and why it filled up
+
+Andre asked why the source tree looked like a dump of files. It did, and the reason is
+worth writing down because it was a tool defect, not untidiness.
+
+`burxt build` writes a bare, extensionless executable into the **working directory**. A
+compiler exercised by hand from its own root therefore accumulates them, one per program
+compiled — by v0.0.70 the root held **twenty-six**: `a`, `b`, `c`, `t`, `stage1`,
+`checker`, `contracts`, and so on. `.gitignore` caught them, so none reached a commit and
+`git status` stayed clean, which is exactly why it went unnoticed for so long: **the
+repository was tidy and the working copy was not**, and only one of those is what a
+person opening the directory sees.
+
+Two files had escaped anyway — `emitted.ll` and `t.ll`, added before the `*.ll` rule
+existed, and an ignore rule does not apply to a file already tracked. And `money.bx` and
+`order.bx` sat at the root while every other program lived in `examples/`.
+
+Fixed at the source rather than swept up:
+
+- **`burxt build|run|emit-ir -o <path>`** says where the output goes. That is the durable
+  fix: the litter existed because the compiler had no way to be told otherwise.
+- **`emit-ir` no longer writes beside the source.** Its `.ll` is an intermediate — the
+  text goes to stdout — so it is written into the temp directory and removed, unless `-o`
+  asked for it. `t.ll` and `emitted.ll` were that intermediate, committed.
+- The two `.ll` files are untracked and deleted; `money.bx` and `order.bx` moved to
+  `examples/` with every reference updated.
+- `.gitignore` lost nineteen names it had accumulated listing individual outputs. The
+  rule above them — ignore anything extensionless at the root, re-admit what belongs —
+  already covered every one, and a list of names has to be maintained while a rule does
+  not.
+- **A test now asserts the root holds only what belongs there**, from an allowlist rather
+  than a pattern, so anything new is added deliberately. The failure mode it prevents is
+  the one that just happened: growth nobody notices because nothing complains.
+
+The layout, stated once so it can be checked: `src/` the Rust compiler, `examples/` Burxt
+programs including the self-hosted compiler, `tests/` the fixtures and the runner,
+`spec/` the design specifications, `editors/` the LSP client and grammar, `assets/` the
+brand kit. The root holds the build files and the four documents a reader looks for
+first, and nothing else.
+
 ## Testing
 
 `cargo test` runs a data-driven suite:

@@ -69,6 +69,8 @@ fn compile_main() {
         eprintln!("  burxt emit-ir <file.bx>                  print LLVM IR");
         eprintln!("  burxt layout  <file.bx>                  print struct layouts");
         eprintln!();
+        eprintln!("  -o <path>     where to write the executable (default ./<name>)");
+        eprintln!();
         eprintln!("Arguments after the source file go to the linker unchanged,");
         eprintln!("e.g. `burxt run pay.bx cside.o -lm` to link the C you call.");
         std::process::exit(2);
@@ -79,9 +81,29 @@ fn compile_main() {
     // `--json` makes diagnostics machine-readable: one JSON object per line, for
     // editors and CI. It is not passed on to the linker.
     let json = rest.iter().any(|a| a == "--json");
-    let link_args: Vec<String> = rest.iter().filter(|a| *a != "--json").cloned().collect();
+    // `-o <path>` says where the executable goes. Without it the compiler writes into
+    // the working directory, which is convenient for one program and a litter of
+    // extensionless binaries for fifty — the repository root learned this the hard way.
+    let mut out: Option<String> = None;
+    let mut link_args: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--json" => {}
+            "-o" => {
+                if i + 1 >= rest.len() {
+                    eprintln!("error: -o needs a path after it");
+                    std::process::exit(2);
+                }
+                out = Some(rest[i + 1].clone());
+                i += 1;
+            }
+            other => link_args.push(other.to_string()),
+        }
+        i += 1;
+    }
 
-    if let Err(e) = run(cmd, path, &link_args, json) {
+    if let Err(e) = run(cmd, path, &link_args, json, out.as_deref()) {
         match e {
             // Diagnostics know where they are, so they can be shown properly —
             // all of them, in the order a reader meets them.
@@ -131,7 +153,13 @@ impl From<String> for Failure {
     }
 }
 
-fn run(cmd: &str, path: &str, link_args: &[String], json: bool) -> Result<(), Failure> {
+fn run(
+    cmd: &str,
+    path: &str,
+    link_args: &[String],
+    json: bool,
+    out: Option<&str>,
+) -> Result<(), Failure> {
     // `-` means "the program is on stdin": what an editor has in its buffer is
     // not what is on disk, and checking the file would report yesterday's errors.
     // Only `check` accepts it — there is no sensible name for the executable
@@ -192,9 +220,21 @@ fn run(cmd: &str, path: &str, link_args: &[String], json: bool) -> Result<(), Fa
             Ok(())
         }
         "emit-ir" => {
-            let ir_path = format!("{}.ll", stem);
+            // The text goes to stdout; the file is an intermediate, so it is written
+            // where intermediates belong unless a path was asked for. Writing it beside
+            // the source is how `t.ll` and `emitted.ll` ended up in this repository.
+            let ir_path = match out {
+                Some(p) => p.to_string(),
+                None => std::env::temp_dir()
+                    .join(format!("burxt-{}-{}.ll", std::process::id(), stem))
+                    .to_string_lossy()
+                    .into_owned(),
+            };
             cg.write_ir(&ir_path)?;
             let ir = std::fs::read_to_string(&ir_path).map_err(|e| e.to_string())?;
+            if out.is_none() {
+                let _ = std::fs::remove_file(&ir_path);
+            }
             println!("{}", ir);
             Ok(())
         }
@@ -204,9 +244,12 @@ fn run(cmd: &str, path: &str, link_args: &[String], json: bool) -> Result<(), Fa
 
             // link with the system C compiler (for printf + crt startup), plus
             // whatever the caller needs for the C it declared.
-            let exe = format!("./{}", stem);
+            let exe = match out {
+                Some(p) => p.to_string(),
+                None => format!("./{}", stem),
+            };
             let status = Command::new("cc")
-                .args([obj.as_str(), "-o", stem])
+                .args([obj.as_str(), "-o", exe.as_str()])
                 .args(link_args)
                 .status()
                 .map_err(|e| format!("failed to invoke cc: {}", e))?;

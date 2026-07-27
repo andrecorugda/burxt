@@ -940,7 +940,7 @@ fn the_burxt_front_end_accepts_every_burxt_source() {
         root.join("examples/lexer.bx"),
         root.join("examples/parser.bx"),
         root.join("examples/tour.bx"),
-        root.join("money.bx"),
+        root.join("examples/money.bx"),
     ];
     // Plus every program the suite already accepts.
     for (program, _) in cases("pass", "stdout") {
@@ -1022,7 +1022,7 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     // lines of the language. A false positive here means the two implementations
     // disagree about what Burxt IS.
     let mut noisy = Vec::new();
-    for name in ["examples/stage1.bx", "examples/tour.bx", "money.bx"] {
+    for name in ["examples/stage1.bx", "examples/tour.bx", "examples/money.bx"] {
         if errors_reported(&root.join(name)) != 0 {
             noisy.push(name.to_string());
         }
@@ -1372,5 +1372,56 @@ fn stage_1_compiles_itself_into_a_working_compiler() {
         String::from_utf8_lossy(&one.stdout),
         String::from_utf8_lossy(&two.stdout),
         "stage-2 disagreed with stage-1 about the same program"
+    );
+}
+
+/// The repository root holds only what belongs there. Not a style preference: `burxt
+/// build` writes a bare, extensionless executable into the working directory, so a
+/// compiler that is exercised by hand from its own root accumulates them — twenty-six
+/// of them, by v0.0.70, next to two `.ll` files that had been committed by accident and
+/// two demo programs that belonged in `examples/`.
+///
+/// An allowlist rather than a pattern, because the question "should this be at the root?"
+/// has a short, knowable answer, and anything new has to be added deliberately.
+#[test]
+fn the_repository_root_holds_only_what_belongs_there() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    const ALLOWED: [&str; 15] = [
+        // build system and metadata
+        "Cargo.toml",
+        "Cargo.lock",
+        ".cargo",
+        ".git",
+        ".gitignore",
+        ".gitattributes",
+        ".vscode",
+        "target",
+        // the documents a reader looks for first
+        "README.md",
+        "DESIGN.md",
+        "CONTRIBUTING.md",
+        "CODE_OF_CONDUCT.md",
+        "LICENSE-MIT",
+        "LICENSE-APACHE",
+        // everything else lives in a directory that says what it is
+        "",
+    ];
+    const DIRS: [&str; 6] = ["src", "spec", "tests", "examples", "editors", "assets"];
+
+    let mut strays = Vec::new();
+    for entry in fs::read_dir(root).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if ALLOWED.contains(&name.as_str()) || DIRS.contains(&name.as_str()) {
+            continue;
+        }
+        strays.push(name);
+    }
+    strays.sort();
+    assert!(
+        strays.is_empty(),
+        "these do not belong at the repository root — build with `-o <path>` and move \
+         sources into a directory: {:?}",
+        strays
     );
 }
