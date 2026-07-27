@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 220" width="200" height="220" role="img" aria-label="Burxt">
+  <rect x="34" y="18" width="26" height="184" rx="6" fill="#E8502A"/>
+  <circle cx="109" cy="139" r="62" fill="#E8502A"/>
+  <!-- bolder white X: two crossing bars, flat angled ends -->
+  <g fill="#FFFFFF">
+    <polygon points="78,106 94,106 140,166 124,166"/>
+    <polygon points="140,106 124,106 78,166 94,166"/>
+  </g>
+</svg>

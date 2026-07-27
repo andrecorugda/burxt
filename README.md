@@ -1,6 +1,6 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/burxt-lockup-dark-600.png">
-  <img src="assets/burxt-lockup-light-600.png" alt="Burxt" width="300">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/burxt-lockup-dark.png">
+  <img src="assets/burxt-lockup-light.png" alt="Burxt" width="300">
 </picture>
 
 **A typed, compiled, native language where exact decimals are the default and correctness is enforced by the compiler — not left to discipline.**
@@ -100,7 +100,7 @@ message. Adding a test means dropping two files in a directory.
 
 ## Editor support
 
-<img src="assets/burxt-favicon-48.png" alt="" width="20" height="20" align="top"> Syntax
+<img src="assets/burxt-b-favicon-48.png" alt="" width="20" height="20" align="top"> Syntax
 highlighting, live diagnostics and hover, with no `npm install`:
 
 ```sh
