@@ -23,28 +23,28 @@
 // this condition walks the whole file on every byte, and reading a file's header costs
 // the square of the file's size. See at_byte in types.bx — the same shape, found the
 // same way, at the same time.
-fn end_of_line(text: String, from: Int, width: Int) -> Int {
-    let mut i: Int = from;
+function end_of_line(text: String, from: Int, width: Int) -> Int {
+    let mutable i: Int = from;
     while i < width && byte_at(text, i) != 10 {
         i += 1;
     }
     return i;
 }
 
-fn first_non_space(text: String, from: Int, stop: Int) -> Int {
-    let mut i: Int = from;
+function first_non_space(text: String, from: Int, stop: Int) -> Int {
+    let mutable i: Int = from;
     while i < stop && (byte_at(text, i) == 32 || byte_at(text, i) == 9) {
         i += 1;
     }
     return i;
 }
 
-fn starts_with_at(text: String, at: Int, prefix: String, width: Int) -> Bool {
+function starts_with_at(text: String, at: Int, prefix: String, width: Int) -> Bool {
     let n: Int = len(prefix);
     if at + n > width {
         return false;
     }
-    let mut i: Int = 0;
+    let mutable i: Int = 0;
     while i < n {
         if byte_at(text, at + i) != byte_at(prefix, i) {
             return false;
@@ -55,12 +55,12 @@ fn starts_with_at(text: String, at: Int, prefix: String, width: Int) -> Bool {
 }
 
 // The quoted path in `use "..."`, or the empty String if this line is not one.
-fn import_on_line(text: String, at: Int, stop: Int) -> String allocates {
+function import_on_line(text: String, at: Int, stop: Int) -> String allocates {
     let begin: Int = first_non_space(text, at, stop);
     if !starts_with_at(text, begin, "use ", stop) {
         return "";
     }
-    let mut i: Int = first_non_space(text, begin + 4, stop);
+    let mutable i: Int = first_non_space(text, begin + 4, stop);
     if i >= stop || byte_at(text, i) != 34 {
         return "";
     }
@@ -77,9 +77,9 @@ fn import_on_line(text: String, at: Int, stop: Int) -> String allocates {
 
 // The directory a path lives in, with its trailing slash, so an import resolves
 // relative to the file that wrote it rather than to wherever the compiler was run.
-fn directory_of(path: String) -> String allocates {
-    let mut cut: Int = 0 - 1;
-    let mut i: Int = 0;
+function directory_of(path: String) -> String allocates {
+    let mutable cut: Int = 0 - 1;
+    let mutable i: Int = 0;
     while i < len(path) {
         if byte_at(path, i) == 47 {
             cut = i;
@@ -98,9 +98,9 @@ fn directory_of(path: String) -> String allocates {
 // Only the HEADER is rewritten. The body is appended in one piece, because building a
 // six-thousand-line file line by line means six thousand copies of a growing String —
 // which is how splitting this compiler into modules first exhausted its own region.
-fn spaces(count: Int) -> String allocates {
-    let mut out: String = "";
-    let mut i: Int = 0;
+function spaces(count: Int) -> String allocates {
+    let mutable out: String = "";
+    let mutable i: Int = 0;
     while i < count {
         out += " ";
         i += 1;
@@ -108,7 +108,7 @@ fn spaces(count: Int) -> String allocates {
     return out;
 }
 
-fn blank_imports(text: String) -> String allocates {
+function blank_imports(text: String) -> String allocates {
     let width: Int = len(text);
     // Only the `use` lines change, so only they are rebuilt. Everything else travels in
     // whole spans: `copied` is how far the answer has been filled in, and the gap from
@@ -119,10 +119,10 @@ fn blank_imports(text: String) -> String allocates {
     // file in this compiler opens with a banner, and a file of nothing but comments cost
     // 24 of its 29 seconds here — quadratic in the file's size, for a pass that changes
     // a handful of lines.
-    let mut out: String = "";
-    let mut copied: Int = 0;
-    let mut at: Int = 0;
-    let mut in_header: Bool = true;
+    let mutable out: String = "";
+    let mutable copied: Int = 0;
+    let mutable at: Int = 0;
+    let mutable in_header: Bool = true;
     while at < width && in_header {
         let stop: Int = end_of_line(text, at, width);
         let begin: Int = first_non_space(text, at, stop);
@@ -143,11 +143,11 @@ fn blank_imports(text: String) -> String allocates {
 }
 
 // Every file a program uses, in dependency order, each one once — which is also what
-// makes a cycle harmless. Burxt has no mutable parameters, so the accumulating buffer
-// and the seen-list live on a struct and the walk is a method on it.
-struct Loader { seen: [String], buffer: String }
+// makes a cycle harmless. Burxt has no writable parameters, so the accumulating buffer
+// and the seen-list live on a record and the walk is a method on it.
+record Loader { seen: [String], buffer: String }
 
-fn (mut self: Loader) load(path: String) -> Int allocates {
+function (mutable self: Loader) load(path: String) -> Int allocates {
     for seen in self.seen {
         if seen == path {
             return 0;                            // read once already; cycles are fine
@@ -159,8 +159,8 @@ fn (mut self: Loader) load(path: String) -> Int allocates {
     let here: String = directory_of(path);
 
     let width: Int = len(text);
-    let mut at: Int = 0;
-    let mut in_header: Bool = true;
+    let mutable at: Int = 0;
+    let mutable in_header: Bool = true;
     while at < width && in_header {
         let stop: Int = end_of_line(text, at, width);
         let begin: Int = first_non_space(text, at, stop);
@@ -186,8 +186,8 @@ fn (mut self: Loader) load(path: String) -> Int allocates {
     return 1;
 }
 
-fn load_program(path: String) -> String allocates {
-    let mut loader: Loader = Loader { seen: [], buffer: "" };
+function load_program(path: String) -> String allocates {
+    let mutable loader: Loader = Loader { seen: [], buffer: "" };
     let done: Int = loader.load(path);
     return loader.buffer;
 }

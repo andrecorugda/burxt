@@ -23,8 +23,8 @@ enum Result<T, E> {
 
 // A function that might not find anything says so in its type. There is no
 // sentinel to document, no -1 to remember, and no way for a caller to forget.
-fn position_of(xs: [Int], want: Int) -> Option<Int> {
-    let mut i = 0;
+function position_of(xs: [Int], want: Int) -> Option<Int> {
+    let mutable i = 0;
     for x in xs {
         if x == want {
             return Option.Some(i);
@@ -36,7 +36,7 @@ fn position_of(xs: [Int], want: Int) -> Option<Int> {
 
 // A function that can fail says THAT in its type. No exception to catch, no
 // error code to check-or-not.
-fn divide(a: Int, b: Int) -> Result<Int, String> {
+function divide(a: Int, b: Int) -> Result<Int, String> {
     if b == 0 {
         return Result.Err("division by zero");
     }
@@ -46,7 +46,7 @@ fn divide(a: Int, b: Int) -> Result<Int, String> {
 // The value or a fallback — generic over the element, so one definition serves
 // every type. `Option<T>` inside a generic body is checked once, with `T`
 // standing for nothing.
-fn or_else<T>(o: Option<T>, fallback: T) -> T {
+function or_else<T>(o: Option<T>, fallback: T) -> T {
     match o {
         None => { return fallback; }
         Some(value) => { return value; }
@@ -55,19 +55,19 @@ fn or_else<T>(o: Option<T>, fallback: T) -> T {
 
 // `?` yields the value or returns the failure from here — so the happy path reads as
 // if nothing could go wrong, while the compiler still knows it can.
-fn average(a: Int, b: Int, n: Int) -> Result<Int, String> {
+function average(a: Int, b: Int, n: Int) -> Result<Int, String> {
     let mean = divide(a + b, n)?;
     return Result.Ok(mean);
 }
 
 // The same shortcut over absence, in a function that answers with an Option.
-fn doubled_first(xs: [Int]) -> Option<Int> {
+function doubled_first(xs: [Int]) -> Option<Int> {
     let head = position_of(xs, 5)?;
     return Option.Some(head * 2);
 }
 
 region r {
-    let mut xs: [Int] = [];
+    let mutable xs: [Int] = [];
     let a = push(xs, 5);
     let b = push(xs, 9);
     let c = push(xs, 14);
@@ -140,14 +140,14 @@ region r {
 // In a function that itself answers with a failure, `?` yields the value or returns
 // the failure from here, immediately.
 //
-//     fn average(a: Int, b: Int, n: Int) -> Result<Int, String> {
+//     function average(a: Int, b: Int, n: Int) -> Result<Int, String> {
 //         let mean = divide(a + b, n)?;      // the value, or return the Err
 //         return Result.Ok(mean);
 //     }
 //
 // It works on absence too, in a function answering with an `Option`:
 //
-//     fn doubled_first(xs: [Int]) -> Option<Int> {
+//     function doubled_first(xs: [Int]) -> Option<Int> {
 //         let head = first_of(xs)?;          // the value, or return None
 //         return Option.Some(head * 2);
 //     }

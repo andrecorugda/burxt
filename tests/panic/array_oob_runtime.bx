@@ -1,5 +1,5 @@
 // A computed index out of range dies loudly, naming the index and range.
 let a: [Int; 3] = [1, 2, 3];
-let mut i: Int = 0;
+let mutable i: Int = 0;
 i = i + 5;
 print(a[i]);

@@ -9,8 +9,8 @@
 // ============================================================================
 
 // ---- Plain C: ints and strings in, an int out ------------------------------
-extern fn strlen(s: String) -> Int;
-extern fn shout(text: String) -> CInt;
+external function strlen(s: String) -> Int;
+external function shout(text: String) -> CInt;
 
 // ---- Money across the boundary ---------------------------------------------
 // `as scaled` is a MARSHALLER, and it is mandatory: a Decimal may only cross
@@ -19,7 +19,7 @@ extern fn shout(text: String) -> CInt;
 // The alternative — handing C a `double` — is a compile error, because that is
 // the exact moment money stops being exact, and no amount of care on the C side
 // can undo it.
-extern fn cents_doubled(amount: Decimal<2> as scaled) -> Int;
+external function cents_doubled(amount: Decimal<2> as scaled) -> Int;
 
 region r {
     let greeting: String = "hello from Burxt";
@@ -33,7 +33,7 @@ region r {
 // ---- What the compiler refuses, and why ------------------------------------
 //
 // A Decimal crossing without a marshaller:
-//     extern fn f(amount: Decimal<2>) -> Int;
+//     external function f(amount: Decimal<2>) -> Int;
 //     error: a Decimal crosses into C only through a declared marshaller —
 //            write `amount: Decimal<2> as scaled`
 //
@@ -42,7 +42,7 @@ region r {
 //            hold a decimal exactly, which is the whole reason this type exists
 //
 // A pointer coming back:
-//     extern fn getenv(name: String) -> String;
+//     external function getenv(name: String) -> String;
 //     error: only Int or CInt may cross the C boundary as a return for now —
 //            Burxt cannot yet track who owns memory a C function returns
 //
@@ -53,6 +53,6 @@ region r {
 // The standard library will hide this behind an API that is checked once.
 //
 // And a symbol the runtime already uses:
-//     extern fn fputs(...)
+//     external function fputs(...)
 //     error: this symbol is used by the Burxt runtime itself. Call it through a
 //            differently-named C wrapper.

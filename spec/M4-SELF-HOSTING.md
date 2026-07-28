@@ -19,7 +19,7 @@ with *stage-1*, and compare the outputs. If they match, the language compiles it
 ## 1. The one architectural decision
 
 **The stage-1 backend emits textual LLVM IR (`.ll`) and hands it to `llc`.** It does
-not drive LLVM's C API, and cannot: `extern fn` returns are `Int` and `CInt` only,
+not drive LLVM's C API, and cannot: `external function` returns are `Int` and `CInt` only,
 because Burxt refuses to receive a pointer whose ownership it cannot describe — so
 an `LLVMBuilderRef` is unreachable by construction.
 
@@ -57,12 +57,12 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
    disagreement-finder between stage-0 and stage-1.
 3. **A full parser in Burxt**, producing an arena AST — children by index, which
    v0.0.22 already proved needs no recursive types.
-   - **3a DONE (v0.0.53):** types, the full expression ladder, struct and array
+   - **3a DONE (v0.0.53):** types, the full expression ladder, record and array
      literals, and every statement form including `match` with bindings. Child lists
      live contiguously in a side array, so nothing needs back-patching. Parses every
      source in the repository, including its own.
-   - **3b DONE (v0.0.54):** items — `fn`, `pure fn`, methods, `struct`, `enum` with
-     payloads, `trait`, `impl`, `extern fn` — with `allocates`, `requires`, `ensures`,
+   - **3b DONE (v0.0.54):** items — `function`, `pure function`, methods, `record`, `enum` with
+     payloads, `trait`, `implement`, `external function` — with `allocates`, `requires`, `ensures`,
      `decreases` and `as scaled`. **stage-1 parses its own source**: 6,610 nodes, no
      errors. Still open: splitting interpolation fragments into pieces, and a trait
      signature's parameters beyond the receiver.
@@ -74,7 +74,7 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
      mutability, `return` against the signature, and conditions. **stage-1 typechecks
      its own source with zero complaints.** 22 of 87 pass programs still draw a
      complaint stage-0 does not — that is the progress bar for 4b.
-   - **4b, part DONE (v0.0.58):** field access, struct literals, the builtins, and
+   - **4b, part DONE (v0.0.58):** field access, record literals, the builtins, and
      enum constructors — `Cell.Number(3)` is indistinguishable from a field access
      until you check whether the base names a type. False positives across the pass
      suite: **24 of 88**, from 22 before (adding checks made it worse before better,
@@ -114,15 +114,15 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
      - an operand of `*` keeps its own scale rather than being forced to the result's,
        which is how `price * 8.25%` survives (stage-0 reaches the same answer by
        re-checking both operands with no expected type);
-     - `CInt`/`CDouble` in an `extern` signature are recorded as the `Int` a Burxt
+     - `CInt`/`CDouble` in an `external` signature are recorded as the `Int` a Burxt
        caller passes, which is why `strcmp(a, b) < 0` compares two Ints;
-     - methods declared inside `impl` blocks are collected, and **method bodies are
+     - methods declared inside `implement` blocks are collected, and **method bodies are
        checked at all** — with `self` bound from the clause node — which they were not
        before;
      - a method call answers its declared return type, and one shared routine checks
        arity and argument types for functions and methods alike;
-     - `dyn Trait` accepts a type that implements it (`fits`, kept separate from
-       `ty_same` because equality must stay equality), and a method on a `dyn` value is
+     - `dynamic Trait` accepts a type that implements it (`fits`, kept separate from
+       `ty_same` because equality must stay equality), and a method on a `dynamic` value is
        checked against the trait's signature rather than any concrete type.
 
      Measured the other way too, which is the honest half: stage-1 rejects **67 of the
@@ -153,7 +153,7 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
        division builtins, …) may not be declared by a program.
 
      Two mechanisms were needed and both are worth naming. `expr_allocates` walks
-     aggregates — the v0.0.48 lesson, since a struct holding a built String is itself
+     aggregates — the v0.0.48 lesson, since a record holding a built String is itself
      built. And a **type cache** records every expression's type as it is decided,
      because the escape check asks about expressions the checker has already seen
      (did that `+` join two Strings?) and re-walking them would report every complaint
@@ -165,7 +165,7 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
      - **the builtins**, table-driven: how many arguments each takes, and what it will
        accept — `len` of a non-array, `byte_at` of a non-String, `to_string` of a String
        or an aggregate, integer division of non-Ints, a path that is not a String,
-       `push`/`truncate` on something that is not growable **or not `let mut`**, and a
+       `push`/`truncate` on something that is not growable **or not `let mutable`**, and a
        pushed value against the array's element type. Arity is reported first and alone,
        because the type errors that follow a miscount are noise;
      - **control flow**: `break` and `continue` with no loop to leave, `return` with no
@@ -176,12 +176,12 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
        `while`, since a loop may run zero times and claiming otherwise would be a guess
        about the condition. `else if` puts a statement where a block usually goes, so a
        branch is asked the same question either way;
-     - **the aggregates**: a struct literal must set every field, an enum constructor's
+     - **the aggregates**: a record literal must set every field, an enum constructor's
        payload is checked against the variant it names (a constructor is the mirror of a
        match arm, and the two read alike), `match` needs an enum and needs an arm for
        every variant with no arm twice — there is no `_` to hide behind — and an enum
-       may not be empty or declare a variant twice. Plus `print` of a struct, an enum,
-       a `dyn` or an array, which has no rendering the language could choose.
+       may not be empty or declare a variant twice. Plus `print` of a record, an enum,
+       a `dynamic` or an array, which has no rendering the language could choose.
 
    - **4b DONE — contracts and traits (v0.0.63):** **140 of the 190 fail programs**
      rejected, from 125, still **0 false positives**.
@@ -194,8 +194,8 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
        an aggregate is refused for the reason A5 §2 states; one `decreases` per
        function, none on a method, and none on a function that never calls itself.
      - **the impls**: every signature the trait declares, no extras, and the same shape
-       for each — receiver form (`self` and `mut self` are different promises),
-       parameter count, parameter types, return type. A trait is a promise a `dyn` value
+       for each — receiver form (`self` and `mutable self` are different promises),
+       parameter count, parameter types, return type. A trait is a promise a `dynamic` value
        makes on the implementor's behalf, so a mismatch here is a promise nobody keeps.
 
      Two mechanisms worth naming. Binding `result` needs a *span whose bytes spell it*,
@@ -212,7 +212,7 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
      part of its type so a literal of the wrong length is refused, a literal index past
      the end is a COMPILE error rather than an exit 70 later, arrays do not nest, an
      array of no elements is refused, and building a growable array needs a region.
-     Layout: a struct cannot contain itself and an enum cannot carry itself, because the
+     Layout: a record cannot contain itself and an enum cannot carry itself, because the
      size would have to exceed itself; an aggregate payload is refused with the layout
      rule that is not written. And `tail`, whose five conditions are each a compile
      error rather than a quiet fallback to an ordinary call: it names a call, not inside
@@ -222,8 +222,8 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
      parameter types, return type.
 
      One correction worth recording: I first wrote the rule that a growable array in a
-     struct is refused. The pass suite answered immediately — stage-1's own `Unit` is
-     made of them. The real rule is that such a struct must be BUILT in a region, which
+     record is refused. The pass suite answered immediately — stage-1's own `Unit` is
+     made of them. The real rule is that such a record must be BUILT in a region, which
      is a statement about the literal, not the declaration.
 
 5. **An IR-text backend in Burxt.** **Slice 1 SHIPPED (v0.0.65):** a program compiled
@@ -275,19 +275,19 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
    which is what M1a §4 predicted when it said "NO change to codegen": the bump allocator
    and the caller's mark already do it. That prediction is now checked by running one.
 
-   **Slice 3 SHIPPED (v0.0.67): structs, fixed arrays, and by-value semantics.**
+   **Slice 3 SHIPPED (v0.0.67): records, fixed arrays, and by-value semantics.**
    - A layout is a **COUNT**, not an alignment problem: everything a Burxt value can be
      is eight bytes wide or an aggregate of things that are — a String and a growable
      array are pointers, a Decimal is a scaled i64 — so `cells_of` counts cells and
      `offset_of` walks the same fields in the same order, which is why the two cannot
      disagree about a layout.
    - **An aggregate's value is its address**, and a copy happens where a copy is *meant*:
-     at a `let`, an assignment, a struct-literal field, and a parameter. `let b = a;
+     at a `let`, an assignment, a record-literal field, and a parameter. `let b = a;
      b.x = 100;` leaves `a.x` alone, and a callee writing to its parameter cannot reach
      back into the caller. Checked by running it, not by reading the emitter.
    - `x.f`, `x.f.g` (a field that is an aggregate answers an interior address, which is
      the same kind of value as any other), `xs[i]` read and written, `[a, b, c]`
-     literals, and struct literals with nested aggregate fields.
+     literals, and record literals with nested aggregate fields.
    - **The bounds check is emitted, not assumed**: an index outside the array names
      itself on stderr and exits 70, with everything printed before it intact. Two
      `icmp`s and a branch, per index.
@@ -307,12 +307,12 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
    driver builtins — and with them, stage-1 emits its own source.**
    - A growable array is a **four-cell header** in the region: length, capacity, the data
      pointer, and the ELEMENT WIDTH in cells. The width is stored rather than baked into
-     each call, so one `push` serves scalars and structs both — it copies eight bytes or
+     each call, so one `push` serves scalars and records both — it copies eight bytes or
      the whole element depending on what the header says. Growth doubles from eight, and
      `burxt.slot` bounds-checks against the LENGTH, never the capacity, which is an
      implementation detail no program can see.
    - A method is a function whose first parameter is the receiver, and the two spellings
-     mean what they say: `mut self` is handed the address and writes through it, plain
+     mean what they say: `mutable self` is handed the address and writes through it, plain
      `self` gets a copy. The symbol is `Type.method`, because two types may both have a
      `label`.
    - An **aggregate return travels through the caller's storage**: the caller hands over

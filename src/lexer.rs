@@ -129,10 +129,10 @@ impl Token {
             Token::InterpStr(_) => "an interpolated string literal".to_string(),
             Token::Ident(s) => format!("`{}`", s),
             Token::Let => "`let`".to_string(),
-            Token::Mut => "`mut`".to_string(),
+            Token::Mut => "`mutable`".to_string(),
             Token::Print => "`print`".to_string(),
-            Token::Fn => "`fn`".to_string(),
-            Token::Extern => "`extern`".to_string(),
+            Token::Fn => "`function`".to_string(),
+            Token::Extern => "`external`".to_string(),
             Token::Return => "`return`".to_string(),
             Token::As => "`as`".to_string(),
             Token::Tail => "`tail`".to_string(),
@@ -144,17 +144,17 @@ impl Token {
             Token::While => "`while`".to_string(),
             Token::True => "`true`".to_string(),
             Token::False => "`false`".to_string(),
-            Token::Struct => "`struct`".to_string(),
+            Token::Struct => "`record`".to_string(),
             Token::Region => "`region`".to_string(),
             Token::Enum => "`enum`".to_string(),
             Token::Match => "`match`".to_string(),
             Token::FatArrow => "`=>`".to_string(),
             Token::Interface => "`interface`".to_string(),
             Token::Trait => "`trait`".to_string(),
-            Token::Impl => "`impl`".to_string(),
+            Token::Impl => "`implement`".to_string(),
             Token::For => "`for`".to_string(),
             Token::In => "`in`".to_string(),
-            Token::Dyn => "`dyn`".to_string(),
+            Token::Dyn => "`dynamic`".to_string(),
             Token::Is => "`is`".to_string(),
             Token::SelfKw => "`self`".to_string(),
             Token::TyInt => "`Int`".to_string(),
@@ -373,7 +373,7 @@ impl<'a> Lexer<'a> {
 
         // identifier / keyword
         if c.is_ascii_alphabetic() || c == '_' {
-            return Ok(self.lex_ident_or_keyword());
+            return self.lex_ident_or_keyword();
         }
 
         // '#' is claimed for compile-time attributes before anything else can
@@ -635,7 +635,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn lex_ident_or_keyword(&mut self) -> Token {
+    fn lex_ident_or_keyword(&mut self) -> Result<Token, String> {
         let mut s = String::new();
         while let Some(&c) = self.peek_char() {
             if c.is_ascii_alphanumeric() || c == '_' {
@@ -645,13 +645,25 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
-        match s.as_str() {
+        // Every keyword in this language is the word it means. `fn`, `mut`, `impl`, `dyn`,
+        // `extern` and `struct` were inherited clippings from Rust, and they sat badly beside
+        // `allocates`, `requires` and `decreases` — twenty-five words spelled out against
+        // five abbreviated. Renamed in v0.0.98, with the old spellings kept reserved for one
+        // job only: naming the new one. A clean break with a signpost, rather than two ways
+        // to write one thing.
+        //
+        // Refused BEFORE the table, so the table below stays a plain list of
+        // `"word" => Token::Variant` — which is the form the editor-grammar test reads.
+        if let Some(message) = renamed_keyword(&s) {
+            return Err(message);
+        }
+        Ok(match s.as_str() {
             "let" => Token::Let,
-            "mut" => Token::Mut,
+            "mutable" => Token::Mut,
             "print" => Token::Print,
             "while" => Token::While,
-            "fn" => Token::Fn,
-            "extern" => Token::Extern,
+            "function" => Token::Fn,
+            "external" => Token::Extern,
             "return" => Token::Return,
             "as" => Token::As,
             "tail" => Token::Tail,
@@ -671,7 +683,7 @@ impl<'a> Lexer<'a> {
             "else" => Token::Else,
             "true" => Token::True,
             "false" => Token::False,
-            "struct" => Token::Struct,
+            "record" => Token::Struct,
             "region" => Token::Region,
             "enum" => Token::Enum,
             "match" => Token::Match,
@@ -679,7 +691,7 @@ impl<'a> Lexer<'a> {
             "is" => Token::Is,
             "self" => Token::SelfKw,
             "trait" => Token::Trait,
-            "impl" => Token::Impl,
+            "implement" => Token::Impl,
             "for" => Token::For,
             // `for x in xs { }`. `for` was already reserved by `impl Trait for Type`;
             // `in` joins it rather than becoming contextual, because `for` opens a
@@ -687,7 +699,7 @@ impl<'a> Lexer<'a> {
             // `format(x);` would take three tokens of lookahead. Every reader already
             // expects both reserved, which is the test that matters.
             "in" => Token::In,
-            "dyn" => Token::Dyn,
+            "dynamic" => Token::Dyn,
             "Int" => Token::TyInt,
             "Bool" => Token::TyBool,
             "String" => Token::TyString,
@@ -697,6 +709,30 @@ impl<'a> Lexer<'a> {
             "RoundHalfEven" => Token::RoundHalfEven,
             "RoundHalfUp" => Token::RoundHalfUp,
             _ => Token::Ident(s),
-        }
+        })
     }
+}
+
+/// The six words Burxt used to spell short. Answers the message an old spelling gets — which
+/// names the new word AND why that word, because a rename a reader cannot see the reason for
+/// is a rename they will resent.
+fn renamed_keyword(word: &str) -> Option<String> {
+    let (new, why) = match word {
+        "fn" => ("function", "a function is a function"),
+        "mut" => ("mutable", "a binding that can change is mutable"),
+        "impl" => ("implement", "`implement Priced for Book` reads as the sentence it is"),
+        "dyn" => ("dynamic", "the decision it names is made dynamically, at run time"),
+        "extern" => ("external", "the function it names is external to this program"),
+        "struct" => (
+            "record",
+            "named fields, copied by value, with no inheritance and no hidden header — \
+             which is what a record is, and what a class is not",
+        ),
+        _ => return None,
+    };
+    Some(format!(
+        "Burxt spells this `{}`, not `{}`: {}. Every keyword in this language is the word it \
+         means — which is why `allocates` and `decreases` are not `alloc` and `dec`.",
+        new, word, why
+    ))
 }

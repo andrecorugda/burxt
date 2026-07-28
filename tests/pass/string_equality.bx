@@ -24,7 +24,7 @@ print(s == t);
 if s == "burxt" && len(s) == 5 {
     print(1);
 }
-let mut m: String = "no";
+let mutable m: String = "no";
 while m != "yes" {
     m = "yes";
 }

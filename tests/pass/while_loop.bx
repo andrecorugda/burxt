@@ -1,15 +1,15 @@
-// Mutation is opt-in with `let mut`; while loops need a Bool condition.
-let mut i: Int = 0;
-let mut acc: Decimal<2> = 0.00;
+// Mutation is opt-in with `let mutable`; while loops need a Bool condition.
+let mutable i: Int = 0;
+let mutable acc: Decimal<2> = 0.00;
 while i < 5 {
     acc = acc + 1.10;
     i = i + 1;
 }
 print(i);
 print(acc);
-// a loop body is a scope, but assignments reach outer `mut` bindings
-let mut hits: Int = 0;
-let mut n: Int = 0;
+// a loop body is a scope, but assignments reach outer `mutable` bindings
+let mutable hits: Int = 0;
+let mutable n: Int = 0;
 while n < 3 {
     let step: Int = 1;
     hits = hits + step;

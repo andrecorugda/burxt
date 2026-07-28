@@ -1,4 +1,4 @@
-fn always_small(n: Int) -> Int
+function always_small(n: Int) -> Int
     ensures result > 100
 {
     return n;

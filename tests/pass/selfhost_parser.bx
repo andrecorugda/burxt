@@ -6,8 +6,8 @@
 // by INDEX. That is how Zig and Carbon build their ASTs — and it means the
 // parser was never blocked on the memory model, only on believing it was.
 //
-// The arena is a struct holding GROWABLE storage (`[Node]`), mutated through a
-// `mut self` method and allocated in a region — so there is no fixed node
+// The arena is a record holding GROWABLE storage (`[Node]`), mutated through a
+// `mutable self` method and allocated in a region — so there is no fixed node
 // budget at all. Before M1 this was capped at [Node; 64].
 //
 //   expr   := term (('+' | '-') term)*
@@ -15,21 +15,21 @@
 //   factor := NUMBER | '(' expr ')'
 // ============================================================================
 
-struct Node {
+record Node {
     kind: Int,                          // 1 num, 2 add, 3 sub, 4 mul
     value: Decimal<2, RoundHalfEven>,   // meaningful when kind == 1
     lhs: Int,                           // arena indices, -1 when absent
     rhs: Int,
 }
 
-struct Arena {
+record Arena {
     nodes: [Node],
     count: Int,
     pos: Int,       // scan position, carried here so it survives calls
     last: Int,      // index of the node just produced
 }
 
-fn (mut self: Arena) push(kind: Int, value: Decimal<2, RoundHalfEven>, lhs: Int, rhs: Int) -> Int {
+function (mutable self: Arena) push(kind: Int, value: Decimal<2, RoundHalfEven>, lhs: Int, rhs: Int) -> Int {
     let at: Int = self.count;
     push(self.nodes, Node { kind: kind, value: value, lhs: lhs, rhs: rhs });
     self.count = at + 1;
@@ -37,18 +37,18 @@ fn (mut self: Arena) push(kind: Int, value: Decimal<2, RoundHalfEven>, lhs: Int,
     return at;
 }
 
-fn is_digit(b: Int) -> Bool {
+function is_digit(b: Int) -> Bool {
     return b >= 48 && b <= 57;
 }
 
-fn (mut self: Arena) skip_spaces(src: String) -> Int {
+function (mutable self: Arena) skip_spaces(src: String) -> Int {
     while self.pos < len(src) && byte_at(src, self.pos) == 32 {
         self.pos = self.pos + 1;
     }
     return self.pos;
 }
 
-fn (mut self: Arena) factor(src: String) -> Int {
+function (mutable self: Arena) factor(src: String) -> Int {
     let at: Int = self.skip_spaces(src);
     if at < len(src) && byte_at(src, at) == 40 {
         self.pos = at + 1;
@@ -60,15 +60,15 @@ fn (mut self: Arena) factor(src: String) -> Int {
         return inner;
     }
     // an exact decimal, digit by digit — never through a float
-    let mut whole: Int = 0;
+    let mutable whole: Int = 0;
     while self.pos < len(src) && is_digit(byte_at(src, self.pos)) {
         whole = whole * 10 + (byte_at(src, self.pos) - 48);
         self.pos = self.pos + 1;
     }
-    let mut cents: Int = 0;
+    let mutable cents: Int = 0;
     if self.pos < len(src) && byte_at(src, self.pos) == 46 {
         self.pos = self.pos + 1;
-        let mut place: Int = 0;
+        let mutable place: Int = 0;
         while self.pos < len(src) && is_digit(byte_at(src, self.pos)) && place < 2 {
             cents = cents * 10 + (byte_at(src, self.pos) - 48);
             place = place + 1;
@@ -81,9 +81,9 @@ fn (mut self: Arena) factor(src: String) -> Int {
     return self.push(1, total, -1, -1);
 }
 
-fn (mut self: Arena) term(src: String) -> Int {
-    let mut node: Int = self.factor(src);
-    let mut going: Bool = true;
+function (mutable self: Arena) term(src: String) -> Int {
+    let mutable node: Int = self.factor(src);
+    let mutable going: Bool = true;
     while going {
         let at: Int = self.skip_spaces(src);
         if at < len(src) && byte_at(src, at) == 42 {
@@ -97,12 +97,12 @@ fn (mut self: Arena) term(src: String) -> Int {
     return node;
 }
 
-fn (mut self: Arena) expr(src: String) -> Int {
-    let mut node: Int = self.term(src);
-    let mut going: Bool = true;
+function (mutable self: Arena) expr(src: String) -> Int {
+    let mutable node: Int = self.term(src);
+    let mutable going: Bool = true;
     while going {
         let at: Int = self.skip_spaces(src);
-        let mut kind: Int = 0;
+        let mutable kind: Int = 0;
         if at < len(src) && byte_at(src, at) == 43 { kind = 2; }
         if at < len(src) && byte_at(src, at) == 45 { kind = 3; }
         if kind == 0 {
@@ -116,7 +116,7 @@ fn (mut self: Arena) expr(src: String) -> Int {
     return node;
 }
 
-fn (self: Arena) eval(at: Int) -> Decimal<2, RoundHalfEven> {
+function (self: Arena) eval(at: Int) -> Decimal<2, RoundHalfEven> {
     let n: Node = self.nodes[at];
     if n.kind == 1 {
         return n.value;
@@ -130,7 +130,7 @@ fn (self: Arena) eval(at: Int) -> Decimal<2, RoundHalfEven> {
 
 let src: String = "1.00 + 2.00 * 3.00";
 region parse {
-    let mut a: Arena = Arena { nodes: [], count: 0, pos: 0, last: -1 };
+    let mutable a: Arena = Arena { nodes: [], count: 0, pos: 0, last: -1 };
     let root: Int = a.expr(src);
     print("{src} = {a.eval(root)}");
     print("nodes used: {a.count}");

@@ -1,4 +1,4 @@
-fn walk(n: Int) -> Int {
+function walk(n: Int) -> Int {
     region r {
         if n <= 0 { return 0; }
         return tail walk(n - 1);

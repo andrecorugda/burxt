@@ -1,0 +1,7 @@
+// The old spelling is reserved for exactly one job: naming the new one. Burxt spells
+// every keyword the word it means, which is why `allocates` and `decreases` were never
+// `alloc` and `dec` — and why `fn` should not have been `fn`.
+fn total(a: Int, b: Int) -> Int {
+    return a + b;
+}
+print(total(1, 2));

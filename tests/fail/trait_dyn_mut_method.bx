@@ -1,15 +1,15 @@
 // Calling a mutating method through a trait object is deferred: the compiler
 // cannot yet tell whether the borrowed value is itself mutable.
 trait Bumpable {
-    fn bump(mut self) -> Int
+    function bump(mutable self) -> Int
 }
-struct Counter { n: Int }
-impl Bumpable for Counter {
-    fn (mut self: Counter) bump() -> Int {
+record Counter { n: Int }
+implement Bumpable for Counter {
+    function (mutable self: Counter) bump() -> Int {
         self.n = self.n + 1;
         return self.n;
     }
 }
-let mut c: Counter = Counter { n: 0 };
-let d: dyn Bumpable = c;
+let mutable c: Counter = Counter { n: 0 };
+let d: dynamic Bumpable = c;
 print(d.bump());

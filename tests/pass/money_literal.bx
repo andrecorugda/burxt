@@ -17,8 +17,8 @@ print(price + big);
 print(price * 3);
 print(price == $19.99);
 print("interpolated: {price}");
-let mut running: Decimal<2> = $0.00;
-let mut i: Int = 0;
+let mutable running: Decimal<2> = $0.00;
+let mutable i: Int = 0;
 while i < 3 {
     running = running + $1.25;
     i = i + 1;

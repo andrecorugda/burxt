@@ -1,5 +1,5 @@
 // Same shape, different name: different types. The name is a contract.
-struct Invoice { total: Decimal<2> }
-struct Refund { total: Decimal<2> }
+record Invoice { total: Decimal<2> }
+record Refund { total: Decimal<2> }
 let x: Invoice = Refund { total: 1.00 };
 print(x.total);

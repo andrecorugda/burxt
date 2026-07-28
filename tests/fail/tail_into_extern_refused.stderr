@@ -1,1 +1,1 @@
-is an `extern fn`, so Burxt cannot guarantee a tail call into it
+is an `external function`, so Burxt cannot guarantee a tail call into it

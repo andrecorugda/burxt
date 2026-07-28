@@ -1,5 +1,5 @@
 enum Wrapped { Some(String), None }
-fn take(src: String) -> Wrapped {
+function take(src: String) -> Wrapped {
     region inner {
         return Wrapped.Some(substring(src, 0, 3));
     }

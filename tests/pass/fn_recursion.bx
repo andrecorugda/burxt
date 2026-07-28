@@ -2,14 +2,14 @@
 print(fib(10));
 print(fact(5));
 
-fn fib(n: Int) -> Int {
+function fib(n: Int) -> Int {
     if n < 2 {
         return n;
     }
     return fib(n - 1) + fib(n - 2);
 }
 
-fn fact(n: Int) -> Int {
+function fact(n: Int) -> Int {
     if n <= 1 {
         return 1;
     }

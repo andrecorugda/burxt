@@ -1,1 +1,1 @@
-unknown type `Basket` — declare it with `struct Basket { ... }`
+unknown type `Basket` — declare it with `record Basket { ... }`

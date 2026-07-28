@@ -1,5 +1,5 @@
 // else-if chains; both branches returning satisfies the return-path check.
-fn tier(amount: Decimal<2>) -> Int {
+function tier(amount: Decimal<2>) -> Int {
     if amount >= 100.00 {
         return 3;
     } else if amount >= 50.00 {

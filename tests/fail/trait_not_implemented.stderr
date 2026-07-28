@@ -1,1 +1,1 @@
-`Book` does not implement `Priced` — add `impl Priced for Book { ... }`.
+`Book` does not implement `Priced` — add `implement Priced for Book { ... }`.

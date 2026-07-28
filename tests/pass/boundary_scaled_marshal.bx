@@ -2,9 +2,9 @@
 // `as scaled` hands C the exact unscaled integer — llabs/labs/imaxabs are real C
 // functions taking a 64-bit integer, so this is the actual boundary, not a
 // simulation of one.
-extern fn llabs(amount: Decimal<2> as scaled) -> Int;
-extern fn labs(amount: Decimal<4> as scaled) -> Int;
-extern fn imaxabs(n: Int) -> Int;
+external function llabs(amount: Decimal<2> as scaled) -> Int;
+external function labs(amount: Decimal<4> as scaled) -> Int;
+external function imaxabs(n: Int) -> Int;
 
 let price: Decimal<2> = $19.99;
 print(llabs(price));            // 1999 — exact cents, never 19.989999...

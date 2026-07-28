@@ -1,0 +1,6 @@
+// All six renamed words answer the same way. `mut` is the one a Rust reader reaches for.
+region r {
+    let mut running = 0;
+    running += 1;
+    print(running);
+}

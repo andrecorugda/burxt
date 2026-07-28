@@ -85,7 +85,7 @@ not merely documented:
 
 ```text
 // illustrative, not current syntax
-pure fn interest(balance: Decimal<2, RoundHalfEven>, rate: Decimal<4>) -> Decimal<2, RoundHalfEven>
+pure function interest(balance: Decimal<2, RoundHalfEven>, rate: Decimal<4>) -> Decimal<2, RoundHalfEven>
 ```
 
 A function so marked may not touch I/O, the clock, randomness, locale, or
@@ -106,7 +106,7 @@ feeding in.
 **Slice 1 SHIPPED in v0.0.39** — `spec/N2-PURE-FUNCTIONS.md`. The illustrative
 syntax above is the actual syntax. It needed **less** than an effect system: the
 first declared effect marker arrived in v0.0.38 (`allocates`), and `pure` is the
-same shape pointed the other way — one that forbids rather than permits. A `pure fn`
+same shape pointed the other way — one that forbids rather than permits. A `pure function`
 may not print, read a file, call into C, or call a function that is not `pure`.
 
 Stated honestly: Burxt has no clock, no random, no locale and no ambient
@@ -126,7 +126,7 @@ The contract grammar can express what money systems actually need, which is not
 "this integer has no data race" but *"value is conserved"*:
 
 ```text
-fn transfer(from: mut Account, to: mut Account, amount: Decimal<2>)
+function transfer(from: mutable Account, to: mutable Account, amount: Decimal<2>)
     requires amount > $0.00
     ensures  from.balance + to.balance == old(from.balance + to.balance)
 ```
@@ -186,7 +186,7 @@ position.** So Burxt can offer exactly the pattern it uses everywhere else:
 
 ```text
 // illustrative, not settled syntax
-fn sum_to(n: Int, acc: Int) -> Int {
+function sum_to(n: Int, acc: Int) -> Int {
     if n <= 0 { return acc; }
     return tail sum_to(n - 1, acc + 1);   // constant stack, or a compile error
 }
@@ -213,7 +213,7 @@ What shipped is exactly the *checkable* version argued for here: the guarantee
 is explicit (never inferred, so an edit cannot silently reintroduce stack
 growth), and when it cannot be honoured the compiler says why in its own words —
 `musttail` requires the caller's and callee's prototypes to match, so mismatched
-signatures, `extern fn` targets, aggregates travelling by hidden pointer, and
+signatures, `external function` targets, aggregates travelling by hidden pointer, and
 leaving a `region` are each refused with their own reason. Self- and mutual
 recursion with matching signatures are the covered cases.
 

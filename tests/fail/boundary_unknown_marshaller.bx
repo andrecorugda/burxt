@@ -1,2 +1,2 @@
-extern fn h(amount: Decimal<2> as cents) -> Int;
+external function h(amount: Decimal<2> as cents) -> Int;
 print(h($1.00));

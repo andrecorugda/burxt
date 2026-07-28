@@ -1,10 +1,10 @@
 // Arrays may hold aggregates, and structs may hold arrays. Both were
 // conservative restrictions, not necessary ones — a fixed-size array of structs
 // is stack-allocatable, which is exactly what an arena AST needs.
-struct Node { kind: Int, lhs: Int, rhs: Int }
+record Node { kind: Int, lhs: Int, rhs: Int }
 enum Tag { Num, Add }
 
-let mut nodes: [Node; 4] = [
+let mutable nodes: [Node; 4] = [
     Node { kind: 0, lhs: -1, rhs: -1 },
     Node { kind: 0, lhs: -1, rhs: -1 },
     Node { kind: 0, lhs: -1, rhs: -1 },
@@ -19,7 +19,7 @@ print(nodes[2].kind);
 print(nodes[nodes[2].lhs].kind);
 // arrays of enums, matched
 let tags: [Tag; 2] = [Tag.Num, Tag.Add];
-let mut i: Int = 0;
+let mutable i: Int = 0;
 while i < len(tags) {
     match tags[i] {
         Num => { print(100); }

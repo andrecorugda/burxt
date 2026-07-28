@@ -2,7 +2,7 @@
 // own name. That is what lets a library type have it. An enum with neither has no failure
 // case to recognise.
 enum Pair { Left(Int), Right(Int) }
-fn f() -> Pair {
+function f() -> Pair {
     let p: Pair = Pair.Left(1);
     let v = p?;
     return Pair.Right(v);

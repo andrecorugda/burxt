@@ -1,7 +1,7 @@
 // Comparing needs an order, which an unbounded parameter does not have. The signature is
 // where a generic says what its parameter can do — and the refusal names the bound that
 // would allow it, which is a promise the compiler now keeps.
-fn bigger<T>(a: T, b: T) -> Bool {
+function bigger<T>(a: T, b: T) -> Bool {
     return a > b;
 }
 region r {

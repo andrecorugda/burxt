@@ -18,7 +18,7 @@ print(div_floor(lo + hi, 2));
 print(rem(255, 16));
 
 // Composes with everything else on a signature.
-pure fn midpoint(a: Int, b: Int) -> Int
+pure function midpoint(a: Int, b: Int) -> Int
     requires a <= b
     ensures result >= a
     ensures result <= b

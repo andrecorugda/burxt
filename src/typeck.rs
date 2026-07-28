@@ -541,7 +541,7 @@ impl TypeChecker {
                 )
             } else {
                 format!(
-                    "`pure fn {}` may not {}: a pure function's result must depend \
+                    "`pure function {}` may not {}: a pure function's result must depend \
                      only on its arguments, which is the whole of what `pure` \
                      promises. Pass the value in as a parameter instead.",
                     name, what
@@ -942,7 +942,7 @@ impl TypeChecker {
                     _ => {
                         return Err(format!(
                             "`{}` needs `{}: {}`, and {} is not a type that can implement \
-                             a trait — only a struct or an enum can.",
+                             a trait — only a record or an enum can.",
                             callee, param, trait_name, shown
                         ))
                     }
@@ -951,7 +951,7 @@ impl TypeChecker {
                     return Ok(());
                 }
                 Err(format!(
-                    "`{}` needs `{}: {}`, and `{}` does not implement it. Write `impl {} \
+                    "`{}` needs `{}: {}`, and `{}` does not implement it. Write `implement {} \
                      for {} {{ ... }}` — conformance is declared, never inferred from \
                      having the right method names.",
                     callee, param, trait_name, shown, trait_name, concrete
@@ -1038,19 +1038,19 @@ impl TypeChecker {
         for s in &prog.structs {
             self.current_span.set(s.span);
             if self.structs.contains_key(&s.name) {
-                return Err(format!("struct `{}` is defined twice", s.name));
+                return Err(format!("record `{}` is defined twice", s.name));
             }
             let mut fields = Vec::new();
             for f in &s.fields {
                 if fields.iter().any(|(n, _)| n == &f.name) {
                     return Err(format!(
-                        "struct `{}` declares the field `{}` twice",
+                        "record `{}` declares the field `{}` twice",
                         s.name, f.name
                     ));
                 }
                 if let Some(m) = f.marshal {
                     return Err(format!(
-                        "struct `{}`: field `{}` is marked `as {}`, but marshalling \
+                        "record `{}`: field `{}` is marked `as {}`, but marshalling \
                          describes how a value crosses a FOREIGN boundary, not how \
                          it is stored. Drop the `as {}`.",
                         s.name, f.name, m, m
@@ -1104,7 +1104,7 @@ impl TypeChecker {
             }
             if self.structs.contains_key(&t.name) {
                 return Err(format!(
-                    "`{}` is already a struct — a trait cannot reuse the name",
+                    "`{}` is already a record — a trait cannot reuse the name",
                     t.name
                 ));
             }
@@ -1248,9 +1248,9 @@ impl TypeChecker {
             // copy question deferred with collections. Parameters are fine.
             if matches!(f.ret, Type::Array { .. }) {
                 return Err(format!(
-                    "fn `{}` cannot return an array yet — returning one needs \
+                    "function `{}` cannot return an array yet — returning one needs \
                      whole-array binding, which arrives with collections. Return \
-                     a struct, or fill an array the caller owns.",
+                     a record, or fill an array the caller owns.",
                     f.name
                 ));
             }
@@ -1263,7 +1263,7 @@ impl TypeChecker {
             // time a standard-library function wanted to answer `[String]`.
             if self.region_allocated(&f.ret) && !f.allocates {
                 return Err(format!(
-                    "fn `{}` cannot return {}, because its storage lives in a region \
+                    "function `{}` cannot return {}, because its storage lives in a region \
                      and would not outlive it. Fill an array the caller owns, or \
                      return a scalar summary.",
                     f.name, f.ret
@@ -1276,7 +1276,7 @@ impl TypeChecker {
             // object points at.
             if matches!(f.ret, Type::Dyn(_)) {
                 return Err(format!(
-                    "fn `{}` cannot return a trait object — it borrows the value it \
+                    "function `{}` cannot return a trait object — it borrows the value it \
                      refers to, which would not outlive the call. Take one as a \
                      parameter instead.",
                     f.name
@@ -1312,7 +1312,7 @@ impl TypeChecker {
             if !self.structs.contains_key(&m.receiver) {
                 return Err(format!(
                     "method `{}` is declared for unknown type `{}` — declare it \
-                     with `struct {} {{ ... }}`",
+                     with `record {} {{ ... }}`",
                     m.name, m.receiver, m.receiver
                 ));
             }
@@ -1491,8 +1491,8 @@ impl TypeChecker {
         })?;
         if !self.structs.contains_key(&im.type_name) {
             return Err(format!(
-                "`impl {} for {}`: unknown type `{}` — declare it with \
-                 `struct {} {{ ... }}`",
+                "`implement {} for {}`: unknown type `{}` — declare it with \
+                 `record {} {{ ... }}`",
                 im.trait_name, im.type_name, im.type_name, im.type_name
             ));
         }
@@ -1507,7 +1507,7 @@ impl TypeChecker {
         for m in &im.methods {
             if !sigs.iter().any(|s| s.name == m.name) {
                 return Err(format!(
-                    "`impl {} for {}` defines `{}`, which is not a method of \
+                    "`implement {} for {}` defines `{}`, which is not a method of \
                      `{}`. Its methods are: {}.",
                     im.trait_name,
                     im.type_name,
@@ -1518,7 +1518,7 @@ impl TypeChecker {
             }
             if m.receiver != im.type_name {
                 return Err(format!(
-                    "in `impl {} for {}`, method `{}` has receiver `self: {}` — \
+                    "in `implement {} for {}`, method `{}` has receiver `self: {}` — \
                      it must be `self: {}`.",
                     im.trait_name, im.type_name, m.name, m.receiver, im.type_name
                 ));
@@ -1529,25 +1529,25 @@ impl TypeChecker {
         for sig in sigs {
             let found = im.methods.iter().find(|m| m.name == sig.name).ok_or_else(|| {
                 format!(
-                    "`impl {} for {}` is missing the method `{}`. Every trait \
+                    "`implement {} for {}` is missing the method `{}`. Every trait \
                      method must be implemented — Burxt has no default bodies.",
                     im.trait_name, im.type_name, sig.name
                 )
             })?;
             if found.receiver_mut != sig.receiver_mut {
                 return Err(format!(
-                    "in `impl {} for {}`, method `{}` declares `{}self` but the \
+                    "in `implement {} for {}`, method `{}` declares `{}self` but the \
                      trait declares `{}self`.",
                     im.trait_name,
                     im.type_name,
                     sig.name,
-                    if found.receiver_mut { "mut " } else { "" },
-                    if sig.receiver_mut { "mut " } else { "" }
+                    if found.receiver_mut { "mutable " } else { "" },
+                    if sig.receiver_mut { "mutable " } else { "" }
                 ));
             }
             if found.params.len() != sig.params.len() {
                 return Err(format!(
-                    "in `impl {} for {}`, method `{}` takes {} parameter(s) but \
+                    "in `implement {} for {}`, method `{}` takes {} parameter(s) but \
                      the trait declares {}.",
                     im.trait_name,
                     im.type_name,
@@ -1559,7 +1559,7 @@ impl TypeChecker {
             for (i, (fp, sp)) in found.params.iter().zip(&sig.params).enumerate() {
                 if fp.ty != sp.ty {
                     return Err(format!(
-                        "in `impl {} for {}`, method `{}` parameter {} is {} but \
+                        "in `implement {} for {}`, method `{}` parameter {} is {} but \
                          the trait declares {}.",
                         im.trait_name,
                         im.type_name,
@@ -1572,7 +1572,7 @@ impl TypeChecker {
             }
             if found.ret != sig.ret {
                 return Err(format!(
-                    "in `impl {} for {}`, method `{}` returns {} but the trait \
+                    "in `implement {} for {}`, method `{}` returns {} but the trait \
                      declares {}.",
                     im.trait_name, im.type_name, sig.name, found.ret, sig.ret
                 ));
@@ -1593,7 +1593,7 @@ impl TypeChecker {
     ) -> Result<TypedExpr, String> {
         let ExprKind::Var(var) = &e.kind else {
             return Err(format!(
-                "a `dyn {}` must come from a variable — a trait object borrows the \
+                "a `dynamic {}` must come from a variable — a trait object borrows the \
                  storage of the value it refers to, and an expression has none.",
                 trait_name
             ));
@@ -1614,7 +1614,7 @@ impl TypeChecker {
             }
             other => {
                 return Err(format!(
-                    "`{}` has type {}, which cannot be a `dyn {}` — only a struct \
+                    "`{}` has type {}, which cannot be a `dynamic {}` — only a record \
                      that implements the trait can.",
                     var, other, trait_name
                 ))
@@ -1622,7 +1622,7 @@ impl TypeChecker {
         };
         if !self.impls.contains(&(trait_name.to_string(), concrete.clone())) {
             return Err(format!(
-                "`{}` does not implement `{}` — add `impl {} for {} {{ ... }}`.",
+                "`{}` does not implement `{}` — add `implement {} for {} {{ ... }}`.",
                 concrete, trait_name, trait_name, concrete
             ));
         }
@@ -1649,7 +1649,7 @@ impl TypeChecker {
                     if !*mutable {
                         return Err(format!(
                             "cannot modify `{}`: it was declared immutable. Declare \
-                             it `let mut {}: {}` to allow it.",
+                             it `let mutable {}: {}` to allow it.",
                             name, name, ty
                         ));
                     }
@@ -1753,13 +1753,13 @@ impl TypeChecker {
                 if !self.structs.contains_key(name) && !self.is_enum(name) =>
             {
                 Err(format!(
-                    "unknown type `{}` — declare it with `struct {} {{ ... }}` or \
+                    "unknown type `{}` — declare it with `record {} {{ ... }}` or \
                      `enum {} {{ ... }}`",
                     name, name, name
                 ))
             }
             Type::CInt => Err(
-                "CInt only exists at the C boundary (extern fn signatures) — \
+                "CInt only exists at the C boundary (external function signatures) — \
                  use Int in Burxt code; values convert at the call."
                     .to_string(),
             ),
@@ -1773,11 +1773,11 @@ impl TypeChecker {
             Type::Slice(elem) => match elem.as_ref() {
                 Type::Slice(_) | Type::Array { .. } => Err(
                     "a growable array cannot hold another array yet — its element \
-                     would need its own region reasoning. Use a struct element."
+                     would need its own region reasoning. Use a record element."
                         .to_string(),
                 ),
                 Type::Dyn(t) => Err(format!(
-                    "a growable array cannot hold `dyn {}` yet — region-allocated \
+                    "a growable array cannot hold `dynamic {}` yet — region-allocated \
                      trait objects arrive in a later slice.",
                     t
                 )),
@@ -1791,11 +1791,11 @@ impl TypeChecker {
                 Type::Array { .. } => Err(
                     "arrays of arrays are not available yet — `a[i][j]` cannot be \
                      written, since indexing applies to a binding rather than an \
-                     expression. Use one array of a struct instead."
+                     expression. Use one array of a record instead."
                         .to_string(),
                 ),
                 Type::Dyn(t) => Err(format!(
-                    "an array cannot hold `dyn {}` — a trait object borrows the value \
+                    "an array cannot hold `dynamic {}` — a trait object borrows the value \
                      it refers to, and storing borrows needs tracking Burxt does not \
                      have yet.",
                     t
@@ -1861,7 +1861,7 @@ impl TypeChecker {
         }
         if RESERVED.contains(&e.name.as_str()) {
             return Err(format!(
-                "extern fn `{}`: this symbol is used by the Burxt runtime itself. \
+                "external function `{}`: this symbol is used by the Burxt runtime itself. \
                  Call it through a differently-named C wrapper.",
                 e.name
             ));
@@ -1881,7 +1881,7 @@ impl TypeChecker {
             }
             if params != &mine || ret != &seen(&e.ret) {
                 return Err(format!(
-                    "extern fn `{}` is declared twice with different signatures — one \
+                    "external function `{}` is declared twice with different signatures — one \
                      symbol cannot be two functions, and a program holding both beliefs \
                      would call whichever the linker picked",
                     e.name
@@ -1900,7 +1900,7 @@ impl TypeChecker {
                 }
                 (Type::Decimal { scale, .. }, None) => {
                     return Err(format!(
-                        "in extern fn `{}`, parameter `{}` is {} and C has no \
+                        "in external function `{}`, parameter `{}` is {} and C has no \
                          decimal type, so the crossing has to say how the value is \
                          encoded. Declare `{}: {} as scaled` to pass the exact \
                          unscaled integer (C receives it scaled by 10^{}), or take \
@@ -1912,7 +1912,7 @@ impl TypeChecker {
                 // encoding question to answer.
                 (other, Some(m)) => {
                     return Err(format!(
-                        "in extern fn `{}`, parameter `{}` is {}, which C holds \
+                        "in external function `{}`, parameter `{}` is {}, which C holds \
                          directly — `as {}` only means something for a Decimal, \
                          whose scale C has no way to carry.",
                         e.name, p.name, other, m
@@ -1921,7 +1921,7 @@ impl TypeChecker {
                 (Type::Int | Type::String | Type::CInt | Type::CDouble, None) => {}
                 (other, None) => {
                     return Err(format!(
-                        "in extern fn `{}`, parameter `{}` has type {}, but only \
+                        "in external function `{}`, parameter `{}` has type {}, but only \
                          Int, CInt, CDouble, String and a marshalled Decimal may \
                          cross the C boundary for now — C has no {}, and the raw \
                          value would silently lose its meaning.",
@@ -1935,7 +1935,7 @@ impl TypeChecker {
         // contradict the thesis. Say how to get the value exactly instead.
         if e.ret == Type::CDouble {
             return Err(format!(
-                "extern fn `{}` returns CDouble, but Burxt has no float type to \
+                "external function `{}` returns CDouble, but Burxt has no float type to \
                  receive it exactly — a double cannot hold most decimal amounts. \
                  Have the C function return the scaled integer (declare `-> Int`), \
                  or return it as text.",
@@ -1944,7 +1944,7 @@ impl TypeChecker {
         }
         if !matches!(e.ret, Type::Int | Type::CInt) {
             return Err(format!(
-                "extern fn `{}` returns {}, but only Int or CInt may cross the C \
+                "external function `{}` returns {}, but only Int or CInt may cross the C \
                  boundary as a return for now — Burxt cannot yet track who owns \
                  memory a C function returns. (If the C function returns a 32-bit \
                  `int`, declare `-> CInt` so the sign survives.)",
@@ -1961,7 +1961,7 @@ impl TypeChecker {
         for p in &f.params {
             if let Some(m) = p.marshal {
                 return Err(format!(
-                    "in `fn {}`, parameter `{}` is marked `as {}`, but marshalling \
+                    "in `function {}`, parameter `{}` is marked `as {}`, but marshalling \
                      only exists where there is a foreign encoding to marshal \
                      into. A Burxt-to-Burxt call passes the value itself, exactly \
                      — drop the `as {}`.",
@@ -2199,7 +2199,7 @@ impl TypeChecker {
 
         if self.extern_names.contains(&name) {
             return Err(format!(
-                "`{}` is an `extern fn`, so Burxt cannot guarantee a tail call \
+                "`{}` is an `external function`, so Burxt cannot guarantee a tail call \
                  into it: the C side owns that ABI, and the width conversion \
                  Burxt does on the result has to happen after the call returns.",
                 name
@@ -2207,7 +2207,7 @@ impl TypeChecker {
         }
         let (params, callee_ret) = self.fns.get(&name).cloned().ok_or_else(|| {
             format!(
-                "unknown function `{}` — a guaranteed tail call needs a `fn` \
+                "unknown function `{}` — a guaranteed tail call needs a `function` \
                  declared in this program.",
                 name
             )
@@ -2443,7 +2443,7 @@ impl TypeChecker {
                     return Err(format!(
                         "`{}` is already declared — Burxt does not allow shadowing; \
                          a second `let {}` would silently hide the first. Use a new \
-                         name, or `{} = ...` if it was declared `let mut`.",
+                         name, or `{} = ...` if it was declared `let mutable`.",
                         name, name, name
                     ));
                 }
@@ -2522,7 +2522,7 @@ impl TypeChecker {
                 if !mutable {
                     return Err(format!(
                         "cannot assign to `{}`: it was declared immutable. \
-                         Declare it `let mut {}: {}` to allow reassignment.",
+                         Declare it `let mutable {}: {}` to allow reassignment.",
                         name, name, declared
                     ));
                 }
@@ -2545,7 +2545,7 @@ impl TypeChecker {
                 if !mutable {
                     return Err(format!(
                         "cannot assign to `{}`: `{}` was declared immutable. \
-                         Declare it `let mut {}: {}` to allow it.",
+                         Declare it `let mutable {}: {}` to allow it.",
                         lvalue, name, name, cur_ty
                     ));
                 }
@@ -2574,7 +2574,7 @@ impl TypeChecker {
                 if !mutable {
                     return Err(format!(
                         "cannot assign to `{}[...]`: `{}` was declared immutable. \
-                         Declare it `let mut {}: {}` to allow it.",
+                         Declare it `let mutable {}: {}` to allow it.",
                         lvalue, name, name, cur_ty
                     ));
                 }
@@ -2639,7 +2639,7 @@ impl TypeChecker {
                 if !mutable {
                     return Err(format!(
                         "cannot assign to `{}[...]`: `{}` was declared immutable. \
-                         Declare it `let mut {}: {}` to allow it.",
+                         Declare it `let mutable {}: {}` to allow it.",
                         name, name, name, declared
                     ));
                 }
@@ -2858,7 +2858,7 @@ impl TypeChecker {
                     }
                     Type::Dyn(t) => {
                         return Err(format!(
-                            "print does not know how to show a `dyn {}` — a trait \
+                            "print does not know how to show a `dynamic {}` — a trait \
                              object exposes only its trait methods, so call one \
                              and print that.",
                             t
@@ -3018,7 +3018,7 @@ impl TypeChecker {
                 let Some(ret) = self.current_ret.clone() else {
                     return Err(
                         "`?` returns the failure from the enclosing function, and a \
-                         top-level statement has none to return from. Put it in a `fn` \
+                         top-level statement has none to return from. Put it in a `function` \
                          that answers with a failure of its own, or use `match`."
                             .to_string(),
                     );
@@ -3799,14 +3799,14 @@ impl TypeChecker {
                             format!(
                                 "a contract clause on `{}` may not call `{}`, which is \
                                  not declared `pure`: a clause must not be able to \
-                                 change the program it checks. Declare `pure fn {}`.",
+                                 change the program it checks. Declare `pure function {}`.",
                                 holder, name, name
                             )
                         } else {
                             format!(
-                                "`pure fn {}` may not call `{}`, which is not declared \
+                                "`pure function {}` may not call `{}`, which is not declared \
                                  `pure`: the guarantee cannot rest on a function that \
-                                 does not make it. Declare `pure fn {}` too, or drop \
+                                 does not make it. Declare `pure function {}` too, or drop \
                                  `pure` from `{}`.",
                                 holder, name, name, holder
                             )
@@ -3871,7 +3871,7 @@ impl TypeChecker {
                     .get(name)
                     .ok_or_else(|| {
                         format!(
-                            "unknown type `{}` — declare it with `struct {} {{ ... }}`",
+                            "unknown type `{}` — declare it with `record {} {{ ... }}`",
                             name, name
                         )
                     })?
@@ -3943,9 +3943,9 @@ impl TypeChecker {
                 // some later check produce something confusing.
                 if let Some(name) = &self.in_pure {
                     return Err(format!(
-                        "`pure fn {}` may not call the method `.{}()`: a method cannot \
+                        "`pure function {}` may not call the method `.{}()`: a method cannot \
                          be declared `pure` yet, so there is no promise to rely on. \
-                         Move the calculation into a `pure fn`, passing the fields it \
+                         Move the calculation into a `pure function`, passing the fields it \
                          needs.",
                         name, method
                     ));
@@ -3964,7 +3964,7 @@ impl TypeChecker {
                         .position(|s| s.name == *method)
                         .ok_or_else(|| {
                             format!(
-                                "`dyn {}` has no method named `{}`. Its methods \
+                                "`dynamic {}` has no method named `{}`. Its methods \
                                  are: {}.",
                                 trait_name,
                                 method,
@@ -3977,7 +3977,7 @@ impl TypeChecker {
                     let sig = sigs[slot].clone();
                     if sig.receiver_mut {
                         return Err(format!(
-                            "`{}` takes `mut self`, and calling a mutating method \
+                            "`{}` takes `mutable self`, and calling a mutating method \
                              through a trait object is not available yet: the \
                              compiler still cannot tell whether the value behind \
                              the object was declared mutable. Regions bound its \
@@ -3988,7 +3988,7 @@ impl TypeChecker {
                     }
                     if args.len() != sig.params.len() {
                         return Err(format!(
-                            "`dyn {}.{}` takes {} argument(s), but {} were given",
+                            "`dynamic {}.{}` takes {} argument(s), but {} were given",
                             trait_name,
                             method,
                             sig.params.len(),
@@ -4000,7 +4000,7 @@ impl TypeChecker {
                         let typed = self.check_expr(arg, Some(&p.ty))?;
                         if typed.ty != p.ty {
                             return Err(format!(
-                                "in the call to `dyn {}.{}`, argument {} must be \
+                                "in the call to `dynamic {}.{}`, argument {} must be \
                                  {}, but it has type {}",
                                 trait_name,
                                 method,
@@ -4084,7 +4084,7 @@ impl TypeChecker {
                     Type::Named(n) => n.clone(),
                     other => {
                         return Err(format!(
-                            "`.{}(...)` needs a struct value, but this has type {}.",
+                            "`.{}(...)` needs a record value, but this has type {}.",
                             method, other
                         ))
                     }
@@ -4106,7 +4106,7 @@ impl TypeChecker {
                     // rule AssignField already enforces for `item.field = v`.
                     let ExprKind::Var(name) = &base.as_ref().kind else {
                         return Err(format!(
-                            "`{}` is a mutating method (`fn (mut self: {}) ...`); \
+                            "`{}` is a mutating method (`function (mutable self: {}) ...`); \
                              it can only be called on a variable, not an \
                              expression.",
                             method, receiver
@@ -4119,7 +4119,7 @@ impl TypeChecker {
                     if !*mutable {
                         return Err(format!(
                             "cannot call the mutating method `{}` on `{}`: it was \
-                             declared immutable. Declare it `let mut {}: {}` to \
+                             declared immutable. Declare it `let mutable {}: {}` to \
                              allow it.",
                             method, name, name, receiver
                         ));
@@ -4209,7 +4209,7 @@ impl TypeChecker {
                             "an array literal does not say whether the array is fixed or \
                              growable, so an array binding names its type: \
                              `let xs: [Int; 3] = [1, 2, 3];` for a fixed one, or \
-                             `let mut xs: [Int] = [];` for one that grows."
+                             `let mutable xs: [Int] = [];` for one that grows."
                                 .to_string(),
                         )
                     }
@@ -4420,7 +4420,7 @@ impl TypeChecker {
             Type::Named(n) => n,
             other => {
                 return Err(format!(
-                    "`.{}` needs a struct value, but the value has type {}.",
+                    "`.{}` needs a record value, but the value has type {}.",
                     field, other
                 ))
             }
@@ -4451,7 +4451,7 @@ impl TypeChecker {
         match (lhs, rhs) {
             (Int, Int) => Ok(()),
             (Named(_), Named(_)) => Err(
-                "struct comparison is not available yet — compare fields individually."
+                "record comparison is not available yet — compare fields individually."
                     .to_string(),
             ),
             // Strings compare by BYTES, and only for equality. This is the

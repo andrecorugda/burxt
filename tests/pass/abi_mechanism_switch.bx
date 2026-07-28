@@ -1,28 +1,28 @@
-// The mechanism-switch test: a one-field struct is small enough for a target
+// The mechanism-switch test: a one-field record is small enough for a target
 // to pass in registers, an eight-field one is not. Both must behave
 // IDENTICALLY — value-copy semantics, callee cannot touch the caller. If
 // switching the mechanism ever changes observable behavior, that is the bug.
-struct Small { a: Int }
-struct Big {
+record Small { a: Int }
+record Big {
     a: Int, b: Int, c: Int, d: Int,
     e: Int, f: Int, g: Int, h: Int,
 }
 
-fn clobber_small(s: Small) -> Int {
-    let mut m: Small = s;
+function clobber_small(s: Small) -> Int {
+    let mutable m: Small = s;
     m.a = 999;
     return m.a;
 }
-fn clobber_big(s: Big) -> Int {
-    let mut m: Big = s;
+function clobber_big(s: Big) -> Int {
+    let mutable m: Big = s;
     m.a = 999;
     m.h = 999;
     return m.a + m.h;
 }
-fn roundtrip_small(s: Small) -> Small {
+function roundtrip_small(s: Small) -> Small {
     return s;
 }
-fn roundtrip_big(s: Big) -> Big {
+function roundtrip_big(s: Big) -> Big {
     return s;
 }
 

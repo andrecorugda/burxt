@@ -1,6 +1,6 @@
-// Element writes follow the binding's mutability, like struct fields.
-let mut slots: [Int; 4] = [0, 0, 0, 0];
-let mut j: Int = 0;
+// Element writes follow the binding's mutability, like record fields.
+let mutable slots: [Int; 4] = [0, 0, 0, 0];
+let mutable j: Int = 0;
 while j < len(slots) {
     slots[j] = j * 10;
     j = j + 1;

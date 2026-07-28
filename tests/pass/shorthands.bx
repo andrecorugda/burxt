@@ -1,11 +1,11 @@
 // The sugar, and what it desugars to. Neither shorthand adds a rule: `x += 1` becomes
 // `x = x + 1` in the parser, and `P { x }` becomes `P { x: x }` — so every scale,
 // contract, mutability and region rule applies exactly as it did to the long form.
-struct Acc { total: Decimal<2>, hits: [Int], label: String }
+record Acc { total: Decimal<2>, hits: [Int], label: String }
 
 region r {
-    let mut sum: Int = 0;
-    let mut i: Int = 0;
+    let mutable sum: Int = 0;
+    let mutable i: Int = 0;
     while i < 5 {
         sum += i * 2;
         i += 1;
@@ -14,7 +14,7 @@ region r {
 
     // through a field, and into a growable array's element
     let label: String = "counts";
-    let mut a: Acc = Acc { total: $0.00, hits: [], label };   // field shorthand
+    let mutable a: Acc = Acc { total: $0.00, hits: [], label };   // field shorthand
     a.total += $19.99;
     a.total += $5.01;
     push(a.hits, 10);
@@ -23,7 +23,7 @@ region r {
     print(a.hits[0]);
     print(a.label);
 
-    let mut down: Int = 10;
+    let mutable down: Int = 10;
     down -= 3;
     down *= 2;
     print(down);

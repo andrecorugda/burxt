@@ -16,7 +16,7 @@ enum Status {
 // There is deliberately no `_` arm. If you add a fourth variant tomorrow, every
 // match in the program stops compiling until you say what it means there —
 // which is the entire reason to have sum types instead of an Int and a comment.
-fn owed(s: Status) -> Decimal<2> {
+function owed(s: Status) -> Decimal<2> {
     match s {
         Paid => { return $0.00; }
         Owing(amount) => { return amount; }
@@ -26,7 +26,7 @@ fn owed(s: Status) -> Decimal<2> {
 
 // A payload binding is a normal binding: it exists inside its arm and nowhere
 // else, and it has the type the variant declared.
-fn describe(s: Status) -> String allocates {
+function describe(s: Status) -> String allocates {
     match s {
         Paid => { return "settled"; }
         Owing(amount) => { return "owes " + to_string(amount); }
@@ -41,8 +41,8 @@ region r {
         Status.Void
     ];
 
-    let mut i: Int = 0;
-    let mut total: Decimal<2> = $0.00;
+    let mutable i: Int = 0;
+    let mutable total: Decimal<2> = $0.00;
     while i < 3 {
         print(describe(invoices[i]));
         total = total + owed(invoices[i]);

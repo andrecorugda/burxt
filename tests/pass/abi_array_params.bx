@@ -1,8 +1,8 @@
 // An array parameter passes as a pointer to a caller-owned copy; the length
 // travels in the type, so len() is still a compile-time constant.
-fn sum3(xs: [Decimal<2>; 3]) -> Decimal<2> {
-    let mut s: Decimal<2> = 0.00;
-    let mut i: Int = 0;
+function sum3(xs: [Decimal<2>; 3]) -> Decimal<2> {
+    let mutable s: Decimal<2> = 0.00;
+    let mutable i: Int = 0;
     while i < len(xs) {
         s = s + xs[i];
         i = i + 1;
@@ -10,9 +10,9 @@ fn sum3(xs: [Decimal<2>; 3]) -> Decimal<2> {
     return s;
 }
 // The aliasing test again, for arrays.
-fn clobber(xs: [Int; 3]) -> Int {
-    let mut ys: [Int; 3] = [0, 0, 0];
-    let mut i: Int = 0;
+function clobber(xs: [Int; 3]) -> Int {
+    let mutable ys: [Int; 3] = [0, 0, 0];
+    let mutable i: Int = 0;
     while i < 3 {
         ys[i] = xs[i];
         i = i + 1;

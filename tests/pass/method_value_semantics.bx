@@ -1,10 +1,10 @@
 // A non-mutating method receives self by VALUE — mutating the parameter
 // inside the method can never be observed by the caller, exactly like an
-// ordinary struct function parameter.
-struct LineItem { price: Decimal<2>, qty: Int }
+// ordinary record function parameter.
+record LineItem { price: Decimal<2>, qty: Int }
 
-fn (self: LineItem) fake_bump() -> Int {
-    let mut m: LineItem = self;
+function (self: LineItem) fake_bump() -> Int {
+    let mutable m: LineItem = self;
     m.qty = 999;
     return m.qty;
 }

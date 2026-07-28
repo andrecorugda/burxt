@@ -26,28 +26,28 @@ enum Token {
 }
 
 // One step of the scan: the token found, and where to continue from.
-struct Scan {
+record Scan {
     tok: Token,
     next: Int,
 }
 
-fn is_digit(b: Int) -> Bool {
+function is_digit(b: Int) -> Bool {
     return b >= 48 && b <= 57;
 }
 
-fn is_alpha(b: Int) -> Bool {
+function is_alpha(b: Int) -> Bool {
     return (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95;
 }
 
-fn is_space(b: Int) -> Bool {
+function is_space(b: Int) -> Bool {
     return b == 32 || b == 9 || b == 10 || b == 13;
 }
 
 // Whitespace and `// line comments` are both trivia: skip them together, and
 // keep going, because a comment can be followed by more of either.
-fn skip_trivia(src: String, from: Int) -> Int {
-    let mut i: Int = from;
-    let mut moving: Bool = true;
+function skip_trivia(src: String, from: Int) -> Int {
+    let mutable i: Int = from;
+    let mutable moving: Bool = true;
     while moving {
         moving = false;
         while i < len(src) && is_space(byte_at(src, i)) {
@@ -64,7 +64,7 @@ fn skip_trivia(src: String, from: Int) -> Int {
     return i;
 }
 
-fn next_token(src: String, from: Int) -> Scan {
+function next_token(src: String, from: Int) -> Scan {
     let start: Int = skip_trivia(src, from);
     if start >= len(src) {
         return Scan { tok: Token.End, next: start };
@@ -74,8 +74,8 @@ fn next_token(src: String, from: Int) -> Scan {
 
     if is_digit(b) {
         // accumulate the value as we go: no substring, no allocation
-        let mut i: Int = start;
-        let mut value: Int = 0;
+        let mutable i: Int = start;
+        let mutable value: Int = 0;
         while i < len(src) && is_digit(byte_at(src, i)) {
             value = value * 10 + (byte_at(src, i) - 48);
             i = i + 1;
@@ -84,7 +84,7 @@ fn next_token(src: String, from: Int) -> Scan {
     }
 
     if is_alpha(b) {
-        let mut i: Int = start;
+        let mutable i: Int = start;
         while i < len(src) && (is_alpha(byte_at(src, i)) || is_digit(byte_at(src, i))) {
             i = i + 1;
         }
@@ -107,13 +107,13 @@ fn next_token(src: String, from: Int) -> Scan {
 // helpers are declared `allocates`: they construct their result in the caller's
 // region, which is what makes a diagnostic returnable at all. The requirement is
 // visible all the way up the chain — `show` says it too, because it calls one.
-fn unexpected(byte: Int, at: Int) -> String allocates {
+function unexpected(byte: Int, at: Int) -> String allocates {
     return "byte " + to_string(byte) + " at offset " + to_string(at) + " starts no token";
 }
 
 // Printing a token is where `match` earns its keep: add a variant to Token and
 // this function stops compiling until the new case is handled.
-fn show(t: Token, offset: Int) -> Int allocates {
+function show(t: Token, offset: Int) -> Int allocates {
     match t {
         Plus => { print("PLUS"); return 1; }
         Minus => { print("MINUS"); return 1; }
@@ -130,9 +130,9 @@ fn show(t: Token, offset: Int) -> Int allocates {
     }
 }
 
-fn tokenize(src: String) -> Int allocates {
-    let mut pos: Int = 0;
-    let mut count: Int = 0;
+function tokenize(src: String) -> Int allocates {
+    let mutable pos: Int = 0;
+    let mutable count: Int = 0;
     // `while true { ... break; }` says "until the end token" directly. Before
     // v0.0.50 this loop carried a `running: Bool` flag to do the same thing, which
     // is the evidence that earned `break` its place.

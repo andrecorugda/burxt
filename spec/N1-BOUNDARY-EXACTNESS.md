@@ -25,7 +25,7 @@ encoder to guard yet. The one boundary that exists today is the **C FFI**, and
 its current state is a blanket refusal:
 
 ```text
-extern fn record(amount: Decimal<2>) -> CInt;
+external function log_amount(amount: Decimal<2>) -> CInt;
 // error: only Int, CInt and String may cross the C boundary for now
 ```
 
@@ -41,7 +41,7 @@ The same move `CInt` made for C's `int`. Without a name for the lossy foreign
 type, "a Decimal may not bind to a float" is **unspellable**, so the guarantee
 cannot be checked — it is merely absent. With it, the rule becomes a type rule.
 
-`CDouble` exists ONLY in `extern fn` signatures, exactly like `CInt`. Burxt
+`CDouble` exists ONLY in `external function` signatures, exactly like `CInt`. Burxt
 still has no float type of its own and this does not introduce one.
 
 ### Decision 2 — `Decimal<S>` → `CDouble` is a compile error, always
@@ -70,9 +70,9 @@ class of defect as a silent decimal rounding.
 ### Decision 4 — a Decimal crosses through a marshaller declared at the DECLARATION site
 
 ```text
-extern fn record(amount: Decimal<2> as scaled) -> CInt;
+external function log_amount(amount: Decimal<2> as scaled) -> CInt;
 
-region r { print(record($19.99)); }   // C receives 1999
+region r { print(log_amount($19.99)); }   // C receives 1999
 ```
 
 `as scaled` says: the C side receives **the exact unscaled integer**. Nothing is
@@ -80,7 +80,7 @@ converted, nothing rounds, and the reading is plain English — *"a Decimal<2>,
 crossing as a scaled integer."*
 
 **Why the declaration site and not the call site.** The obvious alternative is a
-call-site accessor: `record(scaled_of(price))` with `record` taking an `Int`.
+call-site accessor: `log_amount(scaled_of(price))` with `log_amount` taking an `Int`.
 That is strictly weaker, and weaker in exactly the way §1 is about: the scale is
 gone from the type, so a `Decimal<4>`'s unscaled integer type-checks
 identically, and so does an unrelated `Int`. **The scale is lost at the boundary
@@ -89,7 +89,7 @@ scale is part of the contract: it is checked once, `Decimal<4>` is refused, and
 every call site is then correct by construction.
 
 A marshaller is meaningless on a non-Decimal, and `as scaled` on an ordinary
-`fn` parameter is noise (a Burxt-to-Burxt call has no encoding question). Both
+`function` parameter is noise (a Burxt-to-Burxt call has no encoding question). Both
 are compile errors.
 
 ### Decision 5 — no `as text` marshaller
@@ -108,7 +108,7 @@ to get the value exactly instead — have the C side return a scaled integer, or
 string:
 
 ```text
-error: extern fn `rate` returns CDouble, but Burxt has no float type to receive
+error: external function `rate` returns CDouble, but Burxt has no float type to receive
        it exactly. Have the C function return the scaled integer (and declare
        `-> Int`), or return it as text.
 ```
@@ -117,9 +117,9 @@ error: extern fn `rate` returns CDouble, but Burxt has no float type to receive
 
 - **NO implicit Decimal ↔ double conversion, ever, under any flag.** If this
   ever seems necessary, the answer is a wider scaled integer, not a float.
-- **NO float type in Burxt.** `CDouble` appears only in `extern fn` signatures.
+- **NO float type in Burxt.** `CDouble` appears only in `external function` signatures.
   A Burxt binding, field, parameter, or return may never have it.
-- **NO `as` marshallers on ordinary `fn` parameters.** Marshalling exists only
+- **NO `as` marshallers on ordinary `function` parameters.** Marshalling exists only
   where there is a foreign encoding to marshal into.
 - **NO "close enough" mode** on the `Int` → `CDouble` range check. The check is
   not tunable.
@@ -142,7 +142,7 @@ error: extern fn `rate` returns CDouble, but Burxt has no float type to receive
 
 A program that:
 
-1. declares `extern fn` taking `Decimal<2> as scaled` and receives the exact
+1. declares `external function` taking `Decimal<2> as scaled` and receives the exact
    unscaled integer on the C side;
 2. is refused when the same value is declared as `CDouble`, with a message
    naming the loss and both exact alternatives;
@@ -150,8 +150,8 @@ A program that:
    declared — the scale is part of the contract;
 4. passes an `Int` as `CDouble` and gets the same number back out through C;
 5. dies with a named error (exit 70) when that `Int` exceeds 2^53;
-6. is refused when a marshaller is written on an ordinary `fn` parameter, or on
-   a non-Decimal extern parameter, or when a `CDouble` is returned.
+6. is refused when a marshaller is written on an ordinary `function` parameter, or on
+   a non-Decimal external parameter, or when a `CDouble` is returned.
 
 ## 6. Acceptance, verified (v0.0.30)
 
@@ -171,7 +171,7 @@ All six criteria in §5 hold, checked by running the compiler:
    `boundary_cdouble_return` — each refused with its own explanation.
 
 **One thing this slice needed that the spec did not anticipate:** linker
-pass-through. An `extern fn` declaration is only half an FFI — the other half is
+pass-through. An `external function` declaration is only half an FFI — the other half is
 a real object to link against, and there was no way to supply one. Arguments
 after the source file now go to the system linker unchanged
 (`burxt run pay.bx cside.o -lm`). Without it the guarantee could only be

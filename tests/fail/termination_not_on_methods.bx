@@ -1,5 +1,5 @@
-struct C { n: Int }
-fn (self: C) go(n: Int) -> Int
+record C { n: Int }
+function (self: C) go(n: Int) -> Int
     decreases n
 {
     return n;

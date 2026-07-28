@@ -1,6 +1,6 @@
 // Both earned their place by evidence: the self-hosted lexer was carrying a
 // `running: Bool` flag and the symbol table a `guard` counter, purely to leave a loop.
-let mut i: Int = 0;
+let mutable i: Int = 0;
 while i < 10 {
     i = i + 1;
     if rem(i, 2) == 0 {
@@ -14,11 +14,11 @@ while i < 10 {
 print(i);
 
 // The inner loop's `break` leaves the inner loop, not the outer one.
-let mut outer: Int = 0;
-let mut hits: Int = 0;
+let mutable outer: Int = 0;
+let mutable hits: Int = 0;
 while outer < 3 {
     outer = outer + 1;
-    let mut inner: Int = 0;
+    let mutable inner: Int = 0;
     while inner < 5 {
         inner = inner + 1;
         if inner > 2 { break; }
@@ -29,11 +29,11 @@ print(hits);
 
 // A region opened INSIDE a loop is released by the jump out of it. Without that
 // this loop would exhaust the region and die; with it the memory is reused.
-let mut k: Int = 0;
+let mutable k: Int = 0;
 while k < 30000 {
     region per_item {
-        let mut xs: [Int] = [];
-        let mut j: Int = 0;
+        let mutable xs: [Int] = [];
+        let mutable j: Int = 0;
         while j < 100 {
             push(xs, j);
             j = j + 1;

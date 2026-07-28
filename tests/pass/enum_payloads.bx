@@ -1,7 +1,7 @@
 // Payloads of every scalar kind, bound by name inside their arm.
 enum Cell { Empty, Count(Int), Label(String), Money(Decimal<2>), Pair(Int, Int) }
 
-fn show(c: Cell) -> Int {
+function show(c: Cell) -> Int {
     match c {
         Empty => { print("empty"); return 0; }
         Count(n) => { print("count {n}"); return n; }

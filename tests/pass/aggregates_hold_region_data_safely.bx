@@ -1,11 +1,11 @@
 // The other half of the rule: inside a region, aggregates may hold region storage
 // freely — that is what a symbol table IS. Only carrying it OUT is refused.
-struct Symbol { name: String, kind: Int }
-struct Table { rows: [Symbol] }
+record Symbol { name: String, kind: Int }
+record Table { rows: [Symbol] }
 
 region pass {
     let src: String = "let price: Decimal<2> = $19.99;";
-    let mut table: Table = Table { rows: [] };
+    let mutable table: Table = Table { rows: [] };
     push(table.rows, Symbol { name: substring(src, 4, 5), kind: 1 });
     push(table.rows, Symbol { name: substring(src, 11, 7), kind: 2 });
     print(table.rows[0].name);

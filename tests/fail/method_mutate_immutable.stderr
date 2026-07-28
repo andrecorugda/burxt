@@ -1,1 +1,1 @@
-cannot call the mutating method `deposit` on `acct`: it was declared immutable. Declare it `let mut acct: Account` to allow it.
+cannot call the mutating method `deposit` on `acct`: it was declared immutable. Declare it `let mutable acct: Account` to allow it.

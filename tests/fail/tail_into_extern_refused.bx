@@ -1,5 +1,5 @@
-extern fn strlen(s: String) -> CInt;
-fn length(s: String) -> Int {
+external function strlen(s: String) -> CInt;
+function length(s: String) -> Int {
     return tail strlen(s);
 }
 print(length("hi"));

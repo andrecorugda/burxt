@@ -1,6 +1,6 @@
 // An interpolated String is region storage like any other join — it may not
 // outlive the region that holds its bytes.
-fn describe(n: Int) -> String {
+function describe(n: Int) -> String {
     region r {
         return "value {n}";
     }

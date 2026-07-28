@@ -5,8 +5,8 @@ print(byte_at(s, 0));
 print(byte_at(s, 1));
 print(byte_at(s, 2));
 // walking a string is a lexer's inner loop
-let mut i: Int = 0;
-let mut sum: Int = 0;
+let mutable i: Int = 0;
+let mutable sum: Int = 0;
 while i < len(s) {
     sum = sum + byte_at(s, i);
     i = i + 1;

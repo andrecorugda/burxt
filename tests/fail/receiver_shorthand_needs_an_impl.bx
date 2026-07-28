@@ -1,7 +1,7 @@
-// `fn (self)` borrows its type from an `impl` header. At the top level there is no
+// `function (self)` borrows its type from an `implement` header. At the top level there is no
 // header, so nothing says which type it is — refused with both ways to fix it.
-struct Book { cost: Int }
-fn (self) price() -> Int {
+record Book { cost: Int }
+function (self) price() -> Int {
     return self.cost;
 }
 print(1);

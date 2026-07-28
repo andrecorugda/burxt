@@ -1,2 +1,2 @@
-fn old(n: Int) -> Int { return n; }
+function old(n: Int) -> Int { return n; }
 print(old(1));

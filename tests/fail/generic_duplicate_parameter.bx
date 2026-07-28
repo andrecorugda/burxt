@@ -1,5 +1,5 @@
 // Two parameters with one name would mean two things by the same word.
-fn twice<T, T>(a: T, b: T) -> T {
+function twice<T, T>(a: T, b: T) -> T {
     return a;
 }
 region r {

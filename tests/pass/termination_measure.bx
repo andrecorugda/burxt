@@ -1,7 +1,7 @@
 // `decreases` names a quantity that must shrink on every recursive call. An
 // infinite loop in a payment processor is a real failure mode, and nothing else
 // checks for it.
-fn sum_to(n: Int, acc: Int) -> Int
+function sum_to(n: Int, acc: Int) -> Int
     decreases n
 {
     if n <= 0 { return acc; }
@@ -9,7 +9,7 @@ fn sum_to(n: Int, acc: Int) -> Int
 }
 
 // Non-tail recursion, and all four signature markers on one function.
-pure fn countdown(n: Int) -> Int
+pure function countdown(n: Int) -> Int
     requires n >= 0
     ensures result == 0
     decreases n
@@ -19,7 +19,7 @@ pure fn countdown(n: Int) -> Int
 }
 
 // The measure can be an expression over the parameters, not just one of them.
-fn walk(from: Int, to: Int) -> Int
+function walk(from: Int, to: Int) -> Int
     decreases to - from
 {
     if from >= to { return from; }

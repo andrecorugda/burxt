@@ -1,19 +1,19 @@
 // Structs cross function boundaries by value: the callee gets its own copy
 // and cannot observe (or corrupt) the caller's storage.
-struct LineItem { price: Decimal<2>, qty: Int }
+record LineItem { price: Decimal<2>, qty: Int }
 
-fn total(item: LineItem) -> Decimal<2> {
+function total(item: LineItem) -> Decimal<2> {
     return item.price * item.qty;
 }
 // Returns an aggregate: built directly in space the caller owns (sret).
-fn bump(item: LineItem) -> LineItem {
-    let mut copy: LineItem = item;
+function bump(item: LineItem) -> LineItem {
+    let mutable copy: LineItem = item;
     copy.qty = copy.qty + 1;
     return copy;
 }
 // THE aliasing test: the callee scribbles all over its parameter.
-fn clobber(item: LineItem) -> Int {
-    let mut m: LineItem = item;
+function clobber(item: LineItem) -> Int {
+    let mutable m: LineItem = item;
     m.price = 0.00;
     m.qty = 999;
     return m.qty;

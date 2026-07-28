@@ -1,2 +1,2 @@
-extern fn getenv_like() -> String;
+external function getenv_like() -> String;
 print(getenv_like());

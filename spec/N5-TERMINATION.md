@@ -15,7 +15,7 @@ one — and today the honest answer in every language is that nothing checks. A
 `decreases` clause names a quantity that must shrink on every recursive call:
 
 ```text
-fn sum_to(n: Int, acc: Int) -> Int
+function sum_to(n: Int, acc: Int) -> Int
     decreases n
 {
     if n <= 0 { return acc; }

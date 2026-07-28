@@ -1,4 +1,4 @@
-fn double(x: Decimal<2>) -> Decimal<2> {
+function double(x: Decimal<2>) -> Decimal<2> {
     return x + x;
 }
 print(double(3));

@@ -3,12 +3,12 @@
 // `a = a + b` in a loop copies the whole left side every time, which this project paid
 // for four times before adding the builtin.
 region r {
-    let mut out: [Int] = [];
+    let mutable out: [Int] = [];
     let line: String = "exact money, every time\n";
     let width: Int = len(line);
-    let mut n: Int = 0;
+    let mutable n: Int = 0;
     while n < 100 {
-        let mut i: Int = 0;
+        let mutable i: Int = 0;
         while i < width {
             let added: Int = push(out, byte_at(line, i));
             i = i + 1;

@@ -16,7 +16,7 @@
 A type says what shape a value has. A contract says what must be **true** about it.
 
 ```text
-fn withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>
+function withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>
     requires amount > $0.00
     requires amount <= balance
     ensures result >= $0.00
@@ -61,7 +61,7 @@ collision, since shadowing is refused everywhere in Burxt.
 
 ### Decision 4 — contracts must be pure
 
-A clause is checked under the same rule `pure fn` enforces (v0.0.39): no printing,
+A clause is checked under the same rule `pure function` enforces (v0.0.39): no printing,
 no file reads, no FFI, no calls to functions that are not `pure`. **A contract that
 can change the program is not a check, it is a second program**, and one that only
 runs when someone is looking.
@@ -83,7 +83,7 @@ ensures from.balance + to.balance == old(from.balance + to.balance)
 ```
 
 That needs values captured at entry and compared at exit, and it only means anything
-for functions that MUTATE — which today means methods with a `mut self` receiver,
+for functions that MUTATE — which today means methods with a `mutable self` receiver,
 since Burxt's function parameters are by-value copies. Both pieces are real work and
 neither is needed to make `requires`/`ensures` useful. Deferred with a trigger,
 stated plainly rather than half-built: **this slice cannot express a conservation
@@ -100,7 +100,7 @@ result, which is most of what contracts are used for in practice.
 - **NO `ensures` on a function returning an aggregate**, yet: the result travels via
   a hidden pointer into the caller's storage, and binding `result` to it needs care
   that scalars do not. Refused with the reason, not silently ignored.
-- **NO contracts on `extern fn`.** Burxt cannot check the other side, and a
+- **NO contracts on `external function`.** Burxt cannot check the other side, and a
   precondition on a C function would be a claim it never agreed to.
 - **NO inheritance-style contract weakening/strengthening rules.** Those belong with
   `class`/`open`, which do not exist.
@@ -112,7 +112,7 @@ result, which is most of what contracts are used for in practice.
 | ~~`old(expr)` in `ensures`~~ | **DONE** (v0.0.44) | — |
 | ~~Contracts on methods~~ | **DONE** (v0.0.44) | — |
 | ~~Conservation laws (§3's headline)~~ | **DONE** (v0.0.44) | — |
-| `old(...)` of an aggregate | Needs a copy of the whole value at entry | A required program needs the whole struct, not fields |
+| `old(...)` of an aggregate | Needs a copy of the whole value at entry | A required program needs the whole record, not fields |
 | Derived mutual exclusion from an invariant (§3's novel step) | Needs threads | Concurrency exists |
 | Static proof | SMT territory | The runtime form has proven the grammar |
 | `ensures` on aggregate returns | `result` binding needs sret care | A required program needs it |
@@ -128,7 +128,7 @@ result, which is most of what contracts are used for in practice.
 5. A non-Bool clause is a compile error.
 6. An impure clause is a compile error naming purity.
 7. `result` in a `requires` clause is a compile error: there is no result yet.
-8. `ensures` on a function returning a struct is refused with the reason from §2.
+8. `ensures` on a function returning a record is refused with the reason from §2.
 9. Contracts compose with `pure` and `allocates` on the same signature.
 
 ## 4a. Two rules relaxed (v0.0.86)
@@ -160,7 +160,7 @@ only ever carried to satisfy the old rule.
 
 ## 5a. Acceptance for `old(...)` and method contracts (v0.0.44)
 
-10. A `mut self` method carries `requires` and `ensures`, checked like a function's.
+10. A `mutable self` method carries `requires` and `ensures`, checked like a function's.
 11. `ensures self.a + self.b == old(self.a + self.b)` holds for a transfer that
     conserves, and fails — quoting the clause and naming the method — for one that
     loses a cent.
@@ -171,4 +171,4 @@ only ever carried to satisfy the old rule.
 14. `old(...)` outside an `ensures` clause is refused with the reason.
 15. `old(result)` is refused as a contradiction.
 16. `old(...)` of an aggregate is refused, naming the copy that is not built.
-17. `old` is a reserved name: `fn old(...)` is refused.
+17. `old` is a reserved name: `function old(...)` is refused.

@@ -1,4 +1,4 @@
-pure fn f(n: Int) -> Int {
+pure function f(n: Int) -> Int {
     print(n);
     return n;
 }

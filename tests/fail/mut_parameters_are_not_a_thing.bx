@@ -1,5 +1,5 @@
-struct T { n: Int }
-fn fill(mut t: T, v: Int) -> Int {
+record T { n: Int }
+function fill(mutable t: T, v: Int) -> Int {
     return v;
 }
 print(1);

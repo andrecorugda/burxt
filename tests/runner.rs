@@ -132,9 +132,9 @@ fn struct_layout_has_no_hidden_header() {
     let program = scratch.join("layout_probe.bx");
     fs::write(
         &program,
-        "struct Money { amount: Decimal<2> }\n\
-         struct LineItem { price: Decimal<2>, qty: Int }\n\
-         struct Order { total: Money, items: Int, label: String }\n\
+        "record Money { amount: Decimal<2> }\n\
+         record LineItem { price: Decimal<2>, qty: Int }\n\
+         record Order { total: Money, items: Int, label: String }\n\
          print(1);\n",
     )
     .unwrap();
@@ -166,13 +166,13 @@ Order: size 24 align 8
 /// rule: a program with no `dyn` emits no vtable at all.
 #[test]
 fn dyn_does_not_change_layout_and_costs_nothing_unused() {
-    let scratch = scratch_dir("dyn-layout");
+    let scratch = scratch_dir("dynamic-layout");
     fs::create_dir_all(&scratch).unwrap();
 
-    let common = "trait Priced { fn price(self) -> Decimal<2> }\n\
-                  struct Book { cost: Decimal<2>, pages: Int }\n\
-                  impl Priced for Book {\n\
-                  fn (self: Book) price() -> Decimal<2> { return self.cost; }\n\
+    let common = "trait Priced { function price(self) -> Decimal<2> }\n\
+                  record Book { cost: Decimal<2>, pages: Int }\n\
+                  implement Priced for Book {\n\
+                  function (self: Book) price() -> Decimal<2> { return self.cost; }\n\
                   }\n\
                   let b: Book = Book { cost: 1.00, pages: 2 };\n";
 
@@ -182,7 +182,7 @@ fn dyn_does_not_change_layout_and_costs_nothing_unused() {
     let with_dyn = scratch.join("with_dyn.bx");
     fs::write(
         &with_dyn,
-        format!("{}let d: dyn Priced = b;\nprint(d.price());\n", common),
+        format!("{}let d: dynamic Priced = b;\nprint(d.price());\n", common),
     )
     .unwrap();
 
@@ -208,11 +208,11 @@ fn dyn_does_not_change_layout_and_costs_nothing_unused() {
     );
     assert!(
         !s_ir.contains("bx.vtable"),
-        "a program with no `dyn` must emit no vtable"
+        "a program with no `dynamic` must emit no vtable"
     );
     assert!(
         d_ir.contains("bx.vtable.Priced.Book"),
-        "a `dyn` program must emit the (Type, Trait) vtable"
+        "a `dynamic` program must emit the (Type, Trait) vtable"
     );
 }
 
@@ -254,11 +254,11 @@ fn tail_calls_are_emitted_as_musttail() {
     let program = scratch.join("tail_probe.bx");
     fs::write(
         &program,
-        "fn down(n: Int, acc: Int) -> Int {\n\
+        "function down(n: Int, acc: Int) -> Int {\n\
          if n <= 0 { return acc; }\n\
          return tail down(n - 1, acc + 1);\n\
          }\n\
-         fn plain(n: Int, acc: Int) -> Int {\n\
+         function plain(n: Int, acc: Int) -> Int {\n\
          if n <= 0 { return acc; }\n\
          return plain(n - 1, acc + 1);\n\
          }\n\
@@ -324,8 +324,8 @@ fn money_and_integers_cross_into_c_exactly() {
     let program = scratch.join("boundary.bx");
     fs::write(
         &program,
-        "extern fn record_cents(amount: Decimal<2> as scaled) -> Int;\n\
-         extern fn take_double(n: CDouble) -> Int;\n\
+        "external function record_cents(amount: Decimal<2> as scaled) -> Int;\n\
+         external function take_double(n: CDouble) -> Int;\n\
          let price: Decimal<2> = $19.99;\n\
          print(record_cents(price));\n\
          print(take_double(9007199254740992));\n",
@@ -360,7 +360,7 @@ fn money_and_integers_cross_into_c_exactly() {
     // named error and exit 70 — never a silently different integer.
     fs::write(
         scratch.join("over.bx"),
-        "extern fn take_double(n: CDouble) -> Int;\n\
+        "external function take_double(n: CDouble) -> Int;\n\
          print(take_double(9007199254740993));\n",
     )
     .unwrap();
@@ -1060,7 +1060,7 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     let wrong = scratch.join("wrong.bx");
     fs::write(
         &wrong,
-        "fn tax(amount: Decimal<2>, rate: Decimal<4>) -> Decimal<2, RoundHalfEven> {\n\
+        "function tax(amount: Decimal<2>, rate: Decimal<4>) -> Decimal<2, RoundHalfEven> {\n\
          return amount * rate;\n\
          }\n\
          let price: Decimal<2> = $19.99;\n\
@@ -1163,11 +1163,11 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
         ("arith.bx", "let a: Int = 6;\nlet b: Int = 7;\nprint(a * b);\nprint(a - b);\n"),
         (
             "loop.bx",
-            "let mut i: Int = 0;\nwhile i < 4 {\n  if i == 2 { i = i + 1; continue; }\n               print(i * 10);\n  i = i + 1;\n}\nprint(\"end\");\n",
+            "let mutable i: Int = 0;\nwhile i < 4 {\n  if i == 2 { i = i + 1; continue; }\n               print(i * 10);\n  i = i + 1;\n}\nprint(\"end\");\n",
         ),
         (
             "calls.bx",
-            "fn fact(n: Int) -> Int {\n  if n <= 1 { return 1; }\n  return n * fact(n - 1);\n}\n\
+            "function fact(n: Int) -> Int {\n  if n <= 1 { return 1; }\n  return n * fact(n - 1);\n}\n\
              print(fact(6));\n",
         ),
         (
@@ -1178,14 +1178,14 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
         // hands one back — M1a's whole claim, checked by running it.
         (
             "strings.bx",
-            "fn describe(line: Int) -> String allocates {\n               return \"line \" + to_string(line) + \": unexpected byte\";\n}\n             region r {\n  print(describe(3));\n  let s: String = \"hello, burxt\";\n               print(len(s));\n  print(byte_at(s, 0));\n  print(substring(s, 7, 5));\n               print(to_string(true) + \"/\" + to_string(false));\n}\n",
+            "function describe(line: Int) -> String allocates {\n               return \"line \" + to_string(line) + \": unexpected byte\";\n}\n             region r {\n  print(describe(3));\n  let s: String = \"hello, burxt\";\n               print(len(s));\n  print(byte_at(s, 0));\n  print(substring(s, 7, 5));\n               print(to_string(true) + \"/\" + to_string(false));\n}\n",
         ),
         // Structs by value, a nested struct, a struct-typed parameter, a fixed array
         // read and written, and an aggregate copied — `b = a` then `b.x = 100` must
         // leave `a.x` alone, which is the whole of by-value semantics.
         (
             "aggregates.bx",
-            "struct Point { x: Int, y: Int }\n             struct Line { from: Point, to: Point, label: String }\n             fn total_of(p: Point) -> Int { return p.x + p.y; }\n             let a: Point = Point { x: 3, y: 4 };\n             let mut b: Point = a;\n             b.x = 100;\n             print(total_of(a));\nprint(a.x);\nprint(b.x);\n             let l: Line = Line { from: a, to: b, label: \"diagonal\" };\n             print(l.from.x);\nprint(l.to.x);\nprint(l.label);\n             let mut xs: [Int; 4] = [10, 20, 30, 40];\n             xs[1] = 99;\n             let mut i: Int = 0;\nlet mut total: Int = 0;\n             while i < 4 { total = total + xs[i]; i = i + 1; }\n             print(total);\n",
+            "record Point { x: Int, y: Int }\n             record Line { from: Point, to: Point, label: String }\n             function total_of(p: Point) -> Int { return p.x + p.y; }\n             let a: Point = Point { x: 3, y: 4 };\n             let mutable b: Point = a;\n             b.x = 100;\n             print(total_of(a));\nprint(a.x);\nprint(b.x);\n             let l: Line = Line { from: a, to: b, label: \"diagonal\" };\n             print(l.from.x);\nprint(l.to.x);\nprint(l.label);\n             let mutable xs: [Int; 4] = [10, 20, 30, 40];\n             xs[1] = 99;\n             let mutable i: Int = 0;\nlet mutable total: Int = 0;\n             while i < 4 { total = total + xs[i]; i = i + 1; }\n             print(total);\n",
         ),
         (
             "division.bx",
@@ -1264,7 +1264,7 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
     let oob = scratch.join("oob.bx");
     fs::write(
         &oob,
-        "let xs: [Int; 3] = [1, 2, 3];\nlet mut i: Int = 0;\n         while i < 5 { print(xs[i]); i = i + 1; }\n",
+        "let xs: [Int; 3] = [1, 2, 3];\nlet mutable i: Int = 0;\n         while i < 5 { print(xs[i]); i = i + 1; }\n",
     )
     .unwrap();
     let ll = scratch.join("oob.ll");
@@ -1879,7 +1879,7 @@ fn modules_compile_as_one_program_and_report_per_file() {
     // 1 + 2: a struct and a function declared in one file, used in another.
     write(
         "lexer.bx",
-        "struct Tok { kind: Int, start: Int }\nfn scan(text: String) -> Int { return len(text); }\n",
+        "record Tok { kind: Int, start: Int }\nfunction scan(text: String) -> Int { return len(text); }\n",
     );
     let main = write(
         "main.bx",
@@ -1904,7 +1904,7 @@ fn modules_compile_as_one_program_and_report_per_file() {
     // 3: an error in the used file names the used file, at its own line.
     write(
         "bad.bx",
-        "// a module with a mistake\nfn broken(a: Decimal<2>, b: Decimal<4>) -> Decimal<2> {\n           return a + b;\n}\n",
+        "// a module with a mistake\nfunction broken(a: Decimal<2>, b: Decimal<4>) -> Decimal<2> {\n           return a + b;\n}\n",
     );
     let uses_bad = write("uses_bad.bx", "use \"bad.bx\";\nprint(1);\n");
     let complained = burxt("check", &uses_bad, &scratch);
@@ -1916,8 +1916,8 @@ fn modules_compile_as_one_program_and_report_per_file() {
     );
 
     // 4 + 5: a file used twice is compiled once, and two files may use each other.
-    write("a.bx", "use \"b.bx\";\nfn from_a() -> Int { return from_b() + 1; }\n");
-    write("b.bx", "use \"a.bx\";\nfn from_b() -> Int { return 41; }\n");
+    write("a.bx", "use \"b.bx\";\nfunction from_a() -> Int { return from_b() + 1; }\n");
+    write("b.bx", "use \"a.bx\";\nfunction from_b() -> Int { return 41; }\n");
     let cycle = write("cycle.bx", "use \"a.bx\";\nuse \"b.bx\";\nprint(from_a());\n");
     let ran = Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("run")
@@ -1935,7 +1935,7 @@ fn modules_compile_as_one_program_and_report_per_file() {
     assert_eq!(String::from_utf8_lossy(&ran.stdout), "42\n");
 
     // 6: a module may not hold statements.
-    write("effects.bx", "print(\"I run when used\");\nfn helper() -> Int { return 1; }\n");
+    write("effects.bx", "print(\"I run when used\");\nfunction helper() -> Int { return 1; }\n");
     let uses_effects = write("uses_effects.bx", "use \"effects.bx\";\nprint(helper());\n");
     let refused = burxt("check", &uses_effects, &scratch);
     let why = String::from_utf8_lossy(&refused.stderr).to_string();
@@ -2024,13 +2024,13 @@ fn the_standard_library_compiles_and_works() {
         &absence,
         format!(
             "use \"{0}/option.bx\";\nuse \"{0}/result.bx\";\n\
-             fn find(xs: [Int], want: Int) -> Option<Int> {{\n  let mut i = 0;\n  \
+             function find(xs: [Int], want: Int) -> Option<Int> {{\n  let mutable i = 0;\n  \
              for x in xs {{\n    if x == want {{ return Option.Some(i); }}\n    \
              i += 1;\n  }}\n  return Option.None;\n}}\n\
-             fn divide(a: Int, b: Int) -> Result<Int, String> {{\n  \
+             function divide(a: Int, b: Int) -> Result<Int, String> {{\n  \
              if b == 0 {{ return Result.Err(\"division by zero\"); }}\n  \
              return Result.Ok(div_trunc(a, b));\n}}\n\
-             region r {{\n  let mut xs: [Int] = [];\n  let a = push(xs, 5);\n  \
+             region r {{\n  let mutable xs: [Int] = [];\n  let a = push(xs, 5);\n  \
              let b = push(xs, 9);\n  print(option_or(find(xs, 9), 0 - 1));\n  \
              print(option_or(find(xs, 7), 0 - 1));\n  \
              print(option_is_none(find(xs, 7)));\n  \
@@ -2175,7 +2175,7 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
     let program: String = (0..60)
         .map(|n| {
             format!(
-                "fn work_{}(a: Int, b: Int) -> Int {{\n    let c: Int = a * b + a - b;\n    \
+                "function work_{}(a: Int, b: Int) -> Int {{\n    let c: Int = a * b + a - b;\n    \
                  if c > 100 {{ return c - 1; }}\n    return c + 1;\n}}\n",
                 n
             )
@@ -2236,7 +2236,7 @@ fn generics_monomorphise_and_run() {
     let cases: &[(&str, &str, &str)] = &[
         (
             "identity",
-            "fn identity<T>(x: T) -> T { return x; }\n\
+            "function identity<T>(x: T) -> T { return x; }\n\
              region r {\n  print(identity(3));\n  print(identity(\"text\"));\n  \
              print(identity(true));\n  print(identity($1.50));\n}\n",
             "3\ntext\ntrue\n1.50\n",
@@ -2245,11 +2245,11 @@ fn generics_monomorphise_and_run() {
             // One definition, four symbols, and each one holds its type by VALUE — a
             // Decimal<2> stays a scaled i64 rather than becoming a pointer to one.
             "elements",
-            "fn first<T>(xs: [T]) -> T { return xs[0]; }\n\
-             fn second<T>(xs: [T]) -> T { let picked: T = xs[1]; return picked; }\n\
-             region r {\n  let mut ns: [Int] = [];\n  let a = push(ns, 10);\n  \
+            "function first<T>(xs: [T]) -> T { return xs[0]; }\n\
+             function second<T>(xs: [T]) -> T { let picked: T = xs[1]; return picked; }\n\
+             region r {\n  let mutable ns: [Int] = [];\n  let a = push(ns, 10);\n  \
              let b = push(ns, 20);\n  print(first(ns));\n  print(second(ns));\n  \
-             let mut ws: [String] = [];\n  let c = push(ws, \"one\");\n  \
+             let mutable ws: [String] = [];\n  let c = push(ws, \"one\");\n  \
              let d = push(ws, \"two\");\n  print(first(ws));\n  print(second(ws));\n}\n",
             "10\n20\none\ntwo\n",
         ),
@@ -2257,16 +2257,16 @@ fn generics_monomorphise_and_run() {
             // A generic calling a generic: `echo`'s body is checked once with `T`
             // standing for nothing, and `identity$Int` appears only when `echo$Int` does.
             "nested",
-            "fn identity<T>(x: T) -> T { return x; }\n\
-             fn echo<T>(x: T) -> T { return identity(x); }\n\
+            "function identity<T>(x: T) -> T { return x; }\n\
+             function echo<T>(x: T) -> T { return identity(x); }\n\
              region r {\n  print(echo(7));\n  print(echo(\"deep\"));\n}\n",
             "7\ndeep\n",
         ),
         (
             "two_parameters",
-            "struct Point { x: Int, y: Int }\n\
-             fn keep<A, B>(a: A, b: B) -> A { return a; }\n\
-             fn identity<T>(x: T) -> T { return x; }\n\
+            "record Point { x: Int, y: Int }\n\
+             function keep<A, B>(a: A, b: B) -> A { return a; }\n\
+             function identity<T>(x: T) -> T { return x; }\n\
              region r {\n  print(keep(9, \"ignored\"));\n  \
              let p = identity(Point { x: 4, y: 5 });\n  print(p.x + p.y);\n}\n",
             "9\n9\n",
@@ -2279,7 +2279,7 @@ fn generics_monomorphise_and_run() {
             // match, and nothing in the checker below the rewrite knows generics exist.
             "option",
             "enum Option<T> { None, Some(T) }\n\
-             fn or_else<T>(o: Option<T>, fallback: T) -> T {\n  match o {\n    \
+             function or_else<T>(o: Option<T>, fallback: T) -> T {\n  match o {\n    \
              None => { return fallback; }\n    Some(v) => { return v; }\n  }\n}\n\
              region r {\n  print(or_else(Option.Some(7), 0));\n  \
              let missing: Option<Int> = Option.None;\n  print(or_else(missing, 42));\n  \
@@ -2290,7 +2290,7 @@ fn generics_monomorphise_and_run() {
         (
             "result",
             "enum Result<T, E> { Ok(T), Err(E) }\n\
-             fn divide(a: Int, b: Int) -> Result<Int, String> {\n  \
+             function divide(a: Int, b: Int) -> Result<Int, String> {\n  \
              if b == 0 { return Result.Err(\"division by zero\"); }\n  \
              return Result.Ok(div_trunc(a, b));\n}\n\
              region r {\n  match divide(10, 2) {\n    Ok(n) => { print(n); }\n    \
@@ -2317,9 +2317,9 @@ fn generics_monomorphise_and_run() {
             // exactly what the language already allows, so a bound cannot promise more
             // than it delivers.
             "bounds",
-            "fn largest<T: Ordered>(a: T, b: T) -> T {\n  if a > b { return a; }\n  \
+            "function largest<T: Ordered>(a: T, b: T) -> T {\n  if a > b { return a; }\n  \
              return b;\n}\n\
-             fn same<T: Equatable>(a: T, b: T) -> Bool { return a == b; }\n\
+             function same<T: Equatable>(a: T, b: T) -> Bool { return a == b; }\n\
              region r {\n  print(largest(3, 9));\n  print(largest($1.50, $1.25));\n  \
              print(same(1, 1));\n  print(same(\"a\", \"b\"));\n  \
              print(same(true, true));\n}\n",
@@ -2330,15 +2330,15 @@ fn generics_monomorphise_and_run() {
             // vtable and no runtime type information. `dyn` is still there for the cases
             // that genuinely want one implementation over many types.
             "trait_bound",
-            "trait Priced {\n  fn price(self) -> Decimal<2>\n  fn label(self) -> String\n}\n\
-             struct Book { title: String, cost: Decimal<2> }\n\
-             struct Meal { dish: String, cost: Decimal<2>, covers: Int }\n\
-             impl Priced for Book {\n  fn (self) price() -> Decimal<2> { return self.cost; }\n  \
-             fn (self) label() -> String allocates { return \"book: \" + self.title; }\n}\n\
-             impl Priced for Meal {\n  \
-             fn (self) price() -> Decimal<2> { return self.cost * self.covers; }\n  \
-             fn (self) label() -> String allocates { return \"meal: \" + self.dish; }\n}\n\
-             fn describe<T: Priced>(item: T) -> String allocates {\n  \
+            "trait Priced {\n  function price(self) -> Decimal<2>\n  function label(self) -> String\n}\n\
+             record Book { title: String, cost: Decimal<2> }\n\
+             record Meal { dish: String, cost: Decimal<2>, covers: Int }\n\
+             implement Priced for Book {\n  function (self) price() -> Decimal<2> { return self.cost; }\n  \
+             function (self) label() -> String allocates { return \"book: \" + self.title; }\n}\n\
+             implement Priced for Meal {\n  \
+             function (self) price() -> Decimal<2> { return self.cost * self.covers; }\n  \
+             function (self) label() -> String allocates { return \"meal: \" + self.dish; }\n}\n\
+             function describe<T: Priced>(item: T) -> String allocates {\n  \
              return item.label() + \" at \" + to_string(item.price());\n}\n\
              region r {\n  print(describe(Book { title: \"burxt\", cost: $19.99 }));\n  \
              print(describe(Meal { dish: \"soup\", cost: $4.50, covers: 2 }));\n}\n",
@@ -2353,21 +2353,21 @@ fn generics_monomorphise_and_run() {
             // being known to the compiler. See spec/M8-ERRORS.md §1a.
             "question_mark",
             "enum Result<T, E> { Ok(T), Err(E) }\nenum Option<T> { None, Some(T) }\n\
-             fn checked(a: Int, b: Int) -> Result<Int, String> {\n  \
+             function checked(a: Int, b: Int) -> Result<Int, String> {\n  \
              if b == 0 { return Result.Err(\"division by zero\"); }\n  \
              return Result.Ok(div_trunc(a, b));\n}\n\
-             fn average(a: Int, b: Int, n: Int) -> Result<Int, String> {\n  \
+             function average(a: Int, b: Int, n: Int) -> Result<Int, String> {\n  \
              let mean = checked(a + b, n)?;\n  return Result.Ok(mean);\n}\n\
-             fn first_of(xs: [Int]) -> Option<Int> {\n  \
+             function first_of(xs: [Int]) -> Option<Int> {\n  \
              if len(xs) == 0 { return Option.None; }\n  return Option.Some(xs[0]);\n}\n\
-             fn doubled_first(xs: [Int]) -> Option<Int> {\n  \
+             function doubled_first(xs: [Int]) -> Option<Int> {\n  \
              let head = first_of(xs)?;\n  return Option.Some(head * 2);\n}\n\
              region r {\n  \
              match average(10, 6, 2) { Ok(m) => { print(m); } Err(w) => { print(w); } }\n  \
              match average(10, 6, 0) { Ok(m) => { print(m); } Err(w) => { print(w); } }\n  \
-             let mut xs: [Int] = [];\n  let a = push(xs, 21);\n  \
+             let mutable xs: [Int] = [];\n  let a = push(xs, 21);\n  \
              match doubled_first(xs) { None => { print(\"empty\"); } Some(v) => { print(v); } }\n  \
-             let mut none: [Int] = [];\n  \
+             let mutable none: [Int] = [];\n  \
              match doubled_first(none) { None => { print(\"empty\"); } Some(v) => { print(v); } }\n}\n",
             "8\ndivision by zero\n42\nempty\n",
         ),
@@ -2405,7 +2405,7 @@ fn generics_monomorphise_and_run() {
 
     // An unused generic emits no code: spec/M7-GENERICS.md acceptance 6.
     let unused = scratch.join("unused.bx");
-    fs::write(&unused, "fn never<T>(x: T) -> T { return x; }\nprint(1);\n").unwrap();
+    fs::write(&unused, "function never<T>(x: T) -> T { return x; }\nprint(1);\n").unwrap();
     let emitted = Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("emit-ir")
         .arg(&unused)

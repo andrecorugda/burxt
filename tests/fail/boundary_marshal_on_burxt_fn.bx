@@ -1,4 +1,4 @@
-fn charge(amount: Decimal<2> as scaled) -> Int {
+function charge(amount: Decimal<2> as scaled) -> Int {
     return 1;
 }
 print(charge($1.00));

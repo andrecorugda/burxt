@@ -1,1 +1,1 @@
-cannot assign to `item.price`: `item` was declared immutable. Declare it `let mut item: LineItem` to allow it.
+cannot assign to `item.price`: `item` was declared immutable. Declare it `let mutable item: LineItem` to allow it.

@@ -1,7 +1,7 @@
-fn label(n: Int) -> String allocates {
+function label(n: Int) -> String allocates {
     return "n=" + to_string(n);
 }
-fn wrap(n: Int) -> String {
+function wrap(n: Int) -> String {
     region r {
         return label(n);
     }

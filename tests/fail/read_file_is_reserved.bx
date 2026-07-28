@@ -1,1 +1,1 @@
-fn read_file(p: String) -> String { return p; }
+function read_file(p: String) -> String { return p; }

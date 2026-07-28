@@ -9,7 +9,7 @@
 A compiler builds messages. Every one of them looks like this:
 
 ```text
-fn describe(line: Int) -> String {
+function describe(line: Int) -> String {
     return "line " + to_string(line) + ": unexpected byte";
 }
 ```
@@ -50,7 +50,7 @@ therefore refused conservatively.
 ## 2. Decision: declare it, do not infer it
 
 ```text
-fn describe(line: Int) -> String allocates {
+function describe(line: Int) -> String allocates {
     return "line " + to_string(line) + ": unexpected byte";
 }
 
@@ -68,7 +68,7 @@ region open.
 **Why declared rather than inferred.** Inference is possible — walk the call graph,
 mark whatever allocates, propagate — but it would be the only invisible contract in
 the language. Every other guarantee Burxt makes is written down at the point it
-applies: a rounding contract in the type, `dyn` at the dispatch site, `tail` at the
+applies: a rounding contract in the type, `dynamic` at the dispatch site, `tail` at the
 call, `as scaled` at the boundary. A function that quietly acquires a requirement on
 all its callers because someone added a `+` deep inside it is exactly the kind of
 action-at-a-distance the rest of the language refuses. Declared, it is also
@@ -82,7 +82,7 @@ rather than a parameter.
 
 ## 3. The rules
 
-1. `fn f(...) -> T allocates { ... }` may allocate anywhere in its body without
+1. `function f(...) -> T allocates { ... }` may allocate anywhere in its body without
    opening a region. The bytes belong to the caller's region.
 2. **Every call to an `allocates` function requires an open region at the call
    site.** Inside another `allocates` function counts: the caller's region is still
@@ -104,7 +104,7 @@ rather than a parameter.
 - **NO implicit region at a call site.** A call that needs a region and has none is
   an error, never an ambient region conjured to satisfy it — that would be M1's
   "hidden global region", which is a GC by another name.
-- **NO `allocates` on `extern fn`.** The C side does not know about regions.
+- **NO `allocates` on `external function`.** The C side does not know about regions.
 - **NO change to codegen.** If this needs new lowering, the reasoning above is
   wrong. It requires none: the bump allocator and the caller's mark already do it.
 
@@ -118,7 +118,7 @@ rather than a parameter.
 
 ## 6. Acceptance
 
-1. `fn describe(line: Int) -> String allocates` compiles, and returns a String
+1. `function describe(line: Int) -> String allocates` compiles, and returns a String
    built from a literal, a concatenation and `to_string`.
 2. Calling it inside a region prints the built string; the bytes are the caller's
    region's, and are released when that region closes.

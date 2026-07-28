@@ -1,4 +1,4 @@
 // FFI widening: a String parameter passes as a borrowed const char*.
-extern fn strlen(s: String) -> Int;
+external function strlen(s: String) -> Int;
 print(strlen("hello"));
 print(strlen(""));

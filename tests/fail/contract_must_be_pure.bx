@@ -1,5 +1,5 @@
-fn log(n: Int) -> Bool { print(n); return true; }
-fn f(n: Int) -> Int
+function log(n: Int) -> Bool { print(n); return true; }
+function f(n: Int) -> Int
     requires log(n)
 {
     return n;

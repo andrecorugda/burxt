@@ -1,6 +1,6 @@
 // The message quotes the clause as written, and names the function: a failure that
 // says only "precondition violated" makes the reader go and find which one.
-fn withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>
+function withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>
     requires amount > $0.00
     requires amount <= balance
 {

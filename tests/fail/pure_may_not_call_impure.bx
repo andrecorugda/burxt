@@ -1,5 +1,5 @@
-fn helper(n: Int) -> Int { return n + 1; }
-pure fn f(n: Int) -> Int {
+function helper(n: Int) -> Int { return n + 1; }
+pure function f(n: Int) -> Int {
     return helper(n);
 }
 print(f(1));

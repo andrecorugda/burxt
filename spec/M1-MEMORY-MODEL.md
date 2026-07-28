@@ -93,7 +93,7 @@ Sketch, not final syntax:
 
 ```text
 region tx {
-    let mut entries: List<Entry> = List.new();
+    let mutable entries: List<Entry> = List.new();
     entries.push(Entry { amount: $19.99 });
     let total: Decimal<2> = sum(entries);   // a copy — may leave the region
     post(entries);
@@ -109,9 +109,9 @@ Every ledger entry that was waiting on ownership:
 - growable `List<T>`, and therefore a self-hosted compiler that is not capped
   at a fixed `[Node; 64]`
 - string builders
-- storing a `dyn` in a struct (though the real enabler was block scoping, not
+- storing a `dynamic` in a record (though the real enabler was block scoping, not
   regions — see §6a)
-- ~~returning a `dyn`~~ and ~~mutating methods through `dyn`~~ — **these were
+- ~~returning a `dynamic`~~ and ~~mutating methods through `dynamic`~~ — **these were
   overclaimed.** A trait object borrows its source binding, a stack local, so
   neither was ever memory-blocked. Both need borrow/mutability tracking.
 
@@ -160,7 +160,7 @@ before the next begins:
    region, with an error naming the region. This is the correctness core.
 4. **String building** — concatenation and interpolation-as-a-value, which
    were the oldest entries on the ledger.
-5. **Region-allocated `dyn`**, retiring the last two ledger entries.
+5. **Region-allocated `dynamic`**, retiring the last two ledger entries.
 
 Concurrency (ownership transfer) is explicitly NOT in this milestone; §2
 specifies the single-owner rule only so nothing built here forecloses it.
@@ -196,10 +196,10 @@ Revised staging:
    is new machinery rather than an ownership question. Reclassified: concat
    ships here; interpolation-as-a-value moves to its own small slice once a
    formatter exists, and is no longer an M1 ledger entry.
-4. **Storable `dyn`** — done, but NOT as predicted. A struct field may hold a
+4. **Storable `dynamic`** — done, but NOT as predicted. A record field may hold a
    trait object (block scoping already bounded it). The other two entries are
-   re-diagnosed rather than retired: returning a `dyn` needs borrow tracking,
-   and mutating through one needs mutability tracking. **A `dyn` borrows its
+   re-diagnosed rather than retired: returning a `dynamic` needs borrow tracking,
+   and mutating through one needs mutability tracking. **A `dynamic` borrows its
    source binding, which is a stack local — so regions were never the blocker
    for either.** §3 overclaimed; this is the correction.
 
@@ -227,7 +227,7 @@ functions, and **not** of aggregates containing them. So this was accepted:
 return Named { word: substring(src, 0, 3) };   // inside a region block
 ```
 
-A struct, an enum payload or an array element could carry region storage out of its
+A record, an enum payload or an array element could carry region storage out of its
 region: a use-after-free, silently. Fixed by making the check see through all three
 aggregate forms. It had survived since regions shipped, because every test that
 returned an aggregate built one out of scalars and literals.

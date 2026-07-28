@@ -1,6 +1,6 @@
 // A region body that returns on every path IS a return, so anything after the
 // block is unreachable rather than required.
-fn f() -> Int {
+function f() -> Int {
     region r {
         return 1;
     }

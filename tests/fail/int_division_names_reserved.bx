@@ -1,2 +1,2 @@
-fn rem(a: Int, b: Int) -> Int { return a; }
+function rem(a: Int, b: Int) -> Int { return a; }
 print(rem(1, 2));

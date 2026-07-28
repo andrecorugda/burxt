@@ -1,7 +1,7 @@
 // A trailing comma is allowed everywhere a list is written, so adding a field, a
 // parameter, an argument or a variant is a one-line diff rather than a two-line one.
 // It buys nothing to refuse and costs a reader nothing to allow.
-struct Point {
+record Point {
     x: Int,
     y: Int,
 }
@@ -11,7 +11,7 @@ enum Shape {
     Line(Int, Int,),
 }
 
-fn total(
+function total(
     a: Int,
     b: Int,
 ) -> Int {

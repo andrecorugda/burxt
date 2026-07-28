@@ -1,2 +1,2 @@
-fn byte_at(x: Int) -> Int { return x; }
+function byte_at(x: Int) -> Int { return x; }
 print(1);

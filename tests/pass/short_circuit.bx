@@ -1,7 +1,7 @@
 // Short-circuit is OBSERVABLE behavior, not an optimization: the right side
 // must not run when the left already decides the answer. `loud` prints its
 // tag, so a missing number proves the right side was skipped.
-fn loud(tag: Int, answer: Bool) -> Bool {
+function loud(tag: Int, answer: Bool) -> Bool {
     print(tag);
     return answer;
 }

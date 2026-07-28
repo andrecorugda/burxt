@@ -12,8 +12,8 @@
 
 ```text
 // lexer.bx
-struct Tok { kind: Int, start: Int, length: Int }
-fn scan(src: String) -> Int { ... }
+record Tok { kind: Int, start: Int, length: Int }
+function scan(src: String) -> Int { ... }
 
 // main.bx
 use "lexer.bx";
@@ -47,7 +47,7 @@ without learning anything.
 
 ### Decision 2 — everything a module declares is visible, and there is no `pub` yet
 
-A `use`d file's functions, structs, enums, traits and impls are all available to the file
+A `use`d file's functions, records, enums, traits and impls are all available to the file
 that used it. No visibility annotations in this slice.
 
 **Why.** `pub` doubles the annotation burden on every declaration, and its value is hiding —
@@ -128,7 +128,7 @@ ever becomes one the answer is a per-file arena rather than a span redesign.
 
 1. Two files, one program: `main.bx` uses `lexer.bx`, calls a function declared there, and
    runs.
-2. A struct declared in one file is used in another, with the same layout either way.
+2. A record declared in one file is used in another, with the same layout either way.
 3. A diagnostic in a used file names **that file** and the right line, not an offset into a
    concatenated buffer.
 4. A file used twice — directly and through another module — is compiled once.

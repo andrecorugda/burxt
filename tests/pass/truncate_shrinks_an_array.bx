@@ -3,8 +3,8 @@
 // scope could only ever grow. The buffer is kept, so a scope that pushes and
 // truncates repeatedly reuses the same memory rather than growing forever.
 region r {
-    let mut xs: [Int] = [];
-    let mut i: Int = 0;
+    let mutable xs: [Int] = [];
+    let mutable i: Int = 0;
     while i < 10 {
         push(xs, i);
         i = i + 1;

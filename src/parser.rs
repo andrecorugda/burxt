@@ -2,12 +2,12 @@
 //!
 //! Grammar:
 //!   program := (struct | extern | fn | stmt)*
-//!   struct  := "struct" IDENT "{" (param ",")* param? "}"
-//!   extern  := "extern" "fn" IDENT "(" (param ("," param)*)? ")" "->" type ";"
-//!   fn      := "fn" IDENT "(" (param ("," param)*)? ")" "->" type block
+//!   struct  := "record" IDENT "{" (param ",")* param? "}"
+//!   extern  := "external" "function" IDENT "(" (param ("," param)*)? ")" "->" type ";"
+//!   fn      := "function" IDENT "(" (param ("," param)*)? ")" "->" type block
 //!   param   := IDENT ":" type
 //!   block   := "{" stmt* "}"
-//!   stmt    := "let" "mut"? IDENT ":" type "=" expr ";"
+//!   stmt    := "let" "mutable"? IDENT ":" type "=" expr ";"
 //!            | IDENT ("." IDENT)* "=" expr ";"
 //!            | "print" "(" expr ")" ";"
 //!            | "return" expr ";"
@@ -144,7 +144,7 @@ impl Parser {
                 // marker yet, and saying so beats a confusing parse error.
                 if self.peek_at(1) != &Token::Fn {
                     return Err(format!(
-                        "`pure` must be followed by `fn`, but found {}",
+                        "`pure` must be followed by `function`, but found {}",
                         self.peek_at(1).describe()
                     ));
                 }
@@ -212,14 +212,14 @@ impl Parser {
         self.expect(&Token::Struct)?;
         let name = match self.bump() {
             Token::Ident(s) => s,
-            other => return Err(format!("expected a struct name after 'struct', found {}", other.describe())),
+            other => return Err(format!("expected a record name after 'record', found {}", other.describe())),
         };
         self.expect(&Token::LBrace)?;
         let mut fields = Vec::new();
         while !self.at(&Token::RBrace) {
             let fname = match self.bump() {
                 Token::Ident(s) => s,
-                other => return Err(format!("expected a field name in struct {}, found {}", name, other.describe())),
+                other => return Err(format!("expected a field name in record {}, found {}", name, other.describe())),
             };
             self.expect(&Token::Colon)?;
             let ty = self.parse_type()?;
@@ -347,10 +347,10 @@ impl Parser {
         };
         if !self.at(&Token::SelfKw) {
             return Err(format!(
-                "every trait method takes `self` first: write `fn {}({}self, ...)`, \
+                "every trait method takes `self` first: write `function {}({}self, ...)`, \
                  found {}",
                 name,
-                if receiver_mut { "mut " } else { "" },
+                if receiver_mut { "mutable " } else { "" },
                 self.peek().describe()
             ));
         }
@@ -391,14 +391,14 @@ impl Parser {
             Token::Ident(s) => s,
             other => {
                 return Err(format!(
-                    "expected a trait name after 'impl', found {}",
+                    "expected a trait name after 'implement', found {}",
                     other.describe()
                 ))
             }
         };
         if !self.at(&Token::For) {
             return Err(format!(
-                "expected `for` in `impl {} for Type`, found {}",
+                "expected `for` in `implement {} for Type`, found {}",
                 trait_name,
                 self.peek().describe()
             ));
@@ -408,7 +408,7 @@ impl Parser {
             Token::Ident(s) => s,
             other => {
                 return Err(format!(
-                    "expected a type name in `impl {} for ...`, found {}",
+                    "expected a type name in `implement {} for ...`, found {}",
                     trait_name,
                     other.describe()
                 ))
@@ -419,7 +419,7 @@ impl Parser {
         while !self.at(&Token::RBrace) {
             if self.at(&Token::Eof) {
                 return Err(format!(
-                    "unclosed `impl {} for {}`: expected `}}`",
+                    "unclosed `implement {} for {}`: expected `}}`",
                     trait_name, type_name
                 ));
             }
@@ -440,7 +440,7 @@ impl Parser {
             // C has no notion of a type parameter, and a monomorphised C symbol is a
             // symbol that does not exist. See spec/M7-GENERICS.md §2.
             return Err(format!(
-                "`extern fn {}` cannot be generic: C has no type parameters, and there \
+                "`external function {}` cannot be generic: C has no type parameters, and there \
                  would be no symbol to link against.",
                 name
             ));
@@ -526,8 +526,8 @@ impl Parser {
         };
         if !self.at(&Token::SelfKw) {
             return Err(format!(
-                "expected `self` in the receiver clause `fn ({}self: Type)`, found {}",
-                if receiver_mut { "mut " } else { "" },
+                "expected `self` in the receiver clause `function ({}self: Type)`, found {}",
+                if receiver_mut { "mutable " } else { "" },
                 self.peek().describe()
             ));
         }
@@ -541,9 +541,9 @@ impl Parser {
                 Some(t) => t.to_string(),
                 None => {
                     return Err(
-                        "`fn (self)` needs the type: outside an `impl` block nothing says \
-                         which one. Write `fn (self: Type) name(...)`, or put the method \
-                         in `impl Trait for Type { ... }`, where the header says it once."
+                        "`function (self)` needs the type: outside an `implement` block nothing says \
+                         which one. Write `function (self: Type) name(...)`, or put the method \
+                         in `implement Trait for Type { ... }`, where the header says it once."
                             .to_string(),
                     )
                 }
@@ -554,7 +554,7 @@ impl Parser {
                 Token::Ident(s) => s,
                 other => {
                     return Err(format!(
-                        "expected a struct name after `self:`, found {}",
+                        "expected a record name after `self:`, found {}",
                         other.describe()
                     ))
                 }
@@ -683,7 +683,7 @@ impl Parser {
     fn parse_fn_signature(&mut self) -> Result<(String, Vec<TypeParam>, Vec<Param>, Type), String> {
         let name = match self.bump() {
             Token::Ident(s) => s,
-            other => return Err(format!("expected a function name after 'fn', found {}", other.describe())),
+            other => return Err(format!("expected a function name after 'function', found {}", other.describe())),
         };
         // `fn name<T, U>(...)`. Recorded on the parser so `parse_type` can tell a type
         // parameter from a struct name — which is the only place that distinction is
@@ -710,7 +710,7 @@ impl Parser {
         self.expect(&Token::RParen)?;
         if !self.at(&Token::Arrow) {
             return Err(format!(
-                "expected `->` and a return type after fn {}'s parameter list \
+                "expected `->` and a return type after function {}'s parameter list \
                  (every Burxt function returns a value), found {}",
                 name,
                 self.peek().describe()
@@ -1224,7 +1224,7 @@ impl Parser {
             Token::Dyn => match self.bump() {
                 Token::Ident(name) => Ok(Type::Dyn(name)),
                 other => Err(format!(
-                    "expected a trait name after `dyn`, found {}",
+                    "expected a trait name after `dynamic`, found {}",
                     other.describe()
                 )),
             },

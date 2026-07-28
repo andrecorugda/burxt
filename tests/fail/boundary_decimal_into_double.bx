@@ -1,3 +1,3 @@
-extern fn take(n: CDouble) -> Int;
+external function take(n: CDouble) -> Int;
 let price: Decimal<2> = $19.99;
 print(take(price));

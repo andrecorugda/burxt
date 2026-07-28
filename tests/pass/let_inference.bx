@@ -1,10 +1,10 @@
 // `let x = e;` takes its type from `e`. The annotation is optional, not gone: it is
 // still legal everywhere and still required where a value cannot say its own type.
 // See spec/M10-ERGONOMICS.md §1.
-struct Point { x: Int, y: Int }
+record Point { x: Int, y: Int }
 enum Status { Paid, Void }
 
-fn double(n: Int) -> Int { return n * 2; }
+function double(n: Int) -> Int { return n * 2; }
 
 region r {
     let count = 0;                       // Int
@@ -19,8 +19,8 @@ region r {
     let called = double(21);              // Int, from the signature
     let exact = price * rate;             // Decimal<6> — exact, so no contract
 
-    // `let mut` infers the same way, and mutation still needs the `mut`.
-    let mut running = 0;
+    // `let mutable` infers the same way, and mutation still needs the `mutable`.
+    let mutable running = 0;
     running = running + called;
 
     // A built String is a region value like any other, and inference does not change

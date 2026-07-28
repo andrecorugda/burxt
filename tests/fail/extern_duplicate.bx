@@ -1,5 +1,5 @@
-extern fn f(x: Int) -> Int;
-fn f(x: Int) -> Int {
+external function f(x: Int) -> Int;
+function f(x: Int) -> Int {
     return x;
 }
 print(f(1));

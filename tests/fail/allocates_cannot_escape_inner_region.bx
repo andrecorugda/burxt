@@ -1,4 +1,4 @@
-fn label(n: Int) -> String allocates {
+function label(n: Int) -> String allocates {
     region inner {
         return "n=" + to_string(n);
     }

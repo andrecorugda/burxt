@@ -1,0 +1,4 @@
+// `struct` is a clipping of "structure"; Burxt calls the thing a `record`, which is what
+// it is — named fields, copied by value, no inheritance and no hidden header.
+struct Book { title: String }
+print(1);

@@ -13,7 +13,7 @@ region tx {
     print(3);
 }
 region other {
-    let mut n: Int = 0;
+    let mutable n: Int = 0;
     while n < 3 {
         n = n + 1;
     }

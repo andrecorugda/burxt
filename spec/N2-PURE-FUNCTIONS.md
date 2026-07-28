@@ -21,7 +21,7 @@ targets. This extends that to the *inputs*: nothing may enter a calculation exce
 through its parameters.
 
 ```text
-pure fn interest(balance: Decimal<2, RoundHalfEven>, rate: Decimal<4>)
+pure function interest(balance: Decimal<2, RoundHalfEven>, rate: Decimal<4>)
     -> Decimal<2, RoundHalfEven>
 {
     return balance * rate;
@@ -42,7 +42,7 @@ signature.
 - **Print.** Output is an effect. `pure` means the function computes its result and
   does nothing else.
 - **Read a file.** The result would depend on the filesystem.
-- **Call into C** (`extern fn`). What the other side does is not something Burxt can
+- **Call into C** (`external function`). What the other side does is not something Burxt can
   promise anything about — and the FFI is where nondeterminism actually enters a
   Burxt program today.
 - **Call a function that is not `pure`.** The guarantee cannot rest on a function
@@ -51,10 +51,10 @@ signature.
 
 ### Decision 3 — what it may do, deliberately
 
-Arithmetic, comparisons, `match`, loops, local `let mut`, field access, array and
+Arithmetic, comparisons, `match`, loops, local `let mutable`, field access, array and
 string reads, and **allocation**. Allocation is deterministic: a bump allocator
 returns the same layout for the same sequence of calls, and the region model means
-it cannot observe anything about the outside world. `pure fn f(...) -> String
+it cannot observe anything about the outside world. `pure function f(...) -> String
 allocates` is therefore a legal and useful combination — a pure function that builds
 a string.
 
@@ -82,7 +82,7 @@ matters more than overselling what is enforced on the day it ships.
   and memoisation are things the guarantee *enables*, and doing them now would mean
   the marker changes behaviour as well as legality. It must first only ever change
   what compiles.
-- **NO `pure` on `extern fn`.** Burxt cannot check the other side.
+- **NO `pure` on `external function`.** Burxt cannot check the other side.
 - **NO clock, random, locale or environment access added anywhere** until it can be
   added behind this rule.
 
@@ -97,11 +97,11 @@ matters more than overselling what is enforced on the day it ships.
 
 ## 4. Acceptance
 
-1. `pure fn` compiles and computes; a pure function may call another pure function.
-2. `pure fn` + `allocates` compiles and may build and return a String.
+1. `pure function` compiles and computes; a pure function may call another pure function.
+2. `pure function` + `allocates` compiles and may build and return a String.
 3. Printing inside a `pure` function is a compile error saying output is an effect.
 4. Reading a file inside one is a compile error naming reproducibility.
-5. Calling an `extern fn` from one is a compile error naming the C boundary.
+5. Calling an `external function` from one is a compile error naming the C boundary.
 6. Calling a non-`pure` function from one is a compile error naming both functions.
 7. A non-pure function may freely call a pure one.
 8. Calling a method from a `pure` function is refused with the reason recorded in

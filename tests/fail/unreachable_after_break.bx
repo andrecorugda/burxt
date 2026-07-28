@@ -1,4 +1,4 @@
-let mut i: Int = 0;
+let mutable i: Int = 0;
 while i < 3 {
     break;
     print(i);

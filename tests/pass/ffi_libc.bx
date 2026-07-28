@@ -1,9 +1,9 @@
 // FFI: call straight into C. The symbol is unmangled; the signature is the
 // programmer's contract with the C side (llabs is long long -> long long).
-extern fn llabs(x: Int) -> Int;
+external function llabs(x: Int) -> Int;
 print(llabs(0 - 42));
 print(llabs(7));
-// extern calls are ordinary expressions
+// external calls are ordinary expressions
 if llabs(0 - 5) == 5 {
     print(1);
 }

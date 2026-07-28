@@ -1,6 +1,6 @@
 // There is deliberately no `x++`. An expression with a side effect is the class of thing
 // this language refuses — it is why `if (x = 5)` is unwriteable — and `x += 1` gives the
 // brevity without the trap.
-let mut x: Int = 1;
+let mutable x: Int = 1;
 x++;
 print(x);

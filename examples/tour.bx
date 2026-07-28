@@ -14,12 +14,12 @@ let tax: Decimal<2, RoundHalfEven> = subtotal * rate;   // mixed scales need a c
 print("tax {tax}");
 
 // ---- Aggregates with value semantics, and behaviour attached to them ----
-struct LineItem { label: String, price: Decimal<2>, qty: Int }
+record LineItem { label: String, price: Decimal<2>, qty: Int }
 
-trait Priced { fn total(self) -> Decimal<2> }
+trait Priced { function total(self) -> Decimal<2> }
 
-impl Priced for LineItem {
-    fn (self) total() -> Decimal<2> {
+implement Priced for LineItem {
+    function (self) total() -> Decimal<2> {
         return self.price * self.qty;
     }
 }
@@ -27,9 +27,9 @@ impl Priced for LineItem {
 let widget: LineItem = LineItem { label: "widget", price: $19.99, qty: 3 };
 print("{widget.label}: {widget.total()}");
 
-// A trait object: runtime dispatch only where `dyn` is written.
-fn show(item: dyn Priced) -> Int {
-    print("via dyn: {item.total()}");
+// A trait object: runtime dispatch only where `dynamic` is written.
+function show(item: dynamic Priced) -> Int {
+    print("via dynamic: {item.total()}");
     return 0;
 }
 let ignored: Int = show(widget);
@@ -37,7 +37,7 @@ let ignored: Int = show(widget);
 // ---- Sum types with exhaustive matching: no wildcard, no forgotten case ----
 enum Status { Paid, Owing(Decimal<2>), Void }
 
-fn describe(s: Status) -> Int {
+function describe(s: Status) -> Int {
     match s {
         Paid => { print("paid in full"); return 1; }
         Owing(amount) => { print("owing {amount}"); return 2; }
@@ -47,7 +47,7 @@ fn describe(s: Status) -> Int {
 let code: Int = describe(Status.Owing($4.50));
 
 // ---- Guaranteed tail calls: constant stack, or a compile error ----
-fn accumulate(n: Int, acc: Decimal<2>) -> Decimal<2> {
+function accumulate(n: Int, acc: Decimal<2>) -> Decimal<2> {
     if n <= 0 { return acc; }
     return tail accumulate(n - 1, acc + $0.01);
 }
@@ -55,7 +55,7 @@ print("a million cents: {accumulate(1000000, $0.00)}");
 
 // ---- Regions: the unit of ownership, released in O(1) ----
 region tour {
-    let mut lengths: [Int] = [];                  // growable, no capacity declared
+    let mutable lengths: [Int] = [];                  // growable, no capacity declared
     let source: String = read_file("examples/tour.bx");
     push(lengths, len(source));
     push(lengths, byte_at(source, 0));
@@ -64,5 +64,5 @@ region tour {
 }                                                 // released here, as a unit
 
 // ---- The C boundary, where exactness is usually lost and here is not ----
-extern fn llabs(amount: Decimal<2> as scaled) -> Int;
+external function llabs(amount: Decimal<2> as scaled) -> Int;
 print("C received the exact scaled integer: {llabs(price)}");

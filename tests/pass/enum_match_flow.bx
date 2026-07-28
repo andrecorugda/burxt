@@ -2,8 +2,8 @@
 // mutation, and arms that fall through rather than returning.
 enum Step { Go(Int), Stop }
 
-let mut total: Int = 0;
-let mut i: Int = 0;
+let mutable total: Int = 0;
+let mutable i: Int = 0;
 while i < 4 {
     let s: Step = Step.Go(i);
     match s {
@@ -14,7 +14,7 @@ while i < 4 {
 }
 print(total);
 // a match whose arms all return IS a return, so this typechecks
-fn pick(s: Step) -> Int {
+function pick(s: Step) -> Int {
     match s {
         Go(n) => { return n * 2; }
         Stop => { return -1; }

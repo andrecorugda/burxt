@@ -1,5 +1,5 @@
-struct P { a: Int }
-fn f(n: Int) -> P
+record P { a: Int }
+function f(n: Int) -> P
     ensures result.a > 0
 {
     return P { a: n };

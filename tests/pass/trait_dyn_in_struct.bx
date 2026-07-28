@@ -1,17 +1,17 @@
-// A struct field may hold a trait object. Previously refused outright; now
-// allowed, because the struct and the value it borrows are both scoped to the
-// same block, so the struct cannot outlive what it points at.
-trait Priced { fn price(self) -> Decimal<2> }
-struct Book { cost: Decimal<2> }
-struct Meal { cost: Decimal<2>, tip: Decimal<2> }
-impl Priced for Book { fn (self: Book) price() -> Decimal<2> { return self.cost; } }
-impl Priced for Meal { fn (self: Meal) price() -> Decimal<2> { return self.cost + self.tip; } }
+// A record field may hold a trait object. Previously refused outright; now
+// allowed, because the record and the value it borrows are both scoped to the
+// same block, so the record cannot outlive what it points at.
+trait Priced { function price(self) -> Decimal<2> }
+record Book { cost: Decimal<2> }
+record Meal { cost: Decimal<2>, tip: Decimal<2> }
+implement Priced for Book { function (self: Book) price() -> Decimal<2> { return self.cost; } }
+implement Priced for Meal { function (self: Meal) price() -> Decimal<2> { return self.cost + self.tip; } }
 
-struct Holder { item: dyn Priced, label: Int }
+record Holder { item: dynamic Priced, label: Int }
 
 let b: Book = Book { cost: $12.99 };
 let m: Meal = Meal { cost: $30.00, tip: $4.50 };
-// the coercion to `dyn` happens wherever one is expected — here, a field
+// the coercion to `dynamic` happens wherever one is expected — here, a field
 let h1: Holder = Holder { item: b, label: 1 };
 let h2: Holder = Holder { item: m, label: 2 };
 print(h1.item.price());

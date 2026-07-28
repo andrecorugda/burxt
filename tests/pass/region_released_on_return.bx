@@ -1,10 +1,10 @@
 // Leaving a region by `return` must release it, exactly as reaching the closing
 // brace does. If it does not, the bump cursor climbs for the life of the process
 // and this program dies of region exhaustion long before the loop ends.
-fn sized(n: Int) -> Int {
+function sized(n: Int) -> Int {
     region r {
-        let mut xs: [Int] = [];
-        let mut i: Int = 0;
+        let mutable xs: [Int] = [];
+        let mutable i: Int = 0;
         while i < 200 {
             push(xs, i + n);
             i = i + 1;
@@ -13,8 +13,8 @@ fn sized(n: Int) -> Int {
     }
 }
 
-let mut k: Int = 0;
-let mut total: Int = 0;
+let mutable k: Int = 0;
+let mutable total: Int = 0;
 while k < 30000 {
     total = total + sized(k);
     k = k + 1;

@@ -18,7 +18,7 @@ let balance: Decimal<2> = 100.00;
 if balance > 0.00 && balance < 1000.00 {
     print(1);
 }
-let mut i: Int = 0;
+let mutable i: Int = 0;
 while i < 5 && i != 3 {
     i = i + 1;
 }

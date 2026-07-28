@@ -7,8 +7,8 @@ print(len(""));
 print(len("a\tb"));
 let s: String = "burxt";
 print(len(s));
-// a rebound `let mut` gives a different length — proof it is not constant-folded
-let mut m: String = "one";
+// a rebound `let mutable` gives a different length — proof it is not constant-folded
+let mutable m: String = "one";
 print(len(m));
 m = "seventeen chars..";
 print(len(m));

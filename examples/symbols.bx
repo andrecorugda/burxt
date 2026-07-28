@@ -10,29 +10,29 @@
 // it refuses shadowing.
 // ============================================================================
 
-struct Symbol { name: String, type_name: String, at: Int }
+record Symbol { name: String, type_name: String, at: Int }
 
 // A table is a growable array plus the operations that keep it honest.
-struct Table { entries: [Symbol] }
+record Table { entries: [Symbol] }
 
-fn is_alpha(b: Int) -> Bool {
+function is_alpha(b: Int) -> Bool {
     return (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95;
 }
 
-fn is_digit(b: Int) -> Bool {
+function is_digit(b: Int) -> Bool {
     return b >= 48 && b <= 57;
 }
 
-fn is_name_byte(b: Int) -> Bool {
+function is_name_byte(b: Int) -> Bool {
     return is_alpha(b) || is_digit(b);
 }
 
-fn is_space(b: Int) -> Bool {
+function is_space(b: Int) -> Bool {
     return b == 32 || b == 9 || b == 10 || b == 13;
 }
 
-fn skip_spaces(src: String, from: Int) -> Int {
-    let mut i: Int = from;
+function skip_spaces(src: String, from: Int) -> Int {
+    let mutable i: Int = from;
     while i < len(src) && is_space(byte_at(src, i)) {
         i = i + 1;
     }
@@ -40,8 +40,8 @@ fn skip_spaces(src: String, from: Int) -> Int {
 }
 
 // How far a name runs from `from`. Zero means there is no name here.
-fn name_length(src: String, from: Int) -> Int {
-    let mut i: Int = from;
+function name_length(src: String, from: Int) -> Int {
+    let mutable i: Int = from;
     if i >= len(src) || !is_alpha(byte_at(src, i)) {
         return 0;
     }
@@ -53,11 +53,11 @@ fn name_length(src: String, from: Int) -> Int {
 
 // Does the source say `word` at this offset? Compared byte by byte, so it needs
 // no allocation — the reason keyword matching worked before `substring` existed.
-fn word_at(src: String, from: Int, word: String) -> Bool {
+function word_at(src: String, from: Int, word: String) -> Bool {
     if from + len(word) > len(src) {
         return false;
     }
-    let mut i: Int = 0;
+    let mutable i: Int = 0;
     while i < len(word) {
         if byte_at(src, from + i) != byte_at(word, i) {
             return false;
@@ -69,8 +69,8 @@ fn word_at(src: String, from: Int, word: String) -> Bool {
 
 // A declared name is one already in the table. Linear search: a compiler's scope
 // is small, and an honest O(n) beats a hash table nobody has needed yet.
-fn (self: Table) find(name: String) -> Int {
-    let mut i: Int = 0;
+function (self: Table) find(name: String) -> Int {
+    let mutable i: Int = 0;
     while i < len(self.entries) {
         if self.entries[i].name == name {
             return i;
@@ -80,7 +80,7 @@ fn (self: Table) find(name: String) -> Int {
     return -1;
 }
 
-fn (mut self: Table) declare(name: String, type_name: String, at: Int) -> Int
+function (mutable self: Table) declare(name: String, type_name: String, at: Int) -> Int
     ensures len(self.entries) >= old(len(self.entries))
 {
     push(self.entries, Symbol { name: name, type_name: type_name, at: at });
@@ -90,11 +90,11 @@ fn (mut self: Table) declare(name: String, type_name: String, at: Int) -> Int
 // `let NAME: TYPE` — the only declaration form this pass understands. Returns the
 // offset to continue from, so the caller stays a simple loop.
 //
-// A METHOD rather than a function, and not by preference: Burxt has no mutable
-// parameters — mutation goes through a `mut self` receiver, so a pass that fills a
+// A METHOD rather than a function, and not by preference: Burxt has no writable
+// parameters — mutation goes through a `mutable self` receiver, so a pass that fills a
 // table has to be a method on it. Writing this file is what surfaced that, and it
 // also fired the trigger the M1a spec recorded for `allocates` on methods.
-fn (mut self: Table) collect(src: String, from: Int) -> Int allocates {
+function (mutable self: Table) collect(src: String, from: Int) -> Int allocates {
     let at: Int = skip_spaces(src, from);
     if at >= len(src) {
         return at;
@@ -103,9 +103,9 @@ fn (mut self: Table) collect(src: String, from: Int) -> Int allocates {
         return at + 1;
     }
 
-    let mut cursor: Int = skip_spaces(src, at + 4);
-    // `let mut NAME` declares too; the `mut` is not part of the name.
-    if word_at(src, cursor, "mut ") {
+    let mutable cursor: Int = skip_spaces(src, at + 4);
+    // `let mutable NAME` declares too; the `mutable` is not part of the name.
+    if word_at(src, cursor, "mutable ") {
         cursor = skip_spaces(src, cursor + 4);
     }
 
@@ -115,7 +115,7 @@ fn (mut self: Table) collect(src: String, from: Int) -> Int allocates {
     }
     let name: String = substring(src, cursor, name_len);
 
-    let mut after: Int = skip_spaces(src, cursor + name_len);
+    let mutable after: Int = skip_spaces(src, cursor + name_len);
     if byte_at(src, after) != 58 {          // ':'
         return at + 1;
     }
@@ -139,9 +139,9 @@ fn (mut self: Table) collect(src: String, from: Int) -> Int allocates {
 
 region pass {
     let src: String = read_file("examples/negative/declarations.bx");
-    let mut table: Table = Table { entries: [] };
+    let mutable table: Table = Table { entries: [] };
 
-    let mut cursor: Int = 0;
+    let mutable cursor: Int = 0;
     while true {
         if cursor >= len(src) {
             break;

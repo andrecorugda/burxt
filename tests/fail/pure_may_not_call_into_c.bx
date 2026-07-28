@@ -1,5 +1,5 @@
-extern fn strlen(s: String) -> CInt;
-pure fn f(s: String) -> Int {
+external function strlen(s: String) -> CInt;
+pure function f(s: String) -> Int {
     return strlen(s);
 }
 print(f("hi"));

@@ -1,4 +1,4 @@
-fn label(n: Int) -> String {
+function label(n: Int) -> String {
     region r {
         return to_string(n);
     }

@@ -1,24 +1,24 @@
 // Behavior must be IDENTICAL whether a trait method is reached statically or
-// through a trait object — the mechanism-switch property, extended to dyn.
+// through a trait object — the mechanism-switch property, extended to dynamic.
 // A trait method also cannot corrupt the caller: its receiver is read-only.
 trait Peek {
-    fn peek(self) -> Int
-    fn copy_and_clobber(self) -> Int
+    function peek(self) -> Int
+    function copy_and_clobber(self) -> Int
 }
 
-struct Box2 { a: Int, b: Int }
+record Box2 { a: Int, b: Int }
 
-impl Peek for Box2 {
-    fn (self: Box2) peek() -> Int { return self.a; }
-    fn (self: Box2) copy_and_clobber() -> Int {
-        let mut m: Box2 = self;
+implement Peek for Box2 {
+    function (self: Box2) peek() -> Int { return self.a; }
+    function (self: Box2) copy_and_clobber() -> Int {
+        let mutable m: Box2 = self;
         m.a = 999;
         return m.a;
     }
 }
 
 let bx: Box2 = Box2 { a: 1, b: 2 };
-let d: dyn Peek = bx;
+let d: dynamic Peek = bx;
 
 // same answers both ways
 print(bx.peek());

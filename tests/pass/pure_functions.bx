@@ -1,14 +1,14 @@
 // The claim `pure` makes: this result depends only on these arguments, and the
 // compiler checked it. For money that is the audit story — a hidden clock or a
 // config lookup three calls down cannot get in.
-pure fn interest(balance: Decimal<2, RoundHalfEven>, rate: Decimal<4>)
+pure function interest(balance: Decimal<2, RoundHalfEven>, rate: Decimal<4>)
     -> Decimal<2, RoundHalfEven>
 {
     return balance * rate;
 }
 
 // Purity is transitive without being inferred: a pure function may call one.
-pure fn total_with_interest(balance: Decimal<2, RoundHalfEven>, rate: Decimal<4>)
+pure function total_with_interest(balance: Decimal<2, RoundHalfEven>, rate: Decimal<4>)
     -> Decimal<2, RoundHalfEven>
 {
     return balance + interest(balance, rate);
@@ -16,13 +16,13 @@ pure fn total_with_interest(balance: Decimal<2, RoundHalfEven>, rate: Decimal<4>
 
 // `pure` AND `allocates`: a bump allocator observes nothing about the outside
 // world, so building a string is deterministic.
-pure fn render(amount: Decimal<2, RoundHalfEven>) -> String allocates {
+pure function render(amount: Decimal<2, RoundHalfEven>) -> String allocates {
     return "amount " + to_string(amount);
 }
 
 // Purity constrains the callee, never the caller: an ordinary function may call a
 // pure one freely.
-fn report(balance: Decimal<2, RoundHalfEven>, rate: Decimal<4>) -> Int {
+function report(balance: Decimal<2, RoundHalfEven>, rate: Decimal<4>) -> Int {
     print(total_with_interest(balance, rate));
     return 0;
 }

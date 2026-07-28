@@ -27,7 +27,7 @@
 // every use, and the payloads differ per kind. The names live in `kind_name`.
 //   1 identifier      2 Int literal      3 Decimal literal     4 String literal
 //   10..49 punctuation                   100.. keywords
-struct Tok {
+record Tok {
     kind: Int,
     start: Int,
     length: Int,
@@ -39,10 +39,10 @@ struct Tok {
     interpolated: Bool,
 }
 
-struct Kw { word: String, code: Int }
+record Kw { word: String, code: Int }
 // ---- the AST -----------------------------------------------------------------
 // Children by INDEX, not by pointer: v0.0.22 proved an arena needs no recursive
-// types, and an index is a number a struct field can hold.
+// types, and an index is a number a record field can hold.
 //
 // Expression kinds:
 //   1 Int literal        2 Decimal literal      3 String literal    4 Bool literal
@@ -53,14 +53,14 @@ struct Kw { word: String, code: Int }
 // Type kinds:
 //  40 Int  41 Bool  42 String  43 CInt  44 CDouble
 //  45 Decimal (scale in `a`, contract in `b`)   46 named   47 slice   48 array
-//  49 dyn
+//  49 dynamic
 // Statement kinds:
-//  60 let (name tok in `tok`, type in `a`, value in `b`, mutable in `value`)
+//  60 let (name tok in `tok`, type in `a`, value in `b`, writable in `value`)
 //  61 assign            62 print               63 return            64 tail return
 //  65 if                66 while               67 break             68 continue
 //  69 region            70 expression statement
 //  71 match             72 for (name tok in `tok`, iterable in `a`, body in `b`)
-struct Node {
+record Node {
     kind: Int,
     // Child indices, or payload. Meaning depends on `kind`, documented above.
     a: Int,
@@ -83,12 +83,12 @@ struct Node {
 // is the better design regardless. Children pushed into a side array land
 // CONTIGUOUSLY even though their subtrees interleave in `nodes`, so nothing needs
 // back-patching, and a list is two integers instead of a chain of cells.
-// A declared type: `Int`, `Decimal<2, RoundHalfEven>`, `[Int]`, a struct name.
-// A struct rather than an enum, because it is compared and copied constantly and a
+// A declared type: `Int`, `Decimal<2, RoundHalfEven>`, `[Int]`, a record name.
+// A record rather than an enum, because it is compared and copied constantly and a
 // payload enum would need a match at every use.
-struct Ty {
+record Ty {
     // The node kinds the parser produces: 40 Int, 41 Bool, 42 String, 43 CInt,
-    // 44 CDouble, 45 Decimal, 46 named, 47 slice, 48 array, 49 dyn. 0 is unknown,
+    // 44 CDouble, 45 Decimal, 46 named, 47 slice, 48 array, 49 dynamic. 0 is unknown,
     // which never equals anything — including another unknown.
     kind: Int,
     scale: Int,
@@ -100,19 +100,19 @@ struct Ty {
 
 // A binding in scope: its name as a SPAN, so the checker allocates nothing to
 // remember a variable.
-struct Sym { start: Int, length: Int, ty: Ty, mutable: Int, depth: Int }
+record Sym { start: Int, length: Int, ty: Ty, writable: Int, depth: Int }
 // A declared function: its name span, its return type, and its parameter list node.
-struct Fun { start: Int, length: Int, ret: Ty, params: Int, flags: Int }
-// A declared struct or enum: its name span and the item node that declared it.
-struct TypeDecl { start: Int, length: Int, kind: Int, node: Int }
+record Fun { start: Int, length: Int, ret: Ty, params: Int, flags: Int }
+// A declared record or enum: its name span and the item node that declared it.
+record TypeDecl { start: Int, length: Int, kind: Int, node: Int }
 // A declared method, keyed by the receiver's name and its own.
-struct Method {
+record Method {
     receiver_start: Int, receiver_len: Int,
     start: Int, length: Int,
     ret: Ty, params: Int, mutating: Int, flags: Int,
 }
 
-struct Unit {
+record Unit {
     toks: [Tok],
     words: [Kw],
     nodes: [Node],
@@ -138,7 +138,7 @@ struct Unit {
     // Where the parser is in the token array.
     pos: Int,
     // Nonzero while parsing an `if`/`while` condition, where a `{` opens the BODY
-    // rather than a struct literal. The Rust parser carries the same flag.
+    // rather than a record literal. The Rust parser carries the same flag.
     impls: [Impl],
     // Every expression's type, indexed by node. See check.bx's type_at for why it is
     // indexed rather than searched.
@@ -200,19 +200,19 @@ struct Unit {
     n_type_at: Int,
 }
 
-fn is_alpha(b: Int) -> Bool {
+function is_alpha(b: Int) -> Bool {
     return (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95;
 }
 
-fn is_digit(b: Int) -> Bool {
+function is_digit(b: Int) -> Bool {
     return b >= 48 && b <= 57;
 }
 
-fn is_name_byte(b: Int) -> Bool {
+function is_name_byte(b: Int) -> Bool {
     return is_alpha(b) || is_digit(b);
 }
 
-fn is_space(b: Int) -> Bool {
+function is_space(b: Int) -> Bool {
     return b == 32 || b == 9 || b == 10 || b == 13;
 }
 
@@ -225,7 +225,7 @@ fn is_space(b: Int) -> Bool {
 //
 // Passing the bound is also the more correct answer. Interpolation lexes a SLICE of
 // the source, and a slice has no business peeking at the bytes after it.
-fn at_byte(src: String, i: Int, stop: Int) -> Int {
+function at_byte(src: String, i: Int, stop: Int) -> Int {
     if i < 0 || i >= stop {
         return -1;
     }
@@ -236,11 +236,11 @@ fn at_byte(src: String, i: Int, stop: Int) -> Int {
 // `span_eq(src, a, alen, substring(src, b, blen))` — and the compiler refused it,
 // because `substring` allocates and a comparison has no business needing a region.
 // Comparing in place is both cheaper and what the checker wanted anyway.
-fn spans_eq(src: String, a: Int, a_len: Int, b: Int, b_len: Int) -> Bool {
+function spans_eq(src: String, a: Int, a_len: Int, b: Int, b_len: Int) -> Bool {
     if a_len != b_len {
         return false;
     }
-    let mut i: Int = 0;
+    let mutable i: Int = 0;
     while i < a_len {
         if byte_at(src, a + i) != byte_at(src, b + i) {
             return false;
@@ -251,11 +251,11 @@ fn spans_eq(src: String, a: Int, a_len: Int, b: Int, b_len: Int) -> Bool {
 }
 
 // Compare a span of the source against a whole word, without allocating.
-fn span_eq(src: String, start: Int, length: Int, word: String) -> Bool {
+function span_eq(src: String, start: Int, length: Int, word: String) -> Bool {
     if length != len(word) {
         return false;
     }
-    let mut i: Int = 0;
+    let mutable i: Int = 0;
     while i < length {
         if byte_at(src, start + i) != byte_at(word, i) {
             return false;
@@ -267,30 +267,30 @@ fn span_eq(src: String, start: Int, length: Int, word: String) -> Bool {
 
 // ---- the keyword table -----------------------------------------------------
 // Codes from 100. Order does not matter; the lookup is a scan.
-fn (mut self: Unit) add_word(word: String, code: Int) -> Int {
+function (mutable self: Unit) add_word(word: String, code: Int) -> Int {
     push(self.words, Kw { word: word, code: code });
     return len(self.words);
 }
 
-fn (mut self: Unit) install_keywords() -> Int {
-    let mut n: Int = 0;
+function (mutable self: Unit) install_keywords() -> Int {
+    let mutable n: Int = 0;
     n = self.add_word("let", 100);
-    n = self.add_word("mut", 101);
-    n = self.add_word("fn", 102);
+    n = self.add_word("mutable", 101);
+    n = self.add_word("function", 102);
     n = self.add_word("return", 103);
     n = self.add_word("if", 104);
     n = self.add_word("else", 105);
     n = self.add_word("while", 106);
     n = self.add_word("break", 107);
     n = self.add_word("continue", 108);
-    n = self.add_word("struct", 109);
+    n = self.add_word("record", 109);
     n = self.add_word("enum", 110);
     n = self.add_word("match", 111);
     n = self.add_word("trait", 112);
-    n = self.add_word("impl", 113);
+    n = self.add_word("implement", 113);
     n = self.add_word("for", 114);
-    n = self.add_word("dyn", 115);
-    n = self.add_word("extern", 116);
+    n = self.add_word("dynamic", 115);
+    n = self.add_word("external", 116);
     n = self.add_word("region", 117);
     n = self.add_word("print", 118);
     n = self.add_word("self", 119);
@@ -306,7 +306,7 @@ fn (mut self: Unit) install_keywords() -> Int {
     // caught within a minute of the change.
     n = self.add_word("interface", 129);
     n = self.add_word("is", 130);
-    // `for x in xs`. `for` is already a keyword (114) from `impl Trait for Type`.
+    // `for x in xs`. `for` is already a keyword (114) from `implement Trait for Type`.
     n = self.add_word("in", 131);
     // Type names are keywords too: the parser needs them distinguished from
     // ordinary identifiers, exactly as the Rust lexer does.
@@ -322,8 +322,8 @@ fn (mut self: Unit) install_keywords() -> Int {
 }
 
 // An identifier's span, or a keyword code if the table has it.
-fn (self: Unit) keyword_code(src: String, start: Int, length: Int) -> Int {
-    let mut i: Int = 0;
+function (self: Unit) keyword_code(src: String, start: Int, length: Int) -> Int {
+    let mutable i: Int = 0;
     while i < len(self.words) {
         if span_eq(src, start, length, self.words[i].word) {
             return self.words[i].code;
@@ -333,7 +333,7 @@ fn (self: Unit) keyword_code(src: String, start: Int, length: Int) -> Int {
     return 1;
 }
 
-fn (mut self: Unit) emit(kind: Int, start: Int, length: Int) -> Int {
+function (mutable self: Unit) emit(kind: Int, start: Int, length: Int) -> Int {
     push(self.toks, Tok {
         kind: kind, start: start, length: length,
         value: 0, scale: 0, interpolated: false,
@@ -341,7 +341,7 @@ fn (mut self: Unit) emit(kind: Int, start: Int, length: Int) -> Int {
     return len(self.toks);
 }
 
-fn (mut self: Unit) emit_number(kind: Int, start: Int, length: Int, value: Int, scale: Int) -> Int {
+function (mutable self: Unit) emit_number(kind: Int, start: Int, length: Int, value: Int, scale: Int) -> Int {
     push(self.toks, Tok {
         kind: kind, start: start, length: length,
         value: value, scale: scale, interpolated: false,
@@ -349,7 +349,7 @@ fn (mut self: Unit) emit_number(kind: Int, start: Int, length: Int, value: Int, 
     return len(self.toks);
 }
 
-fn (mut self: Unit) emit_string(start: Int, length: Int, interpolated: Bool) -> Int {
+function (mutable self: Unit) emit_string(start: Int, length: Int, interpolated: Bool) -> Int {
     push(self.toks, Tok {
         kind: 4, start: start, length: length,
         value: 0, scale: 0, interpolated: interpolated,
@@ -358,10 +358,10 @@ fn (mut self: Unit) emit_string(start: Int, length: Int, interpolated: Bool) -> 
 }
 
 // ---- whitespace and comments ----------------------------------------------
-fn skip_trivia(src: String, from: Int, stop: Int) -> Int {
-    let mut i: Int = from;
+function skip_trivia(src: String, from: Int, stop: Int) -> Int {
+    let mutable i: Int = from;
     while true {
-        let mut moved: Bool = false;
+        let mutable moved: Bool = false;
         while i < stop && is_space(byte_at(src, i)) {
             i += 1;
             moved = true;
@@ -386,18 +386,18 @@ fn skip_trivia(src: String, from: Int, stop: Int) -> Int {
 // ---- numbers ---------------------------------------------------------------
 // `19.99` is the unscaled integer 1999 with scale 2 — accumulated digit by digit,
 // never through a float. `$19.99` is the same. `8.25%` is two places finer.
-fn (mut self: Unit) scan_number(src: String, from: Int, stop: Int) -> Int allocates {
-    let mut i: Int = from;
+function (mutable self: Unit) scan_number(src: String, from: Int, stop: Int) -> Int allocates {
+    let mutable i: Int = from;
     let money: Bool = byte_at(src, i) == 36;         // '$'
     if money {
         i += 1;
     }
-    let mut value: Int = 0;
+    let mutable value: Int = 0;
     while i < stop && is_digit(byte_at(src, i)) {
         value = value * 10 + (byte_at(src, i) - 48);
         i += 1;
     }
-    let mut scale: Int = 0;
+    let mutable scale: Int = 0;
     if at_byte(src, i, stop) == 46 && is_digit(at_byte(src, i + 1, stop)) {
         i += 1;
         while i < stop && is_digit(byte_at(src, i)) {
@@ -421,9 +421,9 @@ fn (mut self: Unit) scan_number(src: String, from: Int, stop: Int) -> Int alloca
 }
 
 // ---- strings ---------------------------------------------------------------
-fn (mut self: Unit) scan_string(src: String, from: Int, stop: Int) -> Int allocates {
-    let mut i: Int = from + 1;
-    let mut interpolated: Bool = false;
+function (mutable self: Unit) scan_string(src: String, from: Int, stop: Int) -> Int allocates {
+    let mutable i: Int = from + 1;
+    let mutable interpolated: Bool = false;
     while true {
         if i >= stop {
             print("error: unterminated string literal");
@@ -453,11 +453,11 @@ fn (mut self: Unit) scan_string(src: String, from: Int, stop: Int) -> Int alloca
 // ---- punctuation -----------------------------------------------------------
 // Two-character forms are tried first: `-` and `->` differ by one byte and mean
 // entirely different things.
-fn (mut self: Unit) scan_punct(src: String, from: Int, stop: Int) -> Int allocates {
+function (mutable self: Unit) scan_punct(src: String, from: Int, stop: Int) -> Int allocates {
     let one: Int = byte_at(src, from);
     // Same as skip_trivia: the bound is already known, so it is tested rather than
     // measured. A punctuation mark is roughly one token in three.
-    let mut two: Int = 0 - 1;
+    let mutable two: Int = 0 - 1;
     if from + 1 < stop {
         two = byte_at(src, from + 1);
     }
@@ -501,7 +501,7 @@ fn (mut self: Unit) scan_punct(src: String, from: Int, stop: Int) -> Int allocat
 }
 
 // ---- the loop --------------------------------------------------------------
-fn (mut self: Unit) run(src: String) -> Int allocates {
+function (mutable self: Unit) run(src: String) -> Int allocates {
     let count: Int = self.run_range(src, 0, len(src));
     // Where the PROGRAM's tokens end. An interpolation fragment is lexed later and its
     // tokens are appended, so without this the parser would walk off the end of the
@@ -514,8 +514,8 @@ fn (mut self: Unit) run(src: String) -> Int allocates {
 // bytes between `{` and `}` are real Burxt, and the honest way to read them is with the
 // lexer that reads everything else. The tokens are appended, and their spans are absolute,
 // so nothing already parsed shifts and every diagnostic still points at the right byte.
-fn (mut self: Unit) run_range(src: String, from: Int, until: Int) -> Int allocates {
-    let mut i: Int = from;
+function (mutable self: Unit) run_range(src: String, from: Int, until: Int) -> Int allocates {
+    let mutable i: Int = from;
     while true {
         i = skip_trivia(src, i, until);
         if i >= until {

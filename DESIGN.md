@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.97)
+# Burxt — Design Notes (v0.0.98)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -46,7 +46,7 @@ scale rescaling, no truthiness, and never a second "looser" equality
 operator. A comparison either compiles as an exact, value-level equality
 or it is a compile error that says what to convert explicitly. This is
 already the implemented behavior; it is now a standing rule for every
-future type (struct field-wise equality, string byte equality, Option)
+future type (record field-wise equality, string byte equality, Option)
 — they must all arrive as the SAME `==`, total within their type, or
 be refused until they can.
 
@@ -86,7 +86,7 @@ thesis generalized: **dangerous defaults become compile errors.**
 - **Uninitialized variables**: unrepresentable — `let` requires an
   initializer; there is no declaration without a value.
 - **Mutable-by-default**: inverted. Immutable is the default; mutation is
-  opt-in and visible (`let mut`, v0.0.4).
+  opt-in and visible (`let mutable`, v0.0.4).
 - **Shadowing / silent redefinition**: refused (v0.0.9) — a second
   `let x` is a compile error, not a quiet new variable.
 - **Format-string and width bugs at the C boundary**: user bytes are never a
@@ -108,7 +108,7 @@ thesis generalized: **dangerous defaults become compile errors.**
 - **Strings are UTF-8, bytes are bytes**: no implicit mixing, decided before
   a bytes type exists.
 - **Money-specific defaults**: cross-currency arithmetic will require the
-  currencies to be distinct types (nominal structs already give this shape);
+  currencies to be distinct types (nominal records already give this shape);
   dates/timezones, when they come, arrive timezone-explicit or not at all.
 - **Deterministic builds**: when Burxt grows dependencies, resolution is
   locked and reproducible from day one.
@@ -190,7 +190,7 @@ Listed so they are not mistaken for finished work:
 > Composition-only is final, and this is now the settled model rather than a
 > waypoint.
 >
-> The reason is evidence, not taste. Traits + `impl` + composition shipped in
+> The reason is evidence, not taste. Traits + `implement` + composition shipped in
 > v0.0.13–v0.0.14, and in every version since — regions, sum types, contracts,
 > conservation laws, a self-hosted lexer and parser — **nothing has needed
 > inheritance.** Not once. An item that sits on a roadmap through thirty versions
@@ -216,7 +216,7 @@ happen — which is the real goal the original absolute rule was reaching for.
 
 ```text
 trait Printable {
-    fn describe(self) -> String
+    function describe(self) -> String
 }
 
 // Composition is the natural default: Account HAS-A Ledger, not IS-A.
@@ -225,12 +225,12 @@ class Account : Printable {
     balance: Decimal<2> = $0.00
     ledger:  Ledger                 // a field, not a parent
 
-    fn describe(self) -> String {
+    function describe(self) -> String {
         "Account of {self.owner}: {self.balance}"
     }
 }
 
-open class Shape { fn area(self) -> Decimal<4> }
+open class Shape { function area(self) -> Decimal<4> }
 class Circle : Shape { radius: Decimal<4> }   // allowed: Shape is `open`
 // class Sneaky : Account { }                 // ERROR: Account is not `open`
 ```
@@ -251,7 +251,7 @@ positives and lose trust. So:
 | Open/Closed | Traits extend behaviour without modifying what exists. (No `open` classes — see the decision above.) |
 | Liskov Substitution | Unrepresentable to violate: a type satisfies a trait exactly or it is a compile error, and there is no subtype to weaken a contract. Contracts themselves are checked (v0.0.43). |
 | Interface Segregation | Structurally nudged: small traits are the easy path; lint warns on bloat. |
-| Dependency Inversion | Depending on a trait is ergonomic (`dyn Trait` as a parameter); depending on a concrete type is the awkward opt-in. |
+| Dependency Inversion | Depending on a trait is ergonomic (`dynamic Trait` as a parameter); depending on a concrete type is the awkward opt-in. |
 
 ## Signature grammar — eloquent because it matches intent (committed)
 
@@ -265,7 +265,7 @@ description of the problem.
 KEYWORDS, so a function reads as a self-documenting sentence:
 
 ```text
-fn withdraw(acct: Account, amount: Decimal<2>)
+function withdraw(acct: Account, amount: Decimal<2>)
     requires amount > $0.00
     ensures  acct.balance >= $0.00
 {
@@ -380,7 +380,7 @@ how it got here, and finding an entry meant searching rather than navigating.
 | **v0.0.38–v0.0.42** | `allocates`, `pure`, and the mark | [read](docs/log/05-allocates-pure-and-the-brand.md) |
 | **v0.0.43–v0.0.50** | Contracts, conservation laws, and termination | [read](docs/log/06-contracts-and-termination.md) |
 | **v0.0.51–v0.0.58** | The front end, in Burxt | [read](docs/log/07-the-self-hosted-front-end.md) |
-| **v0.0.69–v0.0.97** | The mark, the shape of the repository, the fixpoint, the compiler's own speed, the ergonomics, generics with bounds, no null, `?`, and the grammar swept against the bar | [read](docs/log/08-the-mark-and-the-tree.md) |
+| **v0.0.69–v0.0.98** | The mark, the fixpoint, the compiler's own speed, the ergonomics, generics with bounds, no null, `?`, and every keyword spelled the word it means | [read](docs/log/08-the-mark-and-the-tree.md) |
 
 v0.0.59–v0.0.68 and v0.0.70 have no log entry: they were ten consecutive versions of one
 milestone, recorded in [`spec/M4-SELF-HOSTING.md`](spec/M4-SELF-HOSTING.md) next to the plan
@@ -443,10 +443,10 @@ it travels.
 - A3. FFI / call-into-C — THE KEY UNLOCK: how any Burxt program reaches
   platform APIs on every target. — DONE for Int signatures (v0.0.6);
   String params (v0.0.7); widens further with A4's types.
-- A4. Strings (v0.0.7), structs (v0.0.8), arrays (v0.0.10) — DONE
+- A4. Strings (v0.0.7), records (v0.0.8), arrays (v0.0.10) — DONE
 - A4.5. The aggregate ABI: `byval` params, `sret` returns, layout guarantee
   — DONE (v0.0.12)
-- A4.6. Composition-first OOP: receiver methods (v0.0.13), traits + `dyn`
+- A4.6. Composition-first OOP: receiver methods (v0.0.13), traits + `dynamic`
   dispatch (v0.0.14) — **DONE and CLOSED.** `class` / `open` single inheritance
   was dropped in v0.0.46: thirty versions of real programs never needed it.
 - A4.7. Signature grammar: money/unit literals (`$19.99`, `8.25%`), string
@@ -456,7 +456,7 @@ it travels.
   self-hosted compiler could not do without.
 - A4.9. Guaranteed tail calls: `return tail f(...)` lowered to `musttail`
   (v0.0.29) — NOVELTY §4, the first novelty-register entry to ship.
-- M4 phase 4b, part (v0.0.58): fields, struct literals, builtins and enum
+- M4 phase 4b, part (v0.0.58): fields, record literals, builtins and enum
   constructors; false positives 24 of 88 and falling.
 - M4 phase 4a (v0.0.57): the stage-1 typechecker — declarations, expressions,
   statements, the scale rules. Typechecks its own source. Plus `truncate(xs, n)`, which
@@ -479,7 +479,7 @@ it travels.
 - M4b. Self-hosting, fourth piece (v0.0.49): the scale rule in Burxt — matching scales
   for `+`, a mandatory rounding contract for `Decimal * Decimal`, and the product's
   exact scale computed. The thesis checking itself.
-- FIX (v0.0.48): `expr_allocates` now sees through struct literals, enum payloads and
+- FIX (v0.0.48): `expr_allocates` now sees through record literals, enum payloads and
   array literals. Region data could previously escape inside an aggregate — a
   use-after-free the checker accepted, found by designing a self-hosted checker's error
   type.

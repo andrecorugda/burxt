@@ -7,13 +7,13 @@
 // reading unfamiliar code needs types most are exactly the places that keep them.
 // ============================================================================
 
-struct Point { x: Int, y: Int }
+record Point { x: Int, y: Int }
 
 enum Status { Paid, Owing(Decimal<2>), Void }
 
 // A signature says everything. Nothing here is inferred, and nothing here should
 // be: this line is the contract with everyone who calls it.
-fn distance_squared(a: Point, b: Point) -> Int {
+function distance_squared(a: Point, b: Point) -> Int {
     let dx = a.x - b.x;                  // Int — from the fields
     let dy = a.y - b.y;
     return dx * dx + dy * dy;
@@ -31,8 +31,8 @@ region r {
     let far = distance_squared(here, Point { x: 0, y: 0 });   // Int, from the signature
     let greeting = "hello, " + name;      // String, built in this region
 
-    // `let mut` infers the same way. Mutation is still opt-in and still visible.
-    let mut running = 0;
+    // `let mutable` infers the same way. Mutation is still opt-in and still visible.
+    let mutable running = 0;
     running += far;
 
     print(count);
@@ -48,7 +48,7 @@ region r {
     // GROWABLE — two different types, with different storage and different
     // rules — so the binding says which.
     let sizes: [Int; 3] = [10, 20, 30];   // fixed: exactly three
-    let mut log: [String] = [];           // growable: lives in the region
+    let mutable log: [String] = [];           // growable: lives in the region
     let n = push(log, "started");
     print(sizes[1]);
     print(log[0]);
@@ -56,7 +56,7 @@ region r {
     // ---- and walking one needs no index ------------------------------------
     // The element is a copy, immutable, and scoped to the body. `for` takes a name
     // or a field path, never a call: it reads the array once per element.
-    let mut sum = 0;
+    let mutable sum = 0;
     for s in sizes {
         sum += s;
     }
@@ -86,7 +86,7 @@ region r {
 //     let xs = [1, 2, 3];
 //     error: an array literal does not say whether the array is fixed or growable,
 //            so an array binding names its type: `let xs: [Int; 3] = [1, 2, 3];`
-//            for a fixed one, or `let mut xs: [Int] = [];` for one that grows.
+//            for a fixed one, or `let mutable xs: [Int] = [];` for one that grows.
 //
 // Scales still have to match, inferred or not:
 //     let wrong = price + rate;
@@ -98,7 +98,7 @@ region r {
 //            Decimal<2, RoundHalfEven> — or take the exact answer with Decimal<6>.
 //
 // And a signature is never inferred, because it is what callers read:
-//     fn add(a, b) { return a + b; }
+//     function add(a, b) { return a + b; }
 //     error: expected `:` and a type
 //
 // ---- Where the type went ---------------------------------------------------

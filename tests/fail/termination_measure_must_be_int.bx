@@ -1,4 +1,4 @@
-fn f(x: Decimal<2>) -> Int
+function f(x: Decimal<2>) -> Int
     decreases x
 {
     if x <= $0.00 { return 0; }

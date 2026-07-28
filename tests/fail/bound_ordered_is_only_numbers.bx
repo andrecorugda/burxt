@@ -1,6 +1,6 @@
 // A bound cannot promise more than the language delivers: `Ordered` is Int and Decimal,
 // because those are the types `<` works on. When Strings gain an order they gain it here.
-fn largest<T: Ordered>(a: T, b: T) -> T {
+function largest<T: Ordered>(a: T, b: T) -> T {
     if a > b { return a; }
     return b;
 }

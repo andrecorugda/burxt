@@ -1,5 +1,5 @@
 // A function must provably return on every path.
-fn broken(x: Int) -> Int {
+function broken(x: Int) -> Int {
     if x > 0 {
         return x;
     }

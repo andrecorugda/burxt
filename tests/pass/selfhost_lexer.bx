@@ -25,32 +25,32 @@ enum Token {
 }
 
 // One step of the scan: the token found, and where to continue from.
-struct Scan {
+record Scan {
     tok: Token,
     next: Int,
 }
 
-fn is_digit(b: Int) -> Bool {
+function is_digit(b: Int) -> Bool {
     return b >= 48 && b <= 57;
 }
 
-fn is_alpha(b: Int) -> Bool {
+function is_alpha(b: Int) -> Bool {
     return (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95;
 }
 
-fn is_space(b: Int) -> Bool {
+function is_space(b: Int) -> Bool {
     return b == 32 || b == 9 || b == 10 || b == 13;
 }
 
-fn skip_spaces(src: String, from: Int) -> Int {
-    let mut i: Int = from;
+function skip_spaces(src: String, from: Int) -> Int {
+    let mutable i: Int = from;
     while i < len(src) && is_space(byte_at(src, i)) {
         i = i + 1;
     }
     return i;
 }
 
-fn next_token(src: String, from: Int) -> Scan {
+function next_token(src: String, from: Int) -> Scan {
     let start: Int = skip_spaces(src, from);
     if start >= len(src) {
         return Scan { tok: Token.End, next: start };
@@ -60,8 +60,8 @@ fn next_token(src: String, from: Int) -> Scan {
 
     if is_digit(b) {
         // accumulate the value as we go: no substring, no allocation
-        let mut i: Int = start;
-        let mut value: Int = 0;
+        let mutable i: Int = start;
+        let mutable value: Int = 0;
         while i < len(src) && is_digit(byte_at(src, i)) {
             value = value * 10 + (byte_at(src, i) - 48);
             i = i + 1;
@@ -70,7 +70,7 @@ fn next_token(src: String, from: Int) -> Scan {
     }
 
     if is_alpha(b) {
-        let mut i: Int = start;
+        let mutable i: Int = start;
         while i < len(src) && (is_alpha(byte_at(src, i)) || is_digit(byte_at(src, i))) {
             i = i + 1;
         }
@@ -90,7 +90,7 @@ fn next_token(src: String, from: Int) -> Scan {
 
 // Printing a token is where `match` earns its keep: add a variant to Token and
 // this function stops compiling until the new case is handled.
-fn show(t: Token) -> Int {
+function show(t: Token) -> Int {
     match t {
         Plus => { print("PLUS"); return 1; }
         Minus => { print("MINUS"); return 1; }
@@ -106,10 +106,10 @@ fn show(t: Token) -> Int {
     }
 }
 
-fn tokenize(src: String) -> Int {
-    let mut pos: Int = 0;
-    let mut count: Int = 0;
-    let mut running: Bool = true;
+function tokenize(src: String) -> Int {
+    let mutable pos: Int = 0;
+    let mutable count: Int = 0;
+    let mutable running: Bool = true;
     while running {
         let s: Scan = next_token(src, pos);
         pos = s.next;

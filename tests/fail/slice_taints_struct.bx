@@ -1,2 +1,2 @@
-struct Holder { xs: [Int] }
+record Holder { xs: [Int] }
 let h: Holder = Holder { xs: [] };

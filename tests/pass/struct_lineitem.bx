@@ -1,5 +1,5 @@
 // The OOP substrate: nominal structs with money fields.
-struct LineItem {
+record LineItem {
     price: Decimal<2>,
     qty: Int,
 }
@@ -9,7 +9,7 @@ print(item.price);
 print(item.qty);
 print(item.price * item.qty);
 // field mutation follows the binding's mutability
-let mut acc: LineItem = LineItem { price: 0.00, qty: 0 };
+let mutable acc: LineItem = LineItem { price: 0.00, qty: 0 };
 acc.price = 12.50;
 acc.qty = acc.qty + 2;
 print(acc.price);

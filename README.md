@@ -41,7 +41,7 @@ The same principle generalizes. Burxt's identity is: **the compiler refuses to l
 
 - **Exact decimals by default** — money is base-10 and exact; precision lives in the type (`Decimal<2>`, `Decimal<4>`), and a rounding contract (`Decimal<2, RoundHalfEven>`) is required before any operation that could round.
 - **No silent surprises** — integer overflow traps instead of wrapping, no implicit or lossy conversions, one equality with no coercion, immutable by default, array bounds always checked, and shadowing refused.
-- **Composition-first OOP** — small traits, explicit `impl Trait for Type` conformance, static dispatch by default and runtime dispatch only where you write `dyn`.
+- **Composition-first OOP** — small traits, explicit `implement Trait for Type` conformance, static dispatch by default and runtime dispatch only where you write `dynamic`.
 - **Native, cross-platform by design** — one LLVM backend, many targets: desktop, mobile, and web (WebAssembly). The front end knows nothing about any platform, so reach is a configuration problem rather than a rewrite.
 
 ## Status
@@ -55,11 +55,11 @@ The honest scope, because it matters: the Burxt backend does not emit Decimals, 
 **Working today:**
 
 - **Numbers.** Exact decimals with explicit rounding contracts (`RoundHalfEven` / `RoundHalfUp`), money and percent literals (`$19.99`, `8.25%`), overflow-trapping checked arithmetic, i128 intermediates so the overflow error means the *result* does not fit.
-- **The basics.** Integers, booleans, strings (length, byte access, equality, concatenation, interpolation both as a print and as a value), `let` / `let mut`, functions, recursion, `if` / `else if` / `else`, `while`, `&&` / `||` / `!` with real short-circuiting.
-- **Types.** Nominal structs with value semantics, fixed-size and growable arrays with always-on bounds checks, sum types with **exhaustive `match`** (no wildcard, so a new variant breaks every incomplete match), methods with value or mutating receivers, traits with static dispatch by default and `dyn` fat-pointer dispatch only where written.
+- **The basics.** Integers, booleans, strings (length, byte access, equality, concatenation, interpolation both as a print and as a value), `let` / `let mutable`, functions, recursion, `if` / `else if` / `else`, `while`, `&&` / `||` / `!` with real short-circuiting.
+- **Types.** Nominal records with value semantics, fixed-size and growable arrays with always-on bounds checks, sum types with **exhaustive `match`** (no wildcard, so a new variant breaks every incomplete match), methods with value or mutating receivers, traits with static dispatch by default and `dynamic` fat-pointer dispatch only where written.
 - **Memory.** **Regions** as the unit of ownership: a bump allocator, release in O(1), no GC and no refcounts, and compile-time escape checking that refuses returning region storage. Single-owner regions are what make data-race freedom reachable without per-object borrow checking.
 - **Guaranteed tail calls.** `return tail f(...)` is a *checked* guarantee (LLVM `musttail`), not an invisible optimization: 50 million frames in constant stack, or a compile error explaining why the guarantee cannot be given.
-- **The C boundary.** `extern fn`, plus **exactness that survives it**: a `Decimal` crosses only through a declared marshaller (`amount: Decimal<2> as scaled`), a `Decimal` → C `double` crossing is a compile error, and an `Int` → `double` crossing is range-checked at 2^53.
+- **The C boundary.** `external function`, plus **exactness that survives it**: a `Decimal` crosses only through a declared marshaller (`amount: Decimal<2> as scaled`), a `Decimal` → C `double` crossing is a compile error, and an `Int` → `double` crossing is range-checked at 2^53.
 - **File input.** `read_file` and `to_string`, the two things a self-hosted compiler cannot do without.
 - **Contracts, checked.** `requires` / `ensures` / `decreases` on a signature, checked at runtime with no build mode that strips them, `old(...)` in an `ensures` so a conservation law is expressible (`ensures from + to == old(from + to)`), and `pure` as a compiler-checked claim that a function's answer depends on its arguments alone.
 - **Self-hosting.** The whole compiler, in Burxt: a lexer, a parser building an arena AST, a typechecker that agrees with this one on every program in the suite, and an LLVM-IR backend — compiling itself to a fixpoint.
@@ -166,11 +166,11 @@ burxt check   <file.bx>                  parse and typecheck only — no LLVM, n
 burxt build   <file.bx> [link args...]   compile to a native executable
 burxt run     <file.bx> [link args...]   compile, then run
 burxt emit-ir <file.bx>                  print the generated LLVM IR
-burxt layout  <file.bx>                  print struct layouts (size, alignment, field offsets)
+burxt layout  <file.bx>                  print record layouts (size, alignment, field offsets)
 ```
 
 Arguments after the source file are passed to the system linker unchanged, so the
-C you declare with `extern fn` can actually be linked:
+C you declare with `external function` can actually be linked:
 `burxt run pay.bx cside.o -lm`.
 
 The suite also runs **on Burxt**: [`tests/runner.bx`](tests/runner.bx) walks the same

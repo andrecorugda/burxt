@@ -1,30 +1,30 @@
 // Dependency Inversion, made ergonomic: a function depends on the CONTRACT,
-// not the concrete struct. The same function serves both types.
+// not the concrete record. The same function serves both types.
 trait Priced {
-    fn price(self) -> Decimal<2>
+    function price(self) -> Decimal<2>
 }
 
-struct Book { cost: Decimal<2> }
-struct Meal { cost: Decimal<2>, tip: Decimal<2> }
+record Book { cost: Decimal<2> }
+record Meal { cost: Decimal<2>, tip: Decimal<2> }
 
-impl Priced for Book {
-    fn (self: Book) price() -> Decimal<2> { return self.cost; }
+implement Priced for Book {
+    function (self: Book) price() -> Decimal<2> { return self.cost; }
 }
-impl Priced for Meal {
-    fn (self: Meal) price() -> Decimal<2> { return self.cost + self.tip; }
+implement Priced for Meal {
+    function (self: Meal) price() -> Decimal<2> { return self.cost + self.tip; }
 }
 
-fn is_cheap(item: dyn Priced) -> Bool {
+function is_cheap(item: dynamic Priced) -> Bool {
     return item.price() < 20.00;
 }
-fn doubled(item: dyn Priced) -> Decimal<2> {
+function doubled(item: dynamic Priced) -> Decimal<2> {
     return item.price() * 2;
 }
 
 let b: Book = Book { cost: 12.99 };
 let m: Meal = Meal { cost: 30.00, tip: 4.50 };
-let db: dyn Priced = b;
-let dm: dyn Priced = m;
+let db: dynamic Priced = b;
+let dm: dynamic Priced = m;
 print(is_cheap(db));
 print(is_cheap(dm));
 print(doubled(db));

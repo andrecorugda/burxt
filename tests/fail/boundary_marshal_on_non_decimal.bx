@@ -1,2 +1,2 @@
-extern fn g(n: Int as scaled) -> Int;
+external function g(n: Int as scaled) -> Int;
 print(g(1));

@@ -7,6 +7,7 @@
     { "include": "#comments" },
     { "include": "#strings" },
     { "include": "#numbers" },
+    { "include": "#reserved" },
     { "include": "#declarations" },
     { "include": "#types" },
     { "include": "#keywords" },
@@ -108,11 +109,21 @@
       ]
     },
 
+    "reserved": {
+      "patterns": [
+        {
+          "comment": "The six spellings Burxt used to have. They are still RESERVED WORDS in the compiler, but only so it can name the replacement: `fn` -> `function`, `mut` -> `mutable`, `impl` -> `implement`, `dyn` -> `dynamic`, `extern` -> `external`, `struct` -> `record`. A program using one of them does not compile, so the editor must not colour it like a keyword — it is an error, and this says so before the compiler does. (`enum` was NOT renamed.)",
+          "name": "invalid.deprecated.burxt",
+          "match": "\\b(fn|mut|impl|dyn|extern|struct)\\b"
+        }
+      ]
+    },
+
     "declarations": {
       "patterns": [
         {
-          "comment": "Method declaration: fn (self: Type) name(...) or fn (mut self: Type) name(...)",
-          "match": "\\b(fn)\\s*\\(\\s*(mut\\s+)?(self)\\s*:\\s*([A-Z][A-Za-z0-9_]*)\\s*\\)\\s*([a-z_][A-Za-z0-9_]*)",
+          "comment": "Method declaration: function (self: Type) name(...) or function (mutable self: Type) name(...)",
+          "match": "\\b(function)\\s*\\(\\s*(mutable\\s+)?(self)\\s*:\\s*([A-Z][A-Za-z0-9_]*)\\s*\\)\\s*([a-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "keyword.declaration.function.burxt" },
             "2": { "name": "storage.modifier.burxt" },
@@ -122,29 +133,29 @@
           }
         },
         {
-          "comment": "Function declaration, including `extern fn`.",
-          "match": "\\b(extern\\s+)?(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "comment": "Function declaration, including `external function`.",
+          "match": "\\b(external\\s+)?(function)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
-            "1": { "name": "storage.modifier.extern.burxt" },
+            "1": { "name": "storage.modifier.external.burxt" },
             "2": { "name": "keyword.declaration.function.burxt" },
             "3": { "name": "entity.name.function.burxt" }
           }
         },
         {
           "comment": "Nominal type declarations.",
-          "match": "\\b(struct|enum|trait|interface)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(record|enum|trait|interface)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "keyword.declaration.type.burxt" },
             "2": { "name": "entity.name.type.burxt" }
           }
         },
         {
-          "comment": "impl Trait for Type",
-          "match": "\\b(impl)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s+(for)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "comment": "implement Trait for Type",
+          "match": "\\b(implement)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s+(for)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
-            "1": { "name": "keyword.declaration.impl.burxt" },
+            "1": { "name": "keyword.declaration.implement.burxt" },
             "2": { "name": "entity.name.type.burxt" },
-            "3": { "name": "keyword.declaration.impl.burxt" },
+            "3": { "name": "keyword.declaration.implement.burxt" },
             "4": { "name": "entity.name.type.burxt" }
           }
         },
@@ -157,8 +168,8 @@
           }
         },
         {
-          "comment": "let / let mut bindings.",
-          "match": "\\b(let)\\s+(mut\\s+)?([A-Za-z_][A-Za-z0-9_]*)",
+          "comment": "let / let mutable bindings.",
+          "match": "\\b(let)\\s+(mutable\\s+)?([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "keyword.declaration.variable.burxt" },
             "2": { "name": "storage.modifier.mutable.burxt" },
@@ -188,10 +199,10 @@
           "match": "\\b(Int|Bool|String|CInt|CDouble|Decimal)\\b"
         },
         {
-          "comment": "`dyn Trait` is the only syntax that asks for runtime dispatch.",
-          "match": "\\b(dyn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "comment": "`dynamic Trait` is the only syntax that asks for runtime dispatch.",
+          "match": "\\b(dynamic)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
-            "1": { "name": "storage.modifier.dyn.burxt" },
+            "1": { "name": "storage.modifier.dynamic.burxt" },
             "2": { "name": "entity.name.type.burxt" }
           }
         },
@@ -228,7 +239,7 @@
           "match": "\\ballocates\\b"
         },
         {
-          "comment": "`pure fn` — the result depends only on the arguments: no I/O, no FFI, no impure calls. Checked, not documented.",
+          "comment": "`pure function` — the result depends only on the arguments: no I/O, no FFI, no impure calls. Checked, not documented.",
           "name": "storage.modifier.pure.burxt",
           "match": "\\bpure\\b"
         },
@@ -244,7 +255,7 @@
         },
         {
           "name": "keyword.declaration.burxt",
-          "match": "\\b(let|mut|fn|extern|struct|enum|trait|interface|impl|is|region|dyn)\\b"
+          "match": "\\b(let|mutable|function|external|record|enum|trait|interface|implement|is|region|dynamic)\\b"
         },
         {
           "name": "keyword.operator.expression.as.burxt",

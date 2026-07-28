@@ -1,4 +1,4 @@
-fn take(s: String) -> String {
+function take(s: String) -> String {
     region r {
         return substring(s, 0, 1);
     }

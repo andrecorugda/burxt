@@ -4,7 +4,7 @@
 > **enums**, and **bounds**, monomorphised, with type arguments inferred at the call site and
 > no turbofish required. Acceptance 8 is met: `Option<T>` and `Result<T, E>` are in `lib/`,
 > written in Burxt, with no compiler support beyond this milestone. What remains: generic
-> **structs**, and stage-1. Stage-1 does not read generics yet,
+> **records**, and stage-1. Stage-1 does not read generics yet,
 > which is why the tests for this slice live in `tests/runner.rs` rather than `tests/pass/` —
 > the same staging M5 used, with the second implementation following behind a ratchet.
 >
@@ -15,15 +15,15 @@
 ## 0. What has to become possible
 
 ```text
-struct List<T> { items: [T] }
+record List<T> { items: [T] }
 
-fn (mut self: List<T>) add(item: T) -> Int { push(self.items, item); return len(self.items); }
+function (mutable self: List<T>) add(item: T) -> Int { push(self.items, item); return len(self.items); }
 
-fn largest<T: Ordered>(xs: [T]) -> T
+function largest<T: Ordered>(xs: [T]) -> T
     requires len(xs) > 0
 {
-    let mut best: T = xs[0];
-    let mut i: Int = 1;
+    let mutable best: T = xs[0];
+    let mutable i: Int = 1;
     while i < len(xs) { if xs[i] > best { best = xs[i]; } i = i + 1; }
     return best;
 }
@@ -42,17 +42,17 @@ type information, and a `List<Int>`'s elements are `Int`s in memory rather than 
 them.
 
 **Why.** Burxt's promises are all about what a value *is* — a `Decimal<2>` is a scaled i64,
-a struct has no hidden header, `dyn` costs nothing unless written. Erasure would put a
+a record has no hidden header, `dynamic` costs nothing unless written. Erasure would put a
 pointer where the value was and quietly undo that. The cost is code size, which is a
 measurable and local problem; erasure's cost is a representation nobody asked for.
 
-`dyn Trait` already exists for the cases that genuinely want one implementation over many
+`dynamic Trait` already exists for the cases that genuinely want one implementation over many
 types. Generics are for the cases that want many.
 
 ### Decision 2 — bounds are traits, and they are required
 
 ```text
-fn largest<T: Ordered>(xs: [T]) -> T
+function largest<T: Ordered>(xs: [T]) -> T
 ```
 
 A type parameter with no bound can only be stored, copied and passed. To compare it, print
@@ -70,8 +70,8 @@ and `Bool` implement them where the language already allows those operators.
 
 ### Decision 3 — one parameter list, on the declaration
 
-`fn name<T, U>(...)`, `struct Name<T> { ... }`, `enum Name<T> { ... }`, and a method's
-receiver names the type's parameters (`fn (self: List<T>) first() -> T`). No generic
+`function name<T, U>(...)`, `record Name<T> { ... }`, `enum Name<T> { ... }`, and a method's
+receiver names the type's parameters (`function (self: List<T>) first() -> T`). No generic
 methods with their own extra parameters in this slice — a method may use its type's
 parameters and nothing more.
 
@@ -86,8 +86,8 @@ instantiates at no cost.
 
 ### Decision 5 — no specialisation, no variance, no HKTs
 
-One definition per generic, applied uniformly. No `impl<T> Trait for List<T>` overlapping
-with `impl Trait for List<Int>`; no covariance rules; no generic parameters that are
+One definition per generic, applied uniformly. No `implement<T> Trait for List<T>` overlapping
+with `implement Trait for List<Int>`; no covariance rules; no generic parameters that are
 themselves generic. Each of those is a language of its own, and none is needed to write a
 container.
 
@@ -98,7 +98,7 @@ container.
 - **NO implicit instantiation of a bound.** If `T: Ordered` is declared, the caller's type
   must implement `Ordered` — the compiler will not derive it because the comparison
   "happens to work".
-- **NO generic `extern fn`.** C has no notion of it, and a monomorphised C symbol is a
+- **NO generic `external function`.** C has no notion of it, and a monomorphised C symbol is a
   symbol that does not exist.
 - **NO turbofish requirement.** `largest(xs)` infers `T` from the argument; an explicit
   `largest<Int>(xs)` is allowed where inference is ambiguous, and required nowhere else.
@@ -109,9 +109,9 @@ container.
 
 | Feature | Why deferred | Earns its place when |
 |---|---|---|
-| Generic methods with their own parameters | A method using its type's parameters covers containers | A required program needs `fn (self: List<T>) map<U>(...)` |
+| Generic methods with their own parameters | A method using its type's parameters covers containers | A required program needs `function (self: List<T>) map<U>(...)` |
 | Specialisation | Two rules for one call site is a language of its own | A measured hot path needs a hand-written case |
-| Variance | Needs subtyping, which Burxt does not have beyond `dyn` | Subtyping arrives |
+| Variance | Needs subtyping, which Burxt does not have beyond `dynamic` | Subtyping arrives |
 | Higher-kinded parameters | No container of containers is needed yet | Someone writes a monad and can defend it |
 | `where` clauses | One bound per parameter reads fine | A parameter needs three bounds and the line wraps |
 | A generic over a fixed array's LENGTH | `[T; N]` would need N as a value parameter, which is a second kind of generic | A program needs one container over several fixed sizes; `[T]` covers it today |
@@ -161,7 +161,7 @@ carries nothing, so it can only come from the context — which means an instant
 remember what it was made from, so `Option$Int` can be read back as `(Option, [Int])` when a
 declared type says what a variant does not.
 
-**A generic's `match` is checked generically.** Inside `fn or_else<T>(o: Option<T>, ...)` the
+**A generic's `match` is checked generically.** Inside `function or_else<T>(o: Option<T>, ...)` the
 scrutinee's type is still `Option<T>`: its *variants* are known even though `T` is not, so the
 arms, the exhaustiveness and the bindings are all checked once at the declaration. Both paths
 share one `check_match_arms`, so an instantiation cannot be checked differently from the
@@ -172,7 +172,7 @@ learn that it exists, so every message pretty-prints an instantiation back to `O
 That is a small function and it is not optional: the alternative is a language whose errors talk
 about its own implementation.
 
-**One surprise worth recording:** `fn first<T>(xs: [T])` does not accept a `[Int; 3]`, and
+**One surprise worth recording:** `function first<T>(xs: [T])` does not accept a `[Int; 3]`, and
 should not. `[T]` is a growable array and `[Int; 3]` is a fixed one — different types with
 different storage, exactly as [M10 §1b](M10-ERGONOMICS.md) says of `for`. A generic over a
 fixed array's *length* is a different feature, deferred above.
@@ -184,9 +184,9 @@ bound on `T`"*. That was a promise the compiler could not keep for three version
 the worst kind of error message. It keeps it now.
 
 ```text
-fn largest<T: Ordered>(a: T, b: T) -> T
-fn same<T: Equatable>(a: T, b: T) -> Bool
-fn describe<T: Priced>(item: T) -> String allocates    // any declared trait
+function largest<T: Ordered>(a: T, b: T) -> T
+function same<T: Equatable>(a: T, b: T) -> Bool
+function describe<T: Priced>(item: T) -> String allocates    // any declared trait
 ```
 
 **The two built-in bounds mirror exactly what the language already allows.** `Ordered` is
@@ -196,7 +196,7 @@ so `Ordered` does not claim them — **a bound cannot promise more than the lang
 and when Strings gain an order they gain it in one place.
 
 **A trait bound gives static dispatch.** `describe<Book>` and `describe<Meal>` are two
-functions; there is no vtable and no runtime type information. `dyn Priced` remains for the
+functions; there is no vtable and no runtime type information. `dynamic Priced` remains for the
 opposite case — one implementation serving many types at run time. Generics are for when many
 implementations should serve one shape.
 
@@ -207,15 +207,15 @@ where the type is chosen, naming the parameter, the bound and the fix:
 
 ```text
 error: `describe` needs `T: Priced`, and `Book` does not implement it. Write
-       `impl Priced for Book { ... }` — conformance is declared, never inferred from
+       `implement Priced for Book { ... }` — conformance is declared, never inferred from
        having the right method names.
 ```
 
 ## 4. Acceptance
 
-1. `fn identity<T>(x: T) -> T` compiles, and `identity(3)` and `identity("s")` both work.
-2. `struct List<T>` with a `push`/`len` pair works for `Int` and for a struct element.
-3. ✅ `fn largest<T: Ordered>(a: T, b: T) -> T` compiles; calling it with a type that does not
+1. `function identity<T>(x: T) -> T` compiles, and `identity(3)` and `identity("s")` both work.
+2. `record List<T>` with a `push`/`len` pair works for `Int` and for a record element.
+3. ✅ `function largest<T: Ordered>(a: T, b: T) -> T` compiles; calling it with a type that does not
    implement `Ordered` is refused, naming the bound. A declared trait works as a bound too,
    with static dispatch.
 4. A generic used from inside another generic is instantiated correctly (`largest<T>` called

@@ -3,7 +3,7 @@
 // not, because the matched value's type already says which enum it is.
 enum Token { Plus, Number(Int), End }
 
-fn describe(t: Token) -> Int {
+function describe(t: Token) -> Int {
     match t {
         Plus => { return 1; }
         Number(n) => { return n; }

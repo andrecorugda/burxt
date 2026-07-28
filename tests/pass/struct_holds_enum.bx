@@ -1,11 +1,11 @@
-// A struct field may hold an enum — which is what lets a lexer return "the
+// A record field may hold an enum — which is what lets a lexer return "the
 // token, and where to continue" as one value. Enum types are therefore created
-// before struct bodies; the reverse cannot happen, since enum payloads are
+// before record bodies; the reverse cannot happen, since enum payloads are
 // scalars only.
 enum Token { End, Number(Int) }
-struct Scan { tok: Token, next: Int }
+record Scan { tok: Token, next: Int }
 
-fn step(v: Int) -> Scan {
+function step(v: Int) -> Scan {
     return Scan { tok: Token.Number(v), next: v + 1 };
 }
 let s: Scan = step(41);

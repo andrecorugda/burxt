@@ -116,7 +116,7 @@ impl std::fmt::Display for Type {
                 let inner: Vec<String> = args.iter().map(|a| a.to_string()).collect();
                 write!(f, "{}<{}>", name, inner.join(", "))
             }
-            Type::Dyn(name) => write!(f, "dyn {}", name),
+            Type::Dyn(name) => write!(f, "dynamic {}", name),
         }
     }
 }

@@ -117,7 +117,7 @@ is a bare NUL-terminated pointer, so its length is a scan, so a bounds check is 
 amount of hoisting changes the shape — it only changes how often the scan happens. A String
 carried as pointer-plus-length (still NUL-terminated, so C keeps working) makes `len` and
 `byte_at` O(1) unconditionally, and stops the whole class of bug rather than the instances of
-it. It touches both compilers, every `extern fn`, and `read_file`/`substring`/`concat`, so it
+it. It touches both compilers, every `external function`, and `read_file`/`substring`/`concat`, so it
 is a milestone and not a patch.
 
 **Earns its place when:** a Burxt program processes a file large enough for it to bite — which

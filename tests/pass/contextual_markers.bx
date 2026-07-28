@@ -6,7 +6,7 @@
 // and reserving each one globally to recognise it in one place is over-collection.
 // PHP solves the same problem with `$` on every variable, which taxes every use to
 // refund an occasional collision; a contextual keyword pays only at the collision.
-fn label(n: Int) -> String allocates
+function label(n: Int) -> String allocates
     requires n > 0
     ensures len(result) > 0
     decreases n
@@ -19,7 +19,7 @@ fn label(n: Int) -> String allocates
 
 region r {
     // The same four words, as names.
-    let mut allocates: Int = 0;
+    let mutable allocates: Int = 0;
     let requires: Int = 1;
     let ensures: String = "a name, not a clause";
     let decreases: Bool = true;

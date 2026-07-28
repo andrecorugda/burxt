@@ -10,7 +10,7 @@
 ## 0. What has to become possible
 
 ```text
-fn find(haystack: String, needle: String) -> Option<Int> { ... }
+function find(haystack: String, needle: String) -> Option<Int> { ... }
 
 match find(text, "burxt") {
     Some(at) => { print("found at {at}"); }
@@ -19,7 +19,7 @@ match find(text, "burxt") {
 ```
 
 ```text
-fn parse_amount(text: String) -> Result<Decimal<2>, String> { ... }
+function parse_amount(text: String) -> Result<Decimal<2>, String> { ... }
 
 match parse_amount(input) {
     Ok(amount) => { print(amount); }
@@ -38,9 +38,9 @@ error type is not the caller's?** Both answers are now written down.
 ### Decision A — no conversion. The error types must match.
 
 ```text
-fn parse_amount(text: String) -> Result<Decimal<2>, String> { ... }
+function parse_amount(text: String) -> Result<Decimal<2>, String> { ... }
 
-fn read_invoice(path: String) -> Result<Decimal<2>, String> {
+function read_invoice(path: String) -> Result<Decimal<2>, String> {
     let amount = parse_amount(read_file(path))?;      // both errors are String
     return Result.Ok(amount);
 }
@@ -111,7 +111,7 @@ Handling is a `match`. There is no operator that propagates a failure invisibly 
 function that turns an `Err` into a crash without saying so.
 
 **Why no `?`.** It is genuinely convenient and it hides a control-flow edge at every call
-site. Burxt's position on hidden control flow is already settled — no exceptions, `dyn` only
+site. Burxt's position on hidden control flow is already settled — no exceptions, `dynamic` only
 where written, `tail` only where written — and `?` is the same question. Deferred with a
 trigger rather than refused forever: **when a real program's error handling is more `match`
 than logic, `?` earns a design.**

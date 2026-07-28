@@ -1,2 +1,2 @@
-fn arg(n: Int) -> String { return "x"; }
+function arg(n: Int) -> String { return "x"; }
 print(arg(0));

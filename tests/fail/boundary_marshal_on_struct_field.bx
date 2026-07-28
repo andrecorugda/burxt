@@ -1,2 +1,2 @@
-struct Line { cents: Int as scaled }
+record Line { cents: Int as scaled }
 print(1);

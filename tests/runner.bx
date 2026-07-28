@@ -19,15 +19,15 @@
 // pretended away, and it is the first thing the standard library will hide.
 // ============================================================================
 
-extern fn system(command: String) -> CInt;
+external function system(command: String) -> CInt;
 
-struct Outcome { ran: Int, passed: Int, failed: Int }
+record Outcome { ran: Int, passed: Int, failed: Int }
 
 // ---- talking to the machine -------------------------------------------------
 
 // Every name in a directory, one per line, via the shell. `ls` is the only thing
 // here that is not Burxt, and it is doing what a directory read would do.
-fn listing_of(directory: String, into: String) -> String allocates {
+function listing_of(directory: String, into: String) -> String allocates {
     let command: String = "ls " + directory + " > " + into + " 2>/dev/null";
     let status: Int = system(command);
     return read_file(into);
@@ -35,22 +35,22 @@ fn listing_of(directory: String, into: String) -> String allocates {
 
 // Run a command, capturing everything it says, and answer its exit code.
 // `system` reports the wait status, and the exit code is the high byte of it.
-fn run_capturing(command: String, output: String) -> Int allocates {
+function run_capturing(command: String, output: String) -> Int allocates {
     let status: Int = system(command + " > " + output + " 2>&1");
     return div_floor(status, 256);
 }
 
 // ---- reading the listing ----------------------------------------------------
 
-fn line_end(text: String, from: Int) -> Int {
-    let mut i: Int = from;
+function line_end(text: String, from: Int) -> Int {
+    let mutable i: Int = from;
     while i < len(text) && byte_at(text, i) != 10 {
         i += 1;
     }
     return i;
 }
 
-fn ends_with_bx(name: String) -> Bool {
+function ends_with_bx(name: String) -> Bool {
     let n: Int = len(name);
     if n < 3 {
         return false;
@@ -59,7 +59,7 @@ fn ends_with_bx(name: String) -> Bool {
         && byte_at(name, n - 1) == 120;
 }
 
-fn without_extension(name: String) -> String allocates {
+function without_extension(name: String) -> String allocates {
     return substring(name, 0, len(name) - 3);
 }
 
@@ -68,15 +68,15 @@ fn without_extension(name: String) -> String allocates {
 // Whether `haystack` contains `needle`. A fail fixture records the text the error
 // must CONTAIN rather than the whole message, so a reworded diagnostic does not
 // break a test that is really about the rule.
-fn contains(haystack: String, needle: String) -> Bool {
+function contains(haystack: String, needle: String) -> Bool {
     let n: Int = len(needle);
     if n == 0 {
         return true;
     }
-    let mut i: Int = 0;
+    let mutable i: Int = 0;
     while i + n <= len(haystack) {
-        let mut k: Int = 0;
-        let mut same: Bool = true;
+        let mutable k: Int = 0;
+        let mutable same: Bool = true;
         while k < n {
             if byte_at(haystack, i + k) != byte_at(needle, k) {
                 same = false;
@@ -94,8 +94,8 @@ fn contains(haystack: String, needle: String) -> Bool {
 }
 
 // The recorded text, with the trailing newline a file always has removed.
-fn trimmed(text: String) -> String allocates {
-    let mut n: Int = len(text);
+function trimmed(text: String) -> String allocates {
+    let mutable n: Int = len(text);
     while n > 0 && byte_at(text, n - 1) == 10 {
         n -= 1;
     }
@@ -104,7 +104,7 @@ fn trimmed(text: String) -> String allocates {
 
 // ---- the three kinds of check -----------------------------------------------
 
-fn (mut self: Outcome) record(passed: Bool, name: String, why: String) -> Int allocates {
+function (mutable self: Outcome) note(passed: Bool, name: String, why: String) -> Int allocates {
     self.ran += 1;
     if passed {
         self.passed += 1;
@@ -115,7 +115,7 @@ fn (mut self: Outcome) record(passed: Bool, name: String, why: String) -> Int al
     return 0;
 }
 
-fn (mut self: Outcome) check_pass(compiler: String, name: String, work: String)
+function (mutable self: Outcome) check_pass(compiler: String, name: String, work: String)
     -> Int allocates
 {
     let source: String = "tests/pass/" + name + ".bx";
@@ -125,25 +125,25 @@ fn (mut self: Outcome) check_pass(compiler: String, name: String, work: String)
 
     let built: Int = run_capturing(compiler + " build " + source + " -o " + binary, log);
     if built != 0 {
-        let noted: Int = self.record(false, name, "did not compile: " + trimmed(read_file(log)));
+        let noted: Int = self.note(false, name, "did not compile: " + trimmed(read_file(log)));
         return 0;
     }
     // In the fixture directory, because a program may read a file next to it.
     let ran: Int = run_capturing("cd tests/pass && " + binary, log);
     let printed: String = trimmed(read_file(log));
     if ran != 0 {
-        let noted: Int = self.record(false, name, "exited " + to_string(ran));
+        let noted: Int = self.note(false, name, "exited " + to_string(ran));
         return 0;
     }
     if printed == expected {
-        let noted: Int = self.record(true, name, "");
+        let noted: Int = self.note(true, name, "");
         return 0;
     }
-    let noted: Int = self.record(false, name, "printed " + printed + ", expected " + expected);
+    let noted: Int = self.note(false, name, "printed " + printed + ", expected " + expected);
     return 0;
 }
 
-fn (mut self: Outcome) check_fail(compiler: String, name: String, work: String)
+function (mutable self: Outcome) check_fail(compiler: String, name: String, work: String)
     -> Int allocates
 {
     let source: String = "tests/fail/" + name + ".bx";
@@ -155,19 +155,19 @@ fn (mut self: Outcome) check_fail(compiler: String, name: String, work: String)
     let status: Int = run_capturing(compiler + " check " + source, log);
     let said: String = read_file(log);
     if status == 0 {
-        let noted: Int = self.record(false, name, "was accepted, and should not be");
+        let noted: Int = self.note(false, name, "was accepted, and should not be");
         return 0;
     }
     if contains(said, wanted) {
-        let noted: Int = self.record(true, name, "");
+        let noted: Int = self.note(true, name, "");
         return 0;
     }
-    let noted: Int = self.record(false, name,
+    let noted: Int = self.note(false, name,
         "refused it for the wrong reason: " + trimmed(said));
     return 0;
 }
 
-fn (mut self: Outcome) check_panic(compiler: String, name: String, work: String)
+function (mutable self: Outcome) check_panic(compiler: String, name: String, work: String)
     -> Int allocates
 {
     let source: String = "tests/panic/" + name + ".bx";
@@ -177,30 +177,30 @@ fn (mut self: Outcome) check_panic(compiler: String, name: String, work: String)
 
     let built: Int = run_capturing(compiler + " build " + source + " -o " + binary, log);
     if built != 0 {
-        let noted: Int = self.record(false, name, "did not compile, and should have");
+        let noted: Int = self.note(false, name, "did not compile, and should have");
         return 0;
     }
     let ran: Int = run_capturing(binary, log);
     let said: String = read_file(log);
     if ran == 0 {
-        let noted: Int = self.record(false, name, "ran to completion, and should have died");
+        let noted: Int = self.note(false, name, "ran to completion, and should have died");
         return 0;
     }
     if contains(said, wanted) {
-        let noted: Int = self.record(true, name, "");
+        let noted: Int = self.note(true, name, "");
         return 0;
     }
-    let noted: Int = self.record(false, name, "died for the wrong reason: " + trimmed(said));
+    let noted: Int = self.note(false, name, "died for the wrong reason: " + trimmed(said));
     return 0;
 }
 
 // ---- the sweep ---------------------------------------------------------------
 
-fn (mut self: Outcome) sweep(compiler: String, kind: String, work: String)
+function (mutable self: Outcome) sweep(compiler: String, kind: String, work: String)
     -> Int allocates
 {
     let names: String = listing_of("tests/" + kind, work + "/listing");
-    let mut at: Int = 0;
+    let mutable at: Int = 0;
     while at < len(names) {
         let stop: Int = line_end(names, at);
         let entry: String = substring(names, at, stop - at);
@@ -225,11 +225,11 @@ region suite {
     // Which compiler to exercise, and where to put what the run produces. Both are
     // arguments so this runner can test stage-0 today and stage-1 tomorrow without
     // being edited — the whole point of having two implementations.
-    let mut compiler: String = "./target/debug/burxt";
+    let mutable compiler: String = "./target/debug/burxt";
     if arg_count() > 1 {
         compiler = arg(1);
     }
-    let mut work: String = "/tmp/burxt-suite";
+    let mutable work: String = "/tmp/burxt-suite";
     if arg_count() > 2 {
         work = arg(2);
     }
@@ -237,7 +237,7 @@ region suite {
 
     print("running the suite with " + compiler);
 
-    let mut result: Outcome = Outcome { ran: 0, passed: 0, failed: 0 };
+    let mutable result: Outcome = Outcome { ran: 0, passed: 0, failed: 0 };
     let a: Int = result.sweep(compiler, "pass", work);
     let b: Int = result.sweep(compiler, "fail", work);
     let c: Int = result.sweep(compiler, "panic", work);

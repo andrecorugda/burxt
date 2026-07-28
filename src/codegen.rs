@@ -444,7 +444,7 @@ impl<'ctx> CodeGen<'ctx> {
                         Type::Named(n) => n.clone(),
                         other => {
                             return Err(format!(
-                                "codegen bug: field assignment through non-struct {}",
+                                "codegen bug: field assignment through non-record {}",
                                 other
                             ))
                         }
@@ -474,7 +474,7 @@ impl<'ctx> CodeGen<'ctx> {
                         Type::Named(n) => n.clone(),
                         other => {
                             return Err(format!(
-                                "codegen bug: field path through non-struct {}",
+                                "codegen bug: field path through non-record {}",
                                 other
                             ))
                         }
@@ -2190,7 +2190,7 @@ impl<'ctx> CodeGen<'ctx> {
                 match call.try_as_basic_value() {
                     inkwell::values::ValueKind::Basic(v) => Ok(v),
                     _ => Err(format!(
-                        "codegen bug: dyn call to {}.{} returned void",
+                        "codegen bug: dynamic call to {}.{} returned void",
                         trait_name, method
                     )),
                 }
@@ -2359,7 +2359,7 @@ impl<'ctx> CodeGen<'ctx> {
                 let sname = match &base.ty {
                     Type::Named(n) => n.clone(),
                     other => {
-                        return Err(format!("codegen bug: field of non-struct {}", other))
+                        return Err(format!("codegen bug: field of non-record {}", other))
                     }
                 };
                 let st = self.struct_types[&sname];
@@ -3914,7 +3914,7 @@ impl<'ctx> CodeGen<'ctx> {
 
         self.builder.position_at_end(panic_bb);
         self.build_panic(
-            "burxt runtime error: this value does not fit in a C int — the extern \
+            "burxt runtime error: this value does not fit in a C int — the external \
              parameter is 32-bit\n",
         )?;
 

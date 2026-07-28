@@ -1,20 +1,20 @@
-// `dyn Trait` is the ONLY thing that triggers dynamic dispatch. One call
+// `dynamic Trait` is the ONLY thing that triggers dynamic dispatch. One call
 // site, two concrete impls, resolved at runtime through the vtable.
 trait HasBalance {
-    fn balance_of(self) -> Decimal<2>
-    fn label(self) -> Int
+    function balance_of(self) -> Decimal<2>
+    function label(self) -> Int
 }
 
-struct Account { balance: Decimal<2>, id: Int }
-struct Escrow  { held: Decimal<2>, fee: Decimal<2> }
+record Account { balance: Decimal<2>, id: Int }
+record Escrow  { held: Decimal<2>, fee: Decimal<2> }
 
-impl HasBalance for Account {
-    fn (self: Account) balance_of() -> Decimal<2> { return self.balance; }
-    fn (self: Account) label() -> Int { return self.id; }
+implement HasBalance for Account {
+    function (self: Account) balance_of() -> Decimal<2> { return self.balance; }
+    function (self: Account) label() -> Int { return self.id; }
 }
-impl HasBalance for Escrow {
-    fn (self: Escrow) balance_of() -> Decimal<2> { return self.held - self.fee; }
-    fn (self: Escrow) label() -> Int { return 99; }
+implement HasBalance for Escrow {
+    function (self: Escrow) balance_of() -> Decimal<2> { return self.held - self.fee; }
+    function (self: Escrow) label() -> Int { return 99; }
 }
 
 let acct: Account = Account { balance: 125.50, id: 7 };
@@ -24,9 +24,9 @@ let esc: Escrow = Escrow { held: 200.00, fee: 0.50 };
 print(acct.balance_of());
 print(esc.balance_of());
 
-// now through trait objects — each reaches its own impl
-let d1: dyn HasBalance = acct;
-let d2: dyn HasBalance = esc;
+// now through trait objects — each reaches its own implement
+let d1: dynamic HasBalance = acct;
+let d2: dynamic HasBalance = esc;
 print(d1.balance_of());
 print(d2.balance_of());
 // slot order comes from the trait declaration, so `label` is slot 1 for both

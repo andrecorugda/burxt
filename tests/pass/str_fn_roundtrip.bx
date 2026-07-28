@@ -1,6 +1,6 @@
 // User functions take and return Strings freely — every value is a
 // 'static literal by construction, so there is no ownership question.
-fn pick(cond: Bool, a: String, b: String) -> String {
+function pick(cond: Bool, a: String, b: String) -> String {
     if cond {
         return a;
     }
@@ -8,6 +8,6 @@ fn pick(cond: Bool, a: String, b: String) -> String {
 }
 print(pick(true, "yes", "no"));
 print(pick(false, "yes", "no"));
-let mut s: String = "first";
+let mutable s: String = "first";
 s = "second";
 print(s);

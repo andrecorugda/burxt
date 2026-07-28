@@ -24,18 +24,18 @@ which is right.
 |---|---|---|
 | [A4.4 Strings & Collections](A4.4-STRINGS-COLLECTIONS.md) | **DONE bar one view** | Arrays fixed (v0.0.10) and growable (v0.0.24). Strings: literals, printing, FFI, length, equality, `byte_at` (v0.0.21), **concatenation (v0.0.25)**, **`read_file` / `to_string` (v0.0.28)**. Remaining: `.chars()`. |
 | [A4.5 Aggregate ABI](A4.5-AGGREGATE-ABI.md) | **DONE** (v0.0.12) | — |
-| [A4.6 Interfaces & Dispatch](A4.6-INTERFACES-DISPATCH.md) | **DONE and CLOSED** (v0.0.14) | Traits, `impl`, static + `dyn` dispatch. `class` / `open` inheritance was **dropped in v0.0.46** — nothing needed it across thirty versions, so composition-only is final. |
+| [A4.6 Interfaces & Dispatch](A4.6-INTERFACES-DISPATCH.md) | **DONE and CLOSED** (v0.0.14) | Traits, `implement`, static + `dynamic` dispatch. `class` / `open` inheritance was **dropped in v0.0.46** — nothing needed it across thirty versions, so composition-only is final. |
 | [A4.7 Signature Grammar](A4.7-SIGNATURE-GRAMMAR.md) | **Mostly done** (v0.0.17–v0.0.19, v0.0.28) | Brace hazard, interpolation (as a print, then as a value), money and percent literals, mixed-scale `*` all shipped. Remaining: unit literals (`5.km`), `requires`/`ensures`, pipelines. |
 | [A5.0 Control Flow](A5.0-CONTROL-FLOW.md) | **DONE** (v0.0.3–v0.0.4, v0.0.15) | — |
 | [Far-horizon M1–M4](FAR-HORIZON-ROADMAP.md) | **Direction only** | Re-spec each on arrival. **M1's trigger is now MET** — see its amendment; two new criteria argue against the ARC lean. |
 | [A6.0 Sum Types](A6.0-SUM-TYPES.md) | **DONE** (v0.0.20) | Enums, exhaustive `match`. Deferred: wildcards, recursive/aggregate payloads (M1), guards, nested patterns, match-as-expression, generics. |
 | [M1a Caller-Region Functions](M1a-CALLER-REGION-FUNCTIONS.md) | **DONE** (v0.0.38) | `allocates` on a signature: build in the caller's region, return what you built. Deferred: `allocates` on methods. |
-| [M1 Memory Model](M1-MEMORY-MODEL.md) | **DONE** (v0.0.24–v0.0.27) | All four slices shipped: regions + bump allocator, growable arrays with escape checking, string concatenation, storable `dyn`. Two of its predictions were corrected rather than forced — see §6a. |
+| [M1 Memory Model](M1-MEMORY-MODEL.md) | **DONE** (v0.0.24–v0.0.27) | All four slices shipped: regions + bump allocator, growable arrays with escape checking, string concatenation, storable `dynamic`. Two of its predictions were corrected rather than forced — see §6a. |
 | [Novelty register](NOVELTY.md) | **Ambition — §4, §1, §2, §3 and §5 (runtime forms) shipped** | What Burxt is *for*: exactness across boundaries, provable determinism, conservation-law contracts, effects-not-async. §4 guaranteed tail calls shipped in v0.0.29; §1's FFI half in v0.0.30. |
 | [M4 Self-Hosting](M4-SELF-HOSTING.md) | **Phases 1–4a DONE** (v0.0.51–57) — stage-1 parses and typechecks itself | The staging, with measured sizes: ~10–12.5k lines of Burxt for stage-1, a textual-LLVM-IR backend, six phases, and the public milestone at the end of phase 4. |
 | [N5 Termination](N5-TERMINATION.md) | **Slice 1 DONE** (v0.0.45) | `decreases`, checked at every recursive call site, so it works with `return tail`. Deferred: mutual recursion, methods, lexicographic measures, static proof. |
 | [A5 Contracts](A5-CONTRACTS.md) | **DONE** (v0.0.43–v0.0.44) | `requires` / `ensures` runtime-checked with the clause quoted on failure, clauses must be pure, contracts on methods, and `old(...)` — so NOVELTY §3's conservation laws are checkable. Deferred: static proof, `old` of an aggregate, derived mutual exclusion (needs threads). |
-| [N2 Pure Functions](N2-PURE-FUNCTIONS.md) | **Slice 1 DONE** (v0.0.39) | `pure fn`: no I/O, no FFI, no impure calls. Deferred: pure methods, purity as a parameter requirement, purity-driven optimisation. |
+| [N2 Pure Functions](N2-PURE-FUNCTIONS.md) | **Slice 1 DONE** (v0.0.39) | `pure function`: no I/O, no FFI, no impure calls. Deferred: pure methods, purity as a parameter requirement, purity-driven optimisation. |
 | [N1 Boundary Exactness](N1-BOUNDARY-EXACTNESS.md) | **Slice 1 DONE** (v0.0.30) | `CDouble`, `as scaled` marshallers, range-checked `Int` → `CDouble`, linker pass-through. Remaining: serialization and database boundaries, once an encoder exists to guard. |
 
 ### Newer milestones
@@ -44,10 +44,10 @@ which is right.
 |---|---|---|
 | [M5 (in M4)](M4-SELF-HOSTING.md) | **DONE** (v0.0.79–v0.0.80) | The Burxt backend compiles all 88 pass programs, and the suite runs on Burxt |
 | [M6 Modules](M6-MODULES.md) | **DONE** (v0.0.81–v0.0.82) | `use "path"`, one buffer with a source map, and the compiler split into five files |
-| [M7 Generics](M7-GENERICS.md) | **Slices 1–3 DONE in stage-0** (v0.0.93–96) | Generic functions, enums and bounds (`Ordered`, `Equatable`, any trait — statically dispatched). Remaining: generic structs, stage-1 |
+| [M7 Generics](M7-GENERICS.md) | **Slices 1–3 DONE in stage-0** (v0.0.93–96) | Generic functions, enums and bounds (`Ordered`, `Equatable`, any trait — statically dispatched). Remaining: generic records, stage-1 |
 | [M8 Errors](M8-ERRORS.md) | **DONE** (v0.0.94, 97) | `Option<T>` and `Result<T, E>` in `lib/`, written in Burxt. `?` recognises the failure by VARIANT name, so neither type is known to the compiler — and it does not convert between error types |
 | [M9 Performance](M9-PERFORMANCE.md) | **DONE** (v0.0.87–v0.0.90) | The self-compile: 190 s → 1.17 s, ~1 GB → 196 MB. `byte_at` bounds-checked with a `strlen` per byte |
-| [M10 Ergonomics](M10-ERGONOMICS.md) | **Slices 1–2b DONE** (v0.0.91–92, 95) | `let x = 0;`, `for x in xs`, trailing commas everywhere, `fn (self)` inside an `impl` — both compilers. Plus the rounding rule corrected: a contract where a value narrows, and nowhere else |
+| [M10 Ergonomics](M10-ERGONOMICS.md) | **Slices 1–2c DONE** (v0.0.91–92, 95, 98) | `let x = 0;`, `for x in xs`, trailing commas everywhere, `function (self)` inside an `implement` — both compilers. Plus the rounding rule corrected: a contract where a value narrows, and nowhere else |
 
 ## The audit, in detail
 
@@ -80,7 +80,7 @@ Two deviations from the spec worth recording, both deliberate:
 ### A4.4 Strings & Collections — arrays done, strings half done
 
 **Arrays are complete** (v0.0.10) and match the spec: `[T; N]`, literal
-construction, bounds-checked reads, element assignment through a `let mut`
+construction, bounds-checked reads, element assignment through a `let mutable`
 binding, compile-time rejection of a constant out-of-range index, and a
 runtime trap naming the index and valid range. `len(a)` is constant-folded.
 Not built: the `[0; N]` repeat form (sugar, deferred).
@@ -143,8 +143,8 @@ called out as its own decision rather than smuggled in as sugar.
 Both were implemented directly from their specs and hold their guarantees:
 layout is exactly the declared fields with no hidden header (machine-checked),
 aggregates pass `byval` and return via `sret`, static dispatch emits no
-vtable, and a struct's field offsets are byte-identical with and without
-`dyn`.
+vtable, and a record's field offsets are byte-identical with and without
+`dynamic`.
 
 One correction the A4.6 work forced on A4.5: **method receivers pass as a
 plain pointer, never `byval`**. A vtable slot cannot name a concrete type, so
@@ -175,7 +175,7 @@ In dependency order, cheapest and most-unblocking first:
    no heap, so `examples/parser.bx` parses and evaluates in Burxt today. It
    needed three conservative restrictions lifted, none semantic.
 8. ~~Growable storage — genuinely M1-shaped.~~ **Done in v0.0.24–v0.0.27.**
-   Regions, growable `[T]` with escape checking, concatenation, storable `dyn`.
+   Regions, growable `[T]` with escape checking, concatenation, storable `dynamic`.
    `examples/parser.bx` declares no node budget at all: 599 nodes on a 300-term
    expression, all released as a unit.
 9. ~~The compiler cannot read its own input, or report on what it read.~~
@@ -191,7 +191,7 @@ In dependency order, cheapest and most-unblocking first:
     v0.0.30** — the FFI half, which is the only boundary that exists today.
     `spec/N1-BOUNDARY-EXACTNESS.md` records the decisions; the serialization half
     waits for an encoder to guard. Linker pass-through shipped with it, because
-    an `extern fn` is only half an FFI.
+    an `external function` is only half an FFI.
 12. ~~Editor support: highlighting, and a language GitHub can recognise.~~
     **Done in v0.0.31** — TextMate grammar + VS Code extension + `burxt check`,
     with the grammar locked to the compiler's keyword table by a test. See
@@ -221,6 +221,6 @@ self-host attempt.
 
 M1 (the memory model) is **decided and shipped** — regions as the unit of
 ownership, so data races are unrepresentable without per-object borrow checking.
-What remains ownership-shaped is not memory: returning a `dyn` needs borrow
+What remains ownership-shaped is not memory: returning a `dynamic` needs borrow
 tracking, and mutating through one needs mutability tracking. Both were
 re-diagnosed in v0.0.26 rather than left on the memory ledger.

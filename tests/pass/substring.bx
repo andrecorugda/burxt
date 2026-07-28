@@ -16,7 +16,7 @@ region r {
 }
 
 // It can be built in the caller's region, like any other allocation.
-fn word_at(src: String, at: Int, n: Int) -> String allocates {
+function word_at(src: String, at: Int, n: Int) -> String allocates {
     return substring(src, at, n);
 }
 region r2 {

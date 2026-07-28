@@ -1,5 +1,5 @@
 // Functions with money parameters; literal arguments adopt the param type.
-fn total(price: Decimal<2>, qty: Int) -> Decimal<2> {
+function total(price: Decimal<2>, qty: Int) -> Decimal<2> {
     return price * qty;
 }
 print(total(19.99, 3));

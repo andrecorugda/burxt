@@ -8,33 +8,33 @@
 // where the value was.
 // ============================================================================
 
-struct Point { x: Int, y: Int }
+record Point { x: Int, y: Int }
 
 // One type parameter, named where the function is declared. No turbofish at the call
 // site: `identity(3)` infers `T = Int` from the argument.
-fn identity<T>(x: T) -> T {
+function identity<T>(x: T) -> T {
     return x;
 }
 
 // A parameter can be nested inside another type. `[T]` is a growable array of T.
-fn first<T>(xs: [T]) -> T {
+function first<T>(xs: [T]) -> T {
     return xs[0];
 }
 
 // A parameter is a real type inside the body: it can be bound, copied and returned.
-fn second<T>(xs: [T]) -> T {
+function second<T>(xs: [T]) -> T {
     let picked: T = xs[1];
     return picked;
 }
 
 // A generic may call a generic. `echo`'s body is checked ONCE, with `T` standing for
 // nothing — so a mistake here is an error at this line, not at every call site.
-fn echo<T>(x: T) -> T {
+function echo<T>(x: T) -> T {
     return identity(x);
 }
 
 // Two parameters, and they are independent.
-fn keep<A, B>(a: A, b: B) -> A {
+function keep<A, B>(a: A, b: B) -> A {
     return a;
 }
 
@@ -49,30 +49,30 @@ fn keep<A, B>(a: A, b: B) -> A {
 // allows: `Ordered` is Int and Decimal (the types `<` works on), and `Equatable`
 // adds Bool and String (the types `==` works on). A bound cannot promise more than
 // the language delivers.
-fn largest<T: Ordered>(a: T, b: T) -> T {
+function largest<T: Ordered>(a: T, b: T) -> T {
     if a > b {
         return a;
     }
     return b;
 }
 
-fn same<T: Equatable>(a: T, b: T) -> Bool {
+function same<T: Equatable>(a: T, b: T) -> Bool {
     return a == b;
 }
 
 // Any declared trait is a bound too, and then the parameter has that trait's
 // methods. This is STATIC dispatch: one copy per type, no vtable, no runtime type
-// information. `dyn Priced` is still there for when one implementation must serve
+// information. `dynamic Priced` is still there for when one implementation must serve
 // many types at run time — generics are for when many implementations should.
 trait Priced {
-    fn price(self) -> Decimal<2>
+    function price(self) -> Decimal<2>
 }
 
-impl Priced for Point {
-    fn (self) price() -> Decimal<2> { return $1.00; }
+implement Priced for Point {
+    function (self) price() -> Decimal<2> { return $1.00; }
 }
 
-fn twice_the_price<T: Priced>(item: T) -> Decimal<2> {
+function twice_the_price<T: Priced>(item: T) -> Decimal<2> {
     // Money times a count is exact, so no rounding contract is needed — the same rule
     // that applies outside a generic. A bound changes what is allowed, never what it means.
     return item.price() * 2;
@@ -85,13 +85,13 @@ region r {
     print(identity(true));
     print(identity($1.50));
 
-    let mut ns: [Int] = [];
+    let mutable ns: [Int] = [];
     let a = push(ns, 10);
     let b = push(ns, 20);
     print(first(ns));
     print(second(ns));
 
-    let mut ws: [String] = [];
+    let mutable ws: [String] = [];
     let c = push(ws, "one");
     let d = push(ws, "two");
     print(first(ws));
@@ -99,7 +99,7 @@ region r {
     print(echo(7));
     print(keep(9, "ignored"));
 
-    // A struct travels by value through a generic, like everywhere else.
+    // A record travels by value through a generic, like everywhere else.
     let p = identity(Point { x: 4, y: 5 });
     print(p.x + p.y);
 
@@ -115,12 +115,12 @@ region r {
 // because nothing else is knowable without saying more — and every refusal names the
 // bound that would allow it:
 //
-//     fn show<T>(x: T) -> Int { print(x); return 0; }
+//     function show<T>(x: T) -> Int { print(x); return 0; }
 //     error: `T` is a type parameter with no bound, so a value of it can be stored,
 //            copied, passed and returned — not printed, which needs to know what the
 //            value IS. Say so in the signature with a bound on `T`.
 //
-//     fn bigger<T>(a: T, b: T) -> Bool { return a > b; }
+//     function bigger<T>(a: T, b: T) -> Bool { return a > b; }
 //     error: `T` is a type parameter with no bound, so two values of it cannot be
 //            compared — `>` needs to know what the values ARE. Write `<T: Ordered>`.
 //
@@ -129,26 +129,26 @@ region r {
 //     error: `largest` needs `T: Ordered`, and Bool has no order. Ordered is Int and
 //            Decimal — the types `<` works on.
 //
-//     describe(Book { ... })      // with no `impl Priced for Book`
+//     describe(Book { ... })      // with no `implement Priced for Book`
 //     error: `describe` needs `T: Priced`, and `Book` does not implement it. Write
-//            `impl Priced for Book { ... }` — conformance is declared, never inferred
+//            `implement Priced for Book { ... }` — conformance is declared, never inferred
 //            from having the right method names.
 //
 // ---- And what the compiler refuses ------------------------------------------
 //
 // One type per call — a parameter is not a union:
 //     print(keep(1, 2) + identity("x"));   // fine, two separate calls
-//     fn pair<T>(a: T, b: T) -> T { return a; }
+//     function pair<T>(a: T, b: T) -> T { return a; }
 //     pair(1, "two")
 //     error: `T` would have to be both Int and String in this call
 //
 // A parameter that appears only in the return type has nothing to infer from:
-//     fn make<T>(n: Int) -> T { ... }
+//     function make<T>(n: Int) -> T { ... }
 //     error: `make` cannot tell what `T` is from this call: no argument mentions it.
 //
 // And C has no notion of a type parameter:
-//     extern fn puts<T>(s: T) -> CInt;
-//     error: `extern fn puts` cannot be generic: C has no type parameters, and there
+//     external function puts<T>(s: T) -> CInt;
+//     error: `external function puts` cannot be generic: C has no type parameters, and there
 //            would be no symbol to link against.
 //
 // A generic nobody instantiates emits nothing at all, so a library may declare as

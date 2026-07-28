@@ -1,4 +1,4 @@
-pure fn f() -> Int allocates {
+pure function f() -> Int allocates {
     return len(read_file("x.txt"));
 }
 region r { print(f()); }

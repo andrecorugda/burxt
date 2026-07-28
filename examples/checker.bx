@@ -18,34 +18,34 @@ enum Ty {
     Dec(Int, Bool),
 }
 
-struct Sym { name: String, ty: Ty }
-struct Table { rows: [Sym] }
+record Sym { name: String, ty: Ty }
+record Table { rows: [Sym] }
 
 // A scan result: what was read, and where to continue from.
-struct Scan { ty: Ty, next: Int }
+record Scan { ty: Ty, next: Int }
 
-fn is_alpha(b: Int) -> Bool {
+function is_alpha(b: Int) -> Bool {
     return (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95;
 }
 
-fn is_digit(b: Int) -> Bool {
+function is_digit(b: Int) -> Bool {
     return b >= 48 && b <= 57;
 }
 
-fn is_space(b: Int) -> Bool {
+function is_space(b: Int) -> Bool {
     return b == 32 || b == 9 || b == 10 || b == 13;
 }
 
-fn skip_spaces(src: String, from: Int) -> Int {
-    let mut i: Int = from;
+function skip_spaces(src: String, from: Int) -> Int {
+    let mutable i: Int = from;
     while i < len(src) && is_space(byte_at(src, i)) {
         i = i + 1;
     }
     return i;
 }
 
-fn name_length(src: String, from: Int) -> Int {
-    let mut i: Int = from;
+function name_length(src: String, from: Int) -> Int {
+    let mutable i: Int = from;
     if i >= len(src) || !is_alpha(byte_at(src, i)) {
         return 0;
     }
@@ -55,11 +55,11 @@ fn name_length(src: String, from: Int) -> Int {
     return i - from;
 }
 
-fn word_at(src: String, from: Int, word: String) -> Bool {
+function word_at(src: String, from: Int, word: String) -> Bool {
     if from + len(word) > len(src) {
         return false;
     }
-    let mut i: Int = 0;
+    let mutable i: Int = 0;
     while i < len(word) {
         if byte_at(src, from + i) != byte_at(word, i) {
             return false;
@@ -69,9 +69,9 @@ fn word_at(src: String, from: Int, word: String) -> Bool {
     return true;
 }
 
-fn digits_at(src: String, from: Int) -> Int {
-    let mut i: Int = from;
-    let mut value: Int = 0;
+function digits_at(src: String, from: Int) -> Int {
+    let mutable i: Int = from;
+    let mutable value: Int = 0;
     while i < len(src) && is_digit(byte_at(src, i)) {
         value = value * 10 + (byte_at(src, i) - 48);
         i = i + 1;
@@ -79,8 +79,8 @@ fn digits_at(src: String, from: Int) -> Int {
     return value;
 }
 
-fn digit_count(src: String, from: Int) -> Int {
-    let mut i: Int = from;
+function digit_count(src: String, from: Int) -> Int {
+    let mutable i: Int = from;
     while i < len(src) && is_digit(byte_at(src, i)) {
         i = i + 1;
     }
@@ -88,7 +88,7 @@ fn digit_count(src: String, from: Int) -> Int {
 }
 
 // How a type is written back out, for a message.
-fn ty_name(t: Ty) -> String allocates {
+function ty_name(t: Ty) -> String allocates {
     match t {
         Unknown => { return "?"; }
         IntTy => { return "Int"; }
@@ -104,7 +104,7 @@ fn ty_name(t: Ty) -> String allocates {
 }
 
 // Exactly equal, contract included: that is the language's own rule.
-fn ty_eq(a: Ty, b: Ty) -> Bool {
+function ty_eq(a: Ty, b: Ty) -> Bool {
     match a {
         Unknown => { return false; }
         IntTy => {
@@ -151,7 +151,7 @@ fn ty_eq(a: Ty, b: Ty) -> Bool {
 // Deliberately NOT `ty_eq(t, Ty.Unknown)`: an unknown type must never compare equal
 // to anything, including another unknown, or one bad expression makes every later
 // comparison succeed. Suppressing the cascade needs its own predicate.
-fn is_unknown(t: Ty) -> Bool {
+function is_unknown(t: Ty) -> Bool {
     match t {
         Unknown => { return true; }
         IntTy => { return false; }
@@ -161,7 +161,7 @@ fn is_unknown(t: Ty) -> Bool {
     }
 }
 
-fn is_decimal(t: Ty) -> Bool {
+function is_decimal(t: Ty) -> Bool {
     match t {
         Dec(s, c) => { return true; }
         Unknown => { return false; }
@@ -171,7 +171,7 @@ fn is_decimal(t: Ty) -> Bool {
     }
 }
 
-fn decimal_scale(t: Ty) -> Int {
+function decimal_scale(t: Ty) -> Int {
     match t {
         Dec(scale, contract) => { return scale; }
         Unknown => { return -1; }
@@ -181,7 +181,7 @@ fn decimal_scale(t: Ty) -> Int {
     }
 }
 
-fn decimal_has_contract(t: Ty) -> Bool {
+function decimal_has_contract(t: Ty) -> Bool {
     match t {
         Dec(scale, contract) => { return contract; }
         Unknown => { return false; }
@@ -192,7 +192,7 @@ fn decimal_has_contract(t: Ty) -> Bool {
 }
 
 // `Int`, `Bool`, `String`, `Decimal<S>`, `Decimal<S, RoundHalfEven>`.
-fn parse_ty(src: String, from: Int) -> Scan {
+function parse_ty(src: String, from: Int) -> Scan {
     let at: Int = skip_spaces(src, from);
     if word_at(src, at, "Int") {
         return Scan { ty: Ty.IntTy, next: at + 3 };
@@ -208,8 +208,8 @@ fn parse_ty(src: String, from: Int) -> Scan {
     }
     let scale_at: Int = at + 8;
     let scale: Int = digits_at(src, scale_at);
-    let mut cursor: Int = skip_spaces(src, scale_at + digit_count(src, scale_at));
-    let mut contract: Bool = false;
+    let mutable cursor: Int = skip_spaces(src, scale_at + digit_count(src, scale_at));
+    let mutable contract: Bool = false;
     if byte_at(src, cursor) == 44 {                 // ','
         contract = true;
         cursor = skip_spaces(src, cursor + 1);
@@ -225,14 +225,14 @@ fn parse_ty(src: String, from: Int) -> Scan {
 // A literal's type. `$19.99` is a Decimal whose scale is the digits written after
 // the point — the same rule the lexer uses, and the reason money literals never
 // pass through a float.
-fn literal_ty(src: String, from: Int) -> Scan {
+function literal_ty(src: String, from: Int) -> Scan {
     let at: Int = skip_spaces(src, from);
     if at >= len(src) {
         return Scan { ty: Ty.Unknown, next: at };
     }
     let first: Int = byte_at(src, at);
     if first == 34 {                                // '"'
-        let mut i: Int = at + 1;
+        let mutable i: Int = at + 1;
         while i < len(src) && byte_at(src, i) != 34 {
             i = i + 1;
         }
@@ -244,7 +244,7 @@ fn literal_ty(src: String, from: Int) -> Scan {
     if word_at(src, at, "false") {
         return Scan { ty: Ty.BoolTy, next: at + 5 };
     }
-    let mut cursor: Int = at;
+    let mutable cursor: Int = at;
     if first == 36 {                                // '$'
         cursor = cursor + 1;
     }
@@ -263,8 +263,8 @@ fn literal_ty(src: String, from: Int) -> Scan {
     return Scan { ty: Ty.IntTy, next: cursor };
 }
 
-fn (self: Table) find(name: String) -> Int {
-    let mut i: Int = 0;
+function (self: Table) find(name: String) -> Int {
+    let mutable i: Int = 0;
     while i < len(self.rows) {
         if self.rows[i].name == name {
             return i;
@@ -275,7 +275,7 @@ fn (self: Table) find(name: String) -> Int {
 }
 
 // An operand is a declared name or a literal.
-fn (self: Table) operand_ty(src: String, from: Int) -> Scan allocates {
+function (self: Table) operand_ty(src: String, from: Int) -> Scan allocates {
     let at: Int = skip_spaces(src, from);
     let n: Int = name_length(src, at);
     if n == 0 {
@@ -294,7 +294,7 @@ fn (self: Table) operand_ty(src: String, from: Int) -> Scan allocates {
 }
 
 // The rule this whole language exists for, applied to one expression.
-fn combine(op: Int, left: Ty, right: Ty, declared: Ty) -> Ty allocates {
+function combine(op: Int, left: Ty, right: Ty, declared: Ty) -> Ty allocates {
     if op == 42 {                                   // '*'
         if is_decimal(left) && is_decimal(right) {
             if !decimal_has_contract(declared) {
@@ -323,8 +323,8 @@ fn combine(op: Int, left: Ty, right: Ty, declared: Ty) -> Ty allocates {
     return left;
 }
 
-// `let [mut] NAME : TYPE = OPERAND [op OPERAND] ;`
-fn (mut self: Table) check_let(src: String, from: Int) -> Int allocates {
+// `let [mutable] NAME : TYPE = OPERAND [op OPERAND] ;`
+function (mutable self: Table) check_let(src: String, from: Int) -> Int allocates {
     let at: Int = skip_spaces(src, from);
     if at >= len(src) {
         return at;
@@ -332,8 +332,8 @@ fn (mut self: Table) check_let(src: String, from: Int) -> Int allocates {
     if !word_at(src, at, "let ") {
         return at + 1;
     }
-    let mut cursor: Int = skip_spaces(src, at + 4);
-    if word_at(src, cursor, "mut ") {
+    let mutable cursor: Int = skip_spaces(src, at + 4);
+    if word_at(src, cursor, "mutable ") {
         cursor = skip_spaces(src, cursor + 4);
     }
     let name_len: Int = name_length(src, cursor);
@@ -353,7 +353,7 @@ fn (mut self: Table) check_let(src: String, from: Int) -> Int allocates {
 
     print("let " + name + " : " + ty_name(declared.ty));
     let left: Scan = self.operand_ty(src, cursor + 1);
-    let mut found: Ty = left.ty;
+    let mutable found: Ty = left.ty;
     cursor = skip_spaces(src, left.next);
     let op: Int = byte_at(src, cursor);
     if op == 43 || op == 45 || op == 42 {           // '+' '-' '*'
@@ -373,8 +373,8 @@ fn (mut self: Table) check_let(src: String, from: Int) -> Int allocates {
 
 region pass {
     let src: String = read_file("examples/negative/money.bx");
-    let mut table: Table = Table { rows: [] };
-    let mut cursor: Int = 0;
+    let mutable table: Table = Table { rows: [] };
+    let mutable cursor: Int = 0;
     while true {
         if cursor >= len(src) {
             break;

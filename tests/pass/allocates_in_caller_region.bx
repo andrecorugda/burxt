@@ -1,17 +1,17 @@
 // A helper that BUILDS a message and returns it — what a compiler does constantly,
 // and what regions refused until `allocates` existed.
-fn describe(line: Int, byte: Int) -> String allocates {
+function describe(line: Int, byte: Int) -> String allocates {
     return "line " + to_string(line) + ": unexpected byte " + to_string(byte);
 }
 
 // An `allocates` function may call another one: the caller's region is still the
 // region in effect.
-fn banner(line: Int) -> String allocates {
+function banner(line: Int) -> String allocates {
     return "[burxt] " + describe(line, 108);
 }
 
 // Interpolation, `push` and `read_file` all work in caller-region mode too.
-fn summarise(count: Int) -> String allocates {
+function summarise(count: Int) -> String allocates {
     return "{count} problems";
 }
 

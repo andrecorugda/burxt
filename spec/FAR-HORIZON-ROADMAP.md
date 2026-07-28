@@ -13,7 +13,7 @@
 ## M1 — The Memory Model (THE big fork)
 
 **Why this is the pivotal decision in all of Burxt.** The deferred-features ledger is
-already pointing here: mutating `dyn`, storable/returnable `dyn`, growable `List<T>`,
+already pointing here: mutating `dynamic`, storable/returnable `dynamic`, growable `List<T>`,
 slices, string builders — they are ALL blocked on the same question: *who owns heap
 memory and when is it freed.* When three or four ledger entries share one blocker,
 that blocker has become the critical path. This is that blocker.
@@ -55,8 +55,8 @@ boundary (see A4.4's line).
 ### AMENDMENT (2026-07-25) — the trigger has been met, and two new criteria apply
 
 **The gate is open.** The ledger now carries at least five ownership-blocked
-entries: string concatenation, mutating methods through `dyn`, returning or
-storing a `dyn`, interpolation producing a String *value* (v0.0.17), and
+entries: string concatenation, mutating methods through `dynamic`, returning or
+storing a `dynamic`, interpolation producing a String *value* (v0.0.17), and
 growable collections. M1 is no longer premature.
 
 Two criteria have emerged since this file was written, and **both argue against
@@ -98,7 +98,7 @@ tension the North Star says will be managed forever.
 
 **A reframing of "no runtime baggage" that this exposed:** it should mean **no
 *mandatory* runtime**, not "no runtime ever." Burxt already applies exactly this
-principle — write `dyn` and a vtable is emitted; write none and no vtable exists
+principle — write `dynamic` and a vtable is emitted; write none and no vtable exists
 at all. Under that reading a green-thread scheduler can be a *library* that only
 programs using it pay for, which keeps the pillar intact without foreclosing
 concurrency.
@@ -137,7 +137,7 @@ layouts, callbacks).
   so). FFI is where C-compat layout gets built, as a translation layer, without
   disturbing Burxt's internal ABI.
 - Crossing into C is inherently unsafe (C has null, no bounds checks, manual memory).
-  Decision: FFI calls live behind an explicit `extern`/`unsafe`-style marker so the
+  Decision: FFI calls live behind an explicit `external`/`unsafe`-style marker so the
   correctness guarantees are visibly suspended at the boundary, not silently.
 - No implicit conversion of Burxt types to C types — explicit marshalling.
 
@@ -146,7 +146,7 @@ starting platform work (whichever first). Likely soon after collections, since r
 programs need file/network I/O.
 
 **Minimal-first path:** start by formalizing the existing libc-call mechanism into a
-declared `extern` interface for a handful of functions, before attempting general C
+declared `external` interface for a handful of functions, before attempting general C
 interop. Earn generality with a program that needs it.
 
 ---
@@ -192,7 +192,7 @@ is provably real and complete enough to build serious software — because a com
 IS serious software.
 
 **Why it's last:** self-hosting requires the language to be capable enough to express
-a compiler — which needs (at minimum) control flow, strings, collections, structs,
+a compiler — which needs (at minimum) control flow, strings, collections, records,
 enums/sum types, pattern matching, the memory model, and file I/O (via FFI). It is a
 *capability certificate*, not a feature. You cannot rush to it; you arrive at it when
 the language is ready, and the attempt itself reveals every remaining gap.
@@ -226,7 +226,7 @@ reachable. Full self-hosting waits for the memory model and enums.
   A4.4 strings/coll ──┼──> M2 FFI ──> M3 cross-compile ──> (platform reach)
   A4.7 grammar ───────┘
         │
-        └──> M1 memory model ──> growable collections, mutable dyn, real programs
+        └──> M1 memory model ──> growable collections, mutable dynamic, real programs
                     │
                     └──> M4 self-hosting (also needs enums + pattern matching)
 ```

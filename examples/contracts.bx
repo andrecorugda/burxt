@@ -9,7 +9,7 @@
 // depends on how it was compiled is not enforcing anything.
 
 // ---- requires and ensures --------------------------------------------------
-fn withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>
+function withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>
     requires amount > $0.00
     requires amount <= balance
     ensures result >= $0.00
@@ -25,7 +25,7 @@ fn withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>
 // A `pure` function may not print, read or write a file, call into C, call a
 // function that is not pure, or call a method at all. It is a claim the
 // compiler checks, which is why a contract clause may call one.
-pure fn fee_for(amount: Decimal<2>) -> Decimal<2> {
+pure function fee_for(amount: Decimal<2>) -> Decimal<2> {
     if amount > $100.00 {
         return $2.50;
     }
@@ -37,7 +37,7 @@ pure fn fee_for(amount: Decimal<2>) -> Decimal<2> {
 // compared with the current one. Strictly smaller, and never negative — checked
 // at the call site, which is why it works with `return tail`, where the frame
 // making the call is already gone.
-fn countdown(n: Int, acc: Int) -> Int
+function countdown(n: Int, acc: Int) -> Int
     decreases n
 {
     if n <= 0 { return acc; }
@@ -47,9 +47,9 @@ fn countdown(n: Int, acc: Int) -> Int
 // ---- old(...): conservation laws -------------------------------------------
 // `old(e)` is the value on ENTRY, evaluated once before the body runs. It makes
 // the claim that a transfer moves money without creating or destroying any.
-struct Ledger { from_side: Decimal<2>, to_side: Decimal<2> }
+record Ledger { from_side: Decimal<2>, to_side: Decimal<2> }
 
-fn (mut self: Ledger) transfer(amount: Decimal<2>) -> Int
+function (mutable self: Ledger) transfer(amount: Decimal<2>) -> Int
     requires amount > $0.00
     ensures self.from_side + self.to_side == old(self.from_side + self.to_side)
 {
@@ -63,7 +63,7 @@ region r {
     print(fee_for($150.00));               // 2.50
     print(countdown(5, 0));                // 15
 
-    let mut book: Ledger = Ledger { from_side: $500.00, to_side: $0.00 };
+    let mutable book: Ledger = Ledger { from_side: $500.00, to_side: $0.00 };
     let moved: Int = book.transfer($120.00);
     print(book.from_side);                 // 380.00
     print(book.to_side);                   // 120.00

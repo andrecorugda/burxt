@@ -1,12 +1,12 @@
 // The enclosing function has to be able to carry the failure.
 enum Result<T, E> { Ok(T), Err(E) }
 
-fn checked(a: Int, b: Int) -> Result<Int, String> {
+function checked(a: Int, b: Int) -> Result<Int, String> {
     if b == 0 { return Result.Err("division by zero"); }
     return Result.Ok(div_trunc(a, b));
 }
 
-fn plain(a: Int, b: Int) -> Int {
+function plain(a: Int, b: Int) -> Int {
     let n = checked(a, b)?;
     return n;
 }

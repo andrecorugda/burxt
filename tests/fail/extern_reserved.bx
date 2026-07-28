@@ -1,2 +1,2 @@
-extern fn exit(code: Int) -> Int;
+external function exit(code: Int) -> Int;
 print(exit(0));

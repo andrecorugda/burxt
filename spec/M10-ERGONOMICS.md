@@ -48,7 +48,7 @@ let greeting = "hi, " + name;        // String, built in the region
 
 Arrays are the exception, and Decision 2 says why.
 
-**Signatures stay explicit.** Parameters, return types, struct fields, `allocates`, `pure` and
+**Signatures stay explicit.** Parameters, return types, record fields, `allocates`, `pure` and
 every contract are written down. Inference is local to one statement, so a reader never has to
 look past the line in front of them to know what a binding holds — and the places a *reader of
 someone else's code* needs types most are exactly the places that keep them.
@@ -60,13 +60,13 @@ smuggled in with `$19.99`. This is that decision.
 
 ```text
 let xs: [Int; 3] = [1, 2, 3];        // fixed
-let mut lines: [String] = [];        // growable
+let mutable lines: [String] = [];    // growable
 ```
 
 ```text
 error: an array literal does not say whether the array is fixed or growable, so an
        array binding names its type: `let xs: [Int; 3] = [1, 2, 3];` for a fixed
-       one, or `let mut xs: [Int] = [];` for one that grows.
+       one, or `let mutable xs: [Int] = [];` for one that grows.
 ```
 
 This is the one place local inference does not serve, and the reason is not the element
@@ -157,7 +157,7 @@ for line in lines {
 means exactly
 
 ```text
-let mut i = 0;
+let mutable i = 0;
 while i < len(lines) {
     let line = lines[i];
     i = i + 1;
@@ -170,7 +170,7 @@ same as every other binding. Writing to it is the ordinary immutability error, a
 the array through it is impossible, which is the point.
 
 **Lowered in the back end, not the parser — and the first version got that wrong.** `+=` and
-the field shorthand are parser desugars, so `for` was written as one too: a hidden `let mut
+the field shorthand are parser desugars, so `for` was written as one too: a hidden `let mutable
 for$i = 0;` and the loop above, with `$` chosen because no identifier may contain it. That
 worked in stage-0 and is **impossible in stage-1**, because stage-1 names every binding by its
 **span in the source** — and a synthesized index has no span. There is no byte sequence to
@@ -241,7 +241,7 @@ and `while i < n` already says it — deferred with a trigger below.
 
 - **NO inferring a parameter or return type.** A signature is the contract between a function
   and everyone who calls it, and a contract that has to be computed is not one you can read.
-- **NO inferring a struct field's type.** Same reason, plus layout is a fact about the type.
+- **NO inferring a record field's type.** Same reason, plus layout is a fact about the type.
 - **NO `var`, `auto`, or `:=`.** `let` already means "bind this"; a second spelling would be a
   second way to mean one thing.
 - **NO declare-now-initialize-later.** `let x;` has no type and no value, and every language
@@ -268,12 +268,12 @@ things — plus two that looked like gaps and were not.
 
 **Fixed:**
 
-1. **A trailing comma is allowed everywhere.** It was allowed in struct and enum
+1. **A trailing comma is allowed everywhere.** It was allowed in record and enum
    *declarations* and refused in parameter lists, argument lists, array literals, payloads,
    match bindings and type-argument lists. Refusing it makes adding an item a two-line diff
    and buys nothing.
-2. **`fn (self) name()` inside an `impl`.** The header already said which type, and repeating
-   it on every method meant a five-method trait wrote the type six times. Outside an `impl`
+2. **`function (self) name()` inside an `implement`.** The header already said which type, and repeating
+   it on every method meant a five-method trait wrote the type six times. Outside an `implement`
    the annotation stays required, because there nothing else says it.
 3. **Block comments get a real answer instead of a stray-token error.** `/* ... */` reported
    *"expected statement, found `/`"* from two tokens later. It now says Burxt has line
@@ -292,7 +292,64 @@ field shorthand, `+=`, interpolation, `else if`, and `len` over both strings and
 | Multi-line string literals | A literal spanning lines makes its own indentation part of the data — the one thing that surprises everybody about them. `\n` and `+` cover it |
 | Block comments | See above: one way to write a comment |
 | Default parameter values, named arguments | Real friction, real feature. Not refused on principle — just not built. Earns its place when a signature in this repo wants one |
-| `to_string` of a struct | Needs a display trait with a name the language blesses, which is a decision, not a shorthand |
+| `to_string` of a record | Needs a display trait with a name the language blesses, which is a decision, not a shorthand |
+
+## 2c. Slice 2c — every keyword is the word it means (v0.0.98)
+
+Andre asked why a function is `fn` and a structure is `struct`, coming from PHP where both are
+spelled out. The answer was not a good one: `fn`, `mut`, `impl`, `dyn`, `extern` and `struct`
+were **inherited from Rust**, because Rust is where the memory model and the type discipline
+came from. That is a habit, not a decision — and it sat badly next to the rest of the list:
+
+| Spelled out | Clipped |
+|---|---|
+| `let` `return` `while` `for` `in` `if` `else` `match` `trait` `region` `print` `pure` `break` `continue` `allocates` `requires` `ensures` `decreases` | `fn` `mut` `impl` `dyn` `extern` `struct` |
+
+**Twenty-five words against six.** And the rule had already been decided once, in the other
+direction: `RoundHalfEven`, not `HalfEven`, because the self-explanatory spelling wins. So the
+clippings were the ones out of step.
+
+| Old | New | Why that word |
+|---|---|---|
+| `fn` | `function` | a function is a function |
+| `mut` | `mutable` | a binding that can change is mutable |
+| `impl` | `implement` | `implement Priced for Book` reads as the sentence it is |
+| `dyn` | `dynamic` | the decision it names is made dynamically, at run time |
+| `extern` | `external` | the function it names is external to this program |
+| `struct` | `record` | named fields, copied by value, no inheritance, no hidden header |
+
+`enum` is unchanged: it is short for enumeration, but every language spells it `enum` and
+`enumeration` reads worse rather than clearer.
+
+### Why `record` and not `structure`, `blueprint` or `capsule`
+
+I first argued `struct` should stay because it is "a whole word". **That was wrong** — it is a
+clipping of *structure*, which puts it in exactly the category being fixed.
+
+- **`blueprint`** describes a *class*: a plan you manufacture instances from. A Burxt record has
+  no constructor and no factory. The word would promise machinery that is not there.
+- **`capsule`** implies encapsulation, and a record has none: every field is public, there is no
+  `private`, and the layout is exactly the fields. It would name the opposite of the guarantee.
+- **`structure`** is the literal unclipping, and it is longer without being clearer — jargon in a
+  way `record` is not.
+- **`record`** is what the thing *is*. In C#, Java, F# and Pascal it means precisely: named typed
+  fields, value semantics, no inheritance. A PHP reader has no `struct` in their vocabulary and
+  does know what a record is.
+
+### The old spellings are reserved, and their only job is to say so
+
+A clean break, not two ways to write one thing — "one obvious way to write each construct" is
+the standing rule, and `fn` *or* `function` would be the kitchen sink.
+
+```text
+error: Burxt spells this `record`, not `struct`: named fields, copied by value, with no
+       inheritance and no hidden header — which is what a record is, and what a class is
+       not. Every keyword in this language is the word it means — which is why
+       `allocates` and `decreases` are not `alloc` and `dec`.
+```
+
+A rename a reader cannot see the reason for is a rename they will resent, so each message
+carries its reason.
 
 ## 3. Deferred, with triggers
 
@@ -320,8 +377,8 @@ field shorthand, `+=`, interpolation, `else if`, and `len` over both strings and
 
 ### Slice 1
 
-1. `let x = e;` and `let mut x = e;` work for **every** type Burxt has: Int, Bool, String,
-   Decimal with and without a contract, struct, enum, `dyn`, a built String, and the result of
+1. `let x = e;` and `let mutable x = e;` work for **every** type Burxt has: Int, Bool, String,
+   Decimal with and without a contract, record, enum, `dynamic`, a built String, and the result of
    a call.
 2. An array literal with no annotation is refused with Decision 2's message.
 3. A scale mismatch downstream of an inferred binding is still an error — Decision 3's example
