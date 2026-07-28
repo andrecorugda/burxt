@@ -482,26 +482,45 @@ fn (mut self: Unit) type_of_inner(src: String, node: Int, expected: Ty) -> Ty al
         // product's scale is their SUM, and landing it needs a declared contract.
         if n.value == 27 {
             if left.kind == 45 && right.kind == 45 {
-                if ty_same(src, left, right) {
-                    // Identical operand types: their own contract lands the product,
-                    // so the context does not have to repeat it.
-                    if left.contract == 0 {
-                        let e: Int = self.complain_at(src, n.tok,
-                            "`*` on " + ty_show(src, left) + " and " + ty_show(src, right)
-                            + " needs a rounding contract: the exact product has "
-                            + to_string(left.scale + right.scale) + " decimal places");
-                        return ty_unknown();
-                    }
-                    return left;
+                // The product's TRUE scale is the sum of the operands'. At that scale
+                // nothing rounds, so nothing needs declaring — and a contract demanded
+                // where no rounding happens teaches the reader that contracts are
+                // ceremony. They are not: one appears exactly where a value narrows.
+                //
+                // A scaled i64 holds 18 fractional digits, so a wider sum must narrow
+                // whatever the author wanted. (Relaxed in v0.0.91, with stage-0.)
+                let exact: Int = left.scale + right.scale;
+                let representable: Bool = exact <= 18;
+                if expected.kind == 45 && expected.contract != 0 {
+                    return expected;                 // a contract says how it narrows
                 }
-                if expected.contract == 0 {
+                if expected.kind == 45 {
+                    if representable && expected.scale == exact {
+                        return ty_decimal(exact, 0);  // the product's own width: exact
+                    }
                     let e: Int = self.complain_at(src, n.tok,
                         "`*` on " + ty_show(src, left) + " and " + ty_show(src, right)
-                        + " needs a rounding contract: the exact product has "
-                        + to_string(left.scale + right.scale) + " decimal places");
+                        + " has an exact product with " + to_string(exact)
+                        + " decimal places, and reaching " + ty_show(src, expected)
+                        + " means rounding it: say how with a rounding contract, or take "
+                        + "the exact answer");
                     return ty_unknown();
                 }
-                return expected;
+                // Nothing asked for it. Identical operands that carry a contract land the
+                // product at their OWN scale — the context does not have to repeat what the
+                // operands already say, so `print(a * b)` on money answers in money.
+                if ty_same(src, left, right) && left.contract != 0 {
+                    return left;
+                }
+                if representable {
+                    return ty_decimal(exact, 0);
+                }
+                let e2: Int = self.complain_at(src, n.tok,
+                    "`*` on " + ty_show(src, left) + " and " + ty_show(src, right)
+                    + " has an exact product with " + to_string(exact)
+                    + " decimal places, which does not fit a scaled i64: bind it to a "
+                    + "Decimal with a rounding contract");
+                return ty_unknown();
             }
             if left.kind == 45 && right.kind == 40 { return left; }
             if left.kind == 40 && right.kind == 45 { return right; }
@@ -956,12 +975,20 @@ fn (mut self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -> Int allo
     let n: Node = self.nodes[stmt];
 
     if n.kind == 60 {                                // let
-        let declared: Ty = self.ty_of(src, n.a);
-        let actual: Ty = self.type_of(src, n.b, declared);
-        if !is_unknown(actual) && !self.fits(src, actual, declared) {
-            let e: Int = self.complain_at(src, n.tok,
-                "declared " + ty_show(src, declared) + ", but the value is "
-                + ty_show(src, actual));
+        // Two paths, and only the first line differs: with an annotation the value is
+        // checked AGAINST a type, without one the value IS the type. Inference removes
+        // typing, not checking. See spec/M10-ERGONOMICS.md §1.
+        let mut declared: Ty = ty_unknown();
+        if n.a >= 0 {
+            declared = self.ty_of(src, n.a);
+            let actual: Ty = self.type_of(src, n.b, declared);
+            if !is_unknown(actual) && !self.fits(src, actual, declared) {
+                let e: Int = self.complain_at(src, n.tok,
+                    "declared " + ty_show(src, declared) + ", but the value is "
+                    + ty_show(src, actual));
+            }
+        } else {
+            declared = self.type_of(src, n.b, ty_unknown());
         }
         let name: Tok = self.toks[n.tok];
         // Shadowing is refused, so a second `let` of the same name is an error.

@@ -1,0 +1,10 @@
+// Money times a rate, with nowhere for a contract to live: the answer is the exact
+// product, all six places of it. The decision about how it becomes money belongs
+// wherever it is finally stored, and until then nothing has been decided.
+let price: Decimal<2> = $19.99;
+let rate: Decimal<4> = 8.25%;
+print(price * rate);
+
+// The same product, narrowed to money, with the rounding declared.
+let tax: Decimal<2, RoundHalfEven> = price * rate;
+print(tax);

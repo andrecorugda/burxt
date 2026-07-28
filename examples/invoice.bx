@@ -37,23 +37,30 @@ fn tax_on(subtotal: Decimal<2>, rate: Decimal<4>)
 }
 
 region invoice {
+    // The array names its type, because a literal cannot say fixed or growable —
+    // this one grows, and growing means it lives in the region.
     let mut lines: [Line] = [];
-    let a: Int = push(lines, Line { label: "widget", unit: $19.99, qty: 3 });
-    let b: Int = push(lines, Line { label: "gasket", unit: $4.25,  qty: 12 });
-    let c: Int = push(lines, Line { label: "manual", unit: $12.00, qty: 1 });
+    let a = push(lines, Line { label: "widget", unit: $19.99, qty: 3 });
+    let b = push(lines, Line { label: "gasket", unit: $4.25,  qty: 12 });
+    let c = push(lines, Line { label: "manual", unit: $12.00, qty: 1 });
 
     print("INVOICE 2026-0042");
     print("-------------------------------------------");
 
+    // `let mut subtotal = $0.00;` would be a Decimal<2>, which is what this is. It
+    // keeps its annotation because it is an accumulator: the type is the claim about
+    // what may be added to it, and that claim is worth reading at the top of a loop.
     let mut subtotal: Decimal<2> = $0.00;
-    let mut i: Int = 0;
+    let mut i = 0;
     while i < len(lines) {
         print(lines[i].render());
         subtotal = subtotal + lines[i].amount();
-        i = i + 1;
+        i += 1;
     }
 
-    let rate: Decimal<4> = 8.25%;
+    let rate = 8.25%;                                  // Decimal<4>
+    // These two keep their annotations for the reason the annotation exists: each one
+    // carries a rounding contract, and a contract is a decision, not a type.
     let tax: Decimal<2, RoundHalfEven> = tax_on(subtotal, rate);
     let total: Decimal<2, RoundHalfEven> = subtotal + tax;
 

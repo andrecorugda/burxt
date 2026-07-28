@@ -1118,9 +1118,15 @@ fn (mut self: Unit) parse_stmt(src: String) -> Int allocates {
         if !self.at(1) { return self.complain(src, "a name after `let`"); }
         let name_tok: Int = self.pos;
         let m2: Int = self.advance();
-        if !self.eat(src, 20, "`:` and a type — every `let` declares one") { return -1; }
-        let ty: Int = self.parse_type(src);
-        if ty < 0 { return -1; }
+        // The annotation is optional: without it the type comes from the value, and -1
+        // is how a `let` node says "there was none" — the emitter already read it that
+        // way. See spec/M10-ERGONOMICS.md §1.
+        let mut ty: Int = 0 - 1;
+        if self.at(20) {
+            let colon: Int = self.advance();
+            ty = self.parse_type(src);
+            if ty < 0 { return -1; }
+        }
         if !self.eat(src, 24, "`=` and an initial value") { return -1; }
         let value: Int = self.parse_expr(src);
         if value < 0 { return -1; }

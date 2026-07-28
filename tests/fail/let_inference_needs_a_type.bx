@@ -1,0 +1,7 @@
+// A list of values does not say whether the array is fixed or growable, and that is
+// a decision with different storage behind it. So an array binding names its type,
+// with or without an annotation elsewhere. Refused with the fix in the message.
+region r {
+    let xs = [1, 2, 3];
+    print(xs[0]);
+}

@@ -272,10 +272,15 @@ pub struct Stmt {
 pub enum StmtKind {
     /// `let name: Type = value;` — or `let mut name: ...` to allow
     /// reassignment. Immutable is the default; mutation is opt-in and visible.
+    ///
+    /// `declared` is `None` when the annotation was left off and the type comes
+    /// from the initializer instead (`let count = 0;`). Only the annotation is
+    /// optional: a binding still has exactly one type, fixed where it is bound.
+    /// See spec/M10-ERGONOMICS.md §1.
     Let {
         name: String,
         mutable: bool,
-        declared: Type,
+        declared: Option<Type>,
         value: Expr,
     },
     /// `name = value;` — only valid for a `let mut` binding, and the value's

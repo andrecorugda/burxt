@@ -1,0 +1,7 @@
+// Inference removes typing, not checking: the scales still have to match.
+region r {
+    let money = $1.00;
+    let rate = 8.25%;
+    let wrong = money + rate;
+    print(wrong);
+}

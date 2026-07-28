@@ -1,0 +1,15 @@
+// Decimal * Decimal at the product's OWN scale needs no rounding contract, because
+// no rounding happens: 1.10 * 2.00 is exactly 2.2000, and the exact scale is the sum
+// of the operands'. Until v0.0.91 this was refused, which taught the reader that a
+// contract is ceremony. It is not — it appears exactly where a value narrows.
+let a: Decimal<2> = 1.10;
+let b: Decimal<2> = 2.00;
+print(a * b);
+
+// Written down, the exact scale is accepted too.
+let exact: Decimal<4> = a * b;
+print(exact);
+
+// And narrowing still demands the contract, which is the half that matters.
+let narrowed: Decimal<2, RoundHalfEven> = a * b;
+print(narrowed);

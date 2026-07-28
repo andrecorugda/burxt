@@ -1,5 +1,0 @@
-// With no result binding at all there is nowhere for the contract to live,
-// so the rounding cannot be declared — and is therefore refused.
-let price: Decimal<2, RoundHalfEven> = $19.99;
-let rate: Decimal<4, RoundHalfEven> = 8.25%;
-print(price * rate);

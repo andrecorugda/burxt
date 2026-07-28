@@ -1,5 +1,0 @@
-// A4.7 ships money literals as VALUES; it deliberately does not introduce
-// type inference, so the annotation is still required. Inference is its own
-// milestone, because how much of it a language has shapes every line.
-let price = $19.99;
-print(price);

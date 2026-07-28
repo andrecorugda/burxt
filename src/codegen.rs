@@ -1494,7 +1494,7 @@ impl<'ctx> CodeGen<'ctx> {
                             // same-scale case too (s + s - s = s), so mixed and
                             // matching scales share a single path rather than being
                             // special-cased against each other.
-                            let (scale, mode) = decimal_with_rounding(&e.ty)?;
+                            let scale = decimal_scale(&e.ty)?;
                             let ls = decimal_scale(&lhs.ty)?;
                             let rs = decimal_scale(&rhs.ty)?;
                             let l128 = self.widen(l)?;
@@ -1504,7 +1504,16 @@ impl<'ctx> CodeGen<'ctx> {
                                 .build_int_mul(l128, r128, "mul_raw")
                                 .map_err(|e| e.to_string())?;
                             let shift = ls as i64 + rs as i64 - scale as i64;
-                            if shift >= 0 {
+                            if shift == 0 {
+                                // The result is exactly as wide as the product, so the
+                                // i128 product IS the answer and there is no rounding to
+                                // do — which is why typeck asks for no contract here.
+                                // Narrowing still checks: an exact value can overflow.
+                                self.build_narrow_to_i64(raw)
+                            } else if shift > 0 {
+                                // Digits are being dropped, so a contract says how; typeck
+                                // guarantees one is present on this path.
+                                let (_, mode) = decimal_with_rounding(&e.ty)?;
                                 let pow = self.pow10_i128(shift as u32);
                                 self.build_round_div(mode, raw, pow)
                             } else {

@@ -1,0 +1,42 @@
+// `let x = e;` takes its type from `e`. The annotation is optional, not gone: it is
+// still legal everywhere and still required where a value cannot say its own type.
+// See spec/M10-ERGONOMICS.md §1.
+struct Point { x: Int, y: Int }
+enum Status { Paid, Void }
+
+fn double(n: Int) -> Int { return n * 2; }
+
+region r {
+    let count = 0;                       // Int
+    let flag = true;                      // Bool
+    let name = "burxt";                   // String
+    let price = $19.99;                   // Decimal<2>
+    let rate = 8.25%;                     // Decimal<4>
+    let origin = Point { x: 1, y: 2 };    // Point
+    let state = Status.Paid;              // Status
+    // An array names its type, because a literal cannot say fixed or growable.
+    let sizes: [Int; 3] = [10, 20, 30];
+    let called = double(21);              // Int, from the signature
+    let exact = price * rate;             // Decimal<6> — exact, so no contract
+
+    // `let mut` infers the same way, and mutation still needs the `mut`.
+    let mut running = 0;
+    running = running + called;
+
+    // A built String is a region value like any other, and inference does not change
+    // the rule that it needs one open.
+    let greeting = "hello, " + name;
+
+    print(count);
+    print(flag);
+    print(name);
+    print(price);
+    print(rate);
+    print(origin.x + origin.y);
+    print(sizes[1]);
+    print(called);
+    print(exact);
+    print(running);
+    print(greeting);
+    match state { Paid => { print("paid"); } Void => { print("void"); } }
+}

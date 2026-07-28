@@ -963,8 +963,14 @@ impl Parser {
             Token::Ident(s) => s,
             other => return Err(format!("expected identifier after 'let', found {}", other.describe())),
         };
-        self.expect(&Token::Colon)?;
-        let declared = self.parse_type()?;
+        // The annotation is optional. `let count = 0;` takes its type from the value —
+        // and only here: a signature still says what it takes and what it answers with.
+        let declared = if self.at(&Token::Colon) {
+            self.bump();
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
         self.expect(&Token::Equals)?;
         let value = self.parse_expr()?;
         self.expect(&Token::Semicolon)?;

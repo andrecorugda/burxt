@@ -454,6 +454,26 @@ mod tests {
         assert!(text.contains("half to even"), "got {:?}", text);
     }
 
+    /// An inferred binding has no annotation to read, so hover is where its type
+    /// lives now. This is the trade `let x = 0;` makes explicit: the type did not
+    /// disappear, it moved into the editor. See spec/M10-ERGONOMICS.md §4.6.
+    #[test]
+    fn hover_reports_a_type_that_was_never_written() {
+        let src = "region r {\n    let price = $19.99;\n    let rate = 8.25%;\n    \
+                   let tax = price * rate;\n    print(tax);\n}\n";
+        let at_tax = src.lines().nth(4).unwrap().find("tax").unwrap();
+        let v = hover(src, 4, at_tax).expect("expected a hover on `tax`");
+        let text = v.path(&["contents", "value"]).unwrap().as_str().unwrap();
+        // Nowhere in the program does the word `Decimal` appear.
+        assert!(!src.contains("Decimal"));
+        assert!(text.contains("Decimal<6>"), "got {:?}", text);
+
+        let at_price = src.lines().nth(1).unwrap().find("19.99").unwrap();
+        let v = hover(src, 1, at_price).expect("expected a hover on the literal");
+        let text = v.path(&["contents", "value"]).unwrap().as_str().unwrap();
+        assert!(text.contains("Decimal<2>"), "got {:?}", text);
+    }
+
     /// Hover works throughout a file that does not compile — above AND below the
     /// mistake — because the checker recovers per statement instead of stopping.
     /// This test used to assert the opposite; error recovery is what changed it.

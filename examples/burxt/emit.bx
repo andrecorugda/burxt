@@ -1087,6 +1087,16 @@ fn (mut self: Unit) emit_rounded(left: String, right: String, shift: Int, contra
                                        + " to i64\n");
             return reg;
         }
+        if shift == 0 {
+            // The answer is exactly as wide as the product, so the product IS the answer
+            // and there is nothing to round — which is why the checker asks for no
+            // contract here. Dividing by 10^0 would give the same value; saying so
+            // directly skips a call and matches the IR stage-0 emits.
+            let reg: String = self.fresh();
+            let narrowed: Int = self.w("  " + reg + " = trunc i128 " + product
+                                       + " to i64\n");
+            return reg;
+        }
         numerator = product;
         divisor = to_string(power_of_ten(shift));
     }

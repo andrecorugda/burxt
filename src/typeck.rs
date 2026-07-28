@@ -532,14 +532,17 @@ impl TypeChecker {
 
     /// Keep checking usefully after a statement failed.
     ///
-    /// This is where Burxt gets an unusual advantage: **every `let` declares its
-    /// type**, so even when the initializer is wrong the binding's type is known.
-    /// Binding it anyway means the rest of the function checks against the type
-    /// the author asked for, instead of drowning the real error in a cascade of
-    /// "unknown name" noise. In a language with inference this is the hard part;
-    /// here the annotation was mandatory all along.
+    /// An **annotated** `let` states its type, so even when the initializer is wrong
+    /// the binding's type is known. Binding it anyway means the rest of the function
+    /// checks against the type the author asked for, instead of drowning the real
+    /// error in a cascade of "unknown name" noise.
+    ///
+    /// An **inferred** `let` whose initializer failed has nothing to recover with, and
+    /// nothing is guessed. That is the stated cost of spec/M10-ERGONOMICS.md §1 — half
+    /// of an advantage Burxt used to have for free — and it is a real argument for
+    /// annotating bindings in a long function.
     fn recover_from(&mut self, s: &Stmt) {
-        if let StmtKind::Let { name, mutable, declared, .. } = &s.kind {
+        if let StmtKind::Let { name, mutable, declared: Some(declared), .. } = &s.kind {
             if self.validate_type(declared).is_ok() && !self.env.contains_key(name) {
                 self.env.insert(name.clone(), (declared.clone(), *mutable));
             }
@@ -1773,39 +1776,64 @@ impl TypeChecker {
                         name, name, name
                     ));
                 }
-                self.validate_type(declared)?;
-                // RULE 1 of escape checking: a region-allocated value may only
-                // be bound inside a region. Because block bindings do not
-                // escape their block, this single rule stops region data from
-                // outliving its region by assignment — there is nowhere outside
-                // to put it.
-                if self.region_allocated(declared) && !self.has_region() {
-                    return Err(self.needs_region(&format!(
-                        "`let {}: {}` holds a growable array, which lives in a region",
-                        name, declared
-                    )));
-                }
-                // An array exists only behind a binding: it must be created
-                // right here, from a literal (whole-array copies are deferred).
-                if matches!(declared, Type::Array { .. }) && !matches!(value.kind, ExprKind::ArrayLit(_))
-                {
-                    return Err(format!(
-                        "`let {}: {}` must be initialized with an array literal, \
-                         e.g. [1, 2, 3] — copying a whole array is deferred.",
-                        name, declared
-                    ));
-                }
-                let typed = self.check_expr(value, Some(declared))?;
-                if !self.storable(&typed.ty, declared) {
-                    // The declaration is fine; it is the value that disagrees.
-                    self.blame(value.span);
-                    return Err(format!(
-                        "type mismatch in `let {}`: declared {}, but expression has type {}",
-                        name, declared, typed.ty
-                    ));
-                }
-                self.env.insert(name.clone(), (declared.clone(), *mutable));
-                Ok(TypedStmt::Let { name: name.clone(), ty: declared.clone(), value: typed })
+                // Two paths, and only the first line of each differs: with an annotation
+                // the value is checked AGAINST a type, without one the value IS the type.
+                // Every rule after that is the same, which is the point — inference removes
+                // typing, not checking. See spec/M10-ERGONOMICS.md §1 Decision 3.
+                let (bound, typed) = match declared {
+                    Some(declared) => {
+                        self.validate_type(declared)?;
+                        // RULE 1 of escape checking: a region-allocated value may only
+                        // be bound inside a region. Because block bindings do not
+                        // escape their block, this single rule stops region data from
+                        // outliving its region by assignment — there is nowhere outside
+                        // to put it.
+                        if self.region_allocated(declared) && !self.has_region() {
+                            return Err(self.needs_region(&format!(
+                                "`let {}: {}` holds a growable array, which lives in a region",
+                                name, declared
+                            )));
+                        }
+                        // An array exists only behind a binding: it must be created
+                        // right here, from a literal (whole-array copies are deferred).
+                        if matches!(declared, Type::Array { .. })
+                            && !matches!(value.kind, ExprKind::ArrayLit(_))
+                        {
+                            return Err(format!(
+                                "`let {}: {}` must be initialized with an array literal, \
+                                 e.g. [1, 2, 3] — copying a whole array is deferred.",
+                                name, declared
+                            ));
+                        }
+                        let typed = self.check_expr(value, Some(declared))?;
+                        if !self.storable(&typed.ty, declared) {
+                            // The declaration is fine; it is the value that disagrees.
+                            self.blame(value.span);
+                            return Err(format!(
+                                "type mismatch in `let {}`: declared {}, but expression \
+                                 has type {}",
+                                name, declared, typed.ty
+                            ));
+                        }
+                        (declared.clone(), typed)
+                    }
+                    None => {
+                        let typed = self.check_expr(value, None)?;
+                        // The same region rule, asked of the type that was found rather
+                        // than the one that was written. It can still fire: a call can
+                        // answer with a struct that holds a growable array.
+                        if self.region_allocated(&typed.ty) && !self.has_region() {
+                            return Err(self.needs_region(&format!(
+                                "`let {} = ...` holds a growable array ({}), which lives \
+                                 in a region",
+                                name, typed.ty
+                            )));
+                        }
+                        (typed.ty.clone(), typed)
+                    }
+                };
+                self.env.insert(name.clone(), (bound.clone(), *mutable));
+                Ok(TypedStmt::Let { name: name.clone(), ty: bound, value: typed })
             }
             StmtKind::Assign { name, value } => {
                 let (declared, mutable) = self
@@ -3279,10 +3307,18 @@ impl TypeChecker {
                 }
                 let (elem_ty, len) = match expected {
                     Some(Type::Array { elem, len }) => (elem.as_ref().clone(), *len),
+                    // An array literal is the one thing local inference cannot serve, and
+                    // not because of the element type: a list of values does not say
+                    // whether the array is FIXED or GROWABLE, and that is a decision with
+                    // different storage, different rules and different costs behind it.
+                    // So an array binding names its type, and says which.
+                    // See spec/M10-ERGONOMICS.md §1 Decision 2.
                     _ => {
                         return Err(
-                            "an array literal needs a declared array type — write it \
-                             as a `let` initializer: let a: [Int; 3] = [...];"
+                            "an array literal does not say whether the array is fixed or \
+                             growable, so an array binding names its type: \
+                             `let xs: [Int; 3] = [1, 2, 3];` for a fixed one, or \
+                             `let mut xs: [Int] = [];` for one that grows."
                                 .to_string(),
                         )
                     }
@@ -3612,32 +3648,58 @@ impl TypeChecker {
             // sum-of-scales product narrows. Never optional: a silently rounded
             // product would break the thesis.
             (BinOp::Mul, Decimal { scale: ls, .. }, Decimal { scale: rs, .. }) => {
-                if lhs == rhs {
-                    // identical operand types: the long-standing rule
-                    return self.require_rounding(op, lhs);
-                }
+                // The product's TRUE scale is the sum of the operands'. At that scale
+                // nothing rounds, so nothing needs declaring — and a contract demanded
+                // where no rounding happens teaches the reader that contracts are
+                // ceremony. They are not: one appears exactly where a value narrows.
+                //
+                // A scaled i64 holds 18 fractional digits, so a sum past that cannot be
+                // represented and the result must narrow whatever the author wanted.
+                let exact = ls + rs;
+                let representable = exact <= 18;
+                let exact_ty = Decimal { scale: exact, rounding: None };
                 match expected {
+                    // A contract was asked for: it says how the product narrows, and to
+                    // what. This is the only arm that can round.
                     Some(t @ Decimal { rounding: Some(_), .. }) => Ok(t.clone()),
-                    Some(Decimal { scale, rounding: None }) => Err(format!(
-                        "this multiplication mixes scales {} and {}, so its exact \
-                         product has {} decimal places and must be rounded to reach \
-                         {}. Give the result a rounding contract to say how, e.g. \
-                         Decimal<{}, RoundHalfEven>.",
-                        ls,
-                        rs,
-                        ls + rs,
+                    // Exactly the product's own width: nothing rounds, nothing to declare.
+                    Some(Decimal { scale, rounding: None })
+                        if representable && *scale == exact =>
+                    {
+                        Ok(exact_ty)
+                    }
+                    // Some other width, with no contract to say how it gets there.
+                    Some(Decimal { scale, .. }) => Err(format!(
+                        "this multiplication of {} by {} has an exact product with {} \
+                         decimal places, and reaching Decimal<{}> means rounding it. \
+                         Say how — Decimal<{}, RoundHalfEven> — or take the exact \
+                         answer with Decimal<{}>{}.",
+                        lhs,
+                        rhs,
+                        exact,
                         scale,
-                        scale
+                        scale,
+                        exact,
+                        if representable { "" } else { ", which does not fit an i64" }
                     )),
+                    // Nothing asked for it. Identical operands that carry a contract land
+                    // the product at their OWN scale — the context does not have to repeat
+                    // what the operands already say, so `print(a * b)` on money answers in
+                    // money. (v0.0.86; kept, because it is the common case.)
+                    _ if lhs == rhs && matches!(lhs, Decimal { rounding: Some(_), .. }) => {
+                        Ok(lhs.clone())
+                    }
+                    // Otherwise the exact product, and the decision about narrowing it
+                    // belongs wherever this value is finally stored. A caller expecting
+                    // something else reports that mismatch itself rather than having this
+                    // rule guess at it. See spec/M10-ERGONOMICS.md §1 Decision 5.
+                    _ if representable => Ok(exact_ty),
                     _ => Err(format!(
-                        "this multiplication mixes scales {} and {}, so its exact \
-                         product has {} decimal places and must be rounded. Bind it \
-                         to a Decimal with a rounding contract, e.g. \
-                         `let x: Decimal<2, RoundHalfEven> = ...`, so the rounding \
-                         is declared rather than guessed.",
-                        ls,
-                        rs,
-                        ls + rs
+                        "this multiplication of {} by {} has an exact product with {} \
+                         decimal places, which does not fit a scaled i64. Bind it to a \
+                         Decimal with a rounding contract, e.g. \
+                         `let x: Decimal<2, RoundHalfEven> = ...`.",
+                        lhs, rhs, exact
                     )),
                 }
             }

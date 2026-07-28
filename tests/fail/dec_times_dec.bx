@@ -1,4 +1,0 @@
-// Decimal * Decimal needs an explicit rounding contract — refused for now.
-let a: Decimal<2> = 1.10;
-let b: Decimal<2> = 2.00;
-print(a * b);

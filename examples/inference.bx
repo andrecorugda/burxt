@@ -1,0 +1,100 @@
+// ============================================================================
+// `let x = e;` — a binding takes its type from its value.
+//
+// This is the one piece of inference Burxt has, and the boundary is deliberate:
+// a STATEMENT may leave its type out, a SIGNATURE may not. So a reader never has
+// to look further than the line in front of them, and the places where someone
+// reading unfamiliar code needs types most are exactly the places that keep them.
+// ============================================================================
+
+struct Point { x: Int, y: Int }
+
+enum Status { Paid, Owing(Decimal<2>), Void }
+
+// A signature says everything. Nothing here is inferred, and nothing here should
+// be: this line is the contract with everyone who calls it.
+fn distance_squared(a: Point, b: Point) -> Int {
+    let dx = a.x - b.x;                  // Int — from the fields
+    let dy = a.y - b.y;
+    return dx * dx + dy * dy;
+}
+
+region r {
+    // ---- every type infers -------------------------------------------------
+    let count = 0;                       // Int
+    let ready = true;                     // Bool
+    let name = "burxt";                   // String
+    let price = $19.99;                   // Decimal<2>
+    let rate = 8.25%;                     // Decimal<4>
+    let here = Point { x: 3, y: 4 };      // Point
+    let state = Status.Owing($42.50);     // Status
+    let far = distance_squared(here, Point { x: 0, y: 0 });   // Int, from the signature
+    let greeting = "hello, " + name;      // String, built in this region
+
+    // `let mut` infers the same way. Mutation is still opt-in and still visible.
+    let mut running = 0;
+    running += far;
+
+    print(count);
+    print(ready);
+    print(greeting);
+    print(price);
+    print(rate);
+    print(here.x + here.y);
+    print(running);
+
+    // ---- an array names its type, and this is not about the element type ----
+    // `[10, 20, 30]` obviously holds Ints. What it does not say is FIXED or
+    // GROWABLE — two different types, with different storage and different
+    // rules — so the binding says which.
+    let sizes: [Int; 3] = [10, 20, 30];   // fixed: exactly three
+    let mut log: [String] = [];           // growable: lives in the region
+    let n = push(log, "started");
+    print(sizes[1]);
+    print(log[0]);
+
+    // ---- inference removes typing, not checking ----------------------------
+    // The exact product of a 2-place price and a 4-place rate has six places, and
+    // that is what this is. Nothing rounded, so nothing had to be declared.
+    let exact = price * rate;
+    print(exact);                         // 1.649175
+
+    // Turning it into money is a decision, so it is still written down. Inference
+    // cannot introduce rounding, because a contract only exists if someone typed it.
+    let tax: Decimal<2, RoundHalfEven> = price * rate;
+    print(tax);                           // 1.65
+
+    match state {
+        Paid => { print("settled"); }
+        Owing(amount) => { print(amount); }     // Decimal<2>, from the variant
+        Void => { print("cancelled"); }
+    }
+}
+
+// ---- What the compiler refuses, and why ------------------------------------
+//
+// An array with no type, because a literal cannot say which kind it is:
+//     let xs = [1, 2, 3];
+//     error: an array literal does not say whether the array is fixed or growable,
+//            so an array binding names its type: `let xs: [Int; 3] = [1, 2, 3];`
+//            for a fixed one, or `let mut xs: [Int] = [];` for one that grows.
+//
+// Scales still have to match, inferred or not:
+//     let wrong = price + rate;
+//     error: cannot + Decimal<2> and Decimal<4>: scales must match.
+//
+// Narrowing still needs its contract:
+//     let wrong: Decimal<2> = price * rate;
+//     error: ... reaching Decimal<2> means rounding it. Say how —
+//            Decimal<2, RoundHalfEven> — or take the exact answer with Decimal<6>.
+//
+// And a signature is never inferred, because it is what callers read:
+//     fn add(a, b) { return a + b; }
+//     error: expected `:` and a type
+//
+// ---- Where the type went ---------------------------------------------------
+//
+// An inferred binding has no annotation, so **hover in the editor** is where its
+// type lives. That is the honest trade this feature makes: the type did not go
+// away, it moved out of the source and into the tooling. If you are reading Burxt
+// on a web page rather than in an editor, that is a reason to annotate.
