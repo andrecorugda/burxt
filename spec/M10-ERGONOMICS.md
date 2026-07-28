@@ -351,6 +351,56 @@ error: Burxt spells this `record`, not `struct`: named fields, copied by value, 
 A rename a reader cannot see the reason for is a rename they will resent, so each message
 carries its reason.
 
+## 2d. The tooling is part of the language (v0.0.99)
+
+Andre reported three things after the rename: squiggles on files that compile, squiggles on
+files that are not negatives, and `function` losing its colour. All three were true, none was a
+compiler bug, and the reason they all happened at once is the rule this section exists to write
+down.
+
+> **A change to the language is not finished until the highlighter, the language server and the
+> packaged extension have changed with it.** A reader's first contact with Burxt is an editor,
+> not `cargo test`. A language that compiles correctly and looks broken *is* broken.
+
+### The three, and what each one really was
+
+**1. The editor was colouring yesterday's language.** `burxt-0.1.3.vsix` had been built before
+the rename, so the installed grammar knew `fn` and had never heard of `function`. Nothing in the
+repository noticed, because nothing was looking. Now
+`the_packaged_extension_matches_the_grammar_in_the_repository` reads the grammar back out of the
+`.vsix` and refuses a stale one.
+
+**2. The grammar had never learned `function (self)`.** The receiver shorthand shipped in
+v0.0.95; the method pattern still demanded `self: Type`, so six declarations across the examples
+highlighted as nothing. `editor_grammar_knows_every_keyword_the_compiler_does` passed the whole
+time, because **a keyword list is not a grammar** — it checks vocabulary, not whether the
+language can be read. `editor_grammar_highlights_every_declaration_the_examples_write` now takes
+every declaration line out of the real examples and requires some pattern to match it.
+
+**3. A file is not always a program.** `examples/burxt/check.bx` is one of five modules
+`examples/stage1.bx` assembles, and checking it alone reports every type declared in a sibling as
+unknown — five files of squiggles that were not mistakes. Worse, `stage1.bx` itself reported a
+parse error **on its own `use` lines**, because the language server never resolved imports at
+all: a bug that had been there since modules shipped in v0.0.81 and that no test could see,
+because `burxt check` resolves them and only the editor did not.
+
+The fix is the design M6 already chose, applied one layer up: **check the program, keep the
+diagnostics that landed in this file.** If the open file has `use` lines it is a root and is
+loaded as one; if it has none, the nearby directories are searched for a program whose `use`
+closure reaches it. Either way the concatenated buffer and its source map do the rest — the
+editor's unsaved text is spliced over the file's own span, so what the user is looking at is what
+gets checked. `the_language_server_checks_the_program_a_file_belongs_to` drives the real server
+over stdio for every example, the standard library and every compiler module, and requires
+`"diagnostics":[]` from all of them. `examples/negative/` is excluded on purpose: those are meant
+to be wrong, and a squiggle there is the point.
+
+### What this costs, stated
+
+Checking a module now loads its whole program on every keystroke. For this compiler that is
+200 KB and 1.1 seconds' worth of *compilation* — but the language server does the front end only,
+which is a few milliseconds, and it is what M9 bought. If it ever bites, the answer is to cache
+the program per root and re-check incrementally, not to go back to checking files.
+
 ## 3. Deferred, with triggers
 
 | Feature | Why deferred | Earns its place when |

@@ -3,6 +3,23 @@
 A language is not real to the people using it until their editor knows it. This
 directory holds that half of the project.
 
+> **The rule, learned the hard way in v0.0.99.** A change to the language is not finished
+> until the grammar, the language server and the **packaged** `.vsix` have changed with it.
+> A reader's first contact with Burxt is an editor, not `cargo test`, and a language that
+> compiles correctly while looking broken *is* broken.
+>
+> Three tests enforce it, and each exists because the thing it checks actually went wrong:
+>
+> | Test | What it caught |
+> |---|---|
+> | `editor_grammar_knows_every_keyword_the_compiler_does` | a keyword the grammar had never heard of |
+> | `editor_grammar_highlights_every_declaration_the_examples_write` | `function (self)` — shipped v0.0.95, uncoloured until v0.0.99, because **a keyword list is not a grammar** |
+> | `the_packaged_extension_matches_the_grammar_in_the_repository` | a `.vsix` built before a rename, so the editor coloured yesterday's language |
+> | `the_language_server_checks_the_program_a_file_belongs_to` | five compiler modules squiggled as broken, and `stage1.bx` failing on its own `use` lines |
+>
+> After touching the grammar, run `python3 vscode/pack.py` and bump the version in
+> `vscode/package.json` — an installed extension does not upgrade to the same version number.
+
 | Piece | State | Where |
 |---|---|---|
 | TextMate grammar (highlighting) | **DONE** (v0.0.31) | `vscode/syntaxes/burxt.tmLanguage.json` |

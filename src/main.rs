@@ -178,10 +178,10 @@ impl From<String> for Failure {
 /// One file inside the concatenated buffer: where it starts, how long it is, and what to
 /// call it in a diagnostic.
 #[derive(Clone)]
-struct SourceFile {
-    path: String,
-    start: usize,
-    len: usize,
+pub struct SourceFile {
+    pub path: String,
+    pub start: usize,
+    pub len: usize,
 }
 
 /// Which file an offset fell in, and how far into it — so an error in a used module names
@@ -206,7 +206,7 @@ fn locate_file<'a>(files: &'a [SourceFile], offset: usize) -> Option<(&'a Source
 /// Imports come first in a file, before any other item. That is what makes the pre-pass
 /// safe: it stops at the first line that is not blank, a comment, or a `use`, so a `use`
 /// appearing later inside a string or a comment is never mistaken for one.
-fn load_program(path: &str) -> Result<(String, Vec<SourceFile>), String> {
+pub fn load_program(path: &str) -> Result<(String, Vec<SourceFile>), String> {
     let mut buffer = String::new();
     let mut files: Vec<SourceFile> = Vec::new();
     let mut seen: Vec<String> = Vec::new();
@@ -265,7 +265,7 @@ fn load_into(
 }
 
 /// Find the leading `use "path";` lines, and answer the text with them blanked out.
-fn strip_imports(text: &str) -> (String, Vec<String>) {
+pub fn strip_imports(text: &str) -> (String, Vec<String>) {
     let mut imports = Vec::new();
     let mut out = String::with_capacity(text.len());
     let mut in_header = true;

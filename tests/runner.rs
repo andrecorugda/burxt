@@ -2425,3 +2425,374 @@ fn generics_monomorphise_and_run() {
     let _ = fs::remove_dir_all(&scratch);
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }
+
+/// The editor grammar must actually TOKENIZE the language, not merely contain its words.
+///
+/// `editor_grammar_knows_every_keyword_the_compiler_does` checks the vocabulary. It passed
+/// happily while `function (self) price()` — the receiver shorthand shipped in v0.0.95 —
+/// highlighted as nothing at all, because the method pattern still demanded `self: Type`.
+/// A keyword list is not a grammar.
+///
+/// So: take every declaration line out of the real examples and require that some pattern in
+/// the grammar's `declarations` set matches it from column zero. Anything the examples can
+/// say, the editor has to colour.
+#[test]
+fn editor_grammar_highlights_every_declaration_the_examples_write() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let grammar =
+        fs::read_to_string(root.join("editors/vscode/syntaxes/burxt.tmLanguage.json")).unwrap();
+
+    // The `match` regexes inside the "declarations" repository entry, pulled out textually —
+    // the same deliberately-simple approach the keyword test uses, so this needs no crates.
+    let declarations = grammar
+        .split("\"declarations\"")
+        .nth(1)
+        .expect("the grammar has a `declarations` repository entry");
+    let end = declarations.find("\n    },").unwrap_or(declarations.len());
+    let patterns: Vec<String> = declarations[..end]
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("\"match\": \""))
+        .map(|l| l.trim_end_matches("\",").trim_end_matches('"').replace("\\\\", "\\"))
+        .collect();
+    assert!(
+        patterns.len() >= 5,
+        "failed to read the declaration patterns out of the grammar (found {:?})",
+        patterns
+    );
+
+    // A declaration line is one that opens a function, method, record, enum, trait, impl or
+    // region. Contract clauses and bodies are not declarations and are not checked here.
+    let opens = ["function ", "external function ", "record ", "enum ", "trait ", "interface ",
+                 "implement ", "region "];
+    let mut sources: Vec<PathBuf> = Vec::new();
+    for dir in ["examples", "lib"] {
+        collect_bx(&root.join(dir), &mut sources);
+    }
+    assert!(sources.len() > 15, "expected to sweep the examples, got {}", sources.len());
+
+    let mut unmatched: Vec<String> = Vec::new();
+    for source in &sources {
+        let text = fs::read_to_string(source).unwrap();
+        for (n, line) in text.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            if !opens.iter().any(|o| trimmed.starts_with(o)) {
+                continue;
+            }
+            if !patterns.iter().any(|p| matches_at_start(p, trimmed)) {
+                unmatched.push(format!(
+                    "{}:{}: {}",
+                    source.strip_prefix(root).unwrap_or(source).display(),
+                    n + 1,
+                    trimmed.chars().take(72).collect::<String>()
+                ));
+            }
+        }
+    }
+    assert!(
+        unmatched.is_empty(),
+        "the editor grammar does not highlight these declarations — a reader would see them \
+         uncoloured. Add or widen a pattern in editors/vscode/syntaxes/burxt.tmLanguage.json:\n{}",
+        unmatched.join("\n")
+    );
+}
+
+/// Every `.bx` file under a directory, recursively.
+fn collect_bx(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_dir() {
+            // `negative/` holds programs that are deliberately wrong; they still have to
+            // highlight, so they are included.
+            collect_bx(&path, out);
+        } else if path.extension().is_some_and(|x| x == "bx") {
+            out.push(path);
+        }
+    }
+}
+
+/// Does this TextMate pattern match `line` starting at column zero?
+///
+/// A deliberately small regex subset — enough for the shapes the declaration patterns use
+/// (`\b`, `\s*`, `\s+`, literal alternations in groups, and `[...]` classes with `*`/`+`) —
+/// so the test needs no regex crate and stays readable next to the grammar it checks.
+fn matches_at_start(pattern: &str, line: &str) -> bool {
+    fn walk(p: &[u8], t: &[u8]) -> bool {
+        if p.is_empty() {
+            return true;
+        }
+        // \b at the start of a declaration pattern is always satisfied at column zero.
+        if p.starts_with(b"\\b") {
+            return walk(&p[2..], t);
+        }
+        if p.starts_with(b"\\s") {
+            let quant = p.get(2).copied();
+            let least = if quant == Some(b'+') { 1 } else { 0 };
+            let rest = if matches!(quant, Some(b'*') | Some(b'+')) { &p[3..] } else { &p[2..] };
+            let mut seen = 0;
+            let mut i = 0;
+            while i < t.len() && (t[i] as char).is_whitespace() {
+                i += 1;
+                seen += 1;
+                if walk(rest, &t[i..]) && seen >= least {
+                    return true;
+                }
+            }
+            return seen >= least && walk(rest, &t[i..]);
+        }
+        if p[0] == b'(' {
+            // A group: try each alternative, honouring a trailing `?`.
+            let close = balanced(p).unwrap_or(p.len());
+            let inner = &p[1..close];
+            let mut after = close + 1;
+            let optional = p.get(after).copied() == Some(b'?');
+            if optional {
+                after += 1;
+            }
+            for alt in split_alts(inner) {
+                let mut joined = alt.to_vec();
+                joined.extend_from_slice(&p[after..]);
+                if walk(&joined, t) {
+                    return true;
+                }
+            }
+            return optional && walk(&p[after..], t);
+        }
+        if p[0] == b'[' {
+            let close = p.iter().position(|&c| c == b']').unwrap_or(p.len() - 1);
+            let class = &p[1..close];
+            let quant = p.get(close + 1).copied();
+            let rest_at = if matches!(quant, Some(b'*') | Some(b'+')) { close + 2 } else { close + 1 };
+            let least = if quant == Some(b'+') { 1 } else if quant == Some(b'*') { 0 } else { 1 };
+            let one = |c: u8| in_class(class, c);
+            if quant.is_none() {
+                return !t.is_empty() && one(t[0]) && walk(&p[rest_at..], &t[1..]);
+            }
+            let mut i = 0;
+            while i < t.len() && one(t[i]) {
+                i += 1;
+            }
+            // Greedy, then back off — enough for these patterns.
+            let mut take = i;
+            loop {
+                if take >= least && walk(&p[rest_at..], &t[take..]) {
+                    return true;
+                }
+                if take == 0 {
+                    return false;
+                }
+                take -= 1;
+            }
+        }
+        if p[0] == b'\\' {
+            return t.first() == p.get(1) && walk(&p[2..], &t[1..]);
+        }
+        !t.is_empty() && t[0] == p[0] && walk(&p[1..], &t[1..])
+    }
+
+    fn balanced(p: &[u8]) -> Option<usize> {
+        let mut depth = 0;
+        for (i, &c) in p.iter().enumerate() {
+            match c {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn split_alts(inner: &[u8]) -> Vec<Vec<u8>> {
+        let mut out = vec![Vec::new()];
+        let mut depth = 0;
+        for &c in inner {
+            match c {
+                b'(' => {
+                    depth += 1;
+                    out.last_mut().unwrap().push(c);
+                }
+                b')' => {
+                    depth -= 1;
+                    out.last_mut().unwrap().push(c);
+                }
+                b'|' if depth == 0 => out.push(Vec::new()),
+                _ => out.last_mut().unwrap().push(c),
+            }
+        }
+        out
+    }
+
+    fn in_class(class: &[u8], c: u8) -> bool {
+        let mut i = 0;
+        while i < class.len() {
+            if i + 2 < class.len() && class[i + 1] == b'-' {
+                if c >= class[i] && c <= class[i + 2] {
+                    return true;
+                }
+                i += 3;
+            } else {
+                if class[i] == c {
+                    return true;
+                }
+                i += 1;
+            }
+        }
+        false
+    }
+
+    walk(pattern.as_bytes(), line.as_bytes())
+}
+
+/// A packaged extension must not be older than the grammar it packages.
+///
+/// This is the bug that actually reached the user: the keyword rename landed in the repo, and
+/// the editor kept colouring the language it knew yesterday — because `burxt-0.1.3.vsix` had
+/// been built before the rename and was still what VS Code had installed. Nothing in the repo
+/// noticed, because nothing was looking.
+#[test]
+fn the_packaged_extension_matches_the_grammar_in_the_repository() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = root.join("editors/vscode");
+    let grammar = fs::read_to_string(dir.join("syntaxes/burxt.tmLanguage.json")).unwrap();
+
+    let packages: Vec<PathBuf> = fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "vsix"))
+        .collect();
+    if packages.is_empty() {
+        // Nothing packaged yet is fine — an unbuilt package cannot be stale.
+        return;
+    }
+
+    // A .vsix is a ZIP. Rather than depend on a zip crate, read the grammar back out with
+    // Python, which the packer already uses and every machine running this suite has.
+    for package in &packages {
+        let read = Command::new("python3")
+            .arg("-c")
+            .arg(
+                "import sys, zipfile\n\
+                 z = zipfile.ZipFile(sys.argv[1])\n\
+                 for n in z.namelist():\n\
+                 \x20   if n.endswith('tmLanguage.json'):\n\
+                 \x20       sys.stdout.write(z.read(n).decode()); break\n",
+            )
+            .arg(package)
+            .output()
+            .expect("python3");
+        assert!(read.status.success(), "could not read {}", package.display());
+        let packaged = String::from_utf8_lossy(&read.stdout).to_string();
+        assert!(
+            !packaged.is_empty(),
+            "{} contains no grammar at all",
+            package.display()
+        );
+        assert_eq!(
+            packaged.trim(),
+            grammar.trim(),
+            "{} was packaged from an older grammar — the editor would highlight a language \
+             this repository no longer has. Re-run `python3 editors/vscode/pack.py`.",
+            package.file_name().unwrap().to_string_lossy()
+        );
+    }
+}
+
+/// The editor must check the PROGRAM, not the file.
+///
+/// `examples/burxt/check.bx` is one of five modules `examples/stage1.bx` assembles. Checked on
+/// its own it reports every type declared in a sibling as unknown — so opening the compiler in
+/// an editor showed five files of squiggles that were not mistakes. And `stage1.bx` itself
+/// reported a parse error on its own `use` lines, because the language server never resolved
+/// imports at all.
+///
+/// Both are the same bug: a file is not always a program.
+#[test]
+fn the_language_server_checks_the_program_a_file_belongs_to() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    // The Burxt files that MUST be clean in an editor: every real example, the standard
+    // library, and each module of the compiler. `examples/negative/` is excluded on purpose —
+    // those are meant to be wrong, and a squiggle there is the point.
+    let mut sources: Vec<PathBuf> = Vec::new();
+    for dir in ["examples", "lib"] {
+        collect_bx(&root.join(dir), &mut sources);
+    }
+    sources.retain(|p| !p.components().any(|c| c.as_os_str() == "negative"));
+    sources.push(root.join("tests/runner.bx"));
+    assert!(sources.len() > 15, "expected to sweep the examples, got {}", sources.len());
+
+    let mut noisy = Vec::new();
+    for source in &sources {
+        let text = fs::read_to_string(source).unwrap();
+        let uri = format!("file://{}", source.display());
+        let mut request = String::new();
+        let mut add = |body: String, request: &mut String| {
+            request.push_str(&format!("Content-Length: {}\r\n\r\n{}", body.len(), body));
+        };
+        add(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#.to_string(), &mut request);
+        add(
+            format!(
+                r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":{},"languageId":"burxt","version":1,"text":{}}}}}}}"#,
+                json_string(&uri),
+                json_string(&text)
+            ),
+            &mut request,
+        );
+
+        let mut child = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("lsp")
+            .current_dir(root)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("burxt lsp");
+        use std::io::Write as _;
+        child.stdin.as_mut().unwrap().write_all(request.as_bytes()).unwrap();
+        drop(child.stdin.take());
+        let out = child.wait_with_output().expect("lsp output");
+        let said = String::from_utf8_lossy(&out.stdout).to_string();
+
+        let published = said
+            .split("publishDiagnostics")
+            .nth(1)
+            .unwrap_or_else(|| panic!("no diagnostics for {}", source.display()));
+        // Empty is `"diagnostics":[]`; anything else means the editor drew something.
+        if !published.contains("\"diagnostics\":[]") {
+            let shown: String = published.chars().take(220).collect();
+            noisy.push(format!("{}: {}", source.strip_prefix(root).unwrap_or(source).display(), shown));
+        }
+    }
+    assert!(
+        noisy.is_empty(),
+        "the language server reported problems in files that compile — a file is not always a \
+         program, and these belong to one:\n{}",
+        noisy.join("\n\n")
+    );
+}
+
+/// A JSON string literal, escaped enough for the LSP requests above.
+fn json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}

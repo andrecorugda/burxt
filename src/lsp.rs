@@ -348,6 +348,13 @@ fn respond(output: &mut impl Write, id: Value, result: Value) -> Result<(), Stri
 
 /// Typecheck the buffer and publish what came back — every problem, or none.
 fn publish(output: &mut impl Write, uri: &str, text: &str) -> Result<(), String> {
+    // A file is not always a program. `examples/burxt/check.bx` is one of five modules
+    // another file `use`s, and checking it alone reports every type declared in a sibling
+    // as unknown — five files of squiggles that are not mistakes. So: if this file is used
+    // by a program, check THE PROGRAM, and keep only the diagnostics that landed here.
+    if let Some(diagnostics) = check_in_context(uri, text) {
+        return send(output, diagnostics_message(uri, diagnostics));
+    }
     let diagnostics = check_source(text)
         .err()
         .unwrap_or_default()
@@ -355,6 +362,95 @@ fn publish(output: &mut impl Write, uri: &str, text: &str) -> Result<(), String>
         .map(|d| as_lsp_diagnostic(text, d))
         .collect();
     send(output, diagnostics_message(uri, diagnostics))
+}
+
+/// Check the program this file belongs to, if it belongs to one, and answer only the
+/// diagnostics inside this file. `None` when the file is its own program — the ordinary
+/// case, and the cheap path.
+///
+/// The editor's unsaved text is what the user is looking at, so it wins over what is on
+/// disk: the file is written to a temporary copy of its own directory tree? No — simpler
+/// and honest: the buffer is used for THIS file and the disk for the others, by loading
+/// the program and splicing the buffer over this file's span. An edit that changes the
+/// file's length shifts later files, which the source map already accounts for.
+fn check_in_context(uri: &str, text: &str) -> Option<Vec<Value>> {
+    let path = path_of(uri)?;
+    // Two ways a file belongs to a program. It may BE one — a root with `use` lines, whose
+    // imports have to be resolved or every `use` is a parse error, which is what the editor
+    // used to show on `examples/stage1.bx`. Or it may be one of the modules a root assembles,
+    // in which case the root is what has to be checked.
+    let (_, imports) = crate::strip_imports(text);
+    let root = if imports.is_empty() { program_using(&path)? } else { path.clone() };
+    let (buffer, files) = crate::load_program(root.to_str()?).ok()?;
+    // Where this file sits in the concatenated buffer, and what the editor has for it.
+    let canonical = std::fs::canonicalize(&path).ok()?;
+    let mine = files.iter().find(|f| {
+        std::fs::canonicalize(&f.path).map(|c| c == canonical).unwrap_or(false)
+    })?;
+    let (blanked, _) = crate::strip_imports(text);
+    let mut whole = String::with_capacity(buffer.len() + blanked.len());
+    whole.push_str(&buffer[..mine.start]);
+    whole.push_str(&blanked);
+    whole.push_str(&buffer[mine.start + mine.len..]);
+    let start = mine.start as u32;
+    let end = start + blanked.len() as u32;
+
+    let found = check_source(&whole).err().unwrap_or_default();
+    Some(
+        found
+            .iter()
+            .filter(|d| d.span.start >= start && d.span.start <= end)
+            .map(|d| {
+                // Positions are relative to this file, not to the buffer the program was
+                // assembled into.
+                let local = Diagnostic {
+                    span: crate::diag::Span {
+                        start: d.span.start - start,
+                        end: d.span.end.min(end) - start,
+                    },
+                    ..d.clone()
+                };
+                as_lsp_diagnostic(&blanked, &local)
+            })
+            .collect(),
+    )
+}
+
+fn path_of(uri: &str) -> Option<std::path::PathBuf> {
+    let rest = uri.strip_prefix("file://")?;
+    Some(std::path::PathBuf::from(rest))
+}
+
+/// A `.bx` file whose `use` closure reaches `target`. Searched in the file's own directory
+/// and its ancestors up to three levels, which covers `examples/burxt/check.bx` being
+/// assembled by `examples/stage1.bx` without walking a whole disk on every keystroke.
+fn program_using(target: &std::path::Path) -> Option<std::path::PathBuf> {
+    let canonical = std::fs::canonicalize(target).ok()?;
+    let mut dir = target.parent()?.to_path_buf();
+    for _ in 0..3 {
+        let mut candidates: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+            .ok()?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "bx"))
+            .collect();
+        candidates.sort();
+        for candidate in candidates {
+            if std::fs::canonicalize(&candidate).ok() == Some(canonical.clone()) {
+                continue;
+            }
+            if let Ok((_, files)) = crate::load_program(candidate.to_str()?) {
+                if files.len() > 1
+                    && files.iter().any(|f| {
+                        std::fs::canonicalize(&f.path).ok() == Some(canonical.clone())
+                    })
+                {
+                    return Some(candidate);
+                }
+            }
+        }
+        dir = dir.parent()?.to_path_buf();
+    }
+    None
 }
 
 fn diagnostics_message(uri: &str, diagnostics: Vec<Value>) -> Value {
