@@ -1794,6 +1794,131 @@ impl<'ctx> CodeGen<'ctx> {
                 }
                 Ok(result)
             }
+            // `e?` — read the tag; on the failure variant, rebuild that failure as the
+            // enclosing function's return value and leave immediately; otherwise carry on
+            // with the success payload. The checker proved the two failures have the same
+            // payload types (spec/M8-ERRORS.md §1a Decision A), so the copy is a copy and
+            // never a conversion.
+            TypedExprKind::Try { value, fail_tag, ok_tag, ret_enum, ret_fail_tag } => {
+                let err = |x: inkwell::builder::BuilderError| x.to_string();
+                let Type::Named(source) = &value.ty else {
+                    return Err("codegen bug: `?` on a non-enum".to_string());
+                };
+                let (src_st, src_variants) = self.enum_types[source.as_str()].clone();
+                let src_slots =
+                    src_variants.iter().map(|p| p.len()).max().unwrap_or(0) as u32;
+                let fail_payload = src_variants[*fail_tag as usize].clone();
+
+                let slot = self.gen_aggregate_addr(value)?;
+                let tag_ptr =
+                    self.builder.build_struct_gep(src_st, slot, 0, "try_tag_ptr").map_err(err)?;
+                let tag =
+                    self.builder.build_load(i64t, tag_ptr, "try_tag").map_err(err)?.into_int_value();
+                let failed = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::EQ,
+                        tag,
+                        i64t.const_int(*fail_tag as u64, false),
+                        "try_failed",
+                    )
+                    .map_err(err)?;
+
+                let function = self
+                    .builder
+                    .get_insert_block()
+                    .and_then(|b| b.get_parent())
+                    .ok_or("codegen bug: `?` outside a function")?;
+                let fail_bb = self.ctx.append_basic_block(function, "try.fail");
+                let ok_bb = self.ctx.append_basic_block(function, "try.ok");
+                self.builder.build_conditional_branch(failed, fail_bb, ok_bb).map_err(err)?;
+
+                // ---- the failure path: rebuild and return ----
+                self.builder.position_at_end(fail_bb);
+                let (ret_st, ret_variants) = self.enum_types[ret_enum.as_str()].clone();
+                let ret_slots =
+                    ret_variants.iter().map(|p| p.len()).max().unwrap_or(0) as u32;
+                let out = self.create_entry_alloca("try_err", &Type::Named(ret_enum.clone()))?;
+                let out_tag =
+                    self.builder.build_struct_gep(ret_st, out, 0, "out_tag").map_err(err)?;
+                self.builder
+                    .build_store(out_tag, i64t.const_int(*ret_fail_tag as u64, false))
+                    .map_err(err)?;
+                if !fail_payload.is_empty() {
+                    let from = self
+                        .builder
+                        .build_struct_gep(src_st, slot, 1, "from_payload")
+                        .map_err(err)?;
+                    let into = self
+                        .builder
+                        .build_struct_gep(ret_st, out, 1, "into_payload")
+                        .map_err(err)?;
+                    let from_arr = i64t.array_type(src_slots);
+                    let into_arr = i64t.array_type(ret_slots);
+                    for (i, ty) in fail_payload.iter().enumerate() {
+                        let idx = i64t.const_int(i as u64, false);
+                        let p = unsafe {
+                            self.builder.build_in_bounds_gep(
+                                from_arr,
+                                from,
+                                &[i64t.const_zero(), idx],
+                                "from_slot",
+                            )
+                        }
+                        .map_err(err)?;
+                        let v = self.builder.build_load(self.llvm_type(ty), p, "carried").map_err(err)?;
+                        let q = unsafe {
+                            self.builder.build_in_bounds_gep(
+                                into_arr,
+                                into,
+                                &[i64t.const_zero(), idx],
+                                "into_slot",
+                            )
+                        }
+                        .map_err(err)?;
+                        self.builder.build_store(q, v).map_err(err)?;
+                    }
+                }
+                // An enum is an aggregate, so it leaves through the caller's storage, the
+                // same way an ordinary `return` of one does.
+                if let Some(sret) = self.current_sret {
+                    let loaded = self
+                        .builder
+                        .build_load(self.llvm_type(&Type::Named(ret_enum.clone())), out, "err_value")
+                        .map_err(err)?;
+                    self.builder.build_store(sret, loaded).map_err(err)?;
+                    self.close_open_region()?;
+                    self.builder.build_return(None).map_err(err)?;
+                } else {
+                    let loaded = self
+                        .builder
+                        .build_load(self.llvm_type(&Type::Named(ret_enum.clone())), out, "err_value")
+                        .map_err(err)?;
+                    self.close_open_region()?;
+                    self.builder.build_return(Some(&loaded)).map_err(err)?;
+                }
+
+                // ---- the success path: the payload ----
+                self.builder.position_at_end(ok_bb);
+                let ok_payload = &src_variants[*ok_tag as usize];
+                let from = self
+                    .builder
+                    .build_struct_gep(src_st, slot, 1, "ok_payload")
+                    .map_err(err)?;
+                let arr_ty = i64t.array_type(src_slots);
+                let p = unsafe {
+                    self.builder.build_in_bounds_gep(
+                        arr_ty,
+                        from,
+                        &[i64t.const_zero(), i64t.const_zero()],
+                        "ok_slot",
+                    )
+                }
+                .map_err(err)?;
+                self.builder
+                    .build_load(self.llvm_type(&ok_payload[0]), p, "unwrapped")
+                    .map_err(err)
+            }
             TypedExprKind::VariantLit { enum_name, tag, args } => {
                 let (st, _) = self.enum_types[enum_name.as_str()];
                 let slot = self.create_entry_alloca("variant", &e.ty)?;

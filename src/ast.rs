@@ -236,6 +236,9 @@ pub enum ExprKind {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    /// `e?` — the value if the enum's success variant, or an immediate return of the
+    /// failure from the enclosing function. See spec/M8-ERRORS.md §1a.
+    Try(Box<Expr>),
     /// A comparison, e.g. `balance >= 0.00`. Produces a Bool.
     Compare {
         op: CmpOp,

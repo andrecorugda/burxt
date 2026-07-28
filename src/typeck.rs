@@ -128,6 +128,16 @@ pub enum TypedExprKind {
     SliceLen(Box<TypedExpr>),
     /// Growable-array element read, bounds-checked against the runtime length.
     SliceIndex { base: Box<TypedExpr>, index: Box<TypedExpr> },
+    /// `e?`: the success payload, or return the failure from the enclosing function.
+    /// Everything the lowering needs is settled here — which variant fails, which
+    /// succeeds, and what the caller's failure variant is. See spec/M8-ERRORS.md §1a.
+    Try {
+        value: Box<TypedExpr>,
+        fail_tag: u32,
+        ok_tag: u32,
+        ret_enum: String,
+        ret_fail_tag: u32,
+    },
     /// Enum construction: the variant's index plus its payload values.
     VariantLit { enum_name: String, tag: u32, args: Vec<TypedExpr> },
     /// Bounds-checked indexed read from a place; `len` is the static length.
@@ -2947,6 +2957,119 @@ impl TypeChecker {
             }
         }
         match &e.kind {
+            // `e?` — the value, or an immediate return of the failure. Two decisions live
+            // here, both from spec/M8-ERRORS.md §1a: the failure variant is recognised by
+            // NAME (`Err` or `None`), never by the enum's type name, so a library type gets
+            // it and a hardcoded one is not needed; and there is NO conversion, so the
+            // enclosing function must fail the same way with the same payload.
+            ExprKind::Try(inner) => {
+                let value = self.check_expr(inner, None)?;
+                let instances = self.instance_of.borrow().clone();
+                let Type::Named(enum_name) = &value.ty else {
+                    return Err(format!(
+                        "`?` needs a value that is either a success or a failure, and this \
+                         is {} {}. It works on an enum with two variants, one of them \
+                         `Err` or `None`.",
+                        value.ty.article(),
+                        show(&value.ty, &instances)
+                    ));
+                };
+                let Some(variants) = self.variants_of(enum_name) else {
+                    return Err(format!(
+                        "`?` needs an enum with two variants, and {} is not an enum.",
+                        show(&value.ty, &instances)
+                    ));
+                };
+                let shown = show(&value.ty, &instances);
+                if variants.len() != 2 {
+                    return Err(format!(
+                        "`?` needs an enum with exactly two variants — a success and a \
+                         failure — and {} has {}. Use `match`.",
+                        shown,
+                        variants.len()
+                    ));
+                }
+                let Some(fail_at) = variants
+                    .iter()
+                    .position(|(n, _)| n == "Err" || n == "None")
+                else {
+                    return Err(format!(
+                        "`?` recognises a failure by the variant's NAME — `Err` or `None` — \
+                         and {} has neither. Rename the failing variant, or use `match`.",
+                        shown
+                    ));
+                };
+                let fail_name = variants[fail_at].0.clone();
+                let fail_payload = variants[fail_at].1.clone();
+                let ok_at = 1 - fail_at;
+                let ok_payload = &variants[ok_at].1;
+                if ok_payload.len() != 1 {
+                    return Err(format!(
+                        "`?` yields the success variant's value, and `{}.{}` carries {}. \
+                         It must carry exactly one.",
+                        shown,
+                        variants[ok_at].0,
+                        ok_payload.len()
+                    ));
+                }
+                let yielded = ok_payload[0].clone();
+
+                // The enclosing function has to fail the same way — Decision A.
+                let Some(ret) = self.current_ret.clone() else {
+                    return Err(
+                        "`?` returns the failure from the enclosing function, and a \
+                         top-level statement has none to return from. Put it in a `fn` \
+                         that answers with a failure of its own, or use `match`."
+                            .to_string(),
+                    );
+                };
+                let ret_variants = match &ret {
+                    Type::Named(n) => self.variants_of(n),
+                    _ => None,
+                };
+                let Some(ret_variants) = ret_variants else {
+                    return Err(format!(
+                        "`?` returns the failure from the enclosing function, which \
+                         answers with {} — not something that can carry a failure. Give it \
+                         a return type with an `{}` variant, or use `match`.",
+                        show(&ret, &instances),
+                        fail_name
+                    ));
+                };
+                let Some(ret_fail_at) = ret_variants.iter().position(|(n, _)| *n == fail_name)
+                else {
+                    return Err(format!(
+                        "`?` returns `{}` from the enclosing function, and {} has no `{}` \
+                         variant. Make the two agree, or use `match`.",
+                        fail_name,
+                        show(&ret, &instances),
+                        fail_name
+                    ));
+                };
+                if ret_variants[ret_fail_at].1 != fail_payload {
+                    return Err(format!(
+                        "`?` does not convert between failures: this one carries {}, and \
+                         the enclosing function's `{}` carries {}. Write the `match`, or \
+                         make the two agree.",
+                        Self::type_list(&fail_payload),
+                        fail_name,
+                        Self::type_list(&ret_variants[ret_fail_at].1)
+                    ));
+                }
+                Ok(TypedExpr {
+                    ty: yielded,
+                    kind: TypedExprKind::Try {
+                        value: Box::new(value),
+                        fail_tag: fail_at as u32,
+                        ok_tag: ok_at as u32,
+                        ret_enum: match &ret {
+                            Type::Named(n) => n.clone(),
+                            _ => unreachable!("checked above"),
+                        },
+                        ret_fail_tag: ret_fail_at as u32,
+                    },
+                })
+            }
             ExprKind::IntLit(n) => Ok(TypedExpr { ty: Type::Int, kind: TypedExprKind::IntLit(*n) }),
 
             ExprKind::BoolLit(b) => Ok(TypedExpr { ty: Type::Bool, kind: TypedExprKind::BoolLit(*b) }),
@@ -4633,6 +4756,8 @@ fn calls_itself(body: &[Stmt], name: &str) -> bool {
             ExprKind::StructLit { fields, .. } => fields.iter().any(|(_, v)| in_expr(v, name)),
             ExprKind::Field { base, .. } => in_expr(base, name),
             ExprKind::ArrayLit(items) => any(items),
+        ExprKind::Try(inner) => in_expr(inner, name),
+            ExprKind::Try(inner) => in_expr(inner, name),
             ExprKind::Index { base, index } => in_expr(base, name) || in_expr(index, name),
             ExprKind::InterpStr(parts) => parts.iter().any(|p| match p {
                 InterpPart::Expr(x) => in_expr(x, name),
@@ -4685,7 +4810,7 @@ fn mentions(e: &Expr, name: &str) -> bool {
     let any = |list: &[Expr]| list.iter().any(|x| mentions(x, name));
     match &e.kind {
         ExprKind::Var(n) => n == name,
-        ExprKind::Neg(i) | ExprKind::Not(i) => mentions(i, name),
+        ExprKind::Neg(i) | ExprKind::Not(i) | ExprKind::Try(i) => mentions(i, name),
         ExprKind::Logical { lhs, rhs, .. }
         | ExprKind::Binary { lhs, rhs, .. }
         | ExprKind::Compare { lhs, rhs, .. } => mentions(lhs, name) || mentions(rhs, name),

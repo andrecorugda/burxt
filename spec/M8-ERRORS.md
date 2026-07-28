@@ -1,8 +1,11 @@
 # Burxt — Absence and failure (M8)
 
-> Status: **specified, to implement after M7.** These are library types, not language
-> features, and that is the point: if `Option<T>` needs compiler support, the generics are
-> not finished.
+> Status: **types DONE (v0.0.94), `?` DONE (v0.0.97).** `Option<T>` and `Result<T, E>` live in
+> `lib/option.bx` and `lib/result.bx` as ordinary Burxt with no compiler support beyond M7's
+> generics — which was the point: if `Option<T>` had needed a keyword, the generics were not
+> finished. `?` is the one piece of syntax, and §1a records the two decisions it needed.
+>
+> Original status: **specified, to implement after M7.**
 
 ## 0. What has to become possible
 
@@ -26,6 +29,64 @@ match parse_amount(input) {
 
 Today `lib/str.bx`'s `str_to_int("abc")` answers `0`, and `fs_read` of a missing file answers
 `""` — indistinguishable from success. Every such function is a lie the caller cannot detect.
+
+## 1a. `?` — the two decisions it needed
+
+`?` was named as blocked for three versions, on one question: **what happens when the callee's
+error type is not the caller's?** Both answers are now written down.
+
+### Decision A — no conversion. The error types must match.
+
+```text
+fn parse_amount(text: String) -> Result<Decimal<2>, String> { ... }
+
+fn read_invoice(path: String) -> Result<Decimal<2>, String> {
+    let amount = parse_amount(read_file(path))?;      // both errors are String
+    return Result.Ok(amount);
+}
+```
+
+If the two differ, the `match` is written out. **No `From`-like conversion trait**, no implicit
+widening into a common error type, and no `Box<dyn Error>` — each of those is a mechanism that
+decides on your behalf which information about a failure survives, and every one of them is a
+place where a cause quietly becomes "something went wrong".
+
+**Earns its place when:** a real program has two error enums it genuinely needs to bridge, and
+the conversion is worth naming. Then it is a trait with one method, declared per pair — not a
+blanket rule.
+
+The cost, stated: a function that calls two libraries with different error types writes two
+`match`es. That is more typing and it is also the honest amount of thinking, because somebody
+has to decide what the caller's failure means.
+
+### Decision B — `?` is spelled by VARIANT name, not by type name.
+
+`?` works on any enum with **exactly two variants**, one of which is named `Err` or `None`. The
+other variant carries the value, and its name is irrelevant. The enum's own name is irrelevant
+too.
+
+**Why not bless `Result` and `Option` by name.** They are library types. A compiler that knows
+the *type* names cannot be told that `lib/` wrote them — it has hardcoded a specific library,
+and a second library with the same shape is a second-class citizen. Blessing two *variant*
+names is a much smaller commitment: it says "an enum whose failure case is called `Err` behaves
+like a failure", which is a convention a reader already holds, and any library may follow it.
+
+So `?` on a value of
+
+```text
+enum Fetched<T> { Err(String), Got(T) }
+```
+
+works, and reads correctly, without `Fetched` being known to the compiler.
+
+**The enclosing function must return an enum with the same failure variant and the same payload
+type.** That is Decision A, checked where `?` is written:
+
+```text
+error: `?` returns the error from the enclosing function, and `read_invoice` returns
+       Result<Decimal<2>, Int> — this failure carries a String. `?` does not convert
+       between error types: write the `match`, or make the two agree.
+```
 
 ## 1. Decisions
 

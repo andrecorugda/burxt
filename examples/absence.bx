@@ -53,6 +53,19 @@ fn or_else<T>(o: Option<T>, fallback: T) -> T {
     }
 }
 
+// `?` yields the value or returns the failure from here — so the happy path reads as
+// if nothing could go wrong, while the compiler still knows it can.
+fn average(a: Int, b: Int, n: Int) -> Result<Int, String> {
+    let mean = divide(a + b, n)?;
+    return Result.Ok(mean);
+}
+
+// The same shortcut over absence, in a function that answers with an Option.
+fn doubled_first(xs: [Int]) -> Option<Int> {
+    let head = position_of(xs, 5)?;
+    return Option.Some(head * 2);
+}
+
 region r {
     let mut xs: [Int] = [];
     let a = push(xs, 5);
@@ -86,6 +99,20 @@ region r {
         Ok(answer) => { print(answer); }
         Err(why) => { print(why); }
     }
+
+    // `?` in action: the second call fails, and the failure travels out untouched.
+    match average(10, 6, 2) {
+        Ok(mean) => { print(mean); }
+        Err(why) => { print(why); }
+    }
+    match average(10, 6, 0) {
+        Ok(mean) => { print(mean); }
+        Err(why) => { print(why); }
+    }
+    match doubled_first(xs) {
+        None => { print("no 5"); }
+        Some(v) => { print(v); }
+    }
 }
 
 // ---- What the compiler refuses, and why ------------------------------------
@@ -108,11 +135,38 @@ region r {
 //     error: `Option<Point>` cannot be made: `Option.Some` would carry a Point,
 //            and a variant payload must be Int, Bool, String or Decimal for now.
 //
+// ---- `?` — the shortcut, and the one thing it will not do -------------------
+//
+// In a function that itself answers with a failure, `?` yields the value or returns
+// the failure from here, immediately.
+//
+//     fn average(a: Int, b: Int, n: Int) -> Result<Int, String> {
+//         let mean = divide(a + b, n)?;      // the value, or return the Err
+//         return Result.Ok(mean);
+//     }
+//
+// It works on absence too, in a function answering with an `Option`:
+//
+//     fn doubled_first(xs: [Int]) -> Option<Int> {
+//         let head = first_of(xs)?;          // the value, or return None
+//         return Option.Some(head * 2);
+//     }
+//
+// `?` recognises a failure by the VARIANT name — `Err` or `None` — never by the
+// enum's own name. That is what lets these be library types: an enum you write
+// yourself gets `?` too, as long as its failing case is called `Err` or `None`.
+//
+// And it does NOT convert between error types:
+//
+//     error: `?` does not convert between failures: this one carries String, and the
+//            enclosing function's `Err` carries Int. Write the `match`, or make the
+//            two agree.
+//
+// Two libraries with different failures means two `match`es. That is more typing and
+// it is also the honest amount of thinking — somebody has to decide what the caller's
+// failure means, and that decision does not belong to an operator.
+//
 // ---- What is deliberately absent -------------------------------------------
 //
 // There is no `unwrap`. "Give me the value and abort if there is none" is null
 // with extra steps, and the crash it causes is the one this type prevents.
-//
-// There is no `?` yet — `let n = divide(a, b)?;` meaning "or return the error".
-// It is the right sugar and it needs one decision this language has not made: how
-// the callee's error type becomes the caller's. Written down rather than guessed.

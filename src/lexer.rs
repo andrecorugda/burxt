@@ -102,6 +102,8 @@ pub enum Token {
     EqEq,
     NotEq,
     Bang,
+    /// `?` — the failure shortcut. See spec/M8-ERRORS.md §1a.
+    Question,
     AmpAmp,
     PipePipe,
     // end of input
@@ -189,6 +191,7 @@ impl Token {
             Token::EqEq => "`==`".to_string(),
             Token::NotEq => "`!=`".to_string(),
             Token::Bang => "`!`".to_string(),
+            Token::Question => "`?`".to_string(),
             Token::AmpAmp => "`&&`".to_string(),
             Token::PipePipe => "`||`".to_string(),
             Token::Eof => "the end of the file".to_string(),
@@ -347,6 +350,7 @@ impl<'a> Lexer<'a> {
                 if self.peek_char() == Some(&'=') { self.bump(); return Ok(Token::NotEq); }
                 return Ok(Token::Bang);
             }
+            '?' => { self.bump(); return Ok(Token::Question); }
             _ => {}
         }
 

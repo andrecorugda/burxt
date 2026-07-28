@@ -1382,6 +1382,13 @@ impl Parser {
         }
         let mut e = self.parse_primary()?;
         loop {
+            // `e?` binds tighter than any operator, like a field read — `f(x)? + 1` is
+            // "the value, or return the failure" and then plus one.
+            if self.at(&Token::Question) {
+                self.bump();
+                e = self.expr(ExprKind::Try(Box::new(e)), start);
+                continue;
+            }
             if self.at(&Token::LBracket) {
                 self.bump();
                 let index = self.parse_expr()?;

@@ -2346,8 +2346,37 @@ fn generics_monomorphise_and_run() {
         ),
     ];
 
+    let try_cases: &[(&str, &str, &str)] = &[
+        (
+            // `?`: the value, or an immediate return of the failure. Recognised by the
+            // VARIANT name, so it works on `Result` and `Option` from lib/ without either
+            // being known to the compiler. See spec/M8-ERRORS.md §1a.
+            "question_mark",
+            "enum Result<T, E> { Ok(T), Err(E) }\nenum Option<T> { None, Some(T) }\n\
+             fn checked(a: Int, b: Int) -> Result<Int, String> {\n  \
+             if b == 0 { return Result.Err(\"division by zero\"); }\n  \
+             return Result.Ok(div_trunc(a, b));\n}\n\
+             fn average(a: Int, b: Int, n: Int) -> Result<Int, String> {\n  \
+             let mean = checked(a + b, n)?;\n  return Result.Ok(mean);\n}\n\
+             fn first_of(xs: [Int]) -> Option<Int> {\n  \
+             if len(xs) == 0 { return Option.None; }\n  return Option.Some(xs[0]);\n}\n\
+             fn doubled_first(xs: [Int]) -> Option<Int> {\n  \
+             let head = first_of(xs)?;\n  return Option.Some(head * 2);\n}\n\
+             region r {\n  \
+             match average(10, 6, 2) { Ok(m) => { print(m); } Err(w) => { print(w); } }\n  \
+             match average(10, 6, 0) { Ok(m) => { print(m); } Err(w) => { print(w); } }\n  \
+             let mut xs: [Int] = [];\n  let a = push(xs, 21);\n  \
+             match doubled_first(xs) { None => { print(\"empty\"); } Some(v) => { print(v); } }\n  \
+             let mut none: [Int] = [];\n  \
+             match doubled_first(none) { None => { print(\"empty\"); } Some(v) => { print(v); } }\n}\n",
+            "8\ndivision by zero\n42\nempty\n",
+        ),
+    ];
+
     let mut failures = Vec::new();
-    for (name, program, expected) in cases.iter().chain(enum_cases).chain(bound_cases) {
+    for (name, program, expected) in
+        cases.iter().chain(enum_cases).chain(bound_cases).chain(try_cases)
+    {
         let source = scratch.join(format!("{}.bx", name));
         fs::write(&source, program).unwrap();
         let exe = scratch.join(name);

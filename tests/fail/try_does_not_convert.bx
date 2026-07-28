@@ -1,0 +1,17 @@
+// The one decision `?` needed: it does NOT convert between error types. Two libraries
+// with different failures means two `match`es, which is also the honest amount of thinking
+// — somebody has to decide what the caller's failure means. See spec/M8-ERRORS.md §1a.
+enum Result<T, E> { Ok(T), Err(E) }
+
+fn checked(a: Int, b: Int) -> Result<Int, String> {
+    if b == 0 { return Result.Err("division by zero"); }
+    return Result.Ok(div_trunc(a, b));
+}
+
+fn wrapped(a: Int, b: Int) -> Result<Int, Int> {
+    let n = checked(a, b)?;
+    return Result.Ok(n);
+}
+region r {
+    print(1);
+}
