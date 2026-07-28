@@ -1,0 +1,94 @@
+// ============================================================================
+// Contracts — claims the compiler checks, written where a reader looks for
+// them: in the signature, not in a comment and not in the body.
+// ============================================================================
+//
+// A type says what SHAPE a value has. A contract says what must be TRUE about
+// it. Every one of these is checked at run time, on every call, and there is no
+// build mode that removes them — a program whose enforcement of its own rules
+// depends on how it was compiled is not enforcing anything.
+
+// ---- requires and ensures --------------------------------------------------
+fn withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>
+    requires amount > $0.00
+    requires amount <= balance
+    ensures result >= $0.00
+{
+    return balance - amount;
+}
+
+// `result` is bound inside `ensures` and nowhere else. It is not a keyword — a
+// parameter may still be called `result`; it simply collides there, which is an
+// error about the collision rather than silent shadowing.
+
+// ---- pure: an answer that depends on its arguments alone -------------------
+// A `pure` function may not print, read or write a file, call into C, call a
+// function that is not pure, or call a method at all. It is a claim the
+// compiler checks, which is why a contract clause may call one.
+pure fn fee_for(amount: Decimal<2>) -> Decimal<2> {
+    if amount > $100.00 {
+        return $2.50;
+    }
+    return $1.00;
+}
+
+// ---- decreases: this recursion ends ----------------------------------------
+// The measure is evaluated with the NEW arguments at each recursive call and
+// compared with the current one. Strictly smaller, and never negative — checked
+// at the call site, which is why it works with `return tail`, where the frame
+// making the call is already gone.
+fn countdown(n: Int, acc: Int) -> Int
+    decreases n
+{
+    if n <= 0 { return acc; }
+    return tail countdown(n - 1, acc + n);
+}
+
+// ---- old(...): conservation laws -------------------------------------------
+// `old(e)` is the value on ENTRY, evaluated once before the body runs. It makes
+// the claim that a transfer moves money without creating or destroying any.
+struct Ledger { from_side: Decimal<2>, to_side: Decimal<2> }
+
+fn (mut self: Ledger) transfer(amount: Decimal<2>) -> Int
+    requires amount > $0.00
+    ensures self.from_side + self.to_side == old(self.from_side + self.to_side)
+{
+    self.from_side = self.from_side - amount;
+    self.to_side = self.to_side + amount;
+    return 0;
+}
+
+region r {
+    print(withdraw($100.00, $30.00));      // 70.00
+    print(fee_for($150.00));               // 2.50
+    print(countdown(5, 0));                // 15
+
+    let mut book: Ledger = Ledger { from_side: $500.00, to_side: $0.00 };
+    let moved: Int = book.transfer($120.00);
+    print(book.from_side);                 // 380.00
+    print(book.to_side);                   // 120.00
+}
+
+// ---- What happens when a claim is false ------------------------------------
+//
+// At run time the clause is quoted back, so the message is the answer rather
+// than a hint to go looking:
+//
+//     burxt runtime error: `requires amount <= balance` failed in `withdraw`
+//
+// Exit code 70, like every other named runtime failure — bounds, overflow,
+// division by zero, region exhaustion.
+//
+// And a transfer that loses a cent fails the conservation law by name:
+//
+//     burxt runtime error: `ensures self.from_side + self.to_side ==
+//     old(self.from_side + self.to_side)` failed in `transfer`
+//
+// ---- What the compiler refuses ---------------------------------------------
+//
+// A clause that is not a Bool, a measure that is not an Int, `result` in a
+// `requires` (there is no result yet), `old(...)` outside an `ensures`,
+// `old(result)` as a contradiction, `decreases` on a function that never calls
+// itself, more than one `decreases`, and any clause that is not pure — because
+// a contract that can change the program is not a check, it is a second program
+// that only runs when someone is looking.

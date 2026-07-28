@@ -1578,3 +1578,55 @@ fn the_negative_examples_are_still_negative() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     assert!(counted >= 4, "the example data shrank: {} files", counted);
 }
+
+/// The guide and the examples are only useful if they are reachable and true. Three ways
+/// they rot silently: a page nobody links to, an example nobody lists, and an example that
+/// stopped compiling. All three are checked here.
+#[test]
+fn the_guide_and_examples_are_linked_and_compile() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("guide");
+    fs::create_dir_all(&scratch).unwrap();
+
+    // Every guide page is linked from the guide's index, and the README points at the guide.
+    let index = fs::read_to_string(root.join("docs/guide/README.md")).expect("guide index");
+    let mut pages = 0;
+    for entry in fs::read_dir(root.join("docs/guide")).unwrap() {
+        let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+        if name.ends_with(".md") && name != "README.md" {
+            pages += 1;
+            assert!(index.contains(&name), "docs/guide/README.md does not link {}", name);
+        }
+    }
+    assert!(pages >= 7, "the guide lost pages: {} left", pages);
+    let readme = fs::read_to_string(root.join("README.md")).unwrap();
+    assert!(readme.contains("docs/guide/"), "README.md must link the guide");
+    assert!(readme.contains("examples/"), "README.md must link the examples");
+
+    // Every example is listed in the examples index, and still compiles.
+    let listing = fs::read_to_string(root.join("examples/README.md")).expect("examples index");
+    let mut failures = Vec::new();
+    let mut counted = 0;
+    for entry in fs::read_dir(root.join("examples")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("bx") {
+            continue;
+        }
+        counted += 1;
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if !listing.contains(&name) {
+            failures.push(format!("examples/README.md does not list {}", name));
+        }
+        let out = burxt("check", &path, &scratch);
+        if !out.status.success() {
+            failures.push(format!(
+                "{} no longer compiles:\n{}",
+                name,
+                String::from_utf8_lossy(&out.stdout)
+            ));
+        }
+    }
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(counted >= 13, "examples went missing: {} left", counted);
+}

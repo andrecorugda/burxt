@@ -1,0 +1,77 @@
+// ============================================================================
+// An invoice — the program someone would actually write, and the reason Burxt
+// exists. Every number here is exact: there is no binary float anywhere in the
+// pipeline, and every place a value could round says how.
+// ============================================================================
+
+struct Line {
+    label: String,
+    unit: Decimal<2, RoundHalfEven>,
+    qty: Int
+}
+
+// Money times a count is exact — no contract needed, because no rounding can
+// happen. The contract on `unit` travels with the value into the result.
+fn (self: Line) amount() -> Decimal<2, RoundHalfEven> {
+    return self.unit * self.qty;
+}
+
+fn (self: Line) render() -> String allocates {
+    return self.label + " x" + to_string(self.qty)
+         + " @ " + to_string(self.unit)
+         + " = " + to_string(self.amount());
+}
+
+// A tax rate is finer than money — `8.25%` IS 0.0825, a Decimal<4> — so the
+// product's exact value has 6 decimal places and MUST be told how to land on 2.
+// That is the rounding contract, and it is checked at compile time.
+fn tax_on(subtotal: Decimal<2, RoundHalfEven>, rate: Decimal<4>)
+    -> Decimal<2, RoundHalfEven>
+    requires rate >= 0.0000
+    ensures result >= $0.00
+{
+    return subtotal * rate;
+}
+
+region invoice {
+    let mut lines: [Line] = [];
+    let a: Int = push(lines, Line { label: "widget", unit: $19.99, qty: 3 });
+    let b: Int = push(lines, Line { label: "gasket", unit: $4.25,  qty: 12 });
+    let c: Int = push(lines, Line { label: "manual", unit: $12.00, qty: 1 });
+
+    print("INVOICE 2026-0042");
+    print("-------------------------------------------");
+
+    let mut subtotal: Decimal<2, RoundHalfEven> = $0.00;
+    let mut i: Int = 0;
+    while i < len(lines) {
+        print(lines[i].render());
+        subtotal = subtotal + lines[i].amount();
+        i = i + 1;
+    }
+
+    let rate: Decimal<4> = 8.25%;
+    let tax: Decimal<2, RoundHalfEven> = tax_on(subtotal, rate);
+    let total: Decimal<2, RoundHalfEven> = subtotal + tax;
+
+    print("-------------------------------------------");
+    print("subtotal: " + to_string(subtotal));
+    print("tax 8.25%: " + to_string(tax));
+    print("total:    " + to_string(total));
+}
+
+// ---- Why this is worth a language -------------------------------------------
+//
+// The same arithmetic in a language with binary floats:
+//
+//     19.99 * 3   = 59.96999999999999886313162278...
+//     + 4.25 * 12 = 51.0
+//     + 12.00     = 122.96999999999999886...
+//     * 0.0825    = 10.14452499999999990...
+//
+// and then someone rounds, somewhere, in a way nobody wrote down. The cent that
+// goes missing is not a rounding artifact — it is a decision nobody made.
+//
+// In Burxt every step above is a scaled integer. `59.97` is the integer 5997
+// with a scale of 2, and the only place a value can round is the one marked
+// with a contract, where the reader can see it.

@@ -1,0 +1,78 @@
+// ============================================================================
+// Enums and `match` — one value, several shapes, and the compiler making sure
+// you handled every one of them.
+// ============================================================================
+
+// A variant may carry a payload, or nothing at all. The type is the whole set:
+// a `Status` is exactly one of these three, never null, never "some other
+// string someone typed".
+enum Status {
+    Paid,
+    Owing(Decimal<2>),
+    Void
+}
+
+// ---- Exhaustive matching, with no wildcard --------------------------------
+// There is deliberately no `_` arm. If you add a fourth variant tomorrow, every
+// match in the program stops compiling until you say what it means there —
+// which is the entire reason to have sum types instead of an Int and a comment.
+fn owed(s: Status) -> Decimal<2> {
+    match s {
+        Paid => { return $0.00; }
+        Owing(amount) => { return amount; }
+        Void => { return $0.00; }
+    }
+}
+
+// A payload binding is a normal binding: it exists inside its arm and nowhere
+// else, and it has the type the variant declared.
+fn describe(s: Status) -> String allocates {
+    match s {
+        Paid => { return "settled"; }
+        Owing(amount) => { return "owes " + to_string(amount); }
+        Void => { return "cancelled"; }
+    }
+}
+
+region r {
+    let invoices: [Status; 3] = [
+        Status.Paid,
+        Status.Owing($42.50),
+        Status.Void
+    ];
+
+    let mut i: Int = 0;
+    let mut total: Decimal<2> = $0.00;
+    while i < 3 {
+        print(describe(invoices[i]));
+        total = total + owed(invoices[i]);
+        i = i + 1;
+    }
+    print("outstanding: " + to_string(total));
+}
+
+// ---- What the compiler refuses, and why ------------------------------------
+//
+// A missing arm:
+//     match s { Paid => { ... } Owing(a) => { ... } }
+//     error: this match has no arm for `Void`
+//
+// The same arm twice — only the first could ever run, so the second is a
+// mistake rather than a preference:
+//     error: `Paid` has more than one arm, and only the first could ever run
+//
+// A binding count that does not match the variant:
+//     Owing(a, b) => { ... }
+//     error: this arm binds 2 name(s), but the variant carries 1
+//
+// Matching something that is not an enum:
+//     error: `match` chooses between an enum's variants, and Int has none
+//
+// An enum with no variants, which describes nothing:
+//     enum Empty { }
+//     error: an enum with no variants describes nothing, and no value of it
+//            could ever be made
+//
+// And an enum cannot carry itself — its size would have to exceed its own size:
+//     enum Tree { Leaf, Node(Tree) }
+//     error: an enum cannot carry itself

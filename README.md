@@ -97,6 +97,16 @@ hello, world!
 
 What you cannot do yet: run Burxt in a browser (the WebAssembly target is designed, not built), or split a program across files (the module system is the next language milestone — today a program is one file).
 
+## Learning it
+
+- **[The guide](docs/guide/)** — seven pages in reading order: getting started, numbers and
+  money, types, memory, contracts, the C boundary, and a full reference of every keyword,
+  builtin, operator and error message.
+- **[The examples](examples/)** — one program per idea, all of them compiling. Each ends
+  with a *"what the compiler refuses, and why"* section quoting the real error text, because
+  what a compiler declines to compile says more about it than what it accepts.
+- **[The design log](docs/log/)** — every version, what it decided and what it cost.
+
 ## Building the compiler
 
 Burxt's compiler (the bootstrap/stage-0 compiler) is written in Rust and emits native code via LLVM 18. The Burxt-written compiler in `examples/stage1.bx` is built by it — see [self-hosting](#status).

@@ -1,0 +1,58 @@
+// ============================================================================
+// The C boundary — where exactness is usually lost, and here is not.
+//
+//     cc -c examples/ffi.c -o /tmp/ffi.o
+//     burxt run examples/ffi.bx /tmp/ffi.o -o /tmp/ffi
+//
+// Arguments after the source file go to the linker unchanged, which is how the
+// C you declare actually gets linked.
+// ============================================================================
+
+// ---- Plain C: ints and strings in, an int out ------------------------------
+extern fn strlen(s: String) -> Int;
+extern fn shout(text: String) -> CInt;
+
+// ---- Money across the boundary ---------------------------------------------
+// `as scaled` is a MARSHALLER, and it is mandatory: a Decimal may only cross
+// into C as the exact integer it already is. $19.99 arrives as 1999.
+//
+// The alternative — handing C a `double` — is a compile error, because that is
+// the exact moment money stops being exact, and no amount of care on the C side
+// can undo it.
+extern fn cents_doubled(amount: Decimal<2> as scaled) -> Int;
+
+region r {
+    let greeting: String = "hello from Burxt";
+    print(strlen(greeting));
+    let printed: Int = shout(greeting);
+
+    let price: Decimal<2> = $19.99;
+    print(cents_doubled(price));      // 3998 — the scaled integer, doubled
+}
+
+// ---- What the compiler refuses, and why ------------------------------------
+//
+// A Decimal crossing without a marshaller:
+//     extern fn f(amount: Decimal<2>) -> Int;
+//     error: a Decimal crosses into C only through a declared marshaller —
+//            write `amount: Decimal<2> as scaled`
+//
+// A Decimal crossing as a C double:
+//     error: a Decimal cannot cross as CDouble: binary floating point cannot
+//            hold a decimal exactly, which is the whole reason this type exists
+//
+// A pointer coming back:
+//     extern fn getenv(name: String) -> String;
+//     error: only Int or CInt may cross the C boundary as a return for now —
+//            Burxt cannot yet track who owns memory a C function returns
+//
+// That last one is the wall worth knowing about. Anything returning a pointer —
+// `getenv`, `opendir`, `fopen` — is out of reach directly. A `FILE*` can travel
+// as an `Int` if you insist, but then the claim that it is valid is yours, not
+// the compiler's, and that is exactly the ownership Burxt refuses to guess at.
+// The standard library will hide this behind an API that is checked once.
+//
+// And a symbol the runtime already uses:
+//     extern fn fputs(...)
+//     error: this symbol is used by the Burxt runtime itself. Call it through a
+//            differently-named C wrapper.

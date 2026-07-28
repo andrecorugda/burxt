@@ -1,0 +1,74 @@
+// ============================================================================
+// Regions — the unit of ownership. No garbage collector, no reference counts,
+// no borrow checker: a bump pointer, and a mark that says where it stood.
+// ============================================================================
+//
+// Anything that BUILDS a value at run time — joining Strings, `to_string`,
+// `substring`, `read_file`, a growable array — needs somewhere to build it.
+// That somewhere is a region, and it is written down:
+//
+//     region name { ... }
+//
+// Opening one remembers where the bump pointer stood. Closing it puts the
+// pointer back, which releases everything built inside, all at once, in O(1)
+// regardless of how many allocations happened.
+
+// ---- Building inside a region ----------------------------------------------
+region report {
+    let mut lines: [String] = [];        // a growable array lives in the region
+    let mut i: Int = 1;
+    while i <= 3 {
+        let entry: String = "line " + to_string(i);   // a join: allocates
+        let n: Int = push(lines, entry);
+        i = i + 1;
+    }
+    print(len(lines));
+    print(lines[0]);
+    print(lines[2]);
+}
+// Everything above is gone here — one store to a pointer, no traversal, no
+// finalizers, nothing to schedule.
+
+// ---- Functions that build for their caller ---------------------------------
+// A function body has no region of its own. Without `allocates` it cannot build
+// anything, which would make a helper that formats a message impossible to
+// write. `allocates` says: I build in MY CALLER'S region.
+fn describe(line: Int, byte: Int) -> String allocates {
+    return "line " + to_string(line) + ": unexpected byte " + to_string(byte);
+}
+
+region parse {
+    // The bytes belong to `parse`, and live exactly as long as it does.
+    print(describe(3, 108));
+}
+
+// ---- `to_string` of a Bool needs no region ---------------------------------
+// It renders to one of two literals, so nothing is built. The rule is about
+// allocation, not about types.
+print(to_string(true));
+
+// ---- What the compiler refuses, and why ------------------------------------
+//
+// Building with no region open:
+//     let s: String = "a" + "b";
+//     error: joining two Strings allocates, so it needs a region: there is none
+//            open here. Open one with `region r { ... }`, or declare the
+//            function `allocates` to build in the caller's region.
+//
+// Returning something built inside a region the function itself opened — the
+// region ends at the closing brace, so the storage would not outlive it:
+//     fn bad() -> String { region r { return "a" + "b"; } }
+//     error: cannot return this: it was built inside a `region` block
+//
+// Returning built data without saying `allocates`:
+//     error: cannot return this: it allocates, and a function that returns
+//            built data must say `allocates`
+//
+// The escape check looks INSIDE aggregates, too — a struct holding a built
+// String is itself built. That arm was missing for four versions and let a
+// use-after-free through; it is why the check walks fields and elements now.
+//
+// Regions do not nest:
+//     region a { region b { } }
+//     error: regions do not nest: the inner one would end while the outer is
+//            still open, and one bump pointer cannot serve two marks
