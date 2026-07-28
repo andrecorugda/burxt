@@ -188,6 +188,15 @@ struct Unit {
     // same answer by re-checking both operands with no expected type.
     in_mul: Int,
     errors: Int,
+    // M9: counters, so the hot path is measured rather than guessed at. The first attempt
+    // at this milestone fixed the obvious quadratic and bought 1.5%, which is what a
+    // hypothesis is worth here.
+    n_type_of: Int,
+    n_find_sym: Int,
+    n_find_fun: Int,
+    n_ty_show: Int,
+    n_expr_allocates: Int,
+    n_type_at: Int,
 }
 
 fn is_alpha(b: Int) -> Bool {

@@ -27,13 +27,28 @@ list that grew with every typed expression. It is now indexed by node (v0.0.87) 
 lookup, and the total time barely moved. Worth recording as a lesson: the obvious quadratic
 was not the expensive one.
 
-**Not yet identified.** The remaining cost is somewhere in the checker's per-node work, and
-finding it needs measurement rather than reading. The candidates, in the order they should be
-checked:
+**Eliminated by measurement (v0.0.89).** The compiler now counts its own calls and reports
+them:
 
-1. **Repeated `type_of` on the same node.** Several paths retype an expression — an argument
-   against its parameter, a multiplication's operands, a `print`'s target. If any of those
-   nest, the work is exponential in depth rather than quadratic in size.
+```
+parsed 178 items and statements into 28,135 nodes
+work: type_of called 18,369 times for 28,135 nodes
+```
+
+**`type_of` is linear.** Nothing retypes subtrees, so the leading hypothesis — exponential
+work in expression depth — is wrong. 73 seconds over 18,369 calls is **≈4 ms per call**, which
+means the cost is *inside* one call rather than in how often it is made. That narrows the hunt
+sharply and rules out the fix that looked obvious.
+
+**A note for whoever continues, learned the hard way.** The usual way to bisect a hot path —
+stick an early `return` at the top of a suspect function and re-time — **does not work in
+Burxt**: the compiler refuses unreachable code, so the probe will not build. Elimination here
+means deleting a body, or adding a flag the function reads. That is the language's strictness
+biting its own author, and it is worth knowing before an afternoon is spent on it.
+
+**Still unidentified**, in the order to check:
+
+1. ~~Repeated `type_of` on the same node~~ — **ruled out**, see above.
 2. **`ty_show` and message building on paths that are not errors.** A String built and
    discarded per node would explain both the time and the region traffic.
 3. **`find_sym` / `find_fun` / `find_type` linear scans.** Each is small per call, and every
@@ -68,6 +83,9 @@ against the header's length at run time.
 
 ## 4. Acceptance
 
+0. **A number for every attempt.** v0.0.87 fixed the obvious quadratic and bought 1.5%;
+   v0.0.89 measured and eliminated the leading hypothesis without changing any code. Both are
+   progress, and only the second kind is trustworthy.
 1. A self-compile in **under 20 seconds**, measured the same way: `time stage1
    examples/stage1.bx out.ll`.
 2. Region use during a self-compile **under 200 MB**, so the headroom is real rather than

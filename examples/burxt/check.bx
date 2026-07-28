@@ -366,6 +366,7 @@ fn (mut self: Unit) collect_declarations(src: String) -> Int allocates {
 // expressions the checker has already seen — whether a `+` joined two Strings, say —
 // and re-walking them would report every complaint a second time.
 fn (mut self: Unit) type_of(src: String, node: Int, expected: Ty) -> Ty allocates {
+    self.n_type_of += 1;
     let t: Ty = self.type_of_inner(src, node, expected);
     // The cache is a slot per NODE. It grows to reach the node being recorded, which costs
     // one push per node over a whole compile, and the last answer for a node stands — a

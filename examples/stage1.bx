@@ -37,7 +37,7 @@ region compile {
     // the same reason: a Span stays a byte range, and only a renderer needs to know which
     // file an offset fell in. See spec/M6-MODULES.md §1.5.
     let src: String = load_program(path);
-    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_fn: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, fn_entry: "", body_chunks: [], body_pending: "", next_tmp: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_conds: [], loop_ends: [], in_function: 0, depth: 0, problems: 0, pos: 0, token_end: 0, no_struct: 0, in_mul: 0, errors: 0 };
+    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_fn: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, fn_entry: "", body_chunks: [], body_pending: "", next_tmp: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_conds: [], loop_ends: [], in_function: 0, depth: 0, problems: 0, pos: 0, token_end: 0, no_struct: 0, in_mul: 0, errors: 0, n_type_of: 0, n_find_sym: 0, n_find_fun: 0, n_ty_show: 0, n_expr_allocates: 0, n_type_at: 0 };
     let installed: Int = unit.install_keywords();
     let total: Int = unit.run(src);
 
@@ -71,6 +71,10 @@ region compile {
         print("checked " + to_string(len(unit.funs)) + " functions and "
               + to_string(len(unit.types)) + " types");
         print("  type errors: " + to_string(problems));
+        // M9: what the checker actually did, per run. A number beside a phase is the only
+        // thing that turns "the checker is slow" into a place to look.
+        print("  work: type_of called " + to_string(unit.n_type_of) + " times for "
+              + to_string(len(unit.nodes)) + " nodes");
 
         // ---- phase 5: emit LLVM IR, when a second argument says where ----
         if problems == 0 && arg_count() > 2 {
