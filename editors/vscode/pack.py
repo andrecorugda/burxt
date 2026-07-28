@@ -2,7 +2,7 @@
 """Package the extension as a .vsix, with no toolchain.
 
     python3 editors/vscode/pack.py            # writes burxt-<version>.vsix here
-    code --install-extension editors/vscode/burxt-0.1.1.vsix
+    code --install-extension editors/vscode/burxt-0.1.2.vsix
 
 A .vsix is a ZIP with three things in it: an OPC content-types map, a VSIX
 manifest, and the extension under `extension/`. `vsce` does more than this —

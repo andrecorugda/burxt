@@ -68,9 +68,38 @@ The honest scope, because it matters: the Burxt backend does not emit Decimals, 
 
 `DESIGN.md` records the design north star and a ledger of superseded decisions and deliberately deferred features, each with the trigger that would earn it a milestone. Every version's entry — what it decided and what it cost — is in [`docs/log/`](docs/log/). The distinction between shipped and planned is kept honest in both, on purpose.
 
-## Building
+## Running a Burxt program
 
-Burxt's compiler (the bootstrap/stage-0 compiler) is written in Rust and emits native code via LLVM 18.
+Three ways, depending on how you like to work.
+
+**In a terminal.** Write a file, run it — there is no project file, no manifest, no build step to configure:
+
+```sh
+$ cat > hello.bx <<'EOF'
+let name: String = "world";
+region r {
+    print("hello, " + name + "!");
+}
+let price: Decimal<2> = 19.99;
+print(price * 3);
+EOF
+
+$ burxt run hello.bx        # compiles to native code, then runs it
+hello, world!
+59.97
+```
+
+`burxt run` compiles through LLVM to a real executable and runs it — there is no interpreter and no VM, so what runs is the same machine code you would ship. Use `burxt build hello.bx -o hello` to keep the binary, and `-o` on either to say where it goes.
+
+**In VS Code.** Install the extension (below) and open a `.bx` file: you get syntax highlighting, live diagnostics as you type, hover, and a **▶ Run button** in the editor title bar — or `Ctrl+F5`. The program runs in a terminal, and the executable goes to a temp path rather than beside your source.
+
+**As an installed command.** `cargo install --path .` puts `burxt` on your PATH, so `burxt run x.bx` works from anywhere. A prebuilt binary that needs no Rust toolchain is [on the list](#status), not done.
+
+What you cannot do yet: run Burxt in a browser (the WebAssembly target is designed, not built), or split a program across files (the module system is the next language milestone — today a program is one file).
+
+## Building the compiler
+
+Burxt's compiler (the bootstrap/stage-0 compiler) is written in Rust and emits native code via LLVM 18. The Burxt-written compiler in `examples/stage1.bx` is built by it — see [self-hosting](#status).
 
 Requirements:
 - Rust (via [rustup](https://rustup.rs))
@@ -110,7 +139,7 @@ highlighting, live diagnostics and hover, with no `npm install`:
 
 ```sh
 python3 editors/vscode/pack.py                            # no npm, no vsce
-code --install-extension editors/vscode/burxt-0.1.1.vsix  # then reload the window
+code --install-extension editors/vscode/burxt-0.1.2.vsix  # then reload the window
 ```
 
 That gives VS Code syntax highlighting, **errors as you type, and hover** — with no

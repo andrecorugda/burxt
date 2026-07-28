@@ -2,7 +2,7 @@
   "name": "burxt",
   "displayName": "Burxt",
   "description": "Burxt language support: syntax highlighting, live diagnostics, and hover from the compiler itself.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "burxt",
   "license": "MIT OR Apache-2.0",
   "repository": {
@@ -79,8 +79,41 @@
     ],
     "commands": [
       {
+        "command": "burxt.run",
+        "title": "Burxt: Run File",
+        "icon": "$(play)"
+      },
+      {
+        "command": "burxt.build",
+        "title": "Burxt: Build File"
+      },
+      {
         "command": "burxt.restartServer",
         "title": "Burxt: Restart Language Server"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "burxt.run",
+          "when": "resourceLangId == burxt",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "burxt.run",
+          "when": "resourceLangId == burxt",
+          "group": "z_commands"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "burxt.run",
+        "key": "ctrl+f5",
+        "mac": "cmd+f5",
+        "when": "resourceLangId == burxt"
       }
     ],
     "configuration": {

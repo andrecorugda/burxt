@@ -16,6 +16,7 @@
 // problem matcher still works — but the editor path is the server.)
 
 const vscode = require("vscode");
+const os = require("os");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -171,6 +172,35 @@ function openDocument(document) {
   });
 }
 
+// One terminal, reused, so running twice does not leave two behind.
+let terminal;
+
+function runFile(command) {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || !isBurxt(editor.document)) {
+    vscode.window.showWarningMessage("Burxt: open a `.bx` file first.");
+    return;
+  }
+  // Unsaved changes would compile the file on disk instead of the one on screen, which
+  // is the most confusing possible outcome. Save first, then run.
+  editor.document.save().then(() => {
+    if (!terminal || terminal.exitStatus !== undefined) {
+      terminal = vscode.window.createTerminal("Burxt");
+    }
+    terminal.show(true);
+    const file = editor.document.uri.fsPath;
+    // `-o` into the temp directory, so running a file does not leave an executable next
+    // to it. Without this the compiler writes into the terminal's working directory,
+    // which is how this repository's own root collected twenty-six of them.
+    const stem = path.basename(file).replace(/\.bx$/, "");
+    const out = path.join(os.tmpdir(), `burxt-${stem}`);
+    const quote = (s) => (/[\s"']/.test(s) ? `'${s.replace(/'/g, "'\\''")}'` : s);
+    terminal.sendText(
+      `${quote(compilerPath())} ${command} ${quote(file)} -o ${quote(out)}`
+    );
+  });
+}
+
 function activate(context) {
   diagnostics = vscode.languages.createDiagnosticCollection(LANGUAGE);
   context.subscriptions.push(diagnostics);
@@ -250,6 +280,12 @@ function activate(context) {
         return new vscode.Hover(markdown, range);
       },
     }),
+    // Running the file you are looking at, which is the thing a newcomer tries first.
+    // A terminal rather than an output channel: a Burxt program writes to stdout and
+    // may read arguments, so it belongs somewhere a person can see it and type into it.
+    vscode.commands.registerCommand("burxt.run", () => runFile("run")),
+    vscode.commands.registerCommand("burxt.build", () => runFile("build")),
+
     vscode.commands.registerCommand("burxt.restartServer", () => {
       client?.stop();
       warned = false;

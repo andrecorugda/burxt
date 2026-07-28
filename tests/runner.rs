@@ -755,6 +755,11 @@ fn vscode_extension_speaks_to_the_language_server() {
     let manifest = fs::read_to_string(root.join("editors/vscode/package.json")).unwrap();
     for (needle, why) in [
         ("\"icon\"", "the extension must declare an icon for the burxt language"),
+        // A language you cannot run from the editor is a language people read about
+        // rather than try. The play button, the keybinding and the command behind them.
+        ("burxt.run", "the extension must contribute a Run command"),
+        ("editor/title/run", "Run must appear as the editor's play button"),
+        ("ctrl+f5", "Run must have a keybinding"),
         ("file-icon.png", "the language icon file must be the one that is packaged"),
         ("\"extensionKind\"", "the extension must declare where it runs on a remote"),
         ("workspace", "extensionKind must be `workspace`: it spawns the compiler"),
@@ -765,6 +770,14 @@ fn vscode_extension_speaks_to_the_language_server() {
     // upgrade on the version alone: a rebuilt `.vsix` with the same number installs as
     // "already installed", which is how a stale icon survives a reinstall (v0.0.69's
     // artwork swap did exactly that, and the installed copy kept the old mark).
+    // Running a file must not leave a binary beside it: `-o` into a temp path is what
+    // keeps a user's folder clean, and it is easy to drop in an edit.
+    let extension_js = fs::read_to_string(root.join("editors/vscode/extension.js")).unwrap();
+    assert!(
+        extension_js.contains("os.tmpdir()") && extension_js.contains("-o "),
+        "the Run command must build into a temp path, not the working directory"
+    );
+
     assert!(
         !manifest.contains("\"version\": \"0.1.0\""),
         "bump the extension version when its contents change: VS Code will not reinstall \
