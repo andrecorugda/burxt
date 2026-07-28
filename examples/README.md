@@ -21,6 +21,7 @@ burxt run examples/invoice.bx -o /tmp/invoice
 | [`traits.bx`](traits.bx) | Traits, `impl Trait for Type`, static dispatch, `dyn` — and why there is no inheritance. |
 | [`enums.bx`](enums.bx) | Variants with payloads, exhaustive `match` with no wildcard, and what a new variant breaks. |
 | [`regions.bx`](regions.bx) | Regions as the unit of ownership, `allocates`, and every escape the compiler refuses. |
+| [`services.bx`](services.bx) | **Coming from classes**: a constructor with validation, an interface, dependency injection through a `dyn` field, and two implementations swapped with no change to the service. |
 | [`contracts.bx`](contracts.bx) | `requires` / `ensures` / `pure` / `decreases` / `old(...)`, including a conservation law. |
 | [`ffi.bx`](ffi.bx) + [`ffi.c`](ffi.c) | The C boundary, the `as scaled` marshaller, and the pointer wall. Needs the `.c` file linked — see the header. |
 | [`order.bx`](order.bx) | A small order calculation. |
