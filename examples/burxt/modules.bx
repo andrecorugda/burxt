@@ -1,0 +1,182 @@
+// ============================================================================
+// modules.bx — part of the Burxt compiler, written in Burxt.
+//
+// `use "path";`, resolved before lexing and blanked out afterwards.
+//
+// Assembled by examples/stage1.bx, which is the program; everything here is
+// declarations, which is what a module may hold.
+// ============================================================================
+
+// =============================================================================
+// MODULES: `use "path";` resolved before lexing.
+//
+// The imports are found by scanning the LEADING lines of a file — blank lines,
+// comments and `use` lines, stopping at the first item — and then blanked out:
+// replaced by spaces of the same length, so every byte offset after them is
+// unchanged and the lexer, parser and typechecker learn nothing about modules.
+//
+// Stage-0 does exactly this, and the two must agree: a program that compiles with
+// one and not the other is the disagreement the differential test exists to catch.
+// =============================================================================
+
+fn end_of_line(text: String, from: Int) -> Int {
+    let mut i: Int = from;
+    while i < len(text) && byte_at(text, i) != 10 {
+        i = i + 1;
+    }
+    return i;
+}
+
+fn first_non_space(text: String, from: Int, stop: Int) -> Int {
+    let mut i: Int = from;
+    while i < stop && (byte_at(text, i) == 32 || byte_at(text, i) == 9) {
+        i = i + 1;
+    }
+    return i;
+}
+
+fn starts_with_at(text: String, at: Int, prefix: String) -> Bool {
+    if at + len(prefix) > len(text) {
+        return false;
+    }
+    let mut i: Int = 0;
+    while i < len(prefix) {
+        if byte_at(text, at + i) != byte_at(prefix, i) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// The quoted path in `use "..."`, or the empty String if this line is not one.
+fn import_on_line(text: String, at: Int, stop: Int) -> String allocates {
+    let begin: Int = first_non_space(text, at, stop);
+    if !starts_with_at(text, begin, "use ") {
+        return "";
+    }
+    let mut i: Int = first_non_space(text, begin + 4, stop);
+    if i >= stop || byte_at(text, i) != 34 {
+        return "";
+    }
+    i = i + 1;
+    let from: Int = i;
+    while i < stop && byte_at(text, i) != 34 {
+        i = i + 1;
+    }
+    if i >= stop {
+        return "";
+    }
+    return substring(text, from, i - from);
+}
+
+// The directory a path lives in, with its trailing slash, so an import resolves
+// relative to the file that wrote it rather than to wherever the compiler was run.
+fn directory_of(path: String) -> String allocates {
+    let mut cut: Int = 0 - 1;
+    let mut i: Int = 0;
+    while i < len(path) {
+        if byte_at(path, i) == 47 {
+            cut = i;
+        }
+        i = i + 1;
+    }
+    if cut < 0 {
+        return "";
+    }
+    return substring(path, 0, cut + 1);
+}
+
+// A file's text with its `use` lines blanked out: the bytes become spaces, the
+// newlines stay, and every offset after them is exactly where it was.
+//
+// Only the HEADER is rewritten. The body is appended in one piece, because building a
+// six-thousand-line file line by line means six thousand copies of a growing String —
+// which is how splitting this compiler into modules first exhausted its own region.
+fn blank_imports(text: String) -> String allocates {
+    let mut header: String = "";
+    let mut at: Int = 0;
+    let mut in_header: Bool = true;
+    while at < len(text) && in_header {
+        let stop: Int = end_of_line(text, at);
+        let begin: Int = first_non_space(text, at, stop);
+        let mut blank_it: Bool = false;
+        if begin < stop && !starts_with_at(text, begin, "//") {
+            if len(import_on_line(text, at, stop)) > 0 {
+                blank_it = true;
+            } else {
+                in_header = false;
+            }
+        }
+        if in_header {
+            if blank_it {
+                let mut i: Int = at;
+                while i < stop {
+                    header = header + " ";
+                    i = i + 1;
+                }
+            } else {
+                header = header + substring(text, at, stop - at);
+            }
+            if stop < len(text) {
+                header = header + "\n";
+            }
+            at = stop + 1;
+        }
+    }
+    if at >= len(text) {
+        return header;
+    }
+    return header + substring(text, at, len(text) - at);
+}
+
+// Every file a program uses, in dependency order, each one once — which is also what
+// makes a cycle harmless. Burxt has no mutable parameters, so the accumulating buffer
+// and the seen-list live on a struct and the walk is a method on it.
+struct Loader { seen: [String], buffer: String }
+
+fn (mut self: Loader) load(path: String) -> Int allocates {
+    let mut i: Int = 0;
+    while i < len(self.seen) {
+        if self.seen[i] == path {
+            return 0;
+        }
+        i = i + 1;
+    }
+    let noted: Int = push(self.seen, path);
+
+    let text: String = read_file(path);
+    let here: String = directory_of(path);
+
+    let mut at: Int = 0;
+    let mut in_header: Bool = true;
+    while at < len(text) && in_header {
+        let stop: Int = end_of_line(text, at);
+        let begin: Int = first_non_space(text, at, stop);
+        if begin >= stop || starts_with_at(text, begin, "//") {
+            at = stop + 1;
+        } else {
+            let named: String = import_on_line(text, at, stop);
+            if len(named) == 0 {
+                in_header = false;
+            } else {
+                let done: Int = self.load(here + named);
+                at = stop + 1;
+            }
+        }
+    }
+
+    // A newline BETWEEN files, never after the last: it stops one file's final token
+    // running into the next file's first, and after the last there is nothing to run into.
+    if len(self.buffer) > 0 {
+        self.buffer = self.buffer + "\n";
+    }
+    self.buffer = self.buffer + blank_imports(text);
+    return 1;
+}
+
+fn load_program(path: String) -> String allocates {
+    let mut loader: Loader = Loader { seen: [], buffer: "" };
+    let done: Int = loader.load(path);
+    return loader.buffer;
+}

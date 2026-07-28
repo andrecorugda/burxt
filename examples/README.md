@@ -33,7 +33,12 @@ more about it than what it accepts.
 
 | File | What it is |
 |---|---|
-| [`stage1.bx`](stage1.bx) | **The Burxt compiler, written in Burxt** — lexer, parser, typechecker and an LLVM-IR backend, ~5,000 lines. It compiles its own source to a byte-identical fixpoint. |
+| [`stage1.bx`](stage1.bx) | **The Burxt compiler, written in Burxt** — the program, 105 lines, which `use`s the five modules below. It compiles its own source to a byte-identical fixpoint. |
+| [`burxt/types.bx`](burxt/types.bx) | The shapes everything else is written in, and the lexer. |
+| [`burxt/parser.bx`](burxt/parser.bx) | Tokens in, arena AST out. |
+| [`burxt/check.bx`](burxt/check.bx) | The rules: scales, regions, purity, contracts, exhaustiveness. |
+| [`burxt/modules.bx`](burxt/modules.bx) | `use "path";`, resolved before lexing. |
+| [`burxt/emit.bx`](burxt/emit.bx) | Textual LLVM IR, and the runtime emitted with it. |
 | [`lexer.bx`](lexer.bx) | The lexer alone, on a file with a byte it does not know. |
 | [`parser.bx`](parser.bx) | The parser alone, building an arena AST. |
 | [`checker.bx`](checker.bx) | The scale rule, in Burxt, on a file with real mistakes in it. |

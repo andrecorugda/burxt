@@ -1,6 +1,10 @@
 # Burxt — Modules (M6)
 
-> Status: **specified, implementing.** The blocker for everyone who is not the author:
+> Status: **DONE (v0.0.81–v0.0.82).** Both compilers resolve `use`, and the acceptance test
+> that matters passed: `examples/stage1.bx` is now 105 lines that `use` five modules, and the
+> fixpoint still holds — the compiler compiles its split self byte-identically.
+>
+> Original status: **specified, implementing.** The blocker for everyone who is not the author:
 > `examples/stage1.bx` is 4,996 lines in one file because it has no choice, and nothing
 > multi-file, multi-author or reusable is possible until this exists.
 

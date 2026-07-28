@@ -1,0 +1,2263 @@
+// ============================================================================
+// emit.bx — part of the Burxt compiler, written in Burxt.
+//
+// Textual LLVM IR. The runtime is emitted into every module, so a Burxt program needs
+// nothing on the machine but a C library.
+//
+// Assembled by examples/stage1.bx, which is the program; everything here is
+// declarations, which is what a module may hold.
+// ============================================================================
+
+// =============================================================================
+// PHASE 5: the backend. Textual LLVM IR, for the reason M4 §1 gives — an
+// `extern fn` returns an Int or a CInt, never a pointer whose ownership Burxt
+// cannot describe, so an LLVMBuilderRef is unreachable BY CONSTRUCTION. Emitting
+// text is not a workaround: it is string formatting instead of an API, and the
+// output is readable, diffable and testable without a debugger.
+//
+// Slice 1 covers Ints, Bools, String literals, arithmetic with the overflow
+// checks the thesis requires, comparisons, `if`, `while`, `break`, `continue`,
+// functions, calls and `print`. Decimals, regions and aggregates follow; what is
+// not covered is refused by name rather than emitted wrongly.
+// =============================================================================
+
+// A local. For a scalar the alloca holds the value; for an aggregate the alloca IS the
+// storage and the value is its address.
+//
+// `aggregate` means "the alloca IS the storage", recorded rather than inferred from
+// `cells`. A struct with ONE field occupies one cell and is still a struct — inferring it
+// from the count loaded the field instead of passing the address, and a one-field struct
+// passed to a method segfaulted. A `mut self` slot is the mirror case: one cell, holding
+// someone else's address, so it reads by LOADING and is marked not-aggregate.
+struct Slot { start: Int, length: Int, index: Int, cells: Int, aggregate: Int }
+
+// Two buffers per function, joined when it closes. Allocas MUST land in the entry
+// block: an `alloca` inside a loop allocates again on every iteration, so a `let` in a
+// `while` would grow the stack until it ran out. The entry block is the one place where
+// "once per call" is guaranteed.
+// The body accumulates in CHUNKS for the same reason the module does: `a = a + b` copies
+// the whole left side, and a function body reaching a hundred kilobytes, appended to a
+// hundred thousand times, copies gigabytes. Bounding each copy to the chunk size is what
+// keeps the compiler inside its own region.
+//
+// The entry buffer stays a plain String: allocas are few and short, so it never grows
+// enough for the quadratic term to matter.
+fn (mut self: Unit) w(text: String) -> Int allocates {
+    self.body_pending = self.body_pending + text;
+    if len(self.body_pending) > 4096 {
+        push(self.body_chunks, self.body_pending);
+        self.body_pending = "";
+    }
+    return 0;
+}
+
+// Module-level text — the declarations and the runtime — goes straight to the module,
+// not through a function's buffer: `open_fn` clears those, and a preamble written into
+// one would be discarded when the first function opened.
+// The module's text, in CHUNKS. `a = a + b` copies the whole left side, so appending
+// fifty thousand times to one growing String copies gigabytes — which is exactly how
+// this compiler first exhausted its region while emitting its own source. Chunks bound
+// each copy to the chunk size, and the joins at the end are few.
+//
+// The real fix is a byte buffer that grows in place, which needs a builtin that writes
+// one. Recorded rather than pretended away: this is a cost, not a design.
+fn (mut self: Unit) w_out(text: String) -> Int allocates {
+    self.pending = self.pending + text;
+    if len(self.pending) > 4096 {
+        push(self.chunks, self.pending);
+        self.pending = "";
+    }
+    return 0;
+}
+
+// Joining the chunks PAIRWISE rather than one after another. Appending each chunk to a
+// growing result copies the whole result every time — O(n²) in the output size, which is
+// what exhausted a 1 GB region the moment the module grew past a megabyte. Merging pairs
+// halves the count each round, so the total copying is O(n log n): about eleven megabytes
+// for a 1.2 MB module instead of several hundred.
+//
+// The honest fix is still a byte buffer that grows in place, which needs a builtin that
+// writes one. This buys the room to get there.
+fn (mut self: Unit) finish() -> String allocates {
+    if len(self.pending) > 0 {
+        push(self.chunks, self.pending);
+        self.pending = "";
+    }
+    if len(self.chunks) == 0 {
+        return "";
+    }
+    while len(self.chunks) > 1 {
+        let mut merged: [String] = [];
+        let mut i: Int = 0;
+        while i + 1 < len(self.chunks) {
+            let pair: String = self.chunks[i] + self.chunks[i + 1];
+            let added: Int = push(merged, pair);
+            i = i + 2;
+        }
+        if i < len(self.chunks) {
+            let last: Int = push(merged, self.chunks[i]);
+        }
+        self.chunks = merged;
+    }
+    return self.chunks[0];
+}
+
+fn (mut self: Unit) w_entry(text: String) -> Int allocates {
+    self.fn_entry = self.fn_entry + text;
+    return 0;
+}
+
+fn (mut self: Unit) open_fn(header: String) -> Int allocates {
+    self.fn_entry = "";
+    self.body_pending = "";
+    self.body_chunks = [];
+    return self.w_entry(header);
+}
+
+fn (mut self: Unit) close_fn(closing: String) -> Int allocates {
+    let entry_written: Int = self.w_out(self.fn_entry);
+    let mut i: Int = 0;
+    while i < len(self.body_chunks) {
+        let piece: Int = self.w_out(self.body_chunks[i]);
+        i = i + 1;
+    }
+    let rest: Int = self.w_out(self.body_pending);
+    let closed: Int = self.w_out(closing);
+    self.fn_entry = "";
+    self.body_pending = "";
+    self.body_chunks = [];
+    return 0;
+}
+
+fn (mut self: Unit) fresh() -> String allocates {
+    self.next_tmp = self.next_tmp + 1;
+    return "%t" + to_string(self.next_tmp);
+}
+
+fn (mut self: Unit) fresh_label(stem: String) -> String allocates {
+    self.next_label = self.next_label + 1;
+    return stem + to_string(self.next_label);
+}
+
+// A local's alloca, named by its position in the table rather than by the source
+// name, so two blocks that both say `x` cannot collide in the IR.
+fn (mut self: Unit) declare_slot(src: String, start: Int, length: Int, cells: Int,
+                                 aggregate: Int) -> Int allocates {
+    // The NAME comes from a counter that only grows, not from the table's length. A match
+    // arm's bindings leave scope by truncating the table, so lengths repeat — and two
+    // allocas called `%v3` in one function is not a program LLVM will accept.
+    self.next_slot = self.next_slot + 1;
+    let index: Int = self.next_slot;
+    push(self.slots, Slot { start: start, length: length, index: index, cells: cells,
+                            aggregate: aggregate });
+    let visited: Int = self.w_entry("  %v" + to_string(index) + " = alloca ["
+                                   + to_string(cells) + " x i64]\n");
+    return index;
+}
+
+// Scratch storage for a value that has no name — a struct literal, an array literal.
+// In the entry block for the same reason every other alloca is.
+fn (mut self: Unit) scratch(cells: Int) -> String allocates {
+    self.next_tmp = self.next_tmp + 1;
+    let name: String = "%scratch" + to_string(self.next_tmp);
+    let visited: Int = self.w_entry("  " + name + " = alloca [" + to_string(cells)
+                                   + " x i64]\n");
+    return name;
+}
+
+fn (self: Unit) slot_is_aggregate(src: String, start: Int, length: Int) -> Bool {
+    let mut i: Int = len(self.slots) - 1;
+    while i >= 0 {
+        let slot: Slot = self.slots[i];
+        if spans_eq(src, slot.start, slot.length, start, length) {
+            return slot.aggregate == 1;
+        }
+        i = i - 1;
+    }
+    return false;
+}
+
+// How many i64 cells a value of this type occupies. Everything a Burxt value can be is
+// eight bytes wide or an aggregate of things that are — a String and a growable array
+// are pointers, a Decimal is a scaled i64 — so a layout is a COUNT, and nothing here
+// needs an alignment rule.
+fn (mut self: Unit) cells_of(src: String, ty: Ty) -> Int allocates {
+    if ty.kind == 46 {
+        let found: Int = self.find_type(src, ty.name_start, ty.name_len);
+        if found < 0 {
+            return 1;
+        }
+        let decl: TypeDecl = self.types[found];
+        let item: Node = self.nodes[decl.node];
+        if decl.kind == 83 {
+            // An enum is a TAG plus room for the widest variant's payload. Every value of
+            // the type is the same size, so one may be assigned where another was — which
+            // is what makes a variant a value rather than a separate type.
+            let mut widest: Int = 0;
+            let mut v: Int = 0;
+            while v < item.b {
+                let variant: Node = self.nodes[self.kids[item.a + v]];
+                let mut carried: Int = 0;
+                let mut p: Int = 0;
+                while p < variant.c {
+                    carried = carried + self.cells_of(src, self.ty_of(src, self.subs[variant.b + p]));
+                    p = p + 1;
+                }
+                if carried > widest { widest = carried; }
+                v = v + 1;
+            }
+            return 1 + widest;
+        }
+        if decl.kind != 82 {
+            return 1;
+        }
+        let mut total: Int = 0;
+        let mut f: Int = 0;
+        while f < item.b {
+            let field: Node = self.nodes[self.kids[item.a + f]];
+            total = total + self.cells_of(src, self.ty_of(src, field.a));
+            f = f + 1;
+        }
+        return total;
+    }
+    if ty.kind == 48 {                               // [T; N]
+        return ty.contract * self.cells_of(src, self.ty_of(src, ty.scale));
+    }
+    if ty.kind == 49 {
+        // A trait object is a FAT POINTER: the value, and the table of the trait's
+        // methods. Two cells, always, whatever the concrete type behind it is — which is
+        // what lets one `dyn Priced` hold a Book today and a Meal tomorrow.
+        return 2;
+    }
+    return 1;
+}
+
+// Where a field starts, in cells, and -1 when the holder has no such field. The walk is
+// the same one `cells_of` does, which is why the two cannot disagree about a layout.
+fn (mut self: Unit) offset_of(src: String, holder: Ty, name: Tok) -> Int allocates {
+    let found: Int = self.find_type(src, holder.name_start, holder.name_len);
+    if found < 0 {
+        return -1;
+    }
+    let item: Node = self.nodes[self.types[found].node];
+    let mut offset: Int = 0;
+    let mut f: Int = 0;
+    while f < item.b {
+        let field: Node = self.nodes[self.kids[item.a + f]];
+        let field_name: Tok = self.toks[field.tok];
+        if spans_eq(src, field_name.start, field_name.length, name.start, name.length) {
+            return offset;
+        }
+        offset = offset + self.cells_of(src, self.ty_of(src, field.a));
+        f = f + 1;
+    }
+    return -1;
+}
+
+fn (self: Unit) is_aggregate(ty: Ty) -> Bool {
+    return ty.kind == 46 || ty.kind == 48 || ty.kind == 49;
+}
+
+fn (self: Unit) find_slot(src: String, start: Int, length: Int) -> Int {
+    let mut i: Int = len(self.slots) - 1;
+    while i >= 0 {
+        let slot: Slot = self.slots[i];
+        if spans_eq(src, slot.start, slot.length, start, length) {
+            return slot.index;
+        }
+        i = i - 1;
+    }
+    return -1;
+}
+
+// Every byte as a hex escape. LLVM accepts c"\68\69\00", and emitting only escapes
+// means no byte needs a character to stand for it — which matters in a language whose
+// own `to_string` answers with digits, not letters.
+fn hex_of(value: Int) -> String allocates {
+    let digits: String = "0123456789abcdef";
+    return "\\" + substring(digits, div_floor(value, 16), 1)
+                + substring(digits, rem(value, 16), 1);
+}
+
+// A private constant for these bytes, answering the global's name. The bytes are the
+// STRING as the lexer read it, escapes and all, so what the program prints is what the
+// source said.
+// A constant holding bytes the EMITTER produced — a printf format built for a scale,
+// say — rather than bytes quoted from the program. Same escaping, different source.
+fn (mut self: Unit) intern_text(text: String) -> String allocates {
+    let name: String = "@burxt.k" + to_string(len(self.strings));
+    push(self.strings, 0);
+    let mut body: String = "";
+    let mut i: Int = 0;
+    while i < len(text) {
+        body = body + hex_of(byte_at(text, i));
+        i = i + 1;
+    }
+    self.globals = self.globals + name + " = private unnamed_addr constant ["
+        + to_string(len(text) + 1) + " x i8] c\"" + body + hex_of(0) + "\"\n";
+    return name;
+}
+
+// Ten to the power of a scale. A scale is at most 18 and 10^18 fits in an i64, so this
+// is a literal the emitter can write rather than a computation the program must do.
+fn power_of_ten(scale: Int) -> Int {
+    let mut n: Int = 1;
+    let mut i: Int = 0;
+    while i < scale {
+        n = n * 10;
+        i = i + 1;
+    }
+    return n;
+}
+
+fn (mut self: Unit) intern(src: String, start: Int, length: Int) -> String allocates {
+    let name: String = "@burxt.s" + to_string(len(self.strings));
+    push(self.strings, start);
+    let mut body: String = "";
+    let mut count: Int = 0;
+    let mut i: Int = 0;
+    while i < length {
+        let byte: Int = byte_at(src, start + i);
+        if byte == 92 && i + 1 < length {            // a backslash: the lexer's escape
+            let next: Int = byte_at(src, start + i + 1);
+            let mut resolved: Int = next;
+            if next == 110 { resolved = 10; }        // \n
+            if next == 116 { resolved = 9; }         // \t
+            if next == 48 { resolved = 0; }          // \0
+            body = body + hex_of(resolved);
+            count = count + 1;
+            i = i + 2;
+        } else {
+            body = body + hex_of(byte);
+            count = count + 1;
+            i = i + 1;
+        }
+    }
+    self.globals = self.globals + name + " = private unnamed_addr constant ["
+        + to_string(count + 1) + " x i8] c\"" + body + hex_of(0) + "\"\n";
+    return name;
+}
+
+// ---- expressions -------------------------------------------------------------
+// Each one answers an OPERAND: a register like %t7, or a literal like 42. The caller
+// does not care which, which is what keeps the emitter free of a value type.
+fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
+    let n: Node = self.nodes[node];
+    if n.kind == 1 {                                 // an Int literal
+        return to_string(n.value);
+    }
+    if n.kind == 2 {                                 // a Decimal literal
+        // Scaled integer, and nothing else: $19.99 IS 1999. But a literal takes the scale
+        // of its CONTEXT when that loses nothing — `$5` in a Decimal<2> is 5.00, the
+        // integer 500 — and the checker recorded which scale it settled on. Emitting the
+        // lexer's raw digits instead printed `$5` as 0.05.
+        let settled: Ty = self.type_at(node);
+        let mut value: Int = n.value;
+        if settled.kind == 45 {
+            if settled.scale > n.a {
+                value = value * power_of_ten(settled.scale - n.a);
+            }
+            if settled.scale < n.a {
+                // Narrowing, which the checker allowed only because every digit dropped
+                // is a zero: `42.0` in a Decimal<0> is 42, and the division is exact.
+                value = div_trunc(value, power_of_ten(n.a - settled.scale));
+            }
+        }
+        return to_string(value);
+    }
+    if n.kind == 4 {                                 // a Bool literal
+        if n.value == 1 {
+            return "1";
+        }
+        return "0";
+    }
+    if n.kind == 3 {                                 // a String literal, or a piece
+        if n.c == 1 {
+            // A literal run inside an interpolation: the span is the bytes themselves,
+            // with no quotes around them.
+            let inner: String = self.intern(src, n.a, n.b);
+            return "ptrtoint (ptr " + inner + " to i64)";
+        }
+        let t: Tok = self.toks[n.tok];
+        // The token's span includes its quotes, and the bytes between them are the
+        // string. One place knows that, and it is here.
+        let global: String = self.intern(src, t.start + 1, t.length - 2);
+        return "ptrtoint (ptr " + global + " to i64)";
+    }
+
+    if n.kind == 18 {                                // an interpolated String, as a value
+        // The join it stands for, left to right — byte-identical to writing the `+` and
+        // `to_string` calls by hand, which is the promise interpolation makes.
+        if n.b == 0 {
+            return "ptrtoint (ptr " + self.intern_text("") + " to i64)";
+        }
+        let mut joined: String = self.emit_piece(src, self.kids[n.a]);
+        let mut i: Int = 1;
+        while i < n.b {
+            let piece: String = self.emit_piece(src, self.kids[n.a + i]);
+            let next: String = self.fresh();
+            let appended: Int = self.w("  " + next + " = call i64 @burxt.concat(i64 "
+                                       + joined + ", i64 " + piece + ")\n");
+            joined = next;
+            i = i + 1;
+        }
+        return joined;
+    }
+    if n.kind == 5 {                                 // a name
+        let t: Tok = self.toks[n.tok];
+        let slot: Int = self.find_slot(src, t.start, t.length);
+        if slot < 0 {
+            return "0";
+        }
+        let reg: String = self.fresh();
+        if self.slot_is_aggregate(src, t.start, t.length) {
+            // An aggregate's value IS its address: the alloca is the storage, and
+            // copying happens where a copy is meant, not on every mention.
+            let visited: Int = self.w("  " + reg + " = ptrtoint ptr %v" + to_string(slot)
+                                      + " to i64\n");
+            return reg;
+        }
+        let visited: Int = self.w("  " + reg + " = load i64, ptr %v" + to_string(slot)
+                                  + "\n");
+        return reg;
+    }
+
+    // `Enum.Variant` and `Enum.Variant(x)` parse as a field access and a method call. The
+    // base names a TYPE rather than a value, which is the only thing that tells them
+    // apart — the same check the typechecker makes, for the same reason.
+    if n.kind == 11 || n.kind == 14 {
+        let base_node: Node = self.nodes[n.a];
+        if base_node.kind == 5 {
+            let base_name: Tok = self.toks[base_node.tok];
+            let declared: Int = self.find_type(src, base_name.start, base_name.length);
+            if declared >= 0 {
+                if self.types[declared].kind == 83 {
+                    let holder: Ty = Ty { kind: 46, scale: 0, contract: 0,
+                                          name_start: base_name.start,
+                                          name_len: base_name.length };
+                    return self.emit_construction(src, holder, n, n.kind == 14);
+                }
+            }
+        }
+    }
+
+    if n.kind == 11 {                                // a field
+        let holder: Ty = self.type_at(n.a);
+        let base: String = self.emit_expr(src, n.a);
+        let field: Tok = self.toks[n.tok];
+        let offset: Int = self.offset_of(src, holder, field);
+        if offset < 0 {
+            let e: Int = self.complain_at(src, n.tok,
+                "the Burxt backend cannot find this field's offset");
+            return "0";
+        }
+        let as_ptr: String = self.fresh();
+        let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + base + " to ptr\n");
+        let at: String = self.fresh();
+        let stepped: Int = self.w("  " + at + " = getelementptr i64, ptr " + as_ptr
+                                  + ", i64 " + to_string(offset) + "\n");
+        let mine: Ty = self.type_at(node);
+        if self.is_aggregate(mine) {
+            // A field that is itself an aggregate answers an INTERIOR address, which is
+            // the same kind of value as any other aggregate's.
+            let reg: String = self.fresh();
+            let visited: Int = self.w("  " + reg + " = ptrtoint ptr " + at + " to i64\n");
+            return reg;
+        }
+        let reg: String = self.fresh();
+        let loaded: Int = self.w("  " + reg + " = load i64, ptr " + at + "\n");
+        return reg;
+    }
+
+    if n.kind == 12 {                                // xs[i]
+        let holder: Ty = self.type_at(n.a);
+        let base: String = self.emit_expr(src, n.a);
+        let index: String = self.emit_expr(src, n.b);
+        if holder.kind == 47 {
+            let element: Ty = self.ty_of(src, holder.scale);
+            let at: String = self.fresh();
+            let found: Int = self.w("  " + at + " = call i64 @burxt.slot(i64 " + base
+                                    + ", i64 " + index + ", i64 "
+                                    + to_string(self.toks[n.tok].start) + ")\n");
+            if self.is_aggregate(element) {
+                return at;
+            }
+            let as_ptr: String = self.fresh();
+            let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + at + " to ptr\n");
+            let reg: String = self.fresh();
+            let loaded: Int = self.w("  " + reg + " = load i64, ptr " + as_ptr + "\n");
+            return reg;
+        }
+        if holder.kind != 48 {
+            let e: Int = self.complain_at(src, n.tok,
+                "the Burxt backend cannot index this");
+            return "0";
+        }
+        let element: Ty = self.ty_of(src, holder.scale);
+        let stride: Int = self.cells_of(src, element);
+        // The bounds check is not optional and not a build mode: an index past the end
+        // is a named failure, exit 70, like every other one.
+        let checked: Int = self.w("  call void @burxt.bounds(i64 " + index + ", i64 "
+                                  + to_string(holder.contract) + ", i64 "
+                                  + to_string(self.toks[n.tok].start) + ")\n");
+        let scaled: String = self.fresh();
+        let multiplied: Int = self.w("  " + scaled + " = mul i64 " + index + ", "
+                                     + to_string(stride) + "\n");
+        let as_ptr: String = self.fresh();
+        let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + base + " to ptr\n");
+        let at: String = self.fresh();
+        let stepped: Int = self.w("  " + at + " = getelementptr i64, ptr " + as_ptr
+                                  + ", i64 " + scaled + "\n");
+        if self.is_aggregate(element) {
+            let reg: String = self.fresh();
+            let visited: Int = self.w("  " + reg + " = ptrtoint ptr " + at + " to i64\n");
+            return reg;
+        }
+        let reg: String = self.fresh();
+        let loaded: Int = self.w("  " + reg + " = load i64, ptr " + at + "\n");
+        return reg;
+    }
+
+    if n.kind == 19 {                                // a struct literal
+        let mine: Ty = self.type_at(node);
+        let cells: Int = self.cells_of(src, mine);
+        let storage: String = self.scratch(cells);
+        let mut i: Int = 0;
+        while i < n.b {
+            let pair: Node = self.nodes[self.kids[n.a + i]];
+            let field: Tok = self.toks[pair.tok];
+            let offset: Int = self.offset_of(src, mine, field);
+            let field_ty: Ty = self.field_type(src, mine, pair.tok);
+            let value: String = self.emit_value_for(src, field_ty, pair.a);
+            let at: String = self.fresh();
+            let stepped: Int = self.w("  " + at + " = getelementptr i64, ptr " + storage
+                                      + ", i64 " + to_string(offset) + "\n");
+            if self.is_aggregate(field_ty) {
+                // A field holding an aggregate holds a COPY of it, not a reference to
+                // wherever the value came from.
+                let copied: Int = self.copy_cells(src, at, value,
+                                                  self.cells_of(src, field_ty));
+            } else {
+                let stored: Int = self.w("  store i64 " + value + ", ptr " + at + "\n");
+            }
+            i = i + 1;
+        }
+        let reg: String = self.fresh();
+        let visited: Int = self.w("  " + reg + " = ptrtoint ptr " + storage + " to i64\n");
+        return reg;
+    }
+
+    if n.kind == 17 {                                // an array literal
+        let mine: Ty = self.type_at(node);
+        if mine.kind == 47 {                         // [T] — a header in the region
+            let element: Ty = self.ty_of(src, mine.scale);
+            let reg: String = self.fresh();
+            let made: Int = self.w("  " + reg + " = call i64 @burxt.new_array(i64 "
+                                   + to_string(self.cells_of(src, element)) + ")\n");
+            let mut k: Int = 0;
+            while k < n.b {
+                let value: String = self.emit_expr(src, self.kids[n.a + k]);
+                let pushed: String = self.fresh();
+                let added: Int = self.w("  " + pushed + " = call i64 @burxt.push(i64 "
+                                        + reg + ", i64 " + value + ")\n");
+                k = k + 1;
+            }
+            return reg;
+        }
+        if mine.kind != 48 {
+            let e: Int = self.complain_at(src, n.tok,
+                "the Burxt backend cannot build this array");
+            return "0";
+        }
+        let element: Ty = self.ty_of(src, mine.scale);
+        let stride: Int = self.cells_of(src, element);
+        let storage: String = self.scratch(self.cells_of(src, mine));
+        let mut i: Int = 0;
+        while i < n.b {
+            let value: String = self.emit_expr(src, self.kids[n.a + i]);
+            let at: String = self.fresh();
+            let stepped: Int = self.w("  " + at + " = getelementptr i64, ptr " + storage
+                                      + ", i64 " + to_string(i * stride) + "\n");
+            if self.is_aggregate(element) {
+                let copied: Int = self.copy_cells(src, at, value, stride);
+            } else {
+                let stored: Int = self.w("  store i64 " + value + ", ptr " + at + "\n");
+            }
+            i = i + 1;
+        }
+        let reg: String = self.fresh();
+        let visited: Int = self.w("  " + reg + " = ptrtoint ptr " + storage + " to i64\n");
+        return reg;
+    }
+    if n.kind == 6 || n.kind == 7 {                  // -e, !e
+        let inner: String = self.emit_expr(src, n.a);
+        let reg: String = self.fresh();
+        if n.kind == 7 {
+            let visited: Int = self.w("  " + reg + " = xor i64 " + inner + ", 1\n");
+        } else {
+            let visited: Int = self.w("  " + reg + " = call i64 @burxt.checked.sub(i64 0, "
+                                      + "i64 " + inner + ")\n");
+        }
+        return reg;
+    }
+    if n.kind == 8 {                                 // a + b, a - b, a * b
+        let left: String = self.emit_expr(src, n.a);
+        let right: String = self.emit_expr(src, n.b);
+        if n.value == 25 && self.type_at(n.a).kind == 42 {
+            // `+` on Strings is a join, and the join allocates in the open region.
+            let joined: String = self.fresh();
+            let visited: Int = self.w("  " + joined + " = call i64 @burxt.concat(i64 "
+                                      + left + ", i64 " + right + ")\n");
+            return joined;
+        }
+        let left_ty: Ty = self.type_at(n.a);
+        let right_ty: Ty = self.type_at(n.b);
+        let answer_ty: Ty = self.type_at(node);
+
+        if n.value == 27 && left_ty.kind == 45 && right_ty.kind == 45 {
+            // The exact product of two scaled integers has the SUM of their scales. Landing
+            // it on the answer's scale is a division by a power of ten — and the rounding
+            // contract in the type is what says which way it goes. This is the one place
+            // in the language where a value can lose information, and it is written down.
+            let shift: Int = left_ty.scale + right_ty.scale - answer_ty.scale;
+            return self.emit_rounded(left, right, shift, answer_ty.contract, 0);
+        }
+        if n.value == 28 && left_ty.kind == 45 {
+            // a / b, both scaled by 10^S: the true quotient scaled back up is a*10^S / b.
+            // Dividing by an Int needs no scaling at all — the count is not scaled.
+            if right_ty.kind == 45 {
+                return self.emit_rounded(left, right, 0 - answer_ty.scale,
+                                         answer_ty.contract, 1);
+            }
+            return self.emit_rounded(left, right, 0, answer_ty.contract, 1);
+        }
+
+        let mut helper: String = "add";
+        if n.value == 26 { helper = "sub"; }
+        if n.value == 27 { helper = "mul"; }
+        let reg: String = self.fresh();
+        // Through the checked helper, always. An arithmetic result that silently wraps
+        // is the same class of wrong as a rounded cent.
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.checked." + helper
+                                  + "(i64 " + left + ", i64 " + right + ")\n");
+        return reg;
+    }
+    if n.kind == 9 {                                 // a comparison
+        let left: String = self.emit_expr(src, n.a);
+        let right: String = self.emit_expr(src, n.b);
+        if self.type_at(n.a).kind == 42 {
+            // Strings compare by BYTES. Comparing the i64s would compare pointers, which
+            // is true only when two Strings are the same object — a bug that reads as a
+            // working program right up until two equal Strings were built separately.
+            let order: String = self.fresh();
+            let compared: Int = self.w("  " + order + " = call i64 @burxt.strcmp(i64 "
+                                       + left + ", i64 " + right + ")\n");
+            let bit: String = self.fresh();
+            let mut op: String = "eq";
+            if n.value == 13 { op = "ne"; }
+            let tested: Int = self.w("  " + bit + " = icmp " + op + " i64 " + order
+                                     + ", 0\n");
+            let reg: String = self.fresh();
+            let widened: Int = self.w("  " + reg + " = zext i1 " + bit + " to i64\n");
+            return reg;
+        }
+        // The token codes, not invented ones: `==` is 12, `!=` 13, `<=` 14, `>=` 15,
+        // and the single-character `<` and `>` are 35 and 36.
+        let mut op: String = "eq";
+        if n.value == 13 { op = "ne"; }
+        if n.value == 14 { op = "sle"; }
+        if n.value == 15 { op = "sge"; }
+        if n.value == 35 { op = "slt"; }
+        if n.value == 36 { op = "sgt"; }
+        let bit: String = self.fresh();
+        let visited: Int = self.w("  " + bit + " = icmp " + op + " i64 " + left + ", "
+                                  + right + "\n");
+        let reg: String = self.fresh();
+        // A Bool is an i64 in Burxt's ABI, so a comparison widens once, here.
+        let widened: Int = self.w("  " + reg + " = zext i1 " + bit + " to i64\n");
+        return reg;
+    }
+    if n.kind == 10 {                                // && and ||
+        // These SHORT-CIRCUIT: the right side is evaluated only when the left has not
+        // already decided the answer. That is not an optimisation, it is what makes
+        // `while keep > 0 && self.syms[keep - 1].depth >= self.depth` safe to write —
+        // and this compiler's own symbol table is written exactly that way, which is how
+        // a backend that evaluated both sides was caught: by indexing at -1.
+        //
+        // The answer lives in one cell: store the left value, and overwrite it only if
+        // the right side runs. For `&&` a false left IS the answer; for `||` a true left
+        // is; and when the right side runs, it is the answer for both.
+        //
+        // The parser records the OPERATOR'S BYTE — 124 for `|`, 38 for `&` — not the
+        // token kind. Reading it as a token kind made every `||` an `and`, and the first
+        // test to notice agreed with stage-0 by accident: `5 != 5 || false` is false
+        // either way.
+        let answer: String = self.scratch(1);
+        let left: String = self.emit_expr(src, n.a);
+        let kept: Int = self.w("  store i64 " + left + ", ptr " + answer + "\n");
+        let bit: String = self.fresh();
+        let tested: Int = self.w("  " + bit + " = icmp ne i64 " + left + ", 0\n");
+        let rhs_label: String = self.fresh_label("logic.rhs");
+        let end_label: String = self.fresh_label("logic.end");
+        if n.value == 124 {                          // ||: a true left is the answer
+            let branched: Int = self.w("  br i1 " + bit + ", label %" + end_label
+                                       + ", label %" + rhs_label + "\n");
+        } else {                                     // &&: a false left is the answer
+            let branched: Int = self.w("  br i1 " + bit + ", label %" + rhs_label
+                                       + ", label %" + end_label + "\n");
+        }
+        let opened: Int = self.w(rhs_label + ":\n");
+        let right: String = self.emit_expr(src, n.b);
+        let stored: Int = self.w("  store i64 " + right + ", ptr " + answer + "\n");
+        let joined: Int = self.w("  br label %" + end_label + "\n" + end_label + ":\n");
+        let reg: String = self.fresh();
+        let loaded: Int = self.w("  " + reg + " = load i64, ptr " + answer + "\n");
+        return reg;
+    }
+    if n.kind == 14 {                                // a method call
+        let holder: Ty = self.type_at(n.a);
+        if holder.kind == 49 {
+            return self.emit_dyn_call(src, holder, n);
+        }
+        let receiver: String = self.emit_expr(src, n.a);
+        let list: Node = self.nodes[n.b];
+        let mut args: String = "i64 " + receiver;
+        let mut k: Int = 0;
+        while k < list.b {
+            let value: String = self.emit_expr(src, self.kids[list.a + k]);
+            args = args + ", i64 " + value;
+            k = k + 1;
+        }
+        let answers: Ty = self.type_at(node);
+        if self.is_aggregate(answers) {
+            let storage: String = self.scratch(self.cells_of(src, answers));
+            let dropped: String = self.fresh();
+            let called_it: Int = self.w("  " + dropped + " = call i64 @"
+                                        + method_symbol(src, holder, self.toks[n.tok])
+                                        + "(ptr " + storage + ", " + args + ")\n");
+            let reg: String = self.fresh();
+            let address: Int = self.w("  " + reg + " = ptrtoint ptr " + storage
+                                      + " to i64\n");
+            return reg;
+        }
+        let reg: String = self.fresh();
+        let visited: Int = self.w("  " + reg + " = call i64 @"
+                                  + method_symbol(src, holder, self.toks[n.tok])
+                                  + "(" + args + ")\n");
+        return reg;
+    }
+
+    if n.kind == 13 {                                // a call
+        let t: Tok = self.toks[n.tok];
+        let list: Node = self.nodes[n.a];
+        let called: String = substring(src, t.start, t.length);
+        if builtin_arity(called) >= 0 {
+            return self.emit_builtin(src, n, called);
+        }
+        let mut args: String = "";
+        let mut i: Int = 0;
+        while i < list.b {
+            let value: String = self.emit_expr(src, self.kids[list.a + i]);
+            if i > 0 {
+                args = args + ", ";
+            }
+            args = args + "i64 " + value;
+            i = i + 1;
+        }
+        let found_fn: Int = self.find_fun(src, t.start, t.length);
+        if found_fn >= 0 {
+            if flag_extern(self.funs[found_fn].flags) == 1 {
+                return self.emit_c_call(src, n, self.funs[found_fn]);
+            }
+        }
+        let answers: Ty = self.type_at(node);
+        if self.is_aggregate(answers) {
+            let storage: String = self.scratch(self.cells_of(src, answers));
+            let mut all: String = "ptr " + storage;
+            if args != "" {
+                all = all + ", " + args;
+            }
+            let dropped: String = self.fresh();
+            let called_it: Int = self.w("  " + dropped + " = call i64 @"
+                                        + substring(src, t.start, t.length)
+                                        + "(" + all + ")\n");
+            let reg: String = self.fresh();
+            let address: Int = self.w("  " + reg + " = ptrtoint ptr " + storage
+                                      + " to i64\n");
+            return reg;
+        }
+        let reg: String = self.fresh();
+        let visited: Int = self.w("  " + reg + " = call i64 @" + substring(src, t.start,
+                                  t.length) + "(" + args + ")\n");
+        return reg;
+    }
+    // Anything this slice does not cover is named rather than emitted wrongly.
+    let e: Int = self.complain_at(src, n.tok,
+        "the Burxt backend does not emit this expression yet");
+    return "0";
+}
+
+// ---- statements --------------------------------------------------------------
+// The return type an `extern fn` declared, read from the declaration itself.
+fn (mut self: Unit) extern_return(src: String, signature: Fun) -> Ty allocates {
+    let mut i: Int = 0;
+    while i < len(self.items) {
+        let item: Node = self.nodes[self.items[i]];
+        if item.kind == 86 {
+            let named: Tok = self.toks[item.tok];
+            if spans_eq(src, named.start, named.length, signature.start, signature.length) {
+                return self.ty_of(src, item.b);
+            }
+        }
+        i = i + 1;
+    }
+    return signature.ret;
+}
+
+// A call into C. Every Burxt value is an i64 here, and C's types are not, so each
+// argument is cast at the boundary and the answer is cast back — which is the only place
+// in the emitter where a value changes representation rather than meaning.
+fn (mut self: Unit) emit_c_call(src: String, n: Node, signature: Fun) -> String allocates {
+    let list: Node = self.nodes[n.a];
+    let params: Node = self.nodes[signature.params];
+    let mut args: String = "";
+    let mut i: Int = 0;
+    while i < list.b {
+        let value: String = self.emit_expr(src, self.kids[list.a + i]);
+        let mut want: Ty = ty_simple(40);
+        if i < params.b {
+            want = self.ty_of(src, self.nodes[self.kids[params.a + i]].a);
+        }
+        let shape: String = c_type_of(want);
+        let mut passed: String = value;
+        if shape == "ptr" {
+            let as_ptr: String = self.fresh();
+            let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + value + " to ptr\n");
+            passed = as_ptr;
+        }
+        if shape == "i32" {
+            let narrow: String = self.fresh();
+            let cast: Int = self.w("  " + narrow + " = trunc i64 " + value + " to i32\n");
+            passed = narrow;
+        }
+        if i > 0 {
+            args = args + ", ";
+        }
+        args = args + shape + " " + passed;
+        i = i + 1;
+    }
+
+    // C's DECLARED return, not the one the checker recorded. The checker maps a CInt
+    // return to Int, because a Burxt caller receives an Int — but the call instruction
+    // must name the width C actually returns, or the upper 32 bits are read as data.
+    // `strcmp` answering -1 came back as 4294967295 until this looked at the declaration.
+    let shape: String = c_type_of(self.extern_return(src, signature));
+    let answer: String = self.fresh();
+    let called: Int = self.w("  " + answer + " = call " + shape + " @"
+        + substring(src, signature.start, signature.length) + "(" + args + ")\n");
+    if shape == "i32" {
+        // Sign-extended, not zero-extended: a C function that answers -1 means -1.
+        let widened: String = self.fresh();
+        let ext: Int = self.w("  " + widened + " = sext i32 " + answer + " to i64\n");
+        return widened;
+    }
+    return answer;
+}
+
+// One piece of an interpolation, as a String. A String piece is itself; anything else is
+// rendered the way `to_string` would render it, because interpolation IS `to_string`.
+fn (mut self: Unit) emit_piece(src: String, node: Int) -> String allocates {
+    let value: String = self.emit_expr(src, node);
+    let shown: Ty = self.type_at(node);
+    if shown.kind == 42 {
+        return value;
+    }
+    let reg: String = self.fresh();
+    if shown.kind == 45 {
+        let format: String = self.decimal_format(shown.scale);
+        let called: Int = self.w("  " + reg + " = call i64 @burxt.to_string_dec(i64 "
+            + value + ", i64 " + to_string(power_of_ten(shown.scale)) + ", ptr "
+            + format + ")\n");
+        return reg;
+    }
+    if shown.kind == 41 {
+        let bit: String = self.fresh();
+        let tested: Int = self.w("  " + bit + " = icmp ne i64 " + value + ", 0\n");
+        let chosen: Int = self.w("  " + reg + " = select i1 " + bit
+            + ", i64 ptrtoint (ptr @burxt.str_true to i64), i64 ptrtoint (ptr "
+            + "@burxt.str_false to i64)\n");
+        return reg;
+    }
+    let called: Int = self.w("  " + reg + " = call i64 @burxt.to_string_int(i64 " + value
+                             + ")\n");
+    return reg;
+}
+
+// The builtins with a runtime helper behind them, and the ones that are a single
+// instruction. Anything else is refused by name.
+// `memcpy` of a whole aggregate. Burxt passes and stores aggregates BY VALUE, so this
+// is where that promise is kept: a copy at the point a copy is meant, and nowhere else.
+// The ADDRESS a place names, for the left of an assignment. Reading `x.f` loads from
+// here; writing stores to here.
+fn (mut self: Unit) place_of(src: String, node: Int) -> String allocates {
+    let n: Node = self.nodes[node];
+    if n.kind == 11 {                                // x.f
+        let holder: Ty = self.type_at(n.a);
+        let base: String = self.emit_expr(src, n.a);
+        let offset: Int = self.offset_of(src, holder, self.toks[n.tok]);
+        if offset < 0 {
+            let e: Int = self.complain_at(src, n.tok, "no such field to write to");
+            return "";
+        }
+        let as_ptr: String = self.fresh();
+        let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + base + " to ptr\n");
+        let at: String = self.fresh();
+        let stepped: Int = self.w("  " + at + " = getelementptr i64, ptr " + as_ptr
+                                  + ", i64 " + to_string(offset) + "\n");
+        return at;
+    }
+    if n.kind == 12 {                                // xs[i]
+        let holder: Ty = self.type_at(n.a);
+        let base: String = self.emit_expr(src, n.a);
+        let index: String = self.emit_expr(src, n.b);
+        if holder.kind == 47 {
+            let at: String = self.fresh();
+            let found: Int = self.w("  " + at + " = call i64 @burxt.slot(i64 " + base
+                                    + ", i64 " + index + ", i64 "
+                                    + to_string(self.toks[n.tok].start) + ")\n");
+            let as_ptr: String = self.fresh();
+            let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + at + " to ptr\n");
+            return as_ptr;
+        }
+        if holder.kind != 48 {
+            let e: Int = self.complain_at(src, n.tok,
+                "the Burxt backend cannot write into this");
+            return "";
+        }
+        let stride: Int = self.cells_of(src, self.ty_of(src, holder.scale));
+        let checked: Int = self.w("  call void @burxt.bounds(i64 " + index + ", i64 "
+                                  + to_string(holder.contract) + ", i64 "
+                                  + to_string(self.toks[n.tok].start) + ")\n");
+        let scaled: String = self.fresh();
+        let multiplied: Int = self.w("  " + scaled + " = mul i64 " + index + ", "
+                                     + to_string(stride) + "\n");
+        let as_ptr: String = self.fresh();
+        let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + base + " to ptr\n");
+        let at: String = self.fresh();
+        let stepped: Int = self.w("  " + at + " = getelementptr i64, ptr " + as_ptr
+                                  + ", i64 " + scaled + "\n");
+        return at;
+    }
+    let e: Int = self.complain_at(src, n.tok, "this is not something to assign to");
+    return "";
+}
+
+// Where a variant sits in its enum's declaration — that position IS the tag, so the two
+// compilers agree on it without recording anything: the declaration is the shared fact.
+// -1 when the name is not a variant of this enum.
+fn (mut self: Unit) variant_index(src: String, holder: Ty, name: Tok) -> Int allocates {
+    let found: Int = self.find_type(src, holder.name_start, holder.name_len);
+    if found < 0 {
+        return -1;
+    }
+    let decl: TypeDecl = self.types[found];
+    if decl.kind != 83 {
+        return -1;
+    }
+    let item: Node = self.nodes[decl.node];
+    let mut v: Int = 0;
+    while v < item.b {
+        let variant: Node = self.nodes[self.kids[item.a + v]];
+        let named: Tok = self.toks[variant.tok];
+        if spans_eq(src, named.start, named.length, name.start, name.length) {
+            return v;
+        }
+        v = v + 1;
+    }
+    return -1;
+}
+
+// `Enum.Variant` or `Enum.Variant(payload)`: the tag in cell 0, the payload after it.
+fn (mut self: Unit) emit_construction(src: String, holder: Ty, call: Node,
+                                      has_args: Bool) -> String allocates {
+    let tag: Int = self.variant_index(src, holder, self.toks[call.tok]);
+    let storage: String = self.scratch(self.cells_of(src, holder));
+    let stored: Int = self.w("  store i64 " + to_string(tag) + ", ptr " + storage + "\n");
+
+    if has_args {
+        let list: Node = self.nodes[call.b];
+        let mut cell: Int = 1;
+        let mut i: Int = 0;
+        while i < list.b {
+            let value: String = self.emit_expr(src, self.kids[list.a + i]);
+            let at: String = self.fresh();
+            let stepped: Int = self.w("  " + at + " = getelementptr i64, ptr " + storage
+                                      + ", i64 " + to_string(cell) + "\n");
+            let payload_ty: Ty = self.type_at(self.kids[list.a + i]);
+            let width: Int = self.cells_of(src, payload_ty);
+            if self.is_aggregate(payload_ty) {
+                let copied: Int = self.copy_cells(src, at, value, width);
+            } else {
+                let put: Int = self.w("  store i64 " + value + ", ptr " + at + "\n");
+            }
+            cell = cell + width;
+            i = i + 1;
+        }
+    }
+    let reg: String = self.fresh();
+    let address: Int = self.w("  " + reg + " = ptrtoint ptr " + storage + " to i64\n");
+    return reg;
+}
+
+// A method's symbol: the receiver's type, a dot, the method's name. Two types may both
+// have a `label`, and the linker needs to tell them apart.
+fn method_symbol(src: String, holder: Ty, name: Tok) -> String allocates {
+    return substring(src, holder.name_start, holder.name_len) + "."
+        + substring(src, name.start, name.length);
+}
+
+fn (mut self: Unit) copy_cells(src: String, destination: String, source: String,
+                               cells: Int) -> Int allocates {
+    let from: String = self.fresh();
+    let cast: Int = self.w("  " + from + " = inttoptr i64 " + source + " to ptr\n");
+    return self.w("  call ptr @memcpy(ptr " + destination + ", ptr " + from + ", i64 "
+                  + to_string(cells * 8) + ")\n");
+}
+
+// A Decimal printed exactly: the sign, the integer part, and the fraction zero-padded to
+// the scale. The work happens in i128 because negating the most negative i64 does not fit
+// in an i64 — the one value where taking an absolute value is not free.
+//
+// Scale 0 prints NO decimal point: showing ".0" would display a digit that does not exist.
+// The printf format for a Decimal of this scale. Scale 0 prints no decimal point at all:
+// showing ".0" would display a digit the value does not have.
+fn (mut self: Unit) decimal_format(scale: Int) -> String allocates {
+    if scale == 0 {
+        return self.intern_text("%s%llu");
+    }
+    return self.intern_text("%s%llu.%0" + to_string(scale) + "llu");
+}
+
+// `round(p, d)` where p and d are built from the operands. `shift` says how many powers
+// of ten separate the exact result from the one the type asks for: positive means the
+// product is too fine and must be divided down, negative means the dividend must be scaled
+// up first. `dividing` picks which operand becomes the divisor.
+fn (mut self: Unit) emit_rounded(left: String, right: String, shift: Int, contract: Int,
+                                 dividing: Int) -> String allocates {
+    let lw: String = self.fresh();
+    let w1: Int = self.w("  " + lw + " = sext i64 " + left + " to i128\n");
+    let rw: String = self.fresh();
+    let w2: Int = self.w("  " + rw + " = sext i64 " + right + " to i128\n");
+
+    let mut numerator: String = "";
+    let mut divisor: String = "";
+    if dividing == 1 {
+        divisor = rw;
+        if shift < 0 {
+            let scaled: String = self.fresh();
+            let up: Int = self.w("  " + scaled + " = mul i128 " + lw + ", "
+                                 + to_string(power_of_ten(0 - shift)) + "\n");
+            numerator = scaled;
+        } else {
+            numerator = lw;
+        }
+    } else {
+        let product: String = self.fresh();
+        let mul: Int = self.w("  " + product + " = mul i128 " + lw + ", " + rw + "\n");
+        if shift < 0 {
+            // The answer's scale is WIDER than the exact product's, so nothing rounds:
+            // widening is multiplication by a power of ten and it is lossless. Sending it
+            // through the rounding helper would divide by 10^0 and leave the value at the
+            // wrong scale — `0.05 * 0.5` in a Decimal<6> printed as 0.000025.
+            let widened: String = self.fresh();
+            let up: Int = self.w("  " + widened + " = mul i128 " + product + ", "
+                                 + to_string(power_of_ten(0 - shift)) + "\n");
+            let reg: String = self.fresh();
+            let narrowed: Int = self.w("  " + reg + " = trunc i128 " + widened
+                                       + " to i64\n");
+            return reg;
+        }
+        numerator = product;
+        divisor = to_string(power_of_ten(shift));
+    }
+
+    let mut mode: String = "half_up";
+    if contract == 1 { mode = "half_even"; }
+    let wide: String = self.fresh();
+    let called: Int = self.w("  " + wide + " = call i128 @burxt.round." + mode
+                             + "(i128 " + numerator + ", i128 " + divisor + ")\n");
+    // Back to an i64. The checker proved the declared scale can hold the answer; a value
+    // that cannot fit is the overflow error, which the arithmetic helpers already raise.
+    let reg: String = self.fresh();
+    let narrowed: Int = self.w("  " + reg + " = trunc i128 " + wide + " to i64\n");
+    return reg;
+}
+
+fn (mut self: Unit) emit_decimal_print(value: String, scale: Int) -> Int allocates {
+    let wide: String = self.fresh();
+    let widened: Int = self.w("  " + wide + " = sext i64 " + value + " to i128\n");
+    let negative: String = self.fresh();
+    let tested: Int = self.w("  " + negative + " = icmp slt i64 " + value + ", 0\n");
+    let flipped: String = self.fresh();
+    let negated: Int = self.w("  " + flipped + " = sub i128 0, " + wide + "\n");
+    let magnitude: String = self.fresh();
+    let chosen: Int = self.w("  " + magnitude + " = select i1 " + negative + ", i128 "
+                             + flipped + ", i128 " + wide + "\n");
+    let sign: String = self.fresh();
+    let signed: Int = self.w("  " + sign + " = select i1 " + negative
+        + ", ptr @burxt.str_minus, ptr @burxt.str_empty\n");
+
+    if scale == 0 {
+        let whole: String = self.fresh();
+        let narrowed: Int = self.w("  " + whole + " = trunc i128 " + magnitude + " to i64\n");
+        let format: String = self.decimal_format(0);
+        return self.w("  call i32 (ptr, ...) @printf(ptr " + format + ", ptr " + sign
+                      + ", i64 " + whole + ")\n");
+    }
+
+    let power: String = to_string(power_of_ten(scale));
+    let whole_wide: String = self.fresh();
+    let divided: Int = self.w("  " + whole_wide + " = udiv i128 " + magnitude + ", "
+                              + power + "\n");
+    let frac_wide: String = self.fresh();
+    let remained: Int = self.w("  " + frac_wide + " = urem i128 " + magnitude + ", "
+                               + power + "\n");
+    let whole: String = self.fresh();
+    let n1: Int = self.w("  " + whole + " = trunc i128 " + whole_wide + " to i64\n");
+    let frac: String = self.fresh();
+    let n2: Int = self.w("  " + frac + " = trunc i128 " + frac_wide + " to i64\n");
+    let format: String = self.decimal_format(scale);
+    return self.w("  call i32 (ptr, ...) @printf(ptr " + format + ", ptr " + sign
+                  + ", i64 " + whole + ", i64 " + frac + ")\n");
+}
+
+fn (mut self: Unit) emit_builtin(src: String, n: Node, called: String) -> String allocates {
+    let list: Node = self.nodes[n.a];
+    let mut first: String = "0";
+    let mut second: String = "0";
+    let mut third: String = "0";
+    if list.b > 0 { first = self.emit_expr(src, self.kids[list.a]); }
+    if list.b > 1 { second = self.emit_expr(src, self.kids[list.a + 1]); }
+    if list.b > 2 { third = self.emit_expr(src, self.kids[list.a + 2]); }
+    let reg: String = self.fresh();
+
+    if called == "to_string" {
+        let held: Ty = self.type_at(self.kids[list.a]);
+        if held.kind == 45 {                         // a Decimal renders with its scale
+            let format: String = self.decimal_format(held.scale);
+            let visited: Int = self.w("  " + reg + " = call i64 @burxt.to_string_dec(i64 "
+                + first + ", i64 " + to_string(power_of_ten(held.scale)) + ", ptr "
+                + format + ")\n");
+            return reg;
+        }
+        if self.type_at(self.kids[list.a]).kind == 41 {
+            // A Bool renders to one of two literals, which is why it needs no region.
+            let bit: String = self.fresh();
+            let tested: Int = self.w("  " + bit + " = icmp ne i64 " + first + ", 0\n");
+            let chosen: Int = self.w("  " + reg + " = select i1 " + bit
+                + ", i64 ptrtoint (ptr @burxt.str_true to i64), i64 ptrtoint (ptr @burxt.str_false to i64)\n");
+            return reg;
+        }
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.to_string_int(i64 "
+                                  + first + ")\n");
+        return reg;
+    }
+    if called == "len" {
+        let held: Ty = self.type_at(self.kids[list.a]);
+        if held.kind == 42 {
+            let visited: Int = self.w("  " + reg + " = call i64 @burxt.len_str(i64 "
+                                      + first + ")\n");
+            return reg;
+        }
+        if held.kind == 47 {
+            let visited: Int = self.w("  " + reg + " = call i64 @burxt.array_len(i64 "
+                                      + first + ")\n");
+            return reg;
+        }
+        if held.kind == 48 {
+            // A fixed array's length is part of its type, so it is known here and
+            // costs no instruction at all.
+            return to_string(held.contract);
+        }
+        let e: Int = self.complain_at(src, n.tok, "the Burxt backend cannot take this len");
+        return "0";
+    }
+    if called == "push" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.push(i64 " + first
+                                  + ", i64 " + second + ")\n");
+        return reg;
+    }
+    if called == "truncate" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.truncate(i64 " + first
+                                  + ", i64 " + second + ")\n");
+        return reg;
+    }
+    if called == "byte_at" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.byte_at(i64 " + first
+                                  + ", i64 " + second + ")\n");
+        return reg;
+    }
+    if called == "substring" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.substring(i64 " + first
+                                  + ", i64 " + second + ", i64 " + third + ")\n");
+        return reg;
+    }
+    if called == "arg_count" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.arg_count()\n");
+        return reg;
+    }
+    if called == "arg" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.arg(i64 " + first + ")\n");
+        return reg;
+    }
+    if called == "read_file" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.read_file(i64 " + first
+                                  + ")\n");
+        return reg;
+    }
+    if called == "write_file" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.write_file(i64 " + first
+                                  + ", i64 " + second + ")\n");
+        return reg;
+    }
+    if called == "div_trunc" {
+        let visited: Int = self.w("  " + reg + " = sdiv i64 " + first + ", " + second + "\n");
+        return reg;
+    }
+    if called == "rem" {
+        let visited: Int = self.w("  " + reg + " = srem i64 " + first + ", " + second + "\n");
+        return reg;
+    }
+    if called == "div_floor" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.div_floor(i64 " + first
+                                  + ", i64 " + second + ")\n");
+        return reg;
+    }
+    let e: Int = self.complain_at(src, n.tok,
+        "the Burxt backend does not emit `" + called + "` yet");
+    return "0";
+}
+
+fn (mut self: Unit) emit_stmt(src: String, node: Int) -> Int allocates {
+    let n: Node = self.nodes[node];
+
+    if n.kind == 60 {                                // let
+        let name: Tok = self.toks[n.tok];
+        // The DECLARED type, not the value's: `let d: dyn Priced = book;` stores a trait
+        // object, and the coercion happens here or nowhere.
+        let mut declared: Ty = self.type_at(n.b);
+        if n.a >= 0 {
+            declared = self.ty_of(src, n.a);
+        }
+        let value: String = self.emit_value_for(src, declared, n.b);
+        let cells: Int = self.cells_of(src, declared);
+        if self.is_aggregate(declared) {
+            // The binding gets its OWN storage and a copy: `let a: S = b` then changing
+            // `b.f` must not change `a.f`, which is what by-value means.
+            let slot: Int = self.declare_slot(src, name.start, name.length, cells, 1);
+            return self.copy_cells(src, "%v" + to_string(slot), value, cells);
+        }
+        let slot: Int = self.declare_slot(src, name.start, name.length, 1, 0);
+        return self.w("  store i64 " + value + ", ptr %v" + to_string(slot) + "\n");
+    }
+
+    if n.kind == 61 {                                // assignment
+        let target: Node = self.nodes[n.a];
+        let into: Ty = self.type_at(n.a);
+        let value: String = self.emit_value_for(src, into, n.b);
+        if target.kind == 5 {                        // a name
+            let name: Tok = self.toks[target.tok];
+            let slot: Int = self.find_slot(src, name.start, name.length);
+            if self.is_aggregate(into) {
+                return self.copy_cells(src, "%v" + to_string(slot), value,
+                                       self.cells_of(src, into));
+            }
+            return self.w("  store i64 " + value + ", ptr %v" + to_string(slot) + "\n");
+        }
+        // A place, not a name: `x.f = v` and `xs[i] = v`. The address is computed the
+        // same way reading them does, so the two cannot drift apart.
+        let at: String = self.place_of(src, n.a);
+        if at == "" {
+            return 0;
+        }
+        if self.is_aggregate(into) {
+            return self.copy_cells(src, at, value, self.cells_of(src, into));
+        }
+        return self.w("  store i64 " + value + ", ptr " + at + "\n");
+    }
+
+    if n.kind == 62 {                                // print
+        let printed_node: Node = self.nodes[n.a];
+        if printed_node.kind == 18 {
+            // Pieces in order, then one newline. No join means no allocation, which is
+            // why `print("a {b}")` needs no region while `let s = "a {b}"` does.
+            let mut piece_index: Int = 0;
+            while piece_index < printed_node.b {
+                let piece: String = self.emit_piece(src, self.kids[printed_node.a + piece_index]);
+                let as_ptr: String = self.fresh();
+                let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + piece
+                                       + " to ptr\n");
+                let out: Int = self.w("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_str, "
+                                      + "ptr " + as_ptr + ")\n");
+                piece_index = piece_index + 1;
+            }
+            return self.w("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_nl)\n");
+        }
+        let shown: Ty = self.type_at(n.a);
+        let value: String = self.emit_expr(src, n.a);
+        if shown.kind == 41 {                        // a Bool renders as a word
+            let bit: String = self.fresh();
+            let visited: Int = self.w("  " + bit + " = icmp ne i64 " + value + ", 0\n");
+            let text: String = self.fresh();
+            let chosen: Int = self.w("  " + text + " = select i1 " + bit
+                                     + ", ptr @burxt.str_true, ptr @burxt.str_false\n");
+            let printed: Int = self.w("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_str, ptr "
+                                      + text + ")\n");
+            return self.w("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_nl)\n");
+        }
+        if shown.kind == 45 {                        // a Decimal
+            let rendered: Int = self.emit_decimal_print(value, shown.scale);
+            return self.w("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_nl)\n");
+        }
+        if shown.kind == 42 {                        // a String
+            let as_ptr: String = self.fresh();
+            let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + value + " to ptr\n");
+            let printed: Int = self.w("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_str, ptr "
+                                      + as_ptr + ")\n");
+            return self.w("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_nl)\n");
+        }
+        let printed: Int = self.w("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_int, i64 "
+                                  + value + ")\n");
+        return self.w("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_nl)\n");
+    }
+
+    if n.kind == 64 {                                // return tail
+        // `musttail` is the guarantee, not a hope: LLVM either replaces the frame or
+        // refuses to compile. The checker already proved the signatures match, which is
+        // exactly what LLVM requires of a musttail call.
+        let value: Node = self.nodes[n.a];
+        let target: Tok = self.toks[value.tok];
+        let list: Node = self.nodes[value.a];
+        let mut args: String = "";
+        let mut i: Int = 0;
+        while i < list.b {
+            let arg: String = self.emit_expr(src, self.kids[list.a + i]);
+            if i > 0 {
+                args = args + ", ";
+            }
+            args = args + "i64 " + arg;
+            i = i + 1;
+        }
+        let answer: String = self.fresh();
+        let jumped: Int = self.w("  " + answer + " = musttail call i64 @"
+            + substring(src, target.start, target.length) + "(" + args + ")\n");
+        return self.w("  ret i64 " + answer + "\n");
+    }
+
+    if n.kind == 63 {                                // return
+        let value: String = self.emit_expr(src, n.a);
+        if self.sret != "" {
+            let copied: Int = self.copy_cells(src, self.sret, value, self.sret_cells);
+            return self.w("  ret i64 0\n");
+        }
+        return self.w("  ret i64 " + value + "\n");
+    }
+
+    if n.kind == 65 {                                // if
+        let cond: String = self.emit_expr(src, n.a);
+        let bit: String = self.fresh();
+        let tested: Int = self.w("  " + bit + " = icmp ne i64 " + cond + ", 0\n");
+        let then_label: String = self.fresh_label("if.then");
+        let else_label: String = self.fresh_label("if.else");
+        let end_label: String = self.fresh_label("if.end");
+        let branched: Int = self.w("  br i1 " + bit + ", label %" + then_label
+                                   + ", label %" + else_label + "\n");
+        let opened: Int = self.w(then_label + ":\n");
+        let then_body: Int = self.emit_block(src, n.b);
+        let closed: Int = self.w("  br label %" + end_label + "\n" + else_label + ":\n");
+        if n.c >= 0 {
+            let else_body: Int = self.emit_block(src, n.c);
+        }
+        let joined: Int = self.w("  br label %" + end_label + "\n" + end_label + ":\n");
+        return 1;
+    }
+
+    if n.kind == 66 {                                // while
+        let cond_label: String = self.fresh_label("while.cond");
+        let body_label: String = self.fresh_label("while.body");
+        let end_label: String = self.fresh_label("while.end");
+        let entered: Int = self.w("  br label %" + cond_label + "\n" + cond_label + ":\n");
+        let cond: String = self.emit_expr(src, n.a);
+        let bit: String = self.fresh();
+        let tested: Int = self.w("  " + bit + " = icmp ne i64 " + cond + ", 0\n");
+        let branched: Int = self.w("  br i1 " + bit + ", label %" + body_label
+                                   + ", label %" + end_label + "\n" + body_label + ":\n");
+        // A stack, because `break` inside a nested loop leaves the INNER one.
+        push(self.loop_conds, cond_label);
+        push(self.loop_ends, end_label);
+        let body: Int = self.emit_block(src, n.b);
+        let dropped_cond: Int = truncate(self.loop_conds, len(self.loop_conds) - 1);
+        let dropped_end: Int = truncate(self.loop_ends, len(self.loop_ends) - 1);
+        return self.w("  br label %" + cond_label + "\n" + end_label + ":\n");
+    }
+
+    if n.kind == 67 || n.kind == 68 {                // break, continue
+        let depth: Int = len(self.loop_ends);
+        if depth == 0 {
+            return 0;
+        }
+        let mut target: String = self.loop_ends[depth - 1];
+        if n.kind == 68 {
+            target = self.loop_conds[depth - 1];
+        }
+        let jumped: Int = self.w("  br label %" + target + "\n");
+        // The block after an unconditional branch needs a label, and nothing reaches it.
+        let dead: String = self.fresh_label("after");
+        return self.w(dead + ":\n");
+    }
+
+    if n.kind == 69 {                                // region
+        // The mark IS the region: closing it releases every allocation at once.
+        let mark: String = self.fresh();
+        let saved: Int = self.w("  " + mark + " = load i64, ptr @burxt.bump\n");
+        let body: Int = self.emit_block(src, n.a);
+        return self.w("  store i64 " + mark + ", ptr @burxt.bump\n");
+    }
+
+    if n.kind == 71 {                                // match
+        // The value is an enum, so its first cell is the tag. Each arm is a comparison
+        // against the variant's position in the declaration, and the arm's bindings are
+        // the payload cells that follow. No jump table: a chain of comparisons is what a
+        // reader would write, and LLVM turns a dense one into a switch anyway.
+        let holder: Ty = self.type_at(n.a);
+        let subject: String = self.emit_expr(src, n.a);
+        let as_ptr: String = self.fresh();
+        let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + subject + " to ptr\n");
+        let tag: String = self.fresh();
+        let loaded: Int = self.w("  " + tag + " = load i64, ptr " + as_ptr + "\n");
+        let done: String = self.fresh_label("match.end");
+
+        let mut i: Int = 0;
+        while i < n.c {
+            let arm: Node = self.nodes[self.kids[n.b + i]];
+            let which: Int = self.variant_index(src, holder, self.toks[arm.tok]);
+            let hit: String = self.fresh();
+            let compared: Int = self.w("  " + hit + " = icmp eq i64 " + tag + ", "
+                                       + to_string(which) + "\n");
+            let body_label: String = self.fresh_label("match.arm");
+            let next_label: String = self.fresh_label("match.next");
+            let branched: Int = self.w("  br i1 " + hit + ", label %" + body_label
+                                       + ", label %" + next_label + "\n"
+                                       + body_label + ":\n");
+
+            // The bindings name the payload cells, and leave scope with the arm.
+            let base: Int = len(self.slots);
+            let bound: Int = self.bind_payload(src, holder, arm, as_ptr);
+            let body: Int = self.emit_block(src, arm.a);
+            let dropped: Int = truncate(self.slots, base);
+
+            let joined: Int = self.w("  br label %" + done + "\n" + next_label + ":\n");
+            i = i + 1;
+        }
+        // Every variant has an arm — the checker proved it — so falling past the last
+        // comparison is unreachable. LLVM still needs the block terminated.
+        return self.w("  br label %" + done + "\n" + done + ":\n");
+    }
+
+    if n.kind == 70 {                                // an expression, for its effect
+        let value: String = self.emit_expr(src, n.a);
+        return 1;
+    }
+
+    let e: Int = self.complain_at(src, n.tok,
+        "the Burxt backend does not emit this statement yet");
+    return 0;
+}
+
+// An arm's bindings, pointing into the value being matched. A scalar payload is loaded
+// into its own slot; an aggregate one is named by its address, exactly as any other
+// aggregate is.
+fn (mut self: Unit) bind_payload(src: String, holder: Ty, arm: Node,
+                                 base: String) -> Int allocates {
+    let found: Int = self.find_type(src, holder.name_start, holder.name_len);
+    if found < 0 {
+        return 0;
+    }
+    let item: Node = self.nodes[self.types[found].node];
+    let wanted: Tok = self.toks[arm.tok];
+    let mut v: Int = 0;
+    while v < item.b {
+        let variant: Node = self.nodes[self.kids[item.a + v]];
+        let named: Tok = self.toks[variant.tok];
+        if spans_eq(src, named.start, named.length, wanted.start, wanted.length) {
+            let mut cell: Int = 1;
+            let mut p: Int = 0;
+            while p < arm.c && p < variant.c {
+                let name: Tok = self.toks[self.subs[arm.b + p]];
+                let payload: Ty = self.ty_of(src, self.subs[variant.b + p]);
+                let width: Int = self.cells_of(src, payload);
+                let at: String = self.fresh();
+                let stepped: Int = self.w("  " + at + " = getelementptr i64, ptr " + base
+                                          + ", i64 " + to_string(cell) + "\n");
+                if self.is_aggregate(payload) {
+                    let slot: Int = self.declare_slot(src, name.start, name.length, 1, 0);
+                    let address: String = self.fresh();
+                    let taken: Int = self.w("  " + address + " = ptrtoint ptr " + at
+                                            + " to i64\n");
+                    let put: Int = self.w("  store i64 " + address + ", ptr %v"
+                                          + to_string(slot) + "\n");
+                } else {
+                    let slot: Int = self.declare_slot(src, name.start, name.length, 1, 0);
+                    let value: String = self.fresh();
+                    let read: Int = self.w("  " + value + " = load i64, ptr " + at + "\n");
+                    let put: Int = self.w("  store i64 " + value + ", ptr %v"
+                                          + to_string(slot) + "\n");
+                }
+                cell = cell + width;
+                p = p + 1;
+            }
+            return 1;
+        }
+        v = v + 1;
+    }
+    return 0;
+}
+
+fn (mut self: Unit) emit_block(src: String, block: Int) -> Int allocates {
+    if block < 0 {
+        return 0;
+    }
+    let n: Node = self.nodes[block];
+    if n.kind != 16 {
+        return self.emit_stmt(src, block);
+    }
+    let mut i: Int = 0;
+    while i < n.b {
+        let emitted: Int = self.emit_stmt(src, self.kids[n.a + i]);
+        i = i + 1;
+    }
+    return 1;
+}
+
+// ---- the module --------------------------------------------------------------
+// The symbol naming a trait's table for one concrete type.
+fn vtable_symbol(src: String, trait_name: Tok, type_name: Tok) -> String allocates {
+    return "@burxt.vt." + substring(src, trait_name.start, trait_name.length) + "."
+        + substring(src, type_name.start, type_name.length);
+}
+
+fn (mut self: Unit) emit_vtable(src: String, index: Int) -> Int allocates {
+    let item: Node = self.nodes[index];
+    let trait_name: Tok = self.toks[item.tok];
+    let type_name: Tok = self.toks[item.c];
+    let found: Int = self.find_type(src, trait_name.start, trait_name.length);
+    if found < 0 {
+        return 0;
+    }
+    let declared: Node = self.nodes[self.types[found].node];
+    let mut entries: String = "";
+    let mut i: Int = 0;
+    while i < declared.b {
+        let sig: Node = self.nodes[self.kids[declared.a + i]];
+        let named: Tok = self.toks[sig.tok];
+        if i > 0 {
+            entries = entries + ", ";
+        }
+        entries = entries + "ptr @" + substring(src, type_name.start, type_name.length)
+            + "." + substring(src, named.start, named.length);
+        i = i + 1;
+    }
+    return self.w_out(vtable_symbol(src, trait_name, type_name) + " = constant ["
+                      + to_string(declared.b) + " x ptr] [" + entries + "]\n");
+}
+
+// A concrete value becoming a `dyn Trait`: the address in cell 0, the table in cell 1.
+// This is the ONLY coercion in the language, and it happens where a value is STORED —
+// a binding, a field, an argument, a return — never silently mid-expression.
+fn (mut self: Unit) emit_dyn(src: String, want: Ty, node: Int) -> String allocates {
+    let concrete: Ty = self.type_at(node);
+    let value: String = self.emit_expr(src, node);
+    if concrete.kind == 49 {
+        return value;                                // already a trait object
+    }
+    let storage: String = self.scratch(2);
+    let put_data: Int = self.w("  store i64 " + value + ", ptr " + storage + "\n");
+    let table_cell: String = self.fresh();
+    let stepped: Int = self.w("  " + table_cell + " = getelementptr i64, ptr " + storage
+                              + ", i64 1\n");
+    // The table is chosen by the CONCRETE type, here, at the one place the concrete type
+    // is still known. After this the value has forgotten what it was.
+    let table: String = "@burxt.vt." + substring(src, want.name_start, want.name_len) + "."
+        + substring(src, concrete.name_start, concrete.name_len);
+    let put_table: Int = self.w("  store i64 ptrtoint (ptr " + table + " to i64), ptr "
+                                + table_cell + "\n");
+    let reg: String = self.fresh();
+    let address: Int = self.w("  " + reg + " = ptrtoint ptr " + storage + " to i64\n");
+    return reg;
+}
+
+// Calling a method through a trait object: load the table, take the slot the trait gave
+// this method, and call what is there with the DATA pointer as the receiver. The concrete
+// type is not known here and does not need to be — that is what the indirection buys.
+fn (mut self: Unit) emit_dyn_call(src: String, holder: Ty, call: Node) -> String allocates {
+    let fat: String = self.emit_expr(src, call.a);
+    let base: String = self.fresh();
+    let cast: Int = self.w("  " + base + " = inttoptr i64 " + fat + " to ptr\n");
+    let data: String = self.fresh();
+    let loaded: Int = self.w("  " + data + " = load i64, ptr " + base + "\n");
+    let table_cell: String = self.fresh();
+    let stepped: Int = self.w("  " + table_cell + " = getelementptr i64, ptr " + base
+                              + ", i64 1\n");
+    let table: String = self.fresh();
+    let read: Int = self.w("  " + table + " = load i64, ptr " + table_cell + "\n");
+    let table_ptr: String = self.fresh();
+    let as_ptr: Int = self.w("  " + table_ptr + " = inttoptr i64 " + table + " to ptr\n");
+
+    let slot: Int = self.trait_slot(src, holder, self.toks[call.tok]);
+    let entry: String = self.fresh();
+    let indexed: Int = self.w("  " + entry + " = getelementptr ptr, ptr " + table_ptr
+                              + ", i64 " + to_string(slot) + "\n");
+    let target: String = self.fresh();
+    let fetched: Int = self.w("  " + target + " = load ptr, ptr " + entry + "\n");
+
+    let list: Node = self.nodes[call.b];
+    let mut args: String = "i64 " + data;
+    let mut i: Int = 0;
+    while i < list.b {
+        let value: String = self.emit_expr(src, self.kids[list.a + i]);
+        args = args + ", i64 " + value;
+        i = i + 1;
+    }
+    let answer: String = self.fresh();
+    let called: Int = self.w("  " + answer + " = call i64 " + target + "(" + args + ")\n");
+    return answer;
+}
+
+// Which slot a trait gives a method — its position in the trait's declaration.
+fn (mut self: Unit) trait_slot(src: String, holder: Ty, name: Tok) -> Int allocates {
+    let found: Int = self.find_type(src, holder.name_start, holder.name_len);
+    if found < 0 {
+        return 0;
+    }
+    let declared: Node = self.nodes[self.types[found].node];
+    let mut i: Int = 0;
+    while i < declared.b {
+        let sig: Node = self.nodes[self.kids[declared.a + i]];
+        let named: Tok = self.toks[sig.tok];
+        if spans_eq(src, named.start, named.length, name.start, name.length) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// A value on its way into a place that wants `want`. Everything goes through here so the
+// coercion has exactly one home.
+fn (mut self: Unit) emit_value_for(src: String, want: Ty, node: Int) -> String allocates {
+    if want.kind == 49 {
+        return self.emit_dyn(src, want, node);
+    }
+    return self.emit_expr(src, node);
+}
+
+// What C sees for one Burxt type. A String is a pointer; a CInt is 32 bits wide and must
+// be declared as such or the sign is lost on the way back; everything else is an i64,
+// including a Decimal — which crosses as the exact scaled integer it already is, and that
+// is the whole of `as scaled`: no conversion, because none is needed.
+fn c_type_of(ty: Ty) -> String {
+    if ty.kind == 42 {
+        return "ptr";
+    }
+    if ty.kind == 43 {
+        return "i32";
+    }
+    if ty.kind == 44 {
+        return "double";
+    }
+    return "i64";
+}
+
+// The libc symbols the emitted runtime already declares. A program is free to declare them
+// too — `extern fn strcmp` is an ordinary thing to write — but LLVM refuses the same symbol
+// declared twice, so the second one is skipped rather than emitted.
+//
+// Stage-0 answers the same collision by REFUSING the name. Skipping is better: the program
+// gets to say what it means, and the only cost is that a program declaring a different
+// signature for one of these would be told so by LLVM rather than by the compiler.
+fn declared_by_runtime(name: String) -> Bool {
+    return name == "printf" || name == "exit" || name == "malloc" || name == "strlen"
+        || name == "strcmp" || name == "memcpy" || name == "snprintf" || name == "fprintf"
+        || name == "fopen" || name == "fread" || name == "fwrite" || name == "fclose"
+        || name == "fseek" || name == "ftell";
+}
+
+fn (mut self: Unit) emit_extern(src: String, index: Int) -> Int allocates {
+    let item: Node = self.nodes[index];
+    let name: Tok = self.toks[item.tok];
+    if declared_by_runtime(substring(src, name.start, name.length)) {
+        return 0;
+    }
+    let params: Node = self.nodes[item.a];
+    let mut signature: String = "";
+    let mut p: Int = 0;
+    while p < params.b {
+        if p > 0 {
+            signature = signature + ", ";
+        }
+        let param: Node = self.nodes[self.kids[params.a + p]];
+        signature = signature + c_type_of(self.ty_of(src, param.a));
+        p = p + 1;
+    }
+    let answers: Ty = self.ty_of(src, item.b);
+    return self.w_out("declare " + c_type_of(answers) + " @"
+                      + substring(src, name.start, name.length) + "(" + signature + ")\n");
+}
+
+// One function or method, from its signature to its closing brace. A method is a
+// function whose first parameter is the receiver — `mut self` is handed the ADDRESS and
+// writes through it, plain `self` gets a copy, which is exactly what the two spellings
+// promise a reader.
+fn (mut self: Unit) emit_function(src: String, index: Int) -> Int allocates {
+    let item: Node = self.nodes[index];
+    let name: Tok = self.toks[item.tok];
+    let params: Node = self.nodes[item.a];
+    let signature_node: Node = self.nodes[item.c];
+    let base: Int = len(self.slots);
+    let is_method: Bool = item.kind == 81;
+
+    // An aggregate return travels through the CALLER's storage: the caller hands over a
+    // pointer as the first argument and the callee copies into it. Returning a pointer
+    // into the callee's own frame would be a dangling one, which is why this is not an
+    // optimisation but the only correct shape.
+    let answers: Ty = self.ty_of(src, signature_node.c);
+    let outer_sret: String = self.sret;
+    self.sret = "";
+    let mut signature: String = "";
+    let mut first: Int = 0;
+    if self.is_aggregate(answers) {
+        self.sret = "%sret";
+        self.sret_cells = self.cells_of(src, answers);
+        signature = "ptr %sret";
+        first = 1;
+    }
+
+    let mut symbol: String = substring(src, name.start, name.length);
+    if is_method {
+        let receiver: Tok = self.toks[signature_node.value];
+        let holder: Ty = Ty { kind: 46, scale: 0, contract: 0,
+                              name_start: receiver.start, name_len: receiver.length };
+        symbol = method_symbol(src, holder, name);
+        if first > 0 {
+            signature = signature + ", ";
+        }
+        signature = signature + "i64 %a" + to_string(first);
+        first = first + 1;
+    }
+    let mut p: Int = 0;
+    while p < params.b {
+        if p + first > 0 {
+            signature = signature + ", ";
+        }
+        signature = signature + "i64 %a" + to_string(p + first);
+        p = p + 1;
+    }
+    let opened: Int = self.open_fn("define i64 @" + symbol + "(" + signature
+                                   + ") \{\nentry:\n");
+    if is_method {
+        let receiver: Tok = self.toks[signature_node.value];
+        let word: Tok = self.toks[signature_node.value - 2];
+        // The receiver arrives as an address either way. `mut self` keeps it, so writes
+        // reach the caller's value; plain `self` copies, so they cannot.
+        let receiver_arg: String = "%a" + to_string(first - 1);
+        if item.value >= 4 {
+            // Two kinds of aggregate slot, and they are not the same. A local struct or
+            // a by-value parameter IS its storage, so reading the name takes the alloca's
+            // address. `mut self` HOLDS the caller's address, so reading it must LOAD —
+            // the loaded i64 is already the address. Marked not-aggregate for that
+            // reason: the flag means "the alloca is the storage", not "this is a struct".
+            let slot: Int = self.declare_slot(src, word.start, word.length, 1, 0);
+            let stored: Int = self.w("  store i64 " + receiver_arg + ", ptr %v"
+                                     + to_string(slot) + "\n");
+        } else {
+            let holder: Ty = Ty { kind: 46, scale: 0, contract: 0,
+                                  name_start: receiver.start, name_len: receiver.length };
+            let cells: Int = self.cells_of(src, holder);
+            let slot: Int = self.declare_slot(src, word.start, word.length, cells, 1);
+            let copied: Int = self.copy_cells(src, "%v" + to_string(slot), receiver_arg,
+                                              cells);
+        }
+    }
+    p = 0;
+    while p < params.b {
+        let param: Node = self.nodes[self.kids[params.a + p]];
+        let pname: Tok = self.toks[param.tok];
+        let declared: Ty = self.ty_of(src, param.a);
+        if self.is_aggregate(declared) {
+            // By value across a call too: the callee copies what it was handed, so
+            // writing to a parameter cannot reach back into the caller.
+            let cells: Int = self.cells_of(src, declared);
+            let slot: Int = self.declare_slot(src, pname.start, pname.length, cells, 1);
+            let copied: Int = self.copy_cells(src, "%v" + to_string(slot),
+                                              "%a" + to_string(p + first), cells);
+        } else {
+            let slot: Int = self.declare_slot(src, pname.start, pname.length, 1, 0);
+            let stored: Int = self.w("  store i64 %a" + to_string(p + first) + ", ptr %v"
+                                     + to_string(slot) + "\n");
+        }
+        p = p + 1;
+    }
+    let body: Int = self.emit_block(src, item.b);
+    // Unreachable, since the checker proved every path returns — but LLVM requires every
+    // block to end in a terminator, and a module that does not verify is not a program.
+    let closed: Int = self.close_fn("  ret i64 0\n\}\n\n");
+    let dropped: Int = truncate(self.slots, base);
+    self.sret = outer_sret;
+    return 1;
+}
+
+fn (mut self: Unit) emit_module(src: String) -> Int allocates {
+    let mut preamble: Int = self.w_out("declare i32 @printf(ptr, ...)\n");
+    preamble = self.w_out("declare void @exit(i32)\n\n");
+    // The overflow helpers, written once. They are what makes `a + b` a claim rather
+    // than a hope, and they exit 70 like every other named runtime failure.
+    preamble = self.w_out(overflow_helper("add", "sadd"));
+    preamble = self.w_out(overflow_helper("sub", "ssub"));
+    preamble = self.w_out(overflow_helper("mul", "smul"));
+    preamble = self.w_out(runtime_ir());
+
+    // The method tables, before anything can refer to them. Slot order comes from the
+    // TRAIT's declaration, so every implementor agrees on which slot is which without
+    // negotiating — the same reason the enum tag is a variant's position.
+    let mut t: Int = 0;
+    while t < len(self.items) {
+        let item: Node = self.nodes[self.items[t]];
+        if item.kind == 85 {
+            let table: Int = self.emit_vtable(src, self.items[t]);
+        }
+        t = t + 1;
+    }
+
+    // Functions first, so a call reads as a call to something already written.
+    let mut i: Int = 0;
+    while i < len(self.items) {
+        let index: Int = self.items[i];
+        let item: Node = self.nodes[index];
+        if item.kind == 86 {                         // extern fn: a declaration, no body
+            let declared: Int = self.emit_extern(src, index);
+        }
+        if item.kind == 85 {                         // an impl block's methods
+            let mut k: Int = 0;
+            while k < item.b {
+                let done: Int = self.emit_function(src, self.kids[item.a + k]);
+                k = k + 1;
+            }
+        }
+        if item.kind == 80 || item.kind == 81 {
+            let done: Int = self.emit_function(src, index);
+        }
+        i = i + 1;
+    }
+
+    // Then main, which is the top-level statements in order.
+    let opened: Int = self.open_fn("define i32 @main(i32 %argc, ptr %argv) \{\nentry:\n");
+    // The arguments are recorded once, where they arrive, so `arg(n)` is a load rather
+    // than a parameter threaded through every function that might want it.
+    let widened: Int = self.w("  %argc64 = sext i32 %argc to i64\n");
+    let kept: Int = self.w("  store i64 %argc64, ptr @burxt.argc\n");
+    let kept_argv: Int = self.w("  store ptr %argv, ptr @burxt.argv\n");
+    i = 0;
+    while i < len(self.items) {
+        let index: Int = self.items[i];
+        let item: Node = self.nodes[index];
+        if item.kind >= 60 && item.kind <= 71 {
+            let emitted: Int = self.emit_stmt(src, index);
+        }
+        i = i + 1;
+    }
+    let closed: Int = self.close_fn("  ret i32 0\n\}\n");
+    return 1;
+}
+
+// Every symbol here lives under `burxt.` — a program that defines `fn bump()` must not
+// collide with the allocator's pointer, and one that names a struct `Line` must not
+// collide with anything either. Stage-0 solves the same problem by refusing the name; the
+// prefix solves it without taking a word away from the programmer.
+//
+// The runtime, written into every module rather than linked from a library: a bump
+// allocator, and the String operations that build in it. Emitting it means a Burxt
+// program needs nothing on the machine but a C library.
+//
+// A Burxt String is a NUL-terminated pointer, carried as an i64 like every other value
+// — one value type through the whole emitter, cast at the few places a pointer is
+// needed. `len` is therefore strlen, which is also why a String has no length field
+// that could fall out of step with its bytes. The bump allocator's MARK is the region:
+// opening one remembers where the pointer stood, closing it puts the pointer back, and
+// that is the whole of release — O(1) for any number of allocations.
+fn runtime_ir() -> String allocates {
+    return "@burxt.arena = global ptr null\n"
+        + "@burxt.bump = global i64 0\n"
+        + "declare ptr @malloc(i64)\n"
+        + "declare i64 @strlen(ptr)\n"
+        + "declare i32 @strcmp(ptr, ptr)\n"
+        + "declare ptr @memcpy(ptr, ptr, i64)\n"
+        + "declare i32 @snprintf(ptr, i64, ptr, ...)\n"
+        + "declare i32 @fprintf(ptr, ptr, ...)\n"
+        + "@stderr = external global ptr\n\n"
+        // One gigabyte, the same reservation stage-0 makes, and the SAME refusal when it
+        // runs out. A bump allocator that does not check its limit does not fail — it
+        // writes past the mapping and the program dies with a signal, which is the one
+        // outcome this language is supposed to make impossible. Exit 70 and a named
+        // error, like every other runtime failure.
+        + "define i64 @burxt.alloc(i64 %n) \{\n"
+        + "entry:\n"
+        + "  %a = load ptr, ptr @burxt.arena\n"
+        + "  %isnull = icmp eq ptr %a, null\n"
+        + "  br i1 %isnull, label %init, label %go\n"
+        + "init:\n"
+        + "  %m = call ptr @malloc(i64 1073741824)\n"
+        + "  %failed = icmp eq ptr %m, null\n"
+        + "  br i1 %failed, label %exhausted, label %mapped\n"
+        + "mapped:\n"
+        + "  store ptr %m, ptr @burxt.arena\n"
+        + "  br label %go\n"
+        + "go:\n"
+        + "  %base = load ptr, ptr @burxt.arena\n"
+        + "  %off = load i64, ptr @burxt.bump\n"
+        + "  %padded = add i64 %n, 7\n"
+        + "  %rounded = and i64 %padded, -8\n"
+        + "  %next = add i64 %off, %rounded\n"
+        + "  %over = icmp ugt i64 %next, 1073741824\n"
+        + "  br i1 %over, label %exhausted, label %hand_out\n"
+        + "hand_out:\n"
+        + "  %p = getelementptr i8, ptr %base, i64 %off\n"
+        + "  store i64 %next, ptr @burxt.bump\n"
+        + "  %asint = ptrtoint ptr %p to i64\n"
+        + "  ret i64 %asint\n"
+        + "exhausted:\n"
+        + "  %err = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.region_msg)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n\}\n\n"
+        + "define i64 @burxt.concat(i64 %a, i64 %b) \{\n"
+        + "entry:\n"
+        + "  %pa = inttoptr i64 %a to ptr\n"
+        + "  %pb = inttoptr i64 %b to ptr\n"
+        + "  %la = call i64 @strlen(ptr %pa)\n"
+        + "  %lb = call i64 @strlen(ptr %pb)\n"
+        + "  %total = add i64 %la, %lb\n"
+        + "  %size = add i64 %total, 1\n"
+        + "  %out = call i64 @burxt.alloc(i64 %size)\n"
+        + "  %pout = inttoptr i64 %out to ptr\n"
+        + "  %c1 = call ptr @memcpy(ptr %pout, ptr %pa, i64 %la)\n"
+        + "  %tail = getelementptr i8, ptr %pout, i64 %la\n"
+        + "  %c2 = call ptr @memcpy(ptr %tail, ptr %pb, i64 %lb)\n"
+        + "  %end = getelementptr i8, ptr %pout, i64 %total\n"
+        + "  store i8 0, ptr %end\n"
+        + "  ret i64 %out\n\}\n\n"
+        + "define i64 @burxt.substring(i64 %s, i64 %from, i64 %count) \{\n"
+        + "entry:\n"
+        + "  %size = add i64 %count, 1\n"
+        + "  %out = call i64 @burxt.alloc(i64 %size)\n"
+        + "  %pout = inttoptr i64 %out to ptr\n"
+        + "  %ps = inttoptr i64 %s to ptr\n"
+        + "  %from_ptr = getelementptr i8, ptr %ps, i64 %from\n"
+        + "  %copied = call ptr @memcpy(ptr %pout, ptr %from_ptr, i64 %count)\n"
+        + "  %end = getelementptr i8, ptr %pout, i64 %count\n"
+        + "  store i8 0, ptr %end\n"
+        + "  ret i64 %out\n\}\n\n"
+        + "define i64 @burxt.to_string_int(i64 %v) \{\n"
+        + "entry:\n"
+        + "  %out = call i64 @burxt.alloc(i64 24)\n"
+        + "  %p = inttoptr i64 %out to ptr\n"
+        + "  %n = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %p, i64 24, ptr @burxt.fmt_int, "
+        + "i64 %v)\n"
+        + "  ret i64 %out\n\}\n\n"
+        + "define i64 @burxt.byte_at(i64 %s, i64 %i) \{\n"
+        + "entry:\n"
+        + "  %p = inttoptr i64 %s to ptr\n"
+        + "  %q = getelementptr i8, ptr %p, i64 %i\n"
+        + "  %b = load i8, ptr %q\n"
+        + "  %z = zext i8 %b to i64\n"
+        + "  ret i64 %z\n\}\n\n"
+        + "define i64 @burxt.strcmp(i64 %a, i64 %b) \{\n"
+        + "entry:\n"
+        + "  %pa = inttoptr i64 %a to ptr\n"
+        + "  %pb = inttoptr i64 %b to ptr\n"
+        + "  %r = call i32 @strcmp(ptr %pa, ptr %pb)\n"
+        + "  %answer = sext i32 %r to i64\n"
+        + "  ret i64 %answer\n\}\n\n"
+        + "define i64 @burxt.len_str(i64 %s) \{\n"
+        + "entry:\n"
+        + "  %p = inttoptr i64 %s to ptr\n"
+        + "  %l = call i64 @strlen(ptr %p)\n"
+        + "  ret i64 %l\n\}\n\n"
+        // A growable array is a four-cell header in the region: length, capacity, the
+        // data pointer, and the ELEMENT WIDTH in cells. The width is stored rather than
+        // baked into the call, so one `push` serves scalars and structs both — it copies
+        // eight bytes or the whole element depending on what the header says.
+        // Rounding, in i128 so no intermediate can overflow: every operand reaching here
+        // came from i64s. The tie test is |r| * 2 against |d|, which is exact rather than
+        // a comparison against half of something.
+        //
+        // HalfEven is the default in financial regulation because it does not bias upward
+        // over many transactions; HalfUp is the one people expect from school.
+        + round_helper("half_even")
+        + round_helper("half_up")
+        + "define i64 @burxt.to_string_dec(i64 %v, i64 %pow, ptr %fmt) \{\n"
+        + "entry:\n"
+        + "  %out = call i64 @burxt.alloc(i64 48)\n"
+        + "  %p = inttoptr i64 %out to ptr\n"
+        + "  %wide = sext i64 %v to i128\n"
+        + "  %isneg = icmp slt i64 %v, 0\n"
+        + "  %flip = sub i128 0, %wide\n"
+        + "  %abs = select i1 %isneg, i128 %flip, i128 %wide\n"
+        + "  %sign = select i1 %isneg, ptr @burxt.str_minus, ptr @burxt.str_empty\n"
+        + "  %poww = sext i64 %pow to i128\n"
+        + "  %iw = udiv i128 %abs, %poww\n"
+        + "  %fw = urem i128 %abs, %poww\n"
+        + "  %ip = trunc i128 %iw to i64\n"
+        + "  %fp = trunc i128 %fw to i64\n"
+        + "  %n = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %p, i64 48, ptr %fmt, "
+        + "ptr %sign, i64 %ip, i64 %fp)\n"
+        + "  ret i64 %out\n\}\n\n"
+        + "define i64 @burxt.new_array(i64 %elem) \{\n"
+        + "entry:\n"
+        + "  %h = call i64 @burxt.alloc(i64 32)\n"
+        + "  %p = inttoptr i64 %h to ptr\n"
+        + "  store i64 0, ptr %p\n"
+        + "  %capp = getelementptr i64, ptr %p, i64 1\n"
+        + "  store i64 0, ptr %capp\n"
+        + "  %datap = getelementptr i64, ptr %p, i64 2\n"
+        + "  store i64 0, ptr %datap\n"
+        + "  %elemp = getelementptr i64, ptr %p, i64 3\n"
+        + "  store i64 %elem, ptr %elemp\n"
+        + "  ret i64 %h\n\}\n\n"
+        + "define i64 @burxt.push(i64 %xs, i64 %value) \{\n"
+        + "entry:\n"
+        + "  %p = inttoptr i64 %xs to ptr\n"
+        + "  %capp = getelementptr i64, ptr %p, i64 1\n"
+        + "  %datap = getelementptr i64, ptr %p, i64 2\n"
+        + "  %elemp = getelementptr i64, ptr %p, i64 3\n"
+        + "  %len = load i64, ptr %p\n"
+        + "  %cap = load i64, ptr %capp\n"
+        + "  %elem = load i64, ptr %elemp\n"
+        + "  %full = icmp sge i64 %len, %cap\n"
+        + "  br i1 %full, label %grow, label %place\n"
+        + "grow:\n"
+        + "  %doubled = mul i64 %cap, 2\n"
+        + "  %small = icmp slt i64 %doubled, 8\n"
+        + "  %newcap = select i1 %small, i64 8, i64 %doubled\n"
+        + "  %cells = mul i64 %newcap, %elem\n"
+        + "  %bytes = mul i64 %cells, 8\n"
+        + "  %fresh = call i64 @burxt.alloc(i64 %bytes)\n"
+        + "  %freshp = inttoptr i64 %fresh to ptr\n"
+        + "  %old = load i64, ptr %datap\n"
+        + "  %empty = icmp eq i64 %old, 0\n"
+        + "  br i1 %empty, label %installed, label %move\n"
+        + "move:\n"
+        + "  %oldp = inttoptr i64 %old to ptr\n"
+        + "  %usedcells = mul i64 %len, %elem\n"
+        + "  %usedbytes = mul i64 %usedcells, 8\n"
+        + "  %moved = call ptr @memcpy(ptr %freshp, ptr %oldp, i64 %usedbytes)\n"
+        + "  br label %installed\n"
+        + "installed:\n"
+        + "  store i64 %fresh, ptr %datap\n"
+        + "  store i64 %newcap, ptr %capp\n"
+        + "  br label %place\n"
+        + "place:\n"
+        + "  %data = load i64, ptr %datap\n"
+        + "  %dp = inttoptr i64 %data to ptr\n"
+        + "  %offset = mul i64 %len, %elem\n"
+        + "  %slot = getelementptr i64, ptr %dp, i64 %offset\n"
+        + "  %wide = icmp sgt i64 %elem, 1\n"
+        + "  br i1 %wide, label %copy, label %store_one\n"
+        + "copy:\n"
+        + "  %vp = inttoptr i64 %value to ptr\n"
+        + "  %vbytes = mul i64 %elem, 8\n"
+        + "  %copied = call ptr @memcpy(ptr %slot, ptr %vp, i64 %vbytes)\n"
+        + "  br label %done\n"
+        + "store_one:\n"
+        + "  store i64 %value, ptr %slot\n"
+        + "  br label %done\n"
+        + "done:\n"
+        + "  %next = add i64 %len, 1\n"
+        + "  store i64 %next, ptr %p\n"
+        + "  ret i64 %next\n\}\n\n"
+        + "define i64 @burxt.truncate(i64 %xs, i64 %n) \{\n"
+        + "entry:\n"
+        + "  %p = inttoptr i64 %xs to ptr\n"
+        + "  %len = load i64, ptr %p\n"
+        + "  %shorter = icmp slt i64 %n, %len\n"
+        + "  %answer = select i1 %shorter, i64 %n, i64 %len\n"
+        + "  store i64 %answer, ptr %p\n"
+        + "  ret i64 %answer\n\}\n\n"
+        + "define i64 @burxt.array_len(i64 %xs) \{\n"
+        + "entry:\n"
+        + "  %p = inttoptr i64 %xs to ptr\n"
+        + "  %len = load i64, ptr %p\n"
+        + "  ret i64 %len\n\}\n\n"
+        // The address of element i, bounds-checked against the LENGTH — not the
+        // capacity, which is an implementation detail no program can see.
+        + "define i64 @burxt.slot(i64 %xs, i64 %i, i64 %at) \{\n"
+        + "entry:\n"
+        + "  %p = inttoptr i64 %xs to ptr\n"
+        + "  %len = load i64, ptr %p\n"
+        + "  call void @burxt.bounds(i64 %i, i64 %len, i64 %at)\n"
+        + "  %datap = getelementptr i64, ptr %p, i64 2\n"
+        + "  %elemp = getelementptr i64, ptr %p, i64 3\n"
+        + "  %data = load i64, ptr %datap\n"
+        + "  %elem = load i64, ptr %elemp\n"
+        + "  %offset = mul i64 %i, %elem\n"
+        + "  %dp = inttoptr i64 %data to ptr\n"
+        + "  %slot = getelementptr i64, ptr %dp, i64 %offset\n"
+        + "  %answer = ptrtoint ptr %slot to i64\n"
+        + "  ret i64 %answer\n\}\n\n"
+        // The driver's four: the arguments the program was started with, and the two
+        // file operations. `read_file` reads into the region, so the text it answers has
+        // the lifetime the region does — which is why it needs one open.
+        + "@burxt.argc = global i64 0\n"
+        + "@burxt.argv = global ptr null\n"
+        + "declare ptr @fopen(ptr, ptr)\n"
+        + "declare i64 @fread(ptr, i64, i64, ptr)\n"
+        + "declare i64 @fwrite(ptr, i64, i64, ptr)\n"
+        + "declare i32 @fclose(ptr)\n"
+        + "declare i32 @fseek(ptr, i64, i32)\n"
+        + "declare i64 @ftell(ptr)\n"
+        + "@burxt.mode_read = private unnamed_addr constant [2 x i8] c\"r\\00\"\n"
+        + "@burxt.mode_write = private unnamed_addr constant [2 x i8] c\"w\\00\"\n\n"
+        + "define i64 @burxt.arg_count() \{\n"
+        + "entry:\n  %n = load i64, ptr @burxt.argc\n  ret i64 %n\n\}\n\n"
+        + "define i64 @burxt.arg(i64 %i) \{\n"
+        + "entry:\n"
+        + "  %n = load i64, ptr @burxt.argc\n"
+        + "  call void @burxt.bounds(i64 %i, i64 %n, i64 0)\n"
+        + "  %argv = load ptr, ptr @burxt.argv\n"
+        + "  %at = getelementptr ptr, ptr %argv, i64 %i\n"
+        + "  %s = load ptr, ptr %at\n"
+        + "  %answer = ptrtoint ptr %s to i64\n"
+        + "  ret i64 %answer\n\}\n\n"
+        + "define i64 @burxt.read_file(i64 %path) \{\n"
+        + "entry:\n"
+        + "  %p = inttoptr i64 %path to ptr\n"
+        + "  %f = call ptr @fopen(ptr %p, ptr @burxt.mode_read)\n"
+        + "  %missing = icmp eq ptr %f, null\n"
+        + "  br i1 %missing, label %nothing, label %read\n"
+        + "nothing:\n"
+        + "  %empty = call i64 @burxt.alloc(i64 1)\n"
+        + "  %ep = inttoptr i64 %empty to ptr\n"
+        + "  store i8 0, ptr %ep\n"
+        + "  ret i64 %empty\n"
+        + "read:\n"
+        + "  %sought = call i32 @fseek(ptr %f, i64 0, i32 2)\n"
+        + "  %size = call i64 @ftell(ptr %f)\n"
+        + "  %rewound = call i32 @fseek(ptr %f, i64 0, i32 0)\n"
+        + "  %room = add i64 %size, 1\n"
+        + "  %buffer = call i64 @burxt.alloc(i64 %room)\n"
+        + "  %bp = inttoptr i64 %buffer to ptr\n"
+        + "  %got = call i64 @fread(ptr %bp, i64 1, i64 %size, ptr %f)\n"
+        + "  %closed = call i32 @fclose(ptr %f)\n"
+        + "  %end = getelementptr i8, ptr %bp, i64 %got\n"
+        + "  store i8 0, ptr %end\n"
+        + "  ret i64 %buffer\n\}\n\n"
+        + "define i64 @burxt.write_file(i64 %path, i64 %text) \{\n"
+        + "entry:\n"
+        + "  %p = inttoptr i64 %path to ptr\n"
+        + "  %t = inttoptr i64 %text to ptr\n"
+        + "  %f = call ptr @fopen(ptr %p, ptr @burxt.mode_write)\n"
+        + "  %missing = icmp eq ptr %f, null\n"
+        + "  br i1 %missing, label %refused, label %write\n"
+        + "refused:\n  ret i64 0\n"
+        + "write:\n"
+        + "  %size = call i64 @strlen(ptr %t)\n"
+        + "  %written = call i64 @fwrite(ptr %t, i64 1, i64 %size, ptr %f)\n"
+        + "  %closed = call i32 @fclose(ptr %f)\n"
+        + "  ret i64 %written\n\}\n\n"
+        + "define void @burxt.bounds(i64 %i, i64 %limit, i64 %at) \{\n"
+        + "entry:\n"
+        + "  %low = icmp slt i64 %i, 0\n"
+        + "  %high = icmp sge i64 %i, %limit\n"
+        + "  %bad = or i1 %low, %high\n"
+        + "  br i1 %bad, label %oops, label %ok\n"
+        + "ok:\n  ret void\n"
+        + "oops:\n"
+        + "  %err = load ptr, ptr @stderr\n"
+        // The numbers, because "outside the array" leaves a reader to guess which index
+        // and how long the array was — and the two together usually name the bug.
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.bounds_msg, i64 %i, "
+        + "i64 %limit, i64 %at)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n\}\n\n"
+        + "define i64 @burxt.div_floor(i64 %a, i64 %b) \{\n"
+        + "entry:\n"
+        + "  %q = sdiv i64 %a, %b\n"
+        + "  %r = srem i64 %a, %b\n"
+        + "  %nonzero = icmp ne i64 %r, 0\n"
+        + "  %ra = xor i64 %r, %b\n"
+        + "  %opposite = icmp slt i64 %ra, 0\n"
+        + "  %adjust = and i1 %nonzero, %opposite\n"
+        + "  %lower = sub i64 %q, 1\n"
+        + "  %answer = select i1 %adjust, i64 %lower, i64 %q\n"
+        + "  ret i64 %answer\n\}\n\n";
+}
+
+// One rounding helper per mode, differing only in the tie rule. Written as text with the
+// mode's name substituted, because the two bodies are otherwise identical and a copy would
+// be two places to fix a bug in.
+fn round_helper(mode: String) -> String allocates {
+    let mut tie: String = "";
+    if mode == "half_even" {
+        // A tie goes to the even quotient, so repeated rounding does not drift upward.
+        tie = "  %gt = icmp sgt i128 %r2, %absd\n"
+            + "  %eq = icmp eq i128 %r2, %absd\n"
+            + "  %lsb = and i128 %q, 1\n"
+            + "  %odd = icmp ne i128 %lsb, 0\n"
+            + "  %toeven = and i1 %eq, %odd\n"
+            + "  %bump = or i1 %gt, %toeven\n";
+    } else {
+        tie = "  %bump = icmp sge i128 %r2, %absd\n";
+    }
+    return "define i128 @burxt.round." + mode + "(i128 %p, i128 %d) \{\n"
+        + "entry:\n"
+        + "  %zero = icmp eq i128 %d, 0\n"
+        + "  br i1 %zero, label %by_zero, label %divide\n"
+        + "by_zero:\n"
+        + "  %err = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.divzero_msg)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n"
+        + "divide:\n"
+        + "  %q = sdiv i128 %p, %d\n"
+        + "  %r = srem i128 %p, %d\n"
+        + "  %rneg = sub i128 0, %r\n"
+        + "  %risneg = icmp slt i128 %r, 0\n"
+        + "  %absr = select i1 %risneg, i128 %rneg, i128 %r\n"
+        + "  %dneg = sub i128 0, %d\n"
+        + "  %disneg = icmp slt i128 %d, 0\n"
+        + "  %absd = select i1 %disneg, i128 %dneg, i128 %d\n"
+        + "  %r2 = mul i128 %absr, 2\n"
+        + tie
+        // Away from zero means toward the true quotient's sign, which is sign(p)*sign(d).
+        + "  %pneg = icmp slt i128 %p, 0\n"
+        + "  %opposite = xor i1 %pneg, %disneg\n"
+        + "  %dir = select i1 %opposite, i128 -1, i128 1\n"
+        + "  %delta = select i1 %bump, i128 %dir, i128 0\n"
+        + "  %answer = add i128 %q, %delta\n"
+        + "  ret i128 %answer\n\}\n\n";
+}
+
+fn overflow_helper(name: String, intrinsic: String) -> String allocates {
+    return "define i64 @burxt.checked." + name + "(i64 %a, i64 %b) \{\n"
+        + "entry:\n"
+        + "  %r = call \{i64, i1\} @llvm." + intrinsic + ".with.overflow.i64(i64 %a, i64 %b)\n"
+        + "  %v = extractvalue \{i64, i1\} %r, 0\n"
+        + "  %o = extractvalue \{i64, i1\} %r, 1\n"
+        + "  br i1 %o, label %overflowed, label %ok\n"
+        + "ok:\n  ret i64 %v\n"
+        + "overflowed:\n"
+        + "  %err = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.overflow_msg)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n\}\n"
+        + "declare \{i64, i1\} @llvm." + intrinsic + ".with.overflow.i64(i64, i64)\n\n";
+}

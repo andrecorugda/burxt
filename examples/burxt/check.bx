@@ -1,0 +1,1583 @@
+// ============================================================================
+// check.bx — part of the Burxt compiler, written in Burxt.
+//
+// The rules. Types, scales, rounding contracts, regions, purity, contracts, exhaustiveness
+// — the same refusals stage-0 makes, which is what the differential test compares.
+//
+// Assembled by examples/stage1.bx, which is the program; everything here is
+// declarations, which is what a module may hold.
+// ============================================================================
+
+// ============================================================================
+// PHASE 4: the typechecker. Types in, refusals out — the same rules the Rust
+// compiler enforces, applied to the AST the parser just built.
+// ============================================================================
+
+fn ty_unknown() -> Ty {
+    return Ty { kind: 0, scale: 0, contract: 0, name_start: 0, name_len: 0 };
+}
+
+fn ty_simple(kind: Int) -> Ty {
+    return Ty { kind: kind, scale: 0, contract: 0, name_start: 0, name_len: 0 };
+}
+
+// C's widths as Burxt sees them at the boundary. See N1-BOUNDARY-EXACTNESS: the
+// exactness rule lives in `as scaled`, and the widths themselves are C's business.
+fn as_burxt_sees(t: Ty) -> Ty {
+    if t.kind == 43 || t.kind == 44 {
+        return ty_simple(40);
+    }
+    return t;
+}
+
+fn ty_decimal(scale: Int, contract: Int) -> Ty {
+    return Ty { kind: 45, scale: scale, contract: contract, name_start: 0, name_len: 0 };
+}
+
+// An unknown type never equals anything, including another unknown: one bad
+// expression must not make every later comparison succeed. The stage-1 checker in
+// examples/checker.bx learned this the hard way, and so did stage-0's recovery.
+fn is_unknown(t: Ty) -> Bool {
+    return t.kind == 0;
+}
+
+// A trait implementation: a pair of names, which is all `dyn` dispatch needs to know.
+// The method table already knows what the type can do.
+struct Impl { trait_start: Int, trait_len: Int, type_start: Int, type_len: Int }
+
+struct Typed { node: Int, ty: Ty }
+
+fn ty_same(src: String, a: Ty, b: Ty) -> Bool {
+    if a.kind == 0 || b.kind == 0 {
+        return false;
+    }
+    if a.kind != b.kind {
+        return false;
+    }
+    if a.kind == 45 {
+        // The rounding contract is part of the type, so it is part of equality.
+        return a.scale == b.scale && a.contract == b.contract;
+    }
+    if a.kind == 46 || a.kind == 49 {
+        return spans_eq(src, a.name_start, a.name_len, b.name_start, b.name_len);
+    }
+    return true;
+}
+
+fn ty_show(src: String, t: Ty) -> String allocates {
+    if t.kind == 0 { return "?"; }
+    if t.kind == 40 { return "Int"; }
+    if t.kind == 41 { return "Bool"; }
+    if t.kind == 42 { return "String"; }
+    if t.kind == 43 { return "CInt"; }
+    if t.kind == 44 { return "CDouble"; }
+    if t.kind == 45 {
+        if t.contract == 1 {
+            return "Decimal<" + to_string(t.scale) + ", RoundHalfEven>";
+        }
+        if t.contract == 2 {
+            return "Decimal<" + to_string(t.scale) + ", RoundHalfUp>";
+        }
+        return "Decimal<" + to_string(t.scale) + ">";
+    }
+    if t.kind == 47 { return "a growable array"; }
+    if t.kind == 48 { return "an array"; }
+    if t.kind == 49 { return "dyn " + substring(src, t.name_start, t.name_len); }
+    return substring(src, t.name_start, t.name_len);
+}
+
+// Read a type NODE into a Ty.
+fn (self: Unit) ty_of(src: String, node: Int) -> Ty {
+    if node < 0 {
+        return ty_unknown();
+    }
+    let n: Node = self.nodes[node];
+    if n.kind == 45 {
+        return ty_decimal(n.a, n.b);
+    }
+    if n.kind == 46 || n.kind == 49 {
+        let t: Tok = self.toks[n.tok];
+        return Ty { kind: n.kind, scale: 0, contract: 0,
+                    name_start: t.start, name_len: t.length };
+    }
+    if n.kind == 47 || n.kind == 48 {
+        // `scale` holds the ELEMENT type's node for a slice or an array, and
+        // `contract` the declared length. Reusing two fields rather than widening a
+        // struct that is copied at every comparison in the checker.
+        return Ty { kind: n.kind, scale: n.a, contract: n.b,
+                    name_start: 0, name_len: 0 };
+    }
+    if n.kind >= 40 && n.kind <= 48 {
+        return ty_simple(n.kind);
+    }
+    return ty_unknown();
+}
+
+fn (mut self: Unit) complain_at(src: String, tok: Int, message: String) -> Int allocates {
+    let t: Tok = self.toks[tok];
+    print("error: " + message + " (at `" + substring(src, t.start, t.length) + "`)");
+    self.problems = self.problems + 1;
+    return 0;
+}
+
+// ---- declarations ------------------------------------------------------------
+fn (self: Unit) find_sym(src: String, start: Int, length: Int) -> Int {
+    // Backwards: the innermost binding with this name is the one in scope.
+    let mut i: Int = len(self.syms) - 1;
+    while i >= 0 {
+        if spans_eq(src, self.syms[i].start, self.syms[i].length, start, length) {
+            return i;
+        }
+        i = i - 1;
+    }
+    return -1;
+}
+
+fn (self: Unit) find_fun(src: String, start: Int, length: Int) -> Int {
+    let mut i: Int = 0;
+    while i < len(self.funs) {
+        if spans_eq(src, self.funs[i].start, self.funs[i].length, start, length) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn (self: Unit) find_type(src: String, start: Int, length: Int) -> Int {
+    let mut i: Int = 0;
+    while i < len(self.types) {
+        if spans_eq(src, self.types[i].start, self.types[i].length, start, length) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// Every signature first, so functions may be declared in any order and call each
+// other — the same two-pass shape stage-0 uses.
+// The names a program may not take: the builtins, `old`, and the two the runtime
+// owns. Stage-0 refuses these because a call site cannot tell a shadowed builtin from
+// the builtin, and a reader cannot either.
+fn is_reserved_name(src: String, start: Int, length: Int) -> Bool {
+    return span_eq(src, start, length, "print")
+        || span_eq(src, start, length, "len")
+        || span_eq(src, start, length, "byte_at")
+        || span_eq(src, start, length, "push")
+        || span_eq(src, start, length, "truncate")
+        || span_eq(src, start, length, "substring")
+        || span_eq(src, start, length, "to_string")
+        || span_eq(src, start, length, "read_file")
+        || span_eq(src, start, length, "write_file")
+        || span_eq(src, start, length, "arg")
+        || span_eq(src, start, length, "arg_count")
+        || span_eq(src, start, length, "div_floor")
+        || span_eq(src, start, length, "div_trunc")
+        || span_eq(src, start, length, "rem")
+        || span_eq(src, start, length, "old")
+        || span_eq(src, start, length, "result")
+        || span_eq(src, start, length, "main")
+        || span_eq(src, start, length, "exit");
+}
+
+fn (mut self: Unit) collect_method(src: String, index: Int) -> Int allocates {
+    let item: Node = self.nodes[index];
+    let name: Tok = self.toks[item.tok];
+    let signature: Node = self.nodes[item.c];
+    let receiver: Tok = self.toks[signature.value];
+    let mut mutating: Int = 0;
+    if item.value >= 4 { mutating = 1; }
+    if flag_pure(item.value) == 1 {
+        let e: Int = self.complain_at(src, item.tok,
+            "`pure` is not available on a method: a receiver is state, and a claim "
+            + "about a function of its arguments cannot be made about one");
+    }
+    if self.find_method_named(src, receiver.start, receiver.length,
+                              name.start, name.length) >= 0 {
+        let e: Int = self.complain_at(src, item.tok, "this method is declared twice");
+        return 0;
+    }
+    push(self.methods, Method {
+        receiver_start: receiver.start, receiver_len: receiver.length,
+        start: name.start, length: name.length,
+        ret: self.ty_of(src, signature.c), params: item.a,
+        mutating: mutating, flags: item.value,
+    });
+    return 1;
+}
+
+fn (mut self: Unit) collect_declarations(src: String) -> Int allocates {
+    let mut i: Int = 0;
+    while i < len(self.items) {
+        let index: Int = self.items[i];
+        let item: Node = self.nodes[index];
+        let name: Tok = self.toks[item.tok];
+        if item.kind == 83 {
+            if item.b == 0 {
+                let e: Int = self.complain_at(src, item.tok,
+                    "an enum with no variants describes nothing, and no value of it "
+                    + "could ever be made");
+            }
+            let mut v: Int = 0;
+            while v < item.b {
+                let variant: Node = self.nodes[self.kids[item.a + v]];
+                let named: Tok = self.toks[variant.tok];
+                let mut w: Int = v + 1;
+                while w < item.b {
+                    let other: Node = self.nodes[self.kids[item.a + w]];
+                    let other_name: Tok = self.toks[other.tok];
+                    if spans_eq(src, named.start, named.length,
+                                other_name.start, other_name.length) {
+                        let e: Int = self.complain_at(src, other.tok,
+                            "this variant is declared twice");
+                    }
+                    w = w + 1;
+                }
+                v = v + 1;
+            }
+        }
+        if item.kind == 82 {                         // struct: fields
+            let mut f: Int = 0;
+            while f < item.b {
+                let field: Node = self.nodes[self.kids[item.a + f]];
+                let shaped: Int = self.check_type_shape(src, field.a, field.tok);
+                let held: Node = self.nodes[field.a];
+                if held.kind == 46 {
+                    let held_name: Tok = self.toks[held.tok];
+                    if spans_eq(src, held_name.start, held_name.length,
+                                name.start, name.length) {
+                        // By value, always: a struct that contains itself has no size.
+                        let e: Int = self.complain_at(src, field.tok,
+                            "a struct cannot contain itself: its size would have to be "
+                            + "bigger than itself");
+                    }
+                }
+                f = f + 1;
+            }
+        }
+        if item.kind == 83 {                         // enum: payloads
+            let mut v: Int = 0;
+            while v < item.b {
+                let variant: Node = self.nodes[self.kids[item.a + v]];
+                let mut p: Int = 0;
+                while p < variant.c {
+                    let payload: Int = self.subs[variant.b + p];
+                    let shaped: Int = self.check_type_shape(src, payload, variant.tok);
+                    let held: Node = self.nodes[payload];
+                    if held.kind == 46 {
+                        let held_name: Tok = self.toks[held.tok];
+                        if spans_eq(src, held_name.start, held_name.length,
+                                    name.start, name.length) {
+                            let e: Int = self.complain_at(src, variant.tok,
+                                "an enum cannot carry itself: its size would have to be "
+                                + "bigger than itself");
+                        }
+                        let inner: Int = self.find_type(src, held_name.start, held_name.length);
+                        if inner >= 0 {
+                            if self.types[inner].kind == 82 {
+                                let e: Int = self.complain_at(src, variant.tok,
+                                    "a variant carries a scalar or a String for now: an "
+                                    + "aggregate payload needs a layout rule that is not "
+                                    + "written");
+                            }
+                        }
+                    }
+                    p = p + 1;
+                }
+                v = v + 1;
+            }
+        }
+        if item.kind == 82 || item.kind == 83 {
+            if self.find_type(src, name.start, name.length) >= 0 {
+                let e: Int = self.complain_at(src, item.tok, "this type is declared twice");
+            } else {
+                push(self.types, TypeDecl { start: name.start, length: name.length,
+                                            kind: item.kind, node: index });
+            }
+        }
+        if item.kind == 81 {                         // a method
+            let m: Int = self.collect_method(src, index);
+        }
+        if item.kind == 84 {                         // trait
+            push(self.types, TypeDecl { start: name.start, length: name.length,
+                                        kind: item.kind, node: index });
+        }
+        if item.kind == 85 {                         // impl Trait for Type { ... }
+            let target: Tok = self.toks[item.c];
+            push(self.impls, Impl { trait_start: name.start, trait_len: name.length,
+                                    type_start: target.start, type_len: target.length });
+            // The methods inside an impl are declared exactly as free-standing ones
+            // are, so they are collected by the same code rather than by a copy of it.
+            let mut k: Int = 0;
+            while k < item.b {
+                let m: Int = self.collect_method(src, self.kids[item.a + k]);
+                k = k + 1;
+            }
+        }
+        if item.kind == 80 || item.kind == 86 {
+            if is_reserved_name(src, name.start, name.length) {
+                let e: Int = self.complain_at(src, item.tok,
+                    "`" + substring(src, name.start, name.length) + "` is a name the "
+                    + "language owns, so a program may not declare it");
+            }
+            if self.find_fun(src, name.start, name.length) >= 0 {
+                let e: Int = self.complain_at(src, item.tok, "this function is declared twice");
+            } else {
+                let mut ret: Ty = ty_unknown();
+                if item.kind == 80 {
+                    let signature: Node = self.nodes[item.c];
+                    ret = self.ty_of(src, signature.c);
+                } else {
+                    ret = self.ty_of(src, item.b);   // an extern holds it directly
+                    // CInt and CDouble are C's widths, not Burxt types: a Burxt caller
+                    // passes and receives an Int. So an extern's signature is recorded
+                    // as Burxt sees it, which is why `strcmp(a, b) < 0` compares two
+                    // Ints rather than mixing a CInt with one.
+                    ret = as_burxt_sees(ret);
+                }
+                let mut flags: Int = item.value;
+                if item.kind == 86 { flags = 8; }    // the extern marker
+                push(self.funs, Fun { start: name.start, length: name.length,
+                                      ret: ret, params: item.a, flags: flags });
+            }
+        }
+        i = i + 1;
+    }
+    return len(self.funs);
+}
+
+// ---- expressions -------------------------------------------------------------
+// `expected` carries the declared type inward, which is how a Decimal product can
+// know whether a rounding contract was supplied — exactly as in stage-0.
+// Every expression's type, recorded as it is decided. The escape check asks about
+// expressions the checker has already seen — whether a `+` joined two Strings, say —
+// and re-walking them would report every complaint a second time.
+fn (mut self: Unit) type_of(src: String, node: Int, expected: Ty) -> Ty allocates {
+    let t: Ty = self.type_of_inner(src, node, expected);
+    push(self.typed, Typed { node: node, ty: t });
+    return t;
+}
+
+fn (self: Unit) type_at(node: Int) -> Ty {
+    // Backwards: the last answer for a node is the one that stands, since a retyped
+    // operand (multiplication does that) settles on its second reading.
+    let mut i: Int = len(self.typed) - 1;
+    while i >= 0 {
+        let entry: Typed = self.typed[i];
+        if entry.node == node {
+            return entry.ty;
+        }
+        i = i - 1;
+    }
+    return ty_unknown();
+}
+
+fn (mut self: Unit) type_of_inner(src: String, node: Int, expected: Ty) -> Ty allocates {
+    if node < 0 {
+        return ty_unknown();
+    }
+    let n: Node = self.nodes[node];
+
+    if n.kind == 1 { return ty_simple(40); }
+    if n.kind == 2 {                                 // a decimal, money or percent
+        if expected.kind != 45 {
+            return ty_decimal(n.a, 0);
+        }
+        if expected.scale >= n.a {
+            // Widening a literal is exact: $5 in a Decimal<2> context is 5.00. The
+            // contract comes from the context too, and never rounds the literal —
+            // a literal that needed rounding would be refused below.
+            return ty_decimal(expected.scale, expected.contract);
+        }
+        // Narrowing: allowed only when every digit dropped is a zero.
+        let mut factor: Int = 1;
+        let mut drop: Int = n.a - expected.scale;
+        while drop > 0 {
+            factor = factor * 10;
+            drop = drop - 1;
+        }
+        if rem(n.value, factor) == 0 {
+            return ty_decimal(expected.scale, expected.contract);
+        }
+        if self.in_mul == 1 {
+            return ty_decimal(n.a, 0);
+        }
+        let e: Int = self.complain_at(src, n.tok,
+            "this literal needs " + to_string(n.a) + " decimal places but the context "
+            + "has only " + to_string(expected.scale) + ", and dropping digits from "
+            + "money is refused");
+        return ty_unknown();
+    }
+    if n.kind == 3 {                                 // a String literal, or a piece of one
+        return ty_simple(42);
+    }
+
+    if n.kind == 18 {                                // an interpolated String
+        // Interpolation IS `to_string` plus `+`, so as a VALUE it allocates and needs a
+        // region. As the argument of a `print` it does not — the pieces go out in order
+        // and nothing is joined — which is why the print statement checks it separately.
+        if !self.has_region() {
+            let r: Int = self.needs_region(src, n.tok, "this interpolated String");
+        }
+        let checked: Int = self.check_pieces(src, n);
+        return ty_simple(42);
+    }
+    if n.kind == 4 { return ty_simple(41); }
+
+    if n.kind == 5 {                                 // a name
+        let t: Tok = self.toks[n.tok];
+        let found: Int = self.find_sym(src, t.start, t.length);
+        if found < 0 {
+            let e: Int = self.complain_at(src, n.tok, "unknown name");
+            return ty_unknown();
+        }
+        return self.syms[found].ty;
+    }
+
+    if n.kind == 6 {                                 // -x
+        return self.type_of(src, n.a, expected);
+    }
+    if n.kind == 7 {                                 // !x
+        let inner: Ty = self.type_of(src, n.a, ty_simple(41));
+        if !is_unknown(inner) && inner.kind != 41 {
+            let e: Int = self.complain_at(src, n.tok,
+                "`!` needs a Bool, but this is " + ty_show(src, inner));
+        }
+        return ty_simple(41);
+    }
+
+    if n.kind == 8 {                                 // a + b, a * b
+        let outer: Int = self.in_mul;
+        if n.value == 27 { self.in_mul = 1; }
+        let left: Ty = self.type_of(src, n.a, expected);
+        let right: Ty = self.type_of(src, n.b, expected);
+        self.in_mul = outer;
+        if is_unknown(left) || is_unknown(right) {
+            return ty_unknown();
+        }
+        // `*` combines a quantity with a rate, so the scales may differ — but the
+        // product's scale is their SUM, and landing it needs a declared contract.
+        if n.value == 27 {
+            if left.kind == 45 && right.kind == 45 {
+                if ty_same(src, left, right) {
+                    // Identical operand types: their own contract lands the product,
+                    // so the context does not have to repeat it.
+                    if left.contract == 0 {
+                        let e: Int = self.complain_at(src, n.tok,
+                            "`*` on " + ty_show(src, left) + " and " + ty_show(src, right)
+                            + " needs a rounding contract: the exact product has "
+                            + to_string(left.scale + right.scale) + " decimal places");
+                        return ty_unknown();
+                    }
+                    return left;
+                }
+                if expected.contract == 0 {
+                    let e: Int = self.complain_at(src, n.tok,
+                        "`*` on " + ty_show(src, left) + " and " + ty_show(src, right)
+                        + " needs a rounding contract: the exact product has "
+                        + to_string(left.scale + right.scale) + " decimal places");
+                    return ty_unknown();
+                }
+                return expected;
+            }
+            if left.kind == 45 && right.kind == 40 { return left; }
+            if left.kind == 40 && right.kind == 45 { return right; }
+        }
+        if n.value == 28 {                           // `/`
+            if left.kind == 40 && right.kind == 40 {
+                let e: Int = self.complain_at(src, n.tok,
+                    "`/` on two Ints would have to round, and one operator cannot say "
+                    + "which way — use div_floor, div_trunc or rem");
+                return ty_unknown();
+            }
+            // A quotient can fall between two representable values — 1.00 / 3 — so
+            // unlike `*`, division needs a contract even when the scales match, and
+            // the contract has to be on the value being divided.
+            if left.kind == 45 && (right.kind == 45 || right.kind == 40) {
+                if right.kind == 45 && !ty_same(src, left, right) {
+                    let e: Int = self.complain_at(src, n.tok,
+                        "cannot divide " + ty_show(src, left) + " by " + ty_show(src, right)
+                        + ": division needs the same type, scale included");
+                    return ty_unknown();
+                }
+                if left.contract == 0 {
+                    let e: Int = self.complain_at(src, n.tok,
+                        "`/` on " + ty_show(src, left) + " needs a rounding contract, "
+                        + "because the exact quotient can have more than "
+                        + to_string(left.scale) + " decimal places");
+                    return ty_unknown();
+                }
+                return left;
+            }
+        }
+        if n.value == 25 && left.kind == 42 && right.kind == 42 {
+            if !self.has_region() {
+                let r: Int = self.needs_region(src, n.tok, "joining two Strings");
+            }
+            return left;
+        }
+        // `+` and `-` combine like quantities: the types must match exactly.
+        if !ty_same(src, left, right) {
+            let e: Int = self.complain_at(src, n.tok,
+                "cannot combine " + ty_show(src, left) + " and " + ty_show(src, right)
+                + ": addition and subtraction need the same type, scale included");
+            return ty_unknown();
+        }
+        return left;
+    }
+
+    if n.kind == 9 {                                 // a comparison
+        let left: Ty = self.type_of(src, n.a, ty_unknown());
+        let right: Ty = self.type_of(src, n.b, left);
+        if !is_unknown(left) && !is_unknown(right) && !ty_same(src, left, right) {
+            let e: Int = self.complain_at(src, n.tok,
+                "cannot compare " + ty_show(src, left) + " with " + ty_show(src, right)
+                + ": one equality, no coercion");
+        }
+        return ty_simple(41);
+    }
+
+    if n.kind == 10 {                                // && ||
+        let left: Ty = self.type_of(src, n.a, ty_simple(41));
+        let right: Ty = self.type_of(src, n.b, ty_simple(41));
+        if !is_unknown(left) && left.kind != 41 {
+            let e: Int = self.complain_at(src, n.tok, "this operator needs a Bool");
+        }
+        if !is_unknown(right) && right.kind != 41 {
+            let e: Int = self.complain_at(src, n.tok, "this operator needs a Bool");
+        }
+        return ty_simple(41);
+    }
+
+    // `Enum.Variant` and `Enum.Variant(payload)` — the base names a TYPE, not a
+    // variable, so typing it as one reported an unknown name. An enum constructor
+    // looks exactly like a field access or a method call until you check the base.
+    if n.kind == 11 || n.kind == 14 {
+        let base: Node = self.nodes[n.a];
+        if base.kind == 5 {
+            let base_name: Tok = self.toks[base.tok];
+            let declared: Int = self.find_type(src, base_name.start, base_name.length);
+            if declared >= 0 {
+                if self.types[declared].kind == 83 {
+                    let holder: Ty = Ty { kind: 46, scale: 0, contract: 0,
+                                          name_start: base_name.start,
+                                          name_len: base_name.length };
+                    let checked: Int = self.check_construction(src, holder, n);
+                    return holder;
+                }
+            }
+        }
+    }
+
+    if n.kind == 17 {                                // an array literal
+        if expected.kind != 47 && expected.kind != 48 {
+            let visited: Int = self.visit_children(src, node);
+            return ty_unknown();
+        }
+        let want: Ty = self.ty_of(src, expected.scale);
+        if expected.kind == 47 && !self.has_region() {
+            let r: Int = self.needs_region(src, n.tok, "a growable array");
+        }
+        if expected.kind == 48 && n.b != expected.contract {
+            let e: Int = self.complain_at(src, n.tok,
+                "this array holds " + to_string(expected.contract) + " element(s), and "
+                + "the literal has " + to_string(n.b) + ": a fixed array's length is "
+                + "part of its type");
+        }
+        let mut i: Int = 0;
+        while i < n.b {
+            let got: Ty = self.type_of(src, self.kids[n.a + i], want);
+            if !is_unknown(got) && !self.fits(src, got, want) {
+                let e: Int = self.complain_at(src, n.tok,
+                    "element " + to_string(i + 1) + " should be " + ty_show(src, want)
+                    + ", but it is " + ty_show(src, got));
+            }
+            i = i + 1;
+        }
+        return expected;
+    }
+
+    if n.kind == 12 {                                // xs[i]
+        let holder: Ty = self.type_of(src, n.a, ty_unknown());
+        let index: Ty = self.type_of(src, n.b, ty_simple(40));
+        if !is_unknown(index) && index.kind != 40 {
+            let e: Int = self.complain_at(src, n.tok, "an index must be an Int");
+        }
+        if is_unknown(holder) {
+            return ty_unknown();
+        }
+        if holder.kind == 42 {
+            let e: Int = self.complain_at(src, n.tok,
+                "a String is indexed with byte_at(s, i), which says it reads a BYTE");
+            return ty_unknown();
+        }
+        if holder.kind != 47 && holder.kind != 48 {
+            let e: Int = self.complain_at(src, n.tok,
+                "indexing needs an array, but this is " + ty_show(src, holder));
+            return ty_unknown();
+        }
+        if holder.kind == 48 {
+            let index_node: Node = self.nodes[n.b];
+            if index_node.kind == 1 {
+                // A literal index is known now, so the bounds check is a compile error
+                // rather than an exit 70 later. The runtime check stays for the rest.
+                if index_node.value >= holder.contract || index_node.value < 0 {
+                    let e: Int = self.complain_at(src, n.tok,
+                        "this array holds " + to_string(holder.contract)
+                        + " element(s), so " + to_string(index_node.value)
+                        + " is past its end");
+                }
+            }
+        }
+        return self.ty_of(src, holder.scale);
+    }
+
+    if n.kind == 14 {                                // a method call on a value
+        let holder: Ty = self.type_of(src, n.a, ty_unknown());
+        if is_unknown(holder) {
+            let visited: Int = self.check_args(src, n.b);
+            return ty_unknown();
+        }
+        if holder.kind == 49 {                       // dyn Trait
+            return self.dyn_method(src, holder, n);
+        }
+        let found: Int = self.find_method(src, holder, n.tok);
+        if found < 0 {
+            let visited: Int = self.check_args(src, n.b);
+            let e: Int = self.complain_at(src, n.tok,
+                ty_show(src, holder) + " has no such method");
+            return ty_unknown();
+        }
+        let m: Method = self.methods[found];
+        if flag_allocates(m.flags) == 1 && !self.has_region() {
+            let r: Int = self.needs_region(src, n.tok,
+                "`" + substring(src, m.start, m.length) + "`");
+        }
+        if self.in_pure == 1 {
+            // Not "a method that is not pure": `pure` is refused ON methods, so a
+            // method call from a pure function can never be allowed.
+            let e: Int = self.not_pure(src, n.tok, "call a method");
+        }
+        let ok: Int = self.check_against_params(src, n.tok, n.b, m.params, "method");
+        return m.ret;
+    }
+
+    if n.kind == 11 {                                // a field access
+        let holder: Ty = self.type_of(src, n.a, ty_unknown());
+        if is_unknown(holder) {
+            return ty_unknown();
+        }
+        let field: Ty = self.field_type(src, holder, n.tok);
+        if is_unknown(field) {
+            let e: Int = self.complain_at(src, n.tok,
+                ty_show(src, holder) + " has no such field");
+        }
+        return field;
+    }
+
+    if n.kind == 19 {                                // a struct literal
+        let name: Tok = self.toks[n.tok];
+        let found: Int = self.find_type(src, name.start, name.length);
+        if found < 0 {
+            let e: Int = self.complain_at(src, n.tok, "unknown type");
+            let visited: Int = self.visit_children(src, node);
+            return ty_unknown();
+        }
+        let holder: Ty = Ty { kind: 46, scale: 0, contract: 0,
+                              name_start: name.start, name_len: name.length };
+        let mut i: Int = 0;
+        while i < n.b {
+            let pair: Node = self.nodes[self.kids[n.a + i]];
+            let want: Ty = self.field_type(src, holder, pair.tok);
+            if is_unknown(want) {
+                let e: Int = self.complain_at(src, pair.tok,
+                    ty_show(src, holder) + " has no such field");
+            }
+            let got: Ty = self.type_of(src, pair.a, want);
+            if !is_unknown(got) && !is_unknown(want) && !self.fits(src, got, want) {
+                let e: Int = self.complain_at(src, pair.tok,
+                    "this field is " + ty_show(src, want) + ", but the value is "
+                    + ty_show(src, got));
+            }
+            i = i + 1;
+        }
+        // Every field, not just the ones a writer remembered: a struct with a hole in
+        // it has no value the compiler could invent that would be right.
+        let decl: TypeDecl = self.types[found];
+        let item: Node = self.nodes[decl.node];
+        let mut f: Int = 0;
+        while f < item.b {
+            let field: Node = self.nodes[self.kids[item.a + f]];
+            let field_name: Tok = self.toks[field.tok];
+            let mut given: Bool = false;
+            let mut g: Int = 0;
+            while g < n.b {
+                let pair: Node = self.nodes[self.kids[n.a + g]];
+                let pair_name: Tok = self.toks[pair.tok];
+                if spans_eq(src, pair_name.start, pair_name.length,
+                            field_name.start, field_name.length) {
+                    given = true;
+                }
+                g = g + 1;
+            }
+            if !given {
+                let e: Int = self.complain_at(src, n.tok,
+                    "this literal leaves out `"
+                    + substring(src, field_name.start, field_name.length) + "`");
+            }
+            f = f + 1;
+        }
+        return holder;
+    }
+
+    if n.kind == 13 {                                // a call
+        let t: Tok = self.toks[n.tok];
+        if span_eq(src, t.start, t.length, "old") {
+            // `old(e)` is the pre-state, hoisted to the function's entry. It means
+            // nothing where there is no exit to compare against.
+            if self.in_ensures == 0 {
+                let e: Int = self.complain_at(src, n.tok,
+                    "`old(...)` is the value on entry, so it only means something in "
+                    + "an `ensures` clause");
+            }
+            let list: Node = self.nodes[n.a];
+            if list.b != 1 {
+                let e: Int = self.complain_at(src, n.tok, "`old` takes one expression");
+                return ty_unknown();
+            }
+            let inner: Int = self.kids[list.a];
+            let held: Node = self.nodes[inner];
+            if held.kind == 5 {
+                let named: Tok = self.toks[held.tok];
+                if span_eq(src, named.start, named.length, "result") {
+                    let e: Int = self.complain_at(src, n.tok,
+                        "`old(result)` is a contradiction: the result does not exist "
+                        + "on entry");
+                    return ty_unknown();
+                }
+            }
+            let got: Ty = self.type_of(src, inner, ty_unknown());
+            if got.kind == 46 || got.kind == 47 || got.kind == 48 || got.kind == 49 {
+                let e: Int = self.complain_at(src, n.tok,
+                    "`old` of " + ty_show(src, got) + " would need a copy of the whole "
+                    + "value at entry, which is not built: name the fields instead");
+                return ty_unknown();
+            }
+            return got;
+        }
+        let found: Int = self.find_fun(src, t.start, t.length);
+        if found < 0 {
+            // A builtin, or a name nobody declared. The compiler knows the builtins,
+            // so the checker knows them too rather than staying silent about calls.
+            let builtin: Ty = self.builtin_type(src, t, n.tok, n.a);
+            if is_unknown(builtin) {
+                let e: Int = self.complain_at(src, n.tok, "unknown function");
+            }
+            return builtin;
+        }
+        let signature: Fun = self.funs[found];
+        if flag_allocates(signature.flags) == 1 && !self.has_region() {
+            let r: Int = self.needs_region(src, n.tok,
+                "`" + substring(src, signature.start, signature.length) + "`");
+        }
+        if self.in_pure == 1 && flag_pure(signature.flags) == 0 {
+            let e: Int = self.not_pure(src, n.tok,
+                "call `" + substring(src, signature.start, signature.length)
+                + "`, which is not `pure`");
+        }
+        let ok: Int = self.check_against_params(src, n.tok, n.a, signature.params,
+                                                "function");
+        return signature.ret;
+    }
+
+    // Anything else — fields, method calls, indexing, struct and array literals —
+    // is phase 4b. Its children are still visited so unknown names are still found.
+    let visited: Int = self.visit_children(src, node);
+    return ty_unknown();
+}
+
+// Walk an expression's children without judging the node itself.
+fn (mut self: Unit) visit_children(src: String, node: Int) -> Int allocates {
+    let n: Node = self.nodes[node];
+    if n.kind == 11 || n.kind == 6 || n.kind == 7 {
+        let a: Ty = self.type_of(src, n.a, ty_unknown());
+        return 1;
+    }
+    if n.kind == 12 || n.kind == 14 {
+        let a: Ty = self.type_of(src, n.a, ty_unknown());
+        if n.kind == 12 {
+            let b: Ty = self.type_of(src, n.b, ty_simple(40));
+        }
+        return 1;
+    }
+    if n.kind == 17 || n.kind == 19 {                // array or struct literal
+        let mut i: Int = 0;
+        while i < n.b {
+            let child: Int = self.kids[n.a + i];
+            let field: Node = self.nodes[child];
+            if n.kind == 19 {
+                let v: Ty = self.type_of(src, field.a, ty_unknown());
+            } else {
+                let v: Ty = self.type_of(src, child, ty_unknown());
+            }
+            i = i + 1;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+// Arity and argument types against a declared parameter list. Shared by function and
+// method calls, because what the reader needs to be told is the same either way.
+fn (mut self: Unit) check_against_params(src: String, at: Int, list_node: Int,
+                                        params_node: Int, what: String) -> Int allocates {
+    let list: Node = self.nodes[list_node];
+    let params: Node = self.nodes[params_node];
+    if list.b != params.b {
+        let e: Int = self.complain_at(src, at,
+            "this call passes " + to_string(list.b) + " argument(s), but the "
+            + what + " takes " + to_string(params.b));
+        return 0;
+    }
+    let mut i: Int = 0;
+    while i < list.b {
+        let param: Node = self.nodes[self.kids[params.a + i]];
+        let want: Ty = as_burxt_sees(self.ty_of(src, param.a));
+        let outer: Int = self.in_mul;
+        self.in_mul = 0;                             // an argument is its own context
+        let got: Ty = self.type_of(src, self.kids[list.a + i], want);
+        self.in_mul = outer;
+        if !is_unknown(got) && !self.fits(src, got, want) {
+            let e: Int = self.complain_at(src, at,
+                "argument " + to_string(i + 1) + " should be " + ty_show(src, want)
+                + ", but it is " + ty_show(src, got));
+        }
+        i = i + 1;
+    }
+    return 1;
+}
+
+fn (mut self: Unit) check_args(src: String, list_node: Int) -> Int allocates {
+    if list_node < 0 {
+        return 0;
+    }
+    let list: Node = self.nodes[list_node];
+    let mut i: Int = 0;
+    while i < list.b {
+        let arg: Ty = self.type_of(src, self.kids[list.a + i], ty_unknown());
+        i = i + 1;
+    }
+    return list.b;
+}
+
+// ---- statements --------------------------------------------------------------
+fn (mut self: Unit) check_block_nodes(src: String, block: Int, ret: Ty) -> Int allocates {
+    if block < 0 {
+        return 0;
+    }
+    let node: Node = self.nodes[block];
+    self.depth = self.depth + 1;
+    let mut i: Int = 0;
+    while i < node.b {
+        let stmt: Int = self.kids[node.a + i];
+        let checked: Int = self.check_stmt_node(src, stmt, ret);
+        // Anything after a statement that always leaves the block can never run, and
+        // a reader who wrote it believed otherwise. Reported once, at the first one.
+        if self.stmt_exits(stmt) && i + 1 < node.b {
+            let next: Node = self.nodes[self.kids[node.a + i + 1]];
+            let e: Int = self.complain_at(src, next.tok,
+                "this can never run: the statement before it always leaves the block");
+            i = node.b;
+        }
+        i = i + 1;
+    }
+    // Everything declared inside the block leaves scope at the closing brace. One
+    // `truncate` rather than a loop: the bindings a block made are the ones on top.
+    let mut keep: Int = len(self.syms);
+    while keep > 0 && self.syms[keep - 1].depth >= self.depth {
+        keep = keep - 1;
+    }
+    let dropped: Int = truncate(self.syms, keep);
+    self.depth = self.depth - 1;
+    return node.b;
+}
+
+fn (mut self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -> Int allocates {
+    if stmt < 0 {
+        return 0;
+    }
+    let n: Node = self.nodes[stmt];
+
+    if n.kind == 60 {                                // let
+        let declared: Ty = self.ty_of(src, n.a);
+        let actual: Ty = self.type_of(src, n.b, declared);
+        if !is_unknown(actual) && !self.fits(src, actual, declared) {
+            let e: Int = self.complain_at(src, n.tok,
+                "declared " + ty_show(src, declared) + ", but the value is "
+                + ty_show(src, actual));
+        }
+        let name: Tok = self.toks[n.tok];
+        // Shadowing is refused, so a second `let` of the same name is an error.
+        if self.find_sym(src, name.start, name.length) >= 0 {
+            let e: Int = self.complain_at(src, n.tok,
+                "this name is already declared — Burxt does not shadow");
+        }
+        push(self.syms, Sym { start: name.start, length: name.length,
+                              ty: declared, mutable: n.value, depth: self.depth });
+        return 1;
+    }
+
+    if n.kind == 61 {                                // assignment
+        let target: Node = self.nodes[n.a];
+        let want: Ty = self.type_of(src, n.a, ty_unknown());
+        let got: Ty = self.type_of(src, n.b, want);
+        if !is_unknown(got) && !is_unknown(want) && !self.fits(src, got, want) {
+            let e: Int = self.complain_at(src, n.tok,
+                "cannot assign " + ty_show(src, got) + " to " + ty_show(src, want));
+        }
+        // Only a `let mut` binding may be assigned to.
+        if target.kind == 5 {
+            let name: Tok = self.toks[target.tok];
+            let found: Int = self.find_sym(src, name.start, name.length);
+            if found >= 0 && self.syms[found].mutable == 0 {
+                let e: Int = self.complain_at(src, target.tok,
+                    "this was declared immutable — declare it `let mut` to allow it");
+            }
+        }
+        return 1;
+    }
+
+    if n.kind == 62 {                                // print
+        if self.in_pure == 1 {
+            let e: Int = self.not_pure(src, n.tok, "print");
+        }
+        let shown: Ty = self.type_at(n.a);
+        if shown.kind == 46 || shown.kind == 49 || shown.kind == 47 || shown.kind == 48 {
+            let e: Int = self.complain_at(src, n.tok,
+                "`print` renders a number, a Bool, a Decimal or a String — "
+                + ty_show(src, shown) + " has no one rendering the language can choose "
+                + "for it");
+        }
+        let target: Node = self.nodes[n.a];
+        if target.kind == 18 {
+            // Printing an interpolated string writes its pieces in order, so no String is
+            // built and no region is needed. Used as a VALUE it is a join, and that does.
+            let checked: Int = self.check_pieces(src, target);
+            return 1;
+        }
+    }
+    if n.kind == 62 || n.kind == 70 {                // print, expression statement
+        let value: Ty = self.type_of(src, n.a, ty_unknown());
+        return 1;
+    }
+
+    if n.kind == 63 || n.kind == 64 {                // return, return tail
+        if self.in_function == 0 {
+            let e: Int = self.complain_at(src, n.tok,
+                "there is nothing here to return from: top-level code runs, it does "
+                + "not answer");
+            let visited: Ty = self.type_of(src, n.a, ty_unknown());
+            return 1;
+        }
+        let value: Ty = self.type_of(src, n.a, ret);
+        if !is_unknown(value) && !is_unknown(ret) && !self.fits(src, value, ret) {
+            let e: Int = self.complain_at(src, n.tok,
+                "this function returns " + ty_show(src, ret) + ", but the value is "
+                + ty_show(src, value));
+        }
+        if n.kind == 64 {
+            let checked: Int = self.check_tail(src, n, ret);
+        }
+        // The escape rule, and the whole of M1 in one condition: a built value may
+        // leave a function ONLY when it was built in the CALLER's region — which means
+        // `allocates`, and no region of this function's own open around the return.
+        // A `region` block ends at its closing brace, so anything built inside it
+        // would outlive its storage.
+        if self.expr_allocates(src, n.a) {
+            if self.in_caller_region == 0 {
+                let e: Int = self.complain_at(src, n.tok,
+                    "cannot return this: it allocates, and a function that returns "
+                    + "built data must say `allocates` so the bytes belong to the "
+                    + "caller's region");
+            } else {
+                if self.region_depth > 0 {
+                    let e: Int = self.complain_at(src, n.tok,
+                        "cannot return this: it was built inside a `region` block, "
+                        + "which ends at its closing brace, so its storage would not "
+                        + "outlive it");
+                }
+            }
+        }
+        return 1;
+    }
+
+    if n.kind == 65 {                                // if
+        let cond: Ty = self.type_of(src, n.a, ty_simple(41));
+        if !is_unknown(cond) && cond.kind != 41 {
+            let e: Int = self.complain_at(src, n.tok, "an `if` condition must be a Bool");
+        }
+        let t: Int = self.check_block_nodes(src, n.b, ret);
+        if n.c >= 0 {
+            let other: Node = self.nodes[n.c];
+            if other.kind == 16 {
+                let f: Int = self.check_block_nodes(src, n.c, ret);
+            } else {
+                let f: Int = self.check_stmt_node(src, n.c, ret);
+            }
+        }
+        return 1;
+    }
+
+    if n.kind == 66 {                                // while
+        let cond: Ty = self.type_of(src, n.a, ty_simple(41));
+        if !is_unknown(cond) && cond.kind != 41 {
+            let e: Int = self.complain_at(src, n.tok, "a `while` condition must be a Bool");
+        }
+        self.loop_depth = self.loop_depth + 1;
+        let body: Int = self.check_block_nodes(src, n.b, ret);
+        self.loop_depth = self.loop_depth - 1;
+        return 1;
+    }
+
+    if n.kind == 67 || n.kind == 68 {                // break, continue
+        if self.loop_depth == 0 {
+            let e: Int = self.complain_at(src, n.tok,
+                "there is no loop here to leave: `break` and `continue` only mean "
+                + "something inside `while`");
+        }
+        return 1;
+    }
+
+    if n.kind == 69 {                                // region
+        if self.region_depth > 0 {
+            let e: Int = self.complain_at(src, n.tok,
+                "regions do not nest: the inner one would end while the outer is still "
+                + "open, and one bump pointer cannot serve two marks");
+        }
+        self.region_depth = self.region_depth + 1;
+        let body: Int = self.check_block_nodes(src, n.a, ret);
+        self.region_depth = self.region_depth - 1;
+        return 1;
+    }
+
+    if n.kind == 71 {                                // match
+        let value: Ty = self.type_of(src, n.a, ty_unknown());
+        let mut enum_decl: Int = -1;
+        if value.kind == 46 {
+            let declared: Int = self.find_type(src, value.name_start, value.name_len);
+            if declared >= 0 {
+                if self.types[declared].kind == 83 { enum_decl = declared; }
+            }
+        }
+        if !is_unknown(value) && enum_decl < 0 {
+            let e: Int = self.complain_at(src, n.tok,
+                "`match` chooses between an enum's variants, and " + ty_show(src, value)
+                + " has none");
+        }
+        if enum_decl >= 0 {
+            // Every variant needs an arm, and no variant twice: exhaustiveness is what
+            // makes a match an answer rather than a guess, and there is no `_` to hide
+            // behind. Both questions are the same walk.
+            let decl: Node = self.nodes[self.types[enum_decl].node];
+            let mut v: Int = 0;
+            while v < decl.b {
+                let variant: Node = self.nodes[self.kids[decl.a + v]];
+                let named: Tok = self.toks[variant.tok];
+                let mut seen: Int = 0;
+                let mut a: Int = 0;
+                while a < n.c {
+                    let arm: Node = self.nodes[self.kids[n.b + a]];
+                    let arm_name: Tok = self.toks[arm.tok];
+                    if spans_eq(src, arm_name.start, arm_name.length,
+                                named.start, named.length) {
+                        seen = seen + 1;
+                    }
+                    a = a + 1;
+                }
+                if seen == 0 {
+                    let e: Int = self.complain_at(src, n.tok,
+                        "this match has no arm for `"
+                        + substring(src, named.start, named.length) + "`");
+                }
+                if seen > 1 {
+                    let e: Int = self.complain_at(src, n.tok,
+                        "`" + substring(src, named.start, named.length)
+                        + "` has more than one arm, and only the first could ever run");
+                }
+                v = v + 1;
+            }
+        }
+        let mut i: Int = 0;
+        while i < n.c {
+            let arm: Node = self.nodes[self.kids[n.b + i]];
+            // The arm's bindings take the variant's payload types, and leave scope
+            // with the arm — which is what `truncate` is for.
+            let base: Int = len(self.syms);
+            let bound: Int = self.bind_arm(src, value, arm);
+            let body: Int = self.check_block_nodes(src, arm.a, ret);
+            let dropped: Int = truncate(self.syms, base);
+            i = i + 1;
+        }
+        return 1;
+    }
+
+    return 0;
+}
+
+// ---- the pass ----------------------------------------------------------------
+// A function or method body, with its parameters — and a method's `self` — in scope.
+fn (mut self: Unit) check_body(src: String, index: Int) -> Int allocates {
+    let item: Node = self.nodes[index];
+    let base: Int = len(self.syms);
+    self.depth = self.depth + 1;
+    // The markers are the body's rules: `allocates` means the caller's region is in
+    // effect throughout, `pure` means the world is off limits.
+    let outer_caller: Int = self.in_caller_region;
+    let outer_pure: Int = self.in_pure;
+    self.in_caller_region = flag_allocates(item.value);
+    self.in_pure = flag_pure(item.value);
+    let signature: Node = self.nodes[item.c];
+    if item.kind == 81 {
+        // `self` is a name like any other once it is bound: the receiver's type is
+        // written in the clause node, so a method body needs no special rule.
+        let receiver: Tok = self.toks[signature.value];
+        // The clause node holds the receiver's TYPE token; the word `self` is two
+        // tokens before it, because a receiver clause has exactly one shape:
+        // `(self: Type)` or `(mut self: Type)`. Checked rather than assumed.
+        let mut self_tok: Int = signature.value - 2;
+        if self.toks[self_tok].kind != 119 {
+            self_tok = signature.value;
+        }
+        let word: Tok = self.toks[self_tok];
+        let mut writable: Int = 0;
+        if item.value >= 4 { writable = 1; }
+        push(self.syms, Sym { start: word.start, length: word.length,
+                              ty: Ty { kind: 46, scale: 0, contract: 0,
+                                       name_start: receiver.start,
+                                       name_len: receiver.length },
+                              mutable: writable, depth: self.depth });
+    }
+    let params: Node = self.nodes[item.a];
+    let mut p: Int = 0;
+    while p < params.b {
+        let param: Node = self.nodes[self.kids[params.a + p]];
+        let name: Tok = self.toks[param.tok];
+        push(self.syms, Sym { start: name.start, length: name.length,
+                              ty: self.ty_of(src, param.a), mutable: 0,
+                              depth: self.depth });
+        p = p + 1;
+    }
+    let ret: Ty = self.ty_of(src, signature.c);
+    let clauses: Int = self.check_clauses(src, index, signature, ret);
+    let outer_function: Int = self.in_function;
+    let outer_loop: Int = self.loop_depth;
+    let outer_fn: Int = self.current_fn;
+    self.current_fn = -1;
+    if item.kind == 80 {
+        self.current_fn = self.find_fun(src, self.toks[item.tok].start,
+                                       self.toks[item.tok].length);
+    }
+    self.in_function = 1;
+    self.loop_depth = 0;
+    let body: Int = self.check_block_nodes(src, item.b, ret);
+    if !self.block_exits(item.b) {
+        // Every Burxt function returns a value, so falling off the end is not a
+        // silent zero — it is a missing answer, and the compiler says which function.
+        let e: Int = self.complain_at(src, item.tok,
+            "this function can reach its closing brace without returning, and every "
+            + "Burxt function answers with a value");
+    }
+    self.in_function = outer_function;
+    self.loop_depth = outer_loop;
+    self.current_fn = outer_fn;
+    let dropped: Int = truncate(self.syms, base);
+    self.depth = self.depth - 1;
+    self.in_caller_region = outer_caller;
+    self.in_pure = outer_pure;
+    return 1;
+}
+
+// `requires`, `ensures`, `decreases`. All three are checked under the `pure` rule,
+// for the reason A5 gives: a contract that can change the program is not a check, it
+// is a second program that only runs when someone is looking.
+fn (mut self: Unit) check_clauses(src: String, index: Int, signature: Node,
+                                  ret: Ty) -> Int allocates {
+    let item: Node = self.nodes[index];
+    let outer_pure: Int = self.in_pure;
+    self.in_pure = 1;
+    self.in_contract = 1;
+    let mut measures: Int = 0;
+    let mut i: Int = 0;
+    while i < signature.b {
+        let clause: Node = self.nodes[self.kids[signature.a + i]];
+        let base: Int = len(self.syms);
+        if clause.value == 127 {                     // ensures
+            // `result` is bound here and nowhere else. It is not a keyword: a
+            // parameter may still be called `result`, and then it collides, which is
+            // an error about the collision rather than a silent shadowing.
+            if ret.kind == 46 || ret.kind == 47 || ret.kind == 48 {
+                let e: Int = self.complain_at(src, clause.tok,
+                    "`ensures` cannot see the result of a function returning "
+                    + ty_show(src, ret) + ": it travels through the caller's storage, "
+                    + "and binding `result` to it needs care a scalar does not");
+            }
+            self.in_ensures = 1;
+            let spelling: Int = find_text(src, "result");
+            if spelling >= 0 {
+                push(self.syms, Sym { start: spelling, length: 6,
+                                      ty: ret, mutable: 0, depth: self.depth });
+            }
+        }
+        let got: Ty = self.type_of(src, clause.a, ty_simple(41));
+        if clause.value == 128 {                     // decreases
+            measures = measures + 1;
+            if !is_unknown(got) && got.kind != 40 {
+                let e: Int = self.complain_at(src, clause.tok,
+                    "a `decreases` measure counts, so it must be an Int: a Decimal "
+                    + "measure invites a descent that shrinks forever without arriving");
+            }
+            if item.kind == 81 {
+                let e: Int = self.complain_at(src, clause.tok,
+                    "`decreases` is not available on a method yet, and a clause that "
+                    + "is not checked would be worse than none");
+            }
+            if !self.body_calls(src, item.b, self.toks[item.tok]) {
+                let e: Int = self.complain_at(src, clause.tok,
+                    "`decreases` claims a recursion ends, and this function never "
+                    + "calls itself, so there is nothing to check");
+            }
+        } else {
+            if !is_unknown(got) && got.kind != 41 {
+                let e: Int = self.complain_at(src, clause.tok,
+                    "a contract is a claim, so it must be a Bool, but this is "
+                    + ty_show(src, got));
+            }
+        }
+        self.in_ensures = 0;
+        let dropped: Int = truncate(self.syms, base);
+        i = i + 1;
+    }
+    if measures > 1 {
+        let e: Int = self.complain_at(src, item.tok,
+            "one `decreases` per function: two measures would need a rule for which "
+            + "one descends, and one integer covers the cases that exist");
+    }
+    self.in_contract = 0;
+    self.in_pure = outer_pure;
+    return 1;
+}
+
+// Where these bytes first appear in the source. A symbol is a span, so binding a name
+// the program did not write — `result` inside an `ensures` — needs a span whose bytes
+// spell it. Any occurrence will do, since only the bytes are compared. If the word
+// appears nowhere, nothing can refer to it, and there is nothing to bind.
+fn find_text(src: String, needle: String) -> Int {
+    let n: Int = len(needle);
+    let mut i: Int = 0;
+    while i + n <= len(src) {
+        let mut k: Int = 0;
+        let mut same: Bool = true;
+        while k < n {
+            if byte_at(src, i + k) != byte_at(needle, k) {
+                same = false;
+                k = n;
+            } else {
+                k = k + 1;
+            }
+        }
+        if same {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// `return tail f(...)` is a guarantee, not a hope: the frame is REPLACED. Everything
+// below is a condition for that being possible at all, which is why each one is a
+// compile error rather than a quiet fallback to an ordinary call.
+fn (mut self: Unit) check_tail(src: String, n: Node, ret: Ty) -> Int allocates {
+    let value: Node = self.nodes[n.a];
+    if value.kind != 13 {
+        let e: Int = self.complain_at(src, n.tok,
+            "`tail` names the call whose frame replaces this one, and this is not a call");
+        return 0;
+    }
+    if self.region_depth > 0 {
+        let e: Int = self.complain_at(src, n.tok,
+            "a `tail` call inside a `region` would jump past the region's close, and "
+            + "the bytes would never be released");
+    }
+    if ret.kind == 46 || ret.kind == 47 || ret.kind == 48 {
+        let e: Int = self.complain_at(src, n.tok,
+            "a `tail` call cannot return " + ty_show(src, ret) + ": an aggregate travels "
+            + "through the caller's storage, and the frame that owns it is the one being "
+            + "replaced");
+    }
+    let called: Tok = self.toks[value.tok];
+    let target: Int = self.find_fun(src, called.start, called.length);
+    if target < 0 {
+        let e: Int = self.complain_at(src, n.tok,
+            "`tail` calls a Burxt function, and this is not one");
+        return 0;
+    }
+    let callee: Fun = self.funs[target];
+    if flag_extern(callee.flags) == 1 {
+        let e: Int = self.complain_at(src, n.tok,
+            "`tail` into C is not a tail call: the C side has its own calling "
+            + "convention, and nothing here can guarantee the frame is replaced");
+        return 0;
+    }
+    if self.current_fn < 0 {
+        return 0;
+    }
+    let here: Fun = self.funs[self.current_fn];
+    if !ty_same(src, callee.ret, here.ret) {
+        let e: Int = self.complain_at(src, n.tok,
+            "a `tail` call must answer what this function answers: " + ty_show(src, here.ret)
+            + ", not " + ty_show(src, callee.ret));
+    }
+    let mine: Node = self.nodes[here.params];
+    let theirs: Node = self.nodes[callee.params];
+    if mine.b != theirs.b {
+        let e: Int = self.complain_at(src, n.tok,
+            "a `tail` call replaces this frame, so the signatures must match: this "
+            + "function takes " + to_string(mine.b) + " parameter(s), and that one takes "
+            + to_string(theirs.b));
+        return 0;
+    }
+    let mut i: Int = 0;
+    while i < mine.b {
+        let want: Ty = self.ty_of(src, self.nodes[self.kids[mine.a + i]].a);
+        let got: Ty = self.ty_of(src, self.nodes[self.kids[theirs.a + i]].a);
+        if !ty_same(src, got, want) {
+            let e: Int = self.complain_at(src, n.tok,
+                "parameter " + to_string(i + 1) + " is " + ty_show(src, want) + " here and "
+                + ty_show(src, got) + " there, and a replaced frame has one shape");
+        }
+        i = i + 1;
+    }
+    return 1;
+}
+
+// Whether a body calls this name — the token scan is exact, because Burxt has no
+// first-class functions, so a name followed by `(` inside the body is a call to the
+// one function that has it. The range is the body's braces, counted.
+fn (self: Unit) body_calls(src: String, body: Int, name: Tok) -> Bool {
+    if body < 0 {
+        return false;
+    }
+    let mut i: Int = self.nodes[body].tok;
+    let mut depth: Int = 0;
+    let mut opened: Bool = false;
+    while i < len(self.toks) {
+        let t: Tok = self.toks[i];
+        if t.kind == 31 {
+            depth = depth + 1;
+            opened = true;
+        }
+        if t.kind == 32 {
+            depth = depth - 1;
+            if opened && depth == 0 {
+                return false;
+            }
+        }
+        if t.kind == 1 && spans_eq(src, t.start, t.length, name.start, name.length) {
+            if i + 1 < len(self.toks) {
+                if self.toks[i + 1].kind == 29 {     // '('
+                    return true;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+// An `impl` answers a trait exactly: every signature, no extras, same shapes. A trait
+// is a promise a `dyn` value makes on the implementor's behalf, so a mismatch here is a
+// promise nobody keeps.
+fn (mut self: Unit) check_impl(src: String, index: Int) -> Int allocates {
+    let item: Node = self.nodes[index];
+    let trait_name: Tok = self.toks[item.tok];
+    let found: Int = self.find_type(src, trait_name.start, trait_name.length);
+    if found < 0 {
+        let e: Int = self.complain_at(src, item.tok, "no trait of this name is declared");
+        return 0;
+    }
+    let decl: TypeDecl = self.types[found];
+    if decl.kind != 84 {
+        let e: Int = self.complain_at(src, item.tok,
+            "`impl` implements a trait, and this name belongs to a type");
+        return 0;
+    }
+    let declared: Node = self.nodes[decl.node];
+    let mut i: Int = 0;
+    while i < declared.b {
+        let sig: Node = self.nodes[self.kids[declared.a + i]];
+        let sig_name: Tok = self.toks[sig.tok];
+        let mut matched: Int = -1;
+        let mut k: Int = 0;
+        while k < item.b {
+            let candidate: Int = self.kids[item.a + k];
+            let named: Tok = self.toks[self.nodes[candidate].tok];
+            if spans_eq(src, named.start, named.length, sig_name.start, sig_name.length) {
+                matched = candidate;
+            }
+            k = k + 1;
+        }
+        if matched < 0 {
+            let e: Int = self.complain_at(src, item.tok,
+                "this impl leaves out `" + substring(src, sig_name.start, sig_name.length)
+                + "`, which the trait requires");
+        } else {
+            let method: Node = self.nodes[matched];
+            let mut mutating: Int = 0;
+            if method.value >= 4 { mutating = 1; }
+            if mutating != sig.value {
+                let e: Int = self.complain_at(src, method.tok,
+                    "the trait writes this receiver differently: `self` and `mut self` "
+                    + "are different promises");
+            }
+            let params: Node = self.nodes[method.a];
+            if params.b != sig.c {
+                let e: Int = self.complain_at(src, method.tok,
+                    "the trait's signature takes " + to_string(sig.c)
+                    + " parameter(s), and this takes " + to_string(params.b));
+            } else {
+                let mut p: Int = 0;
+                while p < sig.c {
+                    let want: Ty = self.ty_of(src, self.nodes[self.subs[sig.b + p]].a);
+                    let got: Ty = self.ty_of(src, self.nodes[self.kids[params.a + p]].a);
+                    if !ty_same(src, got, want) {
+                        let e: Int = self.complain_at(src, method.tok,
+                            "parameter " + to_string(p + 1) + " is " + ty_show(src, want)
+                            + " in the trait, and " + ty_show(src, got) + " here");
+                    }
+                    p = p + 1;
+                }
+            }
+            let want_ret: Ty = self.ty_of(src, sig.a);
+            let got_ret: Ty = self.ty_of(src, self.nodes[method.c].c);
+            if !ty_same(src, got_ret, want_ret) {
+                let e: Int = self.complain_at(src, method.tok,
+                    "the trait returns " + ty_show(src, want_ret) + ", and this returns "
+                    + ty_show(src, got_ret));
+            }
+        }
+        i = i + 1;
+    }
+    let mut k: Int = 0;
+    while k < item.b {
+        let method: Node = self.nodes[self.kids[item.a + k]];
+        let named: Tok = self.toks[method.tok];
+        let mut known: Bool = false;
+        let mut i2: Int = 0;
+        while i2 < declared.b {
+            let sig: Node = self.nodes[self.kids[declared.a + i2]];
+            let sig_name: Tok = self.toks[sig.tok];
+            if spans_eq(src, named.start, named.length, sig_name.start, sig_name.length) {
+                known = true;
+            }
+            i2 = i2 + 1;
+        }
+        if !known {
+            let e: Int = self.complain_at(src, method.tok,
+                "the trait has no method of this name, and an impl is an answer to a "
+                + "trait rather than a place to add to a type");
+        }
+        k = k + 1;
+    }
+    return 1;
+}
+
+// The shapes a type may not have. Both refusals are about storage: a nested array would
+// need a layout rule for arrays of arrays that M1 does not have, and a zero-length array
+// describes nothing. A growable array inside a struct is fine — stage-1's own Unit is
+// made of them — and what it costs is that the struct must be built in a region.
+fn (mut self: Unit) check_type_shape(src: String, node: Int, at: Int) -> Int allocates {
+    if node < 0 {
+        return 0;
+    }
+    let n: Node = self.nodes[node];
+    if n.kind != 47 && n.kind != 48 {
+        return 0;
+    }
+    if n.kind == 48 && n.b <= 0 {
+        let e: Int = self.complain_at(src, at,
+            "an array of no elements describes nothing, and nothing can be read from it");
+    }
+    let element: Node = self.nodes[n.a];
+    if element.kind == 47 || element.kind == 48 {
+        let e: Int = self.complain_at(src, at,
+            "arrays do not nest yet: an array of arrays needs a layout rule the memory "
+            + "model does not have");
+        return 0;
+    }
+    return self.check_type_shape(src, n.a, at);
+}
+
+fn (mut self: Unit) check(src: String) -> Int allocates {
+    let collected: Int = self.collect_declarations(src);
+    let mut i: Int = 0;
+    while i < len(self.items) {
+        let index: Int = self.items[i];
+        let item: Node = self.nodes[index];
+        if item.kind == 80 || item.kind == 81 {
+            let checked: Int = self.check_body(src, index);
+        }
+        if item.kind == 85 {                         // an impl block's methods
+            let answered: Int = self.check_impl(src, index);
+            let mut k: Int = 0;
+            while k < item.b {
+                let checked: Int = self.check_body(src, self.kids[item.a + k]);
+                k = k + 1;
+            }
+        }
+        if item.kind >= 60 && item.kind <= 71 {      // a top-level statement
+            let checked: Int = self.check_stmt_node(src, index, ty_unknown());
+        }
+        i = i + 1;
+    }
+    return self.problems;
+}
+
+// ---- reporting -------------------------------------------------------------
+fn kind_name(kind: Int) -> String allocates {
+    if kind == 1 { return "ident"; }
+    if kind == 2 { return "int"; }
+    if kind == 3 { return "decimal"; }
+    if kind == 4 { return "string"; }
+    if kind >= 140 { return "type"; }
+    if kind >= 100 { return "keyword"; }
+    return "punct";
+}
+
+fn (self: Unit) report(src: String, limit: Int) -> Int allocates {
+    let mut i: Int = 0;
+    while i < len(self.toks) && i < limit {
+        let t: Tok = self.toks[i];
+        let text: String = substring(src, t.start, t.length);
+        if t.kind == 3 {
+            print("  decimal " + text + " -> unscaled " + to_string(t.value)
+                  + " scale " + to_string(t.scale));
+        } else {
+            print("  " + kind_name(t.kind) + " `" + text + "`");
+        }
+        i = i + 1;
+    }
+    return i;
+}
+
+fn (self: Unit) count_of(kind: Int) -> Int {
+    let mut i: Int = 0;
+    let mut found: Int = 0;
+    while i < len(self.toks) {
+        if self.toks[i].kind == kind {
+            found = found + 1;
+        }
+        i = i + 1;
+    }
+    return found;
+}
