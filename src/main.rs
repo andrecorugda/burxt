@@ -239,7 +239,14 @@ fn run(
             Ok(())
         }
         "build" | "run" => {
-            let obj = format!("{}.o", stem);
+            // The object is an intermediate, and it goes where intermediates belong: NOT
+            // into the working directory, where two builds running at once collide on the
+            // same name — which is exactly what happened when two tests built the
+            // self-hosted compiler in parallel. Unique per process, and removed after.
+            let obj = std::env::temp_dir()
+                .join(format!("burxt-{}-{}.o", std::process::id(), stem))
+                .to_string_lossy()
+                .into_owned();
             cg.write_object(&obj)?;
 
             // link with the system C compiler (for printf + crt startup), plus

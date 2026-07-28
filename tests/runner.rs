@@ -1408,8 +1408,16 @@ fn burxt_compiles_burxt_and_reaches_the_fixpoint() {
             continue;
         }
         checked += 1;
-        let one = Command::new(&stage1).arg(&path).output().expect("stage-1");
-        let two = Command::new(&stage2).arg(&path).output().expect("stage-2");
+            let one = Command::new(&stage1)
+            .arg(&path)
+            .current_dir(&scratch)
+            .output()
+            .expect("stage-1");
+        let two = Command::new(&stage2)
+            .arg(&path)
+            .current_dir(&scratch)
+            .output()
+            .expect("stage-2");
         if one.stdout != two.stdout {
             disagreements.push(path.file_name().unwrap().to_string_lossy().into_owned());
         }
@@ -1629,4 +1637,91 @@ fn the_guide_and_examples_are_linked_and_compile() {
     let _ = fs::remove_dir_all(&scratch);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     assert!(counted >= 13, "examples went missing: {} left", counted);
+}
+
+/// How much of the language the BURXT backend can actually compile — not "does it emit
+/// something", but "does the program it produces print what stage-0's prints". Every
+/// program in the pass suite is compiled by stage-1, assembled, linked, run, and diffed
+/// against its recorded output.
+///
+/// The number is a **ratchet**: it may only go up. It was 31 when the backend knew nothing
+/// of Decimals; the target is 88, at which point the Burxt compiler can build every
+/// program the Rust one can.
+#[test]
+fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    if !llc.exists() {
+        eprintln!("skipping: {} is not installed", llc.display());
+        return;
+    }
+    let scratch = scratch_dir("backend-share");
+    fs::create_dir_all(&scratch).unwrap();
+    let stage1 = scratch.join("stage1");
+    assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("examples/stage1.bx"))
+        .arg("-o")
+        .arg(&stage1)
+        .status()
+        .expect("burxt")
+        .success());
+
+    let mut correct = 0;
+    let mut total = 0;
+    let mut refused = 0;
+    for entry in fs::read_dir(root.join("tests/pass")).unwrap() {
+        let source = entry.unwrap().path();
+        if source.extension().and_then(|e| e.to_str()) != Some("bx") {
+            continue;
+        }
+        let expected_path = source.with_extension("stdout");
+        if !expected_path.exists() {
+            continue;
+        }
+        total += 1;
+        let ll = scratch.join("out.ll");
+        let emitted = Command::new(&stage1).arg(&source).arg(&ll).output().expect("stage-1");
+        if !String::from_utf8_lossy(&emitted.stdout).contains("bytes of IR") {
+            refused += 1;
+            continue;
+        }
+        let obj = scratch.join("out.o");
+        if !Command::new(llc)
+            .args(["-relocation-model=pic", "-filetype=obj", "-o"])
+            .arg(&obj)
+            .arg(&ll)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let exe = scratch.join("out.exe");
+        if !Command::new("cc").arg("-o").arg(&exe).arg(&obj).status().map(|s| s.success()).unwrap_or(false) {
+            continue;
+        }
+        // In the scratch directory, because a program under test may WRITE a file —
+        // `driver_primitives.bx` does — and it must not land in the repository.
+        let ran = Command::new(&exe)
+            .current_dir(&scratch)
+            .output()
+            .expect("the program");
+        let expected = fs::read(&expected_path).unwrap();
+        if ran.stdout == expected {
+            correct += 1;
+        }
+    }
+
+    let _ = fs::remove_dir_all(&scratch);
+    eprintln!(
+        "the Burxt backend compiles {} of {} pass programs correctly ({} refused outright)",
+        correct, total, refused
+    );
+    assert!(
+        correct >= 58,
+        "the Burxt backend went backwards: {} of {} correct, was 58",
+        correct,
+        total
+    );
 }
