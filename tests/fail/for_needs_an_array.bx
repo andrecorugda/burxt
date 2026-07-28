@@ -1,0 +1,8 @@
+// `for` iterates an array, and says so rather than complaining about something
+// the author never wrote — which is what a parser desugar would have done.
+region r {
+    let n = 5;
+    for x in n {
+        print(x);
+    }
+}

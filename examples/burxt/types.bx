@@ -59,6 +59,7 @@ struct Kw { word: String, code: Int }
 //  61 assign            62 print               63 return            64 tail return
 //  65 if                66 while               67 break             68 continue
 //  69 region            70 expression statement
+//  71 match             72 for (name tok in `tok`, iterable in `a`, body in `b`)
 struct Node {
     kind: Int,
     // Child indices, or payload. Meaning depends on `kind`, documented above.
@@ -305,6 +306,8 @@ fn (mut self: Unit) install_keywords() -> Int {
     // caught within a minute of the change.
     n = self.add_word("interface", 129);
     n = self.add_word("is", 130);
+    // `for x in xs`. `for` is already a keyword (114) from `impl Trait for Type`.
+    n = self.add_word("in", 131);
     // Type names are keywords too: the parser needs them distinguished from
     // ordinary identifiers, exactly as the Rust lexer does.
     n = self.add_word("Int", 140);

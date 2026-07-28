@@ -1,0 +1,8 @@
+// The element is a copy, and immutable: value semantics is not negotiable for a
+// convenience, and nothing may be written back into the array through it.
+region r {
+    let xs: [Int; 2] = [1, 2];
+    for x in xs {
+        x = 5;
+    }
+}

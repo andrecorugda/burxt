@@ -53,6 +53,15 @@ region r {
     print(sizes[1]);
     print(log[0]);
 
+    // ---- and walking one needs no index ------------------------------------
+    // The element is a copy, immutable, and scoped to the body. `for` takes a name
+    // or a field path, never a call: it reads the array once per element.
+    let mut sum = 0;
+    for s in sizes {
+        sum += s;
+    }
+    print(sum);
+
     // ---- inference removes typing, not checking ----------------------------
     // The exact product of a 2-place price and a 4-place rate has six places, and
     // that is what this is. Nothing rounded, so nothing had to be declared.

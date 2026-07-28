@@ -351,6 +351,55 @@ fn (mut self: Unit) intern(src: String, start: Int, length: Int) -> String alloc
 // ---- expressions -------------------------------------------------------------
 // Each one answers an OPERAND: a register like %t7, or a literal like 42. The caller
 // does not care which, which is what keeps the emitter free of a value type.
+// The element at `index` of an array whose type is `holder`, given the array's `base`
+// register. Shared by `xs[i]` and by `for x in xs`, so the two cannot drift apart —
+// which they would, because the slice and fixed-array paths differ.
+fn (mut self: Unit) emit_element(src: String, holder: Ty, base: String, index: String,
+                                 tok: Int) -> String allocates {
+        if holder.kind == 47 {
+            let element: Ty = self.ty_of(src, holder.scale);
+            let at: String = self.fresh();
+            let found: Int = self.w("  " + at + " = call i64 @burxt.slot(i64 " + base
+                                    + ", i64 " + index + ", i64 "
+                                    + to_string(self.toks[tok].start) + ")\n");
+            if self.is_aggregate(element) {
+                return at;
+            }
+            let as_ptr: String = self.fresh();
+            let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + at + " to ptr\n");
+            let reg: String = self.fresh();
+            let loaded: Int = self.w("  " + reg + " = load i64, ptr " + as_ptr + "\n");
+            return reg;
+        }
+        if holder.kind != 48 {
+            let e: Int = self.complain_at(src, tok,
+                "the Burxt backend cannot index this");
+            return "0";
+        }
+        let element: Ty = self.ty_of(src, holder.scale);
+        let stride: Int = self.cells_of(src, element);
+        // The bounds check is not optional and not a build mode: an index past the end
+        // is a named failure, exit 70, like every other one.
+        let checked: Int = self.w("  call void @burxt.bounds(i64 " + index + ", i64 "
+                                  + to_string(holder.contract) + ", i64 "
+                                  + to_string(self.toks[tok].start) + ")\n");
+        let scaled: String = self.fresh();
+        let multiplied: Int = self.w("  " + scaled + " = mul i64 " + index + ", "
+                                     + to_string(stride) + "\n");
+        let as_ptr: String = self.fresh();
+        let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + base + " to ptr\n");
+        let at: String = self.fresh();
+        let stepped: Int = self.w("  " + at + " = getelementptr i64, ptr " + as_ptr
+                                  + ", i64 " + scaled + "\n");
+        if self.is_aggregate(element) {
+            let reg: String = self.fresh();
+            let visited: Int = self.w("  " + reg + " = ptrtoint ptr " + at + " to i64\n");
+            return reg;
+        }
+        let reg: String = self.fresh();
+        let loaded: Int = self.w("  " + reg + " = load i64, ptr " + at + "\n");
+        return reg;
+}
 fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
     let n: Node = self.nodes[node];
     if n.kind == 1 {                                 // an Int literal
@@ -483,49 +532,7 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
         let holder: Ty = self.type_at(n.a);
         let base: String = self.emit_expr(src, n.a);
         let index: String = self.emit_expr(src, n.b);
-        if holder.kind == 47 {
-            let element: Ty = self.ty_of(src, holder.scale);
-            let at: String = self.fresh();
-            let found: Int = self.w("  " + at + " = call i64 @burxt.slot(i64 " + base
-                                    + ", i64 " + index + ", i64 "
-                                    + to_string(self.toks[n.tok].start) + ")\n");
-            if self.is_aggregate(element) {
-                return at;
-            }
-            let as_ptr: String = self.fresh();
-            let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + at + " to ptr\n");
-            let reg: String = self.fresh();
-            let loaded: Int = self.w("  " + reg + " = load i64, ptr " + as_ptr + "\n");
-            return reg;
-        }
-        if holder.kind != 48 {
-            let e: Int = self.complain_at(src, n.tok,
-                "the Burxt backend cannot index this");
-            return "0";
-        }
-        let element: Ty = self.ty_of(src, holder.scale);
-        let stride: Int = self.cells_of(src, element);
-        // The bounds check is not optional and not a build mode: an index past the end
-        // is a named failure, exit 70, like every other one.
-        let checked: Int = self.w("  call void @burxt.bounds(i64 " + index + ", i64 "
-                                  + to_string(holder.contract) + ", i64 "
-                                  + to_string(self.toks[n.tok].start) + ")\n");
-        let scaled: String = self.fresh();
-        let multiplied: Int = self.w("  " + scaled + " = mul i64 " + index + ", "
-                                     + to_string(stride) + "\n");
-        let as_ptr: String = self.fresh();
-        let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + base + " to ptr\n");
-        let at: String = self.fresh();
-        let stepped: Int = self.w("  " + at + " = getelementptr i64, ptr " + as_ptr
-                                  + ", i64 " + scaled + "\n");
-        if self.is_aggregate(element) {
-            let reg: String = self.fresh();
-            let visited: Int = self.w("  " + reg + " = ptrtoint ptr " + at + " to i64\n");
-            return reg;
-        }
-        let reg: String = self.fresh();
-        let loaded: Int = self.w("  " + reg + " = load i64, ptr " + at + "\n");
-        return reg;
+        return self.emit_element(src, holder, base, index, n.tok);
     }
 
     if n.kind == 19 {                                // a struct literal
@@ -1421,6 +1428,67 @@ fn (mut self: Unit) emit_stmt(src: String, node: Int) -> Int allocates {
         return self.w("  br label %" + cond_label + "\n" + end_label + ":\n");
     }
 
+    if n.kind == 72 {                                // for x in xs
+        let holder: Ty = self.type_at(n.a);
+        let element: Ty = self.ty_of(src, holder.scale);
+        let name: Tok = self.toks[n.tok];
+        // The index has no name in the program, so it gets scratch storage rather than a
+        // named slot: nothing can refer to it, and nothing should be able to.
+        let counter: String = self.scratch(1);
+        let zeroed: Int = self.w("  store i64 0, ptr " + counter + "\n");
+
+        let cond_label: String = self.fresh_label("for.cond");
+        let body_label: String = self.fresh_label("for.body");
+        let end_label: String = self.fresh_label("for.end");
+        let entered: Int = self.w("  br label %" + cond_label + "\n" + cond_label + ":\n");
+        let i: String = self.fresh();
+        let read: Int = self.w("  " + i + " = load i64, ptr " + counter + "\n");
+        // The array is re-read in the condition, so a growable one that changed length
+        // would be seen — the same as the `while i < len(xs)` this replaces.
+        let base: String = self.emit_expr(src, n.a);
+        let mut bound: String = to_string(holder.contract);
+        if holder.kind == 47 {
+            let as_ptr: String = self.fresh();
+            let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + base
+                                   + " to ptr\n");
+            let counted: String = self.fresh();
+            let loaded: Int = self.w("  " + counted + " = load i64, ptr " + as_ptr
+                                     + "\n");
+            bound = counted;
+        }
+        let bit: String = self.fresh();
+        let tested: Int = self.w("  " + bit + " = icmp slt i64 " + i + ", " + bound
+                                 + "\n");
+        let branched: Int = self.w("  br i1 " + bit + ", label %" + body_label
+                                   + ", label %" + end_label + "\n" + body_label
+                                   + ":\n");
+
+        // The element is copied into the binding's own storage, because a binding owns
+        // what it holds — the same rule `let` follows.
+        let value: String = self.emit_element(src, holder, base, i, n.tok);
+        let cells: Int = self.cells_of(src, element);
+        if self.is_aggregate(element) {
+            let slot: Int = self.declare_slot(src, name.start, name.length, cells, 1);
+            let copied: Int = self.copy_cells(src, "%v" + to_string(slot), value, cells);
+        } else {
+            let slot: Int = self.declare_slot(src, name.start, name.length, 1, 0);
+            let stored: Int = self.w("  store i64 " + value + ", ptr %v"
+                                     + to_string(slot) + "\n");
+        }
+        // The advance comes BEFORE the body. `continue` jumps to the condition, so an
+        // increment at the bottom would be skipped and the loop would never end.
+        let next: String = self.fresh();
+        let bumped: Int = self.w("  " + next + " = add i64 " + i + ", 1\n");
+        let advanced: Int = self.w("  store i64 " + next + ", ptr " + counter + "\n");
+
+        push(self.loop_conds, cond_label);
+        push(self.loop_ends, end_label);
+        let body: Int = self.emit_block(src, n.b);
+        let dropped_cond: Int = truncate(self.loop_conds, len(self.loop_conds) - 1);
+        let dropped_end: Int = truncate(self.loop_ends, len(self.loop_ends) - 1);
+        return self.w("  br label %" + cond_label + "\n" + end_label + ":\n");
+    }
+
     if n.kind == 67 || n.kind == 68 {                // break, continue
         let depth: Int = len(self.loop_ends);
         if depth == 0 {
@@ -1902,7 +1970,7 @@ fn (mut self: Unit) emit_module(src: String) -> Int allocates {
     while i < len(self.items) {
         let index: Int = self.items[i];
         let item: Node = self.nodes[index];
-        if item.kind >= 60 && item.kind <= 71 {
+        if item.kind >= 60 && item.kind <= 72 {
             let emitted: Int = self.emit_stmt(src, index);
         }
         i += 1;

@@ -156,6 +156,9 @@ pub enum TypedStmt {
     Print(TypedExpr),
     /// `region name { .. }`: open a region, run the body, release as a unit.
     Region { name: String, body: Vec<TypedStmt> },
+    /// `for name in iterable { body }`. The element type and whether the array is fixed
+    /// or growable are settled by the checker, so codegen only has to walk it.
+    For { name: String, elem: Type, iterable: TypedExpr, body: Vec<TypedStmt> },
     /// `match` on an enum: arms in TAG order, each with the names bound to its
     /// payload slots. Exhaustiveness was proven by the typechecker.
     Match { value: TypedExpr, arms: Vec<TypedArm> },
@@ -2128,6 +2131,49 @@ impl TypeChecker {
                 }
                 Ok(if word == "break" { TypedStmt::Break } else { TypedStmt::Continue })
             }
+            StmtKind::For { name, iterable, body } => {
+                if self.env.contains_key(name) {
+                    return Err(format!(
+                        "`{}` is already declared — Burxt does not allow shadowing, and \
+                         a `for` binding is a binding. Use a different name.",
+                        name
+                    ));
+                }
+                let iterable = self.check_expr(iterable, None)?;
+                let elem = match &iterable.ty {
+                    Type::Array { elem, .. } => elem.as_ref().clone(),
+                    Type::Slice(elem) => elem.as_ref().clone(),
+                    Type::String => {
+                        return Err(
+                            "`for` iterates an array, and a String is bytes: use \
+                             `byte_at(s, i)`, which says BYTE so the byte-versus-character \
+                             question cannot hide."
+                                .to_string(),
+                        )
+                    }
+                    other => {
+                        return Err(format!(
+                            "`for` iterates an array, and this is {} {}",
+                            other.article(),
+                            other
+                        ))
+                    }
+                };
+                // The element is a copy, and immutable: value semantics is not negotiable
+                // for a convenience, and nothing may be written back through it.
+                let saved = self.env.clone();
+                self.env.insert(name.clone(), (elem.clone(), false));
+                self.loop_depth += 1;
+                let body = self.check_block(body);
+                self.loop_depth -= 1;
+                self.env = saved;
+                Ok(TypedStmt::For {
+                    name: name.clone(),
+                    elem,
+                    iterable,
+                    body: body?,
+                })
+            }
             StmtKind::While { cond, body } => {
                 let cond = self.check_expr(cond, None)?;
                 if cond.ty != Type::Bool {
@@ -3867,6 +3913,7 @@ fn calls_itself(body: &[Stmt], name: &str) -> bool {
                     || else_block.as_deref().is_some_and(block)
             }
             StmtKind::While { cond, body } => in_expr(cond, name) || block(body),
+            StmtKind::For { iterable, body, .. } => in_expr(iterable, name) || block(body),
             StmtKind::Region { body, .. } => block(body),
             StmtKind::Match { value, arms } => {
                 in_expr(value, name) || arms.iter().any(|a| block(&a.body))
@@ -3924,6 +3971,7 @@ fn stmt_diverges(s: &TypedStmt) -> bool {
             !arms.is_empty() && arms.iter().all(|a| block_diverges(&a.body))
         }
         TypedStmt::Region { body, .. } => block_diverges(body),
+        TypedStmt::For { .. } => false,   // a `for` over an empty array runs zero times
         other => stmt_returns(other),
     }
 }
@@ -3952,6 +4000,7 @@ fn stmt_returns(s: &TypedStmt) -> bool {
         // there was no way to write a function that returns from inside a
         // region.
         TypedStmt::Region { body, .. } => block_returns(body),
+        TypedStmt::For { body, .. } => block_returns(body),
         _ => false,
     }
 }

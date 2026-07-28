@@ -112,6 +112,8 @@ pub struct CodeGen<'ctx> {
     /// The enclosing loops of the statement being generated: where `continue` goes,
     /// where `break` goes, and what region was open when the loop started.
     loop_stack: Vec<(inkwell::basic_block::BasicBlock<'ctx>, inkwell::basic_block::BasicBlock<'ctx>, Option<IntValue<'ctx>>)>,
+    /// How many `for` loops have been lowered, so each hidden index gets its own name.
+    desugared_loops: usize,
     /// The postconditions of the function being generated, with the name of that
     /// function: every `return` has to check them, and the check needs both the
     /// clause and the name to write its message.
@@ -169,6 +171,7 @@ impl<'ctx> CodeGen<'ctx> {
             region_mark: None,
             current_ensures: Vec::new(),
             loop_stack: Vec::new(),
+            desugared_loops: 0,
             old_slots: Vec::new(),
             current_measure: None,
             struct_types: HashMap::new(),
@@ -536,6 +539,71 @@ impl<'ctx> CodeGen<'ctx> {
             TypedStmt::ExprStmt(e) => {
                 self.gen_expr(e)?;
                 Ok(())
+            }
+            TypedStmt::For { name, elem, iterable, body } => {
+                // Lowered HERE rather than in the parser, so the checker could give `for`
+                // its own errors instead of complaining about a `len` call the author
+                // never wrote. The index is named `for$N`; `$` is not a byte an
+                // identifier may contain, so it cannot collide, and N lets loops nest.
+                let index = format!("for${}", self.desugared_loops);
+                self.desugared_loops += 1;
+                let int = |kind| TypedExpr { ty: Type::Int, kind };
+                let idx = || int(TypedExprKind::Var(index.clone()));
+                let (bound, read) = match &iterable.ty {
+                    Type::Array { len, .. } => (
+                        int(TypedExprKind::IntLit(*len as i64)),
+                        TypedExprKind::Index {
+                            base: Box::new(iterable.clone()),
+                            len: *len,
+                            index: Box::new(idx()),
+                        },
+                    ),
+                    Type::Slice(_) => (
+                        int(TypedExprKind::SliceLen(Box::new(iterable.clone()))),
+                        TypedExprKind::SliceIndex {
+                            base: Box::new(iterable.clone()),
+                            index: Box::new(idx()),
+                        },
+                    ),
+                    other => return Err(format!("codegen bug: `for` over {}", other)),
+                };
+
+                let saved = self.vars.clone();
+                self.gen_stmt(&TypedStmt::Let {
+                    name: index.clone(),
+                    ty: Type::Int,
+                    value: int(TypedExprKind::IntLit(0)),
+                })?;
+                let mut inner = Vec::with_capacity(body.len() + 2);
+                inner.push(TypedStmt::Let {
+                    name: name.clone(),
+                    ty: elem.clone(),
+                    value: TypedExpr { ty: elem.clone(), kind: read },
+                });
+                // The advance comes BEFORE the body. `continue` jumps to the condition,
+                // so an increment at the bottom is skipped and the loop never ends — one
+                // hung test taught me that, and it is why a lowering has to be read
+                // against every control-flow statement the language has.
+                inner.push(TypedStmt::Assign {
+                    name: index.clone(),
+                    value: int(TypedExprKind::Binary {
+                        op: BinOp::Add,
+                        lhs: Box::new(idx()),
+                        rhs: Box::new(int(TypedExprKind::IntLit(1))),
+                    }),
+                });
+                inner.extend(body.iter().cloned());
+                let cond = TypedExpr {
+                    ty: Type::Bool,
+                    kind: TypedExprKind::Compare {
+                        op: CmpOp::Lt,
+                        lhs: Box::new(idx()),
+                        rhs: Box::new(bound),
+                    },
+                };
+                let r = self.gen_while(&cond, &inner);
+                self.vars = saved;
+                r
             }
             TypedStmt::Region { name, body } => {
                 // Mark where the bump pointer stands, run the body, then reset

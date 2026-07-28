@@ -55,7 +55,13 @@ impl Parser {
     /// baked into the compiled program, long after the source has gone.
     pub fn with_source(tokens: Vec<(Token, Span)>, src: &str) -> Self {
         let (toks, spans) = tokens.into_iter().unzip();
-        Parser { toks, spans, pos: 0, allow_struct_lit: true, src: src.to_string() }
+        Parser {
+            toks,
+            spans,
+            pos: 0,
+            allow_struct_lit: true,
+            src: src.to_string(),
+        }
     }
 
     /// Is the current token the contextual word `word`?
@@ -636,6 +642,7 @@ impl Parser {
             Token::Return => self.parse_return(),
             Token::If => self.parse_if(),
             Token::While => self.parse_while(),
+            Token::For => self.parse_for(),
             Token::Match => self.parse_match(),
             Token::Region => self.parse_region(),
             Token::Ident(_) | Token::SelfKw => self.parse_assign(),
@@ -889,6 +896,34 @@ impl Parser {
         };
         let body = self.parse_block()?;
         Ok(StmtKind::Region { name, body })
+    }
+
+    /// `for x in xs { body }`. See spec/M10-ERGONOMICS.md §1b.
+    fn parse_for(&mut self) -> Result<StmtKind, String> {
+        self.expect(&Token::For)?;
+        let name = match self.bump() {
+            Token::Ident(s) => s,
+            other => {
+                return Err(format!(
+                    "expected a name after `for`, found {} — `for x in xs {{ ... }}`",
+                    other.describe()
+                ))
+            }
+        };
+        self.expect(&Token::In)?;
+        let iterable = self.parse_cond()?;
+        // The loop reads the iterable once per element, so anything with a cost or an
+        // effect would pay it per pass. A binding and a field path are free to re-read.
+        if !matches!(iterable.kind, ExprKind::Var(_) | ExprKind::Field { .. }) {
+            return Err(format!(
+                "`for` iterates a named array, and this is {}: its result would be \
+                 recomputed on every pass. Bind it first — `let items = ...;` — and \
+                 iterate that.",
+                describe_iterable(&iterable.kind)
+            ));
+        }
+        let body = self.parse_block()?;
+        Ok(StmtKind::For { name, iterable, body })
     }
 
     fn parse_while(&mut self) -> Result<StmtKind, String> {
@@ -1380,5 +1415,17 @@ impl Parser {
             }
             other => Err(format!("expected an expression, found {}", other.describe())),
         }
+    }
+}
+
+/// What kind of thing an unusable `for` iterable is, for the message that refuses it.
+fn describe_iterable(kind: &ExprKind) -> &'static str {
+    match kind {
+        ExprKind::Call { .. } => "a call",
+        ExprKind::MethodCall { .. } => "a method call",
+        ExprKind::Index { .. } => "an element",
+        ExprKind::ArrayLit(_) => "a literal",
+        ExprKind::Binary { .. } => "an expression",
+        _ => "not a name",
     }
 }

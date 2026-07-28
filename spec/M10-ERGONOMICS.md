@@ -1,8 +1,14 @@
 # Burxt — the ergonomics that make it usable (M10)
 
-> Status: **slice 1 DONE (v0.0.91).** `let x = e;` works in both compilers, the fixpoint
-> holds, and the rounding rule got more correct on the way — a contract is now required
-> exactly where a value narrows. Slice 2 (`for x in xs`) is next.
+> Status: **slices 1 and 2 DONE (v0.0.91–v0.0.92).** `let x = e;` and `for x in xs` work in
+> both compilers, the compiler's own source uses both, and the fixpoint holds. The rounding
+> rule got more correct on the way: a contract is now required exactly where a value narrows.
+> Slice 3 (generics) is next.
+>
+> The bar, in Andre's words: **as easy as Python but typed, as friendly as PHP but never
+> compromised.** If a construct is harder to write than its Python equivalent and the extra
+> ceremony buys no correctness, the ceremony is the bug — and friendliness may never cost
+> exactness.
 >
 > Original status: **slice 1 implementing.** The language is correct and it is
 > self-hosting; what it is not yet is *pleasant*. Every one of these is a thing a reader of
@@ -21,8 +27,8 @@ The slices, in the order they earn their place:
 | Slice | What it is | State |
 |---|---|---|
 | 1 | `let x = 0;` — a binding takes its type from its initializer | **DONE** (v0.0.91) |
-| 2 | `for x in xs { }` — the loop everyone writes, without the index | **next** |
-| 3 | Generics ([M7](M7-GENERICS.md)) | specified |
+| 2 | `for x in xs { }` — the loop everyone writes, without the index | **DONE** (v0.0.92) |
+| 3 | Generics ([M7](M7-GENERICS.md)) | **next** |
 | 4 | `Option<T>` / `Result<T, E>` and `?` ([M8](M8-ERRORS.md)) | specified |
 
 ## 1. Slice 1 — local type inference on `let`
@@ -138,7 +144,100 @@ Annotated bindings keep the better behaviour. That is a genuine argument for ann
 functions, it is recorded rather than discovered later, and it is the honest price of the
 feature.
 
-## 2. What slice 1 must NOT do
+## 1b. Slice 2 — `for x in xs`
+
+### Decision 1 — it iterates an array's elements, and it is a real statement
+
+```text
+for line in lines {
+    print(line.render());
+}
+```
+
+means exactly
+
+```text
+let mut i = 0;
+while i < len(lines) {
+    let line = lines[i];
+    i = i + 1;
+    print(line.render());
+}
+```
+
+`x` is a **copy** of the element, immutable, and scoped to the body — value semantics, the
+same as every other binding. Writing to it is the ordinary immutability error, and writing to
+the array through it is impossible, which is the point.
+
+**Lowered in the back end, not the parser — and the first version got that wrong.** `+=` and
+the field shorthand are parser desugars, so `for` was written as one too: a hidden `let mut
+for$i = 0;` and the loop above, with `$` chosen because no identifier may contain it. That
+worked in stage-0 and is **impossible in stage-1**, because stage-1 names every binding by its
+**span in the source** — and a synthesized index has no span. There is no byte sequence to
+point at.
+
+The options were to work around stage-1's representation or to accept that the representation
+was right, and the second is true: a construct the two compilers implement two different ways
+is a construct they can disagree about. So `for` is a statement in both, checked in both, and
+lowered to the loop above in each back end.
+
+It is a better design for a second reason. A parser desugar can only produce errors about what
+it desugared *to*:
+
+```text
+for x in n { }        // n is an Int
+
+error: len(...) needs an array or a string, but this has type Int      // the desugar
+error: `for` iterates an array, and this is an Int                     // the statement
+```
+
+The author never wrote `len`.
+
+**One thing the lowering must get right, and it cost a hung test.** The index advances
+*before* the body, not after. `continue` jumps to the loop condition, so an increment at the
+bottom is skipped and the loop never ends. A lowering has to be read against every
+control-flow statement the language has, not just against the happy path.
+
+### Decision 2 — `for` and `in` are reserved words
+
+This language prefers **contextual** keywords, and `allocates`, `requires`, `ensures`,
+`decreases` and `scaled` are all recognised only where nothing else can appear — so `let
+allocates: Int = 0;` is legal. `for` does not qualify for that treatment: it opens a statement,
+and a statement may also open with an identifier, so recognising it would need three tokens of
+lookahead to tell `for x in xs` from `format(x);`.
+
+Reserving them costs nothing in surprise, because every reader of every language already
+expects `for` and `in` to be reserved — which is the actual test, not consistency with a rule
+whose reason does not apply here.
+
+### Decision 3 — the iterable is a name or a field path, and nothing else
+
+```text
+for x in xs { }              // a binding
+for item in self.items { }   // a field path
+for c in chunks_of(text) { } // refused
+```
+
+```text
+error: `for` iterates a named array, and this is a call: its result would be
+       recomputed on every pass. Bind it first — `let items = chunks_of(text);`
+       — and iterate that.
+```
+
+The loop reads the iterable once per element — for its length and for the element — so
+anything with a cost or an effect would pay it per pass. A name and a field path are free to re-read; a call is
+not. Refused with the fix rather than silently made quadratic — which is the mistake M9 spent
+four versions finding in this compiler's own source.
+
+### Decision 4 — no index, no range, no `for` over anything else
+
+`for x in xs` gives the element. If you need the position, `while` is still there and still
+reads fine. A range form (`for i in 0..n`) is a second construct with its own type questions,
+and `while i < n` already says it — deferred with a trigger below.
+
+## 1c. What slices 1 and 2 must NOT do
+
+
 
 - **NO inferring a parameter or return type.** A signature is the contract between a function
   and everyone who calls it, and a contract that has to be computed is not one you can read.
@@ -154,6 +253,11 @@ feature.
 - **NO inferring `allocates` or a contract.** Already refused by
   [M1a §2](M1a-CALLER-REGION-FUNCTIONS.md) and [A5](A5-CONTRACTS.md), and inference is not a
   reason to revisit it.
+- **NO `for` over a String.** A String is bytes, and `byte_at` says "byte" precisely so the
+  byte-versus-character question cannot hide. `for c in text` would hide it.
+- **NO mutating the loop variable, and no writing through it.** It is a copy, and value
+  semantics is not negotiable for a convenience.
+- **NO `for` that evaluates its iterable more than once.** See slice 2, Decision 3.
 
 ## 3. Deferred, with triggers
 
@@ -163,8 +267,23 @@ feature.
 | Closures / arrow functions | No ownership story for captured state, which is the whole point of regions | Regions can express "this closure's captures live here" |
 | `let` destructuring (`let Point { x, y } = p;`) | Sugar over field reads, and patterns exist only in `match` | Aggregate returns make multi-value binding common |
 | Inferring a generic's type argument | That is [M7](M7-GENERICS.md)'s job, at the call site, not `let`'s | M7 lands |
+| `for i in 0..n` (ranges) | A range is a second construct with its own type and its own questions, and `while i < n` says it today | A program reads worse for the lack of it, or ranges earn their place as values |
+| `for (i, x) in xs` (the index too) | Needs tuples or a second binding form; `while` covers it | Tuples exist |
+| `for` over a growable array being pushed to inside the loop | The bound is re-read each pass, so it works — but nobody should rely on that | Never; it is a bug waiting, and `while` makes the intent visible |
 
-## 4. Acceptance for slice 1
+## 4. Acceptance
+
+### Slice 2
+
+1. `for` over a fixed array, a growable array, a field path, and nested — all working in both
+   compilers, with `break` and `continue` behaving.
+2. An empty array runs the body zero times.
+3. Refused, each naming its fix: a non-array, a String, a call as the iterable, assigning to
+   the loop variable, and a name already in scope.
+4. **The compiler's own source uses it**, and the fixpoint still holds. An ergonomics feature
+   its own author does not write has not landed.
+
+### Slice 1
 
 1. `let x = e;` and `let mut x = e;` work for **every** type Burxt has: Int, Bool, String,
    Decimal with and without a contract, struct, enum, `dyn`, a built String, and the result of

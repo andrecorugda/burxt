@@ -60,6 +60,7 @@ pub enum Token {
     Trait,
     Impl,
     For,
+    In,
     Dyn,
     // type keywords
     TyInt,
@@ -150,6 +151,7 @@ impl Token {
             Token::Trait => "`trait`".to_string(),
             Token::Impl => "`impl`".to_string(),
             Token::For => "`for`".to_string(),
+            Token::In => "`in`".to_string(),
             Token::Dyn => "`dyn`".to_string(),
             Token::Is => "`is`".to_string(),
             Token::SelfKw => "`self`".to_string(),
@@ -659,6 +661,12 @@ impl<'a> Lexer<'a> {
             "trait" => Token::Trait,
             "impl" => Token::Impl,
             "for" => Token::For,
+            // `for x in xs { }`. `for` was already reserved by `impl Trait for Type`;
+            // `in` joins it rather than becoming contextual, because `for` opens a
+            // statement and so may an identifier — telling `for x in xs` from
+            // `format(x);` would take three tokens of lookahead. Every reader already
+            // expects both reserved, which is the test that matters.
+            "in" => Token::In,
             "dyn" => Token::Dyn,
             "Int" => Token::TyInt,
             "Bool" => Token::TyBool,

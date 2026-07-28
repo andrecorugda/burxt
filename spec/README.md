@@ -47,7 +47,7 @@ which is right.
 | [M7 Generics](M7-GENERICS.md) | **Specified** | Monomorphisation, trait bounds required, no erasure |
 | [M8 Errors](M8-ERRORS.md) | **Specified** | `Option<T>` and `Result<T, E>` as LIBRARY types — the test of whether M7's generics are real |
 | [M9 Performance](M9-PERFORMANCE.md) | **DONE** (v0.0.87–v0.0.90) | The self-compile: 190 s → 1.17 s, ~1 GB → 196 MB. `byte_at` bounds-checked with a `strlen` per byte |
-| [M10 Ergonomics](M10-ERGONOMICS.md) | **Slice 1 DONE** (v0.0.91) | `let x = 0;` in both compilers, plus the rounding rule corrected: a contract where a value narrows, and nowhere else |
+| [M10 Ergonomics](M10-ERGONOMICS.md) | **Slices 1–2 DONE** (v0.0.91–92) | `let x = 0;` and `for x in xs`, both compilers, both used by the compiler itself. Plus the rounding rule corrected: a contract where a value narrows, and nowhere else |
 
 ## The audit, in detail
 

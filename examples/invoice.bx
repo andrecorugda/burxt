@@ -51,11 +51,9 @@ region invoice {
     // keeps its annotation because it is an accumulator: the type is the claim about
     // what may be added to it, and that claim is worth reading at the top of a loop.
     let mut subtotal: Decimal<2> = $0.00;
-    let mut i = 0;
-    while i < len(lines) {
-        print(lines[i].render());
-        subtotal = subtotal + lines[i].amount();
-        i += 1;
+    for line in lines {
+        print(line.render());
+        subtotal = subtotal + line.amount();
     }
 
     let rate = 8.25%;                                  // Decimal<4>

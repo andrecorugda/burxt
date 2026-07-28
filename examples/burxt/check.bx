@@ -1001,6 +1001,43 @@ fn (mut self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -> Int allo
         return 1;
     }
 
+    if n.kind == 72 {                                // for x in xs
+        let holder: Ty = self.type_of(src, n.a, ty_unknown());
+        let name: Tok = self.toks[n.tok];
+        if is_unknown(holder) {
+            let skipped: Int = self.check_block_nodes(src, n.b, ret);
+            return 1;
+        }
+        if holder.kind == 42 {
+            let e: Int = self.complain_at(src, n.tok,
+                "`for` iterates an array, and a String is bytes: use byte_at(s, i), "
+                + "which says BYTE so the byte-versus-character question cannot hide");
+            return 1;
+        }
+        if holder.kind != 47 && holder.kind != 48 {
+            let e: Int = self.complain_at(src, n.tok,
+                "`for` iterates an array, and this is " + ty_show(src, holder));
+            return 1;
+        }
+        if self.find_sym(src, name.start, name.length) >= 0 {
+            let e: Int = self.complain_at(src, n.tok,
+                "this name is already declared — Burxt does not shadow, and a `for` "
+                + "binding is a binding");
+        }
+        // The element is a COPY, and immutable: nothing may be written back through it.
+        let element: Ty = self.ty_of(src, holder.scale);
+        let base: Int = len(self.syms);
+        self.depth += 1;
+        push(self.syms, Sym { start: name.start, length: name.length, ty: element,
+                              mutable: 0, depth: self.depth });
+        self.loop_depth += 1;
+        let body: Int = self.check_block_nodes(src, n.b, ret);
+        self.loop_depth -= 1;
+        self.depth -= 1;
+        let dropped: Int = truncate(self.syms, base);
+        return 1;
+    }
+
     if n.kind == 61 {                                // assignment
         let target: Node = self.nodes[n.a];
         let want: Ty = self.type_of(src, n.a, ty_unknown());
@@ -1613,7 +1650,7 @@ fn (mut self: Unit) check(src: String) -> Int allocates {
                 k += 1;
             }
         }
-        if item.kind >= 60 && item.kind <= 71 {      // a top-level statement
+        if item.kind >= 60 && item.kind <= 72 {      // a top-level statement
             let checked: Int = self.check_stmt_node(src, index, ty_unknown());
         }
         i += 1;
@@ -1649,13 +1686,11 @@ fn (self: Unit) report(src: String, limit: Int) -> Int allocates {
 }
 
 fn (self: Unit) count_of(kind: Int) -> Int {
-    let mut i: Int = 0;
-    let mut found: Int = 0;
-    while i < len(self.toks) {
-        if self.toks[i].kind == kind {
+    let mut found = 0;
+    for t in self.toks {
+        if t.kind == kind {
             found += 1;
         }
-        i += 1;
     }
     return found;
 }

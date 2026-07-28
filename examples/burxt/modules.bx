@@ -148,12 +148,10 @@ fn blank_imports(text: String) -> String allocates {
 struct Loader { seen: [String], buffer: String }
 
 fn (mut self: Loader) load(path: String) -> Int allocates {
-    let mut i: Int = 0;
-    while i < len(self.seen) {
-        if self.seen[i] == path {
-            return 0;
+    for seen in self.seen {
+        if seen == path {
+            return 0;                            // read once already; cycles are fine
         }
-        i += 1;
     }
     let noted: Int = push(self.seen, path);
 

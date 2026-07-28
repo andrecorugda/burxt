@@ -306,6 +306,16 @@ pub enum StmtKind {
     /// inside is released as a unit in O(1) when it ends. The name exists so
     /// escape errors can say which region a value would outlive.
     Region { name: String, body: Vec<Stmt> },
+    /// `for name in iterable { body }` — iterate an array's elements.
+    ///
+    /// A real statement rather than a parser desugar. The first version WAS a desugar
+    /// into `let mut i = 0; while i < len(xs) { ... }`, which worked in stage-0 and was
+    /// impossible in stage-1: stage-1 names every binding by its span in the source, and
+    /// a synthesized index has no span. Rather than have the two compilers implement one
+    /// construct two ways, both check it directly — which also means the errors talk about
+    /// `for` instead of about a `len` call the author never wrote.
+    /// See spec/M10-ERGONOMICS.md §1b.
+    For { name: String, iterable: Expr, body: Vec<Stmt> },
     /// `match value { Variant => { .. } .. }` — must cover every variant.
     Match { value: Expr, arms: Vec<MatchArm> },
     /// `while cond { ... }` — the condition must be a Bool; braces required.

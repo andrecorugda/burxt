@@ -1,0 +1,8 @@
+// A String is bytes, and `byte_at` says BYTE precisely so the byte-versus-character
+// question cannot hide. `for c in text` would hide it.
+region r {
+    let text = "ab";
+    for c in text {
+        print(c);
+    }
+}

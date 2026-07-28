@@ -1185,6 +1185,33 @@ fn (mut self: Unit) parse_stmt(src: String) -> Int allocates {
         if body < 0 { return -1; }
         return self.add(66, cond, body, 0, 0, here);
     }
+    // `for x in xs { body }` — a real statement, checked and emitted as one. The first
+    // version desugared it in the parser, which worked in stage-0 and cannot work here:
+    // every binding is named by its SPAN in the source, and a synthesized index has no
+    // span. See spec/M10-ERGONOMICS.md §1b.
+    if k == 114 {                                    // for
+        let n: Int = self.advance();
+        if !self.at(1) { return self.complain(src, "a name after `for`"); }
+        let name_tok: Int = self.pos;
+        let m: Int = self.advance();
+        if !self.eat(src, 131, "`in` and the array to walk") { return -1; }
+        self.no_struct += 1;
+        let iterable: Int = self.parse_expr(src);
+        self.no_struct -= 1;
+        if iterable < 0 { return -1; }
+        // The loop reads the iterable once per element, so a call would pay its cost per
+        // pass. A name and a field path are free to re-read; nothing else is.
+        let holder: Node = self.nodes[iterable];
+        if holder.kind != 5 && holder.kind != 11 {
+            let e: Int = self.complain_at(src, name_tok,
+                "`for` iterates a named array, and this is not a name: its result would "
+                + "be recomputed on every pass. Bind it first and iterate that");
+            return -1;
+        }
+        let body: Int = self.parse_block(src);
+        if body < 0 { return -1; }
+        return self.add(72, iterable, body, 0, 0, name_tok);
+    }
     if k == 107 {                                    // break
         let n: Int = self.advance();
         if !self.eat(src, 21, "`;`") { return -1; }

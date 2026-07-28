@@ -1,0 +1,55 @@
+// `for x in xs` — the loop everyone writes, without the index. A real statement in both
+// compilers, not a parser desugar: see spec/M10-ERGONOMICS.md §1b for why.
+struct Line { label: String, qty: Int }
+struct Doc { lines: [Line] }
+
+region r {
+    // A fixed array: the bound is a constant.
+    let sizes: [Int; 4] = [10, 20, 30, 40];
+    let mut total = 0;
+    for s in sizes {
+        total += s;
+    }
+    print(total);
+
+    // A growable array: the bound is read from the header each pass.
+    let mut names: [String] = [];
+    let a = push(names, "widget");
+    let b = push(names, "gasket");
+    for n in names {
+        print(n);
+    }
+
+    // A struct element is copied into the binding, like every other binding.
+    let mut doc: Doc = Doc { lines: [] };
+    let c = push(doc.lines, Line { label: "first", qty: 2 });
+    let d = push(doc.lines, Line { label: "second", qty: 3 });
+    let mut counted = 0;
+    for line in doc.lines {
+        print(line.label);
+        counted += line.qty;
+    }
+    print(counted);
+
+    // Nested, over a field path and a fixed array at once.
+    for line in doc.lines {
+        for s in sizes {
+            if s == 20 { print(line.qty); }
+        }
+    }
+
+    // `break` and `continue` do what they say. The index advances before the body
+    // precisely so `continue` cannot skip it.
+    for s in sizes {
+        if s == 30 { break; }
+        if s == 10 { continue; }
+        print(s);
+    }
+
+    // An empty array runs the body zero times.
+    let mut nothing: [Int] = [];
+    for x in nothing {
+        print(999);
+    }
+    print(0);
+}
