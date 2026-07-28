@@ -545,6 +545,15 @@ fn (mut self: Unit) fits(src: String, got: Ty, want: Ty) -> Bool {
     if ty_same(src, got, want) {
         return true;
     }
+    // A rounding contract may be ADDED to a value that has none. The representation is
+    // byte-identical — both are a scaled i64 holding the same integer — and a contract does
+    // not reinterpret the value, it constrains what may later be done to it. Dropping one
+    // stays refused: that loses a declared intention. (v0.0.86, with stage-0.)
+    if got.kind == 45 && want.kind == 45 {
+        if got.scale == want.scale && got.contract == 0 && want.contract != 0 {
+            return true;
+        }
+    }
     if want.kind != 49 || got.kind != 46 {
         return false;
     }

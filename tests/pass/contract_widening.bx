@@ -1,0 +1,25 @@
+// Addition never rounds, so a contract on one side and none on the other is not a
+// conflict — the result carries the only contract there is. And a contract may be
+// ADDED where a value has none, because the representation is byte-identical.
+// Relaxed in v0.0.86; before it, a contract could only be declared where money
+// entered the program, and the fix for an error was never where the error was.
+let price: Decimal<2> = $19.99;
+let qty: Int = 3;
+
+// the contract arrives at the binding, not at the source
+let subtotal: Decimal<2, RoundHalfEven> = price * qty;
+print(subtotal);
+
+// one side carries a contract, the other does not
+let fee: Decimal<2> = $1.50;
+let total: Decimal<2, RoundHalfEven> = subtotal + fee;
+print(total);
+
+// and the other way round
+let again: Decimal<2, RoundHalfEven> = fee + subtotal;
+print(again);
+
+// the contract still does its job where rounding actually happens
+let rate: Decimal<4> = 8.25%;
+let tax: Decimal<2, RoundHalfEven> = subtotal * rate;
+print(tax);

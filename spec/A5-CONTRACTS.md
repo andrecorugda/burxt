@@ -131,6 +131,33 @@ result, which is most of what contracts are used for in practice.
 8. `ensures` on a function returning a struct is refused with the reason from §2.
 9. Contracts compose with `pure` and `allocates` on the same signature.
 
+## 4a. Two rules relaxed (v0.0.86)
+
+Andre's judgement, after the rule cost three attempts on a seven-line invoice: it was too
+strict, and in a way that put the fix somewhere other than the error.
+
+**A rounding contract may be ADDED where a value has none.** `Decimal<2>` and
+`Decimal<2, RoundHalfEven>` hold the same integer; a contract does not reinterpret a value,
+it constrains what future operations may do to it. So `let tax: Decimal<2, RoundHalfEven> =
+subtotal * rate;` works with a plain `Decimal<2>` subtotal, and the contract can live where
+the rounding happens rather than where money entered the program.
+
+**Addition and subtraction need matching SCALES, not matching contracts.** They never round,
+so one side carrying a contract and the other carrying none leaves exactly one answer to "if
+this ever rounds, which way" — and the result carries it.
+
+What did NOT change, because these are the rules that protect money:
+
+- **Scales must still match** on `+` and `-`.
+- **Two different contracts are still refused**, with a message that says picking one would
+  be a decision nobody wrote down.
+- **Dropping** a contract is still refused: that loses a declared intention.
+- `*` with mixed scales and `/` always still demand a contract.
+
+Both compilers, and `tests/pass/contract_widening.bx` / `tests/fail/mixed_rounding.bx` pin
+the new boundary from both sides. `examples/invoice.bx` lost three contract annotations it
+only ever carried to satisfy the old rule.
+
 ## 5a. Acceptance for `old(...)` and method contracts (v0.0.44)
 
 10. A `mut self` method carries `requires` and `ensures`, checked like a function's.

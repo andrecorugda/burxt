@@ -1794,7 +1794,7 @@ impl TypeChecker {
                     ));
                 }
                 let typed = self.check_expr(value, Some(declared))?;
-                if &typed.ty != declared {
+                if !self.storable(&typed.ty, declared) {
                     // The declaration is fine; it is the value that disagrees.
                     self.blame(value.span);
                     return Err(format!(
@@ -3591,6 +3591,32 @@ impl TypeChecker {
 
     /// Both operands must be the SAME decimal type: equal scale and equal
     /// rounding contract. Burxt never reconciles differing money types.
+    /// Whether a value of type `have` may be stored where `want` was declared.
+    ///
+    /// Equality, plus **one** widening: a rounding contract may be ADDED to a value that
+    /// has none. The representation is byte-identical — both are a scaled i64 holding the
+    /// same integer — and a contract does not reinterpret the value, it constrains what
+    /// future operations may do to it. That is strictly more information, not different
+    /// information.
+    ///
+    /// Why this matters more than it looks (v0.0.86): without it, a contract could only be
+    /// declared where money ENTERS the program, so `let tax: Decimal<2, RoundHalfEven> =
+    /// price * qty;` failed and the fix was not where the error was — you had to walk back
+    /// to the binding of `price` and change that. Dropping a contract stays refused: that
+    /// loses a declared intention, and losing one silently is what this language is for.
+    fn storable(&self, have: &Type, want: &Type) -> bool {
+        if have == want {
+            return true;
+        }
+        matches!(
+            (have, want),
+            (
+                Type::Decimal { scale: a, rounding: None },
+                Type::Decimal { scale: b, rounding: Some(_) },
+            ) if a == b
+        )
+    }
+
     fn matching_decimal(
         &self,
         op: impl std::fmt::Display,
@@ -3600,13 +3626,38 @@ impl TypeChecker {
         if lhs == rhs {
             return Ok(lhs.clone());
         }
-        if let (Type::Decimal { scale: a, .. }, Type::Decimal { scale: b, .. }) = (lhs, rhs) {
+        if let (
+            Type::Decimal { scale: a, rounding: ra },
+            Type::Decimal { scale: b, rounding: rb },
+        ) = (lhs, rhs)
+        {
             if a != b {
                 return Err(format!(
                     "cannot {} {} and {}: scales must match. \
                      Burxt does not silently rescale money.",
                     op, lhs, rhs
                 ));
+            }
+            // Addition and subtraction NEVER round, so a rounding contract on one side
+            // and none on the other is not a conflict: there is exactly one answer to
+            // "if this ever rounds, which way", and the result carries it.
+            //
+            // Two DIFFERENT contracts still conflict — that is a genuine ambiguity, and
+            // picking one would be the silent decision this language exists to refuse.
+            // (Relaxed in v0.0.86: the old rule cost three attempts on a seven-line
+            // invoice, and the scale rule is the one that protects money.)
+            match (ra, rb) {
+                (Some(x), Some(y)) if x != y => {
+                    return Err(format!(
+                        "cannot {} {} and {}: these are two different rounding contracts, \
+                         and picking one would be a decision nobody wrote down. Make them \
+                         the same, or drop one to a plain Decimal<{}>.",
+                        op, lhs, rhs, a
+                    ));
+                }
+                (Some(x), _) => return Ok(Type::Decimal { scale: *a, rounding: Some(*x) }),
+                (_, Some(y)) => return Ok(Type::Decimal { scale: *a, rounding: Some(*y) }),
+                _ => return Ok(Type::Decimal { scale: *a, rounding: None }),
             }
         }
         Err(format!(

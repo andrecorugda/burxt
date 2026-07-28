@@ -1,0 +1,5 @@
+// Adding a contract is more information; DROPPING one loses a declared intention,
+// and losing one silently is what this language exists to prevent.
+let a: Decimal<2, RoundHalfEven> = $1.00;
+let plain: Decimal<2> = a;
+print(plain);

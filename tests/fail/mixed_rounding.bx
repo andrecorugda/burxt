@@ -1,4 +1,11 @@
-// Different rounding contracts never mix silently — not even with none.
+// Two DIFFERENT rounding contracts never mix silently: picking one would be a
+// decision nobody wrote down.
+//
+// This fixture used to say "not even with none" — a contract mixing with a plain
+// Decimal was refused too. That was relaxed in v0.0.86: addition never rounds, so
+// one contract and no contract leaves exactly one answer, and the old rule meant a
+// contract could only be declared where money entered the program. See
+// tests/pass/contract_widening.bx for what is now allowed.
 let a: Decimal<2, RoundHalfEven> = 1.00;
-let b: Decimal<2> = 2.00;
+let b: Decimal<2, RoundHalfUp> = 2.00;
 print(a + b);

@@ -44,7 +44,7 @@ struct Slot { start: Int, length: Int, index: Int, cells: Int, aggregate: Int }
 // enough for the quadratic term to matter.
 fn (mut self: Unit) w(text: String) -> Int allocates {
     self.body_pending = self.body_pending + text;
-    if len(self.body_pending) > 4096 {
+    if len(self.body_pending) > 512 {
         push(self.body_chunks, self.body_pending);
         self.body_pending = "";
     }
@@ -54,7 +54,13 @@ fn (mut self: Unit) w(text: String) -> Int allocates {
 // Module-level text — the declarations and the runtime — goes straight to the module,
 // not through a function's buffer: `open_fn` clears those, and a preamble written into
 // one would be discarded when the first function opened.
-// The module's text, in CHUNKS. `a = a + b` copies the whole left side, so appending
+// The module's text, in CHUNKS of 512 bytes.
+//
+// The number is a balance, and it is worth the arithmetic. With A appends into a buffer that
+// is flushed at T bytes, the copying is about A x T/2; joining the N/T chunks pairwise costs
+// N per round for log2(N/T) rounds. Emitting this compiler is A ~ 300,000 and N ~ 1.5 MB, so
+// T = 4096 spent about 600 MB and ran the region out; T = 512 spends about 95 MB.
+// `a = a + b` copies the whole left side, so appending
 // fifty thousand times to one growing String copies gigabytes — which is exactly how
 // this compiler first exhausted its region while emitting its own source. Chunks bound
 // each copy to the chunk size, and the joins at the end are few.
@@ -63,7 +69,7 @@ fn (mut self: Unit) w(text: String) -> Int allocates {
 // one. Recorded rather than pretended away: this is a cost, not a design.
 fn (mut self: Unit) w_out(text: String) -> Int allocates {
     self.pending = self.pending + text;
-    if len(self.pending) > 4096 {
+    if len(self.pending) > 512 {
         push(self.chunks, self.pending);
         self.pending = "";
     }

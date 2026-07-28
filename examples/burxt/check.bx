@@ -528,7 +528,31 @@ fn (mut self: Unit) type_of_inner(src: String, node: Int, expected: Ty) -> Ty al
             }
             return left;
         }
-        // `+` and `-` combine like quantities: the types must match exactly.
+        if left.kind == 45 && right.kind == 45 {
+            // Addition and subtraction never round, so the SCALES must match and the
+            // contracts need not: one side carrying a contract and the other none leaves
+            // exactly one answer to "if this ever rounds, which way", and the result carries
+            // it. Two DIFFERENT contracts is a real ambiguity and stays refused.
+            // (Relaxed in v0.0.86, together with stage-0.)
+            if left.scale != right.scale {
+                let e: Int = self.complain_at(src, n.tok,
+                    "cannot combine " + ty_show(src, left) + " and " + ty_show(src, right)
+                    + ": scales must match. Burxt does not silently rescale money");
+                return ty_unknown();
+            }
+            if left.contract != 0 && right.contract != 0 && left.contract != right.contract {
+                let e: Int = self.complain_at(src, n.tok,
+                    "cannot combine " + ty_show(src, left) + " and " + ty_show(src, right)
+                    + ": these are two different rounding contracts, and picking one would "
+                    + "be a decision nobody wrote down");
+                return ty_unknown();
+            }
+            if left.contract != 0 {
+                return left;
+            }
+            return right;
+        }
+        // `+` and `-` combine like quantities: every other type must match exactly.
         if !ty_same(src, left, right) {
             let e: Int = self.complain_at(src, n.tok,
                 "cannot combine " + ty_show(src, left) + " and " + ty_show(src, right)
