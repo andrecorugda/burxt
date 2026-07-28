@@ -19,6 +19,7 @@ burxt run examples/invoice.bx -o /tmp/invoice
 | File | What it teaches |
 |---|---|
 | [`inference.bx`](inference.bx) | `let x = e;` — where the type may be left out, where it may not, and why an array is the exception. |
+| [`absence.bx`](absence.bx) | No null: `Option<T>` and `Result<T, E>` as library types, and the compiler making you handle both cases. |
 | [`generics.bx`](generics.bx) | One definition, one copy per type: monomorphisation, inference at the call site, and what an unbounded parameter may not do. |
 | [`traits.bx`](traits.bx) | Traits, `impl Trait for Type`, static dispatch, `dyn` — and why there is no inheritance. |
 | [`enums.bx`](enums.bx) | Variants with payloads, exhaustive `match` with no wildcard, and what a new variant breaks. |

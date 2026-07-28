@@ -1,0 +1,7 @@
+// A type that exists but is not generic takes no arguments, and the message says that
+// rather than calling it unknown.
+enum Colour { Red, Green }
+region r {
+    let c: Colour<Int> = Colour.Red;
+    print(1);
+}

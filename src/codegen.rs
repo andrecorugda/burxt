@@ -1184,7 +1184,10 @@ impl<'ctx> CodeGen<'ctx> {
             // generic per instantiation — so reaching here is a compiler bug, not a
             // program error. Represented as an i64 so the panic is a diagnostic rather
             // than a crash; the checker is what guarantees it never happens.
-            Type::Param(_) => self.ctx.i64_type().into(),
+            // Both are gone before codegen runs: a parameter is substituted, and a
+            // generic application becomes the `Named` type of its instantiation. Reaching
+            // here is a compiler bug, and the checker is what guarantees it cannot.
+            Type::Param(_) | Type::Generic { .. } => self.ctx.i64_type().into(),
             Type::Int | Type::Bool | Type::Decimal { .. } => self.ctx.i64_type().into(),
             Type::String => self.ctx.ptr_type(AddressSpace::default()).into(),
             Type::CInt => self.ctx.i32_type().into(),
@@ -1272,6 +1275,9 @@ impl<'ctx> CodeGen<'ctx> {
             // Substituted before codegen, so this is unreachable by construction.
             Type::Param(name) => {
                 return Err(format!("codegen bug: type parameter `{}` survived", name))
+            }
+            Type::Generic { name, .. } => {
+                return Err(format!("codegen bug: `{}<...>` was never instantiated", name))
             }
             Type::Int => {
                 let fmt = self.global_str("%lld", "fmt_int");

@@ -1,0 +1,8 @@
+// A variant payload is a scalar in this cut, so an instantiation that would carry a
+// struct is refused — and says which type argument caused it.
+enum Option<T> { None, Some(T) }
+struct Point { x: Int, y: Int }
+region r {
+    let p: Option<Point> = Option.Some(Point { x: 1, y: 2 });
+    print(1);
+}

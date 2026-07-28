@@ -1,0 +1,118 @@
+// ============================================================================
+// No null — absence and failure as types.
+//
+// Burxt has no null, no nil, no undefined and no "" standing in for missing.
+// Nothing is implicitly absent, so no dereference can fail. Absence is a TYPE,
+// and the compiler makes you say what happens when there is nothing there.
+//
+// `Option<T>` and `Result<T, E>` are not language features. They are four lines
+// of Burxt each, in lib/option.bx and lib/result.bx, with no compiler support
+// beyond generics — which was the test set for whether the generics are real: if
+// `Option` had needed a keyword, they were not.
+// ============================================================================
+
+enum Option<T> {
+    None,
+    Some(T)
+}
+
+enum Result<T, E> {
+    Ok(T),
+    Err(E)
+}
+
+// A function that might not find anything says so in its type. There is no
+// sentinel to document, no -1 to remember, and no way for a caller to forget.
+fn position_of(xs: [Int], want: Int) -> Option<Int> {
+    let mut i = 0;
+    for x in xs {
+        if x == want {
+            return Option.Some(i);
+        }
+        i += 1;
+    }
+    return Option.None;
+}
+
+// A function that can fail says THAT in its type. No exception to catch, no
+// error code to check-or-not.
+fn divide(a: Int, b: Int) -> Result<Int, String> {
+    if b == 0 {
+        return Result.Err("division by zero");
+    }
+    return Result.Ok(div_trunc(a, b));
+}
+
+// The value or a fallback — generic over the element, so one definition serves
+// every type. `Option<T>` inside a generic body is checked once, with `T`
+// standing for nothing.
+fn or_else<T>(o: Option<T>, fallback: T) -> T {
+    match o {
+        None => { return fallback; }
+        Some(value) => { return value; }
+    }
+}
+
+region r {
+    let mut xs: [Int] = [];
+    let a = push(xs, 5);
+    let b = push(xs, 9);
+    let c = push(xs, 14);
+
+    // Both cases, every time. That is the whole feature.
+    match position_of(xs, 9) {
+        None => { print("not there"); }
+        Some(at) => { print(at); }
+    }
+    match position_of(xs, 7) {
+        None => { print("not there"); }
+        Some(at) => { print(at); }
+    }
+
+    // Or a fallback, when a default is the right answer.
+    print(or_else(position_of(xs, 14), 0 - 1));
+    print(or_else(position_of(xs, 99), 0 - 1));
+
+    // One definition of `or_else`, two instantiations: `Option<Int>` and
+    // `Option<String>` are separate types with separate layouts.
+    let words: Option<String> = Option.Some("found");
+    print(or_else(words, "missing"));
+
+    match divide(10, 2) {
+        Ok(answer) => { print(answer); }
+        Err(why) => { print(why); }
+    }
+    match divide(1, 0) {
+        Ok(answer) => { print(answer); }
+        Err(why) => { print(why); }
+    }
+}
+
+// ---- What the compiler refuses, and why ------------------------------------
+//
+// Forgetting a case — the reason this type exists:
+//     match found { Some(n) => { print(n); } }
+//     error: this `match` on `Option<Int>` does not handle `None`. Every variant
+//            must be handled — that is what makes adding a variant later a
+//            compile error instead of a silent fall-through.
+//
+// A value whose type nothing states. `None` carries nothing, so nothing in the
+// line says what `T` is:
+//     let nothing = Option.None;
+//     error: `Option.None` does not say what `T` is, and nothing here does.
+//            Write the type where the value lands — `let x: Option<...> = ...`
+//
+// And a payload must be a scalar in this cut, which the message says in terms of
+// the type argument that caused it:
+//     let p: Option<Point> = Option.Some(Point { x: 1, y: 2 });
+//     error: `Option<Point>` cannot be made: `Option.Some` would carry a Point,
+//            and a variant payload must be Int, Bool, String or Decimal for now.
+//
+// ---- What is deliberately absent -------------------------------------------
+//
+// There is no `unwrap`. "Give me the value and abort if there is none" is null
+// with extra steps, and the crash it causes is the one this type prevents.
+//
+// There is no `?` yet — `let n = divide(a, b)?;` meaning "or return the error".
+// It is the right sugar and it needs one decision this language has not made: how
+// the callee's error type becomes the caller's. Written down rather than guessed.

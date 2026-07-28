@@ -291,14 +291,25 @@ pub struct TypeChecker {
     /// The type parameters of every generic function, by name. Empty for all the
     /// others, so the common path is one `is_empty` away. See spec/M7-GENERICS.md.
     generics: HashMap<String, Vec<String>>,
+    /// Generic ENUM declarations: their parameters and their variants, with the parameters
+    /// still standing for nothing. Kept out of `enums` because a generic enum has no
+    /// layout until a use says what its arguments are.
+    generic_enums: HashMap<String, (Vec<String>, Vec<(String, Vec<Type>)>)>,
+    /// Every struct and enum name the program declares, collected before anything is
+    /// registered — so an application of a type that exists but is not generic can say
+    /// so, instead of calling it unknown.
+    declared_type_names: HashSet<String>,
+    /// Instantiations of generic enums, made on demand: mangled name -> variants, and
+    /// mangled name -> what it was an instantiation OF, so a value's type can be read
+    /// back into `(Option, [Int])` when a variant has no payload to infer from.
+    made_enums: RefCell<HashMap<String, Vec<(String, Vec<Type>)>>>,
+    made_order: RefCell<Vec<TypedEnum>>,
+    instance_of: RefCell<HashMap<String, (String, Vec<Type>)>>,
     /// Every `(generic, type arguments)` pair reached, in discovery order, and the set
     /// already recorded so a pair is emitted once. Checking an instantiation can add
     /// more — a generic calling a generic — so this is drained to a fixpoint.
     wanted: RefCell<Vec<(String, Vec<Type>)>>,
     seen_instantiations: RefCell<HashSet<String>>,
-    /// While checking one instantiation: what each type parameter stands for. Empty
-    /// while checking the generic itself, where a parameter stands for nothing.
-    substitution: HashMap<String, Type>,
     /// (receiver, method) pairs declared `allocates`, so a call site can be checked
     /// for an open region in the same one pass the free-function form uses.
     alloc_methods: HashSet<(String, String)>,
@@ -388,9 +399,13 @@ impl TypeChecker {
             env: HashMap::new(),
             fns: HashMap::new(),
             generics: HashMap::new(),
+            generic_enums: HashMap::new(),
+            declared_type_names: HashSet::new(),
+            made_enums: RefCell::new(HashMap::new()),
+            made_order: RefCell::new(Vec::new()),
+            instance_of: RefCell::new(HashMap::new()),
             wanted: RefCell::new(Vec::new()),
             seen_instantiations: RefCell::new(HashSet::new()),
-            substitution: HashMap::new(),
             alloc_fns: HashSet::new(),
             alloc_methods: HashSet::new(),
             pure_fns: HashSet::new(),
@@ -563,6 +578,304 @@ impl TypeChecker {
     /// it will have. Recording is idempotent: a generic called in fifty places is emitted
     /// once, and a generic called nowhere is emitted never — which is what lets a library
     /// declare generics at no cost. See spec/M7-GENERICS.md Decision 4.
+    /// Is this name an enum? Either declared concretely, or made on demand as an
+    /// instantiation of a generic one — a caller has no reason to care which.
+    /// Replace every concrete generic application written anywhere in the program with the
+    /// `Named` type of its instantiation, making those instantiations as it goes.
+    ///
+    /// A pre-pass over the AST rather than a substitution threaded through the checker, for
+    /// the reason `specialise` gives: after it, every rule in this file sees ordinary
+    /// nominal types and none of them has to remember that generics exist.
+    fn expand_program(&self, prog: &mut Program) -> Result<(), String> {
+        // The span is set per item as the walk goes, so a refusal from this pass points at
+        // the declaration that caused it rather than at the top of the file.
+        for st in &mut prog.structs {
+            self.current_span.set(st.span);
+            for f in &mut st.fields {
+                f.ty = self.expand(&f.ty)?;
+            }
+        }
+        for e in &mut prog.enums {
+            self.current_span.set(e.span);
+            if !e.type_params.is_empty() {
+                continue;             // the generic itself: its parameters stay parameters
+            }
+            for v in &mut e.variants {
+                for t in &mut v.payload {
+                    *t = self.expand(t)?;
+                }
+            }
+        }
+        for ex in &mut prog.externs {
+            self.current_span.set(ex.span);
+            for p in &mut ex.params {
+                p.ty = self.expand(&p.ty)?;
+            }
+            ex.ret = self.expand(&ex.ret)?;
+        }
+        for f in &mut prog.fns {
+            self.current_span.set(f.span);
+            self.expand_fn_types(&mut f.params, &mut f.ret, &mut f.body)?;
+        }
+        for m in &mut prog.methods {
+            self.current_span.set(m.span);
+            self.expand_fn_types(&mut m.params, &mut m.ret, &mut m.body)?;
+        }
+        for im in &mut prog.impls {
+            self.current_span.set(im.span);
+            for m in &mut im.methods {
+                self.current_span.set(m.span);
+                self.expand_fn_types(&mut m.params, &mut m.ret, &mut m.body)?;
+            }
+        }
+        self.expand_block(&mut prog.stmts)?;
+        Ok(())
+    }
+
+    fn expand_fn_types(
+        &self,
+        params: &mut [Param],
+        ret: &mut Type,
+        body: &mut [Stmt],
+    ) -> Result<(), String> {
+        for p in params.iter_mut() {
+            p.ty = self.expand(&p.ty)?;
+        }
+        *ret = self.expand(ret)?;
+        self.expand_block(body)
+    }
+
+    fn expand_block(&self, stmts: &mut [Stmt]) -> Result<(), String> {
+        for st in stmts {
+            self.current_span.set(st.span);
+            match &mut st.kind {
+                StmtKind::Let { declared, .. } => {
+                    if let Some(t) = declared {
+                        *t = self.expand(t)?;
+                    }
+                }
+                StmtKind::While { body, .. }
+                | StmtKind::Region { body, .. }
+                | StmtKind::For { body, .. } => self.expand_block(body)?,
+                StmtKind::If { then_block, else_block, .. } => {
+                    self.expand_block(then_block)?;
+                    if let Some(b) = else_block {
+                        self.expand_block(b)?;
+                    }
+                }
+                StmtKind::Match { arms, .. } => {
+                    for a in arms {
+                        self.expand_block(&mut a.body)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn is_enum(&self, name: &str) -> bool {
+        self.enums.contains_key(name) || self.made_enums.borrow().contains_key(name)
+    }
+
+    fn variants_of(&self, name: &str) -> Option<Vec<(String, Vec<Type>)>> {
+        if let Some(v) = self.enums.get(name) {
+            return Some(v.clone());
+        }
+        self.made_enums.borrow().get(name).cloned()
+    }
+
+    /// Replace every concrete generic application in a type with the `Named` type of its
+    /// instantiation, making that instantiation if this is the first time it is asked for.
+    ///
+    /// An application whose arguments still mention a type parameter is left alone: it is
+    /// inside a generic being checked generically, and it becomes concrete when that
+    /// generic is instantiated. See spec/M7-GENERICS.md Decision 4.
+    fn expand(&self, ty: &Type) -> Result<Type, String> {
+        match ty {
+            Type::Generic { name, args } => {
+                let (params, variants) = self.generic_enums.get(name).cloned().ok_or_else(|| {
+                    if self.declared_type_names.contains(name) {
+                        format!(
+                            "`{}` is not generic, so it takes no type arguments — write \
+                             `{}` on its own.",
+                            name, name
+                        )
+                    } else {
+                        format!("unknown generic type `{}`", name)
+                    }
+                })?;
+                let args: Vec<Type> =
+                    args.iter().map(|a| self.expand(a)).collect::<Result<_, _>>()?;
+                if args.len() != params.len() {
+                    return Err(format!(
+                        "`{}` takes {} type argument(s), but {} were given",
+                        name,
+                        params.len(),
+                        args.len()
+                    ));
+                }
+                if args.iter().any(mentions_param) {
+                    return Ok(Type::Generic { name: name.clone(), args });
+                }
+                let symbol = mangle(name, &args);
+                if !self.is_enum(&symbol) {
+                    // Reserve the name BEFORE filling it in, so an enum whose payload
+                    // mentions itself cannot make this recurse forever.
+                    self.made_enums.borrow_mut().insert(symbol.clone(), Vec::new());
+                    let map: HashMap<String, Type> =
+                        params.iter().cloned().zip(args.iter().cloned()).collect();
+                    let mut made: Vec<(String, Vec<Type>)> = Vec::new();
+                    for (vname, payload) in &variants {
+                        let mut ps = Vec::with_capacity(payload.len());
+                        for t in payload {
+                            ps.push(self.expand(&substitute(t, &map))?);
+                        }
+                        made.push((vname.clone(), ps));
+                    }
+                    // The same rule the concrete declarations get, said in terms of the
+                    // type argument that caused it — because that is what the author wrote.
+                    for (vname, ps) in &made {
+                        for t in ps {
+                            match t {
+                                Type::Int
+                                | Type::Bool
+                                | Type::String
+                                | Type::Decimal { .. } => {}
+                                other => {
+                                    self.made_enums.borrow_mut().remove(&symbol);
+                                    return Err(format!(
+                                        "`{}` cannot be made: `{}.{}` would carry {} {}, \
+                                         and a variant payload must be Int, Bool, String \
+                                         or Decimal for now.",
+                                        Type::Generic {
+                                            name: name.clone(),
+                                            args: args.clone()
+                                        },
+                                        name,
+                                        vname,
+                                        other.article(),
+                                        other
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    for (vname, ps) in &made {
+                        if ps.iter().any(|t| t == &Type::Named(symbol.clone())) {
+                            self.made_enums.borrow_mut().remove(&symbol);
+                            return Err(format!(
+                                "`{}` cannot carry itself: `{}.{}` would have to hold a \
+                                 value the same size as the whole enum, plus a tag.",
+                                symbol, name, vname
+                            ));
+                        }
+                    }
+                    self.made_enums.borrow_mut().insert(symbol.clone(), made.clone());
+                    self.instance_of
+                        .borrow_mut()
+                        .insert(symbol.clone(), (name.clone(), args.clone()));
+                    self.made_order.borrow_mut().push(TypedEnum {
+                        name: symbol.clone(),
+                        variants: made.into_iter().map(|(_, p)| p).collect(),
+                    });
+                }
+                Ok(Type::Named(symbol))
+            }
+            Type::Array { elem, len } => Ok(Type::Array {
+                elem: Box::new(self.expand(elem)?),
+                len: *len,
+            }),
+            Type::Slice(elem) => Ok(Type::Slice(Box::new(self.expand(elem)?))),
+            other => Ok(other.clone()),
+        }
+    }
+
+    /// `Option.Some(3)` — work out what the arguments are, then build the variant of the
+    /// instantiation. Two sources, in this order: what the payload says, and what the
+    /// context expects. `Option.None` has no payload, so it needs the context, and says
+    /// so when there is none.
+    fn build_generic_variant(
+        &self,
+        enum_name: &str,
+        variant: &str,
+        args: &[Expr],
+        expected: Option<&Type>,
+    ) -> Result<TypedExpr, String> {
+        let (params, variants) = self.generic_enums[enum_name].clone();
+        let tag = variants.iter().position(|(n, _)| n == variant).ok_or_else(|| {
+            format!(
+                "`{}` has no variant named `{}`. Its variants are: {}.",
+                enum_name,
+                variant,
+                variants.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+            )
+        })?;
+        let payload = &variants[tag].1;
+        if args.len() != payload.len() {
+            return Err(format!(
+                "`{}.{}` carries {} value(s), but {} were given",
+                enum_name,
+                variant,
+                payload.len(),
+                args.len()
+            ));
+        }
+
+        let mut map: HashMap<String, Type> = HashMap::new();
+        // What the context asks for comes first: it is the only thing that can settle a
+        // variant with no payload, and it is what the author wrote down.
+        if let Some(Type::Named(want)) = expected {
+            if let Some((of, type_args)) = self.instance_of.borrow().get(want).cloned() {
+                if of == enum_name {
+                    for (p, a) in params.iter().zip(type_args) {
+                        map.insert(p.clone(), a);
+                    }
+                }
+            }
+        }
+        for (i, (declared, arg)) in payload.iter().zip(args).enumerate() {
+            if !mentions_param(declared) {
+                continue;
+            }
+            let actual = self.check_expr(arg, None)?.ty;
+            let instances = self.instance_of.borrow().clone();
+            unify(declared, &actual, &mut map, &instances).map_err(|why| {
+                format!("in `{}.{}`, payload {}: {}", enum_name, variant, i + 1, why)
+            })?;
+        }
+        let mut type_args = Vec::with_capacity(params.len());
+        for p in &params {
+            match map.get(p) {
+                Some(t) => type_args.push(t.clone()),
+                None => {
+                    let call = if payload.is_empty() {
+                        format!("{}.{}", enum_name, variant)
+                    } else {
+                        format!("{}.{}(...)", enum_name, variant)
+                    };
+                    return Err(format!(
+                        "`{}.{}` does not say what `{}` is, and nothing here does. Write \
+                         the type where the value lands — `let x: {}<...> = {};` — or \
+                         pass it somewhere that names it.",
+                        enum_name, variant, p, enum_name, call
+                    ))
+                }
+            }
+        }
+        let concrete = self.expand(&Type::Generic {
+            name: enum_name.to_string(),
+            args: type_args,
+        })?;
+        let Type::Named(symbol) = &concrete else {
+            return Err("codegen bug: an instantiation is not a named type".to_string());
+        };
+        let variants = self
+            .variants_of(symbol)
+            .ok_or_else(|| format!("codegen bug: `{}` was not made", symbol))?;
+        self.build_variant(symbol, variants, variant, args)
+    }
+
     fn want(&self, name: &str, type_args: &[Type]) -> String {
         let symbol = mangle(name, type_args);
         if self.seen_instantiations.borrow_mut().insert(symbol.clone()) {
@@ -598,6 +911,39 @@ impl TypeChecker {
     }
 
     fn check_program_inner(&mut self, prog: &Program) -> Result<TypedProgram, String> {
+        // Pass -1: collect the generic ENUM declarations, then rewrite every concrete
+        // application of one — `Option<Int>` — into the nominal type of its instantiation.
+        // After this pass no rule below has to know that generics exist.
+        for e in &prog.enums {
+            if e.type_params.is_empty() {
+                continue;
+            }
+            self.current_span.set(e.span);
+            let mut seen: Vec<&str> = Vec::new();
+            for p in &e.type_params {
+                if seen.contains(&p.as_str()) {
+                    return Err(format!("`{}` declares the type parameter `{}` twice", e.name, p));
+                }
+                seen.push(p);
+            }
+            self.generic_enums.insert(
+                e.name.clone(),
+                (
+                    e.type_params.clone(),
+                    e.variants.iter().map(|v| (v.name.clone(), v.payload.clone())).collect(),
+                ),
+            );
+        }
+        for st in &prog.structs {
+            self.declared_type_names.insert(st.name.clone());
+        }
+        for e in &prog.enums {
+            self.declared_type_names.insert(e.name.clone());
+        }
+        let mut owned = prog.clone();
+        self.expand_program(&mut owned)?;
+        let prog = &owned;
+
         // Pass 0: hoist struct declarations, then validate them (field types
         // must exist; no struct may contain itself, directly or transitively).
         for s in &prog.structs {
@@ -648,6 +994,11 @@ impl TypeChecker {
                 }
                 seen.push(&v.name);
             }
+            // A GENERIC enum has no layout until a use says what its arguments are, so it
+            // was collected in pass -1 rather than registered here.
+            if !e.type_params.is_empty() {
+                continue;
+            }
             self.enums.insert(
                 e.name.clone(),
                 e.variants
@@ -697,11 +1048,17 @@ impl TypeChecker {
         // which needs indirection and therefore M1.
         for e in &prog.enums {
             self.current_span.set(e.span);
+            // A generic declaration's payload is a parameter, which is neither a scalar
+            // nor an aggregate until a use says what it is. Its INSTANTIATIONS are checked
+            // where they are made, in `expand`.
+            if !e.type_params.is_empty() {
+                continue;
+            }
             for v in &e.variants {
                 for (i, t) in v.payload.iter().enumerate() {
                     match t {
                         Type::Int | Type::Bool | Type::String | Type::Decimal { .. } => {}
-                        Type::Named(n) if self.enums.contains_key(n) => {
+                        Type::Named(n) if self.is_enum(n) => {
                             return Err(format!(
                                 "`{}.{}` payload {} is the enum `{}` — an enum inside \
                                  an enum needs indirection to have a finite size, \
@@ -977,7 +1334,14 @@ impl TypeChecker {
                     .ok_or_else(|| format!("codegen bug: `{}` is not generic", name))?;
                 let map: HashMap<String, Type> =
                     params.iter().cloned().zip(type_args.iter().cloned()).collect();
-                let concrete = specialise(generic, &map, &mangle(&name, &type_args));
+                let mut concrete = specialise(generic, &map, &mangle(&name, &type_args));
+                // Substituting can make a generic application concrete — `Option<T>`
+                // becomes `Option<Int>` — so the instantiation is expanded again here.
+                self.expand_fn_types(
+                    &mut concrete.params,
+                    &mut concrete.ret,
+                    &mut concrete.body,
+                )?;
                 self.current_span.set(concrete.span);
                 // Registered under its mangled name so a recursive generic call inside
                 // the body resolves, and so `allocates`/`pure` carry over.
@@ -1011,6 +1375,10 @@ impl TypeChecker {
             });
         }
 
+        // Every instantiation of a generic enum, in the order it was first needed, so
+        // codegen has a layout for each one.
+        let mut enums = enums;
+        enums.extend(self.made_order.borrow().iter().cloned());
         Ok(TypedProgram { structs, enums, externs, fns, methods, vtables, stmts })
     }
 
@@ -1284,7 +1652,7 @@ impl TypeChecker {
         }
         match ty {
             Type::Named(name)
-                if !self.structs.contains_key(name) && !self.enums.contains_key(name) =>
+                if !self.structs.contains_key(name) && !self.is_enum(name) =>
             {
                 Err(format!(
                     "unknown type `{}` — declare it with `struct {} {{ ... }}` or \
@@ -1808,6 +2176,117 @@ impl TypeChecker {
         Ok(TypedStmt::TailReturn { name, args: typed_args })
     }
 
+
+    /// The arms of a `match`, given the enum being matched and its variants.
+    ///
+    /// Shared by the two ways a scrutinee can arrive: an ordinary enum, and a generic
+    /// one still holding parameters because we are inside the generic that declared it.
+    /// One implementation, so exhaustiveness and payload binding cannot differ between
+    /// the declaration and its instantiations.
+    fn check_match_arms(
+        &mut self,
+        enum_name: String,
+        variants: Vec<(String, Vec<Type>)>,
+        scrutinee: TypedExpr,
+        arms: &[MatchArm],
+        at: Span,
+        shown: String,
+    ) -> Result<TypedStmt, String> {
+            let mut typed_arms: Vec<TypedArm> = Vec::new();
+            for arm in arms {
+                // Checking the previous arm's body moved the position; an error
+                // about THIS arm's pattern belongs to the match, not to the arm
+                // above it. (Found by shadowing a name in examples/lexer.bx and
+                // being pointed at the wrong line.)
+                self.current_span.set(at);
+                if arm.variant == "_" {
+                    return Err(
+                        "Burxt has no `_` wildcard arm: it would silently absorb \
+                         variants added later, which is the one thing exhaustive \
+                         matching exists to prevent. List the remaining variants."
+                            .to_string(),
+                    );
+                }
+                let tag = variants
+                    .iter()
+                    .position(|(n, _)| *n == arm.variant)
+                    .ok_or_else(|| {
+                        format!(
+                            "`{}` has no variant named `{}`. Its variants are: {}.",
+                            shown,
+                            arm.variant,
+                            variants
+                                .iter()
+                                .map(|(n, _)| n.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    })? as u32;
+                if typed_arms.iter().any(|a| a.tag == tag) {
+                    return Err(format!(
+                        "`{}` is matched twice in this `match`",
+                        arm.variant
+                    ));
+                }
+                let payload = &variants[tag as usize].1;
+                if arm.bindings.len() != payload.len() {
+                    return Err(format!(
+                        "`{}.{}` carries {} value(s), but this pattern names {}. \
+                         Name every payload value, so nothing is silently \
+                         dropped.",
+                        shown,
+                        arm.variant,
+                        payload.len(),
+                        arm.bindings.len()
+                    ));
+                }
+
+                // Payload names are ordinary immutable locals, scoped to the arm.
+                let saved = self.env.clone();
+                let mut bindings = Vec::new();
+                for (name, ty) in arm.bindings.iter().zip(payload) {
+                    if self.env.contains_key(name) {
+                        self.env = saved;
+                        return Err(format!(
+                            "`{}` is already declared — a pattern binding may not \
+                             shadow it, the same rule `let` follows.",
+                            name
+                        ));
+                    }
+                    self.env.insert(name.clone(), (ty.clone(), false));
+                    bindings.push((name.clone(), ty.clone()));
+                }
+                let body = self.check_block(&arm.body);
+                self.env = saved;
+                typed_arms.push(TypedArm { tag, bindings, body: body? });
+            }
+
+            // THE feature: every variant must be handled. Add a variant to
+            // the enum later and every incomplete match becomes an error
+            // naming exactly what to handle.
+            let missing: Vec<&str> = variants
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !typed_arms.iter().any(|a| a.tag == *i as u32))
+                .map(|(_, (n, _))| n.as_str())
+                .collect();
+            if !missing.is_empty() {
+                return Err(format!(
+                    "this `match` on `{}` does not handle {}. Every variant must \
+                     be handled — that is what makes adding a variant later a \
+                     compile error instead of a silent fall-through.",
+                    shown,
+                    missing
+                        .iter()
+                        .map(|m| format!("`{}`", m))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+
+            typed_arms.sort_by_key(|a| a.tag);
+            Ok(TypedStmt::Match { value: scrutinee, arms: typed_arms })
+    }
     /// Render a parameter list for an error message.
     fn type_list(types: &[Type]) -> String {
         types.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ")
@@ -2105,8 +2584,33 @@ impl TypeChecker {
             }
             StmtKind::Match { value, arms } => {
                 let scrutinee = self.check_expr(value, None)?;
+                // Inside a generic being checked generically the scrutinee's type is still
+                // `Option<T>`: its VARIANTS are known even though `T` is not, so the arms,
+                // the exhaustiveness and the payload bindings can all be checked here —
+                // once, at the declaration — rather than at every instantiation.
+                if let Type::Generic { name, args } = &scrutinee.ty {
+                    if let Some((params, variants)) = self.generic_enums.get(name).cloned() {
+                        let map: HashMap<String, Type> =
+                            params.iter().cloned().zip(args.iter().cloned()).collect();
+                        let open: Vec<(String, Vec<Type>)> = variants
+                            .into_iter()
+                            .map(|(v, payload)| {
+                                (v, payload.iter().map(|t| substitute(t, &map)).collect())
+                            })
+                            .collect();
+                        let shown = show(&scrutinee.ty, &self.instance_of.borrow().clone());
+                        return self.check_match_arms(
+                            name.clone(),
+                            open,
+                            scrutinee,
+                            arms,
+                            s.span,
+                            shown,
+                        );
+                    }
+                }
                 let enum_name = match &scrutinee.ty {
-                    Type::Named(n) if self.enums.contains_key(n) => n.clone(),
+                    Type::Named(n) if self.is_enum(n) => n.clone(),
                     other => {
                         return Err(format!(
                             "`match` needs an enum value, but this has type {}. \
@@ -2115,102 +2619,12 @@ impl TypeChecker {
                         ))
                     }
                 };
-                let variants = self.enums[&enum_name].clone();
+                let variants = self
+                    .variants_of(&enum_name)
+                    .ok_or_else(|| format!("codegen bug: no enum named `{}`", enum_name))?;
 
-                let mut typed_arms: Vec<TypedArm> = Vec::new();
-                for arm in arms {
-                    // Checking the previous arm's body moved the position; an error
-                    // about THIS arm's pattern belongs to the match, not to the arm
-                    // above it. (Found by shadowing a name in examples/lexer.bx and
-                    // being pointed at the wrong line.)
-                    self.current_span.set(s.span);
-                    if arm.variant == "_" {
-                        return Err(
-                            "Burxt has no `_` wildcard arm: it would silently absorb \
-                             variants added later, which is the one thing exhaustive \
-                             matching exists to prevent. List the remaining variants."
-                                .to_string(),
-                        );
-                    }
-                    let tag = variants
-                        .iter()
-                        .position(|(n, _)| *n == arm.variant)
-                        .ok_or_else(|| {
-                            format!(
-                                "`{}` has no variant named `{}`. Its variants are: {}.",
-                                enum_name,
-                                arm.variant,
-                                variants
-                                    .iter()
-                                    .map(|(n, _)| n.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            )
-                        })? as u32;
-                    if typed_arms.iter().any(|a| a.tag == tag) {
-                        return Err(format!(
-                            "`{}` is matched twice in this `match`",
-                            arm.variant
-                        ));
-                    }
-                    let payload = &variants[tag as usize].1;
-                    if arm.bindings.len() != payload.len() {
-                        return Err(format!(
-                            "`{}.{}` carries {} value(s), but this pattern names {}. \
-                             Name every payload value, so nothing is silently \
-                             dropped.",
-                            enum_name,
-                            arm.variant,
-                            payload.len(),
-                            arm.bindings.len()
-                        ));
-                    }
-
-                    // Payload names are ordinary immutable locals, scoped to the arm.
-                    let saved = self.env.clone();
-                    let mut bindings = Vec::new();
-                    for (name, ty) in arm.bindings.iter().zip(payload) {
-                        if self.env.contains_key(name) {
-                            self.env = saved;
-                            return Err(format!(
-                                "`{}` is already declared — a pattern binding may not \
-                                 shadow it, the same rule `let` follows.",
-                                name
-                            ));
-                        }
-                        self.env.insert(name.clone(), (ty.clone(), false));
-                        bindings.push((name.clone(), ty.clone()));
-                    }
-                    let body = self.check_block(&arm.body);
-                    self.env = saved;
-                    typed_arms.push(TypedArm { tag, bindings, body: body? });
-                }
-
-                // THE feature: every variant must be handled. Add a variant to
-                // the enum later and every incomplete match becomes an error
-                // naming exactly what to handle.
-                let missing: Vec<&str> = variants
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| !typed_arms.iter().any(|a| a.tag == *i as u32))
-                    .map(|(_, (n, _))| n.as_str())
-                    .collect();
-                if !missing.is_empty() {
-                    return Err(format!(
-                        "this `match` on `{}` does not handle {}. Every variant must \
-                         be handled — that is what makes adding a variant later a \
-                         compile error instead of a silent fall-through.",
-                        enum_name,
-                        missing
-                            .iter()
-                            .map(|m| format!("`{}`", m))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
-                }
-
-                typed_arms.sort_by_key(|a| a.tag);
-                Ok(TypedStmt::Match { value: scrutinee, arms: typed_arms })
+                let shown = show(&scrutinee.ty, &self.instance_of.borrow().clone());
+                return self.check_match_arms(enum_name, variants, scrutinee, arms, s.span, shown);
             }
             StmtKind::Break | StmtKind::Continue => {
                 let word = if matches!(s.kind, StmtKind::Break) { "break" } else { "continue" };
@@ -2324,7 +2738,7 @@ impl TypeChecker {
                 let typed = self.check_expr(e, None)?;
                 match &typed.ty {
                     Type::Param(p) => return Err(unbounded(p, "printed")),
-                    Type::Named(n) if self.enums.contains_key(n) => {
+                    Type::Named(n) if self.is_enum(n) => {
                         return Err(format!(
                             "print does not know how to show a {} — `match` on it and \
                              print what each variant carries.",
@@ -3104,7 +3518,8 @@ impl TypeChecker {
                             continue;
                         }
                         let actual = self.check_expr(arg, None)?.ty;
-                        unify(declared, &actual, &mut map).map_err(|why| {
+                        let instances = self.instance_of.borrow().clone();
+                        unify(declared, &actual, &mut map, &instances).map_err(|why| {
                             self.blame(arg.span);
                             format!("in the call to `{}`, argument {}: {}", name, i + 1, why)
                         })?;
@@ -3123,8 +3538,15 @@ impl TypeChecker {
                             }
                         }
                     }
-                    param_tys = param_tys.iter().map(|t| substitute(t, &map)).collect();
-                    ret = substitute(&ret, &map);
+                    // Substituting can leave a generic application — `Option<T>` becomes
+                    // `Option<String>` — so each one is expanded into its instantiation
+                    // before anything compares it with an argument's actual type.
+                    let mut substituted = Vec::with_capacity(param_tys.len());
+                    for t in &param_tys {
+                        substituted.push(self.expand(&substitute(t, &map))?);
+                    }
+                    param_tys = substituted;
+                    ret = self.expand(&substitute(&ret, &map))?;
                     // If a type argument is still a parameter, this call is inside a
                     // generic being checked generically. There is nothing to emit yet:
                     // the copy appears when the ENCLOSING generic is instantiated, and
@@ -3133,6 +3555,10 @@ impl TypeChecker {
                         instantiated = Some(self.want(name, &type_args));
                     }
                 }
+                // `name` becomes the instantiation's SYMBOL from here on, because that is
+                // what codegen must call. `written` stays what the author typed, because
+                // that is what a message must say.
+                let written = name.clone();
                 let name = &instantiated.clone().unwrap_or_else(|| name.clone());
                 if args.len() != param_tys.len() {
                     return Err(format!(
@@ -3211,7 +3637,7 @@ impl TypeChecker {
                         return Err(format!(
                             "in the call to `{}`, argument {} must be {}, \
                              but it has type {}",
-                            name,
+                            written,
                             i + 1,
                             param_ty,
                             typed.ty
@@ -3283,7 +3709,7 @@ impl TypeChecker {
             }
 
             ExprKind::Field { base, field } => {
-                if let Some(r) = self.check_variant_lit(base, field, &[]) {
+                if let Some(r) = self.check_variant_lit(base, field, &[], expected) {
                     return r;
                 }
                 let typed_base = self.check_expr(base, None)?;
@@ -3307,7 +3733,7 @@ impl TypeChecker {
                         name, method
                     ));
                 }
-                if let Some(r) = self.check_variant_lit(base, method, args) {
+                if let Some(r) = self.check_variant_lit(base, method, args, expected) {
                     return r;
                 }
                 let typed_base = self.check_expr(base, None)?;
@@ -3644,6 +4070,7 @@ impl TypeChecker {
         base: &Expr,
         variant: &str,
         args: &[Expr],
+        expected: Option<&Type>,
     ) -> Option<Result<TypedExpr, String>> {
         let ExprKind::Var(enum_name) = &base.kind else { return None };
         // A local binding wins over an enum of the same name: shadowing is
@@ -3651,8 +4078,13 @@ impl TypeChecker {
         if self.env.contains_key(enum_name) {
             return None;
         }
-        let variants = self.enums.get(enum_name)?;
-        Some(self.build_variant(enum_name, variants.clone(), variant, args))
+        // A generic enum needs its arguments worked out first, and that is a different
+        // question with a different answer, so it gets its own path.
+        if self.generic_enums.contains_key(enum_name) {
+            return Some(self.build_generic_variant(enum_name, variant, args, expected));
+        }
+        let variants = self.variants_of(enum_name)?;
+        Some(self.build_variant(enum_name, variants, variant, args))
     }
 
     fn build_variant(
@@ -4218,6 +4650,10 @@ pub fn substitute(ty: &Type, map: &HashMap<String, Type>) -> Type {
             len: *len,
         },
         Type::Slice(elem) => Type::Slice(Box::new(substitute(elem, map))),
+        Type::Generic { name, args } => Type::Generic {
+            name: name.clone(),
+            args: args.iter().map(|a| substitute(a, map)).collect(),
+        },
         other => other.clone(),
     }
 }
@@ -4228,6 +4664,7 @@ pub fn mentions_param(ty: &Type) -> bool {
     match ty {
         Type::Param(_) => true,
         Type::Array { elem, .. } | Type::Slice(elem) => mentions_param(elem),
+        Type::Generic { args, .. } => args.iter().any(mentions_param),
         _ => false,
     }
 }
@@ -4236,7 +4673,38 @@ pub fn mentions_param(ty: &Type) -> bool {
 /// parameters as it goes. This is the whole of Burxt's inference for type arguments:
 /// structural, one direction, no unification variables and no backtracking — which is
 /// why `largest(xs)` needs no turbofish and why the rule fits in one function.
-fn unify(declared: &Type, actual: &Type, map: &mut HashMap<String, Type>) -> Result<(), String> {
+/// A type as the author would write it: `Option<String>` rather than `Option$String`.
+///
+/// Monomorphisation names an instantiation by mangling, and that name must never be what a
+/// message shows — a reader did not write `Option$String` and should not have to learn that
+/// it exists.
+pub fn show(ty: &Type, instances: &HashMap<String, (String, Vec<Type>)>) -> String {
+    match ty {
+        Type::Named(n) => match instances.get(n) {
+            Some((of, args)) => {
+                let inner: Vec<String> = args.iter().map(|a| show(a, instances)).collect();
+                format!("{}<{}>", of, inner.join(", "))
+            }
+            None => n.clone(),
+        },
+        Type::Array { elem, len } => format!("[{}; {}]", show(elem, instances), len),
+        Type::Slice(elem) => format!("[{}]", show(elem, instances)),
+        Type::Generic { name, args } => {
+            let inner: Vec<String> = args.iter().map(|a| show(a, instances)).collect();
+            format!("{}<{}>", name, inner.join(", "))
+        }
+        other => other.to_string(),
+    }
+}
+
+type Instances = HashMap<String, (String, Vec<Type>)>;
+
+fn unify(
+    declared: &Type,
+    actual: &Type,
+    map: &mut HashMap<String, Type>,
+    instances: &Instances,
+) -> Result<(), String> {
     match (declared, actual) {
         (Type::Param(name), concrete) => {
             if let Some(already) = map.get(name) {
@@ -4257,11 +4725,32 @@ fn unify(declared: &Type, actual: &Type, map: &mut HashMap<String, Type>) -> Res
             Ok(())
         }
         (Type::Array { elem: d, len: dl }, Type::Array { elem: a, len: al }) if dl == al => {
-            unify(d, a, map)
+            unify(d, a, map, instances)
         }
-        (Type::Slice(d), Type::Slice(a)) => unify(d, a, map),
+        (Type::Slice(d), Type::Slice(a)) => unify(d, a, map, instances),
+        // `Option<T>` against `Option$String`: the instantiation remembers what it was
+        // made from, so the arguments line up and `T` binds to String.
+        (Type::Generic { name: dn, args: dargs }, Type::Named(m)) => {
+            match instances.get(m) {
+                Some((of, aargs)) if of == dn && aargs.len() == dargs.len() => {
+                    for (d, a) in dargs.iter().zip(aargs) {
+                        unify(d, a, map, instances)?;
+                    }
+                    Ok(())
+                }
+                _ => Err(format!(
+                    "expected {}, but this is {}",
+                    show(declared, instances),
+                    show(actual, instances)
+                )),
+            }
+        }
         (d, a) if d == a => Ok(()),
-        (d, a) => Err(format!("expected {}, but this is {}", d, a)),
+        (d, a) => Err(format!(
+            "expected {}, but this is {}",
+            show(d, instances),
+            show(a, instances)
+        )),
     }
 }
 

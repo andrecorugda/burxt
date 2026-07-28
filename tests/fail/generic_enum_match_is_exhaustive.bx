@@ -1,0 +1,9 @@
+// An instantiation is a real enum, so its match is exhaustive like any other — and the
+// message names it as the author wrote it, not as the compiler mangled it.
+enum Option<T> { None, Some(T) }
+region r {
+    let found: Option<Int> = Option.Some(1);
+    match found {
+        Some(n) => { print(n); }
+    }
+}

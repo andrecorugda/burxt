@@ -1,0 +1,1 @@
+match` on `Option<Int>` does not handle `None`

@@ -1,0 +1,6 @@
+// The number of type arguments is part of naming the type.
+enum Option<T> { None, Some(T) }
+region r {
+    let wrong: Option<Int, Bool> = Option.None;
+    print(1);
+}

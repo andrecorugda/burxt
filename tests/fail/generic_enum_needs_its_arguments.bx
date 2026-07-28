@@ -1,0 +1,7 @@
+// `None` carries nothing, so nothing in this line says what `T` is. Refused with the
+// place to write it rather than a guess.
+enum Option<T> { None, Some(T) }
+region r {
+    let nothing = Option.None;
+    print(1);
+}

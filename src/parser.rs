@@ -249,6 +249,8 @@ impl Parser {
                 ))
             }
         };
+        let type_params = self.parse_type_params(&name)?;
+        self.type_params = type_params.clone();
         self.expect(&Token::LBrace)?;
         let mut variants = Vec::new();
         while !self.at(&Token::RBrace) {
@@ -286,7 +288,8 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace)?;
-        Ok(EnumDef { name, variants, span: Span { start, end: self.prev_end().max(start + 1) } })
+        self.type_params.clear();
+        Ok(EnumDef { name, type_params, variants, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     // ---- traits and impls ----
@@ -1157,10 +1160,25 @@ impl Parser {
             // `T` from a struct called `T`.
             Token::Ident(name) => {
                 if self.type_params.contains(&name) {
-                    Ok(Type::Param(name))
-                } else {
-                    Ok(Type::Named(name))
+                    return Ok(Type::Param(name));
                 }
+                // `Option<Int>` — a generic applied. `<` after a type name can only mean
+                // this, so no lookahead beyond the one token is needed.
+                if self.at(&Token::Lt) {
+                    self.bump();
+                    let mut args = Vec::new();
+                    loop {
+                        args.push(self.parse_type()?);
+                        if self.at(&Token::Comma) {
+                            self.bump();
+                        } else {
+                            break;
+                        }
+                    }
+                    self.expect(&Token::Gt)?;
+                    return Ok(Type::Generic { name, args });
+                }
+                Ok(Type::Named(name))
             }
             // `dyn Trait` — the only syntax that asks for dynamic dispatch.
             // If you never write `dyn`, you never pay for a vtable.

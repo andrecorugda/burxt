@@ -2009,12 +2009,59 @@ fn the_standard_library_compiles_and_works() {
         .expect("burxt");
     let printed = String::from_utf8_lossy(&ran.stdout).to_string();
     let complained = String::from_utf8_lossy(&ran.stderr).to_string();
-    let _ = fs::remove_dir_all(&scratch);
     assert!(ran.status.success(), "the library program failed:\n{}", complained);
     assert_eq!(
         printed,
         "7\npadded\n-42\na | b | c\n13\ntrue\ntrue\n0\ncaptured\n",
         "the library answered differently than expected"
+    );
+
+    // `Option<T>` and `Result<T, E>` are LIBRARY types — four lines of Burxt each, with no
+    // compiler support beyond generics. That is the test M7 set for whether the generics are
+    // real, so it is checked rather than taken on trust.
+    let absence = scratch.join("uses_option.bx");
+    fs::write(
+        &absence,
+        format!(
+            "use \"{0}/option.bx\";\nuse \"{0}/result.bx\";\n\
+             fn find(xs: [Int], want: Int) -> Option<Int> {{\n  let mut i = 0;\n  \
+             for x in xs {{\n    if x == want {{ return Option.Some(i); }}\n    \
+             i += 1;\n  }}\n  return Option.None;\n}}\n\
+             fn divide(a: Int, b: Int) -> Result<Int, String> {{\n  \
+             if b == 0 {{ return Result.Err(\"division by zero\"); }}\n  \
+             return Result.Ok(div_trunc(a, b));\n}}\n\
+             region r {{\n  let mut xs: [Int] = [];\n  let a = push(xs, 5);\n  \
+             let b = push(xs, 9);\n  print(option_or(find(xs, 9), 0 - 1));\n  \
+             print(option_or(find(xs, 7), 0 - 1));\n  \
+             print(option_is_none(find(xs, 7)));\n  \
+             match divide(10, 2) {{\n    Ok(n) => {{ print(n); }}\n    \
+             Err(why) => {{ print(why); }}\n  }}\n  \
+             match divide(1, 0) {{\n    Ok(n) => {{ print(n); }}\n    \
+             Err(why) => {{ print(why); }}\n  }}\n  \
+             let words: Option<String> = Option.Some(\"here\");\n  \
+             print(option_or(words, \"absent\"));\n}}\n",
+            lib.display()
+        ),
+    )
+    .unwrap();
+    let absent = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("run")
+        .arg(&absence)
+        .arg("-o")
+        .arg(scratch.join("uses_option"))
+        .current_dir(&scratch)
+        .output()
+        .expect("burxt run");
+    let said = String::from_utf8_lossy(&absent.stdout).to_string();
+    let why = String::from_utf8_lossy(&absent.stderr).to_string();
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(absent.status.success(), "the absence library failed:\n{}\n{}", said, why);
+    let want = "1\n-1\ntrue\n5\ndivision by zero\nhere\n";
+    assert!(
+        said.ends_with(want),
+        "Option/Result printed {:?}, expected it to end with {:?}",
+        said,
+        want
     );
 }
 
@@ -2226,8 +2273,46 @@ fn generics_monomorphise_and_run() {
         ),
     ];
 
+    let enum_cases: &[(&str, &str, &str)] = &[
+        (
+            // The instantiation is an ordinary enum: its own layout, its own exhaustive
+            // match, and nothing in the checker below the rewrite knows generics exist.
+            "option",
+            "enum Option<T> { None, Some(T) }\n\
+             fn or_else<T>(o: Option<T>, fallback: T) -> T {\n  match o {\n    \
+             None => { return fallback; }\n    Some(v) => { return v; }\n  }\n}\n\
+             region r {\n  print(or_else(Option.Some(7), 0));\n  \
+             let missing: Option<Int> = Option.None;\n  print(or_else(missing, 42));\n  \
+             let words: Option<String> = Option.Some(\"here\");\n  \
+             print(or_else(words, \"absent\"));\n}\n",
+            "7\n42\nhere\n",
+        ),
+        (
+            "result",
+            "enum Result<T, E> { Ok(T), Err(E) }\n\
+             fn divide(a: Int, b: Int) -> Result<Int, String> {\n  \
+             if b == 0 { return Result.Err(\"division by zero\"); }\n  \
+             return Result.Ok(div_trunc(a, b));\n}\n\
+             region r {\n  match divide(10, 2) {\n    Ok(n) => { print(n); }\n    \
+             Err(why) => { print(why); }\n  }\n  match divide(1, 0) {\n    \
+             Ok(n) => { print(n); }\n    Err(why) => { print(why); }\n  }\n}\n",
+            "5\ndivision by zero\n",
+        ),
+        (
+            // Two instantiations of one enum have SEPARATE layouts: a Decimal payload is
+            // a scaled i64 in place, not a pointer to one.
+            "separate_layouts",
+            "enum Holds<T> { Nothing, It(T) }\n\
+             region r {\n  let money: Holds<Decimal<2>> = Holds.It($19.99);\n  \
+             let text: Holds<String> = Holds.It(\"words\");\n  \
+             match money { Nothing => { print(0); } It(m) => { print(m); } }\n  \
+             match text { Nothing => { print(0); } It(t) => { print(t); } }\n}\n",
+            "19.99\nwords\n",
+        ),
+    ];
+
     let mut failures = Vec::new();
-    for (name, program, expected) in cases {
+    for (name, program, expected) in cases.iter().chain(enum_cases) {
         let source = scratch.join(format!("{}.bx", name));
         fs::write(&source, program).unwrap();
         let exe = scratch.join(name);

@@ -70,6 +70,11 @@ pub enum Type {
     /// A fixed-size stack array `[T; N]`. Arrays exist only behind bindings
     /// in this slice: indexed reads/writes and `len(a)` — never a bare value.
     Array { elem: Box<Type>, len: u32 },
+    /// A generic type applied to arguments: `Option<Int>`, `Result<Int, String>`.
+    /// It exists only between parsing and monomorphisation — the checker replaces every
+    /// concrete one with `Named` of the instantiation's mangled name, so everything
+    /// after it (layout, `match`, codegen) sees an ordinary nominal type.
+    Generic { name: String, args: Vec<Type> },
     /// A type PARAMETER, inside a generic's own body and signature — the `T` of
     /// `fn largest<T>(xs: [T]) -> T`. It is not a type any value has: every one is
     /// replaced by a concrete type before codegen, one copy per instantiation.
@@ -107,6 +112,10 @@ impl std::fmt::Display for Type {
             Type::Slice(elem) => write!(f, "[{}]", elem),
             Type::Array { elem, len } => write!(f, "[{}; {}]", elem, len),
             Type::Param(name) => write!(f, "{}", name),
+            Type::Generic { name, args } => {
+                let inner: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+                write!(f, "{}<{}>", name, inner.join(", "))
+            }
             Type::Dyn(name) => write!(f, "dyn {}", name),
         }
     }
@@ -490,6 +499,9 @@ pub struct Variant {
 #[derive(Debug, Clone)]
 pub struct EnumDef {
     pub name: String,
+    /// `enum Option<T> { ... }` — the names this enum is generic over. Empty for the
+    /// overwhelming majority. See spec/M7-GENERICS.md.
+    pub type_params: Vec<String>,
     pub variants: Vec<Variant>,
     /// Where this item was written, for errors about the item itself.
     pub span: Span,

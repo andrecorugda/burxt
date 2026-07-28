@@ -1,8 +1,10 @@
 # Burxt — Generics (M7)
 
-> Status: **slice 1 DONE in stage-0 (v0.0.93)** — generic **functions**, monomorphised, with
-> type arguments inferred at the call site and no turbofish required. What remains: bounds
-> (`<T: Ordered>`), generic structs and enums, and stage-1. Stage-1 does not read generics yet,
+> Status: **slices 1–2 DONE in stage-0 (v0.0.93–v0.0.94)** — generic **functions** and generic
+> **enums**, monomorphised, with type arguments inferred at the call site and no turbofish
+> required. Acceptance 8 is met: `Option<T>` and `Result<T, E>` are in `lib/`, written in
+> Burxt, with no compiler support beyond this milestone. What remains: bounds
+> (`<T: Ordered>`), generic **structs**, and stage-1. Stage-1 does not read generics yet,
 > which is why the tests for this slice live in `tests/runner.rs` rather than `tests/pass/` —
 > the same staging M5 used, with the second implementation following behind a ratchet.
 >
@@ -141,6 +143,35 @@ annotation in the body, names it `identity$Int`, and hands it to exactly the cod
 every other function. No second checking path means no second path that can disagree with the
 first.
 
+### Slice 2 — generic enums, and what made them cheap
+
+`enum Option<T> { None, Some(T) }` works, and so does `Result<T, E>`. The mechanism is the one
+slice 1 built, applied to types: **an application is rewritten into the nominal type of its
+instantiation.** `Option<Int>` becomes `Option$Int`, a perfectly ordinary enum with its own
+layout, and after that rewrite *no rule in the checker knows generics exist* — `match`,
+exhaustiveness, payload binding, layout and codegen all see what they have always seen.
+
+The rewrite happens in a pre-pass over the AST (`expand_program`), and again after each
+function instantiation, because substituting `T := Int` can turn `Option<T>` into `Option<Int>`.
+
+Three things it needed that functions did not:
+
+**Inference has a second source.** `Option.Some(3)` infers `T` from the payload. `Option.None`
+carries nothing, so it can only come from the context — which means an instantiation has to
+remember what it was made from, so `Option$Int` can be read back as `(Option, [Int])` when a
+declared type says what a variant does not.
+
+**A generic's `match` is checked generically.** Inside `fn or_else<T>(o: Option<T>, ...)` the
+scrutinee's type is still `Option<T>`: its *variants* are known even though `T` is not, so the
+arms, the exhaustiveness and the bindings are all checked once at the declaration. Both paths
+share one `check_match_arms`, so an instantiation cannot be checked differently from the
+declaration that produced it.
+
+**The mangled name must never be shown.** A reader did not write `Option$String` and should not
+learn that it exists, so every message pretty-prints an instantiation back to `Option<String>`.
+That is a small function and it is not optional: the alternative is a language whose errors talk
+about its own implementation.
+
 **One surprise worth recording:** `fn first<T>(xs: [T])` does not accept a `[Int; 3]`, and
 should not. `[T]` is a growable array and `[Int; 3]` is a fixed one — different types with
 different storage, exactly as [M10 §1b](M10-ERGONOMICS.md) says of `for`. A generic over a
@@ -158,6 +189,7 @@ fixed array's *length* is a different feature, deferred above.
    `List<Decimal<4>>` differ where the element does, and `burxt layout` shows both.
 6. An unused generic emits no code — checked by looking for the symbol in the IR.
 7. Both compilers implement it and the differential test passes.
-8. `Option<T>` and `Result<T, E>` (M8) are written **in Burxt, as library types**, with no
+8. ✅ `Option<T>` and `Result<T, E>` (M8) are written **in Burxt, as library types**, with no
    compiler support beyond what this milestone provides. That is the test of whether the
-   generics are real.
+   generics are real, and they passed it: `lib/option.bx` and `lib/result.bx`, four lines of
+   declaration each, checked by `the_standard_library_compiles_and_works`.
