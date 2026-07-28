@@ -1645,8 +1645,9 @@ fn the_guide_and_examples_are_linked_and_compile() {
 /// against its recorded output.
 ///
 /// The number is a **ratchet**: it may only go up. It was 31 when the backend knew nothing
-/// of Decimals; the target is 88, at which point the Burxt compiler can build every
-/// program the Rust one can.
+/// of Decimals, 58 when it learned them, 77 once enums, `match`, interpolation, `extern fn`
+/// and `musttail` followed. The target is 88, at which point the Burxt compiler can build
+/// every program the Rust one can.
 #[test]
 fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -1719,8 +1720,8 @@ fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
         correct, total, refused
     );
     assert!(
-        correct >= 58,
-        "the Burxt backend went backwards: {} of {} correct, was 58",
+        correct >= 77,
+        "the Burxt backend went backwards: {} of {} correct, was 77",
         correct,
         total
     );

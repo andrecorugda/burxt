@@ -161,6 +161,9 @@ struct Unit {
     loop_conds: [String],
     loop_ends: [String],
     in_function: Int,
+    // Where the program's tokens end, which is not where the token ARRAY ends: an
+    // interpolation fragment appends its own, and the parser must not walk into them.
+    token_end: Int,
     no_struct: Int,
     // Set while typing the operands of `*`. Multiplication combines a quantity with a
     // rate, so its operand scales differ by nature: a literal that cannot narrow to
@@ -446,16 +449,29 @@ fn (mut self: Unit) scan_punct(src: String, from: Int) -> Int allocates {
 
 // ---- the loop --------------------------------------------------------------
 fn (mut self: Unit) run(src: String) -> Int allocates {
-    let mut i: Int = 0;
+    let count: Int = self.run_range(src, 0, len(src));
+    // Where the PROGRAM's tokens end. An interpolation fragment is lexed later and its
+    // tokens are appended, so without this the parser would walk off the end of the
+    // program and try to read `n` from `"{n}"` as a top-level statement.
+    self.token_end = len(self.toks);
+    return count;
+}
+
+// Lexing a SLICE of the source rather than all of it. Interpolation needs this: the
+// bytes between `{` and `}` are real Burxt, and the honest way to read them is with the
+// lexer that reads everything else. The tokens are appended, and their spans are absolute,
+// so nothing already parsed shifts and every diagnostic still points at the right byte.
+fn (mut self: Unit) run_range(src: String, from: Int, until: Int) -> Int allocates {
+    let mut i: Int = from;
     while true {
         i = skip_trivia(src, i);
-        if i >= len(src) {
+        if i >= until {
             break;
         }
         let b: Int = byte_at(src, i);
         if is_alpha(b) {
             let start: Int = i;
-            while i < len(src) && is_name_byte(byte_at(src, i)) {
+            while i < until && is_name_byte(byte_at(src, i)) {
                 i = i + 1;
             }
             let code: Int = self.keyword_code(src, start, i - start);
@@ -503,7 +519,7 @@ fn (self: Unit) at_word(src: String, word: String) -> Bool {
 }
 
 fn (self: Unit) done() -> Bool {
-    return self.pos >= len(self.toks);
+    return self.pos >= self.token_end;
 }
 
 fn (mut self: Unit) advance() -> Int {
@@ -947,6 +963,23 @@ fn (mut self: Unit) check_construction(src: String, holder: Ty, call: Node) -> I
     return 0;
 }
 
+// Every piece of an interpolation, checked as an expression and refused if it has no
+// rendering the language could choose. Same rule as `print`, for the same reason.
+fn (mut self: Unit) check_pieces(src: String, n: Node) -> Int allocates {
+    let mut i: Int = 0;
+    while i < n.b {
+        let piece: Int = self.kids[n.a + i];
+        let shown: Ty = self.type_of(src, piece, ty_unknown());
+        if shown.kind == 46 || shown.kind == 47 || shown.kind == 48 || shown.kind == 49 {
+            let e: Int = self.complain_at(src, self.nodes[piece].tok,
+                "an interpolated value renders a number, a Bool, a Decimal or a String — "
+                + ty_show(src, shown) + " has none the language can choose for it");
+        }
+        i = i + 1;
+    }
+    return 1;
+}
+
 // The payload types of `Enum.Variant`, bound to an arm's names.
 fn (mut self: Unit) bind_arm(src: String, holder: Ty, arm: Node) -> Int allocates {
     if holder.kind != 46 {
@@ -1327,6 +1360,68 @@ fn (mut self: Unit) parse_args(src: String) -> Int allocates {
     return self.add(15, start, count, 0, 0, here);
 }
 
+// `"total: {amount} due"` becomes a LIST of pieces — literal runs and expressions — and
+// nothing else in the language needs to know it was ever one token. Node kind 18: the
+// children are in `kids`, alternating as the source did.
+//
+// The fragments are lexed in place with `run_range` and parsed with the ordinary
+// expression parser, because an interpolated expression is an ordinary expression: it can
+// be a call, a field access, arithmetic. Anything less would be a second, worse grammar
+// living inside string literals — which is the mistake this design exists to avoid.
+fn (mut self: Unit) parse_interpolation(src: String, here: Int, t: Tok) -> Int allocates {
+    let base: Int = len(self.stack);
+    let mut count: Int = 0;
+    let inside: Int = t.start + 1;                   // past the opening quote
+    let ending: Int = t.start + t.length - 1;        // before the closing one
+    let mut i: Int = inside;
+    let mut run_from: Int = inside;
+
+    while i < ending {
+        let b: Int = byte_at(src, i);
+        if b == 92 {                                 // an escape: `\{` is a literal brace
+            i = i + 2;
+            continue;
+        }
+        if b == 123 {                                // '{' opens a fragment
+            if i > run_from {
+                let literal: Int = self.add(3, run_from, i - run_from, 1, 0, here);
+                push(self.stack, literal);
+                count = count + 1;
+            }
+            let mut close: Int = i + 1;
+            while close < ending && byte_at(src, close) != 125 {
+                close = close + 1;
+            }
+            // Lex and parse the bytes between the braces, then put the cursor back: the
+            // fragment's tokens live at the END of the stream, so nothing else moves.
+            let resume: Int = self.pos;
+            let first: Int = len(self.toks);
+            let lexed: Int = self.run_range(src, i + 1, close);
+            if len(self.toks) > first {
+                self.pos = first;
+                let piece: Int = self.parse_expr(src);
+                self.pos = resume;
+                if piece < 0 {
+                    return -1;
+                }
+                push(self.stack, piece);
+                count = count + 1;
+            }
+            i = close + 1;
+            run_from = i;
+            continue;
+        }
+        i = i + 1;
+    }
+    if ending > run_from {
+        let literal: Int = self.add(3, run_from, ending - run_from, 1, 0, here);
+        push(self.stack, literal);
+        count = count + 1;
+    }
+    let start: Int = self.commit(base);
+    return self.add(18, start, count, 0, 0, here);
+}
+
 fn (mut self: Unit) parse_primary(src: String) -> Int allocates {
     let here: Int = self.pos;
     let k: Int = self.kind_at(0);
@@ -1342,7 +1437,11 @@ fn (mut self: Unit) parse_primary(src: String) -> Int allocates {
         return self.add(2, t.scale, 0, 0, t.value, here);
     }
     if k == 4 {
+        let t: Tok = self.toks[self.pos];
         let n: Int = self.advance();
+        if t.interpolated {
+            return self.parse_interpolation(src, here, t);
+        }
         return self.add(3, 0, 0, 0, 0, here);
     }
     if k == 120 || k == 121 {                        // true / false
@@ -2359,16 +2458,18 @@ fn (mut self: Unit) type_of_inner(src: String, node: Int, expected: Ty) -> Ty al
             + "money is refused");
         return ty_unknown();
     }
-    if n.kind == 3 {                                 // a String literal
-        let t: Tok = self.toks[n.tok];
-        // Interpolation IS `to_string` plus `+`, so it needs what those need. Stage-1
-        // does not split the fragments yet, so any interpolated literal counts as a
-        // join — which errs toward asking for a region, never toward allowing one out.
-        if t.interpolated {
-            if !self.has_region() {
-                let r: Int = self.needs_region(src, n.tok, "this interpolated String");
-            }
+    if n.kind == 3 {                                 // a String literal, or a piece of one
+        return ty_simple(42);
+    }
+
+    if n.kind == 18 {                                // an interpolated String
+        // Interpolation IS `to_string` plus `+`, so as a VALUE it allocates and needs a
+        // region. As the argument of a `print` it does not — the pieces go out in order
+        // and nothing is joined — which is why the print statement checks it separately.
+        if !self.has_region() {
+            let r: Int = self.needs_region(src, n.tok, "this interpolated String");
         }
+        let checked: Int = self.check_pieces(src, n);
         return ty_simple(42);
     }
     if n.kind == 4 { return ty_simple(41); }
@@ -2908,13 +3009,11 @@ fn (mut self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -> Int allo
                 + "for it");
         }
         let target: Node = self.nodes[n.a];
-        if target.kind == 3 {
-            if self.toks[target.tok].interpolated {
-                // Printing an interpolated string writes its pieces in order, so no
-                // String is built and no region is needed. Interpolation used as a
-                // VALUE is a join, and that one does need one.
-                return 1;
-            }
+        if target.kind == 18 {
+            // Printing an interpolated string writes its pieces in order, so no String is
+            // built and no region is needed. Used as a VALUE it is a join, and that does.
+            let checked: Int = self.check_pieces(src, target);
+            return 1;
         }
     }
     if n.kind == 62 || n.kind == 70 {                // print, expression statement
@@ -3709,10 +3808,29 @@ fn (mut self: Unit) cells_of(src: String, ty: Ty) -> Int allocates {
             return 1;
         }
         let decl: TypeDecl = self.types[found];
-        if decl.kind != 82 {
-            return 1;                                // an enum is a tag plus a payload
-        }
         let item: Node = self.nodes[decl.node];
+        if decl.kind == 83 {
+            // An enum is a TAG plus room for the widest variant's payload. Every value of
+            // the type is the same size, so one may be assigned where another was — which
+            // is what makes a variant a value rather than a separate type.
+            let mut widest: Int = 0;
+            let mut v: Int = 0;
+            while v < item.b {
+                let variant: Node = self.nodes[self.kids[item.a + v]];
+                let mut carried: Int = 0;
+                let mut p: Int = 0;
+                while p < variant.c {
+                    carried = carried + self.cells_of(src, self.ty_of(src, self.subs[variant.b + p]));
+                    p = p + 1;
+                }
+                if carried > widest { widest = carried; }
+                v = v + 1;
+            }
+            return 1 + widest;
+        }
+        if decl.kind != 82 {
+            return 1;
+        }
         let mut total: Int = 0;
         let mut f: Int = 0;
         while f < item.b {
@@ -3843,9 +3961,23 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
         return to_string(n.value);
     }
     if n.kind == 2 {                                 // a Decimal literal
-        // Scaled integer, and nothing else: $19.99 IS 1999. The scale lives in the type,
-        // which is why no conversion happens here and none can be lost.
-        return to_string(n.value);
+        // Scaled integer, and nothing else: $19.99 IS 1999. But a literal takes the scale
+        // of its CONTEXT when that loses nothing — `$5` in a Decimal<2> is 5.00, the
+        // integer 500 — and the checker recorded which scale it settled on. Emitting the
+        // lexer's raw digits instead printed `$5` as 0.05.
+        let settled: Ty = self.type_at(node);
+        let mut value: Int = n.value;
+        if settled.kind == 45 {
+            if settled.scale > n.a {
+                value = value * power_of_ten(settled.scale - n.a);
+            }
+            if settled.scale < n.a {
+                // Narrowing, which the checker allowed only because every digit dropped
+                // is a zero: `42.0` in a Decimal<0> is 42, and the division is exact.
+                value = div_trunc(value, power_of_ten(n.a - settled.scale));
+            }
+        }
+        return to_string(value);
     }
     if n.kind == 4 {                                 // a Bool literal
         if n.value == 1 {
@@ -3853,18 +3985,37 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
         }
         return "0";
     }
-    if n.kind == 3 {                                 // a String literal
-        let t: Tok = self.toks[n.tok];
-        if t.interpolated {
-            let e: Int = self.complain_at(src, n.tok,
-                "the Burxt backend does not emit interpolation yet: it desugars to "
-                + "`to_string` and `+`, and neither is emitted in this slice");
-            return "@burxt.str_true";
+    if n.kind == 3 {                                 // a String literal, or a piece
+        if n.c == 1 {
+            // A literal run inside an interpolation: the span is the bytes themselves,
+            // with no quotes around them.
+            let inner: String = self.intern(src, n.a, n.b);
+            return "ptrtoint (ptr " + inner + " to i64)";
         }
+        let t: Tok = self.toks[n.tok];
         // The token's span includes its quotes, and the bytes between them are the
         // string. One place knows that, and it is here.
         let global: String = self.intern(src, t.start + 1, t.length - 2);
         return "ptrtoint (ptr " + global + " to i64)";
+    }
+
+    if n.kind == 18 {                                // an interpolated String, as a value
+        // The join it stands for, left to right — byte-identical to writing the `+` and
+        // `to_string` calls by hand, which is the promise interpolation makes.
+        if n.b == 0 {
+            return "ptrtoint (ptr " + self.intern_text("") + " to i64)";
+        }
+        let mut joined: String = self.emit_piece(src, self.kids[n.a]);
+        let mut i: Int = 1;
+        while i < n.b {
+            let piece: String = self.emit_piece(src, self.kids[n.a + i]);
+            let next: String = self.fresh();
+            let appended: Int = self.w("  " + next + " = call i64 @burxt.concat(i64 "
+                                       + joined + ", i64 " + piece + ")\n");
+            joined = next;
+            i = i + 1;
+        }
+        return joined;
     }
     if n.kind == 5 {                                 // a name
         let t: Tok = self.toks[n.tok];
@@ -3883,6 +4034,25 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
         let visited: Int = self.w("  " + reg + " = load i64, ptr %v" + to_string(slot)
                                   + "\n");
         return reg;
+    }
+
+    // `Enum.Variant` and `Enum.Variant(x)` parse as a field access and a method call. The
+    // base names a TYPE rather than a value, which is the only thing that tells them
+    // apart — the same check the typechecker makes, for the same reason.
+    if n.kind == 11 || n.kind == 14 {
+        let base_node: Node = self.nodes[n.a];
+        if base_node.kind == 5 {
+            let base_name: Tok = self.toks[base_node.tok];
+            let declared: Int = self.find_type(src, base_name.start, base_name.length);
+            if declared >= 0 {
+                if self.types[declared].kind == 83 {
+                    let holder: Ty = Ty { kind: 46, scale: 0, contract: 0,
+                                          name_start: base_name.start,
+                                          name_len: base_name.length };
+                    return self.emit_construction(src, holder, n, n.kind == 14);
+                }
+            }
+        }
     }
 
     if n.kind == 11 {                                // a field
@@ -4205,6 +4375,12 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
             args = args + "i64 " + value;
             i = i + 1;
         }
+        let found_fn: Int = self.find_fun(src, t.start, t.length);
+        if found_fn >= 0 {
+            if flag_extern(self.funs[found_fn].flags) == 1 {
+                return self.emit_c_call(src, n, self.funs[found_fn]);
+            }
+        }
         let answers: Ty = self.type_at(node);
         if self.is_aggregate(answers) {
             let storage: String = self.scratch(self.cells_of(src, answers));
@@ -4233,6 +4409,81 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
 }
 
 // ---- statements --------------------------------------------------------------
+// A call into C. Every Burxt value is an i64 here, and C's types are not, so each
+// argument is cast at the boundary and the answer is cast back — which is the only place
+// in the emitter where a value changes representation rather than meaning.
+fn (mut self: Unit) emit_c_call(src: String, n: Node, signature: Fun) -> String allocates {
+    let list: Node = self.nodes[n.a];
+    let params: Node = self.nodes[signature.params];
+    let mut args: String = "";
+    let mut i: Int = 0;
+    while i < list.b {
+        let value: String = self.emit_expr(src, self.kids[list.a + i]);
+        let mut want: Ty = ty_simple(40);
+        if i < params.b {
+            want = self.ty_of(src, self.nodes[self.kids[params.a + i]].a);
+        }
+        let shape: String = c_type_of(want);
+        let mut passed: String = value;
+        if shape == "ptr" {
+            let as_ptr: String = self.fresh();
+            let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + value + " to ptr\n");
+            passed = as_ptr;
+        }
+        if shape == "i32" {
+            let narrow: String = self.fresh();
+            let cast: Int = self.w("  " + narrow + " = trunc i64 " + value + " to i32\n");
+            passed = narrow;
+        }
+        if i > 0 {
+            args = args + ", ";
+        }
+        args = args + shape + " " + passed;
+        i = i + 1;
+    }
+
+    let shape: String = c_type_of(signature.ret);
+    let answer: String = self.fresh();
+    let called: Int = self.w("  " + answer + " = call " + shape + " @"
+        + substring(src, signature.start, signature.length) + "(" + args + ")\n");
+    if shape == "i32" {
+        // Sign-extended, not zero-extended: a C function that answers -1 means -1.
+        let widened: String = self.fresh();
+        let ext: Int = self.w("  " + widened + " = sext i32 " + answer + " to i64\n");
+        return widened;
+    }
+    return answer;
+}
+
+// One piece of an interpolation, as a String. A String piece is itself; anything else is
+// rendered the way `to_string` would render it, because interpolation IS `to_string`.
+fn (mut self: Unit) emit_piece(src: String, node: Int) -> String allocates {
+    let value: String = self.emit_expr(src, node);
+    let shown: Ty = self.type_at(node);
+    if shown.kind == 42 {
+        return value;
+    }
+    let reg: String = self.fresh();
+    if shown.kind == 45 {
+        let format: String = self.decimal_format(shown.scale);
+        let called: Int = self.w("  " + reg + " = call i64 @burxt.to_string_dec(i64 "
+            + value + ", i64 " + to_string(power_of_ten(shown.scale)) + ", ptr "
+            + format + ")\n");
+        return reg;
+    }
+    if shown.kind == 41 {
+        let bit: String = self.fresh();
+        let tested: Int = self.w("  " + bit + " = icmp ne i64 " + value + ", 0\n");
+        let chosen: Int = self.w("  " + reg + " = select i1 " + bit
+            + ", i64 ptrtoint (ptr @burxt.str_true to i64), i64 ptrtoint (ptr "
+            + "@burxt.str_false to i64)\n");
+        return reg;
+    }
+    let called: Int = self.w("  " + reg + " = call i64 @burxt.to_string_int(i64 " + value
+                             + ")\n");
+    return reg;
+}
+
 // The builtins with a runtime helper behind them, and the ones that are a single
 // instruction. Anything else is refused by name.
 // `memcpy` of a whole aggregate. Burxt passes and stores aggregates BY VALUE, so this
@@ -4290,6 +4541,63 @@ fn (mut self: Unit) place_of(src: String, node: Int) -> String allocates {
     }
     let e: Int = self.complain_at(src, n.tok, "this is not something to assign to");
     return "";
+}
+
+// Where a variant sits in its enum's declaration — that position IS the tag, so the two
+// compilers agree on it without recording anything: the declaration is the shared fact.
+// -1 when the name is not a variant of this enum.
+fn (mut self: Unit) variant_index(src: String, holder: Ty, name: Tok) -> Int allocates {
+    let found: Int = self.find_type(src, holder.name_start, holder.name_len);
+    if found < 0 {
+        return -1;
+    }
+    let decl: TypeDecl = self.types[found];
+    if decl.kind != 83 {
+        return -1;
+    }
+    let item: Node = self.nodes[decl.node];
+    let mut v: Int = 0;
+    while v < item.b {
+        let variant: Node = self.nodes[self.kids[item.a + v]];
+        let named: Tok = self.toks[variant.tok];
+        if spans_eq(src, named.start, named.length, name.start, name.length) {
+            return v;
+        }
+        v = v + 1;
+    }
+    return -1;
+}
+
+// `Enum.Variant` or `Enum.Variant(payload)`: the tag in cell 0, the payload after it.
+fn (mut self: Unit) emit_construction(src: String, holder: Ty, call: Node,
+                                      has_args: Bool) -> String allocates {
+    let tag: Int = self.variant_index(src, holder, self.toks[call.tok]);
+    let storage: String = self.scratch(self.cells_of(src, holder));
+    let stored: Int = self.w("  store i64 " + to_string(tag) + ", ptr " + storage + "\n");
+
+    if has_args {
+        let list: Node = self.nodes[call.b];
+        let mut cell: Int = 1;
+        let mut i: Int = 0;
+        while i < list.b {
+            let value: String = self.emit_expr(src, self.kids[list.a + i]);
+            let at: String = self.fresh();
+            let stepped: Int = self.w("  " + at + " = getelementptr i64, ptr " + storage
+                                      + ", i64 " + to_string(cell) + "\n");
+            let payload_ty: Ty = self.type_at(self.kids[list.a + i]);
+            let width: Int = self.cells_of(src, payload_ty);
+            if self.is_aggregate(payload_ty) {
+                let copied: Int = self.copy_cells(src, at, value, width);
+            } else {
+                let put: Int = self.w("  store i64 " + value + ", ptr " + at + "\n");
+            }
+            cell = cell + width;
+            i = i + 1;
+        }
+    }
+    let reg: String = self.fresh();
+    let address: Int = self.w("  " + reg + " = ptrtoint ptr " + storage + " to i64\n");
+    return reg;
 }
 
 // A method's symbol: the receiver's type, a dot, the method's name. Two types may both
@@ -4552,6 +4860,22 @@ fn (mut self: Unit) emit_stmt(src: String, node: Int) -> Int allocates {
     }
 
     if n.kind == 62 {                                // print
+        let printed_node: Node = self.nodes[n.a];
+        if printed_node.kind == 18 {
+            // Pieces in order, then one newline. No join means no allocation, which is
+            // why `print("a {b}")` needs no region while `let s = "a {b}"` does.
+            let mut piece_index: Int = 0;
+            while piece_index < printed_node.b {
+                let piece: String = self.emit_piece(src, self.kids[printed_node.a + piece_index]);
+                let as_ptr: String = self.fresh();
+                let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + piece
+                                       + " to ptr\n");
+                let out: Int = self.w("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_str, "
+                                      + "ptr " + as_ptr + ")\n");
+                piece_index = piece_index + 1;
+            }
+            return self.w("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_nl)\n");
+        }
         let shown: Ty = self.type_at(n.a);
         let value: String = self.emit_expr(src, n.a);
         if shown.kind == 41 {                        // a Bool renders as a word
@@ -4578,6 +4902,29 @@ fn (mut self: Unit) emit_stmt(src: String, node: Int) -> Int allocates {
         let printed: Int = self.w("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_int, i64 "
                                   + value + ")\n");
         return self.w("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_nl)\n");
+    }
+
+    if n.kind == 64 {                                // return tail
+        // `musttail` is the guarantee, not a hope: LLVM either replaces the frame or
+        // refuses to compile. The checker already proved the signatures match, which is
+        // exactly what LLVM requires of a musttail call.
+        let value: Node = self.nodes[n.a];
+        let target: Tok = self.toks[value.tok];
+        let list: Node = self.nodes[value.a];
+        let mut args: String = "";
+        let mut i: Int = 0;
+        while i < list.b {
+            let arg: String = self.emit_expr(src, self.kids[list.a + i]);
+            if i > 0 {
+                args = args + ", ";
+            }
+            args = args + "i64 " + arg;
+            i = i + 1;
+        }
+        let answer: String = self.fresh();
+        let jumped: Int = self.w("  " + answer + " = musttail call i64 @"
+            + substring(src, target.start, target.length) + "(" + args + ")\n");
+        return self.w("  ret i64 " + answer + "\n");
     }
 
     if n.kind == 63 {                                // return
@@ -4650,6 +4997,46 @@ fn (mut self: Unit) emit_stmt(src: String, node: Int) -> Int allocates {
         return self.w("  store i64 " + mark + ", ptr @burxt.bump\n");
     }
 
+    if n.kind == 71 {                                // match
+        // The value is an enum, so its first cell is the tag. Each arm is a comparison
+        // against the variant's position in the declaration, and the arm's bindings are
+        // the payload cells that follow. No jump table: a chain of comparisons is what a
+        // reader would write, and LLVM turns a dense one into a switch anyway.
+        let holder: Ty = self.type_at(n.a);
+        let subject: String = self.emit_expr(src, n.a);
+        let as_ptr: String = self.fresh();
+        let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + subject + " to ptr\n");
+        let tag: String = self.fresh();
+        let loaded: Int = self.w("  " + tag + " = load i64, ptr " + as_ptr + "\n");
+        let done: String = self.fresh_label("match.end");
+
+        let mut i: Int = 0;
+        while i < n.c {
+            let arm: Node = self.nodes[self.kids[n.b + i]];
+            let which: Int = self.variant_index(src, holder, self.toks[arm.tok]);
+            let hit: String = self.fresh();
+            let compared: Int = self.w("  " + hit + " = icmp eq i64 " + tag + ", "
+                                       + to_string(which) + "\n");
+            let body_label: String = self.fresh_label("match.arm");
+            let next_label: String = self.fresh_label("match.next");
+            let branched: Int = self.w("  br i1 " + hit + ", label %" + body_label
+                                       + ", label %" + next_label + "\n"
+                                       + body_label + ":\n");
+
+            // The bindings name the payload cells, and leave scope with the arm.
+            let base: Int = len(self.slots);
+            let bound: Int = self.bind_payload(src, holder, arm, as_ptr);
+            let body: Int = self.emit_block(src, arm.a);
+            let dropped: Int = truncate(self.slots, base);
+
+            let joined: Int = self.w("  br label %" + done + "\n" + next_label + ":\n");
+            i = i + 1;
+        }
+        // Every variant has an arm — the checker proved it — so falling past the last
+        // comparison is unreachable. LLVM still needs the block terminated.
+        return self.w("  br label %" + done + "\n" + done + ":\n");
+    }
+
     if n.kind == 70 {                                // an expression, for its effect
         let value: String = self.emit_expr(src, n.a);
         return 1;
@@ -4657,6 +5044,55 @@ fn (mut self: Unit) emit_stmt(src: String, node: Int) -> Int allocates {
 
     let e: Int = self.complain_at(src, n.tok,
         "the Burxt backend does not emit this statement yet");
+    return 0;
+}
+
+// An arm's bindings, pointing into the value being matched. A scalar payload is loaded
+// into its own slot; an aggregate one is named by its address, exactly as any other
+// aggregate is.
+fn (mut self: Unit) bind_payload(src: String, holder: Ty, arm: Node,
+                                 base: String) -> Int allocates {
+    let found: Int = self.find_type(src, holder.name_start, holder.name_len);
+    if found < 0 {
+        return 0;
+    }
+    let item: Node = self.nodes[self.types[found].node];
+    let wanted: Tok = self.toks[arm.tok];
+    let mut v: Int = 0;
+    while v < item.b {
+        let variant: Node = self.nodes[self.kids[item.a + v]];
+        let named: Tok = self.toks[variant.tok];
+        if spans_eq(src, named.start, named.length, wanted.start, wanted.length) {
+            let mut cell: Int = 1;
+            let mut p: Int = 0;
+            while p < arm.c && p < variant.c {
+                let name: Tok = self.toks[self.subs[arm.b + p]];
+                let payload: Ty = self.ty_of(src, self.subs[variant.b + p]);
+                let width: Int = self.cells_of(src, payload);
+                let at: String = self.fresh();
+                let stepped: Int = self.w("  " + at + " = getelementptr i64, ptr " + base
+                                          + ", i64 " + to_string(cell) + "\n");
+                if self.is_aggregate(payload) {
+                    let slot: Int = self.declare_slot(src, name.start, name.length, 1, 0);
+                    let address: String = self.fresh();
+                    let taken: Int = self.w("  " + address + " = ptrtoint ptr " + at
+                                            + " to i64\n");
+                    let put: Int = self.w("  store i64 " + address + ", ptr %v"
+                                          + to_string(slot) + "\n");
+                } else {
+                    let slot: Int = self.declare_slot(src, name.start, name.length, 1, 0);
+                    let value: String = self.fresh();
+                    let read: Int = self.w("  " + value + " = load i64, ptr " + at + "\n");
+                    let put: Int = self.w("  store i64 " + value + ", ptr %v"
+                                          + to_string(slot) + "\n");
+                }
+                cell = cell + width;
+                p = p + 1;
+            }
+            return 1;
+        }
+        v = v + 1;
+    }
     return 0;
 }
 
@@ -4677,6 +5113,59 @@ fn (mut self: Unit) emit_block(src: String, block: Int) -> Int allocates {
 }
 
 // ---- the module --------------------------------------------------------------
+// What C sees for one Burxt type. A String is a pointer; a CInt is 32 bits wide and must
+// be declared as such or the sign is lost on the way back; everything else is an i64,
+// including a Decimal — which crosses as the exact scaled integer it already is, and that
+// is the whole of `as scaled`: no conversion, because none is needed.
+fn c_type_of(ty: Ty) -> String {
+    if ty.kind == 42 {
+        return "ptr";
+    }
+    if ty.kind == 43 {
+        return "i32";
+    }
+    if ty.kind == 44 {
+        return "double";
+    }
+    return "i64";
+}
+
+// The libc symbols the emitted runtime already declares. A program is free to declare them
+// too — `extern fn strcmp` is an ordinary thing to write — but LLVM refuses the same symbol
+// declared twice, so the second one is skipped rather than emitted.
+//
+// Stage-0 answers the same collision by REFUSING the name. Skipping is better: the program
+// gets to say what it means, and the only cost is that a program declaring a different
+// signature for one of these would be told so by LLVM rather than by the compiler.
+fn declared_by_runtime(name: String) -> Bool {
+    return name == "printf" || name == "exit" || name == "malloc" || name == "strlen"
+        || name == "strcmp" || name == "memcpy" || name == "snprintf" || name == "fprintf"
+        || name == "fopen" || name == "fread" || name == "fwrite" || name == "fclose"
+        || name == "fseek" || name == "ftell";
+}
+
+fn (mut self: Unit) emit_extern(src: String, index: Int) -> Int allocates {
+    let item: Node = self.nodes[index];
+    let name: Tok = self.toks[item.tok];
+    if declared_by_runtime(substring(src, name.start, name.length)) {
+        return 0;
+    }
+    let params: Node = self.nodes[item.a];
+    let mut signature: String = "";
+    let mut p: Int = 0;
+    while p < params.b {
+        if p > 0 {
+            signature = signature + ", ";
+        }
+        let param: Node = self.nodes[self.kids[params.a + p]];
+        signature = signature + c_type_of(self.ty_of(src, param.a));
+        p = p + 1;
+    }
+    let answers: Ty = self.ty_of(src, item.b);
+    return self.w_out("declare " + c_type_of(answers) + " @"
+                      + substring(src, name.start, name.length) + "(" + signature + ")\n");
+}
+
 // One function or method, from its signature to its closing brace. A method is a
 // function whose first parameter is the receiver — `mut self` is handed the ADDRESS and
 // writes through it, plain `self` gets a copy, which is exactly what the two spellings
@@ -4794,6 +5283,9 @@ fn (mut self: Unit) emit_module(src: String) -> Int allocates {
     while i < len(self.items) {
         let index: Int = self.items[i];
         let item: Node = self.nodes[index];
+        if item.kind == 86 {                         // extern fn: a declaration, no body
+            let declared: Int = self.emit_extern(src, index);
+        }
         if item.kind == 85 {                         // an impl block's methods
             let mut k: Int = 0;
             while k < item.b {
@@ -5217,7 +5709,7 @@ region compile {
         path = arg(1);
     }
     let src: String = read_file(path);
-    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_fn: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, fn_entry: "", body_chunks: [], body_pending: "", next_tmp: 0, next_label: 0, slots: [], strings: [], loop_conds: [], loop_ends: [], in_function: 0, depth: 0, problems: 0, pos: 0, no_struct: 0, in_mul: 0, errors: 0 };
+    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_fn: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, fn_entry: "", body_chunks: [], body_pending: "", next_tmp: 0, next_label: 0, slots: [], strings: [], loop_conds: [], loop_ends: [], in_function: 0, depth: 0, problems: 0, pos: 0, token_end: 0, no_struct: 0, in_mul: 0, errors: 0 };
     let installed: Int = unit.install_keywords();
     let total: Int = unit.run(src);
 

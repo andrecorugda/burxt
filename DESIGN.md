@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.77)
+# Burxt — Design Notes (v0.0.78)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.
@@ -380,7 +380,7 @@ how it got here, and finding an entry meant searching rather than navigating.
 | **v0.0.38–v0.0.42** | `allocates`, `pure`, and the mark | [read](docs/log/05-allocates-pure-and-the-brand.md) |
 | **v0.0.43–v0.0.50** | Contracts, conservation laws, and termination | [read](docs/log/06-contracts-and-termination.md) |
 | **v0.0.51–v0.0.58** | The front end, in Burxt | [read](docs/log/07-the-self-hosted-front-end.md) |
-| **v0.0.69–v0.0.77** | The mark, the shape of the repository, and the fixpoint | [read](docs/log/08-the-mark-and-the-tree.md) |
+| **v0.0.69–v0.0.78** | The mark, the shape of the repository, and the fixpoint | [read](docs/log/08-the-mark-and-the-tree.md) |
 
 v0.0.59–v0.0.68 and v0.0.70 have no log entry: they were ten consecutive versions of one
 milestone, recorded in [`spec/M4-SELF-HOSTING.md`](spec/M4-SELF-HOSTING.md) next to the plan
