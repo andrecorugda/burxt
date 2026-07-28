@@ -1695,9 +1695,21 @@ fn declared_by_runtime(name: String) -> Bool {
 fn (mut self: Unit) emit_extern(src: String, index: Int) -> Int allocates {
     let item: Node = self.nodes[index];
     let name: Tok = self.toks[item.tok];
-    if declared_by_runtime(substring(src, name.start, name.length)) {
+    let called: String = substring(src, name.start, name.length);
+    if declared_by_runtime(called) {
         return 0;
     }
+    // Two modules may declare the same extern, which the checker allows when the
+    // signatures match. Emitting it twice would let LLVM rename the second and the
+    // linker would ask for a symbol nobody has.
+    let mut d: Int = 0;
+    while d < len(self.declared) {
+        if self.declared[d] == called {
+            return 0;
+        }
+        d = d + 1;
+    }
+    let noted: Int = push(self.declared, called);
     let params: Node = self.nodes[item.a];
     let mut signature: String = "";
     let mut p: Int = 0;

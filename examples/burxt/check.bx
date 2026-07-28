@@ -321,7 +321,18 @@ fn (mut self: Unit) collect_declarations(src: String) -> Int allocates {
                     "`" + substring(src, name.start, name.length) + "` is a name the "
                     + "language owns, so a program may not declare it");
             }
-            if self.find_fun(src, name.start, name.length) >= 0 {
+            let already: Int = self.find_fun(src, name.start, name.length);
+            let mut clash: Bool = already >= 0;
+            if already >= 0 && item.kind == 86 {
+                // An `extern fn` declares an external FACT, not a definition, so two
+                // modules may both declare it — `lib/fs.bx` and `lib/os.bx` both need
+                // `system`, and neither can know the other did. Stage-0 allows this when
+                // the signatures match, and the two must agree.
+                if flag_extern(self.funs[already].flags) == 1 {
+                    clash = false;
+                }
+            }
+            if clash {
                 let e: Int = self.complain_at(src, item.tok, "this function is declared twice");
             } else {
                 let mut ret: Ty = ty_unknown();

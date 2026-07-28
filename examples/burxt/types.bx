@@ -170,6 +170,9 @@ struct Unit {
     next_label: Int,
     slots: [Slot],
     strings: [Int],
+    // Extern symbols already declared in the emitted module, so a symbol two modules
+    // both wrap is declared once.
+    declared: [String],
     loop_conds: [String],
     loop_ends: [String],
     in_function: Int,

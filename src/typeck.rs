@@ -773,9 +773,14 @@ impl TypeChecker {
                     f.name
                 ));
             }
-            // RULE 2 of escape checking: returning region data would let it
-            // outlive the region the caller opened.
-            if self.region_allocated(&f.ret) {
+            // RULE 2 of escape checking: returning region data would let it outlive the
+            // region the caller opened — UNLESS the function declared `allocates`, which
+            // says the storage belongs to the CALLER's region and therefore outlives the
+            // call by construction. That is the same argument M1a §2 made for a String,
+            // and it applies to a growable array for exactly the same reason. The rule
+            // predated `allocates` and never learned about it, which came out the first
+            // time a standard-library function wanted to answer `[String]`.
+            if self.region_allocated(&f.ret) && !f.allocates {
                 return Err(format!(
                     "fn `{}` cannot return {}, because its storage lives in a region \
                      and would not outlive it. Fill an array the caller owns, or \
@@ -1296,8 +1301,28 @@ impl TypeChecker {
                 e.name
             ));
         }
-        if self.fns.contains_key(&e.name) {
-            return Err(format!("function `{}` is defined twice", e.name));
+        // An `extern fn` declares an external FACT, not a definition, so two modules may
+        // both declare it — `use "lib/fs.bx"` and `use "lib/os.bx"` both need `system`,
+        // and neither can know the other did. Identical signatures are harmless; a
+        // MISMATCH is not, because then the program holds two beliefs about one symbol.
+        if let Some((params, ret)) = self.fns.get(&e.name) {
+            let seen = |t: &Type| match t {
+                Type::CInt | Type::CDouble => Type::Int,
+                other => other.clone(),
+            };
+            let mine: Vec<Type> = e.params.iter().map(|p| seen(&p.ty)).collect();
+            if !self.extern_names.contains(&e.name) {
+                return Err(format!("function `{}` is defined twice", e.name));
+            }
+            if params != &mine || ret != &seen(&e.ret) {
+                return Err(format!(
+                    "extern fn `{}` is declared twice with different signatures — one \
+                     symbol cannot be two functions, and a program holding both beliefs \
+                     would call whichever the linker picked",
+                    e.name
+                ));
+            }
+            return Ok(());
         }
         for p in &e.params {
             match (&p.ty, p.marshal) {

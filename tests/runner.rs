@@ -1474,7 +1474,8 @@ fn the_repository_root_holds_only_what_belongs_there() {
         // everything else lives in a directory that says what it is
         "",
     ];
-    const DIRS: [&str; 7] = ["src", "spec", "tests", "examples", "editors", "assets", "docs"];
+    const DIRS: [&str; 8] =
+        ["src", "spec", "tests", "examples", "editors", "assets", "docs", "lib"];
 
     let mut strays = Vec::new();
     for entry in fs::read_dir(root).unwrap() {
@@ -1954,4 +1955,62 @@ fn modules_compile_as_one_program_and_report_per_file() {
     );
 
     let _ = fs::remove_dir_all(&scratch);
+}
+
+/// The standard library compiles, and does what it says. Written in Burxt from the same
+/// builtins any program has — so this test is really asking whether `lib/` is *usable*,
+/// which is the only interesting question about a standard library.
+///
+/// It also covers the two rules that only appear once modules and a library exist
+/// together: an `extern fn` may be declared by two modules if the signatures match, and
+/// the emitted module must declare that symbol once.
+#[test]
+fn the_standard_library_compiles_and_works() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("stdlib");
+    fs::create_dir_all(&scratch).unwrap();
+
+    for module in ["str.bx", "fs.bx", "os.bx"] {
+        let out = burxt("check", &root.join("lib").join(module), &scratch);
+        assert!(
+            out.status.success(),
+            "lib/{} does not compile:\n{}",
+            module,
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+
+    // `fs.bx` and `os.bx` both wrap `system`, so using both exercises the duplicate-extern
+    // rule end to end — typechecker, codegen and linker.
+    let lib = root.join("lib");
+    let program = scratch.join("uses_lib.bx");
+    fs::write(
+        &program,
+        format!(
+            "use \"{0}/str.bx\";\nuse \"{0}/fs.bx\";\nuse \"{0}/os.bx\";\n\
+             region r {{\n  print(str_find(\"hello, modules\", \"modules\"));\n               print(str_trim(\"   padded   \"));\n  print(str_to_int(\"-42\"));\n               print(str_join(str_split(\"a,b,c\", 44), \" | \"));\n               let wrote: Int = fs_write(\"{1}/demo.txt\", \"first\\n\");\n               let more: Int = fs_append(\"{1}/demo.txt\", \"second\\n\");\n               print(len(fs_read(\"{1}/demo.txt\")));\n               print(fs_exists(\"{1}/demo.txt\"));\n               print(len(fs_list(\"{0}\")) >= 3);\n               print(os_run(\"true\"));\n  print(str_trim(os_capture(\"echo captured\")));\n}}\n",
+            lib.display(),
+            scratch.display()
+        ),
+    )
+    .unwrap();
+
+    let exe = scratch.join("prog");
+    let ran = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("run")
+        .arg(&program)
+        .arg("-o")
+        .arg(&exe)
+        .current_dir(&scratch)
+        .output()
+        .expect("burxt");
+    let printed = String::from_utf8_lossy(&ran.stdout).to_string();
+    let complained = String::from_utf8_lossy(&ran.stderr).to_string();
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(ran.status.success(), "the library program failed:\n{}", complained);
+    assert_eq!(
+        printed,
+        "7\npadded\n-42\na | b | c\n13\ntrue\ntrue\n0\ncaptured\n",
+        "the library answered differently than expected"
+    );
 }

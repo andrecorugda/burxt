@@ -97,6 +97,29 @@ hello, world!
 
 What you cannot do yet: run Burxt in a browser (the WebAssembly target is designed, not built), or split a program across files (the module system is the next language milestone — today a program is one file).
 
+## The standard library
+
+```burxt
+use "lib/str.bx";
+use "lib/fs.bx";
+use "lib/os.bx";
+
+region r {
+    let names: [String] = fs_list("/etc");
+    print(str_join(names, ", "));
+}
+```
+
+Written in Burxt, from the same builtins any program has — nothing in it is privileged.
+[`lib/`](lib/) holds strings (`str_find`, `str_split`, `str_trim`, `str_join`, `str_to_int`),
+files (`fs_read`, `fs_append`, `fs_exists`, `fs_list`, `fs_delete`) and the machine
+(`os_args`, `os_run`, `os_capture`, `os_now`).
+
+The real reason it exists: Burxt refuses a C return whose ownership it cannot describe, so
+`opendir` and `getenv` are out of reach directly, and **every program that works around that
+itself is making a promise the compiler cannot check.** Here the promise is made once, in the
+open, with the reasoning beside it.
+
 ## Learning it
 
 - **[The guide](docs/guide/)** — seven pages in reading order: getting started, numbers and

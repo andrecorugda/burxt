@@ -224,7 +224,14 @@ impl<'ctx> CodeGen<'ctx> {
             let param_tys: Vec<BasicMetadataTypeEnum> =
                 e.params.iter().map(|t| self.llvm_type(t).into()).collect();
             let fn_ty = self.llvm_type(&e.ret).fn_type(&param_tys, false);
-            let llf = self.module.add_function(&e.name, fn_ty, None);
+            // Two modules may declare the same extern — `lib/fs.bx` and `lib/os.bx` both
+            // need `system` — and the typechecker allows it when the signatures match.
+            // Adding it twice here would let LLVM rename the second to `system.1`, and
+            // the linker would ask for a symbol nobody has.
+            let llf = match self.module.get_function(&e.name) {
+                Some(existing) => existing,
+                None => self.module.add_function(&e.name, fn_ty, None),
+            };
             self.user_fns.insert(e.name.clone(), llf);
             self.extern_sigs.insert(e.name.clone(), (e.params.clone(), e.ret.clone()));
         }
