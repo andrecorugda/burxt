@@ -1,0 +1,22 @@
+// Writing to an element of a GROWABLE array, including one held in a struct field.
+// Stage-1 has allowed this since it had arrays; stage-0 refused it until v0.0.87, and
+// the refusal is what forced an indexed cache to be a linear search instead.
+struct Table { rows: [Int], name: String }
+
+region r {
+    let mut xs: [Int] = [];
+    let a: Int = push(xs, 10);
+    let b: Int = push(xs, 20);
+    xs[0] = 99;
+    print(xs[0]);
+    print(xs[1]);
+
+    // and through a field, which is what an indexed table wants to write
+    let mut t: Table = Table { rows: [], name: "counts" };
+    let c: Int = push(t.rows, 1);
+    let d: Int = push(t.rows, 2);
+    t.rows[1] = 42;
+    print(t.rows[0]);
+    print(t.rows[1]);
+    print(len(t.rows));
+}

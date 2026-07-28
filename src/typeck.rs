@@ -58,6 +58,8 @@ pub enum TypedExprKind {
     Arg(Box<TypedExpr>),
     /// `write_file(path, contents)` — how a backend emits anything.
     WriteFile { path: Box<TypedExpr>, contents: Box<TypedExpr> },
+    /// `write_bytes(path, buffer)` — the bytes of a growable `[Int]`, written out.
+    WriteBytes { path: Box<TypedExpr>, buffer: Box<TypedExpr> },
     /// `substring(s, at, len)` — a copy of part of a String, in the current region.
     Substring { source: Box<TypedExpr>, at: Box<TypedExpr>, len: Box<TypedExpr> },
     /// `div_floor`, `div_trunc` or `rem` on two Ints. Three names rather than one
@@ -752,7 +754,7 @@ impl TypeChecker {
             if self.fns.contains_key(&f.name) {
                 return Err(format!("function `{}` is defined twice", f.name));
             }
-            if f.name == "len" || f.name == "byte_at" || f.name == "push" || f.name == "read_file" || f.name == "to_string" || f.name == "old" || f.name == "substring" || f.name == "truncate" || f.name == "write_file" || f.name == "arg" || f.name == "arg_count" || f.name == "div_floor" || f.name == "div_trunc" || f.name == "rem" {
+            if f.name == "len" || f.name == "byte_at" || f.name == "push" || f.name == "read_file" || f.name == "to_string" || f.name == "old" || f.name == "substring" || f.name == "truncate" || f.name == "write_file" || f.name == "arg" || f.name == "arg_count" || f.name == "div_floor" || f.name == "div_trunc" || f.name == "rem" || f.name == "write_bytes" {
                 return Err(format!(
                     "the name `{}` is reserved for a built-in",
                     f.name
@@ -1291,7 +1293,7 @@ impl TypeChecker {
     /// function returns.
     fn check_extern(&self, e: &ExternFn) -> Result<(), String> {
         const RESERVED: [&str; 6] = ["printf", "fprintf", "fputs", "exit", "stderr", "main"];
-        if e.name == "len" || e.name == "byte_at" || e.name == "push" || e.name == "read_file" || e.name == "to_string" || e.name == "old" || e.name == "substring" || e.name == "truncate" || e.name == "write_file" || e.name == "arg" || e.name == "arg_count" || e.name == "div_floor" || e.name == "div_trunc" || e.name == "rem" {
+        if e.name == "len" || e.name == "byte_at" || e.name == "push" || e.name == "read_file" || e.name == "to_string" || e.name == "old" || e.name == "substring" || e.name == "truncate" || e.name == "write_file" || e.name == "arg" || e.name == "arg_count" || e.name == "div_floor" || e.name == "div_trunc" || e.name == "rem" || e.name == "write_bytes" {
             return Err(format!("the name `{}` is reserved for a built-in", e.name));
         }
         if RESERVED.contains(&e.name.as_str()) {
@@ -1883,8 +1885,12 @@ impl TypeChecker {
                     indices.push(i);
                     cur_ty = t;
                 }
+                // A growable array field is assignable too, with `len` 0 marking a bound
+                // that is only known at run time. `self.cache[i] = v` is what an indexed
+                // table wants to write, and refusing it forced a linear search instead.
                 let (elem, len) = match &cur_ty {
                     Type::Array { elem, len } => (elem.as_ref().clone(), *len),
+                    Type::Slice(elem) => (elem.as_ref().clone(), 0),
                     other => {
                         return Err(format!(
                             "`{}[...]` indexing needs an array, but `{}` has type {}",
@@ -1917,8 +1923,13 @@ impl TypeChecker {
                     .get(name)
                     .ok_or_else(|| format!("unknown variable: {}", name))?
                     .clone();
+                // A growable array is assignable too, and its bound is its LENGTH, which is
+                // only known at run time — so `len` is 0 here and codegen checks the
+                // header. Stage-1 has allowed this since it had arrays at all; stage-0
+                // refusing it was a divergence found by writing a program that needed it.
                 let (elem, len) = match &declared {
                     Type::Array { elem, len } => (elem.as_ref().clone(), *len),
+                    Type::Slice(elem) => (elem.as_ref().clone(), 0),
                     other => {
                         return Err(format!(
                             "`{}[...]` indexing needs an array, but `{}` has type {}",
@@ -2618,6 +2629,53 @@ impl TypeChecker {
                         },
                     });
                 }
+                // `write_bytes(path, buffer)` — the way out of quadratic string building.
+                //
+                // `a = a + b` in a loop copies the whole left side every time, so building
+                // a megabyte of output an append at a time copies gigabytes. This project
+                // paid for that four times (v0.0.68, v0.0.77, v0.0.82, v0.0.86) before
+                // admitting the answer: a growable array already grows in amortised O(1),
+                // so the missing piece was never a better String — it was a way to WRITE a
+                // buffer of bytes. `push` fills it; this empties it.
+                //
+                // Anyone producing large output — a report, a serialiser, an HTML renderer,
+                // a compiler — needs exactly this, which is the test a builtin has to pass.
+                if name == "write_bytes" {
+                    if args.len() != 2 {
+                        return Err(
+                            "write_bytes(path, buffer) takes a String and a [Int]".to_string()
+                        );
+                    }
+                    let path = self.check_expr(&args[0], Some(&Type::String))?;
+                    if path.ty != Type::String {
+                        return Err(format!(
+                            "write_bytes(...) takes a String path, but this has type {}",
+                            path.ty
+                        ));
+                    }
+                    let buffer = self.check_expr(&args[1], None)?;
+                    match &buffer.ty {
+                        Type::Slice(elem) if **elem == Type::Int => {}
+                        other => {
+                            return Err(format!(
+                                "write_bytes(...) writes the bytes of a growable `[Int]`, \
+                                 but this is {}. Each element is one byte, and a value \
+                                 outside 0..255 is truncated to its low eight bits.",
+                                other
+                            ));
+                        }
+                    }
+                    if let Some(why) = self.impure("write a file") {
+                        return Err(why);
+                    }
+                    return Ok(TypedExpr {
+                        ty: Type::Int,
+                        kind: TypedExprKind::WriteBytes {
+                            path: Box::new(path),
+                            buffer: Box::new(buffer),
+                        },
+                    });
+                }
                 // `substring(s, at, len)` — the primitive a symbol table needs. A
                 // lexer can already compare a span against a literal byte by byte;
                 // what it could not do was KEEP the text, which is what a table of
@@ -3309,6 +3367,20 @@ impl TypeChecker {
             ));
         }
         if let TypedExprKind::IntLit(n) = typed.kind {
+            // `len == 0` means the bound is only known at run time — a growable array. A
+            // FIXED array of length zero cannot exist (the language refuses one, because it
+            // describes nothing), so the marker is unambiguous. A negative literal is still
+            // always wrong, whatever the length turns out to be.
+            if len == 0 {
+                if n < 0 {
+                    return Err(format!(
+                        "index {} is negative, so it is out of bounds for {} whatever its \
+                         length turns out to be.",
+                        n, what
+                    ));
+                }
+                return Ok(typed);
+            }
             if n < 0 || n >= len as i64 {
                 return Err(format!(
                     "index {} is out of bounds for {}: valid indexes are 0 to {}. \

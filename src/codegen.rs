@@ -485,6 +485,33 @@ impl<'ctx> CodeGen<'ctx> {
                 }
                 let i64t = self.ctx.i64_type();
                 let idx_val = self.gen_expr(index)?.into_int_value();
+                let err = |e: inkwell::builder::BuilderError| e.to_string();
+                // A growable array's bound is its header's length, and its elements live in
+                // the region rather than in the struct.
+                if let Type::Slice(elem) = &cur_ty {
+                    let st = self.llvm_type(&cur_ty).into_struct_type();
+                    let ptr_ty = self.ctx.ptr_type(AddressSpace::default());
+                    let data_p =
+                        self.builder.build_struct_gep(st, cur_ptr, 0, "data_p").map_err(err)?;
+                    let len_p =
+                        self.builder.build_struct_gep(st, cur_ptr, 1, "len_p").map_err(err)?;
+                    let data = self.builder.build_load(ptr_ty, data_p, "data").map_err(err)?;
+                    let live =
+                        self.builder.build_load(i64t, len_p, "live").map_err(err)?.into_int_value();
+                    let checked = self.build_checked_index(idx_val, live)?;
+                    let ll_elem = self.llvm_type(elem);
+                    let elem_ptr = unsafe {
+                        self.builder.build_gep(
+                            ll_elem,
+                            data.into_pointer_value(),
+                            &[checked],
+                            "elem_ptr",
+                        )
+                    }
+                    .map_err(err)?;
+                    self.builder.build_store(elem_ptr, val).map_err(err)?;
+                    return Ok(());
+                }
                 let n = i64t.const_int(*len as u64, false);
                 let checked = self.build_checked_index(idx_val, n)?;
                 let arr_ty = self.llvm_type(&cur_ty);
@@ -1332,6 +1359,13 @@ impl<'ctx> CodeGen<'ctx> {
                 let c = self.gen_expr(contents)?.into_pointer_value();
                 self.build_write_file(p, c).map(Into::into)
             }
+            TypedExprKind::WriteBytes { path, buffer } => {
+                let p = self.gen_expr(path)?.into_pointer_value();
+                // The buffer's HEADER, not a copy of it: the value is a `[Int]` and this
+                // needs its length and data pointer, which is what the struct holds.
+                let header = self.gen_expr(buffer)?.into_struct_value();
+                self.build_write_bytes(p, header).map(Into::into)
+            }
             TypedExprKind::Substring { source, at, len } => {
                 let bytes = self.gen_expr(source)?.into_pointer_value();
                 let at = self.gen_expr(at)?.into_int_value();
@@ -2141,6 +2175,25 @@ impl<'ctx> CodeGen<'ctx> {
             .clone();
         let i64t = self.ctx.i64_type();
         let idx_val = self.gen_expr(index)?.into_int_value();
+
+        // A growable array: the bound is the header's length, read now, and the element
+        // lives in the region rather than in this slot.
+        if let Type::Slice(elem) = &ty {
+            let err = |e: inkwell::builder::BuilderError| e.to_string();
+            let st = self.llvm_type(&ty).into_struct_type();
+            let ptr_ty = self.ctx.ptr_type(AddressSpace::default());
+            let data_p = self.builder.build_struct_gep(st, slot, 0, "data_p").map_err(err)?;
+            let len_p = self.builder.build_struct_gep(st, slot, 1, "len_p").map_err(err)?;
+            let data = self.builder.build_load(ptr_ty, data_p, "data").map_err(err)?;
+            let live = self.builder.build_load(i64t, len_p, "live").map_err(err)?.into_int_value();
+            let checked = self.build_checked_index(idx_val, live)?;
+            let ll_elem = self.llvm_type(elem);
+            return unsafe {
+                self.builder.build_gep(ll_elem, data.into_pointer_value(), &[checked], "elem_ptr")
+            }
+            .map_err(err);
+        }
+
         let n = i64t.const_int(len as u64, false);
         let checked = self.build_checked_index(idx_val, n)?;
         let arr_ty = self.llvm_type(&ty);
@@ -2735,6 +2788,111 @@ impl<'ctx> CodeGen<'ctx> {
             .build_call(
                 fwrite,
                 &[contents.into(), i64t.const_int(1, false).into(), count.into(), file.into()],
+                "written",
+            )
+            .map_err(err)?;
+        self.builder.build_call(fclose, &[file.into()], "close").map_err(err)?;
+        match written.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => Ok(v.into_int_value()),
+            _ => Err("fwrite returned void".to_string()),
+        }
+    }
+
+    /// `write_bytes(path, buffer)` — the low byte of every element, written out.
+    ///
+    /// Elements are i64 because a growable array's element type is one of Burxt's, and
+    /// there is no byte type yet. The narrowing is deliberate and documented: an element
+    /// outside 0..255 keeps its low eight bits, which is what a byte buffer means. The 8x
+    /// memory cost of holding bytes in i64s is the price of not adding a type, and it is
+    /// paid in a buffer that lives for one region.
+    fn build_write_bytes(
+        &mut self,
+        path: PointerValue<'ctx>,
+        header: inkwell::values::StructValue<'ctx>,
+    ) -> Result<IntValue<'ctx>, String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+        let i32t = self.ctx.i32_type();
+        let i8t = self.ctx.i8_type();
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+
+        let data = self
+            .builder
+            .build_extract_value(header, 0, "bytes_data")
+            .map_err(err)?
+            .into_pointer_value();
+        let count = self
+            .builder
+            .build_extract_value(header, 1, "bytes_len")
+            .map_err(err)?
+            .into_int_value();
+
+        // One narrow pass into region memory, then a single fwrite. Writing byte by byte
+        // through the C library would be a million calls for a megabyte.
+        let flat = self.build_alloc_bytes(count)?;
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_parent())
+            .ok_or("codegen bug: write_bytes outside a function")?;
+        let loop_head = self.ctx.append_basic_block(function, "narrow_head");
+        let loop_body = self.ctx.append_basic_block(function, "narrow_body");
+        let loop_done = self.ctx.append_basic_block(function, "narrow_done");
+        let index = self.builder.build_alloca(i64t, "narrow_i").map_err(err)?;
+        self.builder.build_store(index, i64t.const_zero()).map_err(err)?;
+        self.builder.build_unconditional_branch(loop_head).map_err(err)?;
+
+        self.builder.position_at_end(loop_head);
+        let i = self.builder.build_load(i64t, index, "i").map_err(err)?.into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, i, count, "more")
+            .map_err(err)?;
+        self.builder.build_conditional_branch(more, loop_body, loop_done).map_err(err)?;
+
+        self.builder.position_at_end(loop_body);
+        let source = unsafe { self.builder.build_gep(i64t, data, &[i], "elem_p") }.map_err(err)?;
+        let wide = self.builder.build_load(i64t, source, "elem").map_err(err)?.into_int_value();
+        let narrow = self.builder.build_int_truncate(wide, i8t, "byte").map_err(err)?;
+        let target = unsafe { self.builder.build_gep(i8t, flat, &[i], "out_p") }.map_err(err)?;
+        self.builder.build_store(target, narrow).map_err(err)?;
+        let next = self
+            .builder
+            .build_int_add(i, i64t.const_int(1, false), "i_next")
+            .map_err(err)?;
+        self.builder.build_store(index, next).map_err(err)?;
+        self.builder.build_unconditional_branch(loop_head).map_err(err)?;
+
+        self.builder.position_at_end(loop_done);
+        let fopen = self.libc("fopen", ptr.fn_type(&[ptr.into(), ptr.into()], false));
+        let fwrite = self.libc(
+            "fwrite",
+            i64t.fn_type(&[ptr.into(), i64t.into(), i64t.into(), ptr.into()], false),
+        );
+        let fclose = self.libc("fclose", i32t.fn_type(&[ptr.into()], false));
+        let mode = self.global_str("wb", "mode_wb_bytes");
+        let handle = self
+            .builder
+            .build_call(fopen, &[path.into(), mode.into()], "out")
+            .map_err(err)?;
+        let file = match handle.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => v.into_pointer_value(),
+            _ => return Err("fopen returned void".to_string()),
+        };
+        let missing = self.ctx.append_basic_block(function, "cannot_write_bytes");
+        let opened = self.ctx.append_basic_block(function, "opened_bytes");
+        let is_null = self.builder.build_is_null(file, "no_handle").map_err(err)?;
+        self.builder.build_conditional_branch(is_null, missing, opened).map_err(err)?;
+
+        self.builder.position_at_end(missing);
+        self.build_panic("burxt runtime error: cannot open file for writing\n")?;
+
+        self.builder.position_at_end(opened);
+        let written = self
+            .builder
+            .build_call(
+                fwrite,
+                &[flat.into(), i64t.const_int(1, false).into(), count.into(), file.into()],
                 "written",
             )
             .map_err(err)?;

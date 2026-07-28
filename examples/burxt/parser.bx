@@ -176,6 +176,7 @@ fn builtin_arity(name: String) -> Int {
     if name == "push" { return 2; }
     if name == "truncate" { return 2; }
     if name == "write_file" { return 2; }
+    if name == "write_bytes" { return 2; }
     if name == "div_floor" { return 2; }
     if name == "div_trunc" { return 2; }
     if name == "rem" { return 2; }
@@ -194,6 +195,7 @@ fn builtin_result(name: String) -> Ty {
     if name == "truncate" { return ty_simple(40); }
     if name == "arg_count" { return ty_simple(40); }
     if name == "write_file" { return ty_simple(40); }
+    if name == "write_bytes" { return ty_simple(40); }
     if name == "div_floor" { return ty_simple(40); }
     if name == "div_trunc" { return ty_simple(40); }
     if name == "rem" { return ty_simple(40); }
@@ -239,6 +241,20 @@ fn (mut self: Unit) check_builtin_args(src: String, at: Int, called: String, fir
         if !is_unknown(second) && second.kind != 40 {
             let e: Int = self.complain_at(src, at,
                 "`" + called + "` divides Ints, but the right side is " + ty_show(src, second));
+        }
+        return 1;
+    }
+    if called == "write_bytes" {
+        // The bytes of a growable [Int], written out — the way past quadratic string
+        // building. `push` fills the buffer; this empties it.
+        if !is_unknown(first) && first.kind != 42 {
+            let e: Int = self.complain_at(src, at,
+                "a path is a String, but this is " + ty_show(src, first));
+        }
+        if !is_unknown(second) && second.kind != 47 {
+            let e: Int = self.complain_at(src, at,
+                "`write_bytes` writes the bytes of a growable `[Int]`, but this is "
+                + ty_show(src, second));
         }
         return 1;
     }
@@ -346,6 +362,9 @@ fn (mut self: Unit) builtin_type(src: String, name: Tok, at: Int, args: Int) -> 
         if span_eq(src, name.start, name.length, "read_file") {
             let e: Int = self.not_pure(src, at, "read a file");
         }
+        if span_eq(src, name.start, name.length, "write_bytes") {
+            let e: Int = self.not_pure(src, at, "write a file");
+        }
         if span_eq(src, name.start, name.length, "write_file") {
             let e: Int = self.not_pure(src, at, "write a file");
         }
@@ -356,6 +375,7 @@ fn (mut self: Unit) builtin_type(src: String, name: Tok, at: Int, args: Int) -> 
     if span_eq(src, name.start, name.length, "truncate") { return ty_simple(40); }
     if span_eq(src, name.start, name.length, "arg_count") { return ty_simple(40); }
     if span_eq(src, name.start, name.length, "write_file") { return ty_simple(40); }
+    if span_eq(src, name.start, name.length, "write_bytes") { return ty_simple(40); }
     if span_eq(src, name.start, name.length, "div_floor") { return ty_simple(40); }
     if span_eq(src, name.start, name.length, "div_trunc") { return ty_simple(40); }
     if span_eq(src, name.start, name.length, "rem") { return ty_simple(40); }

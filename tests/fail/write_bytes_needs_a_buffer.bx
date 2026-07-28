@@ -1,0 +1,5 @@
+// write_bytes writes the bytes of a growable `[Int]`. A String is not one — that is
+// what write_file is for.
+region r {
+    let wrote: Int = write_bytes("out.txt", "not a buffer");
+}

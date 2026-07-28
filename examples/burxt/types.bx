@@ -139,7 +139,9 @@ struct Unit {
     // Nonzero while parsing an `if`/`while` condition, where a `{` opens the BODY
     // rather than a struct literal. The Rust parser carries the same flag.
     impls: [Impl],
-    typed: [Typed],
+    // Every expression's type, indexed by node. See check.bx's type_at for why it is
+    // indexed rather than searched.
+    typed: [Ty],
     // How many regions are open, and whether the function being checked declared
     // `allocates` — which means the caller's region is the region in effect. Together
     // these answer M1's one question: is there somewhere to allocate?

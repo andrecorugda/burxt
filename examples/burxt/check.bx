@@ -170,6 +170,7 @@ fn is_reserved_name(src: String, start: Int, length: Int) -> Bool {
         || span_eq(src, start, length, "to_string")
         || span_eq(src, start, length, "read_file")
         || span_eq(src, start, length, "write_file")
+        || span_eq(src, start, length, "write_bytes")
         || span_eq(src, start, length, "arg")
         || span_eq(src, start, length, "arg_count")
         || span_eq(src, start, length, "div_floor")
@@ -366,22 +367,29 @@ fn (mut self: Unit) collect_declarations(src: String) -> Int allocates {
 // and re-walking them would report every complaint a second time.
 fn (mut self: Unit) type_of(src: String, node: Int, expected: Ty) -> Ty allocates {
     let t: Ty = self.type_of_inner(src, node, expected);
-    push(self.typed, Typed { node: node, ty: t });
+    // The cache is a slot per NODE. It grows to reach the node being recorded, which costs
+    // one push per node over a whole compile, and the last answer for a node stands — a
+    // retyped operand (multiplication does that) settles on its second reading.
+    while len(self.typed) <= node {
+        let filled: Int = push(self.typed, ty_unknown());
+    }
+    self.typed[node] = t;
     return t;
 }
 
 fn (self: Unit) type_at(node: Int) -> Ty {
-    // Backwards: the last answer for a node is the one that stands, since a retyped
-    // operand (multiplication does that) settles on its second reading.
-    let mut i: Int = len(self.typed) - 1;
-    while i >= 0 {
-        let entry: Typed = self.typed[i];
-        if entry.node == node {
-            return entry.ty;
-        }
-        i = i - 1;
+    // Indexed BY NODE, so a lookup is one load.
+    //
+    // This was a backwards linear scan until v0.0.87, over a list that grew with every
+    // typed expression — O(n²) over a compile, noted at the time as "fine at bootstrap
+    // scale". It stopped being fine at 46,000 tokens: the compiler took three and a half
+    // minutes on its own source and then exhausted its region, and the language could not
+    // grow further until this changed. The lesson is the placeholder, not the algorithm —
+    // "fine for now" needs a number attached, or nobody notices when now ends.
+    if node < 0 || node >= len(self.typed) {
+        return ty_unknown();
     }
-    return ty_unknown();
+    return self.typed[node];
 }
 
 fn (mut self: Unit) type_of_inner(src: String, node: Int, expected: Ty) -> Ty allocates {

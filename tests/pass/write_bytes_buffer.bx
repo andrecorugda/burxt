@@ -1,0 +1,22 @@
+// `write_bytes` — the way past quadratic string building. A growable array grows in
+// amortised O(1), so building output means pushing bytes and writing the buffer once.
+// `a = a + b` in a loop copies the whole left side every time, which this project paid
+// for four times before adding the builtin.
+region r {
+    let mut out: [Int] = [];
+    let line: String = "exact money, every time\n";
+    let width: Int = len(line);
+    let mut n: Int = 0;
+    while n < 100 {
+        let mut i: Int = 0;
+        while i < width {
+            let added: Int = push(out, byte_at(line, i));
+            i = i + 1;
+        }
+        n = n + 1;
+    }
+    print(len(out));
+    let wrote: Int = write_bytes("bytes_out.txt", out);
+    print(wrote);
+    print(len(read_file("bytes_out.txt")));
+}
