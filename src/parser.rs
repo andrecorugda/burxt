@@ -652,6 +652,38 @@ impl Parser {
     /// The dot-chain is walked once; hitting `(` after a segment means that
     /// segment is a method name, not a field, and everything read so far
     /// becomes the call's base expression.
+    /// The `=` of an assignment, or one of `+= -= *=`.
+    ///
+    /// A compound assignment is expanded here into `target = target <op> value`, so nothing
+    /// downstream learns a new statement kind: no typecheck rule, no lowering, and the
+    /// scale and contract rules apply exactly as they do to the long form. `x += 1` on a
+    /// Decimal obeys the same "scales must match" refusal, because it IS the long form by
+    /// the time anyone checks it.
+    fn parse_assign_op(&mut self) -> Result<Option<BinOp>, String> {
+        let op = match self.peek() {
+            Token::Equals => None,
+            Token::PlusEq => Some(BinOp::Add),
+            Token::MinusEq => Some(BinOp::Sub),
+            Token::StarEq => Some(BinOp::Mul),
+            other => {
+                return Err(format!("expected `=`, `+=`, `-=` or `*=`, found {}", other.describe()))
+            }
+        };
+        self.bump();
+        Ok(op)
+    }
+
+    /// `target <op>= value` becomes `target = target <op> value`.
+    fn compound(&mut self, op: Option<BinOp>, target: Expr, value: Expr, start: u32) -> Expr {
+        match op {
+            None => value,
+            Some(op) => self.expr(
+                ExprKind::Binary { op, lhs: Box::new(target), rhs: Box::new(value) },
+                start,
+            ),
+        }
+    }
+
     fn parse_assign(&mut self) -> Result<StmtKind, String> {
         let start = self.span().start;
         let name = match self.bump() {
@@ -670,9 +702,19 @@ impl Parser {
             self.bump();
             let index = self.parse_expr()?;
             self.expect(&Token::RBracket)?;
-            self.expect(&Token::Equals)?;
+            let op = self.parse_assign_op()?;
             let value = self.parse_expr()?;
             self.expect(&Token::Semicolon)?;
+            let value = if op.is_some() {
+                let base = self.expr(ExprKind::Var(name.clone()), start);
+                let read = self.expr(
+                    ExprKind::Index { base: Box::new(base), index: Box::new(index.clone()) },
+                    start,
+                );
+                self.compound(op, read, value, start)
+            } else {
+                value
+            };
             return Ok(StmtKind::AssignIndex { name, index, value });
         }
 
@@ -701,18 +743,52 @@ impl Parser {
             self.bump();
             let index = self.parse_expr()?;
             self.expect(&Token::RBracket)?;
-            self.expect(&Token::Equals)?;
+            let op = self.parse_assign_op()?;
             let value = self.parse_expr()?;
             self.expect(&Token::Semicolon)?;
+            let value = if op.is_some() {
+                let read = self.read_path(&name, &path, Some(index.clone()), start);
+                self.compound(op, read, value, start)
+            } else {
+                value
+            };
             return Ok(StmtKind::AssignFieldIndex { name, path, index, value });
         }
-        self.expect(&Token::Equals)?;
+        let op = self.parse_assign_op()?;
         let value = self.parse_expr()?;
         self.expect(&Token::Semicolon)?;
+        let value = if op.is_some() {
+            let read = self.read_path(&name, &path, None, start);
+            self.compound(op, read, value, start)
+        } else {
+            value
+        };
         if path.is_empty() {
             Ok(StmtKind::Assign { name, value })
         } else {
             Ok(StmtKind::AssignField { name, path, value })
+        }
+    }
+
+    /// The expression that READS what an assignment writes: `self.total`, `xs[i]`,
+    /// `a.b.c[i]`. A compound assignment needs both halves, and building the read from the
+    /// same pieces is what keeps `x += 1` exactly equal to `x = x + 1`.
+    fn read_path(
+        &mut self,
+        name: &str,
+        path: &[String],
+        index: Option<Expr>,
+        start: u32,
+    ) -> Expr {
+        let mut base = self.expr(ExprKind::Var(name.to_string()), start);
+        for f in path {
+            base = self.expr(ExprKind::Field { base: Box::new(base), field: f.clone() }, start);
+        }
+        match index {
+            Some(i) => {
+                self.expr(ExprKind::Index { base: Box::new(base), index: Box::new(i) }, start)
+            }
+            None => base,
         }
     }
 
@@ -1257,8 +1333,17 @@ impl Parser {
                                 ))
                             }
                         };
-                        self.expect(&Token::Colon)?;
-                        let value = self.parse_expr()?;
+                        // `P { x, y }` is shorthand for `P { x: x, y: y }`: a field taking
+                        // its value from a variable of the same name. `Order { subtotal:
+                        // subtotal, country: country }` says nothing twice, and this is the
+                        // one place a value can be filled in without inferring a TYPE.
+                        let value = if self.at(&Token::Comma) || self.at(&Token::RBrace) {
+                            let at = self.span().start;
+                            self.expr(ExprKind::Var(fname.clone()), at)
+                        } else {
+                            self.expect(&Token::Colon)?;
+                            self.parse_expr()?
+                        };
                         fields.push((fname, value));
                         if self.at(&Token::Comma) {
                             self.bump(); // trailing comma allowed

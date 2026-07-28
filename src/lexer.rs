@@ -82,6 +82,10 @@ pub enum Token {
     Plus,
     Minus,
     Star,
+    /// `+=`, `-=`, `*=`: sugar the parser expands into `x = x <op> value`.
+    PlusEq,
+    MinusEq,
+    StarEq,
     Slash,
     LParen,
     RParen,
@@ -165,6 +169,9 @@ impl Token {
             Token::Plus => "`+`".to_string(),
             Token::Minus => "`-`".to_string(),
             Token::Star => "`*`".to_string(),
+            Token::PlusEq => "`+=`".to_string(),
+            Token::MinusEq => "`-=`".to_string(),
+            Token::StarEq => "`*=`".to_string(),
             Token::Slash => "`/`".to_string(),
             Token::LParen => "`(`".to_string(),
             Token::RParen => "`)`".to_string(),
@@ -264,13 +271,27 @@ impl<'a> Lexer<'a> {
                 if self.peek_char() == Some(&'>') { self.bump(); return Ok(Token::FatArrow); }
                 return Ok(Token::Equals);
             }
-            '+' => { self.bump(); return Ok(Token::Plus); }
+            '+' => {
+                self.bump();
+                // `x += 1` is sugar the PARSER expands into `x = x + 1`, so one token here
+                // and no new statement kind, no typecheck rule, no lowering. There is
+                // deliberately no `x++`: an expression with a side effect is the class of
+                // thing this language refuses, and `+=` as a statement is the brevity
+                // without the trap.
+                if self.peek_char() == Some(&'=') { self.bump(); return Ok(Token::PlusEq); }
+                return Ok(Token::Plus);
+            }
             '-' => {
                 self.bump();
+                if self.peek_char() == Some(&'=') { self.bump(); return Ok(Token::MinusEq); }
                 if self.peek_char() == Some(&'>') { self.bump(); return Ok(Token::Arrow); }
                 return Ok(Token::Minus);
             }
-            '*' => { self.bump(); return Ok(Token::Star); }
+            '*' => {
+                self.bump();
+                if self.peek_char() == Some(&'=') { self.bump(); return Ok(Token::StarEq); }
+                return Ok(Token::Star);
+            }
             // a solitary '/' is division; '//' was already consumed as a comment
             '/' => { self.bump(); return Ok(Token::Slash); }
             '(' => { self.bump(); return Ok(Token::LParen); }

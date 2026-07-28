@@ -337,7 +337,7 @@
         },
         {
           "name": "keyword.operator.arithmetic.burxt",
-          "match": "\\+|-|\\*|/"
+          "match": "\\+=|-=|\\*=|\\+|-|\\*|/"
         }
       ]
     },

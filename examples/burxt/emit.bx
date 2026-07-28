@@ -35,7 +35,7 @@ struct Slot { start: Int, length: Int, index: Int, cells: Int, aggregate: Int }
 // block: an `alloca` inside a loop allocates again on every iteration, so a `let` in a
 // `while` would grow the stack until it ran out. The entry block is the one place where
 // "once per call" is guaranteed.
-// The body accumulates in CHUNKS for the same reason the module does: `a = a + b` copies
+// The body accumulates in CHUNKS for the same reason the module does: `a += b` copies
 // the whole left side, and a function body reaching a hundred kilobytes, appended to a
 // hundred thousand times, copies gigabytes. Bounding each copy to the chunk size is what
 // keeps the compiler inside its own region.
@@ -43,7 +43,7 @@ struct Slot { start: Int, length: Int, index: Int, cells: Int, aggregate: Int }
 // The entry buffer stays a plain String: allocas are few and short, so it never grows
 // enough for the quadratic term to matter.
 fn (mut self: Unit) w(text: String) -> Int allocates {
-    self.body_pending = self.body_pending + text;
+    self.body_pending += text;
     if len(self.body_pending) > 512 {
         push(self.body_chunks, self.body_pending);
         self.body_pending = "";
@@ -60,7 +60,7 @@ fn (mut self: Unit) w(text: String) -> Int allocates {
 // is flushed at T bytes, the copying is about A x T/2; joining the N/T chunks pairwise costs
 // N per round for log2(N/T) rounds. Emitting this compiler is A ~ 300,000 and N ~ 1.5 MB, so
 // T = 4096 spent about 600 MB and ran the region out; T = 512 spends about 95 MB.
-// `a = a + b` copies the whole left side, so appending
+// `a += b` copies the whole left side, so appending
 // fifty thousand times to one growing String copies gigabytes — which is exactly how
 // this compiler first exhausted its region while emitting its own source. Chunks bound
 // each copy to the chunk size, and the joins at the end are few.
@@ -68,7 +68,7 @@ fn (mut self: Unit) w(text: String) -> Int allocates {
 // The real fix is a byte buffer that grows in place, which needs a builtin that writes
 // one. Recorded rather than pretended away: this is a cost, not a design.
 fn (mut self: Unit) w_out(text: String) -> Int allocates {
-    self.pending = self.pending + text;
+    self.pending += text;
     if len(self.pending) > 512 {
         push(self.chunks, self.pending);
         self.pending = "";
@@ -98,7 +98,7 @@ fn (mut self: Unit) finish() -> String allocates {
         while i + 1 < len(self.chunks) {
             let pair: String = self.chunks[i] + self.chunks[i + 1];
             let added: Int = push(merged, pair);
-            i = i + 2;
+            i += 2;
         }
         if i < len(self.chunks) {
             let last: Int = push(merged, self.chunks[i]);
@@ -109,7 +109,7 @@ fn (mut self: Unit) finish() -> String allocates {
 }
 
 fn (mut self: Unit) w_entry(text: String) -> Int allocates {
-    self.fn_entry = self.fn_entry + text;
+    self.fn_entry += text;
     return 0;
 }
 
@@ -125,7 +125,7 @@ fn (mut self: Unit) close_fn(closing: String) -> Int allocates {
     let mut i: Int = 0;
     while i < len(self.body_chunks) {
         let piece: Int = self.w_out(self.body_chunks[i]);
-        i = i + 1;
+        i += 1;
     }
     let rest: Int = self.w_out(self.body_pending);
     let closed: Int = self.w_out(closing);
@@ -136,12 +136,12 @@ fn (mut self: Unit) close_fn(closing: String) -> Int allocates {
 }
 
 fn (mut self: Unit) fresh() -> String allocates {
-    self.next_tmp = self.next_tmp + 1;
+    self.next_tmp += 1;
     return "%t" + to_string(self.next_tmp);
 }
 
 fn (mut self: Unit) fresh_label(stem: String) -> String allocates {
-    self.next_label = self.next_label + 1;
+    self.next_label += 1;
     return stem + to_string(self.next_label);
 }
 
@@ -152,7 +152,7 @@ fn (mut self: Unit) declare_slot(src: String, start: Int, length: Int, cells: In
     // The NAME comes from a counter that only grows, not from the table's length. A match
     // arm's bindings leave scope by truncating the table, so lengths repeat — and two
     // allocas called `%v3` in one function is not a program LLVM will accept.
-    self.next_slot = self.next_slot + 1;
+    self.next_slot += 1;
     let index: Int = self.next_slot;
     push(self.slots, Slot { start: start, length: length, index: index, cells: cells,
                             aggregate: aggregate });
@@ -164,7 +164,7 @@ fn (mut self: Unit) declare_slot(src: String, start: Int, length: Int, cells: In
 // Scratch storage for a value that has no name — a struct literal, an array literal.
 // In the entry block for the same reason every other alloca is.
 fn (mut self: Unit) scratch(cells: Int) -> String allocates {
-    self.next_tmp = self.next_tmp + 1;
+    self.next_tmp += 1;
     let name: String = "%scratch" + to_string(self.next_tmp);
     let visited: Int = self.w_entry("  " + name + " = alloca [" + to_string(cells)
                                    + " x i64]\n");
@@ -178,7 +178,7 @@ fn (self: Unit) slot_is_aggregate(src: String, start: Int, length: Int) -> Bool 
         if spans_eq(src, slot.start, slot.length, start, length) {
             return slot.aggregate == 1;
         }
-        i = i - 1;
+        i -= 1;
     }
     return false;
 }
@@ -206,11 +206,11 @@ fn (mut self: Unit) cells_of(src: String, ty: Ty) -> Int allocates {
                 let mut carried: Int = 0;
                 let mut p: Int = 0;
                 while p < variant.c {
-                    carried = carried + self.cells_of(src, self.ty_of(src, self.subs[variant.b + p]));
-                    p = p + 1;
+                    carried += self.cells_of(src, self.ty_of(src, self.subs[variant.b + p]));
+                    p += 1;
                 }
                 if carried > widest { widest = carried; }
-                v = v + 1;
+                v += 1;
             }
             return 1 + widest;
         }
@@ -221,8 +221,8 @@ fn (mut self: Unit) cells_of(src: String, ty: Ty) -> Int allocates {
         let mut f: Int = 0;
         while f < item.b {
             let field: Node = self.nodes[self.kids[item.a + f]];
-            total = total + self.cells_of(src, self.ty_of(src, field.a));
-            f = f + 1;
+            total += self.cells_of(src, self.ty_of(src, field.a));
+            f += 1;
         }
         return total;
     }
@@ -254,8 +254,8 @@ fn (mut self: Unit) offset_of(src: String, holder: Ty, name: Tok) -> Int allocat
         if spans_eq(src, field_name.start, field_name.length, name.start, name.length) {
             return offset;
         }
-        offset = offset + self.cells_of(src, self.ty_of(src, field.a));
-        f = f + 1;
+        offset += self.cells_of(src, self.ty_of(src, field.a));
+        f += 1;
     }
     return -1;
 }
@@ -271,7 +271,7 @@ fn (self: Unit) find_slot(src: String, start: Int, length: Int) -> Int {
         if spans_eq(src, slot.start, slot.length, start, length) {
             return slot.index;
         }
-        i = i - 1;
+        i -= 1;
     }
     return -1;
 }
@@ -296,10 +296,10 @@ fn (mut self: Unit) intern_text(text: String) -> String allocates {
     let mut body: String = "";
     let mut i: Int = 0;
     while i < len(text) {
-        body = body + hex_of(byte_at(text, i));
-        i = i + 1;
+        body += hex_of(byte_at(text, i));
+        i += 1;
     }
-    self.globals = self.globals + name + " = private unnamed_addr constant ["
+    self.globals += name + " = private unnamed_addr constant ["
         + to_string(len(text) + 1) + " x i8] c\"" + body + hex_of(0) + "\"\n";
     return name;
 }
@@ -311,7 +311,7 @@ fn power_of_ten(scale: Int) -> Int {
     let mut i: Int = 0;
     while i < scale {
         n = n * 10;
-        i = i + 1;
+        i += 1;
     }
     return n;
 }
@@ -330,16 +330,16 @@ fn (mut self: Unit) intern(src: String, start: Int, length: Int) -> String alloc
             if next == 110 { resolved = 10; }        // \n
             if next == 116 { resolved = 9; }         // \t
             if next == 48 { resolved = 0; }          // \0
-            body = body + hex_of(resolved);
-            count = count + 1;
-            i = i + 2;
+            body += hex_of(resolved);
+            count += 1;
+            i += 2;
         } else {
-            body = body + hex_of(byte);
-            count = count + 1;
-            i = i + 1;
+            body += hex_of(byte);
+            count += 1;
+            i += 1;
         }
     }
-    self.globals = self.globals + name + " = private unnamed_addr constant ["
+    self.globals += name + " = private unnamed_addr constant ["
         + to_string(count + 1) + " x i8] c\"" + body + hex_of(0) + "\"\n";
     return name;
 }
@@ -405,7 +405,7 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
             let appended: Int = self.w("  " + next + " = call i64 @burxt.concat(i64 "
                                        + joined + ", i64 " + piece + ")\n");
             joined = next;
-            i = i + 1;
+            i += 1;
         }
         return joined;
     }
@@ -546,7 +546,7 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
             } else {
                 let stored: Int = self.w("  store i64 " + value + ", ptr " + at + "\n");
             }
-            i = i + 1;
+            i += 1;
         }
         let reg: String = self.fresh();
         let visited: Int = self.w("  " + reg + " = ptrtoint ptr " + storage + " to i64\n");
@@ -566,7 +566,7 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
                 let pushed: String = self.fresh();
                 let added: Int = self.w("  " + pushed + " = call i64 @burxt.push(i64 "
                                         + reg + ", i64 " + value + ")\n");
-                k = k + 1;
+                k += 1;
             }
             return reg;
         }
@@ -589,7 +589,7 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
             } else {
                 let stored: Int = self.w("  store i64 " + value + ", ptr " + at + "\n");
             }
-            i = i + 1;
+            i += 1;
         }
         let reg: String = self.fresh();
         let visited: Int = self.w("  " + reg + " = ptrtoint ptr " + storage + " to i64\n");
@@ -731,8 +731,8 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
         let mut k: Int = 0;
         while k < list.b {
             let value: String = self.emit_expr(src, self.kids[list.a + k]);
-            args = args + ", i64 " + value;
-            k = k + 1;
+            args += ", i64 " + value;
+            k += 1;
         }
         let answers: Ty = self.type_at(node);
         if self.is_aggregate(answers) {
@@ -765,10 +765,10 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
         while i < list.b {
             let value: String = self.emit_expr(src, self.kids[list.a + i]);
             if i > 0 {
-                args = args + ", ";
+                args += ", ";
             }
-            args = args + "i64 " + value;
-            i = i + 1;
+            args += "i64 " + value;
+            i += 1;
         }
         let found_fn: Int = self.find_fun(src, t.start, t.length);
         if found_fn >= 0 {
@@ -781,7 +781,7 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
             let storage: String = self.scratch(self.cells_of(src, answers));
             let mut all: String = "ptr " + storage;
             if args != "" {
-                all = all + ", " + args;
+                all += ", " + args;
             }
             let dropped: String = self.fresh();
             let called_it: Int = self.w("  " + dropped + " = call i64 @"
@@ -815,7 +815,7 @@ fn (mut self: Unit) extern_return(src: String, signature: Fun) -> Ty allocates {
                 return self.ty_of(src, item.b);
             }
         }
-        i = i + 1;
+        i += 1;
     }
     return signature.ret;
 }
@@ -847,10 +847,10 @@ fn (mut self: Unit) emit_c_call(src: String, n: Node, signature: Fun) -> String 
             passed = narrow;
         }
         if i > 0 {
-            args = args + ", ";
+            args += ", ";
         }
-        args = args + shape + " " + passed;
-        i = i + 1;
+        args += shape + " " + passed;
+        i += 1;
     }
 
     // C's DECLARED return, not the one the checker recorded. The checker maps a CInt
@@ -978,7 +978,7 @@ fn (mut self: Unit) variant_index(src: String, holder: Ty, name: Tok) -> Int all
         if spans_eq(src, named.start, named.length, name.start, name.length) {
             return v;
         }
-        v = v + 1;
+        v += 1;
     }
     return -1;
 }
@@ -1006,8 +1006,8 @@ fn (mut self: Unit) emit_construction(src: String, holder: Ty, call: Node,
             } else {
                 let put: Int = self.w("  store i64 " + value + ", ptr " + at + "\n");
             }
-            cell = cell + width;
-            i = i + 1;
+            cell += width;
+            i += 1;
         }
     }
     let reg: String = self.fresh();
@@ -1305,7 +1305,7 @@ fn (mut self: Unit) emit_stmt(src: String, node: Int) -> Int allocates {
                                        + " to ptr\n");
                 let out: Int = self.w("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_str, "
                                       + "ptr " + as_ptr + ")\n");
-                piece_index = piece_index + 1;
+                piece_index += 1;
             }
             return self.w("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_nl)\n");
         }
@@ -1349,10 +1349,10 @@ fn (mut self: Unit) emit_stmt(src: String, node: Int) -> Int allocates {
         while i < list.b {
             let arg: String = self.emit_expr(src, self.kids[list.a + i]);
             if i > 0 {
-                args = args + ", ";
+                args += ", ";
             }
-            args = args + "i64 " + arg;
-            i = i + 1;
+            args += "i64 " + arg;
+            i += 1;
         }
         let answer: String = self.fresh();
         let jumped: Int = self.w("  " + answer + " = musttail call i64 @"
@@ -1463,7 +1463,7 @@ fn (mut self: Unit) emit_stmt(src: String, node: Int) -> Int allocates {
             let dropped: Int = truncate(self.slots, base);
 
             let joined: Int = self.w("  br label %" + done + "\n" + next_label + ":\n");
-            i = i + 1;
+            i += 1;
         }
         // Every variant has an arm — the checker proved it — so falling past the last
         // comparison is unreachable. LLVM still needs the block terminated.
@@ -1519,12 +1519,12 @@ fn (mut self: Unit) bind_payload(src: String, holder: Ty, arm: Node,
                     let put: Int = self.w("  store i64 " + value + ", ptr %v"
                                           + to_string(slot) + "\n");
                 }
-                cell = cell + width;
-                p = p + 1;
+                cell += width;
+                p += 1;
             }
             return 1;
         }
-        v = v + 1;
+        v += 1;
     }
     return 0;
 }
@@ -1540,7 +1540,7 @@ fn (mut self: Unit) emit_block(src: String, block: Int) -> Int allocates {
     let mut i: Int = 0;
     while i < n.b {
         let emitted: Int = self.emit_stmt(src, self.kids[n.a + i]);
-        i = i + 1;
+        i += 1;
     }
     return 1;
 }
@@ -1567,11 +1567,11 @@ fn (mut self: Unit) emit_vtable(src: String, index: Int) -> Int allocates {
         let sig: Node = self.nodes[self.kids[declared.a + i]];
         let named: Tok = self.toks[sig.tok];
         if i > 0 {
-            entries = entries + ", ";
+            entries += ", ";
         }
-        entries = entries + "ptr @" + substring(src, type_name.start, type_name.length)
+        entries += "ptr @" + substring(src, type_name.start, type_name.length)
             + "." + substring(src, named.start, named.length);
-        i = i + 1;
+        i += 1;
     }
     return self.w_out(vtable_symbol(src, trait_name, type_name) + " = constant ["
                       + to_string(declared.b) + " x ptr] [" + entries + "]\n");
@@ -1631,8 +1631,8 @@ fn (mut self: Unit) emit_dyn_call(src: String, holder: Ty, call: Node) -> String
     let mut i: Int = 0;
     while i < list.b {
         let value: String = self.emit_expr(src, self.kids[list.a + i]);
-        args = args + ", i64 " + value;
-        i = i + 1;
+        args += ", i64 " + value;
+        i += 1;
     }
     let answer: String = self.fresh();
     let called: Int = self.w("  " + answer + " = call i64 " + target + "(" + args + ")\n");
@@ -1653,7 +1653,7 @@ fn (mut self: Unit) trait_slot(src: String, holder: Ty, name: Tok) -> Int alloca
         if spans_eq(src, named.start, named.length, name.start, name.length) {
             return i;
         }
-        i = i + 1;
+        i += 1;
     }
     return 0;
 }
@@ -1713,7 +1713,7 @@ fn (mut self: Unit) emit_extern(src: String, index: Int) -> Int allocates {
         if self.declared[d] == called {
             return 0;
         }
-        d = d + 1;
+        d += 1;
     }
     let noted: Int = push(self.declared, called);
     let params: Node = self.nodes[item.a];
@@ -1721,11 +1721,11 @@ fn (mut self: Unit) emit_extern(src: String, index: Int) -> Int allocates {
     let mut p: Int = 0;
     while p < params.b {
         if p > 0 {
-            signature = signature + ", ";
+            signature += ", ";
         }
         let param: Node = self.nodes[self.kids[params.a + p]];
-        signature = signature + c_type_of(self.ty_of(src, param.a));
-        p = p + 1;
+        signature += c_type_of(self.ty_of(src, param.a));
+        p += 1;
     }
     let answers: Ty = self.ty_of(src, item.b);
     return self.w_out("declare " + c_type_of(answers) + " @"
@@ -1767,18 +1767,18 @@ fn (mut self: Unit) emit_function(src: String, index: Int) -> Int allocates {
                               name_start: receiver.start, name_len: receiver.length };
         symbol = method_symbol(src, holder, name);
         if first > 0 {
-            signature = signature + ", ";
+            signature += ", ";
         }
-        signature = signature + "i64 %a" + to_string(first);
-        first = first + 1;
+        signature += "i64 %a" + to_string(first);
+        first += 1;
     }
     let mut p: Int = 0;
     while p < params.b {
         if p + first > 0 {
-            signature = signature + ", ";
+            signature += ", ";
         }
-        signature = signature + "i64 %a" + to_string(p + first);
-        p = p + 1;
+        signature += "i64 %a" + to_string(p + first);
+        p += 1;
     }
     let opened: Int = self.open_fn("define i64 @" + symbol + "(" + signature
                                    + ") \{\nentry:\n");
@@ -1823,7 +1823,7 @@ fn (mut self: Unit) emit_function(src: String, index: Int) -> Int allocates {
             let stored: Int = self.w("  store i64 %a" + to_string(p + first) + ", ptr %v"
                                      + to_string(slot) + "\n");
         }
-        p = p + 1;
+        p += 1;
     }
     let body: Int = self.emit_block(src, item.b);
     // Unreachable, since the checker proved every path returns — but LLVM requires every
@@ -1853,7 +1853,7 @@ fn (mut self: Unit) emit_module(src: String) -> Int allocates {
         if item.kind == 85 {
             let table: Int = self.emit_vtable(src, self.items[t]);
         }
-        t = t + 1;
+        t += 1;
     }
 
     // Functions first, so a call reads as a call to something already written.
@@ -1868,13 +1868,13 @@ fn (mut self: Unit) emit_module(src: String) -> Int allocates {
             let mut k: Int = 0;
             while k < item.b {
                 let done: Int = self.emit_function(src, self.kids[item.a + k]);
-                k = k + 1;
+                k += 1;
             }
         }
         if item.kind == 80 || item.kind == 81 {
             let done: Int = self.emit_function(src, index);
         }
-        i = i + 1;
+        i += 1;
     }
 
     // Then main, which is the top-level statements in order.
@@ -1891,7 +1891,7 @@ fn (mut self: Unit) emit_module(src: String) -> Int allocates {
         if item.kind >= 60 && item.kind <= 71 {
             let emitted: Int = self.emit_stmt(src, index);
         }
-        i = i + 1;
+        i += 1;
     }
     let closed: Int = self.close_fn("  ret i32 0\n\}\n");
     return 1;

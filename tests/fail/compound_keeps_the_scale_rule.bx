@@ -1,0 +1,5 @@
+// `+=` is the long form by the time anyone checks it, so it obeys the same refusals.
+let mut price: Decimal<2> = $19.99;
+let rate: Decimal<4> = 8.25%;
+price += rate;
+print(price);
