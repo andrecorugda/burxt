@@ -372,7 +372,7 @@ fn (mut self: Table) check_let(src: String, from: Int) -> Int allocates {
 }
 
 region pass {
-    let src: String = read_file("examples/inputs/money.bx");
+    let src: String = read_file("examples/negative/money.bx");
     let mut table: Table = Table { rows: [] };
     let mut cursor: Int = 0;
     while true {

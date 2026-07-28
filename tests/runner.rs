@@ -461,9 +461,9 @@ fn editor_grammar_knows_every_keyword_the_compiler_does() {
 ///
 /// `check` is used rather than `run` on purpose: it needs no working directory,
 /// no linker, and no LLVM, so this stays fast enough to never be skipped.
-/// Files under `examples/inputs/` are DATA for other examples to read, not
-/// programs, so they are not checked — a directory rather than an exception list,
-/// because exception lists rot.
+/// Files under `examples/inputs/` are DATA for other examples to read, not programs.
+/// They get their own test below, because two of them are wrong ON PURPOSE and silence
+/// about that is what makes a reader think the repository is broken.
 #[test]
 fn every_example_still_typechecks() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
@@ -1525,4 +1525,56 @@ fn every_log_file_is_linked_from_its_index() {
         "DESIGN.md is growing back into a log: {} lines",
         design.lines().count()
     );
+}
+
+/// Two directories of data, and the DIRECTORY is the promise: everything in
+/// `examples/negative/` must be rejected, everything in `examples/inputs/` must compile.
+///
+/// A folder rather than a naming convention, because a folder answers the question
+/// before anyone opens a file — and because a rule holds for files nobody has written
+/// yet, while a list of exceptions rots. Without this test, "fixing" a negative input
+/// would quietly turn a demonstration into a demonstration of nothing, with the suite
+/// still green.
+#[test]
+fn the_negative_examples_are_still_negative() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("negative");
+    fs::create_dir_all(&scratch).unwrap();
+    let mut wrong = Vec::new();
+    let mut counted = 0;
+
+    for (dir, must_fail) in [("examples/negative", true), ("examples/inputs", false)] {
+        let path = root.join(dir);
+        let mut seen = 0;
+        for entry in fs::read_dir(&path).unwrap() {
+            let file = entry.unwrap().path();
+            if file.extension().and_then(|e| e.to_str()) != Some("bx") {
+                continue;
+            }
+            seen += 1;
+            counted += 1;
+            let rejected = !burxt("check", &file, &scratch).status.success();
+            if rejected != must_fail {
+                wrong.push(format!(
+                    "{}/{}: the directory says it must {}, but the compiler {} it",
+                    dir,
+                    file.file_name().unwrap().to_string_lossy(),
+                    if must_fail { "fail" } else { "compile" },
+                    if rejected { "rejected" } else { "accepted" }
+                ));
+            }
+        }
+        assert!(seen > 0, "{} has no .bx files left", dir);
+        // Each directory explains itself, because the first person to meet these files is
+        // someone who opened one and saw red squiggles.
+        assert!(
+            path.join("README.md").exists(),
+            "{} must say what it is: no README.md",
+            dir
+        );
+    }
+
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    assert!(counted >= 4, "the example data shrank: {} files", counted);
 }

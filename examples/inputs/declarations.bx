@@ -1,7 +1,9 @@
-// Input for the self-hosted symbol table: a few declarations, one of them a
-// redeclaration, which is what the pass exists to catch.
+// Valid declarations, read by nothing in particular — a scratch file for trying the
+// language out. The version WITH a redeclaration, which `examples/symbols.bx` reads to
+// show the symbol table catching it, is in `examples/negative/declarations.bx`.
 let price: Decimal<2> = $19.99;
-let qty: Int = 3;
+let mut qty: Int = 3;
 let mut total: Decimal<2> = $0.00;
 let label: String = "widget";
-let qty: Int = 4;
+qty = 4;
+print(qty);

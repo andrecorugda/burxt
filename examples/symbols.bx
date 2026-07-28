@@ -138,7 +138,7 @@ fn (mut self: Table) collect(src: String, from: Int) -> Int allocates {
 }
 
 region pass {
-    let src: String = read_file("examples/inputs/declarations.bx");
+    let src: String = read_file("examples/negative/declarations.bx");
     let mut table: Table = Table { entries: [] };
 
     let mut cursor: Int = 0;

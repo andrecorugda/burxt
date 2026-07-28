@@ -1,0 +1,4 @@
+// Negative input for `examples/lexer.bx`: one byte the language does not know (`@`),
+// so the lexer has a real diagnostic to build. Compiling this directly fails.
+let price = 250;
+let total = price * 4 @ 99;

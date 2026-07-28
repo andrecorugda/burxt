@@ -1,5 +1,5 @@
-// Input for the self-hosted scale checker. Three of these are legal Burxt and
-// three are exactly what the language refuses.
+// Negative input for `examples/checker.bx`: three legal bindings and three the scale
+// rule refuses. Compiling this directly is supposed to fail.
 let price: Decimal<2> = $19.99;
 let qty: Int = 3;
 let rate: Decimal<4> = 0.0825;
