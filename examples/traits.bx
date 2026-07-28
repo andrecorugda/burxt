@@ -20,13 +20,13 @@ struct Meal { dish: String, cost: Decimal<2>, covers: Int }
 // trait by having the right method names — conformance is declared, and the
 // compiler checks the impl answers EVERY signature, with no extras.
 impl Priced for Book {
-    fn (self: Book) price() -> Decimal<2> { return self.cost; }
-    fn (self: Book) label() -> String allocates { return "book: " + self.title; }
+    fn (self) price() -> Decimal<2> { return self.cost; }
+    fn (self) label() -> String allocates { return "book: " + self.title; }
 }
 
 impl Priced for Meal {
-    fn (self: Meal) price() -> Decimal<2> { return self.cost * self.covers; }
-    fn (self: Meal) label() -> String allocates { return "meal: " + self.dish; }
+    fn (self) price() -> Decimal<2> { return self.cost * self.covers; }
+    fn (self) label() -> String allocates { return "meal: " + self.dish; }
 }
 
 // ---- Static dispatch: the default, and it costs nothing -------------------

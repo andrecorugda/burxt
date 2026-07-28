@@ -184,6 +184,21 @@ fn is_reserved_name(src: String, start: Int, length: Int) -> Bool {
         || span_eq(src, start, length, "exit");
 }
 
+// The `self` token of the receiver clause that ends just before `from`. -1 if there is
+// none, which the caller treats as a program that is not a method.
+fn (self: Unit) self_token(from: Int) -> Int {
+    let mut i: Int = from - 1;
+    let mut steps: Int = 0;
+    while i >= 0 && steps < 6 {
+        if self.toks[i].kind == 119 {                // `self`
+            return i;
+        }
+        i -= 1;
+        steps += 1;
+    }
+    return 0 - 1;
+}
+
 fn (mut self: Unit) collect_method(src: String, index: Int) -> Int allocates {
     let item: Node = self.nodes[index];
     let name: Tok = self.toks[item.tok];
@@ -1252,13 +1267,13 @@ fn (mut self: Unit) check_body(src: String, index: Int) -> Int allocates {
         // `self` is a name like any other once it is bound: the receiver's type is
         // written in the clause node, so a method body needs no special rule.
         let receiver: Tok = self.toks[signature.value];
-        // The clause node holds the receiver's TYPE token; the word `self` is two
-        // tokens before it, because a receiver clause has exactly one shape:
-        // `(self: Type)` or `(mut self: Type)`. Checked rather than assumed.
-        let mut self_tok: Int = signature.value - 2;
-        if self.toks[self_tok].kind != 119 {
-            self_tok = signature.value;
-        }
+        // Where the word `self` is. Counting back from the receiver's TYPE token stopped
+        // working when `fn (self) name()` became legal inside an `impl`, because there the
+        // type token is the impl HEADER's and lives far away. The clause always sits
+        // immediately before the method's name, in one of three shapes — `(self)`,
+        // `(self: T)`, `(mut self: T)` — so scanning back for it is both shorter and
+        // right for all three.
+        let self_tok: Int = self.self_token(item.tok);
         let word: Tok = self.toks[self_tok];
         let mut writable: Int = 0;
         if item.value >= 4 { writable = 1; }

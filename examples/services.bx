@@ -26,14 +26,14 @@ struct FlatRates { everywhere: Decimal<4> }
 struct TableRates { home: Decimal<4>, abroad: Decimal<4> }
 
 impl Rates for FlatRates {
-    fn (self: FlatRates) rate_for(country: String) -> Decimal<4> {
+    fn (self) rate_for(country: String) -> Decimal<4> {
         return self.everywhere;
     }
     fn (self: FlatRates) name() -> String { return "flat"; }
 }
 
 impl Rates for TableRates {
-    fn (self: TableRates) rate_for(country: String) -> Decimal<4> {
+    fn (self) rate_for(country: String) -> Decimal<4> {
         if country == "PH" { return self.home; }
         return self.abroad;
     }

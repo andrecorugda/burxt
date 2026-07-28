@@ -259,6 +259,41 @@ and `while i < n` already says it — deferred with a trigger below.
   semantics is not negotiable for a convenience.
 - **NO `for` that evaluates its iterable more than once.** See slice 2, Decision 3.
 
+## 2b. Slice 2b — the grammar swept against the bar (v0.0.95)
+
+The bar is not a filter on new features, it is a lens for the **whole grammar**: for any
+construct, what does the Python or PHP equivalent cost to write? If Burxt costs more and the
+extra buys no correctness, the extra is the bug. Swept once, deliberately, and it found three
+things — plus two that looked like gaps and were not.
+
+**Fixed:**
+
+1. **A trailing comma is allowed everywhere.** It was allowed in struct and enum
+   *declarations* and refused in parameter lists, argument lists, array literals, payloads,
+   match bindings and type-argument lists. Refusing it makes adding an item a two-line diff
+   and buys nothing.
+2. **`fn (self) name()` inside an `impl`.** The header already said which type, and repeating
+   it on every method meant a five-method trait wrote the type six times. Outside an `impl`
+   the annotation stays required, because there nothing else says it.
+3. **Block comments get a real answer instead of a stray-token error.** `/* ... */` reported
+   *"expected statement, found `/`"* from two tokens later. It now says Burxt has line
+   comments only, and why that is a choice: one way to write a comment means no nesting rule
+   to get wrong, and every editor will `//` a selection.
+
+**Checked and already fine**, recorded so the next sweep does not re-check them: a call kept
+for its effect (`push(xs, 1);` needs no binding), negative literals (`-1`, `-19.99`), the
+field shorthand, `+=`, interpolation, `else if`, and `len` over both strings and arrays.
+
+**Deliberately still absent**, each with the reason rather than an omission:
+
+| Missing | Why it stays missing |
+|---|---|
+| `%` for modulo | `%` is the percent literal, and `8.25%` is a headline of this language. `rem`, `div_floor` and `div_trunc` also *name* which convention is meant, which one operator cannot |
+| Multi-line string literals | A literal spanning lines makes its own indentation part of the data — the one thing that surprises everybody about them. `\n` and `+` cover it |
+| Block comments | See above: one way to write a comment |
+| Default parameter values, named arguments | Real friction, real feature. Not refused on principle — just not built. Earns its place when a signature in this repo wants one |
+| `to_string` of a struct | Needs a display trait with a name the language blesses, which is a decision, not a shorthand |
+
 ## 3. Deferred, with triggers
 
 | Feature | Why deferred | Earns its place when |

@@ -295,7 +295,23 @@ impl<'a> Lexer<'a> {
                 return Ok(Token::Star);
             }
             // a solitary '/' is division; '//' was already consumed as a comment
-            '/' => { self.bump(); return Ok(Token::Slash); }
+            '/' => {
+                self.bump();
+                // `/* ... */` is the one thing a reader might reasonably try and not find.
+                // Burxt has line comments only — one way to write a comment, and no rule
+                // to learn about nesting — so say that instead of "expected statement,
+                // found `/`", which is what the parser used to report two tokens later.
+                if self.peek_char() == Some(&'*') {
+                    return Err(
+                        "Burxt has line comments only: `// like this`. There is no \
+                         `/* ... */`, so there is no nesting rule to get wrong — comment \
+                         out a block by putting `//` on each line, which every editor \
+                         will do for you."
+                            .to_string(),
+                    );
+                }
+                return Ok(Token::Slash);
+            }
             '(' => { self.bump(); return Ok(Token::LParen); }
             ')' => { self.bump(); return Ok(Token::RParen); }
             '{' => { self.bump(); return Ok(Token::LBrace); }

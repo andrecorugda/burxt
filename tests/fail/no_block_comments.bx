@@ -1,0 +1,5 @@
+// Burxt has line comments only. One way to write a comment, and therefore no rule
+// about nesting to get wrong — which is what block comments cost every language that
+// has them. The refusal says so, instead of reporting a stray `/` two tokens later.
+/* this is not a comment in Burxt */
+print(1);

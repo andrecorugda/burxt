@@ -1,0 +1,43 @@
+// A trailing comma is allowed everywhere a list is written, so adding a field, a
+// parameter, an argument or a variant is a one-line diff rather than a two-line one.
+// It buys nothing to refuse and costs a reader nothing to allow.
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+enum Shape {
+    Dot,
+    Line(Int, Int,),
+}
+
+fn total(
+    a: Int,
+    b: Int,
+) -> Int {
+    return a + b;
+}
+
+region r {
+    let p = Point {
+        x: 1,
+        y: 2,
+    };
+    print(total(
+        p.x,
+        p.y,
+    ));
+
+    let sizes: [Int; 3] = [
+        10,
+        20,
+        30,
+    ];
+    print(sizes[2]);
+
+    let drawn: Shape = Shape.Line(3, 4,);
+    match drawn {
+        Dot => { print(0); }
+        Line(from, to,) => { print(from + to); }
+    }
+}

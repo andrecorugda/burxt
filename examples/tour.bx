@@ -19,7 +19,7 @@ struct LineItem { label: String, price: Decimal<2>, qty: Int }
 trait Priced { fn total(self) -> Decimal<2> }
 
 impl Priced for LineItem {
-    fn (self: LineItem) total() -> Decimal<2> {
+    fn (self) total() -> Decimal<2> {
         return self.price * self.qty;
     }
 }

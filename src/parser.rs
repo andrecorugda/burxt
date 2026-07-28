@@ -161,7 +161,8 @@ impl Parser {
                 // `fn (self: T) name(...)` is a method; `fn name(...)` is a
                 // free function — the `(` right after `fn` is the tell.
                 if self.peek_at(1) == &Token::LParen {
-                    methods.push(self.parse_method()?);
+                    // Top level: there is no `impl` header to borrow a type from.
+                    methods.push(self.parse_method(None)?);
                 } else {
                     fns.push(self.parse_fn()?);
                 }
@@ -272,9 +273,7 @@ impl Parser {
                 self.bump();
                 loop {
                     payload.push(self.parse_type()?);
-                    if self.at(&Token::Comma) {
-                        self.bump();
-                    } else {
+                    if !self.more_in_list(&Token::RParen) {
                         break;
                     }
                 }
@@ -424,7 +423,7 @@ impl Parser {
                     trait_name, type_name
                 ));
             }
-            methods.push(self.parse_method()?);
+            methods.push(self.parse_method(Some(&type_name))?);
         }
         self.expect(&Token::RBrace)?;
         Ok(ImplBlock { trait_name, type_name, methods, span: Span { start, end: self.prev_end().max(start + 1) } })
@@ -515,7 +514,7 @@ impl Parser {
 
     /// `fn (self: Type) name(params) -> ret { body }`, or `fn (mut self: ...)`
     /// for a mutating method.
-    fn parse_method(&mut self) -> Result<MethodDef, String> {
+    fn parse_method(&mut self, owner: Option<&str>) -> Result<MethodDef, String> {
         let start = self.span().start;
         self.expect(&Token::Fn)?;
         self.expect(&Token::LParen)?;
@@ -533,14 +532,32 @@ impl Parser {
             ));
         }
         self.bump();
-        self.expect(&Token::Colon)?;
-        let receiver = match self.bump() {
-            Token::Ident(s) => s,
-            other => {
-                return Err(format!(
-                    "expected a struct name after `self:`, found {}",
-                    other.describe()
-                ))
+        // `fn (self) name()` inside an `impl` — the header already said which type, so
+        // repeating it on every method buys nothing. `owner` is that type when we are
+        // inside one; outside, there is nothing to fall back on and the annotation stays
+        // required, because there the type genuinely is not known.
+        let receiver = if self.at(&Token::RParen) {
+            match owner {
+                Some(t) => t.to_string(),
+                None => {
+                    return Err(
+                        "`fn (self)` needs the type: outside an `impl` block nothing says \
+                         which one. Write `fn (self: Type) name(...)`, or put the method \
+                         in `impl Trait for Type { ... }`, where the header says it once."
+                            .to_string(),
+                    )
+                }
+            }
+        } else {
+            self.expect(&Token::Colon)?;
+            match self.bump() {
+                Token::Ident(s) => s,
+                other => {
+                    return Err(format!(
+                        "expected a struct name after `self:`, found {}",
+                        other.describe()
+                    ))
+                }
             }
         };
         self.expect(&Token::RParen)?;
@@ -595,6 +612,19 @@ impl Parser {
     /// `<T>` or `<T, U>` after a name, or nothing. Refused: an empty list, a duplicate,
     /// and a parameter whose name is a declared type's — each of those is a program that
     /// means two things.
+    /// Is there another element in this comma-separated list?
+    ///
+    /// A **trailing comma is allowed everywhere**, so adding a field, a parameter or an
+    /// argument is a one-line diff rather than a two-line one. It buys nothing to refuse
+    /// and it costs a reader nothing to allow, which is the whole test.
+    fn more_in_list(&mut self, closer: &Token) -> bool {
+        if !self.at(&Token::Comma) {
+            return false;
+        }
+        self.bump();
+        !self.at(closer)
+    }
+
     fn parse_type_params(&mut self, owner: &str) -> Result<Vec<String>, String> {
         if !self.at(&Token::Lt) {
             return Ok(Vec::new());
@@ -620,9 +650,7 @@ impl Parser {
                     ))
                 }
             }
-            if self.at(&Token::Comma) {
-                self.bump();
-            } else {
+            if !self.more_in_list(&Token::Gt) {
                 break;
             }
         }
@@ -655,9 +683,7 @@ impl Parser {
                 let ty = self.parse_type()?;
                 let marshal = self.parse_marshal()?;
                 params.push(Param { name: pname, ty, marshal });
-                if self.at(&Token::Comma) {
-                    self.bump();
-                } else {
+                if !self.more_in_list(&Token::RParen) {
                     break;
                 }
             }
@@ -881,9 +907,7 @@ impl Parser {
         if !self.at(&Token::RParen) {
             loop {
                 args.push(self.parse_expr()?);
-                if self.at(&Token::Comma) {
-                    self.bump();
-                } else {
+                if !self.more_in_list(&Token::RParen) {
                     break;
                 }
             }
@@ -929,9 +953,7 @@ impl Parser {
                             ))
                         }
                     }
-                    if self.at(&Token::Comma) {
-                        self.bump();
-                    } else {
+                    if !self.more_in_list(&Token::RParen) {
                         break;
                     }
                 }
@@ -1169,9 +1191,7 @@ impl Parser {
                     let mut args = Vec::new();
                     loop {
                         args.push(self.parse_type()?);
-                        if self.at(&Token::Comma) {
-                            self.bump();
-                        } else {
+                        if !self.more_in_list(&Token::Gt) {
                             break;
                         }
                     }
@@ -1364,9 +1384,7 @@ impl Parser {
                 if !self.at(&Token::RParen) {
                     loop {
                         args.push(self.parse_expr()?);
-                        if self.at(&Token::Comma) {
-                            self.bump();
-                        } else {
+                        if !self.more_in_list(&Token::RParen) {
                             break;
                         }
                     }
@@ -1450,9 +1468,7 @@ impl Parser {
                     if !self.at(&Token::RParen) {
                         loop {
                             args.push(self.parse_expr()?);
-                            if self.at(&Token::Comma) {
-                                self.bump();
-                            } else {
+                            if !self.more_in_list(&Token::RParen) {
                                 break;
                             }
                         }

@@ -43,6 +43,20 @@ fn (mut self: Unit) advance() -> Int {
     return self.pos;
 }
 
+// Is there another element in this comma-separated list?
+//
+// A TRAILING COMMA is allowed everywhere, so adding a parameter, an argument, a field or
+// a variant is a one-line diff rather than a two-line one. It buys nothing to refuse and
+// it costs a reader nothing to allow, which is the whole test. `closer` is the token that
+// ends the list — 30 for `)`, 32 for `}`, 34 for `]`.
+fn (mut self: Unit) more_in_list(closer: Int) -> Bool {
+    if !self.at(22) {                                // ','
+        return false;
+    }
+    let comma: Int = self.advance();
+    return !self.at(closer);
+}
+
 fn (mut self: Unit) complain(src: String, what: String) -> Int allocates {
     let where: Int = self.pos;
     if where < len(self.toks) {
@@ -894,8 +908,7 @@ fn (mut self: Unit) parse_args(src: String) -> Int allocates {
         if arg < 0 { return -1; }
         push(self.stack, arg);
         count += 1;
-        if self.at(22) {                             // ','
-            let n: Int = self.advance();
+        if self.more_in_list(30) {                   // ',' — a trailing one is allowed
             continue;
         }
         break;
@@ -1011,8 +1024,7 @@ fn (mut self: Unit) parse_primary(src: String) -> Int allocates {
             if item < 0 { return -1; }
             push(self.stack, item);
             count += 1;
-            if self.at(22) {                         // ','
-                let c: Int = self.advance();
+            if self.more_in_list(34) {              // ',' — a trailing one is allowed
                 continue;
             }
             break;
@@ -1250,8 +1262,7 @@ fn (mut self: Unit) parse_stmt(src: String) -> Int allocates {
                     push(self.subs, self.pos);
                     binds += 1;
                     let b: Int = self.advance();
-                    if self.at(22) {
-                        let c: Int = self.advance();
+                    if self.more_in_list(30) {
                         continue;
                     }
                     break;
@@ -1346,8 +1357,7 @@ fn (mut self: Unit) parse_params(src: String) -> Int allocates {
         let param: Int = self.add(90, ty, 0, 0, marshalled, name_tok);
         push(self.stack, param);
         count += 1;
-        if self.at(22) {                             // ','
-            let c: Int = self.advance();
+        if self.more_in_list(30) {                   // ',' — a trailing one is allowed
             continue;
         }
         break;
@@ -1387,7 +1397,7 @@ fn (mut self: Unit) parse_clauses(src: String, ret: Int, receiver_tok: Int) -> I
 
 // `fn name(params) -> Type [allocates] [clauses] { body }`, or a method when a
 // receiver clause follows `fn`. `pure` precedes the whole thing.
-fn (mut self: Unit) parse_fn(src: String, is_pure: Int) -> Int allocates {
+fn (mut self: Unit) parse_fn(src: String, is_pure: Int, owner: Int) -> Int allocates {
     let here: Int = self.pos;
     if !self.eat(src, 102, "`fn`") { return -1; }
 
@@ -1402,12 +1412,25 @@ fn (mut self: Unit) parse_fn(src: String, is_pure: Int) -> Int allocates {
             let m: Int = self.advance();
         }
         if !self.eat(src, 119, "`self` in the receiver clause") { return -1; }
-        if !self.eat(src, 20, "`:` and the receiver's type") { return -1; }
-        if !self.at(1) {
-            return self.complain(src, "a struct name after `self:`");
+        // `fn (self) name()` inside an `impl` — the header already said which type, so
+        // `owner` is that type's token and repeating it on every method buys nothing.
+        // Outside an impl `owner` is -1 and the annotation stays required, because there
+        // nothing says which type it is.
+        if self.at(30) {
+            if owner < 0 {
+                return self.complain(src,
+                    "the receiver's type: outside an `impl` block nothing says which "
+                    + "one, so write `fn (self: Type) name(...)`");
+            }
+            receiver_tok = owner;
+        } else {
+            if !self.eat(src, 20, "`:` and the receiver's type") { return -1; }
+            if !self.at(1) {
+                return self.complain(src, "a struct name after `self:`");
+            }
+            receiver_tok = self.pos;
+            let r: Int = self.advance();
         }
-        receiver_tok = self.pos;
-        let r: Int = self.advance();
         if !self.eat(src, 30, "`)` closing the receiver clause") { return -1; }
     }
 
@@ -1467,8 +1490,7 @@ fn (mut self: Unit) parse_struct(src: String) -> Int allocates {
         let field: Int = self.add(91, ty, 0, 0, 0, field_tok);
         push(self.stack, field);
         count += 1;
-        if self.at(22) {
-            let c: Int = self.advance();
+        if self.more_in_list(32) {
             continue;
         }
         break;
@@ -1500,8 +1522,7 @@ fn (mut self: Unit) parse_enum(src: String) -> Int allocates {
                 if ty < 0 { return -1; }
                 push(self.subs, ty);
                 payload += 1;
-                if self.at(22) {
-                    let c: Int = self.advance();
+                if self.more_in_list(30) {
                     continue;
                 }
                 break;
@@ -1511,8 +1532,7 @@ fn (mut self: Unit) parse_enum(src: String) -> Int allocates {
         let variant: Int = self.add(92, 0, payload_start, payload, 0, variant_tok);
         push(self.stack, variant);
         count += 1;
-        if self.at(22) {
-            let c: Int = self.advance();
+        if self.more_in_list(32) {
             continue;
         }
         break;
@@ -1585,7 +1605,7 @@ fn (mut self: Unit) parse_impl(src: String) -> Int allocates {
     let base: Int = len(self.stack);
     let mut count: Int = 0;
     while !self.at(32) && !self.done() {
-        let method: Int = self.parse_fn(src, 0);
+        let method: Int = self.parse_fn(src, 0, type_tok);
         if method < 0 { return -1; }
         push(self.stack, method);
         count += 1;
@@ -1616,9 +1636,9 @@ fn (mut self: Unit) parse_item(src: String) -> Int allocates {
     let k: Int = self.kind_at(0);
     if k == 124 {                                    // pure fn
         let n: Int = self.advance();
-        return self.parse_fn(src, 1);
+        return self.parse_fn(src, 1, 0 - 1);
     }
-    if k == 102 { return self.parse_fn(src, 0); }
+    if k == 102 { return self.parse_fn(src, 0, 0 - 1); }
     if k == 109 { return self.parse_struct(src); }
     if k == 110 { return self.parse_enum(src); }
     if k == 112 { return self.parse_trait(src); }

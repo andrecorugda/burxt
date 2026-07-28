@@ -1866,7 +1866,11 @@ fn (mut self: Unit) emit_function(src: String, index: Int) -> Int allocates {
                                    + ") \{\nentry:\n");
     if is_method {
         let receiver: Tok = self.toks[signature_node.value];
-        let word: Tok = self.toks[signature_node.value - 2];
+        // The word `self`, found by scanning back from the method's name rather than by
+        // counting from the receiver's TYPE token — because `fn (self) name()` inside an
+        // `impl` borrows the header's type token, which is nowhere near the clause.
+        // See check.bx's self_token, which had to learn the same thing.
+        let word: Tok = self.toks[self.self_token(item.tok)];
         // The receiver arrives as an address either way. `mut self` keeps it, so writes
         // reach the caller's value; plain `self` copies, so they cannot.
         let receiver_arg: String = "%a" + to_string(first - 1);

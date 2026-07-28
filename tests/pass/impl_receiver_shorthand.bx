@@ -1,0 +1,40 @@
+// Inside `impl Trait for Type`, the header already says which type — so a method may
+// write `fn (self)` and let it. Repeating the type on every method buys nothing, and on
+// a trait with five methods it was the type written six times.
+trait Priced {
+    fn price(self) -> Decimal<2>
+    fn label(self) -> String
+}
+
+struct Book { title: String, cost: Decimal<2> }
+
+impl Priced for Book {
+    fn (self) price() -> Decimal<2> { return self.cost; }
+    fn (self) label() -> String allocates { return "book: " + self.title; }
+}
+
+struct Counter { n: Int }
+
+impl Priced for Counter {
+    // The long form still works, and is still required outside an `impl`.
+    fn (self: Counter) price() -> Decimal<2> { return $0.00; }
+    fn (self) label() -> String allocates { return "counter " + to_string(self.n); }
+}
+
+// A mutating receiver abbreviates too. Free-standing methods are not inside an `impl`,
+// so this one names its type — which is the rule, not an exception.
+fn (mut self: Counter) bump() -> Int {
+    self.n += 1;
+    return self.n;
+}
+
+region r {
+    let b = Book { title: "burxt", cost: $19.99 };
+    print(b.price());
+    print(b.label());
+
+    let mut c = Counter { n: 0 };
+    print(c.bump());
+    print(c.bump());
+    print(c.label());
+}
