@@ -155,6 +155,7 @@ struct Unit {
     body_chunks: [String],
     body_pending: String,
     next_tmp: Int,
+    next_slot: Int,
     next_label: Int,
     slots: [Slot],
     strings: [Int],
@@ -3767,7 +3768,11 @@ fn (mut self: Unit) fresh_label(stem: String) -> String allocates {
 // name, so two blocks that both say `x` cannot collide in the IR.
 fn (mut self: Unit) declare_slot(src: String, start: Int, length: Int, cells: Int,
                                  aggregate: Int) -> Int allocates {
-    let index: Int = len(self.slots);
+    // The NAME comes from a counter that only grows, not from the table's length. A match
+    // arm's bindings leave scope by truncating the table, so lengths repeat — and two
+    // allocas called `%v3` in one function is not a program LLVM will accept.
+    self.next_slot = self.next_slot + 1;
+    let index: Int = self.next_slot;
     push(self.slots, Slot { start: start, length: length, index: index, cells: cells,
                             aggregate: aggregate });
     let visited: Int = self.w_entry("  %v" + to_string(index) + " = alloca ["
@@ -3843,6 +3848,12 @@ fn (mut self: Unit) cells_of(src: String, ty: Ty) -> Int allocates {
     if ty.kind == 48 {                               // [T; N]
         return ty.contract * self.cells_of(src, self.ty_of(src, ty.scale));
     }
+    if ty.kind == 49 {
+        // A trait object is a FAT POINTER: the value, and the table of the trait's
+        // methods. Two cells, always, whatever the concrete type behind it is — which is
+        // what lets one `dyn Priced` hold a Book today and a Meal tomorrow.
+        return 2;
+    }
     return 1;
 }
 
@@ -3869,7 +3880,7 @@ fn (mut self: Unit) offset_of(src: String, holder: Ty, name: Tok) -> Int allocat
 }
 
 fn (self: Unit) is_aggregate(ty: Ty) -> Bool {
-    return ty.kind == 46 || ty.kind == 48;
+    return ty.kind == 46 || ty.kind == 48 || ty.kind == 49;
 }
 
 fn (self: Unit) find_slot(src: String, start: Int, length: Int) -> Int {
@@ -4141,11 +4152,11 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
             let pair: Node = self.nodes[self.kids[n.a + i]];
             let field: Tok = self.toks[pair.tok];
             let offset: Int = self.offset_of(src, mine, field);
-            let value: String = self.emit_expr(src, pair.a);
+            let field_ty: Ty = self.field_type(src, mine, pair.tok);
+            let value: String = self.emit_value_for(src, field_ty, pair.a);
             let at: String = self.fresh();
             let stepped: Int = self.w("  " + at + " = getelementptr i64, ptr " + storage
                                       + ", i64 " + to_string(offset) + "\n");
-            let field_ty: Ty = self.type_at(pair.a);
             if self.is_aggregate(field_ty) {
                 // A field holding an aggregate holds a COPY of it, not a reference to
                 // wherever the value came from.
@@ -4330,6 +4341,9 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
     }
     if n.kind == 14 {                                // a method call
         let holder: Ty = self.type_at(n.a);
+        if holder.kind == 49 {
+            return self.emit_dyn_call(src, holder, n);
+        }
         let receiver: String = self.emit_expr(src, n.a);
         let list: Node = self.nodes[n.b];
         let mut args: String = "i64 " + receiver;
@@ -4409,6 +4423,22 @@ fn (mut self: Unit) emit_expr(src: String, node: Int) -> String allocates {
 }
 
 // ---- statements --------------------------------------------------------------
+// The return type an `extern fn` declared, read from the declaration itself.
+fn (mut self: Unit) extern_return(src: String, signature: Fun) -> Ty allocates {
+    let mut i: Int = 0;
+    while i < len(self.items) {
+        let item: Node = self.nodes[self.items[i]];
+        if item.kind == 86 {
+            let named: Tok = self.toks[item.tok];
+            if spans_eq(src, named.start, named.length, signature.start, signature.length) {
+                return self.ty_of(src, item.b);
+            }
+        }
+        i = i + 1;
+    }
+    return signature.ret;
+}
+
 // A call into C. Every Burxt value is an i64 here, and C's types are not, so each
 // argument is cast at the boundary and the answer is cast back — which is the only place
 // in the emitter where a value changes representation rather than meaning.
@@ -4442,7 +4472,11 @@ fn (mut self: Unit) emit_c_call(src: String, n: Node, signature: Fun) -> String 
         i = i + 1;
     }
 
-    let shape: String = c_type_of(signature.ret);
+    // C's DECLARED return, not the one the checker recorded. The checker maps a CInt
+    // return to Int, because a Burxt caller receives an Int — but the call instruction
+    // must name the width C actually returns, or the upper 32 bits are read as data.
+    // `strcmp` answering -1 came back as 4294967295 until this looked at the declaration.
+    let shape: String = c_type_of(self.extern_return(src, signature));
     let answer: String = self.fresh();
     let called: Int = self.w("  " + answer + " = call " + shape + " @"
         + substring(src, signature.start, signature.length) + "(" + args + ")\n");
@@ -4655,6 +4689,19 @@ fn (mut self: Unit) emit_rounded(left: String, right: String, shift: Int, contra
     } else {
         let product: String = self.fresh();
         let mul: Int = self.w("  " + product + " = mul i128 " + lw + ", " + rw + "\n");
+        if shift < 0 {
+            // The answer's scale is WIDER than the exact product's, so nothing rounds:
+            // widening is multiplication by a power of ten and it is lossless. Sending it
+            // through the rounding helper would divide by 10^0 and leave the value at the
+            // wrong scale — `0.05 * 0.5` in a Decimal<6> printed as 0.000025.
+            let widened: String = self.fresh();
+            let up: Int = self.w("  " + widened + " = mul i128 " + product + ", "
+                                 + to_string(power_of_ten(0 - shift)) + "\n");
+            let reg: String = self.fresh();
+            let narrowed: Int = self.w("  " + reg + " = trunc i128 " + widened
+                                       + " to i64\n");
+            return reg;
+        }
         numerator = product;
         divisor = to_string(power_of_ten(shift));
     }
@@ -4821,8 +4868,13 @@ fn (mut self: Unit) emit_stmt(src: String, node: Int) -> Int allocates {
 
     if n.kind == 60 {                                // let
         let name: Tok = self.toks[n.tok];
-        let declared: Ty = self.type_at(n.b);
-        let value: String = self.emit_expr(src, n.b);
+        // The DECLARED type, not the value's: `let d: dyn Priced = book;` stores a trait
+        // object, and the coercion happens here or nowhere.
+        let mut declared: Ty = self.type_at(n.b);
+        if n.a >= 0 {
+            declared = self.ty_of(src, n.a);
+        }
+        let value: String = self.emit_value_for(src, declared, n.b);
         let cells: Int = self.cells_of(src, declared);
         if self.is_aggregate(declared) {
             // The binding gets its OWN storage and a copy: `let a: S = b` then changing
@@ -4836,8 +4888,8 @@ fn (mut self: Unit) emit_stmt(src: String, node: Int) -> Int allocates {
 
     if n.kind == 61 {                                // assignment
         let target: Node = self.nodes[n.a];
-        let value: String = self.emit_expr(src, n.b);
         let into: Ty = self.type_at(n.a);
+        let value: String = self.emit_value_for(src, into, n.b);
         if target.kind == 5 {                        // a name
             let name: Tok = self.toks[target.tok];
             let slot: Int = self.find_slot(src, name.start, name.length);
@@ -5113,6 +5165,127 @@ fn (mut self: Unit) emit_block(src: String, block: Int) -> Int allocates {
 }
 
 // ---- the module --------------------------------------------------------------
+// The symbol naming a trait's table for one concrete type.
+fn vtable_symbol(src: String, trait_name: Tok, type_name: Tok) -> String allocates {
+    return "@burxt.vt." + substring(src, trait_name.start, trait_name.length) + "."
+        + substring(src, type_name.start, type_name.length);
+}
+
+fn (mut self: Unit) emit_vtable(src: String, index: Int) -> Int allocates {
+    let item: Node = self.nodes[index];
+    let trait_name: Tok = self.toks[item.tok];
+    let type_name: Tok = self.toks[item.c];
+    let found: Int = self.find_type(src, trait_name.start, trait_name.length);
+    if found < 0 {
+        return 0;
+    }
+    let declared: Node = self.nodes[self.types[found].node];
+    let mut entries: String = "";
+    let mut i: Int = 0;
+    while i < declared.b {
+        let sig: Node = self.nodes[self.kids[declared.a + i]];
+        let named: Tok = self.toks[sig.tok];
+        if i > 0 {
+            entries = entries + ", ";
+        }
+        entries = entries + "ptr @" + substring(src, type_name.start, type_name.length)
+            + "." + substring(src, named.start, named.length);
+        i = i + 1;
+    }
+    return self.w_out(vtable_symbol(src, trait_name, type_name) + " = constant ["
+                      + to_string(declared.b) + " x ptr] [" + entries + "]\n");
+}
+
+// A concrete value becoming a `dyn Trait`: the address in cell 0, the table in cell 1.
+// This is the ONLY coercion in the language, and it happens where a value is STORED —
+// a binding, a field, an argument, a return — never silently mid-expression.
+fn (mut self: Unit) emit_dyn(src: String, want: Ty, node: Int) -> String allocates {
+    let concrete: Ty = self.type_at(node);
+    let value: String = self.emit_expr(src, node);
+    if concrete.kind == 49 {
+        return value;                                // already a trait object
+    }
+    let storage: String = self.scratch(2);
+    let put_data: Int = self.w("  store i64 " + value + ", ptr " + storage + "\n");
+    let table_cell: String = self.fresh();
+    let stepped: Int = self.w("  " + table_cell + " = getelementptr i64, ptr " + storage
+                              + ", i64 1\n");
+    // The table is chosen by the CONCRETE type, here, at the one place the concrete type
+    // is still known. After this the value has forgotten what it was.
+    let table: String = "@burxt.vt." + substring(src, want.name_start, want.name_len) + "."
+        + substring(src, concrete.name_start, concrete.name_len);
+    let put_table: Int = self.w("  store i64 ptrtoint (ptr " + table + " to i64), ptr "
+                                + table_cell + "\n");
+    let reg: String = self.fresh();
+    let address: Int = self.w("  " + reg + " = ptrtoint ptr " + storage + " to i64\n");
+    return reg;
+}
+
+// Calling a method through a trait object: load the table, take the slot the trait gave
+// this method, and call what is there with the DATA pointer as the receiver. The concrete
+// type is not known here and does not need to be — that is what the indirection buys.
+fn (mut self: Unit) emit_dyn_call(src: String, holder: Ty, call: Node) -> String allocates {
+    let fat: String = self.emit_expr(src, call.a);
+    let base: String = self.fresh();
+    let cast: Int = self.w("  " + base + " = inttoptr i64 " + fat + " to ptr\n");
+    let data: String = self.fresh();
+    let loaded: Int = self.w("  " + data + " = load i64, ptr " + base + "\n");
+    let table_cell: String = self.fresh();
+    let stepped: Int = self.w("  " + table_cell + " = getelementptr i64, ptr " + base
+                              + ", i64 1\n");
+    let table: String = self.fresh();
+    let read: Int = self.w("  " + table + " = load i64, ptr " + table_cell + "\n");
+    let table_ptr: String = self.fresh();
+    let as_ptr: Int = self.w("  " + table_ptr + " = inttoptr i64 " + table + " to ptr\n");
+
+    let slot: Int = self.trait_slot(src, holder, self.toks[call.tok]);
+    let entry: String = self.fresh();
+    let indexed: Int = self.w("  " + entry + " = getelementptr ptr, ptr " + table_ptr
+                              + ", i64 " + to_string(slot) + "\n");
+    let target: String = self.fresh();
+    let fetched: Int = self.w("  " + target + " = load ptr, ptr " + entry + "\n");
+
+    let list: Node = self.nodes[call.b];
+    let mut args: String = "i64 " + data;
+    let mut i: Int = 0;
+    while i < list.b {
+        let value: String = self.emit_expr(src, self.kids[list.a + i]);
+        args = args + ", i64 " + value;
+        i = i + 1;
+    }
+    let answer: String = self.fresh();
+    let called: Int = self.w("  " + answer + " = call i64 " + target + "(" + args + ")\n");
+    return answer;
+}
+
+// Which slot a trait gives a method — its position in the trait's declaration.
+fn (mut self: Unit) trait_slot(src: String, holder: Ty, name: Tok) -> Int allocates {
+    let found: Int = self.find_type(src, holder.name_start, holder.name_len);
+    if found < 0 {
+        return 0;
+    }
+    let declared: Node = self.nodes[self.types[found].node];
+    let mut i: Int = 0;
+    while i < declared.b {
+        let sig: Node = self.nodes[self.kids[declared.a + i]];
+        let named: Tok = self.toks[sig.tok];
+        if spans_eq(src, named.start, named.length, name.start, name.length) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// A value on its way into a place that wants `want`. Everything goes through here so the
+// coercion has exactly one home.
+fn (mut self: Unit) emit_value_for(src: String, want: Ty, node: Int) -> String allocates {
+    if want.kind == 49 {
+        return self.emit_dyn(src, want, node);
+    }
+    return self.emit_expr(src, node);
+}
+
 // What C sees for one Burxt type. A String is a pointer; a CInt is 32 bits wide and must
 // be declared as such or the sign is lost on the way back; everything else is an i64,
 // including a Decimal — which crosses as the exact scaled integer it already is, and that
@@ -5277,6 +5450,18 @@ fn (mut self: Unit) emit_module(src: String) -> Int allocates {
     preamble = self.w_out(overflow_helper("sub", "ssub"));
     preamble = self.w_out(overflow_helper("mul", "smul"));
     preamble = self.w_out(runtime_ir());
+
+    // The method tables, before anything can refer to them. Slot order comes from the
+    // TRAIT's declaration, so every implementor agrees on which slot is which without
+    // negotiating — the same reason the enum tag is a variant's position.
+    let mut t: Int = 0;
+    while t < len(self.items) {
+        let item: Node = self.nodes[self.items[t]];
+        if item.kind == 85 {
+            let table: Int = self.emit_vtable(src, self.items[t]);
+        }
+        t = t + 1;
+    }
 
     // Functions first, so a call reads as a call to something already written.
     let mut i: Int = 0;
@@ -5709,7 +5894,7 @@ region compile {
         path = arg(1);
     }
     let src: String = read_file(path);
-    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_fn: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, fn_entry: "", body_chunks: [], body_pending: "", next_tmp: 0, next_label: 0, slots: [], strings: [], loop_conds: [], loop_ends: [], in_function: 0, depth: 0, problems: 0, pos: 0, token_end: 0, no_struct: 0, in_mul: 0, errors: 0 };
+    let mut unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_fn: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, fn_entry: "", body_chunks: [], body_pending: "", next_tmp: 0, next_slot: 0, next_label: 0, slots: [], strings: [], loop_conds: [], loop_ends: [], in_function: 0, depth: 0, problems: 0, pos: 0, token_end: 0, no_struct: 0, in_mul: 0, errors: 0 };
     let installed: Int = unit.install_keywords();
     let total: Int = unit.run(src);
 

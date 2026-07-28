@@ -1644,10 +1644,11 @@ fn the_guide_and_examples_are_linked_and_compile() {
 /// program in the pass suite is compiled by stage-1, assembled, linked, run, and diffed
 /// against its recorded output.
 ///
-/// The number is a **ratchet**: it may only go up. It was 31 when the backend knew nothing
-/// of Decimals, 58 when it learned them, 77 once enums, `match`, interpolation, `extern fn`
-/// and `musttail` followed. The target is 88, at which point the Burxt compiler can build
-/// every program the Rust one can.
+/// **This reached 88 of 88 in v0.0.79**: the Burxt compiler builds every program the Rust
+/// one can, and each program prints the same bytes either way. The number got there as a
+/// ratchet — 31 with no Decimals, 58 with them, 77 with enums, `match`, interpolation,
+/// `extern fn` and `musttail`, 88 once `dyn` dispatch and three narrow defects were done —
+/// and it stays one, because going backwards is the failure this guards against.
 #[test]
 fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -1667,6 +1668,15 @@ fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
         .status()
         .expect("burxt")
         .success());
+
+    // A program may read a file next to it, so the fixtures travel to the scratch
+    // directory with it — `read_file.bx` wants `source_fixture.txt`.
+    for entry in fs::read_dir(root.join("tests/pass")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) == Some("txt") {
+            let _ = fs::copy(&path, scratch.join(path.file_name().unwrap()));
+        }
+    }
 
     let mut correct = 0;
     let mut total = 0;
@@ -1720,8 +1730,8 @@ fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
         correct, total, refused
     );
     assert!(
-        correct >= 77,
-        "the Burxt backend went backwards: {} of {} correct, was 77",
+        correct >= 88,
+        "the Burxt backend went backwards: {} of {} correct, was 88 — every program",
         correct,
         total
     );
