@@ -1474,8 +1474,11 @@ fn the_repository_root_holds_only_what_belongs_there() {
         // everything else lives in a directory that says what it is
         "",
     ];
-    const DIRS: [&str; 8] =
-        ["src", "spec", "tests", "examples", "editors", "assets", "docs", "lib"];
+    const DIRS: [&str; 10] = [
+        "src", "spec", "tests", "examples", "editors", "assets", "docs", "lib", "scripts",
+        // built by scripts/release.sh, ignored by git, never committed
+        "dist",
+    ];
 
     let mut strays = Vec::new();
     for entry in fs::read_dir(root).unwrap() {
@@ -2012,5 +2015,82 @@ fn the_standard_library_compiles_and_works() {
         printed,
         "7\npadded\n-42\na | b | c\n13\ntrue\ntrue\n0\ncaptured\n",
         "the library answered differently than expected"
+    );
+}
+
+/// Distribution: a tarball someone can unpack and use with no Rust, no cargo and no LLVM.
+///
+/// The binary statically links LLVM — which is why it is 14 MB compressed — so the only
+/// thing it needs from a machine is a C compiler for the link step. This test builds the
+/// tarball, unpacks it somewhere else, and compiles a program that uses the packaged
+/// standard library, with the LLVM environment variable removed to prove it is not needed.
+#[test]
+#[ignore = "builds a release binary; run with --ignored when packaging"]
+fn the_release_tarball_works_without_rust_or_llvm() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("release");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let built = Command::new("sh")
+        .arg("scripts/release.sh")
+        .current_dir(root)
+        .output()
+        .expect("scripts/release.sh");
+    assert!(
+        built.status.success(),
+        "the release script failed:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let tarball = fs::read_dir(root.join("dist"))
+        .expect("dist/")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| p.to_string_lossy().ends_with(".tar.gz"))
+        .expect("a tarball in dist/");
+
+    assert!(Command::new("tar")
+        .arg("xzf")
+        .arg(&tarball)
+        .arg("-C")
+        .arg(&scratch)
+        .status()
+        .expect("tar")
+        .success());
+    let unpacked = fs::read_dir(&scratch)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| p.is_dir())
+        .expect("the unpacked directory");
+
+    let program = scratch.join("hello.bx");
+    fs::write(
+        &program,
+        format!(
+            "use \"{}/lib/str.bx\";\nregion r {{\n  print(str_trim(\"  packaged  \"));\n               let price: Decimal<2> = 19.99;\n  print(price * 3);\n}}\n",
+            unpacked.display()
+        ),
+    )
+    .unwrap();
+
+    // Without LLVM_SYS_181_PREFIX: if the binary needed LLVM on the machine, this is where
+    // it would say so.
+    let ran = Command::new(unpacked.join("burxt"))
+        .arg("run")
+        .arg(&program)
+        .arg("-o")
+        .arg(scratch.join("prog"))
+        .env_remove("LLVM_SYS_181_PREFIX")
+        .output()
+        .expect("the packaged burxt");
+    let printed = String::from_utf8_lossy(&ran.stdout).to_string();
+    let said = String::from_utf8_lossy(&ran.stderr).to_string();
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(ran.status.success(), "the packaged compiler failed:\n{}", said);
+    assert!(
+        printed.contains("packaged") && printed.contains("59.97"),
+        "the packaged compiler and library answered:\n{}",
+        printed
     );
 }

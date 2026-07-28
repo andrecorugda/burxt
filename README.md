@@ -130,6 +130,20 @@ open, with the reasoning beside it.
   what a compiler declines to compile says more about it than what it accepts.
 - **[The design log](docs/log/)** — every version, what it decided and what it cost.
 
+## Installing without Rust
+
+```sh
+sh scripts/release.sh                 # → dist/burxt-<version>-linux-x86_64.tar.gz (14 MB)
+sh scripts/install.sh                 # → /usr/local/bin/burxt + /usr/local/lib/burxt/
+```
+
+The binary **statically links LLVM**, so whoever installs it needs no Rust, no cargo and no
+LLVM. The one thing it cannot carry is a **C compiler**: `burxt build` hands the object file
+to the system linker, so `cc` must exist. `burxt check` needs nothing at all.
+
+`PREFIX=~/.local sh scripts/install.sh` installs somewhere else, and
+`sh scripts/install.sh <url.tar.gz>` installs from a published release.
+
 ## Building the compiler
 
 Burxt's compiler (the bootstrap/stage-0 compiler) is written in Rust and emits native code via LLVM 18. The Burxt-written compiler in `examples/stage1.bx` is built by it — see [self-hosting](#status).

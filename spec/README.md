@@ -38,6 +38,15 @@ which is right.
 | [N2 Pure Functions](N2-PURE-FUNCTIONS.md) | **Slice 1 DONE** (v0.0.39) | `pure fn`: no I/O, no FFI, no impure calls. Deferred: pure methods, purity as a parameter requirement, purity-driven optimisation. |
 | [N1 Boundary Exactness](N1-BOUNDARY-EXACTNESS.md) | **Slice 1 DONE** (v0.0.30) | `CDouble`, `as scaled` marshallers, range-checked `Int` → `CDouble`, linker pass-through. Remaining: serialization and database boundaries, once an encoder exists to guard. |
 
+### Newer milestones
+
+| Spec | State | What it is |
+|---|---|---|
+| [M5 (in M4)](M4-SELF-HOSTING.md) | **DONE** (v0.0.79–v0.0.80) | The Burxt backend compiles all 88 pass programs, and the suite runs on Burxt |
+| [M6 Modules](M6-MODULES.md) | **DONE** (v0.0.81–v0.0.82) | `use "path"`, one buffer with a source map, and the compiler split into five files |
+| [M7 Generics](M7-GENERICS.md) | **Specified** | Monomorphisation, trait bounds required, no erasure |
+| [M8 Errors](M8-ERRORS.md) | **Specified** | `Option<T>` and `Result<T, E>` as LIBRARY types — the test of whether M7's generics are real |
+
 ## The audit, in detail
 
 Everything below was checked by compiling and running a probe program, not by

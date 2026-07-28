@@ -20,6 +20,10 @@
 !/src/
 !/tests/
 
+# release tarballs: built by scripts/release.sh, published as GitHub release assets,
+# never committed — a binary in a repository is a binary nobody can reproduce
+/dist/
+
 # editor tooling scratch
 node_modules/
 *.vsix
