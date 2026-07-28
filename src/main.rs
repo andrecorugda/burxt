@@ -107,16 +107,38 @@ fn compile_main() {
         match e {
             // Diagnostics know where they are, so they can be shown properly —
             // all of them, in the order a reader meets them.
-            Failure::At(ds, src) => {
+            Failure::At(ds, src, files) => {
                 let total = ds.len();
                 for (i, d) in ds.iter().enumerate() {
+                    // An error in a used module names THAT module, and the line number is
+                    // the one in it — not an offset into a buffer nobody wrote. The span
+                    // is a plain byte range; the map is what turns it back into a place.
+                    let mut shown_path: &str = path;
+                    let mut shown_src = src.as_str();
+                    let mut shown = d.clone();
+                    // Always through the map, even for one file: the buffer carries a
+                    // separator the file does not, so rendering the buffer would count a
+                    // line the programmer never wrote.
+                    {
+                        if let Some((file, local)) = locate_file(&files, d.span.start as usize) {
+                            shown_path = file.path.as_str();
+                            shown_src = &src[file.start..file.start + file.len];
+                            shown = diag::Diagnostic::new(
+                                d.message.clone(),
+                                diag::Span::new(
+                                    local,
+                                    local + (d.span.end - d.span.start) as usize,
+                                ),
+                            );
+                        }
+                    }
                     if json {
-                        println!("{}", diag::to_json(path, &src, d));
+                        println!("{}", diag::to_json(shown_path, shown_src, &shown));
                     } else {
                         if i > 0 {
                             eprintln!();
                         }
-                        eprint!("{}", diag::render(path, &src, d));
+                        eprint!("{}", diag::render(shown_path, shown_src, &shown));
                     }
                 }
                 if !json && total > 1 {
@@ -143,7 +165,7 @@ fn compile_main() {
 /// A failure that either knows where it happened or does not. Keeping the two
 /// apart means the position is never invented — a link error has no line.
 enum Failure {
-    At(Vec<diag::Diagnostic>, String),
+    At(Vec<diag::Diagnostic>, String, Vec<SourceFile>),
     Plain(String),
 }
 
@@ -151,6 +173,126 @@ impl From<String> for Failure {
     fn from(message: String) -> Self {
         Failure::Plain(message)
     }
+}
+
+/// One file inside the concatenated buffer: where it starts, how long it is, and what to
+/// call it in a diagnostic.
+#[derive(Clone)]
+struct SourceFile {
+    path: String,
+    start: usize,
+    len: usize,
+}
+
+/// Which file an offset fell in, and how far into it — so an error in a used module names
+/// that module rather than an offset into a buffer the programmer never saw.
+fn locate_file<'a>(files: &'a [SourceFile], offset: usize) -> Option<(&'a SourceFile, usize)> {
+    // Inclusive at the end: a diagnostic about the END of a file — "expected `;`, found the
+    // end of the file" — points one past its last byte, and that position belongs to the
+    // file it ended rather than to the separator after it.
+    files
+        .iter()
+        .find(|f| offset >= f.start && offset <= f.start + f.len)
+        .map(|f| (f, offset - f.start))
+}
+
+/// Read a program and everything it `use`s, into ONE buffer with a map back to the files.
+///
+/// The imports are resolved as a pre-pass over the text rather than as a parser feature,
+/// and the `use` lines are BLANKED OUT — replaced by spaces of the same length — so every
+/// byte offset in what follows is unchanged and the lexer, parser and typechecker need to
+/// know nothing about modules at all. See spec/M6-MODULES.md §1.5.
+///
+/// Imports come first in a file, before any other item. That is what makes the pre-pass
+/// safe: it stops at the first line that is not blank, a comment, or a `use`, so a `use`
+/// appearing later inside a string or a comment is never mistaken for one.
+fn load_program(path: &str) -> Result<(String, Vec<SourceFile>), String> {
+    let mut buffer = String::new();
+    let mut files: Vec<SourceFile> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    load_into(path, &mut buffer, &mut files, &mut seen, true)?;
+    Ok((buffer, files))
+}
+
+fn load_into(
+    path: &str,
+    buffer: &mut String,
+    files: &mut Vec<SourceFile>,
+    seen: &mut Vec<String>,
+    is_root: bool,
+) -> Result<(), String> {
+    let canonical = std::fs::canonicalize(path)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string());
+    if seen.contains(&canonical) {
+        // Used twice — directly and through another module — is compiled once. Cycles
+        // work for the same reason, since declarations are collected before any body is
+        // checked and nothing needs a forward declaration.
+        return Ok(());
+    }
+    seen.push(canonical);
+
+    let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {}", path, e))?;
+    let (blanked, imports) = strip_imports(&text);
+
+    // Dependencies first, so their declarations precede the file that asked for them.
+    // Nothing requires this — the checker collects declarations in a pass of its own — but
+    // a buffer that reads in dependency order is a buffer a person can debug.
+    let here = std::path::Path::new(path).parent().map(|p| p.to_path_buf());
+    for import in &imports {
+        let resolved = match &here {
+            Some(dir) => dir.join(import).to_string_lossy().into_owned(),
+            None => import.clone(),
+        };
+        load_into(&resolved, buffer, files, seen, false).map_err(|e| {
+            format!("{}\n  ...used by {}", e, path)
+        })?;
+    }
+
+    // A newline BETWEEN files, never after the last one: it exists so the final token of
+    // one file cannot run into the first of the next, and after the last file there is
+    // nothing to run into. Appending it unconditionally moved the end-of-file position one
+    // byte past the program, and "expected `;`, found the end of the file" started
+    // reporting a line the programmer had not written.
+    if !buffer.is_empty() {
+        buffer.push('\n');
+    }
+    let start = buffer.len();
+    buffer.push_str(&blanked);
+    files.push(SourceFile { path: path.to_string(), start, len: blanked.len() });
+    let _ = is_root;
+    Ok(())
+}
+
+/// Find the leading `use "path";` lines, and answer the text with them blanked out.
+fn strip_imports(text: &str) -> (String, Vec<String>) {
+    let mut imports = Vec::new();
+    let mut out = String::with_capacity(text.len());
+    let mut in_header = true;
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if in_header {
+            if trimmed.is_empty() || trimmed.starts_with("//") {
+                out.push_str(line);
+                continue;
+            }
+            if let Some(rest) = trimmed.strip_prefix("use ") {
+                let quoted = rest.trim().trim_end_matches(';').trim();
+                if quoted.len() >= 2 && quoted.starts_with('"') && quoted.ends_with('"') {
+                    imports.push(quoted[1..quoted.len() - 1].to_string());
+                    // Blanked, not removed: every offset after this line stays exactly
+                    // where it was, which is why no span anywhere needs adjusting.
+                    for ch in line.chars() {
+                        out.push(if ch == '\n' { '\n' } else { ' ' });
+                    }
+                    continue;
+                }
+            }
+            in_header = false;
+        }
+        out.push_str(line);
+    }
+    (out, imports)
 }
 
 fn run(
@@ -164,6 +306,9 @@ fn run(
     // not what is on disk, and checking the file would report yesterday's errors.
     // Only `check` accepts it — there is no sensible name for the executable
     // otherwise.
+    // Which file each byte came from, for diagnostics. A single-file program has one
+    // entry, which costs nothing and keeps one path through the renderer.
+    let mut files: Vec<SourceFile> = Vec::new();
     let src = if path == "-" {
         if cmd != "check" {
             return Err(format!(
@@ -178,9 +323,13 @@ fn run(
         std::io::stdin()
             .read_to_string(&mut text)
             .map_err(|e| format!("cannot read stdin: {}", e))?;
+        files.push(SourceFile { path: path.to_string(), start: 0, len: text.len() });
         text
     } else {
-        std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {}", path, e))?
+        // The program AND everything it uses, in one buffer with a map back to the files.
+        let (buffer, loaded) = load_program(path)?;
+        files = loaded;
+        buffer
     };
 
     // ---- front end (backend-independent) ----
@@ -188,10 +337,38 @@ fn run(
     // offending line and a caret under it.
     // The lexer and parser stop at the first problem (recovering a token stream
     // is its own design question); the typechecker reports everything it finds.
-    let one = |d: diag::Diagnostic| Failure::At(vec![d], src.clone());
-    let all = |ds: Vec<diag::Diagnostic>| Failure::At(ds, src.clone());
+    let one = |d: diag::Diagnostic| Failure::At(vec![d], src.clone(), files.clone());
+    let all = |ds: Vec<diag::Diagnostic>| Failure::At(ds, src.clone(), files.clone());
     let tokens = lexer::Lexer::new(&src).tokenize().map_err(one)?;
     let program = parser::Parser::with_source(tokens, &src).parse().map_err(one)?;
+
+    // A module holds DECLARATIONS, not statements: a file that runs when it is used is the
+    // import side-effect problem, and every language that allows it grows a convention
+    // against it. The file being compiled is exempt — statements are what make it the
+    // program. See spec/M6-MODULES.md §1.3.
+    if files.len() > 1 {
+        let root = files.last().expect("the program is the last file loaded");
+        for stmt in &program.stmts {
+            let at = stmt.span.start as usize;
+            if at >= root.start {
+                continue;
+            }
+            if let Some((file, _)) = locate_file(&files, at) {
+                return Err(Failure::At(
+                    vec![diag::Diagnostic::new(
+                        format!(
+                            "a module holds declarations, not statements: this would run \
+                             when `{}` was used, and a `use` is not a call",
+                            file.path
+                        ),
+                        stmt.span,
+                    )],
+                    src.clone(),
+                    files.clone(),
+                ));
+            }
+        }
+    }
     let typed = typeck::TypeChecker::new().check(&program).map_err(all)?;
 
     // `check` is the front end and nothing more: no LLVM context, no object

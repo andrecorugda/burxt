@@ -1858,3 +1858,100 @@ fn the_suite_also_runs_on_burxt() {
         said
     );
 }
+
+/// Modules: two files, one program, and the six rules from spec/M6-MODULES.md that a
+/// reader would want checked. The interesting one is the third — a diagnostic inside a
+/// used module must name THAT module and its own line number, not an offset into the
+/// buffer the compiler concatenated, which the programmer never saw.
+#[test]
+fn modules_compile_as_one_program_and_report_per_file() {
+    let scratch = scratch_dir("modules");
+    fs::create_dir_all(&scratch).unwrap();
+    let write = |name: &str, text: &str| {
+        fs::write(scratch.join(name), text).unwrap();
+        scratch.join(name)
+    };
+
+    // 1 + 2: a struct and a function declared in one file, used in another.
+    write(
+        "lexer.bx",
+        "struct Tok { kind: Int, start: Int }\nfn scan(text: String) -> Int { return len(text); }\n",
+    );
+    let main = write(
+        "main.bx",
+        "use \"lexer.bx\";\nregion r {\n  let t: Tok = Tok { kind: 7, start: 0 };\n           print(t.kind);\n  print(scan(\"hello\"));\n}\n",
+    );
+    let exe = scratch.join("prog");
+    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("run")
+        .arg(&main)
+        .arg("-o")
+        .arg(&exe)
+        .current_dir(&scratch)
+        .output()
+        .expect("burxt");
+    assert!(
+        built.status.success(),
+        "a two-file program did not compile:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&built.stdout), "7\n5\n");
+
+    // 3: an error in the used file names the used file, at its own line.
+    write(
+        "bad.bx",
+        "// a module with a mistake\nfn broken(a: Decimal<2>, b: Decimal<4>) -> Decimal<2> {\n           return a + b;\n}\n",
+    );
+    let uses_bad = write("uses_bad.bx", "use \"bad.bx\";\nprint(1);\n");
+    let complained = burxt("check", &uses_bad, &scratch);
+    let said = String::from_utf8_lossy(&complained.stderr).to_string();
+    assert!(
+        said.contains("bad.bx:3:") && said.contains("scales must match"),
+        "an error in a module must name the module and its line:\n{}",
+        said
+    );
+
+    // 4 + 5: a file used twice is compiled once, and two files may use each other.
+    write("a.bx", "use \"b.bx\";\nfn from_a() -> Int { return from_b() + 1; }\n");
+    write("b.bx", "use \"a.bx\";\nfn from_b() -> Int { return 41; }\n");
+    let cycle = write("cycle.bx", "use \"a.bx\";\nuse \"b.bx\";\nprint(from_a());\n");
+    let ran = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("run")
+        .arg(&cycle)
+        .arg("-o")
+        .arg(scratch.join("cyc"))
+        .current_dir(&scratch)
+        .output()
+        .expect("burxt");
+    assert!(
+        ran.status.success(),
+        "mutual use should compile — declarations are collected before bodies:\n{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&ran.stdout), "42\n");
+
+    // 6: a module may not hold statements.
+    write("effects.bx", "print(\"I run when used\");\nfn helper() -> Int { return 1; }\n");
+    let uses_effects = write("uses_effects.bx", "use \"effects.bx\";\nprint(helper());\n");
+    let refused = burxt("check", &uses_effects, &scratch);
+    let why = String::from_utf8_lossy(&refused.stderr).to_string();
+    assert!(!refused.status.success(), "a module with a statement must be refused");
+    assert!(
+        why.contains("declarations, not statements"),
+        "and refused for that reason:\n{}",
+        why
+    );
+
+    // 7: a missing file names who asked for it.
+    let missing = write("missing.bx", "use \"nowhere.bx\";\nprint(1);\n");
+    let gone = burxt("check", &missing, &scratch);
+    let text = String::from_utf8_lossy(&gone.stderr).to_string();
+    assert!(!gone.status.success());
+    assert!(
+        text.contains("nowhere.bx") && text.contains("missing.bx"),
+        "a missing module must name itself and its user:\n{}",
+        text
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
