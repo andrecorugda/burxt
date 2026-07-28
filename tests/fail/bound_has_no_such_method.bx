@@ -1,0 +1,7 @@
+// The bound is the whole interface: a method it does not declare does not exist on the
+// parameter, however many types happen to have one.
+trait Priced { fn price(self) -> Int }
+fn f<T: Priced>(x: T) -> Int {
+    return x.cost();
+}
+print(1);

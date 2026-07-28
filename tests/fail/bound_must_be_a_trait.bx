@@ -1,0 +1,8 @@
+// A bound is `Ordered`, `Equatable`, or a trait this program declares. Anything else is
+// a name that means nothing.
+fn f<T: Nope>(x: T) -> T {
+    return x;
+}
+region r {
+    print(f(1));
+}

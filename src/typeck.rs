@@ -290,11 +290,15 @@ pub struct TypeChecker {
     fns: HashMap<String, (Vec<Type>, Type)>,
     /// The type parameters of every generic function, by name. Empty for all the
     /// others, so the common path is one `is_empty` away. See spec/M7-GENERICS.md.
-    generics: HashMap<String, Vec<String>>,
+    generics: HashMap<String, Vec<TypeParam>>,
     /// Generic ENUM declarations: their parameters and their variants, with the parameters
     /// still standing for nothing. Kept out of `enums` because a generic enum has no
     /// layout until a use says what its arguments are.
-    generic_enums: HashMap<String, (Vec<String>, Vec<(String, Vec<Type>)>)>,
+    generic_enums: HashMap<String, (Vec<TypeParam>, Vec<(String, Vec<Type>)>)>,
+    /// The bound on each type parameter of the generic being checked, by parameter name.
+    /// Empty except while a generic's own body is being checked — an instantiation has no
+    /// parameters left, so it needs none of this.
+    param_bounds: HashMap<String, Option<String>>,
     /// Every struct and enum name the program declares, collected before anything is
     /// registered — so an application of a type that exists but is not generic can say
     /// so, instead of calling it unknown.
@@ -400,6 +404,7 @@ impl TypeChecker {
             fns: HashMap::new(),
             generics: HashMap::new(),
             generic_enums: HashMap::new(),
+            param_bounds: HashMap::new(),
             declared_type_names: HashSet::new(),
             made_enums: RefCell::new(HashMap::new()),
             made_order: RefCell::new(Vec::new()),
@@ -723,8 +728,11 @@ impl TypeChecker {
                     // Reserve the name BEFORE filling it in, so an enum whose payload
                     // mentions itself cannot make this recurse forever.
                     self.made_enums.borrow_mut().insert(symbol.clone(), Vec::new());
-                    let map: HashMap<String, Type> =
-                        params.iter().cloned().zip(args.iter().cloned()).collect();
+                    let map: HashMap<String, Type> = params
+                        .iter()
+                        .map(|p| p.name.clone())
+                        .zip(args.iter().cloned())
+                        .collect();
                     let mut made: Vec<(String, Vec<Type>)> = Vec::new();
                     for (vname, payload) in &variants {
                         let mut ps = Vec::with_capacity(payload.len());
@@ -829,7 +837,7 @@ impl TypeChecker {
             if let Some((of, type_args)) = self.instance_of.borrow().get(want).cloned() {
                 if of == enum_name {
                     for (p, a) in params.iter().zip(type_args) {
-                        map.insert(p.clone(), a);
+                        map.insert(p.name.clone(), a);
                     }
                 }
             }
@@ -846,7 +854,7 @@ impl TypeChecker {
         }
         let mut type_args = Vec::with_capacity(params.len());
         for p in &params {
-            match map.get(p) {
+            match map.get(&p.name) {
                 Some(t) => type_args.push(t.clone()),
                 None => {
                     let call = if payload.is_empty() {
@@ -858,7 +866,7 @@ impl TypeChecker {
                         "`{}.{}` does not say what `{}` is, and nothing here does. Write \
                          the type where the value lands — `let x: {}<...> = {};` — or \
                          pass it somewhere that names it.",
-                        enum_name, variant, p, enum_name, call
+                        enum_name, variant, p.name, enum_name, call
                     ))
                 }
             }
@@ -874,6 +882,72 @@ impl TypeChecker {
             .variants_of(symbol)
             .ok_or_else(|| format!("codegen bug: `{}` was not made", symbol))?;
         self.build_variant(symbol, variants, variant, args)
+    }
+
+    /// Does this type argument satisfy the bound the signature declared?
+    ///
+    /// The two the language ships mirror exactly what it already allows: `Ordered` is `Int`
+    /// and `Decimal<S>`, because those are the types `<` works on; `Equatable` adds `Bool`
+    /// and `String`, because those are the types `==` works on. A bound cannot promise more
+    /// than the language delivers, so when Strings gain an ordering they gain `Ordered`
+    /// here and nowhere else.
+    ///
+    /// Any other bound names a declared trait, and satisfying it means having an `impl`.
+    fn satisfies(
+        &self,
+        arg: &Type,
+        bound: &str,
+        callee: &str,
+        param: &str,
+    ) -> Result<(), String> {
+        let instances = self.instance_of.borrow().clone();
+        let shown = show(arg, &instances);
+        match bound {
+            "Ordered" => match arg {
+                Type::Int | Type::Decimal { .. } => Ok(()),
+                _ => Err(format!(
+                    "`{}` needs `{}: Ordered`, and {} has no order. Ordered is Int and \
+                     Decimal — the types `<` works on.",
+                    callee, param, shown
+                )),
+            },
+            "Equatable" => match arg {
+                Type::Int | Type::Bool | Type::String | Type::Decimal { .. } => Ok(()),
+                _ => Err(format!(
+                    "`{}` needs `{}: Equatable`, and two {} values cannot be compared. \
+                     Equatable is Int, Bool, String and Decimal — the types `==` works on.",
+                    callee, param, shown
+                )),
+            },
+            trait_name => {
+                if !self.traits.contains_key(trait_name) {
+                    return Err(format!(
+                        "`{}` bounds `{}` by `{}`, which is not a trait this program \
+                         declares. A bound is `Ordered`, `Equatable`, or a declared trait.",
+                        callee, param, trait_name
+                    ));
+                }
+                let concrete = match arg {
+                    Type::Named(n) => n.clone(),
+                    _ => {
+                        return Err(format!(
+                            "`{}` needs `{}: {}`, and {} is not a type that can implement \
+                             a trait — only a struct or an enum can.",
+                            callee, param, trait_name, shown
+                        ))
+                    }
+                };
+                if self.impls.contains(&(trait_name.to_string(), concrete.clone())) {
+                    return Ok(());
+                }
+                Err(format!(
+                    "`{}` needs `{}: {}`, and `{}` does not implement it. Write `impl {} \
+                     for {} {{ ... }}` — conformance is declared, never inferred from \
+                     having the right method names.",
+                    callee, param, trait_name, shown, trait_name, concrete
+                ))
+            }
+        }
     }
 
     fn want(&self, name: &str, type_args: &[Type]) -> String {
@@ -919,12 +993,17 @@ impl TypeChecker {
                 continue;
             }
             self.current_span.set(e.span);
+            // The parser already refuses a duplicate; this is the same rule stated where
+            // the declaration is registered, which is where a reader looks for it.
             let mut seen: Vec<&str> = Vec::new();
             for p in &e.type_params {
-                if seen.contains(&p.as_str()) {
-                    return Err(format!("`{}` declares the type parameter `{}` twice", e.name, p));
+                if seen.contains(&p.name.as_str()) {
+                    return Err(format!(
+                        "`{}` declares the type parameter `{}` twice",
+                        e.name, p.name
+                    ));
                 }
-                seen.push(p);
+                seen.push(&p.name);
             }
             self.generic_enums.insert(
                 e.name.clone(),
@@ -1270,7 +1349,16 @@ impl TypeChecker {
         let mut fns = Vec::new();
         for f in &prog.fns {
             self.current_span.set(f.span);
+            // While a GENERIC's own body is checked, its parameters' bounds are what says
+            // which operations are allowed. An instantiation has no parameters left, so
+            // this is empty for every other function.
+            self.param_bounds = f
+                .type_params
+                .iter()
+                .map(|p| (p.name.clone(), p.bound.clone()))
+                .collect();
             let checked = self.check_fn(f)?;
+            self.param_bounds.clear();
             // The generic itself is CHECKED and never EMITTED: there is no layout for a
             // `T` until a caller says what it is. Its instantiations are added below.
             if f.type_params.is_empty() {
@@ -1333,7 +1421,7 @@ impl TypeChecker {
                     .get(&name)
                     .ok_or_else(|| format!("codegen bug: `{}` is not generic", name))?;
                 let map: HashMap<String, Type> =
-                    params.iter().cloned().zip(type_args.iter().cloned()).collect();
+                    params.iter().map(|p| p.name.clone()).zip(type_args.iter().cloned()).collect();
                 let mut concrete = specialise(generic, &map, &mangle(&name, &type_args));
                 // Substituting can make a generic application concrete — `Option<T>`
                 // becomes `Option<Int>` — so the instantiation is expanded again here.
@@ -2591,7 +2679,7 @@ impl TypeChecker {
                 if let Type::Generic { name, args } = &scrutinee.ty {
                     if let Some((params, variants)) = self.generic_enums.get(name).cloned() {
                         let map: HashMap<String, Type> =
-                            params.iter().cloned().zip(args.iter().cloned()).collect();
+                            params.iter().map(|p| p.name.clone()).zip(args.iter().cloned()).collect();
                         let open: Vec<(String, Vec<Type>)> = variants
                             .into_iter()
                             .map(|(v, payload)| {
@@ -3503,6 +3591,7 @@ impl TypeChecker {
                 // `name` becomes the instantiation's symbol, so everything downstream —
                 // purity, `allocates`, codegen — sees an ordinary function.
                 let mut instantiated: Option<String> = None;
+                let written_name = name.clone();
                 if let Some(type_params) = self.generics.get(name).cloned() {
                     if args.len() != param_tys.len() {
                         return Err(format!(
@@ -3526,14 +3615,14 @@ impl TypeChecker {
                     }
                     let mut type_args = Vec::with_capacity(type_params.len());
                     for p in &type_params {
-                        match map.get(p) {
+                        match map.get(&p.name) {
                             Some(t) => type_args.push(t.clone()),
                             None => {
                                 return Err(format!(
                                     "`{}` cannot tell what `{}` is from this call: no \
                                      argument mentions it. A type parameter that appears \
                                      only in the return type cannot be inferred.",
-                                    name, p
+                                    name, p.name
                                 ))
                             }
                         }
@@ -3547,6 +3636,11 @@ impl TypeChecker {
                     }
                     param_tys = substituted;
                     ret = self.expand(&substitute(&ret, &map))?;
+                    for (p, arg) in type_params.iter().zip(&type_args) {
+                        if let Some(bound) = &p.bound {
+                            self.satisfies(arg, bound, &written_name, &p.name)?;
+                        }
+                    }
                     // If a type argument is still a parameter, this call is inside a
                     // generic being checked generically. There is nothing to emit yet:
                     // the copy appears when the ENCLOSING generic is instantiated, and
@@ -3806,6 +3900,63 @@ impl TypeChecker {
                     });
                 }
 
+                // A method on a value of a type PARAMETER: the bound says which methods
+                // exist, so the body is checked against the trait rather than against each
+                // instantiation. That is what makes the signature the contract.
+                if let Type::Param(p) = &typed_base.ty {
+                    let bound = self.param_bounds.get(p).cloned().flatten();
+                    let Some(trait_name) = bound else {
+                        return Err(unbounded(p, &format!("asked for `.{}(...)`", method)));
+                    };
+                    let Some(sigs) = self.traits.get(&trait_name) else {
+                        return Err(format!(
+                            "`{}: {}` is not a trait bound with methods — `Ordered` and \
+                             `Equatable` allow comparison, not calls.",
+                            p, trait_name
+                        ));
+                    };
+                    let Some(sig) = sigs.iter().find(|s| &s.name == method) else {
+                        return Err(format!(
+                            "`{}: {}` has no method `{}`. `{}` declares: {}.",
+                            p,
+                            trait_name,
+                            method,
+                            trait_name,
+                            sigs.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")
+                        ));
+                    };
+                    if args.len() != sig.params.len() {
+                        return Err(format!(
+                            "`{}.{}` takes {} argument(s), but {} were given",
+                            p,
+                            method,
+                            sig.params.len(),
+                            args.len()
+                        ));
+                    }
+                    let mut typed_args = Vec::new();
+                    for (arg, want) in args.iter().zip(&sig.params) {
+                        let t = self.check_expr(arg, Some(&want.ty))?;
+                        if t.ty != want.ty {
+                            self.blame(arg.span);
+                            return Err(format!(
+                                "`{}.{}` expects {} here, but this argument has type {}",
+                                p, method, want.ty, t.ty
+                            ));
+                        }
+                        typed_args.push(t);
+                    }
+                    return Ok(TypedExpr {
+                        ty: sig.ret.clone(),
+                        kind: TypedExprKind::MethodCall {
+                            receiver: p.clone(),
+                            method: method.clone(),
+                            receiver_mut: sig.receiver_mut,
+                            base: Box::new(typed_base),
+                            args: typed_args,
+                        },
+                    });
+                }
                 let receiver = match &typed_base.ty {
                     Type::Named(n) => n.clone(),
                     other => {
@@ -4205,6 +4356,29 @@ impl TypeChecker {
                     Ok(())
                 } else {
                     self.matching_decimal(format!("compare ({})", op), lhs, rhs).map(|_| ())
+                }
+            }
+            // Two values of the same type PARAMETER. Whether this is allowed is entirely
+            // what the bound says, which is the point of bounds: the body is checked
+            // against the signature's promise, not against whatever the instantiations
+            // happen to permit. See spec/M7-GENERICS.md Decision 2.
+            (Param(a), Param(b)) if a == b => {
+                let bound = self.param_bounds.get(a).cloned().flatten();
+                match (bound.as_deref(), op) {
+                    (Some("Ordered"), _) => Ok(()),
+                    (Some("Equatable"), CmpOp::Eq | CmpOp::Ne) => Ok(()),
+                    (Some("Equatable"), _) => Err(format!(
+                        "`{}: Equatable` says two values of it can be compared for \
+                         equality, not ordered — `{}` needs `{}: Ordered`.",
+                        a, op, a
+                    )),
+                    (Some(other), _) => Err(format!(
+                        "`{}: {}` says a value of it has {}'s methods, not an order. \
+                         Comparing with `{}` needs `{}: Ordered`, or `{}: Equatable` for \
+                         `==` and `!=`.",
+                        a, other, other, op, a, a
+                    )),
+                    (None, _) => Err(unbounded_compare(a, op)),
                 }
             }
             _ => Err(format!(
@@ -4831,5 +5005,20 @@ fn unbounded(param: &str, what: &str) -> String {
          passed and returned — not {}, which needs to know what the value IS. Say so in \
          the signature with a bound on `{}`.",
         param, what, param
+    )
+}
+
+/// Comparing two values of an unbounded parameter: the same shape as `unbounded`, said in
+/// terms of the operator, and naming the bound that would allow it.
+fn unbounded_compare(param: &str, op: CmpOp) -> String {
+    let needed = match op {
+        CmpOp::Eq | CmpOp::Ne => "Equatable",
+        _ => "Ordered",
+    };
+    format!(
+        "`{}` is a type parameter with no bound, so two values of it cannot be compared — \
+         `{}` needs to know what the values ARE. Write `<{}: {}>` and the signature says \
+         so, which is what makes the body's rules the same for every caller.",
+        param, op, param, needed
     )
 }

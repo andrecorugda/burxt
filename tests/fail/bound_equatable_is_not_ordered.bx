@@ -1,0 +1,7 @@
+// Equality and order are different promises, and the signature says which.
+fn bigger<T: Equatable>(a: T, b: T) -> Bool {
+    return a > b;
+}
+region r {
+    print(bigger(1, 2));
+}

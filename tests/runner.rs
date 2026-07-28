@@ -2311,8 +2311,43 @@ fn generics_monomorphise_and_run() {
         ),
     ];
 
+    let bound_cases: &[(&str, &str, &str)] = &[
+        (
+            // `Ordered` is Int and Decimal; `Equatable` adds Bool and String. Each mirrors
+            // exactly what the language already allows, so a bound cannot promise more
+            // than it delivers.
+            "bounds",
+            "fn largest<T: Ordered>(a: T, b: T) -> T {\n  if a > b { return a; }\n  \
+             return b;\n}\n\
+             fn same<T: Equatable>(a: T, b: T) -> Bool { return a == b; }\n\
+             region r {\n  print(largest(3, 9));\n  print(largest($1.50, $1.25));\n  \
+             print(same(1, 1));\n  print(same(\"a\", \"b\"));\n  \
+             print(same(true, true));\n}\n",
+            "9\n1.50\ntrue\nfalse\ntrue\n",
+        ),
+        (
+            // A TRAIT bound gives static dispatch: one definition, one copy per type, no
+            // vtable and no runtime type information. `dyn` is still there for the cases
+            // that genuinely want one implementation over many types.
+            "trait_bound",
+            "trait Priced {\n  fn price(self) -> Decimal<2>\n  fn label(self) -> String\n}\n\
+             struct Book { title: String, cost: Decimal<2> }\n\
+             struct Meal { dish: String, cost: Decimal<2>, covers: Int }\n\
+             impl Priced for Book {\n  fn (self) price() -> Decimal<2> { return self.cost; }\n  \
+             fn (self) label() -> String allocates { return \"book: \" + self.title; }\n}\n\
+             impl Priced for Meal {\n  \
+             fn (self) price() -> Decimal<2> { return self.cost * self.covers; }\n  \
+             fn (self) label() -> String allocates { return \"meal: \" + self.dish; }\n}\n\
+             fn describe<T: Priced>(item: T) -> String allocates {\n  \
+             return item.label() + \" at \" + to_string(item.price());\n}\n\
+             region r {\n  print(describe(Book { title: \"burxt\", cost: $19.99 }));\n  \
+             print(describe(Meal { dish: \"soup\", cost: $4.50, covers: 2 }));\n}\n",
+            "book: burxt at 19.99\nmeal: soup at 9.00\n",
+        ),
+    ];
+
     let mut failures = Vec::new();
-    for (name, program, expected) in cases.iter().chain(enum_cases) {
+    for (name, program, expected) in cases.iter().chain(enum_cases).chain(bound_cases) {
         let source = scratch.join(format!("{}.bx", name));
         fs::write(&source, program).unwrap();
         let exe = scratch.join(name);

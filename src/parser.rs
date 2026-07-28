@@ -251,7 +251,7 @@ impl Parser {
             }
         };
         let type_params = self.parse_type_params(&name)?;
-        self.type_params = type_params.clone();
+        self.type_params = type_params.iter().map(|p| p.name.clone()).collect();
         self.expect(&Token::LBrace)?;
         let mut variants = Vec::new();
         while !self.at(&Token::RBrace) {
@@ -625,22 +625,41 @@ impl Parser {
         !self.at(closer)
     }
 
-    fn parse_type_params(&mut self, owner: &str) -> Result<Vec<String>, String> {
+    fn parse_type_params(&mut self, owner: &str) -> Result<Vec<TypeParam>, String> {
         if !self.at(&Token::Lt) {
             return Ok(Vec::new());
         }
         self.bump();
-        let mut names: Vec<String> = Vec::new();
+        let mut names: Vec<TypeParam> = Vec::new();
         loop {
             match self.bump() {
                 Token::Ident(s) => {
-                    if names.contains(&s) {
+                    if names.iter().any(|p| p.name == s) {
                         return Err(format!(
                             "`{}` declares the type parameter `{}` twice",
                             owner, s
                         ));
                     }
-                    names.push(s);
+                    // `<T: Ordered>` — one bound per parameter. Two would need a `where`
+                    // clause to stay readable, and one has covered every case so far.
+                    let bound = if self.at(&Token::Colon) {
+                        self.bump();
+                        match self.bump() {
+                            Token::Ident(b) => Some(b),
+                            other => {
+                                return Err(format!(
+                                    "expected a trait name after `{}:`, found {} — a \
+                                     bound is `Ordered`, `Equatable`, or a trait this \
+                                     program declares.",
+                                    s,
+                                    other.describe()
+                                ))
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    names.push(TypeParam { name: s, bound });
                 }
                 other => {
                     return Err(format!(
@@ -661,7 +680,7 @@ impl Parser {
         Ok(names)
     }
 
-    fn parse_fn_signature(&mut self) -> Result<(String, Vec<String>, Vec<Param>, Type), String> {
+    fn parse_fn_signature(&mut self) -> Result<(String, Vec<TypeParam>, Vec<Param>, Type), String> {
         let name = match self.bump() {
             Token::Ident(s) => s,
             other => return Err(format!("expected a function name after 'fn', found {}", other.describe())),
@@ -670,7 +689,7 @@ impl Parser {
         // parameter from a struct name — which is the only place that distinction is
         // visible, since both are spelled as a bare identifier.
         let type_params = self.parse_type_params(&name)?;
-        self.type_params = type_params.clone();
+        self.type_params = type_params.iter().map(|p| p.name.clone()).collect();
         self.expect(&Token::LParen)?;
         let mut params = Vec::new();
         if !self.at(&Token::RParen) {

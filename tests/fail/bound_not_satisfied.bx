@@ -1,0 +1,8 @@
+// Conformance is declared, never inferred from having the right method names — so a type
+// argument must have an `impl`, even if its methods would happen to work.
+trait Priced { fn price(self) -> Int }
+struct Book { cost: Int }
+fn describe<T: Priced>(item: T) -> Int { return item.price(); }
+region r {
+    print(describe(Book { cost: 5 }));
+}

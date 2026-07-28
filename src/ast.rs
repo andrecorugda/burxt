@@ -386,15 +386,26 @@ impl std::fmt::Display for Marshal {
     }
 }
 
+/// One type parameter of a generic: its name, and the trait a value of it must satisfy.
+///
+/// A parameter with **no bound** can only be stored, copied, passed and returned — the
+/// signature is the contract, so anything more has to be written in it. A bound may be one
+/// of the two the language ships (`Ordered`, `Equatable`) or any declared trait, in which
+/// case the parameter's methods are that trait's. See spec/M7-GENERICS.md Decision 2.
+#[derive(Debug, Clone)]
+pub struct TypeParam {
+    pub name: String,
+    pub bound: Option<String>,
+}
+
 /// `fn name(params) -> ret { body }`. Every function returns a value, and the
 /// typechecker proves it returns on every path.
 #[derive(Debug, Clone)]
 pub struct FnDef {
     pub name: String,
-    /// `fn largest<T, U>(...)` — the names this function is generic over, in order.
-    /// Empty for the overwhelming majority of functions, which is why it is a Vec of
-    /// Strings rather than anything cleverer.
-    pub type_params: Vec<String>,
+    /// `fn largest<T: Ordered, U>(...)` — what this function is generic over, in order.
+    /// Empty for the overwhelming majority of functions.
+    pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub ret: Type,
     /// Declared `allocates`: builds values in the CALLER's region, so it may
@@ -499,9 +510,9 @@ pub struct Variant {
 #[derive(Debug, Clone)]
 pub struct EnumDef {
     pub name: String,
-    /// `enum Option<T> { ... }` — the names this enum is generic over. Empty for the
+    /// `enum Option<T> { ... }` — what this enum is generic over. Empty for the
     /// overwhelming majority. See spec/M7-GENERICS.md.
-    pub type_params: Vec<String>,
+    pub type_params: Vec<TypeParam>,
     pub variants: Vec<Variant>,
     /// Where this item was written, for errors about the item itself.
     pub span: Span,

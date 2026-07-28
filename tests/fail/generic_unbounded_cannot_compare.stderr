@@ -1,1 +1,1 @@
-cannot compare T and T
+is a type parameter with no bound, so two values of it cannot be compared

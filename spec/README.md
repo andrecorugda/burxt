@@ -44,7 +44,7 @@ which is right.
 |---|---|---|
 | [M5 (in M4)](M4-SELF-HOSTING.md) | **DONE** (v0.0.79–v0.0.80) | The Burxt backend compiles all 88 pass programs, and the suite runs on Burxt |
 | [M6 Modules](M6-MODULES.md) | **DONE** (v0.0.81–v0.0.82) | `use "path"`, one buffer with a source map, and the compiler split into five files |
-| [M7 Generics](M7-GENERICS.md) | **Slices 1–2 DONE in stage-0** (v0.0.93–94) | Generic functions AND enums, monomorphised, inferred at the call site. Remaining: bounds, generic structs, stage-1 |
+| [M7 Generics](M7-GENERICS.md) | **Slices 1–3 DONE in stage-0** (v0.0.93–96) | Generic functions, enums and bounds (`Ordered`, `Equatable`, any trait — statically dispatched). Remaining: generic structs, stage-1 |
 | [M8 Errors](M8-ERRORS.md) | **Types DONE** (v0.0.94) | `Option<T>` and `Result<T, E>` live in `lib/`, written in Burxt, no compiler support beyond M7. Remaining: `?` — needs a rule for converting the callee's error type |
 | [M9 Performance](M9-PERFORMANCE.md) | **DONE** (v0.0.87–v0.0.90) | The self-compile: 190 s → 1.17 s, ~1 GB → 196 MB. `byte_at` bounds-checked with a `strlen` per byte |
 | [M10 Ergonomics](M10-ERGONOMICS.md) | **Slices 1–2b DONE** (v0.0.91–92, 95) | `let x = 0;`, `for x in xs`, trailing commas everywhere, `fn (self)` inside an `impl` — both compilers. Plus the rounding rule corrected: a contract where a value narrows, and nowhere else |

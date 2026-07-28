@@ -38,6 +38,46 @@ fn keep<A, B>(a: A, b: B) -> A {
     return a;
 }
 
+// ---- Bounds: what a parameter is allowed to do -----------------------------
+//
+// A bound is written in the signature, and the BODY is checked against it — not
+// against whatever the instantiations happen to permit. So adding a `>` inside a
+// generic cannot silently narrow every caller: it is a compile error until the
+// signature says so. Same argument `allocates` and rounding contracts make.
+//
+// Two bounds ship with the language, and each mirrors exactly what it already
+// allows: `Ordered` is Int and Decimal (the types `<` works on), and `Equatable`
+// adds Bool and String (the types `==` works on). A bound cannot promise more than
+// the language delivers.
+fn largest<T: Ordered>(a: T, b: T) -> T {
+    if a > b {
+        return a;
+    }
+    return b;
+}
+
+fn same<T: Equatable>(a: T, b: T) -> Bool {
+    return a == b;
+}
+
+// Any declared trait is a bound too, and then the parameter has that trait's
+// methods. This is STATIC dispatch: one copy per type, no vtable, no runtime type
+// information. `dyn Priced` is still there for when one implementation must serve
+// many types at run time — generics are for when many implementations should.
+trait Priced {
+    fn price(self) -> Decimal<2>
+}
+
+impl Priced for Point {
+    fn (self) price() -> Decimal<2> { return $1.00; }
+}
+
+fn twice_the_price<T: Priced>(item: T) -> Decimal<2> {
+    // Money times a count is exact, so no rounding contract is needed — the same rule
+    // that applies outside a generic. A bound changes what is allowed, never what it means.
+    return item.price() * 2;
+}
+
 region r {
     // Four instantiations of one definition. Each is its own symbol.
     print(identity(3));
@@ -62,12 +102,18 @@ region r {
     // A struct travels by value through a generic, like everywhere else.
     let p = identity(Point { x: 4, y: 5 });
     print(p.x + p.y);
+
+    print(largest(3, 9));
+    print(largest($1.50, $1.25));
+    print(same("a", "a"));
+    print(twice_the_price(p));
 }
 
 // ---- What an unbounded parameter can do, and what it cannot -----------------
 //
 // `T` with no bound can be stored, copied, passed and returned. Nothing else,
-// because nothing else is knowable without saying more:
+// because nothing else is knowable without saying more — and every refusal names the
+// bound that would allow it:
 //
 //     fn show<T>(x: T) -> Int { print(x); return 0; }
 //     error: `T` is a type parameter with no bound, so a value of it can be stored,
@@ -75,11 +121,18 @@ region r {
 //            value IS. Say so in the signature with a bound on `T`.
 //
 //     fn bigger<T>(a: T, b: T) -> Bool { return a > b; }
-//     error: cannot compare T and T — the types must match exactly
+//     error: `T` is a type parameter with no bound, so two values of it cannot be
+//            compared — `>` needs to know what the values ARE. Write `<T: Ordered>`.
 //
-// That is deliberate and it is the same argument `allocates` makes. A generic whose
-// constraints are whatever its body happens to do is a generic whose signature is a
-// lie: adding a `>` inside it would silently narrow every caller.
+// And a bound is checked where the type argument is chosen, not where it is used:
+//     largest(true, false)
+//     error: `largest` needs `T: Ordered`, and Bool has no order. Ordered is Int and
+//            Decimal — the types `<` works on.
+//
+//     describe(Book { ... })      // with no `impl Priced for Book`
+//     error: `describe` needs `T: Priced`, and `Book` does not implement it. Write
+//            `impl Priced for Book { ... }` — conformance is declared, never inferred
+//            from having the right method names.
 //
 // ---- And what the compiler refuses ------------------------------------------
 //

@@ -1,10 +1,10 @@
 # Burxt — Generics (M7)
 
-> Status: **slices 1–2 DONE in stage-0 (v0.0.93–v0.0.94)** — generic **functions** and generic
-> **enums**, monomorphised, with type arguments inferred at the call site and no turbofish
-> required. Acceptance 8 is met: `Option<T>` and `Result<T, E>` are in `lib/`, written in
-> Burxt, with no compiler support beyond this milestone. What remains: bounds
-> (`<T: Ordered>`), generic **structs**, and stage-1. Stage-1 does not read generics yet,
+> Status: **slices 1–3 DONE in stage-0 (v0.0.93–v0.0.96)** — generic **functions**, generic
+> **enums**, and **bounds**, monomorphised, with type arguments inferred at the call site and
+> no turbofish required. Acceptance 8 is met: `Option<T>` and `Result<T, E>` are in `lib/`,
+> written in Burxt, with no compiler support beyond this milestone. What remains: generic
+> **structs**, and stage-1. Stage-1 does not read generics yet,
 > which is why the tests for this slice live in `tests/runner.rs` rather than `tests/pass/` —
 > the same staging M5 used, with the second implementation following behind a ratchet.
 >
@@ -177,12 +177,47 @@ should not. `[T]` is a growable array and `[Int; 3]` is a fixed one — differen
 different storage, exactly as [M10 §1b](M10-ERGONOMICS.md) says of `for`. A generic over a
 fixed array's *length* is a different feature, deferred above.
 
+### Slice 3 — bounds, and a promise kept
+
+Every refusal on an unbounded parameter already ended with *"say so in the signature with a
+bound on `T`"*. That was a promise the compiler could not keep for three versions, which is
+the worst kind of error message. It keeps it now.
+
+```text
+fn largest<T: Ordered>(a: T, b: T) -> T
+fn same<T: Equatable>(a: T, b: T) -> Bool
+fn describe<T: Priced>(item: T) -> String allocates    // any declared trait
+```
+
+**The two built-in bounds mirror exactly what the language already allows.** `Ordered` is
+`Int` and `Decimal<S>`, because those are the types `<` works on today; `Equatable` adds
+`Bool` and `String`, because those are the types `==` works on. Strings have no ordering yet,
+so `Ordered` does not claim them — **a bound cannot promise more than the language delivers**,
+and when Strings gain an order they gain it in one place.
+
+**A trait bound gives static dispatch.** `describe<Book>` and `describe<Meal>` are two
+functions; there is no vtable and no runtime type information. `dyn Priced` remains for the
+opposite case — one implementation serving many types at run time. Generics are for when many
+implementations should serve one shape.
+
+**Two checks, in two places, and that is the whole design.** The BODY is checked against the
+bound, once, at the declaration — so adding a `>` inside a generic is a compile error until
+the signature says so, rather than a silent narrowing of every caller. The ARGUMENT is checked
+where the type is chosen, naming the parameter, the bound and the fix:
+
+```text
+error: `describe` needs `T: Priced`, and `Book` does not implement it. Write
+       `impl Priced for Book { ... }` — conformance is declared, never inferred from
+       having the right method names.
+```
+
 ## 4. Acceptance
 
 1. `fn identity<T>(x: T) -> T` compiles, and `identity(3)` and `identity("s")` both work.
 2. `struct List<T>` with a `push`/`len` pair works for `Int` and for a struct element.
-3. `fn largest<T: Ordered>(xs: [T]) -> T` compiles; calling it with a type that does not
-   implement `Ordered` is refused, naming the bound.
+3. ✅ `fn largest<T: Ordered>(a: T, b: T) -> T` compiles; calling it with a type that does not
+   implement `Ordered` is refused, naming the bound. A declared trait works as a bound too,
+   with static dispatch.
 4. A generic used from inside another generic is instantiated correctly (`largest<T>` called
    from `summarise<T: Ordered>`).
 5. Two instantiations of one generic have **separate layouts**: `List<Int>` and
