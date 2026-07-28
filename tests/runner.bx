@@ -1,0 +1,253 @@
+// ============================================================================
+// The test suite, in Burxt.
+//
+//     burxt build tests/runner.bx -o /tmp/burxt-runner && /tmp/burxt-runner
+//
+// It runs the same fixtures `tests/runner.rs` runs, and a Rust test asserts the
+// two agree — so this is a second implementation of the harness, not a
+// replacement for it, the same relationship stage-1 has with stage-0.
+//
+// Three kinds of fixture, and the directory says which:
+//   tests/pass/NAME.bx   + NAME.stdout   must compile, run, and print that
+//   tests/fail/NAME.bx   + NAME.stderr   must be REFUSED, with that text in the message
+//   tests/panic/NAME.bx  + NAME.stderr   must compile, then die with that text
+//
+// Everything it needs from the machine goes through one C function. Burxt cannot
+// yet list a directory — `opendir` returns a pointer, and the memory model has
+// nothing to say about who owns it — so the shell lists it and the answer comes
+// back through a file. That is a real limit, honestly worked around rather than
+// pretended away, and it is the first thing the standard library will hide.
+// ============================================================================
+
+extern fn system(command: String) -> CInt;
+
+struct Outcome { ran: Int, passed: Int, failed: Int }
+
+// ---- talking to the machine -------------------------------------------------
+
+// Every name in a directory, one per line, via the shell. `ls` is the only thing
+// here that is not Burxt, and it is doing what a directory read would do.
+fn listing_of(directory: String, into: String) -> String allocates {
+    let command: String = "ls " + directory + " > " + into + " 2>/dev/null";
+    let status: Int = system(command);
+    return read_file(into);
+}
+
+// Run a command, capturing everything it says, and answer its exit code.
+// `system` reports the wait status, and the exit code is the high byte of it.
+fn run_capturing(command: String, output: String) -> Int allocates {
+    let status: Int = system(command + " > " + output + " 2>&1");
+    return div_floor(status, 256);
+}
+
+// ---- reading the listing ----------------------------------------------------
+
+fn line_end(text: String, from: Int) -> Int {
+    let mut i: Int = from;
+    while i < len(text) && byte_at(text, i) != 10 {
+        i = i + 1;
+    }
+    return i;
+}
+
+fn ends_with_bx(name: String) -> Bool {
+    let n: Int = len(name);
+    if n < 3 {
+        return false;
+    }
+    return byte_at(name, n - 3) == 46 && byte_at(name, n - 2) == 98
+        && byte_at(name, n - 1) == 120;
+}
+
+fn without_extension(name: String) -> String allocates {
+    return substring(name, 0, len(name) - 3);
+}
+
+// ---- comparing ---------------------------------------------------------------
+
+// Whether `haystack` contains `needle`. A fail fixture records the text the error
+// must CONTAIN rather than the whole message, so a reworded diagnostic does not
+// break a test that is really about the rule.
+fn contains(haystack: String, needle: String) -> Bool {
+    let n: Int = len(needle);
+    if n == 0 {
+        return true;
+    }
+    let mut i: Int = 0;
+    while i + n <= len(haystack) {
+        let mut k: Int = 0;
+        let mut same: Bool = true;
+        while k < n {
+            if byte_at(haystack, i + k) != byte_at(needle, k) {
+                same = false;
+                k = n;
+            } else {
+                k = k + 1;
+            }
+        }
+        if same {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+// The recorded text, with the trailing newline a file always has removed.
+fn trimmed(text: String) -> String allocates {
+    let mut n: Int = len(text);
+    while n > 0 && byte_at(text, n - 1) == 10 {
+        n = n - 1;
+    }
+    return substring(text, 0, n);
+}
+
+// ---- the three kinds of check -----------------------------------------------
+
+fn (mut self: Outcome) record(passed: Bool, name: String, why: String) -> Int allocates {
+    self.ran = self.ran + 1;
+    if passed {
+        self.passed = self.passed + 1;
+        return 0;
+    }
+    self.failed = self.failed + 1;
+    print("FAIL " + name + ": " + why);
+    return 0;
+}
+
+fn (mut self: Outcome) check_pass(compiler: String, name: String, work: String)
+    -> Int allocates
+{
+    let source: String = "tests/pass/" + name + ".bx";
+    let expected: String = trimmed(read_file("tests/pass/" + name + ".stdout"));
+    let binary: String = work + "/" + name;
+    let log: String = work + "/out";
+
+    let built: Int = run_capturing(compiler + " build " + source + " -o " + binary, log);
+    if built != 0 {
+        let noted: Int = self.record(false, name, "did not compile: " + trimmed(read_file(log)));
+        return 0;
+    }
+    // In the fixture directory, because a program may read a file next to it.
+    let ran: Int = run_capturing("cd tests/pass && " + binary, log);
+    let printed: String = trimmed(read_file(log));
+    if ran != 0 {
+        let noted: Int = self.record(false, name, "exited " + to_string(ran));
+        return 0;
+    }
+    if printed == expected {
+        let noted: Int = self.record(true, name, "");
+        return 0;
+    }
+    let noted: Int = self.record(false, name, "printed " + printed + ", expected " + expected);
+    return 0;
+}
+
+fn (mut self: Outcome) check_fail(compiler: String, name: String, work: String)
+    -> Int allocates
+{
+    let source: String = "tests/fail/" + name + ".bx";
+    let wanted: String = trimmed(read_file("tests/fail/" + name + ".stderr"));
+    let log: String = work + "/out";
+
+    // `check` rather than `build`: a refusal needs no linker, and this is the only
+    // thing the fixture is about.
+    let status: Int = run_capturing(compiler + " check " + source, log);
+    let said: String = read_file(log);
+    if status == 0 {
+        let noted: Int = self.record(false, name, "was accepted, and should not be");
+        return 0;
+    }
+    if contains(said, wanted) {
+        let noted: Int = self.record(true, name, "");
+        return 0;
+    }
+    let noted: Int = self.record(false, name,
+        "refused it for the wrong reason: " + trimmed(said));
+    return 0;
+}
+
+fn (mut self: Outcome) check_panic(compiler: String, name: String, work: String)
+    -> Int allocates
+{
+    let source: String = "tests/panic/" + name + ".bx";
+    let wanted: String = trimmed(read_file("tests/panic/" + name + ".stderr"));
+    let binary: String = work + "/" + name;
+    let log: String = work + "/out";
+
+    let built: Int = run_capturing(compiler + " build " + source + " -o " + binary, log);
+    if built != 0 {
+        let noted: Int = self.record(false, name, "did not compile, and should have");
+        return 0;
+    }
+    let ran: Int = run_capturing(binary, log);
+    let said: String = read_file(log);
+    if ran == 0 {
+        let noted: Int = self.record(false, name, "ran to completion, and should have died");
+        return 0;
+    }
+    if contains(said, wanted) {
+        let noted: Int = self.record(true, name, "");
+        return 0;
+    }
+    let noted: Int = self.record(false, name, "died for the wrong reason: " + trimmed(said));
+    return 0;
+}
+
+// ---- the sweep ---------------------------------------------------------------
+
+fn (mut self: Outcome) sweep(compiler: String, kind: String, work: String)
+    -> Int allocates
+{
+    let names: String = listing_of("tests/" + kind, work + "/listing");
+    let mut at: Int = 0;
+    while at < len(names) {
+        let stop: Int = line_end(names, at);
+        let entry: String = substring(names, at, stop - at);
+        if ends_with_bx(entry) {
+            let name: String = without_extension(entry);
+            if kind == "pass" {
+                let done: Int = self.check_pass(compiler, name, work);
+            }
+            if kind == "fail" {
+                let done: Int = self.check_fail(compiler, name, work);
+            }
+            if kind == "panic" {
+                let done: Int = self.check_panic(compiler, name, work);
+            }
+        }
+        at = stop + 1;
+    }
+    return 0;
+}
+
+region suite {
+    // Which compiler to exercise, and where to put what the run produces. Both are
+    // arguments so this runner can test stage-0 today and stage-1 tomorrow without
+    // being edited — the whole point of having two implementations.
+    let mut compiler: String = "./target/debug/burxt";
+    if arg_count() > 1 {
+        compiler = arg(1);
+    }
+    let mut work: String = "/tmp/burxt-suite";
+    if arg_count() > 2 {
+        work = arg(2);
+    }
+    let made: Int = system("mkdir -p " + work);
+
+    print("running the suite with " + compiler);
+
+    let mut result: Outcome = Outcome { ran: 0, passed: 0, failed: 0 };
+    let a: Int = result.sweep(compiler, "pass", work);
+    let b: Int = result.sweep(compiler, "fail", work);
+    let c: Int = result.sweep(compiler, "panic", work);
+
+    print("---");
+    print("ran " + to_string(result.ran) + ", passed " + to_string(result.passed)
+          + ", failed " + to_string(result.failed));
+    if result.failed > 0 {
+        print("SUITE FAILED");
+    } else {
+        print("all green");
+    }
+}

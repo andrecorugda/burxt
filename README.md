@@ -136,6 +136,17 @@ Arguments after the source file are passed to the system linker unchanged, so th
 C you declare with `extern fn` can actually be linked:
 `burxt run pay.bx cside.o -lm`.
 
+The suite also runs **on Burxt**: [`tests/runner.bx`](tests/runner.bx) walks the same
+fixtures and reports the same verdict, and a Rust test asserts the two agree — including
+the case where that runner is itself compiled by the Burxt compiler.
+
+```sh
+burxt build tests/runner.bx -o /tmp/burxt-runner && /tmp/burxt-runner
+running the suite with ./target/debug/burxt
+ran 299, passed 299, failed 0
+all green
+```
+
 Run the test suite with `cargo test`. It is data-driven: every program in
 `tests/pass/` must compile and produce exactly its recorded output, every
 program in `tests/fail/` must be *rejected* with its recorded error, and every

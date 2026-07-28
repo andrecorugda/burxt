@@ -1736,3 +1736,125 @@ fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
         total
     );
 }
+
+/// **The suite, run by Burxt.** `tests/runner.bx` walks the same fixtures this file walks
+/// — pass, fail and panic — and reports the same verdict. A second implementation of the
+/// harness, standing to this one exactly as stage-1 stands to stage-0: not a replacement,
+/// a cross-check, so a fixture cannot quietly mean two different things.
+///
+/// It needs nothing new from the language. Burxt cannot list a directory — `opendir`
+/// returns a pointer and the memory model has nothing to say about who owns it — so the
+/// shell lists it and the answer comes back through a file. An honest limit, worked
+/// around in the open, and the first thing the standard library will hide.
+#[test]
+fn the_suite_also_runs_on_burxt() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("burxt-runner");
+    fs::create_dir_all(&scratch).unwrap();
+    let runner = scratch.join("runner");
+    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("tests/runner.bx"))
+        .arg("-o")
+        .arg(&runner)
+        .output()
+        .expect("burxt");
+    assert!(
+        built.status.success(),
+        "the Burxt test runner did not compile:\n{}",
+        String::from_utf8_lossy(&built.stdout)
+    );
+
+    // From the repository root, because the fixtures are named relative to it.
+    let ran = Command::new(&runner)
+        .arg(env!("CARGO_BIN_EXE_burxt"))
+        .arg(scratch.join("work"))
+        .current_dir(root)
+        .output()
+        .expect("the Burxt runner");
+    let said = String::from_utf8_lossy(&ran.stdout).to_string();
+
+    // How many fixtures this file would check, counted the same way.
+    let mut fixtures = 0;
+    for kind in ["pass", "fail", "panic"] {
+        for entry in fs::read_dir(root.join("tests").join(kind)).unwrap() {
+            if entry.unwrap().path().extension().and_then(|e| e.to_str()) == Some("bx") {
+                fixtures += 1;
+            }
+        }
+    }
+
+    // And the whole loop: the runner, written in Burxt, compiled by the compiler written
+    // in Burxt, checking the compiler written in Rust. Burxt by Burxt, with stage-0 as the
+    // thing under test rather than the thing doing the testing.
+    let mut selfhosted = String::new();
+    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    if llc.exists() {
+        let stage1 = scratch.join("stage1");
+        assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("build")
+            .arg(root.join("examples/stage1.bx"))
+            .arg("-o")
+            .arg(&stage1)
+            .status()
+            .expect("burxt")
+            .success());
+        let ll = scratch.join("runner.ll");
+        let emitted = Command::new(&stage1)
+            .arg(root.join("tests/runner.bx"))
+            .arg(&ll)
+            .output()
+            .expect("stage-1");
+        assert!(
+            String::from_utf8_lossy(&emitted.stdout).contains("bytes of IR"),
+            "stage-1 could not emit the test runner:\n{}",
+            String::from_utf8_lossy(&emitted.stdout)
+        );
+        let obj = scratch.join("runner.o");
+        assert!(Command::new(llc)
+            .args(["-relocation-model=pic", "-filetype=obj", "-o"])
+            .arg(&obj)
+            .arg(&ll)
+            .status()
+            .expect("llc")
+            .success());
+        let native = scratch.join("runner-by-burxt");
+        assert!(Command::new("cc")
+            .arg("-o")
+            .arg(&native)
+            .arg(&obj)
+            .status()
+            .expect("cc")
+            .success());
+        selfhosted = String::from_utf8_lossy(
+            &Command::new(&native)
+                .arg(env!("CARGO_BIN_EXE_burxt"))
+                .arg(scratch.join("work2"))
+                .current_dir(root)
+                .output()
+                .expect("the self-hosted runner")
+                .stdout,
+        )
+        .to_string();
+    }
+
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(
+        said.contains("all green"),
+        "the Burxt runner disagreed with this one:\n{}",
+        said
+    );
+    if !selfhosted.is_empty() {
+        assert!(
+            selfhosted.contains("all green"),
+            "the runner compiled BY BURXT disagreed:\n{}",
+            selfhosted
+        );
+    }
+    assert!(
+        said.contains(&format!("ran {}, passed {}, failed 0", fixtures, fixtures)),
+        "the Burxt runner checked a different set — expected {} fixtures:\n{}",
+        fixtures,
+        said
+    );
+}
