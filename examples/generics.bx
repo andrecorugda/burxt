@@ -1,0 +1,102 @@
+// ============================================================================
+// Generics — one definition, one copy per type that uses it.
+//
+// Burxt monomorphises: `identity<Int>` and `identity<String>` are two functions in
+// the object file, and a `Decimal<2>` inside a generic is still a scaled i64 rather
+// than a pointer to one. That is the whole reason not to erase — every other promise
+// this language makes is about what a value IS, and erasure would put a pointer
+// where the value was.
+// ============================================================================
+
+struct Point { x: Int, y: Int }
+
+// One type parameter, named where the function is declared. No turbofish at the call
+// site: `identity(3)` infers `T = Int` from the argument.
+fn identity<T>(x: T) -> T {
+    return x;
+}
+
+// A parameter can be nested inside another type. `[T]` is a growable array of T.
+fn first<T>(xs: [T]) -> T {
+    return xs[0];
+}
+
+// A parameter is a real type inside the body: it can be bound, copied and returned.
+fn second<T>(xs: [T]) -> T {
+    let picked: T = xs[1];
+    return picked;
+}
+
+// A generic may call a generic. `echo`'s body is checked ONCE, with `T` standing for
+// nothing — so a mistake here is an error at this line, not at every call site.
+fn echo<T>(x: T) -> T {
+    return identity(x);
+}
+
+// Two parameters, and they are independent.
+fn keep<A, B>(a: A, b: B) -> A {
+    return a;
+}
+
+region r {
+    // Four instantiations of one definition. Each is its own symbol.
+    print(identity(3));
+    print(identity("text"));
+    print(identity(true));
+    print(identity($1.50));
+
+    let mut ns: [Int] = [];
+    let a = push(ns, 10);
+    let b = push(ns, 20);
+    print(first(ns));
+    print(second(ns));
+
+    let mut ws: [String] = [];
+    let c = push(ws, "one");
+    let d = push(ws, "two");
+    print(first(ws));
+
+    print(echo(7));
+    print(keep(9, "ignored"));
+
+    // A struct travels by value through a generic, like everywhere else.
+    let p = identity(Point { x: 4, y: 5 });
+    print(p.x + p.y);
+}
+
+// ---- What an unbounded parameter can do, and what it cannot -----------------
+//
+// `T` with no bound can be stored, copied, passed and returned. Nothing else,
+// because nothing else is knowable without saying more:
+//
+//     fn show<T>(x: T) -> Int { print(x); return 0; }
+//     error: `T` is a type parameter with no bound, so a value of it can be stored,
+//            copied, passed and returned — not printed, which needs to know what the
+//            value IS. Say so in the signature with a bound on `T`.
+//
+//     fn bigger<T>(a: T, b: T) -> Bool { return a > b; }
+//     error: cannot compare T and T — the types must match exactly
+//
+// That is deliberate and it is the same argument `allocates` makes. A generic whose
+// constraints are whatever its body happens to do is a generic whose signature is a
+// lie: adding a `>` inside it would silently narrow every caller.
+//
+// ---- And what the compiler refuses ------------------------------------------
+//
+// One type per call — a parameter is not a union:
+//     print(keep(1, 2) + identity("x"));   // fine, two separate calls
+//     fn pair<T>(a: T, b: T) -> T { return a; }
+//     pair(1, "two")
+//     error: `T` would have to be both Int and String in this call
+//
+// A parameter that appears only in the return type has nothing to infer from:
+//     fn make<T>(n: Int) -> T { ... }
+//     error: `make` cannot tell what `T` is from this call: no argument mentions it.
+//
+// And C has no notion of a type parameter:
+//     extern fn puts<T>(s: T) -> CInt;
+//     error: `extern fn puts` cannot be generic: C has no type parameters, and there
+//            would be no symbol to link against.
+//
+// A generic nobody instantiates emits nothing at all, so a library may declare as
+// many as it likes and cost a program only what it uses.

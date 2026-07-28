@@ -2172,3 +2172,107 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
         self_compile
     );
 }
+
+/// M7 slice 1: generic functions, monomorphised.
+///
+/// These live here rather than in `tests/pass/` on purpose. Every pass fixture is also
+/// swept by `the_burxt_front_end_accepts_every_burxt_source` and
+/// `the_burxt_typechecker_agrees_with_the_rust_one`, and stage-1 does not read generics
+/// yet — so a pass fixture would assert something untrue about the OTHER compiler. The
+/// same staging M5 used for the backend: stage-0 first, with the second implementation
+/// following behind a ratchet, and the tests saying honestly which one is under test.
+#[test]
+fn generics_monomorphise_and_run() {
+    let scratch = scratch_dir("generics");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "identity",
+            "fn identity<T>(x: T) -> T { return x; }\n\
+             region r {\n  print(identity(3));\n  print(identity(\"text\"));\n  \
+             print(identity(true));\n  print(identity($1.50));\n}\n",
+            "3\ntext\ntrue\n1.50\n",
+        ),
+        (
+            // One definition, four symbols, and each one holds its type by VALUE — a
+            // Decimal<2> stays a scaled i64 rather than becoming a pointer to one.
+            "elements",
+            "fn first<T>(xs: [T]) -> T { return xs[0]; }\n\
+             fn second<T>(xs: [T]) -> T { let picked: T = xs[1]; return picked; }\n\
+             region r {\n  let mut ns: [Int] = [];\n  let a = push(ns, 10);\n  \
+             let b = push(ns, 20);\n  print(first(ns));\n  print(second(ns));\n  \
+             let mut ws: [String] = [];\n  let c = push(ws, \"one\");\n  \
+             let d = push(ws, \"two\");\n  print(first(ws));\n  print(second(ws));\n}\n",
+            "10\n20\none\ntwo\n",
+        ),
+        (
+            // A generic calling a generic: `echo`'s body is checked once with `T`
+            // standing for nothing, and `identity$Int` appears only when `echo$Int` does.
+            "nested",
+            "fn identity<T>(x: T) -> T { return x; }\n\
+             fn echo<T>(x: T) -> T { return identity(x); }\n\
+             region r {\n  print(echo(7));\n  print(echo(\"deep\"));\n}\n",
+            "7\ndeep\n",
+        ),
+        (
+            "two_parameters",
+            "struct Point { x: Int, y: Int }\n\
+             fn keep<A, B>(a: A, b: B) -> A { return a; }\n\
+             fn identity<T>(x: T) -> T { return x; }\n\
+             region r {\n  print(keep(9, \"ignored\"));\n  \
+             let p = identity(Point { x: 4, y: 5 });\n  print(p.x + p.y);\n}\n",
+            "9\n9\n",
+        ),
+    ];
+
+    let mut failures = Vec::new();
+    for (name, program, expected) in cases {
+        let source = scratch.join(format!("{}.bx", name));
+        fs::write(&source, program).unwrap();
+        let exe = scratch.join(name);
+        let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("build")
+            .arg(&source)
+            .arg("-o")
+            .arg(&exe)
+            .current_dir(&scratch)
+            .output()
+            .expect("burxt");
+        if !built.status.success() {
+            failures.push(format!(
+                "{} did not compile:\n{}",
+                name,
+                String::from_utf8_lossy(&built.stderr)
+            ));
+            continue;
+        }
+        let ran = Command::new(&exe).current_dir(&scratch).output().expect("the program");
+        let printed = String::from_utf8_lossy(&ran.stdout).to_string();
+        if printed != *expected {
+            failures.push(format!("{} printed {:?}, expected {:?}", name, printed, expected));
+        }
+    }
+
+    // An unused generic emits no code: spec/M7-GENERICS.md acceptance 6.
+    let unused = scratch.join("unused.bx");
+    fs::write(&unused, "fn never<T>(x: T) -> T { return x; }\nprint(1);\n").unwrap();
+    let emitted = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("emit-ir")
+        .arg(&unused)
+        .current_dir(&scratch)
+        .output()
+        .expect("burxt emit-ir");
+    assert!(
+        emitted.status.success(),
+        "`emit-ir` failed on the unused generic:\n{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let text = String::from_utf8_lossy(&emitted.stdout).to_string();
+    if text.contains("@never") {
+        failures.push("a generic nobody instantiates was emitted anyway".to_string());
+    }
+
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+}

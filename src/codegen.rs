@@ -1180,6 +1180,11 @@ impl<'ctx> CodeGen<'ctx> {
     /// opaque pointer — the TARGET decides pointer width, never this code.
     fn llvm_type(&self, ty: &Type) -> BasicTypeEnum<'ctx> {
         match ty {
+            // Every type parameter is substituted before codegen runs — one copy of the
+            // generic per instantiation — so reaching here is a compiler bug, not a
+            // program error. Represented as an i64 so the panic is a diagnostic rather
+            // than a crash; the checker is what guarantees it never happens.
+            Type::Param(_) => self.ctx.i64_type().into(),
             Type::Int | Type::Bool | Type::Decimal { .. } => self.ctx.i64_type().into(),
             Type::String => self.ctx.ptr_type(AddressSpace::default()).into(),
             Type::CInt => self.ctx.i32_type().into(),
@@ -1264,6 +1269,10 @@ impl<'ctx> CodeGen<'ctx> {
         let printf = self.printf.ok_or("codegen bug: printf not declared")?;
         let val = self.gen_expr(e)?;
         match &e.ty {
+            // Substituted before codegen, so this is unreachable by construction.
+            Type::Param(name) => {
+                return Err(format!("codegen bug: type parameter `{}` survived", name))
+            }
             Type::Int => {
                 let fmt = self.global_str("%lld", "fmt_int");
                 self.builder

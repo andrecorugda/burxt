@@ -1,0 +1,9 @@
+// Nothing in the call says what `T` is: a parameter that appears only in the return
+// type has nothing to be inferred from.
+fn make<T>(n: Int) -> T {
+    let x: T = n;
+    return x;
+}
+region r {
+    print(make(1));
+}

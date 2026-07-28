@@ -1,6 +1,12 @@
 # Burxt — Generics (M7)
 
-> Status: **specified, to implement.** Ordered before `Option`/`Result` (M8) deliberately:
+> Status: **slice 1 DONE in stage-0 (v0.0.93)** — generic **functions**, monomorphised, with
+> type arguments inferred at the call site and no turbofish required. What remains: bounds
+> (`<T: Ordered>`), generic structs and enums, and stage-1. Stage-1 does not read generics yet,
+> which is why the tests for this slice live in `tests/runner.rs` rather than `tests/pass/` —
+> the same staging M5 used, with the second implementation following behind a ratchet.
+>
+> Original status: **specified, to implement.** Ordered before `Option`/`Result` (M8) deliberately:
 > without generics those would be `OptionInt`, `OptionString`, `OptionDecimal` — code that
 > generics would immediately delete. With generics, `Option<T>` is four lines of library.
 
@@ -106,6 +112,39 @@ container.
 | Variance | Needs subtyping, which Burxt does not have beyond `dyn` | Subtyping arrives |
 | Higher-kinded parameters | No container of containers is needed yet | Someone writes a monad and can defend it |
 | `where` clauses | One bound per parameter reads fine | A parameter needs three bounds and the line wraps |
+| A generic over a fixed array's LENGTH | `[T; N]` would need N as a value parameter, which is a second kind of generic | A program needs one container over several fixed sizes; `[T]` covers it today |
+| Type arguments written out (`largest<Int>(xs)`) | Inference from the arguments has covered every case so far | A parameter appears only in the return type and the call is worth writing |
+
+## 3b. What slice 1 built, and what it turned out to need
+
+**Inference is one function, one direction, no backtracking.** `unify(declared, actual)`
+walks the two types together and binds a parameter to whatever stands opposite it. That is
+the whole of it — no unification variables, no constraint set — and it is why `largest(xs)`
+needs no turbofish and why the rule fits on a page.
+
+**A generic's body is checked once, with its parameters standing for nothing.** That is what
+puts the error at the declaration instead of at every call site, and it is the reason bounds
+are required rather than inferred. An unbounded parameter can be stored, copied, passed and
+returned; anything more is refused with a message naming the parameter and saying a bound is
+how to allow it.
+
+**Instantiation is a work list drained to a fixpoint**, not a single pass — because checking
+one instantiation can discover another. A generic calling a generic works by binding the
+inner parameter to the *outer* parameter while the outer is still abstract, and recording
+nothing: the copy appears when the enclosing generic is instantiated and its body finally
+names a concrete type. A runaway (a generic that reaches itself at a new type every pass) is
+refused after 64 rounds with the reason, rather than compiled until the machine gives up.
+
+**An instantiation is substituted in the AST, not threaded through the checker.** `specialise`
+clones the declaration, replaces every parameter in the signature and in every `let`
+annotation in the body, names it `identity$Int`, and hands it to exactly the code that checks
+every other function. No second checking path means no second path that can disagree with the
+first.
+
+**One surprise worth recording:** `fn first<T>(xs: [T])` does not accept a `[Int; 3]`, and
+should not. `[T]` is a growable array and `[Int; 3]` is a fixed one — different types with
+different storage, exactly as [M10 §1b](M10-ERGONOMICS.md) says of `for`. A generic over a
+fixed array's *length* is a different feature, deferred above.
 
 ## 4. Acceptance
 

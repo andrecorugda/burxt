@@ -70,6 +70,12 @@ pub enum Type {
     /// A fixed-size stack array `[T; N]`. Arrays exist only behind bindings
     /// in this slice: indexed reads/writes and `len(a)` — never a bare value.
     Array { elem: Box<Type>, len: u32 },
+    /// A type PARAMETER, inside a generic's own body and signature — the `T` of
+    /// `fn largest<T>(xs: [T]) -> T`. It is not a type any value has: every one is
+    /// replaced by a concrete type before codegen, one copy per instantiation.
+    /// Two parameters are the same type only if they have the same name.
+    /// See spec/M7-GENERICS.md.
+    Param(String),
     /// `dyn Trait` — a trait object: the ONLY thing that triggers dynamic
     /// dispatch. Represented as a fat pointer (data pointer, vtable pointer);
     /// the vtable lives outside the data, which is why the A4.5 layout
@@ -100,6 +106,7 @@ impl std::fmt::Display for Type {
             Type::Named(name) => write!(f, "{}", name),
             Type::Slice(elem) => write!(f, "[{}]", elem),
             Type::Array { elem, len } => write!(f, "[{}; {}]", elem, len),
+            Type::Param(name) => write!(f, "{}", name),
             Type::Dyn(name) => write!(f, "dyn {}", name),
         }
     }
@@ -375,6 +382,10 @@ impl std::fmt::Display for Marshal {
 #[derive(Debug, Clone)]
 pub struct FnDef {
     pub name: String,
+    /// `fn largest<T, U>(...)` — the names this function is generic over, in order.
+    /// Empty for the overwhelming majority of functions, which is why it is a Vec of
+    /// Strings rather than anything cleverer.
+    pub type_params: Vec<String>,
     pub params: Vec<Param>,
     pub ret: Type,
     /// Declared `allocates`: builds values in the CALLER's region, so it may

@@ -1,0 +1,8 @@
+// A type parameter stands for one type per call, so two arguments declared `T` must
+// agree. This is what makes the signature a claim rather than a suggestion.
+fn pair<T>(a: T, b: T) -> T {
+    return a;
+}
+region r {
+    print(pair(1, "two"));
+}

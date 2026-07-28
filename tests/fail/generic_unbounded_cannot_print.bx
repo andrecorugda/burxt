@@ -1,0 +1,9 @@
+// A type parameter with no bound can be stored, copied, passed and returned, and
+// nothing else. Printing needs to know what the value IS.
+fn show<T>(x: T) -> Int {
+    print(x);
+    return 0;
+}
+region r {
+    print(show(1));
+}

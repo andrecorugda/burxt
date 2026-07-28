@@ -1,0 +1,4 @@
+// C has no type parameters, and a monomorphised C symbol is a symbol that does not
+// exist to link against.
+extern fn puts<T>(s: T) -> CInt;
+print(1);

@@ -288,6 +288,17 @@ pub struct TypeChecker {
     /// function name -> (parameter types, return type); collected up front so
     /// functions may be defined in any order and call each other.
     fns: HashMap<String, (Vec<Type>, Type)>,
+    /// The type parameters of every generic function, by name. Empty for all the
+    /// others, so the common path is one `is_empty` away. See spec/M7-GENERICS.md.
+    generics: HashMap<String, Vec<String>>,
+    /// Every `(generic, type arguments)` pair reached, in discovery order, and the set
+    /// already recorded so a pair is emitted once. Checking an instantiation can add
+    /// more — a generic calling a generic — so this is drained to a fixpoint.
+    wanted: RefCell<Vec<(String, Vec<Type>)>>,
+    seen_instantiations: RefCell<HashSet<String>>,
+    /// While checking one instantiation: what each type parameter stands for. Empty
+    /// while checking the generic itself, where a parameter stands for nothing.
+    substitution: HashMap<String, Type>,
     /// (receiver, method) pairs declared `allocates`, so a call site can be checked
     /// for an open region in the same one pass the free-function form uses.
     alloc_methods: HashSet<(String, String)>,
@@ -376,6 +387,10 @@ impl TypeChecker {
         TypeChecker {
             env: HashMap::new(),
             fns: HashMap::new(),
+            generics: HashMap::new(),
+            wanted: RefCell::new(Vec::new()),
+            seen_instantiations: RefCell::new(HashSet::new()),
+            substitution: HashMap::new(),
             alloc_fns: HashSet::new(),
             alloc_methods: HashSet::new(),
             pure_fns: HashSet::new(),
@@ -544,6 +559,18 @@ impl TypeChecker {
     /// nothing is guessed. That is the stated cost of spec/M10-ERGONOMICS.md §1 — half
     /// of an advantage Burxt used to have for free — and it is a real argument for
     /// annotating bindings in a long function.
+    /// Record that this `(generic, type arguments)` pair is needed, and answer the symbol
+    /// it will have. Recording is idempotent: a generic called in fifty places is emitted
+    /// once, and a generic called nowhere is emitted never — which is what lets a library
+    /// declare generics at no cost. See spec/M7-GENERICS.md Decision 4.
+    fn want(&self, name: &str, type_args: &[Type]) -> String {
+        let symbol = mangle(name, type_args);
+        if self.seen_instantiations.borrow_mut().insert(symbol.clone()) {
+            self.wanted.borrow_mut().push((name.to_string(), type_args.to_vec()));
+        }
+        symbol
+    }
+
     fn recover_from(&mut self, s: &Stmt) {
         if let StmtKind::Let { name, mutable, declared: Some(declared), .. } = &s.kind {
             if self.validate_type(declared).is_ok() && !self.env.contains_key(name) {
@@ -811,6 +838,9 @@ impl TypeChecker {
             }
             let param_tys = f.params.iter().map(|p| p.ty.clone()).collect();
             self.fns.insert(f.name.clone(), (param_tys, f.ret.clone()));
+            if !f.type_params.is_empty() {
+                self.generics.insert(f.name.clone(), f.type_params.clone());
+            }
             if f.allocates {
                 self.alloc_fns.insert(f.name.clone());
             }
@@ -875,10 +905,20 @@ impl TypeChecker {
         }
 
         // Pass 2: check each function body.
+        //
+        // A GENERIC's body is checked here too, with its type parameters standing for
+        // nothing — which is what catches misuse at the declaration rather than at every
+        // call. An unbounded `T` can be stored, copied, passed and returned, and nothing
+        // else; the error says so and names the bound that would allow more.
         let mut fns = Vec::new();
         for f in &prog.fns {
             self.current_span.set(f.span);
-            fns.push(self.check_fn(f)?);
+            let checked = self.check_fn(f)?;
+            // The generic itself is CHECKED and never EMITTED: there is no layout for a
+            // `T` until a caller says what it is. Its instantiations are added below.
+            if f.type_params.is_empty() {
+                fns.push(checked);
+            }
         }
         let mut methods = Vec::new();
         for m in all_methods.iter().copied() {
@@ -900,6 +940,57 @@ impl TypeChecker {
                     self.record(message);
                     self.recover_from(s);
                 }
+            }
+        }
+
+        // Pass 2b: one copy of each generic per `(generic, type arguments)` pair the
+        // program actually reached. Checking an instantiation can discover more — a
+        // generic calling a generic — so this drains to a fixpoint rather than iterating
+        // a fixed list. See spec/M7-GENERICS.md Decision 4.
+        let by_name: HashMap<&str, &FnDef> =
+            prog.fns.iter().map(|f| (f.name.as_str(), f)).collect();
+        let mut guard = 0usize;
+        loop {
+            let batch: Vec<(String, Vec<Type>)> = std::mem::take(&mut *self.wanted.borrow_mut());
+            if batch.is_empty() {
+                break;
+            }
+            guard += 1;
+            if guard > 64 {
+                // A generic that instantiates itself at a new type on every pass —
+                // `fn f<T>(x: T) { f(wrap(x)); }` shaped — would never converge. Refused
+                // with the reason rather than compiled until the machine gives up.
+                return Err(
+                    "this program instantiates generics without end: a generic reaches \
+                     itself at a new type argument every time, so there is no finite set \
+                     of copies to emit."
+                        .to_string(),
+                );
+            }
+            for (name, type_args) in batch {
+                let generic = by_name
+                    .get(name.as_str())
+                    .ok_or_else(|| format!("codegen bug: no generic named `{}`", name))?;
+                let params = self
+                    .generics
+                    .get(&name)
+                    .ok_or_else(|| format!("codegen bug: `{}` is not generic", name))?;
+                let map: HashMap<String, Type> =
+                    params.iter().cloned().zip(type_args.iter().cloned()).collect();
+                let concrete = specialise(generic, &map, &mangle(&name, &type_args));
+                self.current_span.set(concrete.span);
+                // Registered under its mangled name so a recursive generic call inside
+                // the body resolves, and so `allocates`/`pure` carry over.
+                let param_tys = concrete.params.iter().map(|p| p.ty.clone()).collect();
+                self.fns
+                    .insert(concrete.name.clone(), (param_tys, concrete.ret.clone()));
+                if concrete.allocates {
+                    self.alloc_fns.insert(concrete.name.clone());
+                }
+                if concrete.is_pure {
+                    self.pure_fns.insert(concrete.name.clone());
+                }
+                fns.push(self.check_fn(&concrete)?);
             }
         }
 
@@ -2211,6 +2302,9 @@ impl TypeChecker {
                                     | Type::Bool
                                     | Type::String
                                     | Type::Decimal { .. } => {}
+                                    Type::Param(p) => {
+                                        return Err(unbounded(p, "interpolated"))
+                                    }
                                     other => {
                                         return Err(format!(
                                             "cannot interpolate {} {} — only Int, \
@@ -2229,6 +2323,7 @@ impl TypeChecker {
                 }
                 let typed = self.check_expr(e, None)?;
                 match &typed.ty {
+                    Type::Param(p) => return Err(unbounded(p, "printed")),
                     Type::Named(n) if self.enums.contains_key(n) => {
                         return Err(format!(
                             "print does not know how to show a {} — `match` on it and \
@@ -2984,11 +3079,61 @@ impl TypeChecker {
                         )),
                     };
                 }
-                let (param_tys, ret) = self
+                let (mut param_tys, mut ret) = self
                     .fns
                     .get(name)
                     .ok_or_else(|| format!("unknown function: {}", name))?
                     .clone();
+                // A generic call: infer what each type parameter stands for from the
+                // arguments, then proceed as if the signature had been written that way.
+                // `name` becomes the instantiation's symbol, so everything downstream —
+                // purity, `allocates`, codegen — sees an ordinary function.
+                let mut instantiated: Option<String> = None;
+                if let Some(type_params) = self.generics.get(name).cloned() {
+                    if args.len() != param_tys.len() {
+                        return Err(format!(
+                            "function `{}` takes {} argument(s), but {} were given",
+                            name,
+                            param_tys.len(),
+                            args.len()
+                        ));
+                    }
+                    let mut map: HashMap<String, Type> = HashMap::new();
+                    for (i, (declared, arg)) in param_tys.iter().zip(args).enumerate() {
+                        if !mentions_param(declared) {
+                            continue;
+                        }
+                        let actual = self.check_expr(arg, None)?.ty;
+                        unify(declared, &actual, &mut map).map_err(|why| {
+                            self.blame(arg.span);
+                            format!("in the call to `{}`, argument {}: {}", name, i + 1, why)
+                        })?;
+                    }
+                    let mut type_args = Vec::with_capacity(type_params.len());
+                    for p in &type_params {
+                        match map.get(p) {
+                            Some(t) => type_args.push(t.clone()),
+                            None => {
+                                return Err(format!(
+                                    "`{}` cannot tell what `{}` is from this call: no \
+                                     argument mentions it. A type parameter that appears \
+                                     only in the return type cannot be inferred.",
+                                    name, p
+                                ))
+                            }
+                        }
+                    }
+                    param_tys = param_tys.iter().map(|t| substitute(t, &map)).collect();
+                    ret = substitute(&ret, &map);
+                    // If a type argument is still a parameter, this call is inside a
+                    // generic being checked generically. There is nothing to emit yet:
+                    // the copy appears when the ENCLOSING generic is instantiated, and
+                    // its body then names a concrete type here.
+                    if !type_args.iter().any(mentions_param) {
+                        instantiated = Some(self.want(name, &type_args));
+                    }
+                }
+                let name = &instantiated.clone().unwrap_or_else(|| name.clone());
                 if args.len() != param_tys.len() {
                     return Err(format!(
                         "function `{}` takes {} argument(s), but {} were given",
@@ -4053,4 +4198,149 @@ fn normalize_decimal(unscaled: i64, from_scale: u32, to_scale: u32) -> Result<i6
             Err(lose())
         }
     }
+}
+
+// ---- generics: substitution, unification, and the name of an instantiation -----
+//
+// Monomorphisation, per spec/M7-GENERICS.md Decision 1: each `(generic, type arguments)`
+// pair becomes its own function at compile time, so a `T` in memory is whatever the
+// caller's type is rather than a pointer to it. Erasure would put a pointer where the
+// value was and quietly undo everything else this language promises about what a value
+// IS.
+
+/// A type with every parameter replaced. Recursive, because a parameter can be nested:
+/// `[T]`, `[T; 3]`, and eventually `List<T>`.
+pub fn substitute(ty: &Type, map: &HashMap<String, Type>) -> Type {
+    match ty {
+        Type::Param(name) => map.get(name).cloned().unwrap_or_else(|| ty.clone()),
+        Type::Array { elem, len } => Type::Array {
+            elem: Box::new(substitute(elem, map)),
+            len: *len,
+        },
+        Type::Slice(elem) => Type::Slice(Box::new(substitute(elem, map))),
+        other => other.clone(),
+    }
+}
+
+/// Does this type mention a parameter at all? The cheap test that keeps every
+/// non-generic call on exactly the path it was on before generics existed.
+pub fn mentions_param(ty: &Type) -> bool {
+    match ty {
+        Type::Param(_) => true,
+        Type::Array { elem, .. } | Type::Slice(elem) => mentions_param(elem),
+        _ => false,
+    }
+}
+
+/// Match a declared parameter type against an argument's actual type, binding type
+/// parameters as it goes. This is the whole of Burxt's inference for type arguments:
+/// structural, one direction, no unification variables and no backtracking — which is
+/// why `largest(xs)` needs no turbofish and why the rule fits in one function.
+fn unify(declared: &Type, actual: &Type, map: &mut HashMap<String, Type>) -> Result<(), String> {
+    match (declared, actual) {
+        (Type::Param(name), concrete) => {
+            if let Some(already) = map.get(name) {
+                if already != concrete {
+                    return Err(format!(
+                        "`{}` would have to be both {} and {} in this call — a type \
+                         parameter stands for one type per call",
+                        name, already, concrete
+                    ));
+                }
+                return Ok(());
+            }
+            // `concrete` may itself be a parameter — that is a generic calling a
+            // generic, where `T` stands for the OUTER function's `T`. Binding it is
+            // right; what must not happen is emitting a copy for it, and the caller
+            // below decides that.
+            map.insert(name.clone(), concrete.clone());
+            Ok(())
+        }
+        (Type::Array { elem: d, len: dl }, Type::Array { elem: a, len: al }) if dl == al => {
+            unify(d, a, map)
+        }
+        (Type::Slice(d), Type::Slice(a)) => unify(d, a, map),
+        (d, a) if d == a => Ok(()),
+        (d, a) => Err(format!("expected {}, but this is {}", d, a)),
+    }
+}
+
+/// The symbol one instantiation gets: `identity$Int`, `largest$Decimal_2`. `$` and `_`
+/// are both legal in an LLVM symbol and neither can appear in a Burxt identifier, so a
+/// mangled name can never collide with a name the program wrote.
+pub fn mangle(name: &str, args: &[Type]) -> String {
+    let mut out = String::from(name);
+    for a in args {
+        out.push('$');
+        for c in a.to_string().chars() {
+            match c {
+                'a'..='z' | 'A'..='Z' | '0'..='9' => out.push(c),
+                _ => out.push('_'),
+            }
+        }
+    }
+    out
+}
+
+/// One instantiation of a generic, as an ordinary function: every type parameter replaced
+/// by the caller's type, the parameter list emptied, and the mangled symbol as its name.
+///
+/// Substituting in the AST rather than threading a map through the checker is deliberate.
+/// It means an instantiation is checked by exactly the code that checks every other
+/// function — no second path that can disagree with the first, and no rule that has to
+/// remember it might be looking at a parameter.
+fn specialise(f: &FnDef, map: &HashMap<String, Type>, symbol: &str) -> FnDef {
+    let mut out = f.clone();
+    out.name = symbol.to_string();
+    out.type_params.clear();
+    for p in &mut out.params {
+        p.ty = substitute(&p.ty, map);
+    }
+    out.ret = substitute(&out.ret, map);
+    substitute_in_block(&mut out.body, map);
+    out
+}
+
+/// A declared type can appear inside a body too — `let best: T = xs[0];` — so the walk
+/// has to reach every block a statement can hold.
+fn substitute_in_block(stmts: &mut [Stmt], map: &HashMap<String, Type>) {
+    for s in stmts {
+        match &mut s.kind {
+            StmtKind::Let { declared, .. } => {
+                if let Some(t) = declared {
+                    *t = substitute(t, map);
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::Region { body, .. }
+            | StmtKind::For { body, .. } => substitute_in_block(body, map),
+            StmtKind::If { then_block, else_block, .. } => {
+                substitute_in_block(then_block, map);
+                if let Some(b) = else_block {
+                    substitute_in_block(b, map);
+                }
+            }
+            StmtKind::Match { arms, .. } => {
+                for a in arms {
+                    substitute_in_block(&mut a.body, map);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// What an unbounded type parameter cannot do, said the same way everywhere.
+///
+/// Per spec/M7-GENERICS.md Decision 2: a parameter with no bound can be stored, copied,
+/// passed and returned, and nothing else. Anything more needs the signature to say so,
+/// because a generic whose constraints are whatever its body happens to do is a generic
+/// whose signature is a lie — adding a `>` inside it would silently narrow every caller.
+fn unbounded(param: &str, what: &str) -> String {
+    format!(
+        "`{}` is a type parameter with no bound, so a value of it can be stored, copied, \
+         passed and returned — not {}, which needs to know what the value IS. Say so in \
+         the signature with a bound on `{}`.",
+        param, what, param
+    )
 }

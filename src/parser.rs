@@ -43,6 +43,9 @@ pub struct Parser {
     /// `while count { ... }` must parse `{` as the loop body, not a literal.
     /// Parenthesizing re-enables them.
     allow_struct_lit: bool,
+    /// The type parameters of the generic being parsed, so `parse_type` can tell `T`
+    /// from a struct called `T`. Cleared when the declaration ends.
+    type_params: Vec<String>,
 }
 
 impl Parser {
@@ -61,6 +64,7 @@ impl Parser {
             pos: 0,
             allow_struct_lit: true,
             src: src.to_string(),
+            type_params: Vec::new(),
         }
     }
 
@@ -429,7 +433,16 @@ impl Parser {
         let start = self.span().start;
         self.expect(&Token::Extern)?;
         self.expect(&Token::Fn)?;
-        let (name, params, ret) = self.parse_fn_signature()?;
+        let (name, type_params, params, ret) = self.parse_fn_signature()?;
+        if !type_params.is_empty() {
+            // C has no notion of a type parameter, and a monomorphised C symbol is a
+            // symbol that does not exist. See spec/M7-GENERICS.md §2.
+            return Err(format!(
+                "`extern fn {}` cannot be generic: C has no type parameters, and there \
+                 would be no symbol to link against.",
+                name
+            ));
+        }
         self.expect(&Token::Semicolon)?;
         Ok(ExternFn { name, params, ret, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
@@ -484,7 +497,7 @@ impl Parser {
             self.bump();
         }
         self.expect(&Token::Fn)?;
-        let (name, params, ret) = self.parse_fn_signature()?;
+        let (name, type_params, params, ret) = self.parse_fn_signature()?;
         // `-> T allocates` reads as what it is: returns a T, and allocates.
         let allocates = self.at_word("allocates");
         if allocates {
@@ -492,7 +505,9 @@ impl Parser {
         }
         let (requires, ensures, decreases) = self.parse_contracts()?;
         let body = self.parse_block()?;
-        Ok(FnDef { name, params, ret, allocates, is_pure, requires, ensures, decreases, body, span: Span { start, end: self.prev_end().max(start + 1) } })
+        // The parameters are only in scope for this signature and body.
+        self.type_params.clear();
+        Ok(FnDef { name, type_params, params, ret, allocates, is_pure, requires, ensures, decreases, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `fn (self: Type) name(params) -> ret { body }`, or `fn (mut self: ...)`
@@ -526,7 +541,17 @@ impl Parser {
             }
         };
         self.expect(&Token::RParen)?;
-        let (name, params, ret) = self.parse_fn_signature()?;
+        let (name, type_params, params, ret) = self.parse_fn_signature()?;
+        if !type_params.is_empty() {
+            // A method may use its TYPE's parameters; its own are a later slice, and a
+            // parameter list that silently did nothing would be worse than a refusal.
+            // See spec/M7-GENERICS.md §3.
+            return Err(format!(
+                "`{}` declares its own type parameters, and a method may not yet: it may \
+                 use the parameters of the type it is on. Move it to a free function.",
+                name
+            ));
+        }
         let allocates = self.at_word("allocates");
         if allocates {
             self.bump();
@@ -564,11 +589,57 @@ impl Parser {
         }
     }
 
-    fn parse_fn_signature(&mut self) -> Result<(String, Vec<Param>, Type), String> {
+    /// `<T>` or `<T, U>` after a name, or nothing. Refused: an empty list, a duplicate,
+    /// and a parameter whose name is a declared type's — each of those is a program that
+    /// means two things.
+    fn parse_type_params(&mut self, owner: &str) -> Result<Vec<String>, String> {
+        if !self.at(&Token::Lt) {
+            return Ok(Vec::new());
+        }
+        self.bump();
+        let mut names: Vec<String> = Vec::new();
+        loop {
+            match self.bump() {
+                Token::Ident(s) => {
+                    if names.contains(&s) {
+                        return Err(format!(
+                            "`{}` declares the type parameter `{}` twice",
+                            owner, s
+                        ));
+                    }
+                    names.push(s);
+                }
+                other => {
+                    return Err(format!(
+                        "expected a type parameter name in `{}<...>`, found {}",
+                        owner,
+                        other.describe()
+                    ))
+                }
+            }
+            if self.at(&Token::Comma) {
+                self.bump();
+            } else {
+                break;
+            }
+        }
+        self.expect(&Token::Gt)?;
+        if names.is_empty() {
+            return Err(format!("`{}<>` declares nothing — drop the angle brackets", owner));
+        }
+        Ok(names)
+    }
+
+    fn parse_fn_signature(&mut self) -> Result<(String, Vec<String>, Vec<Param>, Type), String> {
         let name = match self.bump() {
             Token::Ident(s) => s,
             other => return Err(format!("expected a function name after 'fn', found {}", other.describe())),
         };
+        // `fn name<T, U>(...)`. Recorded on the parser so `parse_type` can tell a type
+        // parameter from a struct name — which is the only place that distinction is
+        // visible, since both are spelled as a bare identifier.
+        let type_params = self.parse_type_params(&name)?;
+        self.type_params = type_params.clone();
         self.expect(&Token::LParen)?;
         let mut params = Vec::new();
         if !self.at(&Token::RParen) {
@@ -599,7 +670,7 @@ impl Parser {
         }
         self.bump();
         let ret = self.parse_type()?;
-        Ok((name, params, ret))
+        Ok((name, type_params, params, ret))
     }
 
     fn parse_block(&mut self) -> Result<Vec<Stmt>, String> {
@@ -1081,7 +1152,16 @@ impl Parser {
             }
             // A bare identifier is a struct type; whether it exists is the
             // typechecker's question, so use-before-declaration works.
-            Token::Ident(name) => Ok(Type::Named(name)),
+            // A bare identifier is a struct or enum name — unless the generic being
+            // parsed declared it as a type parameter, which is the only thing that tells
+            // `T` from a struct called `T`.
+            Token::Ident(name) => {
+                if self.type_params.contains(&name) {
+                    Ok(Type::Param(name))
+                } else {
+                    Ok(Type::Named(name))
+                }
+            }
             // `dyn Trait` — the only syntax that asks for dynamic dispatch.
             // If you never write `dyn`, you never pay for a vtable.
             Token::Dyn => match self.bump() {
