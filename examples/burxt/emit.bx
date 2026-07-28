@@ -293,14 +293,18 @@ fn hex_of(value: Int) -> String allocates {
 fn (mut self: Unit) intern_text(text: String) -> String allocates {
     let name: String = "@burxt.k" + to_string(len(self.strings));
     push(self.strings, 0);
+    // Measured once. `len` on a String walks it, so leaving it in the condition makes
+    // interning cost the square of the literal's length — the same shape that made the
+    // lexer quadratic. See at_byte in types.bx.
+    let width: Int = len(text);
     let mut body: String = "";
     let mut i: Int = 0;
-    while i < len(text) {
+    while i < width {
         body += hex_of(byte_at(text, i));
         i += 1;
     }
     self.globals += name + " = private unnamed_addr constant ["
-        + to_string(len(text) + 1) + " x i8] c\"" + body + hex_of(0) + "\"\n";
+        + to_string(width + 1) + " x i8] c\"" + body + hex_of(0) + "\"\n";
     return name;
 }
 

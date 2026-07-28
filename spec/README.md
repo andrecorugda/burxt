@@ -46,6 +46,7 @@ which is right.
 | [M6 Modules](M6-MODULES.md) | **DONE** (v0.0.81–v0.0.82) | `use "path"`, one buffer with a source map, and the compiler split into five files |
 | [M7 Generics](M7-GENERICS.md) | **Specified** | Monomorphisation, trait bounds required, no erasure |
 | [M8 Errors](M8-ERRORS.md) | **Specified** | `Option<T>` and `Result<T, E>` as LIBRARY types — the test of whether M7's generics are real |
+| [M9 Performance](M9-PERFORMANCE.md) | **DONE** (v0.0.87–v0.0.90) | The self-compile: 190 s → 1.17 s, ~1 GB → 196 MB. `byte_at` bounds-checked with a `strlen` per byte |
 
 ## The audit, in detail
 

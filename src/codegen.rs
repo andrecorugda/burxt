@@ -3555,50 +3555,28 @@ impl<'ctx> CodeGen<'ctx> {
         if let Some(f) = self.str_len_fn {
             return Ok(f);
         }
-        let err = |e: inkwell::builder::BuilderError| e.to_string();
-        let saved = self.builder.get_insert_block();
-
         let i64t = self.ctx.i64_type();
-        let i8t = self.ctx.i8_type();
         let ptr = self.ctx.ptr_type(AddressSpace::default());
-        let f = self
-            .module
-            .add_function("burxt.strlen", i64t.fn_type(&[ptr.into()], false), None);
-        let entry = self.ctx.append_basic_block(f, "entry");
-        let loop_bb = self.ctx.append_basic_block(f, "scan");
-        let next_bb = self.ctx.append_basic_block(f, "next");
-        let done_bb = self.ctx.append_basic_block(f, "done");
-
-        let s = f.get_nth_param(0).unwrap().into_pointer_value();
-        self.builder.position_at_end(entry);
-        self.builder.build_unconditional_branch(loop_bb).map_err(err)?;
-
-        self.builder.position_at_end(loop_bb);
-        let i = self.builder.build_phi(i64t, "i").map_err(err)?;
-        i.add_incoming(&[(&i64t.const_zero(), entry)]);
-        let idx = i.as_basic_value().into_int_value();
-        let p = unsafe { self.builder.build_gep(i8t, s, &[idx], "byte_ptr") }.map_err(err)?;
-        let c = self.builder.build_load(i8t, p, "byte").map_err(err)?.into_int_value();
-        let is_nul = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::EQ, c, i8t.const_zero(), "is_nul")
-            .map_err(err)?;
-        self.builder.build_conditional_branch(is_nul, done_bb, next_bb).map_err(err)?;
-
-        self.builder.position_at_end(next_bb);
-        let bumped = self
-            .builder
-            .build_int_add(idx, i64t.const_int(1, false), "i_next")
-            .map_err(err)?;
-        i.add_incoming(&[(&bumped, next_bb)]);
-        self.builder.build_unconditional_branch(loop_bb).map_err(err)?;
-
-        self.builder.position_at_end(done_bb);
-        self.builder.build_return(Some(&idx)).map_err(err)?;
-
-        if let Some(bb) = saved {
-            self.builder.position_at_end(bb);
-        }
+        // libc's `strlen`, called by its real name. The name is load-bearing twice over.
+        //
+        // Until v0.0.90 this was a hand-written byte-at-a-time scan called `burxt.strlen`,
+        // and both halves of that were expensive. LLVM cannot prove such a loop terminates,
+        // so the call was never `willreturn`, so LICM refused to hoist it out of any loop —
+        // and `byte_at` bounds-checks against the length, which made reading a string one
+        // byte at a time cost the SQUARE of its length. That is what a compiler does all
+        // day, and it is why stage-1 took three minutes on its own source.
+        //
+        // Under its real name LLVM recognises it as a library function: it knows it only
+        // reads its argument and always returns, and hoists it out of the loop by itself.
+        // It also links to the vectorised implementation libc ships, which reads a whole
+        // register at a time instead of a byte. Stage-1's emitter already did it this way;
+        // this is stage-0 catching up with the compiler it wrote.
+        let f = match self.module.get_function("strlen") {
+            Some(f) => f,
+            None => self
+                .module
+                .add_function("strlen", i64t.fn_type(&[ptr.into()], false), None),
+        };
         self.str_len_fn = Some(f);
         Ok(f)
     }
@@ -4230,6 +4208,7 @@ impl<'ctx> CodeGen<'ctx> {
 
     /// Emit a native object file using the host target machine.
     pub fn write_object(&self, path: &str) -> Result<(), String> {
+        use inkwell::passes::PassBuilderOptions;
         use inkwell::targets::{
             CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
         };
@@ -4252,6 +4231,25 @@ impl<'ctx> CodeGen<'ctx> {
                 CodeModel::Default,
             )
             .ok_or("failed to create target machine")?;
+
+        // The optimisation level on a TargetMachine governs instruction selection and
+        // scheduling — it does NOT run the mid-level IR pipeline, and `write_to_file`
+        // alone therefore ships whatever this file built, unsimplified. That gap is what
+        // M9 turned out to be about.
+        //
+        // `byte_at(s, i)` bounds-checks against the string's length, and a Burxt String
+        // is NUL-terminated, so the length is a `strlen`. One per byte read is O(n) per
+        // byte and O(n²) per pass over a file, which is exactly what a compiler does all
+        // day: stage-1 took three minutes on its own source, and 133 KB of comments alone
+        // took thirty seconds. Nothing about the Burxt was wrong. `strlen` is `readonly`
+        // and the loop writes nothing it reads, so LICM hoists it out — once there is a
+        // pipeline to run LICM.
+        //
+        // Correctness first: the check stays, and every program still refuses to read a
+        // byte it does not own. It is simply hoisted rather than repeated.
+        self.module
+            .run_passes("default<O2>", &tm, PassBuilderOptions::create())
+            .map_err(|e| e.to_string())?;
 
         tm.write_to_file(&self.module, FileType::Object, std::path::Path::new(path))
             .map_err(|e| e.to_string())

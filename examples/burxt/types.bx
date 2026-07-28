@@ -215,8 +215,17 @@ fn is_space(b: Int) -> Bool {
     return b == 32 || b == 9 || b == 10 || b == 13;
 }
 
-fn at_byte(src: String, i: Int) -> Int {
-    if i < 0 || i >= len(src) {
+// The byte at `i`, or -1 if that is outside the range being lexed. The bound is
+// PASSED rather than measured: `len` on a String is `strlen`, so asking for it here
+// would walk the whole source on every single byte, and the lexer would cost the
+// square of the file's size. It did, for eleven versions — 133 KB of comments took
+// 36 seconds — and nothing about the code looked wrong, because the loop that pays
+// is written the way everyone writes it: `while i < len(src)`.
+//
+// Passing the bound is also the more correct answer. Interpolation lexes a SLICE of
+// the source, and a slice has no business peeking at the bytes after it.
+fn at_byte(src: String, i: Int, stop: Int) -> Int {
+    if i < 0 || i >= stop {
         return -1;
     }
     return byte_at(src, i);
@@ -346,16 +355,20 @@ fn (mut self: Unit) emit_string(start: Int, length: Int, interpolated: Bool) -> 
 }
 
 // ---- whitespace and comments ----------------------------------------------
-fn skip_trivia(src: String, from: Int) -> Int {
+fn skip_trivia(src: String, from: Int, stop: Int) -> Int {
     let mut i: Int = from;
     while true {
         let mut moved: Bool = false;
-        while i < len(src) && is_space(byte_at(src, i)) {
+        while i < stop && is_space(byte_at(src, i)) {
             i += 1;
             moved = true;
         }
-        if at_byte(src, i) == 47 && at_byte(src, i + 1) == 47 {
-            while i < len(src) && byte_at(src, i) != 10 {
+        // Tested against `stop` first, then read directly rather than through `at_byte`,
+        // which would re-derive a bound this function was handed. Worth 5% of the lexer
+        // and no more: `byte_at`'s own check still measures the string, and see
+        // spec/M9-PERFORMANCE.md §3 for why only an O(1) length removes that.
+        if i + 1 < stop && byte_at(src, i) == 47 && byte_at(src, i + 1) == 47 {
+            while i < stop && byte_at(src, i) != 10 {
                 i += 1;
             }
             moved = true;
@@ -370,27 +383,27 @@ fn skip_trivia(src: String, from: Int) -> Int {
 // ---- numbers ---------------------------------------------------------------
 // `19.99` is the unscaled integer 1999 with scale 2 — accumulated digit by digit,
 // never through a float. `$19.99` is the same. `8.25%` is two places finer.
-fn (mut self: Unit) scan_number(src: String, from: Int) -> Int allocates {
+fn (mut self: Unit) scan_number(src: String, from: Int, stop: Int) -> Int allocates {
     let mut i: Int = from;
     let money: Bool = byte_at(src, i) == 36;         // '$'
     if money {
         i += 1;
     }
     let mut value: Int = 0;
-    while i < len(src) && is_digit(byte_at(src, i)) {
+    while i < stop && is_digit(byte_at(src, i)) {
         value = value * 10 + (byte_at(src, i) - 48);
         i += 1;
     }
     let mut scale: Int = 0;
-    if at_byte(src, i) == 46 && is_digit(at_byte(src, i + 1)) {
+    if at_byte(src, i, stop) == 46 && is_digit(at_byte(src, i + 1, stop)) {
         i += 1;
-        while i < len(src) && is_digit(byte_at(src, i)) {
+        while i < stop && is_digit(byte_at(src, i)) {
             value = value * 10 + (byte_at(src, i) - 48);
             scale += 1;
             i += 1;
         }
     }
-    if at_byte(src, i) == 37 {                       // '%'
+    if at_byte(src, i, stop) == 37 {                 // '%'
         i += 1;
         // A percent is the number divided by a hundred: two more places, exactly.
         let n: Int = self.emit_number(3, from, i - from, value, scale + 2);
@@ -405,11 +418,11 @@ fn (mut self: Unit) scan_number(src: String, from: Int) -> Int allocates {
 }
 
 // ---- strings ---------------------------------------------------------------
-fn (mut self: Unit) scan_string(src: String, from: Int) -> Int allocates {
+fn (mut self: Unit) scan_string(src: String, from: Int, stop: Int) -> Int allocates {
     let mut i: Int = from + 1;
     let mut interpolated: Bool = false;
     while true {
-        if i >= len(src) {
+        if i >= stop {
             print("error: unterminated string literal");
             self.errors += 1;
             break;
@@ -437,9 +450,14 @@ fn (mut self: Unit) scan_string(src: String, from: Int) -> Int allocates {
 // ---- punctuation -----------------------------------------------------------
 // Two-character forms are tried first: `-` and `->` differ by one byte and mean
 // entirely different things.
-fn (mut self: Unit) scan_punct(src: String, from: Int) -> Int allocates {
+fn (mut self: Unit) scan_punct(src: String, from: Int, stop: Int) -> Int allocates {
     let one: Int = byte_at(src, from);
-    let two: Int = at_byte(src, from + 1);
+    // Same as skip_trivia: the bound is already known, so it is tested rather than
+    // measured. A punctuation mark is roughly one token in three.
+    let mut two: Int = 0 - 1;
+    if from + 1 < stop {
+        two = byte_at(src, from + 1);
+    }
     if one == 45 && two == 62 { let n: Int = self.emit(10, from, 2); return from + 2; }  // ->
     if one == 61 && two == 62 { let n: Int = self.emit(11, from, 2); return from + 2; }  // =>
     if one == 61 && two == 61 { let n: Int = self.emit(12, from, 2); return from + 2; }  // ==
@@ -496,7 +514,7 @@ fn (mut self: Unit) run(src: String) -> Int allocates {
 fn (mut self: Unit) run_range(src: String, from: Int, until: Int) -> Int allocates {
     let mut i: Int = from;
     while true {
-        i = skip_trivia(src, i);
+        i = skip_trivia(src, i, until);
         if i >= until {
             break;
         }
@@ -510,15 +528,15 @@ fn (mut self: Unit) run_range(src: String, from: Int, until: Int) -> Int allocat
             let n: Int = self.emit(code, start, i - start);
             continue;
         }
-        if is_digit(b) || (b == 36 && is_digit(at_byte(src, i + 1))) {
-            i = self.scan_number(src, i);
+        if is_digit(b) || (b == 36 && is_digit(at_byte(src, i + 1, until))) {
+            i = self.scan_number(src, i, until);
             continue;
         }
         if b == 34 {
-            i = self.scan_string(src, i);
+            i = self.scan_string(src, i, until);
             continue;
         }
-        i = self.scan_punct(src, i);
+        i = self.scan_punct(src, i, until);
     }
     return len(self.toks);
 }

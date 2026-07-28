@@ -19,9 +19,13 @@
 // one and not the other is the disagreement the differential test exists to catch.
 // =============================================================================
 
-fn end_of_line(text: String, from: Int) -> Int {
+// The bound is passed, not measured. `len` on a String is `strlen`, so leaving it in
+// this condition walks the whole file on every byte, and reading a file's header costs
+// the square of the file's size. See at_byte in types.bx — the same shape, found the
+// same way, at the same time.
+fn end_of_line(text: String, from: Int, width: Int) -> Int {
     let mut i: Int = from;
-    while i < len(text) && byte_at(text, i) != 10 {
+    while i < width && byte_at(text, i) != 10 {
         i += 1;
     }
     return i;
@@ -35,12 +39,13 @@ fn first_non_space(text: String, from: Int, stop: Int) -> Int {
     return i;
 }
 
-fn starts_with_at(text: String, at: Int, prefix: String) -> Bool {
-    if at + len(prefix) > len(text) {
+fn starts_with_at(text: String, at: Int, prefix: String, width: Int) -> Bool {
+    let n: Int = len(prefix);
+    if at + n > width {
         return false;
     }
     let mut i: Int = 0;
-    while i < len(prefix) {
+    while i < n {
         if byte_at(text, at + i) != byte_at(prefix, i) {
             return false;
         }
@@ -52,7 +57,7 @@ fn starts_with_at(text: String, at: Int, prefix: String) -> Bool {
 // The quoted path in `use "..."`, or the empty String if this line is not one.
 fn import_on_line(text: String, at: Int, stop: Int) -> String allocates {
     let begin: Int = first_non_space(text, at, stop);
-    if !starts_with_at(text, begin, "use ") {
+    if !starts_with_at(text, begin, "use ", stop) {
         return "";
     }
     let mut i: Int = first_non_space(text, begin + 4, stop);
@@ -93,41 +98,48 @@ fn directory_of(path: String) -> String allocates {
 // Only the HEADER is rewritten. The body is appended in one piece, because building a
 // six-thousand-line file line by line means six thousand copies of a growing String —
 // which is how splitting this compiler into modules first exhausted its own region.
+fn spaces(count: Int) -> String allocates {
+    let mut out: String = "";
+    let mut i: Int = 0;
+    while i < count {
+        out += " ";
+        i += 1;
+    }
+    return out;
+}
+
 fn blank_imports(text: String) -> String allocates {
-    let mut header: String = "";
+    let width: Int = len(text);
+    // Only the `use` lines change, so only they are rebuilt. Everything else travels in
+    // whole spans: `copied` is how far the answer has been filled in, and the gap from
+    // there to the next import goes out in one `substring`.
+    //
+    // The first version walked the header a line at a time and appended each one, which
+    // is one copy of a growing String per line. Since a comment counts as header, every
+    // file in this compiler opens with a banner, and a file of nothing but comments cost
+    // 24 of its 29 seconds here — quadratic in the file's size, for a pass that changes
+    // a handful of lines.
+    let mut out: String = "";
+    let mut copied: Int = 0;
     let mut at: Int = 0;
     let mut in_header: Bool = true;
-    while at < len(text) && in_header {
-        let stop: Int = end_of_line(text, at);
+    while at < width && in_header {
+        let stop: Int = end_of_line(text, at, width);
         let begin: Int = first_non_space(text, at, stop);
-        let mut blank_it: Bool = false;
-        if begin < stop && !starts_with_at(text, begin, "//") {
+        if begin >= stop || starts_with_at(text, begin, "//", stop) {
+            at = stop + 1;                           // blank or comment: kept verbatim
+        } else {
             if len(import_on_line(text, at, stop)) > 0 {
-                blank_it = true;
+                out += substring(text, copied, at - copied);
+                out += spaces(stop - at);            // exactly as wide, so no offset moves
+                copied = stop;
+                at = stop + 1;
             } else {
                 in_header = false;
             }
         }
-        if in_header {
-            if blank_it {
-                let mut i: Int = at;
-                while i < stop {
-                    header += " ";
-                    i += 1;
-                }
-            } else {
-                header += substring(text, at, stop - at);
-            }
-            if stop < len(text) {
-                header += "\n";
-            }
-            at = stop + 1;
-        }
     }
-    if at >= len(text) {
-        return header;
-    }
-    return header + substring(text, at, len(text) - at);
+    return out + substring(text, copied, width - copied);
 }
 
 // Every file a program uses, in dependency order, each one once — which is also what
@@ -148,12 +160,13 @@ fn (mut self: Loader) load(path: String) -> Int allocates {
     let text: String = read_file(path);
     let here: String = directory_of(path);
 
+    let width: Int = len(text);
     let mut at: Int = 0;
     let mut in_header: Bool = true;
-    while at < len(text) && in_header {
-        let stop: Int = end_of_line(text, at);
+    while at < width && in_header {
+        let stop: Int = end_of_line(text, at, width);
         let begin: Int = first_non_space(text, at, stop);
-        if begin >= stop || starts_with_at(text, begin, "//") {
+        if begin >= stop || starts_with_at(text, begin, "//", stop) {
             at = stop + 1;
         } else {
             let named: String = import_on_line(text, at, stop);

@@ -121,7 +121,8 @@ fn (mut self: Unit) complain_at(src: String, tok: Int, message: String) -> Int a
 }
 
 // ---- declarations ------------------------------------------------------------
-fn (self: Unit) find_sym(src: String, start: Int, length: Int) -> Int {
+fn (mut self: Unit) find_sym(src: String, start: Int, length: Int) -> Int {
+    self.n_find_sym += 1;
     // Backwards: the innermost binding with this name is the one in scope.
     let mut i: Int = len(self.syms) - 1;
     while i >= 0 {
@@ -133,7 +134,8 @@ fn (self: Unit) find_sym(src: String, start: Int, length: Int) -> Int {
     return -1;
 }
 
-fn (self: Unit) find_fun(src: String, start: Int, length: Int) -> Int {
+fn (mut self: Unit) find_fun(src: String, start: Int, length: Int) -> Int {
+    self.n_find_fun += 1;
     let mut i: Int = 0;
     while i < len(self.funs) {
         if spans_eq(src, self.funs[i].start, self.funs[i].length, start, length) {
@@ -1318,8 +1320,13 @@ fn (mut self: Unit) check_clauses(src: String, index: Int, signature: Node,
 // appears nowhere, nothing can refer to it, and there is nothing to bind.
 fn find_text(src: String, needle: String) -> Int {
     let n: Int = len(needle);
+    // `len` on a String is strlen, so both bounds are hoisted. Leaving `len(src)` in the
+    // condition walked the whole source on every iteration — O(source²) for one call, on a
+    // two-hundred-kilobyte source. The first of four of this shape; the one that mattered
+    // was not in Burxt at all, and spec/M9-PERFORMANCE.md tells that story.
+    let stop: Int = len(src) - n;
     let mut i: Int = 0;
-    while i + n <= len(src) {
+    while i <= stop {
         let mut k: Int = 0;
         let mut same: Bool = true;
         while k < n {

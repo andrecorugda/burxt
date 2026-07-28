@@ -2094,3 +2094,81 @@ fn the_release_tarball_works_without_rust_or_llvm() {
         printed
     );
 }
+
+/// M9. Reading a file one byte at a time must not cost the square of the file's size.
+///
+/// The fixture is a small program followed by 1.5 MB of comments: the same tokens and the same
+/// nodes either way, so every extra second is spent on bytes that mean nothing. Before v0.0.90
+/// it took **28 seconds**; it takes 1.3 now. The 8-second budget sits between them with room on
+/// both sides, so it flags the regression on a slow machine and flaps on none.
+///
+/// The second number is `spec/M9-PERFORMANCE.md` §6.1 written down: a self-compile inside 20
+/// seconds. It was 190 seconds before the fix and 1.2 after.
+///
+/// What the fix was, since a threshold on its own teaches nobody: `byte_at` bounds-checks
+/// against the string's length, a Burxt String is NUL-terminated, so the length is a `strlen`.
+/// Stage-0 hand-wrote that scan instead of calling libc's, which meant LLVM could not prove it
+/// terminated and so never hoisted it out of a loop — and stage-0 ran no IR pipeline to hoist
+/// with. The check still happens; it is computed once per loop rather than once per byte.
+#[test]
+fn the_compiler_compiles_itself_without_going_quadratic() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("m9");
+    fs::create_dir_all(&scratch).unwrap();
+    let stage1 = scratch.join("stage1");
+    assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("examples/stage1.bx"))
+        .arg("-o")
+        .arg(&stage1)
+        .status()
+        .expect("burxt")
+        .success());
+
+    let program: String = (0..60)
+        .map(|n| {
+            format!(
+                "fn work_{}(a: Int, b: Int) -> Int {{\n    let c: Int = a * b + a - b;\n    \
+                 if c > 100 {{ return c - 1; }}\n    return c + 1;\n}}\n",
+                n
+            )
+        })
+        .collect();
+    let filler: String = std::iter::repeat(format!("// {}\n", "x".repeat(80)))
+        .take(18_000)
+        .collect();
+    let padded = scratch.join("padded.bx");
+    fs::write(&padded, format!("{}{}", program, filler)).unwrap();
+
+    let started = std::time::Instant::now();
+    let ran = Command::new(&stage1).arg(&padded).output().expect("stage1");
+    let on_comments = started.elapsed();
+    assert!(
+        String::from_utf8_lossy(&ran.stdout).contains("type errors: 0"),
+        "stage-1 did not accept the padded program:\n{}",
+        String::from_utf8_lossy(&ran.stdout)
+    );
+    assert!(
+        on_comments < std::time::Duration::from_secs(8),
+        "1.5 MB of comments took {:?}; the budget is 8 s (28 s before v0.0.90, 1.3 s after). \
+         Reading bytes has gone quadratic again — see spec/M9-PERFORMANCE.md",
+        on_comments
+    );
+
+    let started = std::time::Instant::now();
+    let emitted = Command::new(&stage1)
+        .arg(root.join("examples/stage1.bx"))
+        .arg(scratch.join("self.ll"))
+        .output()
+        .expect("stage1 on its own source");
+    let self_compile = started.elapsed();
+    let said = String::from_utf8_lossy(&emitted.stdout).to_string();
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(said.contains("bytes of IR"), "stage-1 did not emit its own source:\n{}", said);
+    assert!(
+        self_compile < std::time::Duration::from_secs(20),
+        "the compiler took {:?} on its own source; the budget is 20 s (190 s before v0.0.90, \
+         1.2 s after)",
+        self_compile
+    );
+}

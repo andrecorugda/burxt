@@ -73,8 +73,10 @@ region compile {
         print("  type errors: " + to_string(problems));
         // M9: what the checker actually did, per run. A number beside a phase is the only
         // thing that turns "the checker is slow" into a place to look.
-        print("  work: type_of called " + to_string(unit.n_type_of) + " times for "
-              + to_string(len(unit.nodes)) + " nodes");
+        print("  work: " + to_string(len(unit.nodes)) + " nodes, type_of "
+              + to_string(unit.n_type_of) + ", find_sym " + to_string(unit.n_find_sym)
+              + " over " + to_string(len(unit.syms)) + " syms, find_fun "
+              + to_string(unit.n_find_fun) + " over " + to_string(len(unit.funs)) + " funs");
 
         // ---- phase 5: emit LLVM IR, when a second argument says where ----
         if problems == 0 && arg_count() > 2 {
