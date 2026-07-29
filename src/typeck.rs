@@ -4627,6 +4627,41 @@ impl TypeChecker {
                         }
                         typed_args.push(typed);
                     }
+                    // A method reached through a trait object allocates if ANY
+                    // implementation of it does. The call site cannot know which one runs —
+                    // that is what `dynamic` means — so the conservative answer is the only
+                    // sound one, and it costs a region the program was going to need anyway.
+                    //
+                    // This check was MISSING, not merely weak: the branch returns before the
+                    // `alloc_methods` test further down, so `allocates` was enforced for a
+                    // direct call and silently skipped through a trait object. It corrupted
+                    // nothing in the reproduction only because a region happened to be open
+                    // further up the stack. spec/M14-IMPLICIT-REGIONS.md §5.
+                    //
+                    // The design §5 first proposed — `allocates` on trait signatures — is not
+                    // needed and would have been worse: one fact in two places, with the
+                    // trait declaring it and every impl having to agree. That is the failure
+                    // spec/A7.0-NAMING.md exists to prevent. Read off the impls instead, now
+                    // that they are inferred, and no syntax is involved at all.
+                    //
+                    // `leaks` is computed BEFORE asking `has_region`, and the order is
+                    // load-bearing: under probing `has_region` RECORDS that something here
+                    // wanted a region, so asking it first would record on every such call and
+                    // mark half the program as allocating.
+                    let leaks = self.impls.iter().any(|(implemented, concrete)| {
+                        *implemented == trait_name
+                            && self.alloc_methods.contains(&(concrete.clone(), method.clone()))
+                    });
+                    if leaks && !self.has_region() {
+                        return Err(format!(
+                            "`dynamic {}.{}` builds its result in the caller's region — some \
+                             implementation of it allocates, and a call through a trait \
+                             object cannot know which one runs. There is no region open \
+                             here: wrap the call in `region name {{ ... }}`, or declare the \
+                             enclosing function `allocates` too.",
+                            trait_name, method
+                        ));
+                    }
                     return Ok(TypedExpr {
                         ty: signature.ret.clone(),
                         kind: TypedExprKind::DynCall {
@@ -4684,6 +4719,23 @@ impl TypeChecker {
                             ));
                         }
                         typed_args.push(t);
+                    }
+                    // The same rule for a value of a type parameter, asked of the BOUND:
+                    // `largest<T: Priced>` calls `T`'s methods through the trait exactly as a
+                    // trait object does, and any implementation may allocate. `trait_name`
+                    // here is the bound, never `p` — `p` is the parameter's own name.
+                    let leaks = self.impls.iter().any(|(implemented, concrete)| {
+                        *implemented == trait_name
+                            && self.alloc_methods.contains(&(concrete.clone(), method.clone()))
+                    });
+                    if leaks && !self.has_region() {
+                        return Err(format!(
+                            "`{}.{}` builds its result in the caller's region — `{}: {}` is \
+                             satisfied by an implementation that allocates. There is no \
+                             region open here: wrap the call in `region name {{ ... }}`, or \
+                             declare the enclosing function `allocates` too.",
+                            p, method, p, trait_name
+                        ));
                     }
                     return Ok(TypedExpr {
                         ty: signature.ret.clone(),

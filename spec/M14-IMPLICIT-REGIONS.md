@@ -46,9 +46,8 @@
 >   directory's contract is that both compilers accept everything in it, and an exemption list on
 >   the 109-of-109 equality would be worse than a separate directory — a floor with holes cannot
 >   see a regression.
-> - **§5's hole is still open.** A trait signature still cannot declare `allocates`, so the region
->   check is skipped through a trait object. Slice 2 closes it by construction; if slice 2 slips
->   again, fix it on its own.
+> - ~~**§5's hole is still open.**~~ **CLOSED in v0.0.143**, and without the syntax §5 proposed —
+>   see the note added to §5 below. `tests/fail/allocates_through_a_trait_object_needs_a_region.bx`.
 > - Slices 2 and 3: implicit block regions, `allocates nothing`, `burxt explain memory`.
 
 ## 0. Where this came from
@@ -176,8 +175,31 @@ Nothing was corrupted in the reproduction only because a region happened to be o
 stack. The check did not fire. M14 removes the hole by removing the declaration: nothing is declared,
 so nothing can fail to be.
 
-**If M14 is deferred, this must be fixed on its own** — `allocates` on trait signatures, checked at
-`dynamic` call sites. It is a gap in a memory guarantee and it should not wait on a redesign.
+### Closed in v0.0.143 — and the fix proposed here was the wrong one
+
+Fixed, but **not** by putting `allocates` on trait signatures as this section originally proposed.
+That design was worse and slice 1 is what made it unnecessary.
+
+`allocates` on a trait signature is **one fact in two places**: the trait would declare it and every
+implementation would have to agree, with nothing but a check keeping them in step. That is precisely
+the failure `spec/A7.0-NAMING.md` exists to prevent, and it would have added a keyword to a position
+where the language currently has none.
+
+Now that `alloc_methods` is INFERRED, the answer can simply be read off the implementations:
+
+> A method reached through a trait object allocates if **any** implementation of it does.
+
+Conservative because it must be — a call through `dynamic T` cannot know which implementation runs
+— and it costs a region the program was going to need anyway. **No syntax at all**, and nothing for
+a programmer to keep in step.
+
+The same rule now covers a value of a type PARAMETER, asked of its bound: `show<T: Describable>`
+calls `T`'s methods through the trait exactly as a trait object does.
+
+One implementation detail worth recording, because getting it backwards silently ruins the
+inference: `leaks` is computed **before** asking `has_region`. Under probing `has_region` *records*
+that something wanted a region, so asking it first would record on every such call and mark half the
+program as allocating.
 
 ## 6. The annotation inverts, and becomes opt-in
 
