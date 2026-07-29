@@ -1,0 +1,13 @@
+// A record payload is fine since v0.0.118. Another ENUM is not, and the reason is not layout: an
+// enum inside an enum has no finite size without indirection, because the inner one's payload area
+// would have to be big enough for the outer one. That is a memory-model question.
+//
+// The self-reference case (`E` inside `E`) has its own message; this is `E` inside `F`.
+record Point { x: Int, y: Int }
+enum Inner { Nothing, Dot(Point) }
+enum Outer { Empty, Held(Inner) }
+
+region r {
+    let o: Outer = Outer.Empty;
+    print(1);
+}

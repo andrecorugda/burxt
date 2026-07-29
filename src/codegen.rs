@@ -192,20 +192,33 @@ impl<'ctx> CodeGen<'ctx> {
         let printf_ty = i32t.fn_type(&[i8ptr.into()], true);
         self.printf = Some(self.module.add_function("printf", printf_ty, None));
 
-        // Enums are a tag plus an inline payload area: `{ i64, [N x i64] }`,
-        // where N is the largest payload slot count. Every payload field is 8
-        // bytes (payloads are scalars), so slots need no size computation.
+        // Enums are a tag plus an inline payload area: `{ i64, [N x i64] }`, where N is the
+        // widest variant measured in CELLS.
+        //
+        // It used to be the payload COUNT, on the stated assumption that every payload is 8 bytes
+        // because payloads are scalars. Once a record could be a payload that assumption became a
+        // bug with a precise shape: `Line(Point, Point)` gave each Point one cell, so the second
+        // overlapped the first's second field and the area was half the size it needed.
+        //
+        // Two passes, because a payload may be a record or another enum whose own width has to be
+        // known first — `payload_cells` reads `struct_fields` and `enum_types`, so every shell must
+        // exist before any body is sized.
+        for en in &prog.enums {
+            let st = self.ctx.opaque_struct_type(&format!("bx.enum.{}", en.name));
+            self.enum_types.insert(en.name.clone(), (st, en.variants.clone()));
+        }
+        for s in &prog.structs {
+            self.struct_fields.insert(s.name.clone(), s.fields.clone());
+        }
         for en in &prog.enums {
             let i64t = self.ctx.i64_type();
-            let slots = en.variants.iter().map(|p| p.len()).max().unwrap_or(0) as u32;
-            let st = self.ctx.opaque_struct_type(&format!("bx.enum.{}", en.name));
+            let slots = self.payload_area(&en.variants);
+            let st = self.enum_types[en.name.as_str()].0;
             if slots == 0 {
                 st.set_body(&[i64t.into()], false);
             } else {
                 st.set_body(&[i64t.into(), i64t.array_type(slots).into()], false);
             }
-            self.enum_types
-                .insert(en.name.clone(), (st, en.variants.clone()));
         }
 
         // Create all struct types: opaque shells first so nested references
@@ -635,8 +648,7 @@ impl<'ctx> CodeGen<'ctx> {
                     }
                 };
                 let (st, variants) = self.enum_types[enum_name.as_str()].clone();
-                let slots =
-                    variants.iter().map(|p| p.len()).max().unwrap_or(0) as u32;
+                let slots = self.payload_area(&variants);
 
                 // The value needs an address so payload slots can be read out.
                 let slot = self.gen_aggregate_addr(value)?;
@@ -683,18 +695,23 @@ impl<'ctx> CodeGen<'ctx> {
                             .build_struct_gep(st, slot, 1, "payload_ptr")
                             .map_err(err)?;
                         let arr_ty = i64t.array_type(slots);
+                        // The SAME offsets construction used, which is why they come from one
+                        // function: a variant that stored its payloads at cell offsets and read
+                        // them back at indices would be a silent misread, not a crash.
+                        let (offsets, _) = self.payload_offsets(&variants[arm.tag as usize]);
                         for (i, (name, ty)) in arm.bindings.iter().enumerate() {
                             let p = unsafe {
                                 self.builder.build_in_bounds_gep(
                                     arr_ty,
                                     payload_ptr,
-                                    &[i64t.const_zero(), i64t.const_int(i as u64, false)],
+                                    &[i64t.const_zero(),
+                                      i64t.const_int(offsets[i] as u64, false)],
                                     "slot",
                                 )
                             }
                             .map_err(err)?;
-                            // The slot is 8 bytes; load it at the binding's own
-                            // type so a String comes back as a pointer.
+                            // Loaded at the binding's own type, so a String comes back as a
+                            // pointer and a record comes back as a whole record.
                             let v = self
                                 .builder
                                 .build_load(self.llvm_type(ty), p, name)
@@ -1178,6 +1195,57 @@ impl<'ctx> CodeGen<'ctx> {
 
     /// The LLVM type for a Burxt type. All scalars are i64; String is an
     /// opaque pointer — the TARGET decides pointer width, never this code.
+    /// How many 8-byte cells a value of this type occupies in an enum's payload area.
+    ///
+    /// Only enums need this. Everywhere else stage-0 uses real LLVM types and lets LLVM do the
+    /// arithmetic; a variant payload is the one place where values of different types share one
+    /// area and their positions have to be computed by hand.
+    ///
+    /// Kept deliberately parallel to `llvm_type`: every arm here answers for the type that arm
+    /// builds. A `Slice` is stage-0's three-field {ptr, len, cap} struct, which is three cells and
+    /// NOT the one cell stage-1 uses — the two compilers agree on behaviour, never on ABI.
+    fn payload_cells(&self, ty: &Type) -> u32 {
+        match ty {
+            Type::Int | Type::Bool | Type::Decimal { .. } | Type::String => 1,
+            Type::CInt | Type::CDouble => 1,
+            Type::Param(_) | Type::Generic { .. } => 1,
+            Type::Slice(_) => 3,
+            Type::Array { elem, len } => self.payload_cells(elem) * (*len as u32),
+            Type::Dyn(_) => 2,
+            Type::Named(name) => {
+                if let Some(fields) = self.struct_fields.get(name) {
+                    return fields.iter().map(|t| self.payload_cells(t)).sum();
+                }
+                if let Some((_, variants)) = self.enum_types.get(name) {
+                    let widest = variants
+                        .iter()
+                        .map(|p| p.iter().map(|t| self.payload_cells(t)).sum::<u32>())
+                        .max()
+                        .unwrap_or(0);
+                    return 1 + widest;
+                }
+                1
+            }
+            _ => 1,
+        }
+    }
+
+    /// The cell offset of each payload within a variant, and the total the variant needs.
+    fn payload_offsets(&self, payload: &[Type]) -> (Vec<u32>, u32) {
+        let mut offsets = Vec::with_capacity(payload.len());
+        let mut at = 0;
+        for t in payload {
+            offsets.push(at);
+            at += self.payload_cells(t);
+        }
+        (offsets, at)
+    }
+
+    /// The payload area's width in cells: the widest variant.
+    fn payload_area(&self, variants: &[Vec<Type>]) -> u32 {
+        variants.iter().map(|p| self.payload_offsets(p).1).max().unwrap_or(0)
+    }
+
     fn llvm_type(&self, ty: &Type) -> BasicTypeEnum<'ctx> {
         match ty {
             // Every type parameter is substituted before codegen runs — one copy of the
@@ -1954,17 +2022,15 @@ impl<'ctx> CodeGen<'ctx> {
                         .builder
                         .build_struct_gep(st, slot, 1, "payload_ptr")
                         .map_err(|e| e.to_string())?;
-                    let arr_ty = i64t.array_type(
-                        self.enum_types[enum_name.as_str()]
-                            .1
-                            .iter()
-                            .map(|p| p.len())
-                            .max()
-                            .unwrap_or(0) as u32,
-                    );
+                    let variants = self.enum_types[enum_name.as_str()].1.clone();
+                    let arr_ty = i64t.array_type(self.payload_area(&variants));
+                    // Cell offsets, so a payload wider than one cell does not overlap the next.
+                    // `store` places a whole LLVM aggregate as happily as an i64, so a record
+                    // payload needs no memcpy here — only the right address.
+                    let (offsets, _) = self.payload_offsets(&variants[*tag as usize]);
                     for (i, a) in args.iter().enumerate() {
                         let v = self.gen_expr(a)?;
-                        let idx = i64t.const_int(i as u64, false);
+                        let idx = i64t.const_int(offsets[i] as u64, false);
                         let p = unsafe {
                             self.builder.build_in_bounds_gep(
                                 arr_ty,

@@ -170,11 +170,12 @@ at the call that made the choice, not at the body that needed it.
   it. Add a bound or take a `String`.
 - **A generic `external function`.** C has no type parameters, so there would be no symbol to
   link against.
-- **An aggregate payload in a generic enum.** `Holder<Point>` is refused today: a variant's
-  payload must be `Int`, `Bool`, `String` or `Decimal`. This is a cut, not a principle — the
-  question it defers is how wide a variant is when the widest one holds a record — and it is
-  checked per *instantiation*, because `Holder<T>`'s payload is neither scalar nor aggregate
-  until an argument says.
+- **An ENUM as a generic enum's payload.** `Holder<Inner>` where `Inner` is itself an enum is
+  refused: an enum inside an enum has no finite size without indirection, because the inner one's
+  payload area would have to be big enough for the outer one. That is a memory question, not a
+  layout one. A **record** payload — `Holder<Point>` — works, and it is checked per
+  *instantiation*, because `Holder<T>`'s payload is neither one thing nor the other until an
+  argument says.
 - **Type arguments on a plain type**, and the wrong number of them. Both say so by name.
 
 ## Under the hood, and why you might care

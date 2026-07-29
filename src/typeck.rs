@@ -863,12 +863,18 @@ impl TypeChecker {
                                 | Type::Bool
                                 | Type::String
                                 | Type::Decimal { .. } => {}
+                                // A record or an array payload is allowed since v0.0.118, so
+                                // `Option<Point>` can be made. An ENUM payload still cannot: an
+                                // enum inside an enum has no finite size without indirection, and
+                                // that is a memory-model question rather than a layout one.
+                                Type::Named(n) if !self.is_enum(n) => {}
+                                Type::Array { .. } | Type::Slice(_) => {}
                                 other => {
                                     self.made_enums.borrow_mut().remove(&symbol);
                                     return Err(format!(
                                         "`{}` cannot be made: `{}.{}` would carry {} {}, \
-                                         and a variant payload must be Int, Bool, String \
-                                         or Decimal for now.",
+                                         which has no layout here. A variant carries a \
+                                         scalar, a String, a record or an array.",
                                         Type::Generic {
                                             name: name.clone(),
                                             args: args.clone()
@@ -1463,10 +1469,17 @@ impl TypeChecker {
                                 n
                             ))
                         }
+                        // A RECORD or an ARRAY payload is allowed since v0.0.118. The question
+                        // this rule deferred was "how wide is a variant when the widest one holds a
+                        // record", and that is the same question `cells_of` already answers for a
+                        // record: a layout is a count of cells, and an enum is one tag cell plus the
+                        // widest payload. Nothing recursive is involved, which is why the enum case
+                        // above is still refused and this one no longer is.
+                        Type::Named(_) | Type::Array { .. } | Type::Slice(_) => {}
                         other => {
                             return Err(format!(
-                                "`{}.{}` payload {} is {} {} — variant payloads must \
-                                 be Int, Bool, String or Decimal for now.",
+                                "`{}.{}` payload {} is {} {}, which has no layout here. A \
+                                 variant carries a scalar, a String, a record or an array.",
                                 e.name,
                                 v.name,
                                 i + 1,

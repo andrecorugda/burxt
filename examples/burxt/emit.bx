@@ -1637,6 +1637,12 @@ function (mutable self: Unit) bind_payload(src: String, holder: Type, arm: Node,
         return 0;
     }
     let item: Node = self.nodes[self.types[found].node];
+    // The holder's type ARGUMENTS, in scope for the whole walk. A generic variant's payload is
+    // written `T`, and without the binding it resolved to `T`: not an aggregate, so a `Point`
+    // payload was loaded as if its first cell were an address. That segfaults rather than printing
+    // something wrong, which is the better failure — and it is the same omission the field rule and
+    // `cells_of` each had to learn.
+    let restore: Int = self.bind_from_application(src, holder);
     let wanted: Token = self.tokens[arm.token];
     let mutable v: Int = 0;
     while v < item.b {
@@ -1669,10 +1675,12 @@ function (mutable self: Unit) bind_payload(src: String, holder: Type, arm: Node,
                 cell += width;
                 p += 1;
             }
+            let dropped: Int = truncate(self.type_bindings, restore);
             return 1;
         }
         v += 1;
     }
+    let dropped: Int = truncate(self.type_bindings, restore);
     return 0;
 }
 

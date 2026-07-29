@@ -14,6 +14,8 @@
 // See spec/M11-MAPS.md Decision 1.
 // ============================================================================
 
+use "option.bx";
+
 // One key and its value. `live` is false for a tombstone: a removed entry keeps its place in the
 // entry array so that everything after it keeps its insertion position, which is the whole point.
 record MapEntry<K: Equatable, V> { key: K, value: V, live: Bool }
@@ -215,6 +217,35 @@ function (self: Map<K, V>) get(key: K, fallback: V) -> V {
         return fallback;
     }
     return entry.value;
+}
+
+// The value if it is there, as an `Option<V>`.
+//
+// This could not be written until v0.0.118, and the reason was recorded rather than guessed at: a
+// variant payload had to be a scalar, so `Option<Point>` was refused, so an `Option<V>` return would
+// have restricted map VALUES to scalars — a worse limitation than the one it removed. Lifting the
+// payload rule was the trigger spec/M11-MAPS.md Decision 5 named, and this is what it unblocked.
+//
+// `get` stays, and is still the right call when a default is genuinely right. `find` is for when it
+// is not, and it answers with the one type in this language that cannot be read without saying what
+// happens when there is nothing there.
+function (self: Map<K, V>) find(key: K) -> Option<V> allocates {
+    if len(self.slots) == 0 {
+        return Option.None;
+    }
+    let at: Int = self.probe(key);
+    if at < 0 {
+        return Option.None;
+    }
+    let holds: Int = self.slots[at];
+    if holds == 0 {
+        return Option.None;
+    }
+    let entry: MapEntry<K, V> = self.entries[holds - 1];
+    if !entry.live {
+        return Option.None;
+    }
+    return Option.Some(entry.value);
 }
 
 function (self: Map<K, V>) count() -> Int {

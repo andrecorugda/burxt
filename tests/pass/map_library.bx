@@ -57,6 +57,18 @@ region r {
     let here: Point = places.get("origin", Point { x: 0, y: 0 });
     print(here.x + here.y);
 
+    // `find` answers an Option, which needed the variant-payload rule lifted in v0.0.118 — and a
+    // record VALUE is exactly the case it unblocked. `get` with a fallback stays for when a default
+    // is right; `find` is for when it is not.
+    match places.find("origin") {
+        None => { print("absent"); }
+        Some(q) => { print(q.x * 10 + q.y); }
+    }
+    match places.find("nowhere") {
+        None => { print("absent"); }
+        Some(q) => { print(q.x); }
+    }
+
     // Insertion order, after a removal.
     let names: [String] = m.keys();
     for k in names {

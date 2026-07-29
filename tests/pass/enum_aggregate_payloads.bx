@@ -1,0 +1,78 @@
+// A variant may carry a RECORD since v0.0.118. The rule it replaces said an aggregate payload
+// "needs a layout rule that is not written" — and the layout rule turned out to be written already:
+// an enum is one tag cell plus the widest variant, and a variant is the sum of its payloads' cells.
+// Stage-1's `cells_of` had computed exactly that for a long time. Stage-0 had not, and the shape of
+// its bug is what this fixture is really about:
+//
+//   `Line(Point, Point)` gave each payload ONE cell, because the payload area was sized by the
+//   payload COUNT on the stated assumption that every payload is 8 bytes. So the second Point
+//   overlapped the first's second field, and the area was half the size it needed. It printed a
+//   wrong number rather than crashing, which is why this fixture reads every field back out.
+//
+// An enum inside an enum is still refused — see tests/fail/enum_cannot_carry_an_enum.bx — and that
+// is a memory question, not a layout one.
+
+record Point { x: Int, y: Int }
+record Span { from: Point, to: Point }
+
+enum Shape { Nothing, Dot(Point), Line(Point, Point), Tagged(Int, Point) }
+enum Option<T> { None, Some(T) }
+enum Twice<T> { Empty, Both(T, T) }
+
+region r {
+    let d: Shape = Shape.Dot(Point { x: 3, y: 4 });
+    match d {
+        Nothing => { print(0); }
+        Dot(p) => { print(p.x + p.y); }
+        Line(a, b) => { print(0 - 1); }
+        Tagged(n, p) => { print(0 - 2); }
+    }
+
+    // Two record payloads in one variant: the case that overlapped.
+    let l: Shape = Shape.Line(Point { x: 1, y: 2 }, Point { x: 10, y: 20 });
+    match l {
+        Nothing => { print(0); }
+        Dot(p) => { print(0 - 1); }
+        Line(a, b) => { print(a.x + a.y + b.x + b.y); }
+        Tagged(n, p) => { print(0 - 2); }
+    }
+
+    // A scalar BEFORE an aggregate, so the aggregate's offset is not zero.
+    let t: Shape = Shape.Tagged(7, Point { x: 100, y: 200 });
+    match t {
+        Nothing => { print(0); }
+        Dot(p) => { print(0 - 1); }
+        Line(a, b) => { print(0 - 2); }
+        Tagged(n, p) => { print(n + p.x + p.y); }
+    }
+
+    // A record whose fields are records, so the payload is four cells deep.
+    let nested: Shape = Shape.Dot(Point { x: 5, y: 6 });
+    let s: Span = Span { from: Point { x: 1, y: 1 }, to: Point { x: 2, y: 3 } };
+    print(s.from.x + s.to.y);
+
+    // The generic forms, which is what this was wanted for: `Option<Point>` is the thing a reader
+    // tries first, and it used to be refused by name.
+    let o: Option<Point> = Option.Some(Point { x: 3, y: 4 });
+    match o {
+        None => { print(0); }
+        Some(v) => { print(v.x + v.y); }
+    }
+    let none: Option<Point> = Option.None;
+    match none {
+        None => { print(0 - 9); }
+        Some(v) => { print(v.x); }
+    }
+    let both: Twice<Point> = Twice.Both(Point { x: 1, y: 2 }, Point { x: 10, y: 20 });
+    match both {
+        Empty => { print(0); }
+        Both(a, b) => { print(a.x + b.y); }
+    }
+
+    // And a String payload still behaves, because a String is one cell either way.
+    let named: Option<String> = Option.Some("kept");
+    match named {
+        None => { print("none"); }
+        Some(v) => { print(v); }
+    }
+}

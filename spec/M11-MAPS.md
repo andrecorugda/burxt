@@ -166,8 +166,11 @@ map VALUES to scalars — a worse limitation than the one it removes.
 shape `lib/option.bx` chose (`option_or`, `option_is_some`, and deliberately no `unwrap`), so a
 reader learns one idiom and not two.
 
-**Trigger for `Option<V>`:** lifting the scalar-payload restriction on generic enums. Then `find`
-can be added alongside, and `get` stays for the common case.
+**Trigger for `Option<V>`: FIRED, v0.0.118.** The scalar-payload restriction is lifted, so
+`Option<Point>` can be made, so `find` exists alongside `get` and answers an `Option<V>`. `get`
+stays and is still the right call when a default is genuinely right; `find` is for when it is not.
+This is what naming a trigger is for — the note said what would unblock it, and when that landed
+the work was three lines and a fixture rather than a rediscovery.
 
 ### Decision 6 — no `map`, `filter` or `each`
 

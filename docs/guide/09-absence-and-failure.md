@@ -133,9 +133,10 @@ not forgotten.
 something else, write the `match`. Somebody has to decide what the caller's failure *means*, and
 that decision does not belong to an operator.
 
-**A payload must be `Int`, `Bool`, `String` or `Decimal` for now.** `Option<Point>` is refused and
-says so. An aggregate payload reopens the question of how wide a variant is when the widest one
-holds a record.
+**A payload may not be another enum.** `Option<Point>` works — a record payload is fine — but
+`Option<Inner>` where `Inner` is an enum is refused, because an enum inside an enum has no finite
+size without indirection. That is a memory question rather than a layout one, and it is the last
+thing a variant cannot carry.
 
 ## The pattern to take away
 

@@ -1,3 +1,0 @@
-record P { a: Int }
-enum E { V(P) }
-print(1);
