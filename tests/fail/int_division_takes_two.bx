@@ -1,1 +1,1 @@
-print(div_trunc(7));
+print(divide_toward_zero(7));

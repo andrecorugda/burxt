@@ -1,9 +1,9 @@
 // Negative input for `examples/checker.bx`: three legal bindings and three the scale
 // rule refuses. Compiling this directly is supposed to fail.
 let price: Decimal<2> = $19.99;
-let qty: Int = 3;
+let quantity: Int = 3;
 let rate: Decimal<4> = 0.0825;
-let subtotal: Decimal<2> = price * qty;
+let subtotal: Decimal<2> = price * quantity;
 let broken: Decimal<2> = price + rate;
 let tax: Decimal<2> = price * rate;
 let tax_ok: Decimal<2, RoundHalfEven> = price * rate;

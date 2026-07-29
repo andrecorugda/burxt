@@ -288,7 +288,7 @@ field shorthand, `+=`, interpolation, `else if`, and `len` over both strings and
 
 | Missing | Why it stays missing |
 |---|---|
-| `%` for modulo | `%` is the percent literal, and `8.25%` is a headline of this language. `rem`, `div_floor` and `div_trunc` also *name* which convention is meant, which one operator cannot |
+| `%` for modulo | `%` is the percent literal, and `8.25%` is a headline of this language. `remainder`, `divide_floor` and `divide_toward_zero` also *name* which convention is meant, which one operator cannot |
 | Multi-line string literals | A literal spanning lines makes its own indentation part of the data — the one thing that surprises everybody about them. `\n` and `+` cover it |
 | Block comments | See above: one way to write a comment |
 | Default parameter values, named arguments | Real friction, real feature. Not refused on principle — just not built. Earns its place when a signature in this repo wants one |
@@ -436,6 +436,70 @@ each free version turned out to be the method that delegated to it, so both merg
 concept, one function.
 
 445 occurrences across five files, fixpoint intact.
+
+## 2f. The clip audit — four agents searching, one hand fixing (v0.0.104)
+
+Andre asked whether any clipped names had been overlooked, and had four agents sweep disjoint
+areas in parallel while the fixes went through one pair of hands. That division is the right one:
+searching is embarrassingly parallel, and editing the same tree from four directions is not.
+
+**The rule they applied, refined into two parts.** A *clipping* of one word is bad — `ty`, `rem`,
+`arg`, `str`, `fs`. An *initialism read as itself* is not — `OS`, `IR`, `LSP`, `JSON`, `argc`.
+That distinction settles most cases without argument: `os_` stays, `str_` does not.
+
+### Fixed in this version
+
+**Five builtins**, which are language surface a user types:
+
+| Old | New | Why |
+|---|---|---|
+| `rem` | `remainder` | reads as REM sleep, R.E.M., BASIC's comment, the CSS unit |
+| `div_floor` | `divide_floor` | `div` reads as an HTML tag |
+| `div_trunc` | `divide_toward_zero` | `trunc` is not a word, and this says what it *does* — while avoiding `divide_truncate`, since `truncate` already means shortening an array |
+| `arg` | `argument` | not a word; the AST already spelled it out |
+| `arg_count` | `argument_count` | same |
+
+`len` and `push` stay: Python, Go, Rust and JavaScript establish them, and neither can be
+misread.
+
+**88 test fixtures renamed**, because their file names still taught the vocabulary v0.0.98
+removed — `struct_nested.bx`, `fn_money.bx`, `impl_receiver_shorthand.bx`, `dyn_dispatch.bx`,
+`extern_duplicate.bx`, `mut_parameters_are_not_a_thing.bx`. The `old_keyword_*` fixtures keep
+their names: those exist to test the retired spellings.
+
+**`qty` → `quantity`**, 79 occurrences, most of them in `invoice.bx` — the flagship example, and
+the one most likely to be read first.
+
+**Two real defects**, found by an agent while reading rather than by any test: a dead binding in
+`lib/str.bx` (`let trimmed: Int = 0;` — an `Int` named for a String operation, never read), and a
+doc comment that had drifted to `sep` while its parameter said `separator`.
+
+**Two test names** that described the language with words it no longer has.
+
+### The mistake, recorded
+
+The builtin sweep **broke the build** — 54 errors. `\barg\b` with word boundaries matched Rust's
+own `Command::arg(...)` in 129 places. Exactly the class of error `\nfn` was in v0.0.98, and I
+made it again one version after writing that lesson down. A word-boundary rename is only safe
+when the word cannot occur in the *host* language, and `arg` occurs everywhere in Rust.
+
+The three test failures after the revert were all downstream and honest ones: the editor grammar
+listed the old builtin names, and four `panic` fixtures quoted them in expected output. Both are
+the tooling rule from v0.0.99 doing its job.
+
+### Left for a decision
+
+- **`enum`** is now the only clipped keyword, and the standing exception to v0.0.98's own rule —
+  I defended it as universal, which is the same defence I rejected for `struct`. `enumeration` is
+  worse (longer *and* inaccurate: a Burxt enum is a sum type). `choice` would be accurate.
+- **`Err` → `Error`.** Two agents disagreed: one called it the exact failure mode ("err" as a
+  hesitation noise), the other called it ecosystem convention that `?` matches on. It is
+  genuinely both.
+- **`str_` → `string_`, `fs_` → `file_`** in the standard library, including the file names.
+- **The compiler's own internals** — `Tok`, `Kw`, `Sym`, `Fun`, `Impl`, `Node.tok` (207 uses),
+  `w` (185), `spans_eq`, `no_struct`, the `n_*` counters — plus stage-0's `ty` (344) and its AST
+  still spelling `StructDef`/`ImplBlock`/`ExternFn`. Large, mechanical, and best done one name per
+  commit with a full test run between.
 
 ## 3. Deferred, with triggers
 

@@ -40,7 +40,7 @@ function divide(a: Int, b: Int) -> Result<Int, String> {
     if b == 0 {
         return Result.Err("division by zero");
     }
-    return Result.Ok(div_trunc(a, b));
+    return Result.Ok(divide_toward_zero(a, b));
 }
 
 // The value or a fallback — generic over the element, so one definition serves

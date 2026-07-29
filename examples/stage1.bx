@@ -30,8 +30,8 @@ use "burxt/emit.bx";
 region compile {
     // The file to lex: whatever was asked for, or the tour as a default.
     let mutable path: String = "examples/tour.bx";
-    if arg_count() > 1 {
-        path = arg(1);
+    if argument_count() > 1 {
+        path = argument(1);
     }
     // The program AND everything it uses, in one buffer. The same design stage-0 uses, for
     // the same reason: a Span stays a byte range, and only a renderer needs to know which
@@ -79,7 +79,7 @@ region compile {
               + to_string(unit.n_find_fun) + " over " + to_string(len(unit.funs)) + " funs");
 
         // ---- phase 5: emit LLVM IR, when a second argument says where ----
-        if problems == 0 && arg_count() > 2 {
+        if problems == 0 && argument_count() > 2 {
             let emitted: Int = unit.emit_module(src);
             if unit.problems == 0 {
                 let text: String = "; LLVM IR written by the Burxt compiler, in Burxt.\n"
@@ -101,8 +101,8 @@ region compile {
                     + "c\"burxt runtime error: index %lld is outside an array of %lld"
                     + " (at byte %lld)\\0A\\00\"\n"
                     + unit.globals + "\n" + unit.finish();
-                let wrote: Int = write_file(arg(2), text);
-                print("wrote " + arg(2) + ", " + to_string(len(text)) + " bytes of IR");
+                let wrote: Int = write_file(argument(2), text);
+                print("wrote " + argument(2) + ", " + to_string(len(text)) + " bytes of IR");
             } else {
                 print("  backend refusals: " + to_string(unit.problems));
             }

@@ -1,8 +1,8 @@
 // What separates a program from a tool: it can see its own command line and write a
 // file. A compiler needs both — one to know what it was asked to compile, the other
 // to emit anything at all.
-print(arg_count() >= 1);          // 0 is the program's own name
-print(len(arg(0)) > 0);
+print(argument_count() >= 1);          // 0 is the program's own name
+print(len(argument(0)) > 0);
 
 region r {
     let text: String = "; hand-written IR, the shape a Burxt backend will emit\n";

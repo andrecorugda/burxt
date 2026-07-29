@@ -281,8 +281,8 @@ function (self: Unit) find_slot(src: String, start: Int, length: Int) -> Int {
 // own `to_string` answers with digits, not letters.
 function hex_of(value: Int) -> String allocates {
     let digits: String = "0123456789abcdef";
-    return "\\" + substring(digits, div_floor(value, 16), 1)
-                + substring(digits, rem(value, 16), 1);
+    return "\\" + substring(digits, divide_floor(value, 16), 1)
+                + substring(digits, remainder(value, 16), 1);
 }
 
 // A private constant for these bytes, answering the global's name. The bytes are the
@@ -419,7 +419,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
             if settled.scale < n.a {
                 // Narrowing, which the checker allowed only because every digit dropped
                 // is a zero: `42.0` in a Decimal<0> is 42, and the division is exact.
-                value = div_trunc(value, power_of_ten(n.a - settled.scale));
+                value = divide_toward_zero(value, power_of_ten(n.a - settled.scale));
             }
         }
         return to_string(value);
@@ -1229,12 +1229,12 @@ function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String)
                                   + ", i64 " + second + ", i64 " + third + ")\n");
         return reg;
     }
-    if called == "arg_count" {
-        let visited: Int = self.w("  " + reg + " = call i64 @burxt.arg_count()\n");
+    if called == "argument_count" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.argument_count()\n");
         return reg;
     }
-    if called == "arg" {
-        let visited: Int = self.w("  " + reg + " = call i64 @burxt.arg(i64 " + first + ")\n");
+    if called == "argument" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.argument(i64 " + first + ")\n");
         return reg;
     }
     if called == "read_file" {
@@ -1247,16 +1247,16 @@ function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String)
                                   + ", i64 " + second + ")\n");
         return reg;
     }
-    if called == "div_trunc" {
+    if called == "divide_toward_zero" {
         let visited: Int = self.w("  " + reg + " = sdiv i64 " + first + ", " + second + "\n");
         return reg;
     }
-    if called == "rem" {
+    if called == "remainder" {
         let visited: Int = self.w("  " + reg + " = srem i64 " + first + ", " + second + "\n");
         return reg;
     }
-    if called == "div_floor" {
-        let visited: Int = self.w("  " + reg + " = call i64 @burxt.div_floor(i64 " + first
+    if called == "divide_floor" {
+        let visited: Int = self.w("  " + reg + " = call i64 @burxt.divide_floor(i64 " + first
                                   + ", i64 " + second + ")\n");
         return reg;
     }
@@ -1368,11 +1368,11 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates
         let mutable args: String = "";
         let mutable i: Int = 0;
         while i < list.b {
-            let arg: String = self.emit_expr(src, self.kids[list.a + i]);
+            let argument: String = self.emit_expr(src, self.kids[list.a + i]);
             if i > 0 {
                 args += ", ";
             }
-            args += "i64 " + arg;
+            args += "i64 " + argument;
             i += 1;
         }
         let answer: String = self.fresh();
@@ -1965,7 +1965,7 @@ function (mutable self: Unit) emit_module(src: String) -> Int allocates {
 
     // Then main, which is the top-level statements in order.
     let opened: Int = self.open_fn("define i32 @main(i32 %argc, ptr %argv) \{\nentry:\n");
-    // The arguments are recorded once, where they arrive, so `arg(n)` is a load rather
+    // The arguments are recorded once, where they arrive, so `argument(n)` is a load rather
     // than a parameter threaded through every function that might want it.
     let widened: Int = self.w("  %argc64 = sext i32 %argc to i64\n");
     let kept: Int = self.w("  store i64 %argc64, ptr @burxt.argc\n");
@@ -2230,9 +2230,9 @@ function runtime_ir() -> String allocates {
         + "declare i64 @ftell(ptr)\n"
         + "@burxt.mode_read = private unnamed_addr constant [2 x i8] c\"r\\00\"\n"
         + "@burxt.mode_write = private unnamed_addr constant [2 x i8] c\"w\\00\"\n\n"
-        + "define i64 @burxt.arg_count() \{\n"
+        + "define i64 @burxt.argument_count() \{\n"
         + "entry:\n  %n = load i64, ptr @burxt.argc\n  ret i64 %n\n\}\n\n"
-        + "define i64 @burxt.arg(i64 %i) \{\n"
+        + "define i64 @burxt.argument(i64 %i) \{\n"
         + "entry:\n"
         + "  %n = load i64, ptr @burxt.argc\n"
         + "  call void @burxt.bounds(i64 %i, i64 %n, i64 0)\n"
@@ -2292,7 +2292,7 @@ function runtime_ir() -> String allocates {
         + "i64 %limit, i64 %at)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n\}\n\n"
-        + "define i64 @burxt.div_floor(i64 %a, i64 %b) \{\n"
+        + "define i64 @burxt.divide_floor(i64 %a, i64 %b) \{\n"
         + "entry:\n"
         + "  %q = sdiv i64 %a, %b\n"
         + "  %r = srem i64 %a, %b\n"

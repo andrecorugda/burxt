@@ -1,5 +1,5 @@
 // The program that proves the thesis: exact decimal money math.
 let price: Decimal<2> = 19.99;
-let qty: Int = 3;
-let total: Decimal<2> = price * qty;
+let quantity: Int = 3;
+let total: Decimal<2> = price * quantity;
 print(total);        // expect 59.97 exactly

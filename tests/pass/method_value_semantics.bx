@@ -1,14 +1,14 @@
 // A non-mutating method receives self by VALUE — mutating the parameter
 // inside the method can never be observed by the caller, exactly like an
 // ordinary record function parameter.
-record LineItem { price: Decimal<2>, qty: Int }
+record LineItem { price: Decimal<2>, quantity: Int }
 
 function (self: LineItem) fake_bump() -> Int {
     let mutable m: LineItem = self;
-    m.qty = 999;
-    return m.qty;
+    m.quantity = 999;
+    return m.quantity;
 }
 
-let item: LineItem = LineItem { price: 19.99, qty: 3 };
+let item: LineItem = LineItem { price: 19.99, quantity: 3 };
 print(item.fake_bump());
-print(item.qty);
+print(item.quantity);

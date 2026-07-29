@@ -2,7 +2,7 @@
 // twice — which is what the symbol-table pass exists to catch, and what Burxt refuses
 // (there is no shadowing in this language). Compiling this directly is supposed to fail.
 let price: Decimal<2> = $19.99;
-let qty: Int = 3;
+let quantity: Int = 3;
 let mutable total: Decimal<2> = $0.00;
 let label: String = "widget";
-let qty: Int = 4;
+let quantity: Int = 4;

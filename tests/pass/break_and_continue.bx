@@ -3,7 +3,7 @@
 let mutable i: Int = 0;
 while i < 10 {
     i = i + 1;
-    if rem(i, 2) == 0 {
+    if remainder(i, 2) == 0 {
         continue;
     }
     if i > 7 {

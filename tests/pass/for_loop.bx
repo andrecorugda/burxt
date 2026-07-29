@@ -1,6 +1,6 @@
 // `for x in xs` — the loop everyone writes, without the index. A real statement in both
 // compilers, not a parser desugar: see spec/M10-ERGONOMICS.md §1b for why.
-record Line { label: String, qty: Int }
+record Line { label: String, quantity: Int }
 record Doc { lines: [Line] }
 
 region r {
@@ -22,19 +22,19 @@ region r {
 
     // A record element is copied into the binding, like every other binding.
     let mutable doc: Doc = Doc { lines: [] };
-    let c = push(doc.lines, Line { label: "first", qty: 2 });
-    let d = push(doc.lines, Line { label: "second", qty: 3 });
+    let c = push(doc.lines, Line { label: "first", quantity: 2 });
+    let d = push(doc.lines, Line { label: "second", quantity: 3 });
     let mutable counted = 0;
     for line in doc.lines {
         print(line.label);
-        counted += line.qty;
+        counted += line.quantity;
     }
     print(counted);
 
     // Nested, over a field path and a fixed array at once.
     for line in doc.lines {
         for s in sizes {
-            if s == 20 { print(line.qty); }
+            if s == 20 { print(line.quantity); }
         }
     }
 

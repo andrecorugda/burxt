@@ -37,7 +37,7 @@ function listing_of(directory: String, into: String) -> String allocates {
 // `system` reports the wait status, and the exit code is the high byte of it.
 function run_capturing(command: String, output: String) -> Int allocates {
     let status: Int = system(command + " > " + output + " 2>&1");
-    return div_floor(status, 256);
+    return divide_floor(status, 256);
 }
 
 // ---- reading the listing ----------------------------------------------------
@@ -226,12 +226,12 @@ region suite {
     // arguments so this runner can test stage-0 today and stage-1 tomorrow without
     // being edited — the whole point of having two implementations.
     let mutable compiler: String = "./target/debug/burxt";
-    if arg_count() > 1 {
-        compiler = arg(1);
+    if argument_count() > 1 {
+        compiler = argument(1);
     }
     let mutable work: String = "/tmp/burxt-suite";
-    if arg_count() > 2 {
-        work = arg(2);
+    if argument_count() > 2 {
+        work = argument(2);
     }
     let made: Int = system("mkdir -p " + work);
 

@@ -374,16 +374,16 @@ impl<'ctx> CodeGen<'ctx> {
         let offset = if ret_is_agg { 1 } else { 0 };
 
         for (i, (name, ty)) in f.params.iter().enumerate() {
-            let arg = llf.get_nth_param((i + offset) as u32).unwrap();
+            let argument = llf.get_nth_param((i + offset) as u32).unwrap();
             if is_aggregate(ty) {
                 // byval already gave us a pointer to our OWN copy, so it is
                 // the variable's slot directly — no second copy needed, and
                 // writing through it cannot touch the caller's value.
-                self.vars.insert(name.clone(), (arg.into_pointer_value(), ty.clone()));
+                self.vars.insert(name.clone(), (argument.into_pointer_value(), ty.clone()));
             } else {
                 // Spill scalars so they behave like any other binding.
                 let slot = self.create_entry_alloca(name, ty)?;
-                self.builder.build_store(slot, arg).map_err(|e| e.to_string())?;
+                self.builder.build_store(slot, argument).map_err(|e| e.to_string())?;
                 self.vars.insert(name.clone(), (slot, ty.clone()));
             }
         }
@@ -1095,12 +1095,12 @@ impl<'ctx> CodeGen<'ctx> {
 
         let param_offset = self_idx + 1;
         for (i, (name, ty)) in m.params.iter().enumerate() {
-            let arg = llf.get_nth_param((param_offset + i) as u32).unwrap();
+            let argument = llf.get_nth_param((param_offset + i) as u32).unwrap();
             if is_aggregate(ty) {
-                self.vars.insert(name.clone(), (arg.into_pointer_value(), ty.clone()));
+                self.vars.insert(name.clone(), (argument.into_pointer_value(), ty.clone()));
             } else {
                 let slot = self.create_entry_alloca(name, ty)?;
-                self.builder.build_store(slot, arg).map_err(|e| e.to_string())?;
+                self.builder.build_store(slot, argument).map_err(|e| e.to_string())?;
                 self.vars.insert(name.clone(), (slot, ty.clone()));
             }
         }
@@ -2864,7 +2864,7 @@ impl<'ctx> CodeGen<'ctx> {
         *self.heap.insert((base, next))
     }
 
-    /// Where `main` stashed its arguments, so `arg_count()` and `arg(n)` can read
+    /// Where `main` stashed its arguments, so `argument_count()` and `argument(n)` can read
     /// them from anywhere in the program.
     fn args_globals(
         &mut self,
@@ -2884,7 +2884,7 @@ impl<'ctx> CodeGen<'ctx> {
         *self.args.insert((argc, argv))
     }
 
-    /// `arg(n)` — the n-th command-line argument, bounds-checked.
+    /// `argument(n)` — the n-th command-line argument, bounds-checked.
     ///
     /// No allocation: the C runtime's strings outlive the program, so this hands back
     /// a borrowed pointer that is already NUL-terminated. That is why it needs no
@@ -2907,7 +2907,7 @@ impl<'ctx> CodeGen<'ctx> {
             .into_pointer_value();
         let slot = unsafe { self.builder.build_gep(ptr, argv, &[checked], "argslot") }.map_err(err)?;
         self.builder
-            .build_load(ptr, slot, "arg")
+            .build_load(ptr, slot, "argument")
             .map(|v| v.into_pointer_value())
             .map_err(err)
     }
@@ -2936,7 +2936,7 @@ impl<'ctx> CodeGen<'ctx> {
             .builder
             .get_insert_block()
             .and_then(|b| b.get_parent())
-            .ok_or("codegen bug: arg() outside a function")?;
+            .ok_or("codegen bug: argument() outside a function")?;
         let broken = self.ctx.append_basic_block(function, "arg_oob");
         let ok = self.ctx.append_basic_block(function, "arg_ok");
         self.builder.build_conditional_branch(bad, broken, ok).map_err(err)?;
@@ -2945,7 +2945,7 @@ impl<'ctx> CodeGen<'ctx> {
         let fprintf = self.fprintf_fn();
         let (stderr_g, _, exit) = self.panic_deps();
         let fmt = self.global_str(
-            "burxt runtime error: arg(%lld) does not exist — this program was given \
+            "burxt runtime error: argument(%lld) does not exist — this program was given \
              %lld arguments (0 is its own name)\n",
             "fmt_arg_oob",
         );
@@ -4020,9 +4020,9 @@ impl<'ctx> CodeGen<'ctx> {
 
     fn int_div_fn(&mut self, kind: IntDiv) -> Result<FunctionValue<'ctx>, String> {
         let (symbol, name) = match kind {
-            IntDiv::Floor => ("burxt.div.floor", "div_floor"),
-            IntDiv::Trunc => ("burxt.div.trunc", "div_trunc"),
-            IntDiv::Rem => ("burxt.rem", "rem"),
+            IntDiv::Floor => ("burxt.div.floor", "divide_floor"),
+            IntDiv::Trunc => ("burxt.div.trunc", "divide_toward_zero"),
+            IntDiv::Rem => ("burxt.remainder", "remainder"),
         };
         if let Some(f) = self.module.get_function(symbol) {
             return Ok(f);
@@ -4069,14 +4069,14 @@ impl<'ctx> CodeGen<'ctx> {
 
         self.builder.position_at_end(compute);
         let result = match kind {
-            IntDiv::Rem => self.builder.build_int_signed_rem(a, b, "rem").map_err(err)?,
+            IntDiv::Rem => self.builder.build_int_signed_rem(a, b, "remainder").map_err(err)?,
             IntDiv::Trunc => self.builder.build_int_signed_div(a, b, "quot").map_err(err)?,
             IntDiv::Floor => {
                 // Truncating division rounds toward zero; flooring rounds down. They
                 // differ by one exactly when there is a remainder and the operands
                 // have opposite signs.
                 let q = self.builder.build_int_signed_div(a, b, "quot").map_err(err)?;
-                let r = self.builder.build_int_signed_rem(a, b, "rem").map_err(err)?;
+                let r = self.builder.build_int_signed_rem(a, b, "remainder").map_err(err)?;
                 let has_rem = self.builder.build_int_compare(NE, r, zero, "has_rem").map_err(err)?;
                 let r_neg = self.builder.build_int_compare(SLT, r, zero, "r_neg").map_err(err)?;
                 let b_neg = self.builder.build_int_compare(SLT, b, zero, "b_neg").map_err(err)?;
@@ -4490,11 +4490,11 @@ struct MeasureState<'ctx> {
 /// because they disagree on negatives and the difference must be visible.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum IntDiv {
-    /// Rounds down, toward negative infinity: `div_floor(-7, 2) == -4`.
+    /// Rounds down, toward negative infinity: `divide_floor(-7, 2) == -4`.
     Floor,
-    /// Rounds toward zero, as C does: `div_trunc(-7, 2) == -3`.
+    /// Rounds toward zero, as C does: `divide_toward_zero(-7, 2) == -3`.
     Trunc,
-    /// The remainder that pairs with `div_trunc`: its sign follows the dividend.
+    /// The remainder that pairs with `divide_toward_zero`: its sign follows the dividend.
     Rem,
 }
 

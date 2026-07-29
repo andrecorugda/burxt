@@ -1,1 +1,1 @@
-div_floor(...) works on Ints, but the first argument has type Decimal<2>
+divide_floor(...) works on Ints, but the first argument has type Decimal<2>

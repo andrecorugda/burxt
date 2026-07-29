@@ -1,2 +1,2 @@
 let n: Int = 0;
-print(div_floor(1, n));
+print(divide_floor(1, n));

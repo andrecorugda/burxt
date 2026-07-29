@@ -52,7 +52,7 @@ pub enum TypedExprKind {
     /// `truncate(xs, n)` — drop everything past `n`. The counterpart to `push`, and
     /// the primitive a scope needs: leaving a block drops every binding it made.
     Truncate { place: Box<TypedExpr>, length: Box<TypedExpr> },
-    /// `arg_count()` and `arg(n)` — the command line. A compiler needs to know which
+    /// `argument_count()` and `argument(n)` — the command line. A compiler needs to know which
     /// file it was asked to compile.
     ArgCount,
     Arg(Box<TypedExpr>),
@@ -62,7 +62,7 @@ pub enum TypedExprKind {
     WriteBytes { path: Box<TypedExpr>, buffer: Box<TypedExpr> },
     /// `substring(s, at, len)` — a copy of part of a String, in the current region.
     Substring { source: Box<TypedExpr>, at: Box<TypedExpr>, len: Box<TypedExpr> },
-    /// `div_floor`, `div_trunc` or `rem` on two Ints. Three names rather than one
+    /// `divide_floor`, `divide_toward_zero` or `remainder` on two Ints. Three names rather than one
     /// operator, because they disagree on negatives.
     IntDiv { kind: crate::codegen::IntDiv, lhs: Box<TypedExpr>, rhs: Box<TypedExpr> },
     /// `old(expr)` in an `ensures` clause: the value that expression had on
@@ -941,11 +941,11 @@ impl TypeChecker {
                 }
             }
         }
-        for (i, (declared, arg)) in payload.iter().zip(args).enumerate() {
+        for (i, (declared, argument)) in payload.iter().zip(args).enumerate() {
             if !mentions_param(declared) {
                 continue;
             }
-            let actual = self.check_expr(arg, None)?.ty;
+            let actual = self.check_expr(argument, None)?.ty;
             let instances = self.instance_of.borrow().clone();
             unify(declared, &actual, &mut map, &instances).map_err(|why| {
                 format!("in `{}.{}`, payload {}: {}", enum_name, variant, i + 1, why)
@@ -994,15 +994,15 @@ impl TypeChecker {
     /// Any other bound names a declared trait, and satisfying it means having an `impl`.
     fn satisfies(
         &self,
-        arg: &Type,
+        argument: &Type,
         bound: &str,
         callee: &str,
         param: &str,
     ) -> Result<(), String> {
         let instances = self.instance_of.borrow().clone();
-        let shown = show(arg, &instances);
+        let shown = show(argument, &instances);
         match bound {
-            "Ordered" => match arg {
+            "Ordered" => match argument {
                 Type::Int | Type::Decimal { .. } => Ok(()),
                 _ => Err(format!(
                     "`{}` needs `{}: Ordered`, and {} has no order. Ordered is Int and \
@@ -1010,7 +1010,7 @@ impl TypeChecker {
                     callee, param, shown
                 )),
             },
-            "Equatable" => match arg {
+            "Equatable" => match argument {
                 Type::Int | Type::Bool | Type::String | Type::Decimal { .. } => Ok(()),
                 _ => Err(format!(
                     "`{}` needs `{}: Equatable`, and two {} values cannot be compared. \
@@ -1026,7 +1026,7 @@ impl TypeChecker {
                         callee, param, trait_name
                     ));
                 }
-                let concrete = match arg {
+                let concrete = match argument {
                     Type::Named(n) => n.clone(),
                     _ => {
                         return Err(format!(
@@ -1105,9 +1105,9 @@ impl TypeChecker {
                 }
             }
         }
-        for (p, arg) in params.iter().zip(&type_args) {
+        for (p, argument) in params.iter().zip(&type_args) {
             if let Some(bound) = &p.bound {
-                self.satisfies(arg, bound, name, &p.name)?;
+                self.satisfies(argument, bound, name, &p.name)?;
             }
         }
         match self.expand(&Type::Generic { name: name.to_string(), args: type_args })? {
@@ -1488,7 +1488,7 @@ impl TypeChecker {
             if self.fns.contains_key(&f.name) {
                 return Err(format!("function `{}` is defined twice", f.name));
             }
-            if f.name == "len" || f.name == "byte_at" || f.name == "push" || f.name == "read_file" || f.name == "to_string" || f.name == "old" || f.name == "substring" || f.name == "truncate" || f.name == "write_file" || f.name == "arg" || f.name == "arg_count" || f.name == "div_floor" || f.name == "div_trunc" || f.name == "rem" || f.name == "write_bytes" {
+            if f.name == "len" || f.name == "byte_at" || f.name == "push" || f.name == "read_file" || f.name == "to_string" || f.name == "old" || f.name == "substring" || f.name == "truncate" || f.name == "write_file" || f.name == "argument" || f.name == "argument_count" || f.name == "divide_floor" || f.name == "divide_toward_zero" || f.name == "remainder" || f.name == "write_bytes" {
                 return Err(format!(
                     "the name `{}` is reserved for a built-in",
                     f.name
@@ -2143,7 +2143,7 @@ impl TypeChecker {
     /// function returns.
     fn check_extern(&self, e: &ExternFn) -> Result<(), String> {
         const RESERVED: [&str; 6] = ["printf", "fprintf", "fputs", "exit", "stderr", "main"];
-        if e.name == "len" || e.name == "byte_at" || e.name == "push" || e.name == "read_file" || e.name == "to_string" || e.name == "old" || e.name == "substring" || e.name == "truncate" || e.name == "write_file" || e.name == "arg" || e.name == "arg_count" || e.name == "div_floor" || e.name == "div_trunc" || e.name == "rem" || e.name == "write_bytes" {
+        if e.name == "len" || e.name == "byte_at" || e.name == "push" || e.name == "read_file" || e.name == "to_string" || e.name == "old" || e.name == "substring" || e.name == "truncate" || e.name == "write_file" || e.name == "argument" || e.name == "argument_count" || e.name == "divide_floor" || e.name == "divide_toward_zero" || e.name == "remainder" || e.name == "write_bytes" {
             return Err(format!("the name `{}` is reserved for a built-in", e.name));
         }
         if RESERVED.contains(&e.name.as_str()) {
@@ -2545,8 +2545,8 @@ impl TypeChecker {
             ));
         }
         let mut typed_args = Vec::new();
-        for (arg, want) in args.iter().zip(params.iter()) {
-            let t = self.check_expr(arg, Some(want))?;
+        for (argument, want) in args.iter().zip(params.iter()) {
+            let t = self.check_expr(argument, Some(want))?;
             if t.ty != *want {
                 return Err(format!(
                     "`{}` expects {} {} here, but this argument has type {}",
@@ -3661,20 +3661,20 @@ impl TypeChecker {
                 // returned a pointer could not be.
                 // The command line, and writing a file: between them, a program can be
                 // a compiler rather than a demonstration.
-                if name == "arg_count" {
+                if name == "argument_count" {
                     if !args.is_empty() {
-                        return Err("arg_count() takes no arguments".to_string());
+                        return Err("argument_count() takes no arguments".to_string());
                     }
                     return Ok(TypedExpr { ty: Type::Int, kind: TypedExprKind::ArgCount });
                 }
-                if name == "arg" {
+                if name == "argument" {
                     if args.len() != 1 {
-                        return Err("arg(n) takes one Int".to_string());
+                        return Err("argument(n) takes one Int".to_string());
                     }
                     let index = self.check_expr(&args[0], Some(&Type::Int))?;
                     if index.ty != Type::Int {
                         return Err(format!(
-                            "arg(n) takes an Int, but this has type {}",
+                            "argument(n) takes an Int, but this has type {}",
                             index.ty
                         ));
                     }
@@ -3802,9 +3802,9 @@ impl TypeChecker {
                 // operator cannot say which way it rounds, and for negatives the
                 // answers differ.
                 if let Some(kind) = match name.as_str() {
-                    "div_floor" => Some(crate::codegen::IntDiv::Floor),
-                    "div_trunc" => Some(crate::codegen::IntDiv::Trunc),
-                    "rem" => Some(crate::codegen::IntDiv::Rem),
+                    "divide_floor" => Some(crate::codegen::IntDiv::Floor),
+                    "divide_toward_zero" => Some(crate::codegen::IntDiv::Trunc),
+                    "remainder" => Some(crate::codegen::IntDiv::Rem),
                     _ => None,
                 } {
                     if args.len() != 2 {
@@ -3970,20 +3970,20 @@ impl TypeChecker {
                             "len(...) takes exactly one array or string".to_string()
                         );
                     }
-                    let arg = self.check_expr(&args[0], None)?;
-                    return match arg.ty {
+                    let argument = self.check_expr(&args[0], None)?;
+                    return match argument.ty {
                         Type::Array { len, .. } => Ok(TypedExpr {
                             ty: Type::Int,
                             kind: TypedExprKind::IntLit(len as i64),
                         }),
                         Type::String => Ok(TypedExpr {
                             ty: Type::Int,
-                            kind: TypedExprKind::StrLen(Box::new(arg)),
+                            kind: TypedExprKind::StrLen(Box::new(argument)),
                         }),
                         // a growable array knows its length at runtime
                         Type::Slice(_) => Ok(TypedExpr {
                             ty: Type::Int,
-                            kind: TypedExprKind::SliceLen(Box::new(arg)),
+                            kind: TypedExprKind::SliceLen(Box::new(argument)),
                         }),
                         other => Err(format!(
                             "len(...) needs an array or a string, but this has type {}",
@@ -4012,14 +4012,14 @@ impl TypeChecker {
                         ));
                     }
                     let mut map: HashMap<String, Type> = HashMap::new();
-                    for (i, (declared, arg)) in param_tys.iter().zip(args).enumerate() {
+                    for (i, (declared, argument)) in param_tys.iter().zip(args).enumerate() {
                         if !mentions_param(declared) {
                             continue;
                         }
-                        let actual = self.check_expr(arg, None)?.ty;
+                        let actual = self.check_expr(argument, None)?.ty;
                         let instances = self.instance_of.borrow().clone();
                         unify(declared, &actual, &mut map, &instances).map_err(|why| {
-                            self.blame(arg.span);
+                            self.blame(argument.span);
                             format!("in the call to `{}`, argument {}: {}", name, i + 1, why)
                         })?;
                     }
@@ -4046,9 +4046,9 @@ impl TypeChecker {
                     }
                     param_tys = substituted;
                     ret = self.expand(&substitute(&ret, &map))?;
-                    for (p, arg) in type_params.iter().zip(&type_args) {
+                    for (p, argument) in type_params.iter().zip(&type_args) {
                         if let Some(bound) = &p.bound {
-                            self.satisfies(arg, bound, &written_name, &p.name)?;
+                            self.satisfies(argument, bound, &written_name, &p.name)?;
                         }
                     }
                     // If a type argument is still a parameter, this call is inside a
@@ -4114,11 +4114,11 @@ impl TypeChecker {
                 }
                 let declared = self.extern_params.get(name).cloned();
                 let mut typed_args = Vec::new();
-                for (i, (arg, param_ty)) in args.iter().zip(&param_tys).enumerate() {
-                    let typed = self.check_expr(arg, Some(param_ty))?;
+                for (i, (argument, param_ty)) in args.iter().zip(&param_tys).enumerate() {
+                    let typed = self.check_expr(argument, Some(param_ty))?;
                     if &typed.ty != param_ty {
                         // Point at the argument, not at the whole call.
-                        self.blame(arg.span);
+                        self.blame(argument.span);
                         // The boundary-exactness case gets its own message,
                         // because "argument 1 must be Int" would hide WHY: a
                         // double cannot hold the amount, and there are two
@@ -4286,8 +4286,8 @@ impl TypeChecker {
                         ));
                     }
                     let mut typed_args = Vec::new();
-                    for (i, (arg, p)) in args.iter().zip(&sig.params).enumerate() {
-                        let typed = self.check_expr(arg, Some(&p.ty))?;
+                    for (i, (argument, p)) in args.iter().zip(&sig.params).enumerate() {
+                        let typed = self.check_expr(argument, Some(&p.ty))?;
                         if typed.ty != p.ty {
                             return Err(format!(
                                 "in the call to `dynamic {}.{}`, argument {} must be \
@@ -4348,10 +4348,10 @@ impl TypeChecker {
                         ));
                     }
                     let mut typed_args = Vec::new();
-                    for (arg, want) in args.iter().zip(&sig.params) {
-                        let t = self.check_expr(arg, Some(&want.ty))?;
+                    for (argument, want) in args.iter().zip(&sig.params) {
+                        let t = self.check_expr(argument, Some(&want.ty))?;
                         if t.ty != want.ty {
-                            self.blame(arg.span);
+                            self.blame(argument.span);
                             return Err(format!(
                                 "`{}.{}` expects {} here, but this argument has type {}",
                                 p, method, want.ty, t.ty
@@ -4439,8 +4439,8 @@ impl TypeChecker {
                     ));
                 }
                 let mut typed_args = Vec::new();
-                for (i, (arg, param_ty)) in args.iter().zip(&param_tys).enumerate() {
-                    let typed = self.check_expr(arg, Some(param_ty))?;
+                for (i, (argument, param_ty)) in args.iter().zip(&param_tys).enumerate() {
+                    let typed = self.check_expr(argument, Some(param_ty))?;
                     if &typed.ty != param_ty {
                         return Err(format!(
                             "in the call to `{}.{}`, argument {} must be {}, \
@@ -4680,8 +4680,8 @@ impl TypeChecker {
             ));
         }
         let mut typed_args = Vec::new();
-        for (i, (arg, want)) in args.iter().zip(payload).enumerate() {
-            let t = self.check_expr(arg, Some(want))?;
+        for (i, (argument, want)) in args.iter().zip(payload).enumerate() {
+            let t = self.check_expr(argument, Some(want))?;
             if &t.ty != want {
                 return Err(format!(
                     "in `{}.{}`, payload {} must be {}, but it has type {}",
@@ -4815,8 +4815,8 @@ impl TypeChecker {
             (BinOp::Div, Int, Int) => Err(
                 "`/` on two Ints would have to round, and one operator cannot say \
                  which way: -7 divided by 2 is -3 rounding toward zero and -4 \
-                 rounding down. Say which you mean — `div_floor(a, b)`, \
-                 `div_trunc(a, b)`, or `rem(a, b)` for the remainder."
+                 rounding down. Say which you mean — `divide_floor(a, b)`, \
+                 `divide_toward_zero(a, b)`, or `remainder(a, b)` for the remainder."
                     .to_string(),
             ),
 

@@ -227,11 +227,11 @@ function is_reserved_name(src: String, start: Int, length: Int) -> Bool {
         || span_eq(src, start, length, "read_file")
         || span_eq(src, start, length, "write_file")
         || span_eq(src, start, length, "write_bytes")
-        || span_eq(src, start, length, "arg")
-        || span_eq(src, start, length, "arg_count")
-        || span_eq(src, start, length, "div_floor")
-        || span_eq(src, start, length, "div_trunc")
-        || span_eq(src, start, length, "rem")
+        || span_eq(src, start, length, "argument")
+        || span_eq(src, start, length, "argument_count")
+        || span_eq(src, start, length, "divide_floor")
+        || span_eq(src, start, length, "divide_toward_zero")
+        || span_eq(src, start, length, "remainder")
         || span_eq(src, start, length, "old")
         || span_eq(src, start, length, "result")
         || span_eq(src, start, length, "main")
@@ -488,7 +488,7 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             factor = factor * 10;
             drop -= 1;
         }
-        if rem(n.value, factor) == 0 {
+        if remainder(n.value, factor) == 0 {
             return decimal_type(expected.scale, expected.contract);
         }
         if self.in_mul == 1 {
@@ -598,7 +598,7 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             if left.kind == 40 && right.kind == 40 {
                 let e: Int = self.complain_at(src, n.tok,
                     "`/` on two Ints would have to round, and one operator cannot say "
-                    + "which way — use div_floor, div_trunc or rem");
+                    + "which way — use divide_floor, divide_toward_zero or remainder");
                 return unknown_type();
             }
             // A quotient can fall between two representable values — 1.00 / 3 — so
@@ -999,7 +999,7 @@ function (mutable self: Unit) check_args(src: String, list_node: Int) -> Int all
     let list: Node = self.nodes[list_node];
     let mutable i: Int = 0;
     while i < list.b {
-        let arg: Type = self.type_of(src, self.kids[list.a + i], unknown_type());
+        let argument: Type = self.type_of(src, self.kids[list.a + i], unknown_type());
         i += 1;
     }
     return list.b;

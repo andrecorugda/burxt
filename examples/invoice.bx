@@ -7,7 +7,7 @@
 record Line {
     label: String,
     unit: Decimal<2>,
-    qty: Int
+    quantity: Int
 }
 
 // Money times a count is exact — no contract needed, because no rounding can happen.
@@ -16,11 +16,11 @@ record Line {
 // to be declared here, at the point money entered the program, which put an answer about
 // rounding three functions away from the rounding.
 function (self: Line) amount() -> Decimal<2> {
-    return self.unit * self.qty;
+    return self.unit * self.quantity;
 }
 
 function (self: Line) render() -> String allocates {
-    return self.label + " x" + to_string(self.qty)
+    return self.label + " x" + to_string(self.quantity)
          + " @ " + to_string(self.unit)
          + " = " + to_string(self.amount());
 }
@@ -40,9 +40,9 @@ region invoice {
     // The array names its type, because a literal cannot say fixed or growable —
     // this one grows, and growing means it lives in the region.
     let mutable lines: [Line] = [];
-    let a = push(lines, Line { label: "widget", unit: $19.99, qty: 3 });
-    let b = push(lines, Line { label: "gasket", unit: $4.25,  qty: 12 });
-    let c = push(lines, Line { label: "manual", unit: $12.00, qty: 1 });
+    let a = push(lines, Line { label: "widget", unit: $19.99, quantity: 3 });
+    let b = push(lines, Line { label: "gasket", unit: $4.25,  quantity: 12 });
+    let c = push(lines, Line { label: "manual", unit: $12.00, quantity: 1 });
 
     print("INVOICE 2026-0042");
     print("-------------------------------------------");

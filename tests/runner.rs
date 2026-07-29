@@ -126,7 +126,7 @@ fn panic_programs_die_cleanly_at_runtime() {
 /// adding a trait implementation could move a field, and codegen written
 /// against these offsets would break.
 #[test]
-fn struct_layout_has_no_hidden_header() {
+fn record_layout_has_no_hidden_header() {
     let scratch = scratch_dir("layout");
     fs::create_dir_all(&scratch).unwrap();
     let program = scratch.join("layout_probe.bx");
@@ -165,7 +165,7 @@ Order: size 24 align 8
 /// the vtable lives OUTSIDE the value. Also checks the pay-for-what-you-use
 /// rule: a program with no `dyn` emits no vtable at all.
 #[test]
-fn dyn_does_not_change_layout_and_costs_nothing_unused() {
+fn dynamic_does_not_change_layout_and_costs_nothing_unused() {
     let scratch = scratch_dir("dynamic-layout");
     fs::create_dir_all(&scratch).unwrap();
 
@@ -1219,7 +1219,7 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
         ),
         (
             "division.bx",
-            "print(div_floor(-7, 2));\nprint(div_trunc(-7, 2));\nprint(rem(-7, 2));\n             print(div_floor(7, 2));\n",
+            "print(divide_floor(-7, 2));\nprint(divide_toward_zero(-7, 2));\nprint(remainder(-7, 2));\n             print(divide_floor(7, 2));\n",
         ),
     ];
 
@@ -2059,7 +2059,7 @@ fn the_standard_library_compiles_and_works() {
              i += 1;\n  }}\n  return Option.None;\n}}\n\
              function divide(a: Int, b: Int) -> Result<Int, String> {{\n  \
              if b == 0 {{ return Result.Err(\"division by zero\"); }}\n  \
-             return Result.Ok(div_trunc(a, b));\n}}\n\
+             return Result.Ok(divide_toward_zero(a, b));\n}}\n\
              region r {{\n  let mutable xs: [Int] = [];\n  let a = push(xs, 5);\n  \
              let b = push(xs, 9);\n  print(option_or(find(xs, 9), 0 - 1));\n  \
              print(option_or(find(xs, 7), 0 - 1));\n  \
@@ -2322,7 +2322,7 @@ fn generics_monomorphise_and_run() {
             "enum Result<T, E> { Ok(T), Err(E) }\n\
              function divide(a: Int, b: Int) -> Result<Int, String> {\n  \
              if b == 0 { return Result.Err(\"division by zero\"); }\n  \
-             return Result.Ok(div_trunc(a, b));\n}\n\
+             return Result.Ok(divide_toward_zero(a, b));\n}\n\
              region r {\n  match divide(10, 2) {\n    Ok(n) => { print(n); }\n    \
              Err(why) => { print(why); }\n  }\n  match divide(1, 0) {\n    \
              Ok(n) => { print(n); }\n    Err(why) => { print(why); }\n  }\n}\n",
@@ -2416,7 +2416,7 @@ fn generics_monomorphise_and_run() {
             "enum Result<T, E> { Ok(T), Err(E) }\nenum Option<T> { None, Some(T) }\n\
              function checked(a: Int, b: Int) -> Result<Int, String> {\n  \
              if b == 0 { return Result.Err(\"division by zero\"); }\n  \
-             return Result.Ok(div_trunc(a, b));\n}\n\
+             return Result.Ok(divide_toward_zero(a, b));\n}\n\
              function average(a: Int, b: Int, n: Int) -> Result<Int, String> {\n  \
              let mean = checked(a + b, n)?;\n  return Result.Ok(mean);\n}\n\
              function first_of(xs: [Int]) -> Option<Int> {\n  \

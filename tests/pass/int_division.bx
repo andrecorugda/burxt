@@ -1,21 +1,21 @@
 // `/` on two Ints is refused because one operator cannot say which way it rounds.
 // Three names can, and the difference is only visible on negatives — which is
 // exactly why hiding it behind an operator would be a trap.
-print(div_floor(7, 2));      // 3
-print(div_trunc(7, 2));      // 3
-print(div_floor(-7, 2));     // -4, rounds down
-print(div_trunc(-7, 2));     // -3, rounds toward zero
-print(div_floor(7, -2));     // -4
-print(div_trunc(7, -2));     // -3
-print(rem(7, 2));            // 1
-print(rem(-7, 2));           // -1, the sign follows the dividend
-print(rem(7, -2));           // 1
+print(divide_floor(7, 2));      // 3
+print(divide_toward_zero(7, 2));      // 3
+print(divide_floor(-7, 2));     // -4, rounds down
+print(divide_toward_zero(-7, 2));     // -3, rounds toward zero
+print(divide_floor(7, -2));     // -4
+print(divide_toward_zero(7, -2));     // -3
+print(remainder(7, 2));            // 1
+print(remainder(-7, 2));           // -1, the sign follows the dividend
+print(remainder(7, -2));           // 1
 
 // What compiler-shaped code actually needs.
 let lo: Int = 3;
 let hi: Int = 10;
-print(div_floor(lo + hi, 2));
-print(rem(255, 16));
+print(divide_floor(lo + hi, 2));
+print(remainder(255, 16));
 
 // Composes with everything else on a signature.
 pure function midpoint(a: Int, b: Int) -> Int
@@ -23,6 +23,6 @@ pure function midpoint(a: Int, b: Int) -> Int
     ensures result >= a
     ensures result <= b
 {
-    return div_floor(a + b, 2);
+    return divide_floor(a + b, 2);
 }
 print(midpoint(4, 9));

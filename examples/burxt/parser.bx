@@ -224,9 +224,9 @@ function (mutable self: Unit) parse_type(src: String) -> Int allocates {
             let args_start: Int = len(self.subs);
             let mutable count: Int = 0;
             while true {
-                let arg: Int = self.parse_type(src);
-                if arg < 0 { return -1; }
-                push(self.subs, arg);
+                let argument: Int = self.parse_type(src);
+                if argument < 0 { return -1; }
+                push(self.subs, argument);
                 count += 1;
                 if self.more_in_list(36) {           // ',' — a trailing one is allowed
                     continue;
@@ -277,19 +277,19 @@ function (self: Unit) field_type(src: String, holder: Type, name_tok: Int) -> Ty
 // is one message and reporting it once is what stops the type errors that follow it
 // from being noise.
 function builtin_arity(name: String) -> Int {
-    if name == "arg_count" { return 0; }
+    if name == "argument_count" { return 0; }
     if name == "len" { return 1; }
     if name == "to_string" { return 1; }
     if name == "read_file" { return 1; }
-    if name == "arg" { return 1; }
+    if name == "argument" { return 1; }
     if name == "byte_at" { return 2; }
     if name == "push" { return 2; }
     if name == "truncate" { return 2; }
     if name == "write_file" { return 2; }
     if name == "write_bytes" { return 2; }
-    if name == "div_floor" { return 2; }
-    if name == "div_trunc" { return 2; }
-    if name == "rem" { return 2; }
+    if name == "divide_floor" { return 2; }
+    if name == "divide_toward_zero" { return 2; }
+    if name == "remainder" { return 2; }
     if name == "substring" { return 3; }
     return -1;
 }
@@ -298,17 +298,17 @@ function builtin_result(name: String) -> Type {
     if name == "to_string" { return simple_type(42); }
     if name == "read_file" { return simple_type(42); }
     if name == "substring" { return simple_type(42); }
-    if name == "arg" { return simple_type(42); }
+    if name == "argument" { return simple_type(42); }
     if name == "len" { return simple_type(40); }
     if name == "byte_at" { return simple_type(40); }
     if name == "push" { return simple_type(40); }
     if name == "truncate" { return simple_type(40); }
-    if name == "arg_count" { return simple_type(40); }
+    if name == "argument_count" { return simple_type(40); }
     if name == "write_file" { return simple_type(40); }
     if name == "write_bytes" { return simple_type(40); }
-    if name == "div_floor" { return simple_type(40); }
-    if name == "div_trunc" { return simple_type(40); }
-    if name == "rem" { return simple_type(40); }
+    if name == "divide_floor" { return simple_type(40); }
+    if name == "divide_toward_zero" { return simple_type(40); }
+    if name == "remainder" { return simple_type(40); }
     return unknown_type();
 }
 
@@ -343,7 +343,7 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
         }
         return 1;
     }
-    if called == "div_floor" || called == "div_trunc" || called == "rem" {
+    if called == "divide_floor" || called == "divide_toward_zero" || called == "remainder" {
         if !is_unknown(first) && first.kind != 40 {
             let e: Int = self.complain_at(src, at,
                 "`" + called + "` divides Ints, but the left side is " + self.show_type(src, first));
@@ -379,9 +379,9 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
         }
         return 1;
     }
-    if called == "arg" {
+    if called == "argument" {
         if !is_unknown(first) && first.kind != 40 {
-            let e: Int = self.complain_at(src, at, "`arg` takes an Int index");
+            let e: Int = self.complain_at(src, at, "`argument` takes an Int index");
         }
         return 1;
     }
@@ -483,16 +483,16 @@ function (mutable self: Unit) builtin_type(src: String, name: Tok, at: Int, args
     if span_eq(src, name.start, name.length, "byte_at") { return simple_type(40); }
     if span_eq(src, name.start, name.length, "push") { return simple_type(40); }
     if span_eq(src, name.start, name.length, "truncate") { return simple_type(40); }
-    if span_eq(src, name.start, name.length, "arg_count") { return simple_type(40); }
+    if span_eq(src, name.start, name.length, "argument_count") { return simple_type(40); }
     if span_eq(src, name.start, name.length, "write_file") { return simple_type(40); }
     if span_eq(src, name.start, name.length, "write_bytes") { return simple_type(40); }
-    if span_eq(src, name.start, name.length, "div_floor") { return simple_type(40); }
-    if span_eq(src, name.start, name.length, "div_trunc") { return simple_type(40); }
-    if span_eq(src, name.start, name.length, "rem") { return simple_type(40); }
+    if span_eq(src, name.start, name.length, "divide_floor") { return simple_type(40); }
+    if span_eq(src, name.start, name.length, "divide_toward_zero") { return simple_type(40); }
+    if span_eq(src, name.start, name.length, "remainder") { return simple_type(40); }
     if span_eq(src, name.start, name.length, "to_string") { return simple_type(42); }
     if span_eq(src, name.start, name.length, "read_file") { return simple_type(42); }
     if span_eq(src, name.start, name.length, "substring") { return simple_type(42); }
-    if span_eq(src, name.start, name.length, "arg") { return simple_type(42); }
+    if span_eq(src, name.start, name.length, "argument") { return simple_type(42); }
     return unknown_type();
 }
 
@@ -739,7 +739,7 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
         let name: Tok = self.toks[n.tok];
         if span_eq(src, name.start, name.length, "substring")
             || span_eq(src, name.start, name.length, "read_file")
-            || span_eq(src, name.start, name.length, "arg") {
+            || span_eq(src, name.start, name.length, "argument") {
             return true;
         }
         if span_eq(src, name.start, name.length, "to_string") {
@@ -853,13 +853,13 @@ function (mutable self: Unit) not_pure(src: String, at: Int, what: String) -> In
 
 // The markers, unpacked from the bits they ride in.
 function flag_pure(flags: Int) -> Int {
-    return rem(flags, 2);
+    return remainder(flags, 2);
 }
 function flag_allocates(flags: Int) -> Int {
-    return rem(div_floor(flags, 2), 2);
+    return remainder(divide_floor(flags, 2), 2);
 }
 function flag_extern(flags: Int) -> Int {
-    return rem(div_floor(flags, 8), 2);
+    return remainder(divide_floor(flags, 8), 2);
 }
 
 // ---- expressions -------------------------------------------------------------
@@ -1000,9 +1000,9 @@ function (mutable self: Unit) parse_args(src: String) -> Int allocates {
     let base: Int = len(self.stack);
     let mutable count: Int = 0;
     while !self.at(30) {                             // until ')'
-        let arg: Int = self.parse_expr(src);
-        if arg < 0 { return -1; }
-        push(self.stack, arg);
+        let argument: Int = self.parse_expr(src);
+        if argument < 0 { return -1; }
+        push(self.stack, argument);
         count += 1;
         if self.more_in_list(30) {                   // ',' — a trailing one is allowed
             continue;

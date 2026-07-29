@@ -1,0 +1,1 @@
+is missing the field `quantity: Int`. Every field must be given a value — Burxt does not invent defaults.

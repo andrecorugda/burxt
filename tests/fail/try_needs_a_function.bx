@@ -3,7 +3,7 @@ enum Result<T, E> { Ok(T), Err(E) }
 
 function checked(a: Int, b: Int) -> Result<Int, String> {
     if b == 0 { return Result.Err("division by zero"); }
-    return Result.Ok(div_trunc(a, b));
+    return Result.Ok(divide_toward_zero(a, b));
 }
 
 region r {

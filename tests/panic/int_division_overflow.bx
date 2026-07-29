@@ -1,3 +1,3 @@
 // The one quotient an i64 cannot hold.
 let most_negative: Int = -9223372036854775807 - 1;
-print(div_trunc(most_negative, -1));
+print(divide_toward_zero(most_negative, -1));

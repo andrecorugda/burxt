@@ -19,7 +19,7 @@ function scan(src: String) -> Int { ... }
 use "lexer.bx";
 
 region r {
-    print(scan(read_file(arg(1))));
+    print(scan(read_file(argument(1))));
 }
 ```
 

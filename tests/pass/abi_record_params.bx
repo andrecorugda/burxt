@@ -1,31 +1,31 @@
 // Structs cross function boundaries by value: the callee gets its own copy
 // and cannot observe (or corrupt) the caller's storage.
-record LineItem { price: Decimal<2>, qty: Int }
+record LineItem { price: Decimal<2>, quantity: Int }
 
 function total(item: LineItem) -> Decimal<2> {
-    return item.price * item.qty;
+    return item.price * item.quantity;
 }
 // Returns an aggregate: built directly in space the caller owns (sret).
 function bump(item: LineItem) -> LineItem {
     let mutable copy: LineItem = item;
-    copy.qty = copy.qty + 1;
+    copy.quantity = copy.quantity + 1;
     return copy;
 }
 // THE aliasing test: the callee scribbles all over its parameter.
 function clobber(item: LineItem) -> Int {
     let mutable m: LineItem = item;
     m.price = 0.00;
-    m.qty = 999;
-    return m.qty;
+    m.quantity = 999;
+    return m.quantity;
 }
 
-let item: LineItem = LineItem { price: 19.99, qty: 3 };
+let item: LineItem = LineItem { price: 19.99, quantity: 3 };
 print(total(item));
 let bumped: LineItem = bump(item);
-print(bumped.qty);
+print(bumped.quantity);
 print(clobber(item));
 // The caller's value is untouched by both of the above.
-print(item.qty);
+print(item.quantity);
 print(item.price);
 // A literal argument needs no home of its own.
-print(total(LineItem { price: 2.50, qty: 4 }));
+print(total(LineItem { price: 2.50, quantity: 4 }));

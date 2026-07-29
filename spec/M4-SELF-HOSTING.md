@@ -47,7 +47,7 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
 
 ## 3. Phases, each one shippable
 
-1. **Driver primitives** — `arg(n)`, `arg_count()`, `write_file`, and a region large
+1. **Driver primitives** — `argument(n)`, `argument_count()`, `write_file`, and a region large
    enough to hold a whole compile. **DONE (v0.0.51).**
 2. **A full lexer in Burxt.** **DONE (v0.0.52)** — `examples/stage1_lexer.bx`, 376
    lines: every punctuation form, a 39-entry keyword table with type names
@@ -268,7 +268,7 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
      field that could fall out of step with its bytes.
    - `+` on Strings, `substring`, `byte_at`, `len`, `to_string` of an Int (via
      `snprintf`) and of a Bool (a `select` between two literals, no allocation), and the
-     named integer divisions — `div_floor` differs from C's truncation exactly when the
+     named integer divisions — `divide_floor` differs from C's truncation exactly when the
      signs differ and the division is inexact, so it is a helper rather than an `sdiv`.
 
    An `allocates` function that returns a built String **needed no backend work at all**,
@@ -319,7 +319,7 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
      a pointer as the first argument and the callee copies into it. Returning a pointer
      into the callee's own frame would dangle, so this is not an optimisation but the
      only correct shape.
-   - The driver's four — `arg`, `arg_count`, `read_file`, `write_file` — with argc and
+   - The driver's four — `argument`, `argument_count`, `read_file`, `write_file` — with argc and
      argv recorded once where they arrive, and `read_file` reading into the region, so
      the text it answers lives exactly as long as the region does.
 

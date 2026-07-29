@@ -5,8 +5,8 @@
 
 // ---- Exact money, and rounding you have to declare ----
 let price: Decimal<2> = $19.99;
-let qty: Int = 3;
-let subtotal: Decimal<2> = price * qty;          // exact: Decimal * Int never rounds
+let quantity: Int = 3;
+let subtotal: Decimal<2> = price * quantity;          // exact: Decimal * Int never rounds
 print("subtotal {subtotal}");
 
 let rate: Decimal<4> = 8.25%;                    // a percent literal: scale 6 written as 4+2
@@ -14,17 +14,17 @@ let tax: Decimal<2, RoundHalfEven> = subtotal * rate;   // mixed scales need a c
 print("tax {tax}");
 
 // ---- Aggregates with value semantics, and behaviour attached to them ----
-record LineItem { label: String, price: Decimal<2>, qty: Int }
+record LineItem { label: String, price: Decimal<2>, quantity: Int }
 
 trait Priced { function total(self) -> Decimal<2> }
 
 implement Priced for LineItem {
     function (self) total() -> Decimal<2> {
-        return self.price * self.qty;
+        return self.price * self.quantity;
     }
 }
 
-let widget: LineItem = LineItem { label: "widget", price: $19.99, qty: 3 };
+let widget: LineItem = LineItem { label: "widget", price: $19.99, quantity: 3 };
 print("{widget.label}: {widget.total()}");
 
 // A trait object: runtime dispatch only where `dynamic` is written.

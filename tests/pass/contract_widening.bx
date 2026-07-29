@@ -4,10 +4,10 @@
 // Relaxed in v0.0.86; before it, a contract could only be declared where money
 // entered the program, and the fix for an error was never where the error was.
 let price: Decimal<2> = $19.99;
-let qty: Int = 3;
+let quantity: Int = 3;
 
 // the contract arrives at the binding, not at the source
-let subtotal: Decimal<2, RoundHalfEven> = price * qty;
+let subtotal: Decimal<2, RoundHalfEven> = price * quantity;
 print(subtotal);
 
 // one side carries a contract, the other does not

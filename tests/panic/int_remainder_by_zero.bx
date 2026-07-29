@@ -1,2 +1,2 @@
 let n: Int = 0;
-print(rem(1, n));
+print(remainder(1, n));
