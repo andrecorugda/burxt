@@ -547,6 +547,13 @@ function (self: Unit) declared_type(src: String, node: Int) -> Type {
 }
 
 function (mutable self: Unit) complain_at(src: String, token: Int, message: String) -> Int allocates {
+    // A probe round is silent. It refuses nothing, so anything it found is about a question
+    // still being answered — and this function PRINTS, so without the guard the user would
+    // read complaints that the real pass then does not make. The real pass reports
+    // everything, in its own order, exactly as it did before the inference existed.
+    if self.probing == 1 {
+        return 0;
+    }
     let t: Token = self.tokens[token];
     print("error: " + message + " (at `" + substring(src, t.start, t.length) + "`)");
     self.problems += 1;
@@ -1874,6 +1881,10 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int allocat
     // effect throughout, `pure` means the world is off limits.
     let outer_caller: Int = self.in_caller_region;
     let outer_pure: Int = self.in_pure;
+    // From the node's flags for now; corrected below to the STORED signature's flags once
+    // this body's owner is known. The stored one is what the probe updates, so reading the
+    // node here alone would mean an inferred `allocates` never reached the body it was
+    // inferred for — the body would still refuse what the signature now permits.
     self.in_caller_region = flag_allocates(item.value);
     self.in_pure = flag_pure(item.value);
     let signature: Node = self.nodes[item.c];
@@ -1927,10 +1938,26 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int allocat
     let outer_function: Int = self.in_function;
     let outer_loop: Int = self.loop_depth;
     let outer_fn: Int = self.current_function;
+    let outer_method: Int = self.current_method;
     self.current_function = -1;
+    self.current_method = -1;
     if item.kind == 80 {
         self.current_function = self.find_function(src, self.tokens[item.token].start,
                                        self.tokens[item.token].length);
+    }
+    if item.kind == 81 {
+        let receiver_token: Token = self.tokens[signature.value];
+        self.current_method = self.find_method_named(src, receiver_token.start,
+                                  receiver_token.length, self.tokens[item.token].start,
+                                  self.tokens[item.token].length);
+    }
+    // Now that the owner is known, take `allocates` from the signature the probe updates
+    // rather than from the node it was parsed with. See the note above.
+    if self.current_function >= 0 {
+        self.in_caller_region = flag_allocates(self.functions[self.current_function].flags);
+    }
+    if self.current_method >= 0 {
+        self.in_caller_region = flag_allocates(self.methods[self.current_method].flags);
     }
     self.in_function = 1;
     self.loop_depth = 0;
@@ -1945,6 +1972,7 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int allocat
     self.in_function = outer_function;
     self.loop_depth = outer_loop;
     self.current_function = outer_fn;
+    self.current_method = outer_method;
     let dropped: Int = truncate(self.bindings, base);
     self.depth -= 1;
     self.in_caller_region = outer_caller;
@@ -2419,9 +2447,59 @@ function (mutable self: Unit) check_applications(src: String) -> Int allocates {
     return 1;
 }
 
+// Work out which functions and methods allocate, so `allocates` need not be written.
+//
+// A least fixpoint, and it iterates rather than asking once because the answer travels along
+// the call graph: `a` allocates because it calls `b`, which allocates because it calls `c`.
+// One round per link, plus one to confirm nothing new — a 4-deep forwarding chain takes 5,
+// and the compiler's own 8,300 lines take 2, because nearly everything that allocates does
+// so directly.
+//
+// Rounds are safe to repeat, which is not luck but two properties worth naming:
+//   * the `typed` cache is a slot per NODE and the last answer for a node stands, so a
+//     second reading overwrites rather than appends;
+//   * `complain_at` is silent while probing, so nothing a round found is reported.
+// Bindings are already truncated per body by `check_body`.
+//
+// Terminates because the flags only ever go from 0 to 1, over a finite number of signatures.
+// The ceiling is a backstop for that argument being wrong, not an expectation.
+function (mutable self: Unit) infer_allocates(src: String) -> Int allocates {
+    self.probing = 1;
+    let ceiling: Int = len(self.functions) + len(self.methods) + 1;
+    // Where the binding stack stood before any round ran.
+    //
+    // `check_body` truncates back to its own base, so a FUNCTION body leaves nothing behind
+    // — but a top-level statement declares into the same stack and nothing pops it, because
+    // in a single pass nothing ever needed to. Two passes, and the real one met every
+    // top-level name already declared: `this name is already declared — Burxt does not
+    // shadow`, on 68 of 109 programs. The rounds have to leave the stack where they found it.
+    let base: Int = len(self.bindings);
+    let mutable round: Int = 0;
+    while round < ceiling {
+        self.probe_changes = 0;
+        let swept: Int = self.check_bodies(src);
+        let dropped: Int = truncate(self.bindings, base);
+        if self.probe_changes == 0 {
+            break;
+        }
+        round += 1;
+    }
+    self.probing = 0;
+    return round;
+}
+
 function (mutable self: Unit) check(src: String) -> Int allocates {
     let collected: Int = self.collect_declarations(src);
     let applications: Int = self.check_applications(src);
+    // Before anything is refused: a body may call a function declared 200 lines below it, so
+    // the answer has to exist before the first body is read. That ordering is the only reason
+    // `allocates` was ever required — the compiler always computed it.
+    let inferred: Int = self.infer_allocates(src);
+    let checked: Int = self.check_bodies(src);
+    return self.problems;
+}
+
+function (mutable self: Unit) check_bodies(src: String) -> Int allocates {
     let mutable i: Int = 0;
     while i < len(self.items) {
         let index: Int = self.items[i];

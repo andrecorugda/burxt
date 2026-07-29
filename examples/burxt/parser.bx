@@ -902,7 +902,50 @@ function (self: Unit) block_exits(block: Int) -> Bool {
     return self.stmt_exits(self.children[b.a + b.b - 1]);
 }
 
-function (self: Unit) has_region() -> Bool {
+// Set the `allocates` bit on whichever function or method is being checked, and say whether
+// that was news. The flag lives on the STORED signature, which is the same place every call
+// site already reads it from — so the inference needs no second table and no lookup path of
+// its own. That is the whole reason this is small.
+function (mutable self: Unit) note_allocates() -> Int {
+    if self.current_method >= 0 {
+        let m: Method = self.methods[self.current_method];
+        if flag_allocates(m.flags) == 1 {
+            return 0;
+        }
+        self.methods[self.current_method] = Method { receiver_start: m.receiver_start,
+            receiver_length: m.receiver_length, start: m.start, length: m.length,
+            return_type: m.return_type, parameters: m.parameters, mutating: m.mutating,
+            flags: m.flags + 2 };
+        self.probe_changes += 1;
+        return 1;
+    }
+    if self.current_function >= 0 {
+        let f: DeclaredFunction = self.functions[self.current_function];
+        if flag_allocates(f.flags) == 1 {
+            return 0;
+        }
+        self.functions[self.current_function] = DeclaredFunction { start: f.start,
+            length: f.length, return_type: f.return_type, parameters: f.parameters,
+            flags: f.flags + 2 };
+        self.probe_changes += 1;
+        return 1;
+    }
+    // The top level. It has no signature to carry the answer, and it is where the program's
+    // own region lives — nothing to record.
+    return 0;
+}
+
+function (mutable self: Unit) has_region() -> Bool {
+    // Probing: refuse nothing, and treat "something wanted a region while none was open"
+    // as the definition of "this function allocates in its caller's region". Six sites ask
+    // this question; recording here means the inference is one place rather than a sweep —
+    // and a sweep is exactly how the vtable ABI bug got two of its three sites right.
+    if self.probing == 1 {
+        if self.region_depth == 0 {
+            let noted: Int = self.note_allocates();
+        }
+        return true;
+    }
     return self.region_depth > 0 || self.in_caller_region == 1;
 }
 

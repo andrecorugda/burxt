@@ -1,20 +1,47 @@
 # Burxt — every block is a region (M14)
 
-> Status: **slice 1 DONE in stage-0 (v0.0.142) — `allocates` is inferred. Slices 2–3 pending.**
+> Status: **slice 1 DONE in BOTH compilers (stage-0 v0.0.142, stage-1 v0.0.144) — `allocates` is
+> inferred. Slices 2–3 pending.**
 >
 > | | |
 > |---|---|
 > | `examples/pos/` with every `allocates` deleted | **compiles, same receipt** |
 > | Fixpoint rounds, `examples/stage1.bx` (8.3k lines, ~500 functions) | **2** |
 > | Fixpoint rounds, a 4-deep forwarding chain | **5** — one per link, plus one to confirm |
-> | `burxt check examples/stage1.bx` | **0.26 s** (3 typecheck passes: 2 probe + 1 real) |
-> | Suite | 38 invariants, fixpoint intact, stage-1 still 109 of 109 |
+> | `burxt check examples/stage1.bx` | **0.06 s** (3 typecheck passes: 2 probe + 1 real) |
+> | stage-1 compiling its own source | **0.14 s** |
+> | Suite | 37 invariants, fixpoint intact, stage-1 110 of 110 |
 >
-> The cost is the honest one: checking now runs *rounds + 1* times instead of once. Two rounds
-> for real code, so ~3×, and it is bounded by the number of functions. A program with a 20-deep
-> forwarding chain would pay 21 passes; the fix if that ever bites is to process in
-> reverse-topological order, which makes an acyclic call graph converge in one. Not done, because
-> nothing measured needs it.
+> Both timings are the median of three warm runs. **An earlier version of this table said 0.26 s
+> for the check, which was a single cold run** — recorded and then repeated without being
+> re-measured, which is the failure this project keeps a numbers table to avoid.
+>
+> The cost is the honest one: checking runs *rounds + 1* times instead of once. Two rounds for
+> real code, so ~3×, bounded by the number of signatures. A 20-deep forwarding chain would pay
+> 21 passes; the fix if that ever bites is to walk the call graph in reverse-topological order,
+> which converges in one for an acyclic program. Not done, because nothing measured needs it.
+>
+> ### What stage-1 needed that stage-0 did not
+>
+> Stage-0 runs each probe round on a **throwaway checker**, so no state can leak. Stage-1 has one
+> `Unit` and no such option, and the difference cost one real bug:
+>
+> **A round has to leave the binding stack where it found it.** `check_body` truncates back to
+> its own base, so a function body leaves nothing behind — but a **top-level statement** declares
+> into the same stack and nothing pops it, because in a single pass nothing ever needed to. The
+> second pass met every top-level name already declared and refused **68 of 109 programs** with
+> `this name is already declared — Burxt does not shadow`. One `truncate` per round.
+>
+> Two things made the rest safe, and they are worth naming because they are why this was not
+> harder: the `typed` cache is a slot per NODE and the last answer stands, so a second reading
+> overwrites rather than appends; and `complain_at` is silenced while probing, which it had to be
+> anyway — it **prints**, so without the guard a user would read complaints from a question the
+> compiler had not finished answering.
+>
+> Stage-1 also needed `current_method`. Stage-0 keys methods in a separate set; stage-1 sets the
+> `allocates` bit on the **stored signature** — the same place every call site already reads it
+> from — so the inference needs no second table and no lookup path of its own, but it does need
+> to know which signature to write to.
 >
 > ### A use-after-free found while testing this, and fixed with it
 >
@@ -41,11 +68,10 @@
 >
 > ### What is NOT done
 >
-> - **Stage-1 still requires the word.** Slice 1 is stage-0 only, staged the way M7 staged
->   generics. That is why the proof lives in `tests/stage0-only/` and not `tests/pass/`: that
->   directory's contract is that both compilers accept everything in it, and an exemption list on
->   the 109-of-109 equality would be worse than a separate directory — a floor with holes cannot
->   see a regression.
+> - ~~**Stage-1 still requires the word.**~~ **DONE in v0.0.144.** `tests/stage0-only/` served its
+>   purpose and is gone: `inferred_allocates.bx` moved into `tests/pass/`, where both compilers are
+>   held to it, and the temporary invariant that guarded it was deleted — its own comment said to
+>   do exactly that.
 > - ~~**§5's hole is still open.**~~ **CLOSED in v0.0.143**, and without the syntax §5 proposed —
 >   see the note added to §5 below. `tests/fail/allocates_through_a_trait_object_needs_a_region.bx`.
 > - Slices 2 and 3: implicit block regions, `allocates nothing`, `burxt explain memory`.

@@ -249,6 +249,21 @@ record Unit {
     // Which function is being checked, so a `tail` call can be compared with the
     // signature it must replace. -1 at top level and inside a method.
     current_function: Int,
+    // Which METHOD is being checked, as an index into `methods`. -1 unless a method body
+    // is open. It exists for the same reason `current_function` does — something has to
+    // know who to credit — and it arrived with the `allocates` inference, which credits a
+    // method exactly as it credits a function.
+    current_method: Int,
+    // ---- working out `allocates` instead of asking for it (M14) --------------
+    //
+    // 1 during the probe rounds, which refuse nothing. While set, `has_region` records
+    // that something wanted a region and answers yes, so a round reaches the end of every
+    // body instead of stopping at the first allocation — and `complain_at` says nothing,
+    // because a probe's complaints are about a question it has not finished answering yet.
+    probing: Int,
+    // How many `allocates` flags this round newly set. Zero ends the fixpoint: the set only
+    // grows, over a finite number of functions, so it has to stop growing.
+    probe_changes: Int,
     // The backend's state: the IR text, the constants it referred to, a counter for
     // registers and one for labels, the locals' allocas, and the enclosing loops'
     // labels so `break` and `continue` know where to jump.

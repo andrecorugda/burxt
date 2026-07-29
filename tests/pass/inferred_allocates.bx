@@ -4,16 +4,14 @@
 // caller's region. Before v0.0.142 each was a compile error naming a keyword the compiler
 // had already worked out for itself.
 //
-// ---- Why this is not in tests/pass/ -----------------------------------------------
+// ---- Why this moved here ----------------------------------------------------------
 //
-// That directory has a contract: BOTH compilers accept every program in it, byte for byte,
-// and `the_burxt_backend_compiles_a_growing_share_of_the_suite` asserts 109 of 109. Stage-1
-// still requires the word — the inference is a stage-0 half, staged the way M7 staged
-// generics. Putting this in tests/pass/ would break that equality, and an exemption list on
-// the equality would be worse: a floor with holes in it cannot see a regression.
+// It began in `tests/stage0-only/`, because that directory's contract is that BOTH compilers
+// accept everything in it — `the_burxt_backend_compiles_a_growing_share_of_the_suite` asserts
+// 109 of 109 — and stage-1 still required the word. Staged the way M7 staged generics.
 //
-// So it lives here, and `allocates_is_inferred_in_stage_zero` in tests/runner.rs runs it
-// against stage-0 alone and says why. When the stage-1 half lands, this file moves.
+// v0.0.144 gave stage-1 the same inference, so it belongs here now, and both compilers are
+// held to it. `tests/stage0-only/` is gone rather than left empty.
 
 record Item { sku: String, name: String, price: Decimal<2> }
 
