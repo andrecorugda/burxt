@@ -229,20 +229,30 @@ function (mutable self: Unit) parse_type(src: String) -> Int allocates {
         // the way every other nested list is, with the start in `a` and the count in `b`.
         if self.at(35) {                             // '<'
             let open: Int = self.advance();
-            let args_start: Int = len(self.nested_children);
-            let mutable count: Int = 0;
+            // Gathered first, appended after — the `commit(base)` shape every other nested list in
+            // this parser uses, and for exactly the reason it exists. Taking the start before the
+            // loop looks right and is not: a NESTED application pushes its own arguments while this
+            // one is still parsing, so the range handed out begins inside the inner list.
+            // `Box<Box<Int>>` therefore read its argument as `Int`, and a generic containing a
+            // generic silently meant something else.
+            let mutable gathered: [Int] = [];
             while true {
                 let argument: Int = self.parse_type(src);
                 if argument < 0 { return -1; }
-                push(self.nested_children, argument);
-                count += 1;
+                push(gathered, argument);
                 if self.more_in_list(36) {           // ',' — a trailing one is allowed
                     continue;
                 }
                 break;
             }
             if !self.eat(src, 36, "`>` closing the type arguments") { return -1; }
-            return self.add(46, args_start, count, 0, 0, name_tok);
+            let args_start: Int = len(self.nested_children);
+            let mutable g: Int = 0;
+            while g < len(gathered) {
+                push(self.nested_children, gathered[g]);
+                g += 1;
+            }
+            return self.add(46, args_start, len(gathered), 0, 0, name_tok);
         }
         return self.add(46, 0, 0, 0, 0, name_tok);
     }

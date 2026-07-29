@@ -71,6 +71,31 @@ region r {
 Those two are genuinely different shapes in memory. `Pair<Int>` is two cells; `Pair<Point>` is
 four. Nothing is boxed to make them the same size, which is what "one copy per type" buys.
 
+## Constructors
+
+A function may build a generic and answer it, with the type arguments coming from **where the value
+lands** rather than from an argument:
+
+```burxt
+record Bag<T> { items: [T], count: Int }
+
+function empty_bag<T>() -> Bag<T> allocates {
+    return Bag { items: [], count: 0 };
+}
+
+region r {
+    let mutable names: Bag<String> = empty_bag();   // T = String, from the annotation
+    let numbers: Bag<Int> = empty_bag();            // T = Int, same source, second copy
+}
+```
+
+`empty_bag()` takes no arguments at all, so there is nothing to infer `T` from — except the type
+already written on the left. Reading it from there is why there is still no turbofish: writing
+`empty_bag::<String>()` would be the language demanding an answer it is holding.
+
+This works when every field can be built without a `T` in hand — an empty `[T]` needs no element.
+A `Bag<T>` with a `first: T` field cannot be built out of nothing, and asking says so by name.
+
 **A generic name always needs its arguments.** `let x: Pair = ...` is refused, and so is
 
 ```burxt

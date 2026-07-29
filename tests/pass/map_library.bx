@@ -12,7 +12,7 @@ use "../../lib/map.bx";
 record Point { x: Int, y: Int }
 
 region r {
-    let mutable m: Map<String, Int> = Map { entries: [], slots: [], live: 0 };
+    let mutable m: Map<String, Int> = map_new();
     let a: Int = m.set("alpha", 1);
     let b: Int = m.set("beta", 2);
     let c: Int = m.set("gamma", 3);
@@ -38,7 +38,7 @@ region r {
 
     // Enough keys to force a rehash — the table grows past 8 slots — so that insertion order is
     // shown surviving a growth and not just a removal.
-    let mutable big: Map<Int, Int> = Map { entries: [], slots: [], live: 0 };
+    let mutable big: Map<Int, Int> = map_new();
     let mutable i: Int = 0;
     while i < 20 {
         let put: Int = big.set(i * 7, i);
@@ -52,7 +52,7 @@ region r {
 
     // A record VALUE, which is the case Decision 5 exists to protect: an `Option<V>` return would
     // have restricted values to scalars, because a generic enum payload must be one.
-    let mutable places: Map<String, Point> = Map { entries: [], slots: [], live: 0 };
+    let mutable places: Map<String, Point> = map_new();
     let put: Int = places.set("origin", Point { x: 3, y: 4 });
     let here: Point = places.get("origin", Point { x: 0, y: 0 });
     print(here.x + here.y);

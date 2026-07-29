@@ -726,7 +726,14 @@ impl TypeChecker {
         if let Some(f) = self.structs.get(name) {
             return Some(f.clone());
         }
-        self.made_records.borrow().get(name).cloned()
+        if let Some(f) = self.made_records.borrow().get(name) {
+            return Some(f.clone());
+        }
+        // A generic's OWN name, with its fields still in terms of its parameters. Only reachable
+        // while checking the generic's own body, where `Map { ... }` means "this record, arguments
+        // not yet known". A bare `Map` as a type annotation is refused before it gets here, by the
+        // rule that a generic name always needs its arguments.
+        self.generic_records.get(name).map(|(_, fields)| fields.clone())
     }
 
     fn is_enum(&self, name: &str) -> bool {
@@ -1008,6 +1015,20 @@ impl TypeChecker {
     ) -> Result<(), String> {
         let instances = self.instance_of.borrow().clone();
         let shown = show(argument, &instances);
+        // A type PARAMETER satisfies a bound when its own declaration says so. That is the whole
+        // job of a bound: `Map<K: Equatable, V>` built inside `map_new<K: Equatable, V>` passes `K`
+        // along, and the promise travels with it. Checked before the concrete cases below, because
+        // a parameter is not any of them.
+        if let Type::Param(n) = argument {
+            if self.param_bounds.get(n).cloned().flatten().as_deref() == Some(bound) {
+                return Ok(());
+            }
+            return Err(format!(
+                "`{}` needs `{}: {}`, and the type parameter `{}` carries no such bound. Write \
+                 `{}: {}` where it is declared, so the promise travels with it.",
+                callee, param, bound, n, n, bound
+            ));
+        }
         match bound {
             "Ordered" => match argument {
                 Type::Int | Type::Decimal { .. } => Ok(()),
@@ -1065,11 +1086,21 @@ impl TypeChecker {
         name: &str,
         given: &[(String, Expr)],
         expected: Option<&Type>,
-    ) -> Result<String, String> {
+    ) -> Result<Type, String> {
         let Some((params, fields)) = self.generic_records.get(name).cloned() else {
-            return Ok(name.to_string());
+            return Ok(Type::Named(name.to_string()));
         };
         let mut map: HashMap<String, Type> = HashMap::new();
+        // An expectation that is itself an application — `-> Map<K, V>` inside a generic, or
+        // `Map<String, Int>` before instantiation — names the arguments directly. Read first,
+        // because what the context says beats what the field values imply.
+        if let Some(Type::Generic { name: want, args }) = expected {
+            if want == name && args.len() == params.len() {
+                for (p, a) in params.iter().zip(args) {
+                    map.insert(p.name.clone(), a.clone());
+                }
+            }
+        }
         if let Some(Type::Named(want)) = expected {
             if let Some((of, args)) = self.instance_of.borrow().get(want).cloned() {
                 if of == name {
@@ -1118,7 +1149,21 @@ impl TypeChecker {
             }
         }
         match self.expand(&Type::Generic { name: name.to_string(), args: type_args })? {
-            Type::Named(symbol) => Ok(symbol),
+            Type::Named(symbol) => Ok(Type::Named(symbol)),
+            // Still abstract, because an argument mentions a type parameter — which is what
+            // `Map { entries: [], slots: [], live: 0 }` looks like INSIDE `Map`'s own generic
+            // function. `expand` leaves it alone on purpose, by the same rule the function path
+            // uses, and this used to call that a codegen bug.
+            //
+            // There is no instantiation to name yet, so the answer is the generic's own name. Its
+            // fields are typed in terms of its parameters, which is exactly what checking this body
+            // needs — and nothing will ever lower it, because `specialise` clones the UNTYPED
+            // declaration and the copy is checked fresh with the arguments substituted. The
+            // abstract pass validates; the concrete pass compiles.
+            // Answered as the APPLICATION and not as a bare name, so that it still equals the
+            // `Box<T>` a signature wrote. A bare `Box` would compare unequal to `Box<T>` and the
+            // return check would refuse the very literal it asked for.
+            still @ Type::Generic { .. } => Ok(still),
             other => Err(format!("codegen bug: `{}` instantiated to {}", name, other)),
         }
     }
@@ -4053,6 +4098,26 @@ impl TypeChecker {
                             format!("in the call to `{}`, argument {}: {}", name, i + 1, why)
                         })?;
                     }
+                    // Anything the arguments could not settle, read from the EXPECTATION. A
+                    // parameter that appears only in the return type has nothing to infer from at
+                    // the call, but `let m: Map<String, Int> = map_new();` already says what it is
+                    // — in the place this language says a type belongs. Unifying the declared
+                    // return against what the context wants is therefore strictly better than a
+                    // turbofish, and keeps "there is no turbofish" true.
+                    //
+                    // Second, not first: an argument is more specific than a context, and a
+                    // context that disagrees should be reported as a mismatch by the ordinary
+                    // return check rather than silently win here.
+                    if type_params.iter().any(|p| !map.contains_key(&p.name)) {
+                        if let Some(want) = expected {
+                            let instances = self.instance_of.borrow().clone();
+                            // A failure is not an error here. The expectation may legitimately be
+                            // unrelated — a call whose result is discarded, or one inside a bigger
+                            // expression — and the real complaint is the one below, which names the
+                            // parameter that is still unknown.
+                            let _ = unify(&ret, want, &mut map, &instances);
+                        }
+                    }
                     let mut type_args = Vec::with_capacity(type_params.len());
                     for p in &type_params {
                         match map.get(&p.name) {
@@ -4060,9 +4125,13 @@ impl TypeChecker {
                             None => {
                                 return Err(format!(
                                     "`{}` cannot tell what `{}` is from this call: no \
-                                     argument mentions it. A type parameter that appears \
-                                     only in the return type cannot be inferred.",
-                                    name, p.name
+                                     argument mentions it, and the surrounding code does not \
+                                     say either. Write the type where the value lands, as in \
+                                     `let x: {} = {}(...);`",
+                                    name,
+                                    p.name,
+                                    show(&ret, &self.instance_of.borrow().clone()),
+                                    name
                                 ))
                             }
                         }
@@ -4187,7 +4256,15 @@ impl TypeChecker {
                 // `Pair { left: 7, right: "seven" }`. Which instantiation it is comes from
                 // the context if there is one, and otherwise from the field values — the
                 // same two sources, in the same order, that a generic enum's variant uses.
-                let name = &self.instantiate_record(name, fields, expected)?;
+                // The literal's TYPE and the name its fields are read under are not always the
+                // same thing: inside the generic itself the type is `Box<T>` while the fields live
+                // under `Box`. Concrete instantiations agree, so this only differs abstractly.
+                let literal_ty = self.instantiate_record(name, fields, expected)?;
+                let name = &match &literal_ty {
+                    Type::Named(symbol) => symbol.clone(),
+                    Type::Generic { name: still, .. } => still.clone(),
+                    other => return Err(format!("codegen bug: `{}` instantiated to {}", name, other)),
+                };
                 let declared = self
                     .fields_of(name)
                     .ok_or_else(|| {
@@ -4240,7 +4317,7 @@ impl TypeChecker {
                     typed_fields.push(typed);
                 }
                 Ok(TypedExpr {
-                    ty: Type::Named(name.clone()),
+                    ty: literal_ty,
                     kind: TypedExprKind::StructLit { name: name.clone(), fields: typed_fields },
                 })
             }

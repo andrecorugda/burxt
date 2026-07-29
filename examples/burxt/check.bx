@@ -443,6 +443,29 @@ function (mutable self: Unit) unify(src: String, declared: Type, actual: Type) -
         return self.unify(src, self.declared_type(src, declared.scale),
                           self.declared_type(src, actual.scale));
     }
+    // A named APPLICATION, argument by argument: `Map<K, V>` against `Map<String, Int>` binds both.
+    // Without this, unify handled slices and stopped, so a parameter reachable only through a type
+    // argument could not be inferred — which is every constructor, since `-> Map<K, V>` mentions
+    // its parameters only there.
+    if declared.kind == 46 && declared.contract > 0 && actual.kind == 46 {
+        if declared.contract != actual.contract {
+            return false;
+        }
+        if !spans_equal(src, declared.name_start, declared.name_len,
+                        actual.name_start, actual.name_len) {
+            return false;
+        }
+        let mutable i: Int = 0;
+        while i < declared.contract {
+            let want: Type = self.declared_type(src, self.nested_children[declared.scale + i]);
+            let got: Type = self.declared_type(src, self.nested_children[actual.scale + i]);
+            if !self.unify(src, want, got) {
+                return false;
+            }
+            i += 1;
+        }
+        return true;
+    }
     return self.same_type(src, declared, actual);
 }
 
@@ -1342,12 +1365,32 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
         let base: Int = len(self.type_bindings);
         let generic: Int = self.generic_named(src, t.start, t.length);
         if generic >= 0 {
+            // Anything the arguments cannot settle is read from the EXPECTATION first, so that
+            // `let m: Map<String, Int> = map_new();` works: a type parameter appearing only in the
+            // return type has no argument to infer from, and the annotation already says what it
+            // is, in the place this language says a type belongs. Better than a turbofish, which
+            // would ask a question the context has already answered.
+            //
+            // Bound BEFORE the arguments are matched, so an argument that disagrees still fails
+            // where it should — `unify` refuses to rebind a parameter to something that does not
+            // agree with what it already stands for.
+            // Only when there IS an expectation. `print(identity(3))` has none, and binding `T`
+            // to "unknown" before the arguments are looked at poisoned it — the argument then
+            // disagreed with a parameter nobody had settled, and nine valid programs were refused.
+            if !is_unknown(expected) {
+                let from_context: Bool = self.unify(src, signature.return_type, expected);
+            }
             let bound: Int = self.bind_type_arguments(src, generic, n.a, signature.params,
                                                       n.token);
         }
         let ok: Int = self.check_against_params(src, n.token, n.a, signature.params,
                                                 "function");
-        let answer: Type = self.resolve_shallow(src, signature.return_type);
+        // DEEPLY, not shallowly. `resolve_shallow` only answers for a bare parameter, so a
+        // function returning `Map<K, V>` answered `Map<K, V>` — with the parameters still in it —
+        // and whoever received that had no bindings left to make sense of them. The emitter reads
+        // this cached answer to pick which copy to call, so a half-resolved one meant a call to an
+        // unmangled `@map_new` that nothing defines.
+        let answer: Type = self.resolve_deep(src, signature.return_type, n.token);
         // The bindings belong to this call. A nested generic call pushed its own on top and
         // truncating restores ours, which is why the base is taken before and not after.
         let dropped: Int = truncate(self.type_bindings, base);

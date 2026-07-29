@@ -175,36 +175,47 @@ They need a function as a value, and a closure needs an owner for its captured s
 memory question and not a syntax one. Iteration is a `for` loop over `map_keys`, which is a
 construct the language already has and which cannot capture anything by accident.
 
-### Decision 7 — there is no `map_new()`, and that is a language gap, not a preference
-
-An empty map is written as a literal with its type named:
+### Decision 7 — `map_new()` exists, and closing the two gaps that blocked it was the real work
 
 ```burxt
-let mutable counts: Map<String, Int> = Map { entries: [], slots: [], live: 0 };
+let mutable counts: Map<String, Int> = map_new();
 ```
 
-A constructor cannot be written today, and two separate holes are why:
+This spec first recorded that a constructor **could not be written**, and named two holes. Both are
+closed in v0.0.116, and they were worth closing for every generic anyone writes, not just this one:
 
-1. **A type parameter that appears only in the RETURN type cannot be inferred.**
-   `function map_new<K, V>() -> Map<K, V>` has no argument to infer from, and Burxt has no
-   turbofish. The fix is **inference from the expectation** — `let m: Map<String, Int> = map_new();`
-   already says what `K` and `V` are, in the place the guide says a type belongs. That is strictly
-   better than a turbofish and keeps the guide's "there is no turbofish" true.
-2. **A generic record literal inside the generic that declares it is refused by stage-0**, with
-   `codegen bug: Box instantiated to Box<T>`. `expand` correctly leaves `Box<T>` abstract when an
-   argument still mentions a parameter — the same rule the function path uses — but
-   `instantiate_record` only accepts a `Type::Named` back and treats the abstract answer as a bug.
-   It also only reads an expectation when the expectation is `Type::Named`, so a `Type::Generic`
-   expectation contributes nothing.
+1. **A generic record literal inside the generic that declares it.** `Map { entries: [], ... }` in
+   `map_new`'s body is not an instantiation of anything yet — it becomes one when `map_new` does.
+   `expand` already left it abstract by the same rule the function path uses, and
+   `instantiate_record` called that "codegen bug". It now answers the **application** rather than a
+   bare name, so it still equals the `Map<K, V>` the signature wrote, and nothing lowers it because
+   `specialise` clones the untyped declaration and the copy is checked fresh. **The abstract pass
+   validates; the concrete pass compiles.**
+2. **A type parameter with nothing to infer from.** Read from the **expectation**:
+   `let m: Map<String, Int> = map_new();` already says what `K` and `V` are, in the place this
+   language says a type belongs. That is strictly better than a turbofish, which would be the
+   language demanding an answer it is already holding — and it keeps the guide's "there is no
+   turbofish" true rather than adding a footnote to it.
 
-Stage-1 does **not** have hole 2: it resolves lazily and never needs a symbol until layout. So
-this is one compiler behind the other, which is the situation the differential test exists to
-surface, and it is surfaced here rather than worked around silently.
+A bound travels with the parameter too: `satisfies` now accepts a type parameter whose own
+declaration carries the bound, because a generic that declares `K: Equatable` and then cannot rely
+on it has a bound for decoration.
 
-Until both are fixed, the three fields are visible at each construction site. That is the one
-place `lib/map.bx` is less friendly than this language should be, and it is written down rather
-than papered over. **Trigger:** these two fixes, which are worth doing for every generic
-constructor anyone writes, not just this one.
+**Three defects fell out of building it, all in stage-1**, and one of them was old:
+
+- The call's answer was resolved **shallowly**, so a function returning `Map<K, V>` answered
+  `Map<K, V>` with the parameters still in it. The emitter reads that cached answer to choose which
+  copy to call, so a half-resolved one meant a call to an unmangled symbol nothing defines.
+- `unify` descended into slices but **not into a named application's arguments**, so a parameter
+  reachable only through a type argument could not be inferred — which is every constructor.
+- **`Box<Box<Int>>` read its argument as `Int`.** The parser took `args_start` *before* parsing the
+  arguments, and a nested application pushes its own arguments while the outer one is still
+  parsing, so the outer range began inside the inner list. Gathered-then-appended now, which is the
+  `commit(base)` shape every other nested list in that parser already uses. This was wrong from the
+  day applications were parsed and no test had reached it.
+
+`tests/pass/generics_constructors.bx` pins all of it, including the nested case and a
+zero-argument constructor.
 
 ## 2. What has to change in the compilers
 

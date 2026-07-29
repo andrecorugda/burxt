@@ -37,26 +37,24 @@ record Map<K: Equatable, V> { entries: [MapEntry<K, V>], slots: [Int], live: Int
 
 // ---- Building one ----------------------------------------------------------
 
-// An empty map is written as a literal with its type named:
+// An empty map.
 //
-//     let mutable counts: Map<String, Int> = Map { entries: [], slots: [], live: 0 };
+//     let mutable counts: Map<String, Int> = map_new();
 //
-// There is deliberately no `map_new()`. It cannot be written today, and the reason is a real
-// language gap rather than a preference: a generic function whose type parameters appear ONLY in
-// its return type has nothing to infer them from, and a generic record literal inside the generic
-// that declares it is not yet accepted by stage-0 (`codegen bug: Box instantiated to Box<T>`).
-// Both are recorded in spec/M11-MAPS.md Decision 7 with what it would take to fix them — and the
-// fix is inference from the expectation, NOT a turbofish, because the type is already written
-// where the value lands.
-//
-// Until then the three fields are visible at each construction site. That is the one place this
-// file is not as friendly as it should be, and it is written down rather than papered over.
+// The type arguments come from the ANNOTATION, not from an argument — there is nothing to pass.
+// That works because a call whose type parameters the arguments cannot settle reads them from the
+// expectation, which is strictly better than a turbofish: the type is already written where the
+// value lands, and writing it twice would be the language asking a question it can already answer.
+// Landed in v0.0.116; before that this had to be spelled `Map { entries: [], slots: [], live: 0 }`
+// with all three fields exposed at every construction site. See spec/M11-MAPS.md Decision 7.
 //
 // Everything else is a METHOD, and not for tidiness: Burxt has no writable parameters, so a
 // container that changes has to change through `mutable self`. The API is better for it —
 // `counts.set("k", 1)` rather than `map_set(counts, "k", 1)` — which is the usual way a real
 // constraint turns out to have been pointing at the nicer design.
-
+function map_new<K: Equatable, V>() -> Map<K, V> allocates {
+    return Map { entries: [], slots: [], live: 0 };
+}
 
 // Where a key wants to live, as an index into `slots`.
 //

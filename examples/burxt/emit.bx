@@ -841,7 +841,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
             let dropped: String = self.fresh();
             let called_it: Int = self.write_body("  " + dropped + " = call i64 @"
                                         + substring(src, t.start, t.length)
-                                        + self.call_suffix(src, t, n.a)
+                                        + self.call_suffix(src, t, n.a, node)
                                         + "(" + all + ")\n");
             let reg: String = self.fresh();
             let address: Int = self.write_body("  " + reg + " = ptrtoint ptr " + storage
@@ -850,7 +850,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
         }
         let reg: String = self.fresh();
         let visited: Int = self.write_body("  " + reg + " = call i64 @" + substring(src, t.start,
-                                  t.length) + self.call_suffix(src, t, n.a)
+                                  t.length) + self.call_suffix(src, t, n.a, node)
                                   + "(" + args + ")\n");
         return reg;
     }
@@ -1442,7 +1442,7 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates
         let answer: String = self.fresh();
         let jumped: Int = self.write_body("  " + answer + " = musttail call i64 @"
             + substring(src, target.start, target.length)
-            + self.call_suffix(src, target, value.a) + "(" + args + ")\n");
+            + self.call_suffix(src, target, value.a, n.a) + "(" + args + ")\n");
         return self.write_body("  ret i64 " + answer + "\n");
     }
 
@@ -1987,6 +1987,21 @@ function (mutable self: Unit) find_instance(src: String, generic: Int, args_star
     return len(self.instances) - 1;
 }
 
+// The declared function a generic index names. `Generic` holds a name span rather than an index
+// into `funs`, because a generic may be a record or an enum too, so the crossing is by bytes.
+function (self: Unit) find_fun_by_index(generic: Int) -> Int {
+    let declaration: Generic = self.generics[generic];
+    let mutable i: Int = 0;
+    while i < len(self.funs) {
+        let f: DeclaredFunction = self.funs[i];
+        if f.start == declaration.start && f.length == declaration.length {
+            return i;
+        }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
 // Which instance a call resolves to, working out its type arguments the way the checker did:
 // unify the declared parameter types against the actual ones. The actuals come from the
 // checker's own cache and are resolved DEEPLY first, because inside `echo<T>` the argument's
@@ -1996,8 +2011,16 @@ function (mutable self: Unit) find_instance(src: String, generic: Int, args_star
 // enclosing generic has not been instantiated yet, and this call will be reached again when it
 // is. That is exactly the case a work list exists to handle.
 function (mutable self: Unit) instance_of_call(src: String, generic: Int, params: Int,
-                                               args: Int) -> Int allocates {
+                                               args: Int, call: Int) -> Int allocates {
     let base: Int = len(self.type_bindings);
+    // What the CALL's type turned out to be settles anything the arguments cannot — which for a
+    // constructor is everything, since `-> Map<K, V>` mentions its parameters only in the return.
+    // The checker already worked this out and cached it, so the emitter reads the answer rather
+    // than deriving it a second time and risking a different one.
+    let found: Int = self.find_fun_by_index(generic);
+    if found >= 0 {
+        let matched: Bool = self.unify(src, self.funs[found].return_type, self.type_at(call));
+    }
     let wanted: Node = self.nodes[params];
     let given: Node = self.nodes[args];
     let mutable i: Int = 0;
@@ -2037,7 +2060,8 @@ function (mutable self: Unit) instance_of_call(src: String, generic: Int, params
 // The suffix a call site must add to name the copy it is calling, or "" when the callee is not
 // generic. Also the moment an instance is DISCOVERED, which is why it is not a pure lookup: a
 // call reached while emitting one instance adds the next one to the list.
-function (mutable self: Unit) call_suffix(src: String, name: Token, args: Int) -> String allocates {
+function (mutable self: Unit) call_suffix(src: String, name: Token, args: Int,
+                                          call: Int) -> String allocates {
     let generic: Int = self.generic_named(src, name.start, name.length);
     if generic < 0 {
         return "";
@@ -2046,7 +2070,7 @@ function (mutable self: Unit) call_suffix(src: String, name: Token, args: Int) -
     if found < 0 {
         return "";
     }
-    let instance: Int = self.instance_of_call(src, generic, self.funs[found].params, args);
+    let instance: Int = self.instance_of_call(src, generic, self.funs[found].params, args, call);
     if instance < 0 {
         return "";                                   // still abstract: nothing to name yet
     }
