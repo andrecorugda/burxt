@@ -1,0 +1,52 @@
+// METHODS on a generic type, which is the last piece of M7. A method's copy is chosen by its
+// RECEIVER rather than by its arguments — `Pair<Point>.left` — so no unification is needed at the
+// call site: whoever calls it already knows what they are holding. The symbol is `Pair$Point.left`.
+//
+// The bug this fixture exists to catch is not a wrong answer, it is a wrong FRAME. A method
+// returning `T` where `T = Point` returns by address, and the call site — reading a type the
+// checker had already resolved — passed a storage pointer as the first argument. The callee,
+// reading `T` unresolved, did not take one. Two halves of one call disagreeing about the shape of
+// a function segfaults rather than printing something wrong, which is the better failure.
+
+record Point { x: Int, y: Int }
+record Pair<T> { first: T, second: T }
+
+function (self: Pair<T>) left() -> T {
+    return self.first;
+}
+
+// `mutable self` writes back into the caller's value, and for `T = Point` each write is two cells
+// and not one. The scalar and aggregate instantiations of this method are genuinely different code.
+function (mutable self: Pair<T>) swap() -> Int {
+    let keep: T = self.first;
+    self.first = self.second;
+    self.second = keep;
+    return 0;
+}
+
+// A method that takes a `T` as well as returning one, so the parameter's convention is exercised
+// in both instantiations too.
+function (self: Pair<T>) either(pick: Bool) -> T {
+    if pick {
+        return self.first;
+    }
+    return self.second;
+}
+
+region r {
+    let mutable a: Pair<Int> = Pair { first: 3, second: 4 };
+    print(a.left());
+    let done: Int = a.swap();
+    print(a.left());
+    print(a.either(false));
+
+    let mutable b: Pair<Point> = Pair { first: Point { x: 1, y: 2 },
+                                        second: Point { x: 9, y: 8 } };
+    print(b.left().x);
+    let moved: Int = b.swap();
+    print(b.left().x);
+    print(b.either(false).y);
+
+    let s: Pair<String> = Pair { first: "one", second: "two" };
+    print(s.either(true));
+}

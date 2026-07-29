@@ -1183,8 +1183,15 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             // method call from a pure function can never be allowed.
             let complained: Int = self.not_pure(src, n.token, "call a method");
         }
+        // The receiver's arguments are in scope for the whole call: a parameter declared `T`
+        // has to accept a Point when the receiver is a `Pair<Point>`, and the answer has to BE
+        // a Point, because whoever receives it no longer has the bindings. The same shape the
+        // field rule below uses — a method is a field's worth of resolution plus arguments.
+        let base: Int = self.bind_from_application(src, holder);
         let ok: Int = self.check_against_params(src, n.token, n.b, m.params, "method");
-        return m.return_type;
+        let answer: Type = self.resolve_deep(src, m.return_type, n.token);
+        let dropped: Int = truncate(self.type_bindings, base);
+        return answer;
     }
 
     if n.kind == 11 {                                // a field access
@@ -2174,24 +2181,6 @@ function (mutable self: Unit) check_type_shape(src: String, node: Int, at: Int) 
 // layout is a count read under the arguments in scope.
 //
 // Answers the declaration node so the message can point at it, or -1 when there is none.
-// A METHOD on a generic type, which this slice does not do. `Stack<T>.push` needs the same copy
-// per instantiation that a generic function needs, plus a mangled receiver, and the guard is
-// separate from `generic_function` because that one is now a work list rather than a refusal.
-function (self: Unit) generic_method(src: String) -> Int {
-    let mutable at: Int = 0;
-    while at < len(self.nodes) {
-        let n: Node = self.nodes[at];
-        if n.kind == 81 {
-            let signature: Node = self.nodes[n.c];
-            let receiver: Token = self.tokens[signature.value];
-            if self.generic_named(src, receiver.start, receiver.length) >= 0 {
-                return at;
-            }
-        }
-        at += 1;
-    }
-    return 0 - 1;
-}
 
 function (self: Unit) generic_function(src: String) -> Int {
     let mutable at: Int = 0;

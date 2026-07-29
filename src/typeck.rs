@@ -2570,7 +2570,6 @@ impl TypeChecker {
     /// the declaration and its instantiations.
     fn check_match_arms(
         &mut self,
-        enum_name: String,
         variants: Vec<(String, Vec<Type>)>,
         scrutinee: TypedExpr,
         arms: &[MatchArm],
@@ -2985,7 +2984,6 @@ impl TypeChecker {
                             .collect();
                         let shown = show(&scrutinee.ty, &self.instance_of.borrow().clone());
                         return self.check_match_arms(
-                            name.clone(),
                             open,
                             scrutinee,
                             arms,
@@ -3009,7 +3007,7 @@ impl TypeChecker {
                     .ok_or_else(|| format!("codegen bug: no enum named `{}`", enum_name))?;
 
                 let shown = show(&scrutinee.ty, &self.instance_of.borrow().clone());
-                return self.check_match_arms(enum_name, variants, scrutinee, arms, s.span, shown);
+                return self.check_match_arms(variants, scrutinee, arms, s.span, shown);
             }
             StmtKind::Break | StmtKind::Continue => {
                 let word = if matches!(s.kind, StmtKind::Break) { "break" } else { "continue" };
@@ -5045,7 +5043,6 @@ fn calls_itself(body: &[Stmt], name: &str) -> bool {
             ExprKind::StructLit { fields, .. } => fields.iter().any(|(_, v)| in_expr(v, name)),
             ExprKind::Field { base, .. } => in_expr(base, name),
             ExprKind::ArrayLit(items) => any(items),
-        ExprKind::Try(inner) => in_expr(inner, name),
             ExprKind::Try(inner) => in_expr(inner, name),
             ExprKind::Index { base, index } => in_expr(base, name) || in_expr(index, name),
             ExprKind::InterpStr(parts) => parts.iter().any(|p| match p {

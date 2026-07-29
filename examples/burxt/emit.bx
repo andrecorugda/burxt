@@ -289,6 +289,17 @@ function (mutable self: Unit) field_type_here(src: String, holder: Type, at: Int
     return settled;
 }
 
+// Does a value of this type travel by ADDRESS rather than in a register? Resolved first, because
+// a `T` is whatever it was bound to and the answer decides the calling convention.
+//
+// It did not resolve at first, and the bug that found was precise: a method returning `T` where
+// `T = Point` did not set up an sret, while the CALL site — reading the checker's already-resolved
+// type — passed a storage pointer as the first argument. The two halves of one call disagreeing
+// about the shape of a function is not a wrong answer, it is a wrong frame.
+function (self: Unit) is_aggregate_written(src: String, written: Type) -> Bool {
+    return self.is_aggregate(self.resolve_shallow(src, written));
+}
+
 function (self: Unit) is_aggregate(bound_type: Type) -> Bool {
     return bound_type.kind == 46 || bound_type.kind == 48 || bound_type.kind == 49;
 }
@@ -391,7 +402,7 @@ function (mutable self: Unit) emit_element(src: String, holder: Type, base: Stri
             let found: Int = self.write_body("  " + at + " = call i64 @burxt.slot(i64 " + base
                                     + ", i64 " + index + ", i64 "
                                     + to_string(self.tokens[token].start) + ")\n");
-            if self.is_aggregate(element) {
+            if self.is_aggregate_written(src, element) {
                 return at;
             }
             let as_ptr: String = self.fresh();
@@ -420,7 +431,7 @@ function (mutable self: Unit) emit_element(src: String, holder: Type, base: Stri
         let at: String = self.fresh();
         let stepped: Int = self.write_body("  " + at + " = getelementptr i64, ptr " + as_ptr
                                   + ", i64 " + scaled + "\n");
-        if self.is_aggregate(element) {
+        if self.is_aggregate_written(src, element) {
             let reg: String = self.fresh();
             let visited: Int = self.write_body("  " + reg + " = ptrtoint ptr " + at + " to i64\n");
             return reg;
@@ -545,7 +556,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
         let stepped: Int = self.write_body("  " + at + " = getelementptr i64, ptr " + as_ptr
                                   + ", i64 " + to_string(offset) + "\n");
         let mine: Type = self.type_at(node);
-        if self.is_aggregate(mine) {
+        if self.is_aggregate_written(src, mine) {
             // A field that is itself an aggregate answers an INTERIOR address, which is
             // the same kind of value as any other aggregate's.
             let reg: String = self.fresh();
@@ -578,7 +589,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
             let at: String = self.fresh();
             let stepped: Int = self.write_body("  " + at + " = getelementptr i64, ptr " + storage
                                       + ", i64 " + to_string(offset) + "\n");
-            if self.is_aggregate(field_ty) {
+            if self.is_aggregate_written(src, field_ty) {
                 // A field holding an aggregate holds a COPY of it, not a reference to
                 // wherever the value came from.
                 let copied: Int = self.copy_cells(src, at, value,
@@ -624,7 +635,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
             let at: String = self.fresh();
             let stepped: Int = self.write_body("  " + at + " = getelementptr i64, ptr " + storage
                                       + ", i64 " + to_string(i * stride) + "\n");
-            if self.is_aggregate(element) {
+            if self.is_aggregate_written(src, element) {
                 let copied: Int = self.copy_cells(src, at, value, stride);
             } else {
                 let stored: Int = self.write_body("  store i64 " + value + ", ptr " + at + "\n");
@@ -775,11 +786,13 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
             k += 1;
         }
         let answers: Type = self.type_at(node);
-        if self.is_aggregate(answers) {
+        if self.is_aggregate_written(src, answers) {
             let storage: String = self.scratch(self.cells_of(src, answers));
             let dropped: String = self.fresh();
+            let seen: Int = self.note_holder(src, holder);
             let called_it: Int = self.write_body("  " + dropped + " = call i64 @"
                                         + method_symbol(src, holder, self.tokens[n.token])
+                                        + self.holder_suffix(src, holder)
                                         + "(ptr " + storage + ", " + args + ")\n");
             let reg: String = self.fresh();
             let address: Int = self.write_body("  " + reg + " = ptrtoint ptr " + storage
@@ -787,8 +800,10 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
             return reg;
         }
         let reg: String = self.fresh();
+        let seen: Int = self.note_holder(src, holder);
         let visited: Int = self.write_body("  " + reg + " = call i64 @"
                                   + method_symbol(src, holder, self.tokens[n.token])
+                                  + self.holder_suffix(src, holder)
                                   + "(" + args + ")\n");
         return reg;
     }
@@ -817,7 +832,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
             }
         }
         let answers: Type = self.type_at(node);
-        if self.is_aggregate(answers) {
+        if self.is_aggregate_written(src, answers) {
             let storage: String = self.scratch(self.cells_of(src, answers));
             let mutable all: String = "ptr " + storage;
             if args != "" {
@@ -1043,7 +1058,7 @@ function (mutable self: Unit) emit_construction(src: String, holder: Type, call:
                                       + ", i64 " + to_string(cell) + "\n");
             let payload_ty: Type = self.type_at(self.children[list.a + i]);
             let width: Int = self.cells_of(src, payload_ty);
-            if self.is_aggregate(payload_ty) {
+            if self.is_aggregate_written(src, payload_ty) {
                 let copied: Int = self.copy_cells(src, at, value, width);
             } else {
                 let put: Int = self.write_body("  store i64 " + value + ", ptr " + at + "\n");
@@ -1309,7 +1324,7 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates
         }
         let value: String = self.emit_value_for(src, declared, n.b);
         let cells: Int = self.cells_of(src, declared);
-        if self.is_aggregate(declared) {
+        if self.is_aggregate_written(src, declared) {
             // The binding gets its OWN storage and a copy: `let a: S = b` then changing
             // `b.f` must not change `a.f`, which is what by-value means.
             let slot: Int = self.declare_slot(src, name.start, name.length, cells, 1);
@@ -1326,7 +1341,7 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates
         if target.kind == 5 {                        // a name
             let name: Token = self.tokens[target.token];
             let slot: Int = self.find_slot(src, name.start, name.length);
-            if self.is_aggregate(into) {
+            if self.is_aggregate_written(src, into) {
                 return self.copy_cells(src, "%v" + to_string(slot), value,
                                        self.cells_of(src, into));
             }
@@ -1338,7 +1353,7 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates
         if at == "" {
             return 0;
         }
-        if self.is_aggregate(into) {
+        if self.is_aggregate_written(src, into) {
             return self.copy_cells(src, at, value, self.cells_of(src, into));
         }
         return self.write_body("  store i64 " + value + ", ptr " + at + "\n");
@@ -1499,7 +1514,7 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates
         // what it holds — the same rule `let` follows.
         let value: String = self.emit_element(src, holder, base, i, n.token);
         let cells: Int = self.cells_of(src, element);
-        if self.is_aggregate(element) {
+        if self.is_aggregate_written(src, element) {
             let slot: Int = self.declare_slot(src, name.start, name.length, cells, 1);
             let copied: Int = self.copy_cells(src, "%v" + to_string(slot), value, cells);
         } else {
@@ -1619,7 +1634,7 @@ function (mutable self: Unit) bind_payload(src: String, holder: Type, arm: Node,
                 let at: String = self.fresh();
                 let stepped: Int = self.write_body("  " + at + " = getelementptr i64, ptr " + base
                                           + ", i64 " + to_string(cell) + "\n");
-                if self.is_aggregate(payload) {
+                if self.is_aggregate_written(src, payload) {
                     let slot: Int = self.declare_slot(src, name.start, name.length, 1, 0);
                     let address: String = self.fresh();
                     let taken: Int = self.write_body("  " + address + " = ptrtoint ptr " + at
@@ -1864,7 +1879,11 @@ function (mutable self: Unit) emit_extern(src: String, index: Int) -> Int alloca
 
 // A type as a symbol fragment. Total by construction: every kind answers something, because a
 // name that falls through to "" would collide two instances into one definition.
-function (self: Unit) mangle_type(src: String, t: Type) -> String allocates {
+function (self: Unit) mangle_type(src: String, written: Type) -> String allocates {
+    // Resolved at every level, like `cells_of`. So `Pair<Pair<T>>` mangles correctly with the
+    // bindings in scope and nothing has to be substituted first — the argument list travels down
+    // by being looked up rather than rewritten.
+    let t: Type = self.resolve_shallow(src, written);
     if t.kind == 40 { return "Int"; }
     if t.kind == 41 { return "Bool"; }
     if t.kind == 42 { return "String"; }
@@ -2023,6 +2042,58 @@ function (mutable self: Unit) call_suffix(src: String, name: Token, args: Int) -
     return suffix;
 }
 
+// The suffix that names a METHOD's copy: the receiver's type arguments, mangled. `Pair<Point>`
+// gives `$Point`, so the symbol is `Pair$Point.left`. A method on a generic type is the one case
+// where the copy is chosen by the RECEIVER rather than by the arguments, which is also why it
+// needs no unification — the call site already knows what it is holding.
+function (self: Unit) holder_suffix(src: String, holder: Type) -> String allocates {
+    if holder.kind != 46 || holder.contract <= 0 {
+        return "";
+    }
+    let mutable suffix: String = "";
+    let mutable i: Int = 0;
+    while i < holder.contract {
+        suffix += "$" + self.mangle_type(src,
+            self.declared_type(src, self.nested_children[holder.scale + i]));
+        i += 1;
+    }
+    return suffix;
+}
+
+// A receiver application seen at a call site, recorded so its methods get emitted. The same work
+// list the functions use, and deliberately so: a method called on a `Pair<Point>` inside a
+// `Stack<Point>` method is discovered while that one is being emitted.
+//
+// Answers nothing. Skipped when an argument is still abstract, because the enclosing generic has
+// not been instantiated yet and this receiver will be seen again when it is.
+function (mutable self: Unit) note_holder(src: String, holder: Type) -> Int allocates {
+    if holder.kind != 46 || holder.contract <= 0 {
+        return 0;
+    }
+    let generic: Int = self.generic_named(src, holder.name_start, holder.name_len);
+    if generic < 0 {
+        return 0;
+    }
+    let args_start: Int = len(self.instance_args);
+    let mutable settled: Bool = true;
+    let mutable i: Int = 0;
+    while i < holder.contract {
+        let written: Type = self.declared_type(src, self.nested_children[holder.scale + i]);
+        let argument: Type = self.resolve_shallow(src, written);
+        if argument.kind == 50 {
+            settled = false;
+        }
+        let noted: Int = push(self.instance_args, argument);
+        i += 1;
+    }
+    if !settled {
+        let unwound: Int = truncate(self.instance_args, args_start);
+        return 0;
+    }
+    let instance: Int = self.find_instance(src, generic, args_start, holder.contract);
+    return instance;
+}
+
 // Put an instance's arguments in scope, so every layout question asked while its body is emitted
 // answers for THIS instantiation. Returns the base to truncate back to.
 function (mutable self: Unit) install_instance(src: String, instance: Int) -> Int allocates {
@@ -2051,12 +2122,12 @@ function (mutable self: Unit) emit_function(src: String, index: Int, suffix: Str
     // pointer as the first argument and the callee copies into it. Returning a pointer
     // into the callee's own frame would be a dangling one, which is why this is not an
     // optimisation but the only correct shape.
-    let answers: Type = self.declared_type(src, signature_node.c);
+    let answers: Type = self.resolve_shallow(src, self.declared_type(src, signature_node.c));
     let outer_sret: String = self.sret;
     self.sret = "";
     let mutable signature: String = "";
     let mutable first: Int = 0;
-    if self.is_aggregate(answers) {
+    if self.is_aggregate_written(src, answers) {
         self.sret = "%sret";
         self.sret_cells = self.cells_of(src, answers);
         signature = "ptr %sret";
@@ -2117,8 +2188,8 @@ function (mutable self: Unit) emit_function(src: String, index: Int, suffix: Str
     while p < params.b {
         let param: Node = self.nodes[self.children[params.a + p]];
         let pname: Token = self.tokens[param.token];
-        let declared: Type = self.declared_type(src, param.a);
-        if self.is_aggregate(declared) {
+        let declared: Type = self.resolve_shallow(src, self.declared_type(src, param.a));
+        if self.is_aggregate_written(src, declared) {
             // By value across a call too: the callee copies what it was handed, so
             // writing to a parameter cannot reach back into the caller.
             let cells: Int = self.cells_of(src, declared);
@@ -2150,15 +2221,6 @@ function (mutable self: Unit) emit_module(src: String) -> Int allocates {
     // A generic METHOD is the one thing left: `Stack<T>.push` wants a mangled receiver as well
     // as a mangled name, and a receiver that is itself an application. Named rather than emitted
     // wrongly, which is the rule every gap in this file follows.
-    let method: Int = self.generic_method(src);
-    if method >= 0 {
-        let complained: Int = self.complain_at(src, self.nodes[method].token,
-            "the Burxt backend does not emit METHODS on a generic type yet: `Stack<T>.push` "
-            + "needs one copy per instantiation like a generic function, and a mangled receiver "
-            + "besides. Generic functions, records and enums all work. The Rust compiler emits "
-            + "this one");
-        return 0;
-    }
     let mutable preamble: Int = self.write_module("declare i32 @printf(ptr, ...)\n");
     preamble = self.write_module("declare void @exit(i32)\n\n");
     // The overflow helpers, written once. They are what makes `a + b` a claim rather
@@ -2200,7 +2262,18 @@ function (mutable self: Unit) emit_module(src: String) -> Int allocates {
             // becomes one copy per instantiation, and the instantiations are only known once
             // every body that calls it has been walked. Skipped now, drained below.
             let name: Token = self.tokens[item.token];
-            if self.generic_named(src, name.start, name.length) < 0 {
+            let mutable generic: Bool = self.generic_named(src, name.start, name.length) >= 0;
+            if item.kind == 81 {
+                // A METHOD is generic when its RECEIVER is, whatever the method itself is
+                // called. `Pair<T>.left` has an ordinary name and still needs one copy per
+                // instantiation, which is the case the first version of this test missed.
+                let signature: Node = self.nodes[item.c];
+                let receiver: Token = self.tokens[signature.value];
+                if self.generic_named(src, receiver.start, receiver.length) >= 0 {
+                    generic = true;
+                }
+            }
+            if !generic {
                 let done: Int = self.emit_function(src, index, "");
             }
         }
@@ -2237,14 +2310,40 @@ function (mutable self: Unit) emit_module(src: String) -> Int allocates {
     while pending < len(self.instances) {
         let it: Instance = self.instances[pending];
         let declaration: Generic = self.generics[it.generic];
+        let base: Int = self.install_instance(src, pending);
+        let suffix: String = self.instance_suffix(src, pending);
         let node: Int = self.declaration_node(src, declaration.start, declaration.length);
         if node >= 0 {
-            let base: Int = self.install_instance(src, pending);
-            let suffix: String = self.instance_suffix(src, pending);
             let done: Int = self.emit_function(src, node, suffix);
-            let dropped: Int = truncate(self.type_bindings, base);
+        } else {
+            // Not a function, so a generic RECORD or ENUM, and what an instantiation of one
+            // means is that every method on it needs a copy. Chosen by the receiver rather than
+            // by the arguments, which is why there is no unification here: the call site that
+            // recorded this instance already knew what it was holding.
+            let methods: Int = self.emit_methods_of(src, declaration, suffix);
         }
+        let dropped: Int = truncate(self.type_bindings, base);
         pending += 1;
+    }
+    return 1;
+}
+
+// Every method declared on this generic type, emitted once for the arguments now in scope.
+function (mutable self: Unit) emit_methods_of(src: String, declaration: Generic,
+                                             suffix: String) -> Int allocates {
+    let mutable i: Int = 0;
+    while i < len(self.items) {
+        let index: Int = self.items[i];
+        let item: Node = self.nodes[index];
+        if item.kind == 81 {
+            let signature: Node = self.nodes[item.c];
+            let receiver: Token = self.tokens[signature.value];
+            if spans_equal(src, receiver.start, receiver.length,
+                           declaration.start, declaration.length) {
+                let done: Int = self.emit_function(src, index, suffix);
+            }
+        }
+        i += 1;
     }
     return 1;
 }

@@ -1,12 +1,18 @@
 # Burxt — Generics (M7)
 
-> Status: **slices 1–3 DONE in stage-0 (v0.0.93–v0.0.96)** — generic **functions**, generic
-> **enums**, and **bounds**, monomorphised, with type arguments inferred at the call site and
-> no turbofish required. Acceptance 8 is met: `Option<T>` and `Result<T, E>` are in `lib/`,
-> written in Burxt, with no compiler support beyond this milestone. What remains: generic
-> **records**, and stage-1. Stage-1 does not read generics yet,
-> which is why the tests for this slice live in `tests/runner.rs` rather than `tests/pass/` —
-> the same staging M5 used, with the second implementation following behind a ratchet.
+> Status: **DONE (v0.0.111).** Generic **functions**, **records**, **enums**, **bounds** and
+> **methods on a generic type**, in **both** compilers, with type arguments inferred at the call
+> site and no turbofish anywhere. Stage-1 compiles 101 of the 102 pass programs; the one left
+> needs `write_bytes`. `Option<T>` and `Result<T, E>` live in `lib/`, written in Burxt, needing no
+> compiler support beyond this milestone.
+>
+> The tests live in `tests/pass/`, which is the claim that matters: a fixture there is held
+> against **both** compilers end to end. They lived in `tests/runner.rs` while stage-1 could not
+> read generics, and moving them was the acceptance criterion for saying this is done.
+>
+> The design in one line: **a type parameter is a question, not a placeholder.** Answer it at
+> every point that asks and almost nothing has to be substituted — §"Where it actually stands
+> (v0.0.111)" gives the two exceptions and why they are cheap.
 >
 > Original status: **specified, to implement.** Ordered before `Option`/`Result` (M8) deliberately:
 > without generics those would be `OptionInt`, `OptionString`, `OptionDecimal` — code that
@@ -263,7 +269,39 @@ So the design has to differ, and the shape that fits stage-1's representation is
 - **Mangling moves to the emitter**, which already builds strings freely, so the LLVM symbol name
   is computed where symbol names belong and nowhere else.
 
-### Where it actually stands (v0.0.110) — DONE, bar generic methods
+### Where it actually stands (v0.0.111) — **M7 IS DONE**
+
+**Both compilers now check and emit every generic form the language has**: functions, bounded
+functions, records, enums, and methods on a generic type. Stage-1 compiles **101 of the 102 pass
+programs**, and the one left needs `write_bytes` — nothing to do with generics.
+
+The last piece was methods, and it is the one case where **the copy is chosen by the RECEIVER
+rather than by the arguments**. `Pair<Point>.left` needs no unification at all: the call site
+already knows what it is holding. So the symbol is `Pair$Point.left`, discovery is "note the
+receiver's application", and the drain does the rest — a work-list entry whose generic turns out
+to be a record or an enum means *every method on it* wants a copy.
+
+**The defect worth remembering is not a wrong answer, it is a wrong FRAME.** `is_aggregate` did
+not resolve, so a method returning `T` where `T = Point` did not set up an sret — while the call
+site, reading a type the checker had already resolved, passed a storage pointer as the first
+argument. Two halves of one call disagreeing about the shape of a function. It segfaulted, which
+is the better failure: a printed wrong number would have been found much later. Every
+calling-convention decision in the emitter now resolves first, through one named predicate
+(`is_aggregate_written`) rather than fifteen call sites each remembering to.
+
+That is the third time this milestone that the fix was **resolve where you read** rather than
+**rewrite before you start** — after `same_type` and after `cells_of`. Worth stating as the
+design rule it turned out to be:
+
+> A type parameter is a question, not a placeholder. Answer it at every point that asks, and
+> nothing ever has to be substituted. The only exceptions are the two places that must hand back
+> something self-contained — a nested application's argument list, and a function BODY — and both
+> of them are cheap because they fire only when something actually changed.
+
+**Left in M7: nothing.** Higher-kinded types, variance and specialisation are not in this
+milestone and are not obviously wanted; if they arrive they arrive with a program that needs them.
+
+### Where it stood (v0.0.110)
 
 **Generic functions are emitted by both compilers, and stage-1 now compiles 100 of the 101 pass
 programs** (the one left needs `write_bytes`, nothing to do with generics). This is the piece

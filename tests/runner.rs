@@ -1781,13 +1781,13 @@ fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
         "the Burxt backend compiles {} of {} pass programs correctly ({} refused outright)",
         correct, total, refused
     );
-    // 100 of 101 in v0.0.110, and the one it does not do has nothing to do with generics:
-    // `write_bytes_buffer.bx` needs `write_bytes`. Keeping the gap as a NAME rather than a
-    // number is the point — a count tells you how far along you are and a name tells you what
-    // to do next.
+    // 101 of 102 in v0.0.111. The one left is `write_bytes_buffer.bx`, which needs
+    // `write_bytes` — nothing to do with generics, and the last item on this list. Keeping the
+    // gap as a NAME rather than a number is the point: a count tells you how far along you are
+    // and a name tells you what to do next.
     assert!(
-        correct >= 100,
-        "the Burxt backend went backwards: {} of {} correct, was 100 of 101 (the one is \
+        correct >= 101,
+        "the Burxt backend went backwards: {} of {} correct, was 101 of 102 (the one is \
          write_bytes_buffer.bx, which needs `write_bytes`)",
         correct,
         total
@@ -2309,242 +2309,18 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
 
 }
 
-/// M7 slice 1: generic functions, monomorphised.
-///
-/// These live here rather than in `tests/pass/` on purpose. Every pass fixture is also
-/// swept by `the_burxt_front_end_accepts_every_burxt_source` and
-/// `the_burxt_typechecker_agrees_with_the_rust_one`, and stage-1 does not read generics
-/// yet — so a pass fixture would assert something untrue about the OTHER compiler. The
-/// same staging M5 used for the backend: stage-0 first, with the second implementation
-/// following behind a ratchet, and the tests saying honestly which one is under test.
-#[test]
-fn generics_monomorphise_and_run() {
-    let scratch = scratch_dir("generics");
-    fs::create_dir_all(&scratch).unwrap();
+// `generics_monomorphise_and_run` lived here until v0.0.111, with nine cases and a rationale
+// that said stage-1 "does not read generics yet" — so a pass fixture would have asserted
+// something untrue about the other compiler. That is no longer true, and a test whose reason for
+// existing has expired is worse than no test: it looks like coverage.
+//
+// Its nine grounds are now covered by four fixtures in tests/pass/ — generics_functions (a `[T]`
+// element, a bound, a trait bound, a generic calling a generic), generics_types (two type
+// parameters, Option, Result), generics_layout (separate layouts, a generic inside a generic) and
+// generics_methods (a method on a generic type) — and a fixture there is held against BOTH
+// compilers end to end by the pass-suite sweep, which the inline test never did. Strictly more
+// coverage in strictly less code, so the weaker one is gone rather than kept for company.
 
-    let cases: &[(&str, &str, &str)] = &[
-        (
-            "identity",
-            "function identity<T>(x: T) -> T { return x; }\n\
-             region r {\n  print(identity(3));\n  print(identity(\"text\"));\n  \
-             print(identity(true));\n  print(identity($1.50));\n}\n",
-            "3\ntext\ntrue\n1.50\n",
-        ),
-        (
-            // One definition, four symbols, and each one holds its type by VALUE — a
-            // Decimal<2> stays a scaled i64 rather than becoming a pointer to one.
-            "elements",
-            "function first<T>(xs: [T]) -> T { return xs[0]; }\n\
-             function second<T>(xs: [T]) -> T { let picked: T = xs[1]; return picked; }\n\
-             region r {\n  let mutable ns: [Int] = [];\n  let a = push(ns, 10);\n  \
-             let b = push(ns, 20);\n  print(first(ns));\n  print(second(ns));\n  \
-             let mutable ws: [String] = [];\n  let c = push(ws, \"one\");\n  \
-             let d = push(ws, \"two\");\n  print(first(ws));\n  print(second(ws));\n}\n",
-            "10\n20\none\ntwo\n",
-        ),
-        (
-            // A generic calling a generic: `echo`'s body is checked once with `T`
-            // standing for nothing, and `identity$Int` appears only when `echo$Int` does.
-            "nested",
-            "function identity<T>(x: T) -> T { return x; }\n\
-             function echo<T>(x: T) -> T { return identity(x); }\n\
-             region r {\n  print(echo(7));\n  print(echo(\"deep\"));\n}\n",
-            "7\ndeep\n",
-        ),
-        (
-            "two_parameters",
-            "record Point { x: Int, y: Int }\n\
-             function keep<A, B>(a: A, b: B) -> A { return a; }\n\
-             function identity<T>(x: T) -> T { return x; }\n\
-             region r {\n  print(keep(9, \"ignored\"));\n  \
-             let p = identity(Point { x: 4, y: 5 });\n  print(p.x + p.y);\n}\n",
-            "9\n9\n",
-        ),
-    ];
-
-    let enum_cases: &[(&str, &str, &str)] = &[
-        (
-            // The instantiation is an ordinary enum: its own layout, its own exhaustive
-            // match, and nothing in the checker below the rewrite knows generics exist.
-            "option",
-            "enum Option<T> { None, Some(T) }\n\
-             function or_else<T>(o: Option<T>, fallback: T) -> T {\n  match o {\n    \
-             None => { return fallback; }\n    Some(v) => { return v; }\n  }\n}\n\
-             region r {\n  print(or_else(Option.Some(7), 0));\n  \
-             let missing: Option<Int> = Option.None;\n  print(or_else(missing, 42));\n  \
-             let words: Option<String> = Option.Some(\"here\");\n  \
-             print(or_else(words, \"absent\"));\n}\n",
-            "7\n42\nhere\n",
-        ),
-        (
-            "result",
-            "enum Result<T, E> { Ok(T), Error(E) }\n\
-             function divide(a: Int, b: Int) -> Result<Int, String> {\n  \
-             if b == 0 { return Result.Error(\"division by zero\"); }\n  \
-             return Result.Ok(divide_toward_zero(a, b));\n}\n\
-             region r {\n  match divide(10, 2) {\n    Ok(n) => { print(n); }\n    \
-             Error(why) => { print(why); }\n  }\n  match divide(1, 0) {\n    \
-             Ok(n) => { print(n); }\n    Error(why) => { print(why); }\n  }\n}\n",
-            "5\ndivision by zero\n",
-        ),
-        (
-            // Two instantiations of one enum have SEPARATE layouts: a Decimal payload is
-            // a scaled i64 in place, not a pointer to one.
-            "separate_layouts",
-            "enum Holds<T> { Nothing, It(T) }\n\
-             region r {\n  let money: Holds<Decimal<2>> = Holds.It($19.99);\n  \
-             let text: Holds<String> = Holds.It(\"words\");\n  \
-             match money { Nothing => { print(0); } It(m) => { print(m); } }\n  \
-             match text { Nothing => { print(0); } It(t) => { print(t); } }\n}\n",
-            "19.99\nwords\n",
-        ),
-    ];
-
-    let bound_cases: &[(&str, &str, &str)] = &[
-        (
-            // `Ordered` is Int and Decimal; `Equatable` adds Bool and String. Each mirrors
-            // exactly what the language already allows, so a bound cannot promise more
-            // than it delivers.
-            "bounds",
-            "function largest<T: Ordered>(a: T, b: T) -> T {\n  if a > b { return a; }\n  \
-             return b;\n}\n\
-             function same<T: Equatable>(a: T, b: T) -> Bool { return a == b; }\n\
-             region r {\n  print(largest(3, 9));\n  print(largest($1.50, $1.25));\n  \
-             print(same(1, 1));\n  print(same(\"a\", \"b\"));\n  \
-             print(same(true, true));\n}\n",
-            "9\n1.50\ntrue\nfalse\ntrue\n",
-        ),
-        (
-            // A TRAIT bound gives static dispatch: one definition, one copy per type, no
-            // vtable and no runtime type information. `dyn` is still there for the cases
-            // that genuinely want one implementation over many types.
-            "trait_bound",
-            "trait Priced {\n  function price(self) -> Decimal<2>\n  function label(self) -> String\n}\n\
-             record Book { title: String, cost: Decimal<2> }\n\
-             record Meal { dish: String, cost: Decimal<2>, covers: Int }\n\
-             implement Priced for Book {\n  function (self) price() -> Decimal<2> { return self.cost; }\n  \
-             function (self) label() -> String allocates { return \"book: \" + self.title; }\n}\n\
-             implement Priced for Meal {\n  \
-             function (self) price() -> Decimal<2> { return self.cost * self.covers; }\n  \
-             function (self) label() -> String allocates { return \"meal: \" + self.dish; }\n}\n\
-             function describe<T: Priced>(item: T) -> String allocates {\n  \
-             return item.label() + \" at \" + to_string(item.price());\n}\n\
-             region r {\n  print(describe(Book { title: \"burxt\", cost: $19.99 }));\n  \
-             print(describe(Meal { dish: \"soup\", cost: $4.50, covers: 2 }));\n}\n",
-            "book: burxt at 19.99\nmeal: soup at 9.00\n",
-        ),
-    ];
-
-    let record_cases: &[(&str, &str, &str)] = &[
-        (
-            // A generic record: `Pair<Int, String>` and `Pair<Decimal<2>, Bool>` are separate
-            // types with separate layouts, and a field holds its type by value.
-            "generic_record",
-            "record Pair<A, B> { left: A, right: B }\n\
-             region r {\n  let p: Pair<Int, String> = Pair { left: 7, right: \"seven\" };\n  \
-             print(p.left);\n  print(p.right);\n  \
-             let q: Pair<Decimal<2>, Bool> = Pair { left: $1.50, right: true };\n  \
-             print(q.left);\n  print(q.right);\n}\n",
-            "7\nseven\n1.50\ntrue\n",
-        ),
-        (
-            // A container, which is what generics were for: one definition, and each
-            // instantiation gets its OWN copy of every method.
-            "generic_container",
-            "record Stack<T> { items: [T] }\n\
-             function (mutable self: Stack<T>) push_one(item: T) -> Int allocates {\n  \
-             return push(self.items, item);\n}\n\
-             function (self: Stack<T>) count() -> Int { return len(self.items); }\n\
-             function (self: Stack<T>) first() -> T { return self.items[0]; }\n\
-             region r {\n  let mutable ints: Stack<Int> = Stack { items: [] };\n  \
-             let a = ints.push_one(5);\n  let b = ints.push_one(9);\n  \
-             print(ints.count());\n  print(ints.first());\n  \
-             let mutable words: Stack<String> = Stack { items: [] };\n  \
-             let c = words.push_one(\"one\");\n  print(words.count());\n  \
-             print(words.first());\n}\n",
-            "2\n5\n1\none\n",
-        ),
-    ];
-
-    let try_cases: &[(&str, &str, &str)] = &[
-        (
-            // `?`: the value, or an immediate return of the failure. Recognised by the
-            // VARIANT name, so it works on `Result` and `Option` from lib/ without either
-            // being known to the compiler. See spec/M8-ERRORS.md §1a.
-            "question_mark",
-            "enum Result<T, E> { Ok(T), Error(E) }\nenum Option<T> { None, Some(T) }\n\
-             function checked(a: Int, b: Int) -> Result<Int, String> {\n  \
-             if b == 0 { return Result.Error(\"division by zero\"); }\n  \
-             return Result.Ok(divide_toward_zero(a, b));\n}\n\
-             function average(a: Int, b: Int, n: Int) -> Result<Int, String> {\n  \
-             let mean = checked(a + b, n)?;\n  return Result.Ok(mean);\n}\n\
-             function first_of(xs: [Int]) -> Option<Int> {\n  \
-             if len(xs) == 0 { return Option.None; }\n  return Option.Some(xs[0]);\n}\n\
-             function doubled_first(xs: [Int]) -> Option<Int> {\n  \
-             let head = first_of(xs)?;\n  return Option.Some(head * 2);\n}\n\
-             region r {\n  \
-             match average(10, 6, 2) { Ok(m) => { print(m); } Error(w) => { print(w); } }\n  \
-             match average(10, 6, 0) { Ok(m) => { print(m); } Error(w) => { print(w); } }\n  \
-             let mutable xs: [Int] = [];\n  let a = push(xs, 21);\n  \
-             match doubled_first(xs) { None => { print(\"empty\"); } Some(v) => { print(v); } }\n  \
-             let mutable none: [Int] = [];\n  \
-             match doubled_first(none) { None => { print(\"empty\"); } Some(v) => { print(v); } }\n}\n",
-            "8\ndivision by zero\n42\nempty\n",
-        ),
-    ];
-
-    let mut failures = Vec::new();
-    for (name, program, expected) in
-        cases.iter().chain(enum_cases).chain(record_cases).chain(bound_cases).chain(try_cases)
-    {
-        let source = scratch.join(format!("{}.bx", name));
-        fs::write(&source, program).unwrap();
-        let exe = scratch.join(name);
-        let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
-            .arg("build")
-            .arg(&source)
-            .arg("-o")
-            .arg(&exe)
-            .current_dir(&scratch)
-            .output()
-            .expect("burxt");
-        if !built.status.success() {
-            failures.push(format!(
-                "{} did not compile:\n{}",
-                name,
-                String::from_utf8_lossy(&built.stderr)
-            ));
-            continue;
-        }
-        let ran = Command::new(&exe).current_dir(&scratch).output().expect("the program");
-        let printed = String::from_utf8_lossy(&ran.stdout).to_string();
-        if printed != *expected {
-            failures.push(format!("{} printed {:?}, expected {:?}", name, printed, expected));
-        }
-    }
-
-    // An unused generic emits no code: spec/M7-GENERICS.md acceptance 6.
-    let unused = scratch.join("unused.bx");
-    fs::write(&unused, "function never<T>(x: T) -> T { return x; }\nprint(1);\n").unwrap();
-    let emitted = Command::new(env!("CARGO_BIN_EXE_burxt"))
-        .arg("emit-ir")
-        .arg(&unused)
-        .current_dir(&scratch)
-        .output()
-        .expect("burxt emit-ir");
-    assert!(
-        emitted.status.success(),
-        "`emit-ir` failed on the unused generic:\n{}",
-        String::from_utf8_lossy(&emitted.stderr)
-    );
-    let text = String::from_utf8_lossy(&emitted.stdout).to_string();
-    if text.contains("@never") {
-        failures.push("a generic nobody instantiates was emitted anyway".to_string());
-    }
-
-    let _ = fs::remove_dir_all(&scratch);
-    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
-}
 
 /// The editor grammar must actually TOKENIZE the language, not merely contain its words.
 ///
@@ -2932,7 +2708,7 @@ fn json_string(s: &str) -> String {
 /// A compiler that half-understands a construct answers differently from the other one, and the
 /// differential test exists to stop exactly that.
 #[test]
-fn the_burxt_compiler_reads_generics_and_says_it_cannot_check_them() {
+fn the_burxt_compiler_reads_and_emits_every_generic_form() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let scratch = scratch_dir("stage1-generics");
     fs::create_dir_all(&scratch).unwrap();
@@ -2946,10 +2722,10 @@ fn the_burxt_compiler_reads_generics_and_says_it_cannot_check_them() {
         .expect("burxt")
         .success());
 
-    // One of each generic form. The calls to `identity` and `largest` must be CHECKED — those
-    // work — and the `Option<Int>` annotation must be REFUSED, because instantiating a generic
-    // enum needs a layout stage-1 cannot make yet. Both halves in one program, so neither can
-    // regress unnoticed.
+    // One of each generic form in one program — function, bounded function, generic record,
+    // generic enum, method on a generic type — so no single form can regress unnoticed. Every
+    // one of them must now PARSE, CHECK and EMIT: this test asserted a refusal until v0.0.111,
+    // and the refusal is gone.
     let program = scratch.join("generic.bx");
     fs::write(
         &program,
@@ -2965,12 +2741,12 @@ fn the_burxt_compiler_reads_generics_and_says_it_cannot_check_them() {
 
     let ran = Command::new(&stage1)
         .arg(&program)
+        .arg(scratch.join("generic.ll"))
         .current_dir(&scratch)
         .output()
         .expect("stage1");
     let said = String::from_utf8_lossy(&ran.stdout).to_string();
     let complained = String::from_utf8_lossy(&ran.stderr).to_string();
-    let _ = fs::remove_dir_all(&scratch);
 
     // It must not die. A runtime failure exits 70; a refusal is an ordinary run.
     assert!(
@@ -2988,11 +2764,31 @@ fn the_burxt_compiler_reads_generics_and_says_it_cannot_check_them() {
     // And the CHECKER must say so rather than pretend.
     assert!(
         said.contains("type errors: 0"),
-        "stage-1's FRONT END must accept generics — it binds type parameters at the call \
+        "stage-1's front end must accept generics — it binds type parameters at the call \
          site, resolves them lazily, and resolves a field or payload deeply where it is \
-         read. Only its BACKEND still refuses, for layout:\n{}",
+         read:\n{}",
         said
     );
+    // And the BACKEND must emit them, which is what changed in v0.0.111.
+    assert!(
+        said.contains("bytes of IR"),
+        "stage-1's backend must emit every generic form:\n{}\n{}",
+        said,
+        complained
+    );
+    // A call to an UNMANGLED generic is what a missed suffix looks like: the module links
+    // against a function that was never defined, which is a link error rather than a wrong
+    // answer. Cheaper to grep for than to discover at `cc` time.
+    let ir = fs::read_to_string(scratch.join("generic.ll")).expect("the IR");
+    for named in ["identity", "largest"] {
+        assert!(
+            !ir.contains(&format!("call i64 @{}(", named)),
+            "a call to the unmangled generic `{}` survived: every call must name the copy it \
+             is calling, or the module will not link",
+            named
+        );
+    }
+    let _ = fs::remove_dir_all(&scratch);
 }
 
 /// Every source and documentation file must be IN version control.
