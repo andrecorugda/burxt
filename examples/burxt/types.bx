@@ -111,6 +111,15 @@ record Type {
 // A binding in scope: its name as a SPAN, so the checker allocates nothing to
 // remember a variable.
 record Binding { start: Int, length: Int, bound_type: Type, writable: Int, depth: Int }
+// What a type parameter stands for, while a generic's call is being checked. Its name is a
+// SPAN, like every other name here, so a binding needs no synthesized identifier.
+//
+// Resolution is LAZY and shallow: nothing rewrites a `[T]` into a `[Int]`, because a slice
+// holds its element as a node index and there would be no node to point at. Instead every
+// recursive walk over types — comparison, rendering, layout — resolves each level as it
+// reaches it. That is what lets stage-1 hold generics with no new arena entries at all.
+record TypeBinding { name_start: Int, name_len: Int, bound: Type }
+
 // Which declaration is generic over which parameters. A side table, looked up by name span
 // like every other declaration here, because every field of a node is already spoken for.
 // `type_param_start`/`type_param_count` index `type_params`, which holds the TOKEN of each parameter's name —
@@ -175,7 +184,18 @@ record Unit {
     params_in_scope: [Int],
     // Every generic declaration, and the parameter-name tokens they index into.
     generics: [Generic],
+    type_bindings: [TypeBinding],
     type_params: [Int],
+    // Each parameter's bound, as the token of the trait's name, or -1 for none. Parallel to
+    // `type_params`, because a parameter has exactly one bound and two arrays are cheaper
+    // than a record that is copied at every lookup.
+    type_param_bounds: [Int],
+    // Bounds seen while a parameter list is being parsed, before the declaration is noted.
+    pending_bounds: [Int],
+    // Which generic declaration's body is being checked, or -1. A parameter's bound has to be
+    // looked up in ITS OWN declaration: three generics may each call their parameter `T`, and
+    // searching by name alone found the first one's bound for all of them.
+    current_generic: Int,
     // Which function is being checked, so a `tail` call can be compared with the
     // signature it must replace. -1 at top level and inside a method.
     current_function: Int,

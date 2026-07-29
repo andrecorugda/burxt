@@ -263,7 +263,25 @@ So the design has to differ, and the shape that fits stage-1's representation is
 - **Mangling moves to the emitter**, which already builds strings freely, so the LLVM symbol name
   is computed where symbol names belong and nowhere else.
 
-### Where it actually stands (v0.0.101)
+### Where it actually stands (v0.0.107)
+
+**Generic functions are checked.** Type parameters are bound at the call site by structural
+unification, resolved **lazily** as comparison recurses, and their bounds enforced — so stage-1
+agrees with stage-0 on generic functions.
+
+The design got simpler again on contact, and the simplification is the interesting part:
+**nothing is substituted.** A `[T]` is never rewritten into a `[Int]`, because a slice holds its
+element as a node index and a substituted element would have no node — the wall §5 predicted.
+Instead a binding table maps a parameter's *span* to a type, and `resolve_shallow` is called at
+each level of every recursive walk. `same_type` resolves as it descends, so `[T]` against
+`[Int]` matches without either being rewritten. No new arena entries, no synthesized names, and
+the wall turned out to be avoidable rather than merely climbable.
+
+What remains is layout: giving `Option<Int>` its own record or enum, which is genuinely one copy
+per argument list and cannot be done lazily. That is the next slice, and the guard now refuses
+exactly that and nothing more.
+
+### Where it stood (v0.0.101)
 
 **The parser is done.** Type parameters on functions, records and enums, bounds, generic
 receivers (`self: Stack<T>`) and applications in any type position all read with zero parse

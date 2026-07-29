@@ -1903,3 +1903,63 @@ every failure localised to the batch that caused it — which is the argument fo
 batches rather than sweeping once and hoping.
 
 34 invariants green, fixpoint intact, self-compile 1.2 s.
+
+### v0.0.107: stage-1 checks generic functions, and substitution turned out to be unnecessary
+
+The blocker I named two versions ago — *substituting into `[T]` needs a type node, and a `Type`'s
+name is a span with no token to build one from* — dissolved. **Nothing needs to be substituted.**
+
+A binding table maps a parameter's **span** to a type, and `resolve_shallow` answers "what does
+this parameter stand for, one level deep." Every recursive walk over types calls it as it
+descends, so `same_type([T], [Int])` resolves the element exactly where the comparison reaches
+it. A `[T]` is never rewritten into a `[Int]`, so there is never a node to invent. No new arena
+entries, no synthesized identifiers, and the wall was avoidable rather than merely climbable.
+
+That is twice now that this representation looked like an obstacle and turned out to be a
+constraint worth respecting. It names everything by a span in the source, and both times the
+answer was to stop trying to manufacture names and let the spans do the work.
+
+Stage-1 now binds a generic function's type parameters at the call site by structural
+unification, checks the arguments against the resolved types, resolves the return type, and
+enforces `Ordered` / `Equatable` / declared-trait bounds. It agrees with stage-0 on generic
+functions. What it still cannot do is give `Option<Int>` its own layout — genuinely one copy per
+argument list, and the one thing that cannot be lazy — so the guard now refuses exactly
+applications of generic records and enums, and nothing more.
+
+#### Four bugs, and what each was really about
+
+**A crash on `self: Stack<T>`.** `self_token` scanned back a fixed six tokens to find the word
+`self`. That covers `(self)`, `(self: T)` and `(mut self: T)` — and a generic receiver is
+**seven**, so it returned -1 and the caller indexed the token array with it. Now it scans back to
+the clause's opening `(` instead. *A bound that depends on the shape of what it is scanning is a
+bound that breaks when the shape grows* — and this is the second time that function has been
+wrong, having already been rewritten in v0.0.99 for the same reason.
+
+**Three `T`s, one bound.** `bound_of` looked a parameter's bound up by name across every generic
+in the program, so with `identity<T>`, `largest<T: Ordered>` and `first<T>` all present it found
+`identity`'s absent bound for all three. A parameter's bound has to be read from **its own
+declaration**, which needed the checker to know which generic it is inside.
+
+**`declared_type` did not know parameters.** It handled kinds 40–49 and returned *unknown* for
+50, so every unification compared against nothing. One missing arm, and the symptom was
+"argument 1 should be ?, but it is Int".
+
+**The print branch reads a cache nobody filled.** Trying to refuse `print(x)` where `x: T`, I
+made the branch call `type_of` — and nine programs stage-0 accepts were suddenly rejected,
+because the rules below it have been switching on `unknown` and were effectively dead. Making
+them live revealed they were written against an assumption the file no longer holds. I found the
+parameter case a different way, and **left the larger gap recorded rather than fixed blind**:
+that branch needs its own investigation, not a drive-by.
+
+#### The ratchet went down, on purpose, for the first time
+
+192 → 189. Before this version stage-1 refused *every* program containing a generic with one
+blanket message, so three fail fixtures counted as rejections **for the wrong reason**. Two are
+now honestly pending on records and enums; the third likewise. Three fixtures traded from
+accidentally-right to knowingly-pending.
+
+That is written into the ratchet's own comment, with the fixtures named, because a floor that
+moves down silently is worse than no floor. It is also the second time in three versions that
+this instrument has needed a note about what it cannot see.
+
+34 invariants green, fixpoint intact, self-compile 1.4 s.

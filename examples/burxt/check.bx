@@ -107,35 +107,236 @@ function (self: Unit) show_type(src: String, t: Type) -> String allocates {
 // Nothing caught it because the differential test's rejection count is a FLOOR, not an
 // equality: stage-1 rejecting less than stage-0 kept the ratchet green. Found by trying to
 // build generic unification on top of it, which needed element comparison to mean something.
-function (self: Unit) same_type(src: String, a: Type, b: Type) -> Bool {
-    if a.kind == 0 || b.kind == 0 {
+// What a type parameter stands for right now, or the type unchanged if it is not one.
+//
+// Shallow on purpose: it looks at ONE level. Every recursive walk over types calls it as it
+// descends, so `[T]` resolves when its element is reached rather than being rewritten — which
+// it could not be, since a slice holds its element as a node index and a substituted element
+// would have no node.
+// Bind a generic's type parameters from the arguments at a call site.
+//
+// Each declared parameter type is matched against the argument's actual type; a parameter that
+// no argument mentions cannot be inferred, and says so. The bound is checked here too, where
+// the type argument is chosen — which is the point of a bound, and the same place stage-0
+// checks it.
+function (mutable self: Unit) bind_type_arguments(src: String, generic: Int, args: Int,
+                                                 params: Int, at: Int) -> Int allocates {
+    let declaration: Generic = self.generics[generic];
+    let given: Node = self.nodes[args];
+    let wanted: Node = self.nodes[params];
+    let mutable i: Int = 0;
+    while i < wanted.b && i < given.b {
+        let parameter: Node = self.nodes[self.children[wanted.a + i]];
+        let declared: Type = self.declared_type(src, parameter.a);
+        if declared.kind == 50 || declared.kind == 47 || declared.kind == 48 {
+            let actual: Type = self.type_of(src, self.children[given.a + i], unknown_type());
+            if !is_unknown(actual) {
+                let matched: Bool = self.unify(src, declared, actual);
+                if !matched {
+                    let complained: Int = self.complain_at(src, at,
+                        "argument " + to_string(i + 1) + " does not fit "
+                        + self.show_type(src, declared) + ": it is "
+                        + self.show_type(src, actual));
+                }
+            }
+        }
+        i += 1;
+    }
+    // Every parameter has to have been settled by something, and to satisfy its bound.
+    let mutable p: Int = 0;
+    while p < declaration.type_param_count {
+        let slot: Int = declaration.type_param_start + p;
+        let named: Token = self.tokens[self.type_params[slot]];
+        let stands_for: Type = self.resolve_shallow(src,
+            Type { kind: 50, scale: 0, contract: 0,
+                   name_start: named.start, name_len: named.length });
+        if stands_for.kind == 50 {
+            let complained: Int = self.complain_at(src, at,
+                "cannot tell what `" + substring(src, named.start, named.length)
+                + "` is from this call: no argument mentions it");
+        } else {
+            let satisfied: Int = self.check_bound(src, self.type_param_bounds[slot],
+                                                 stands_for, named, at);
+        }
+        p += 1;
+    }
+    return 1;
+}
+
+// Does this type argument satisfy the bound the signature declared?
+//
+// The two the language ships mirror exactly what it already allows: `Ordered` is Int and
+// Decimal, the types `<` works on; `Equatable` adds Bool and String, the types `==` works on.
+// A bound cannot promise more than the language delivers.
+function (mutable self: Unit) check_bound(src: String, bound: Int, argument: Type,
+                                         parameter: Token, at: Int) -> Int allocates {
+    if bound < 0 {
+        return 0;
+    }
+    let named: Token = self.tokens[bound];
+    if span_equal(src, named.start, named.length, "Ordered") {
+        if argument.kind != 40 && argument.kind != 45 {
+            let complained: Int = self.complain_at(src, at,
+                "`" + substring(src, parameter.start, parameter.length)
+                + ": Ordered` needs a type with an order, and " + self.show_type(src, argument)
+                + " has none: Ordered is Int and Decimal");
+        }
+        return 1;
+    }
+    if span_equal(src, named.start, named.length, "Equatable") {
+        if argument.kind != 40 && argument.kind != 41 && argument.kind != 42
+           && argument.kind != 45 {
+            let complained: Int = self.complain_at(src, at,
+                "`" + substring(src, parameter.start, parameter.length)
+                + ": Equatable` needs a type two values of which can be compared, and "
+                + self.show_type(src, argument) + " is not one");
+        }
+        return 1;
+    }
+    // Any other bound names a declared trait, and satisfying it means having an implementation.
+    // Traits are registered in the same table records and enums are, so one lookup covers all
+    // three — and a bound naming a record rather than a trait fails the implementation check
+    // below, which is the honest place for it.
+    if self.find_type(src, named.start, named.length) < 0 {
+        let complained: Int = self.complain_at(src, at,
+            "`" + substring(src, parameter.start, parameter.length) + ": "
+            + substring(src, named.start, named.length)
+            + "` names something that is not a trait this program declares");
+        return 1;
+    }
+    if argument.kind != 46 {
+        let complained: Int = self.complain_at(src, at,
+            self.show_type(src, argument) + " cannot implement a trait — only a record or an "
+            + "enum can");
+        return 1;
+    }
+    let mutable i: Int = 0;
+    while i < len(self.impls) {
+        let candidate: Implementation = self.impls[i];
+        if spans_equal(src, candidate.trait_start, candidate.trait_len, named.start, named.length) {
+            if spans_equal(src, candidate.type_start, candidate.type_len,
+                           argument.name_start, argument.name_len) {
+                return 1;
+            }
+        }
+        i += 1;
+    }
+    let complained: Int = self.complain_at(src, at,
+        self.show_type(src, argument) + " does not implement `"
+        + substring(src, named.start, named.length)
+        + "`: conformance is declared, never inferred");
+    return 1;
+}
+
+// The bound declared for this type parameter, as the token of the trait's name, or -1.
+// Looked up by the parameter's own name span, which is unique within the declaration that
+// owns it.
+function (self: Unit) bound_of(src: String, start: Int, length: Int) -> Int {
+    if self.current_generic < 0 {
+        return 0 - 1;
+    }
+    let declaration: Generic = self.generics[self.current_generic];
+    let mutable i: Int = 0;
+    while i < declaration.type_param_count {
+        let at: Int = declaration.type_param_start + i;
+        let named: Token = self.tokens[self.type_params[at]];
+        if spans_equal(src, named.start, named.length, start, length) {
+            return self.type_param_bounds[at];
+        }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+function (self: Unit) resolve_shallow(src: String, t: Type) -> Type {
+    if t.kind != 50 {
+        return t;
+    }
+    let mutable i: Int = len(self.type_bindings) - 1;
+    while i >= 0 {
+        let binding: TypeBinding = self.type_bindings[i];
+        if spans_equal(src, binding.name_start, binding.name_len, t.name_start, t.name_len) {
+            return binding.bound;
+        }
+        i -= 1;
+    }
+    return t;                                        // still abstract: inside the generic itself
+}
+
+// Match a declared parameter type against an argument's actual type, binding type parameters
+// as it goes. The whole of stage-1's inference: structural, one direction, no backtracking —
+// the same shape stage-0 uses, so the two agree by construction rather than by coincidence.
+function (mutable self: Unit) unify(src: String, declared: Type, actual: Type) -> Bool allocates {
+    if declared.kind == 50 {
+        let already: Type = self.resolve_shallow(src, declared);
+        if already.kind != 50 {
+            return self.same_type(src, already, actual);   // bound once, so it must agree
+        }
+        let noted: Int = push(self.type_bindings,
+            TypeBinding { name_start: declared.name_start, name_len: declared.name_len,
+                          bound: actual });
+        return true;
+    }
+    if declared.kind != actual.kind {
         return false;
     }
-    if a.kind != b.kind {
-        return false;
+    if declared.kind == 47 {
+        return self.unify(src, self.declared_type(src, declared.scale),
+                          self.declared_type(src, actual.scale));
     }
-    if a.kind == 47 {
-        return self.same_type(src, self.declared_type(src, a.scale), self.declared_type(src, b.scale));
-    }
-    if a.kind == 48 {
-        // A fixed array's length is part of its type, and so is its element's type.
-        if a.contract != b.contract {
+    if declared.kind == 48 {
+        if declared.contract != actual.contract {
             return false;
         }
-        return self.same_type(src, self.declared_type(src, a.scale), self.declared_type(src, b.scale));
+        return self.unify(src, self.declared_type(src, declared.scale),
+                          self.declared_type(src, actual.scale));
     }
-    if a.kind == 0 || b.kind == 0 {
+    return self.same_type(src, declared, actual);
+}
+
+// The generic declaration this name belongs to, or -1.
+function (self: Unit) generic_named(src: String, start: Int, length: Int) -> Int {
+    let mutable i: Int = 0;
+    while i < len(self.generics) {
+        let g: Generic = self.generics[i];
+        if spans_equal(src, g.start, g.length, start, length) {
+            return i;
+        }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+function (self: Unit) same_type(src: String, a: Type, b: Type) -> Bool {
+    // Resolved at every level rather than rewritten: a type parameter becomes what it stands
+    // for exactly where the comparison reaches it. See resolve_shallow.
+    let left: Type = self.resolve_shallow(src, a);
+    let right: Type = self.resolve_shallow(src, b);
+    if left.kind == 0 || right.kind == 0 {
         return false;
     }
-    if a.kind != b.kind {
+    if left.kind != right.kind {
         return false;
     }
-    if a.kind == 45 {
+    if left.kind == 47 {
+        return self.same_type(src, self.declared_type(src, left.scale),
+                              self.declared_type(src, right.scale));
+    }
+    if left.kind == 48 {
+        // A fixed array's length is part of its type, and so is its element's type.
+        if left.contract != right.contract {
+            return false;
+        }
+        return self.same_type(src, self.declared_type(src, left.scale),
+                              self.declared_type(src, right.scale));
+    }
+    if left.kind == 45 {
         // The rounding contract is part of the type, so it is part of equality.
-        return a.scale == b.scale && a.contract == b.contract;
+        return left.scale == right.scale && left.contract == right.contract;
     }
-    if a.kind == 46 || a.kind == 49 {
-        return spans_equal(src, a.name_start, a.name_len, b.name_start, b.name_len);
+    if left.kind == 46 || left.kind == 49 || left.kind == 50 {
+        return spans_equal(src, left.name_start, left.name_len,
+                           right.name_start, right.name_len);
     }
     return true;
 }
@@ -148,9 +349,13 @@ function (self: Unit) declared_type(src: String, node: Int) -> Type {
     if n.kind == 45 {
         return decimal_type(n.a, n.b);
     }
-    if n.kind == 46 || n.kind == 49 {
+    if n.kind == 46 || n.kind == 49 || n.kind == 50 {
+        // A named type, a trait object, or a type PARAMETER — all three carry the span of a
+        // name written in the source, which is why a parameter needs no invented identifier.
+        // A generic application also carries its arguments: `a` is their start in
+        // `nested_children` and `b` is how many.
         let t: Token = self.tokens[n.token];
-        return Type { kind: n.kind, scale: 0, contract: 0,
+        return Type { kind: n.kind, scale: n.a, contract: n.b,
                     name_start: t.start, name_len: t.length };
     }
     if n.kind == 47 || n.kind == 48 {
@@ -240,14 +445,20 @@ function is_reserved_name(src: String, start: Int, length: Int) -> Bool {
 // The `self` token of the receiver clause that ends just before `from`. -1 if there is
 // none, which the caller treats as a program that is not a method.
 function (self: Unit) self_token(from: Int) -> Int {
+    // Scans back to the clause's opening `(` rather than counting tokens. A fixed budget of
+    // six was enough for `(self)`, `(self: T)` and `(mut self: T)` and one short for
+    // `(self: Stack<T>)`, which is seven — so a generic receiver returned -1 and the caller
+    // indexed the token array with it. A bound that depends on the shape of what it is
+    // scanning is a bound that breaks when the shape grows.
     let mutable i: Int = from - 1;
-    let mutable steps: Int = 0;
-    while i >= 0 && steps < 6 {
+    while i >= 0 {
         if self.tokens[i].kind == 119 {                // `self`
             return i;
         }
+        if self.tokens[i].kind == 29 {                 // `(` — the clause started here
+            return 0 - 1;
+        }
         i -= 1;
-        steps += 1;
     }
     return 0 - 1;
 }
@@ -668,6 +879,31 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
                 "cannot compare " + self.show_type(src, left) + " with " + self.show_type(src, right)
                 + ": one equality, no coercion");
         }
+        // Two values of a type PARAMETER: whether this is allowed is entirely what the bound
+        // says. Without one, a parameter can be stored, copied, passed and returned and
+        // nothing else — the body is checked against the signature's promise, not against
+        // whatever the instantiations happen to permit.
+        let abstract_left: Type = self.resolve_shallow(src, left);
+        if abstract_left.kind == 50 {
+            let bound: Int = self.bound_of(src, abstract_left.name_start, abstract_left.name_len);
+            let ordering: Bool = n.value != 12 && n.value != 13;   // not `==` and not `!=`
+            if bound < 0 {
+                let complained: Int = self.complain_at(src, n.token,
+                    "`" + substring(src, abstract_left.name_start, abstract_left.name_len)
+                    + "` is a type parameter with no bound, so two values of it cannot be "
+                    + "compared: say so in the signature with a bound");
+            } else {
+                let named: Token = self.tokens[bound];
+                let is_ordered: Bool = span_equal(src, named.start, named.length, "Ordered");
+                let is_equatable: Bool = span_equal(src, named.start, named.length, "Equatable");
+                if !is_ordered && (ordering || !is_equatable) {
+                    let complained: Int = self.complain_at(src, n.token,
+                        "comparing two values of `"
+                        + substring(src, abstract_left.name_start, abstract_left.name_len)
+                        + "` needs `Ordered`, or `Equatable` for `==` and `!=`");
+                }
+            }
+        }
         return simple_type(41);
     }
 
@@ -919,9 +1155,22 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
                 "call `" + substring(src, signature.start, signature.length)
                 + "`, which is not `pure`");
         }
+        // A generic call: bind each type parameter from the arguments, then check exactly as
+        // an ordinary call is checked. Nothing below this line knows generics exist — the
+        // bindings do their work through `same_type`, which resolves as it recurses.
+        let base: Int = len(self.type_bindings);
+        let generic: Int = self.generic_named(src, t.start, t.length);
+        if generic >= 0 {
+            let bound: Int = self.bind_type_arguments(src, generic, n.a, signature.params,
+                                                      n.token);
+        }
         let ok: Int = self.check_against_params(src, n.token, n.a, signature.params,
                                                 "function");
-        return signature.return_type;
+        let answer: Type = self.resolve_shallow(src, signature.return_type);
+        // The bindings belong to this call. A nested generic call pushed its own on top and
+        // truncating restores ours, which is why the base is taken before and not after.
+        let dropped: Int = truncate(self.type_bindings, base);
+        return answer;
     }
 
     // Anything else — fields, method calls, indexing, record and array literals —
@@ -1130,7 +1379,32 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
         if self.in_pure == 1 {
             let complained: Int = self.not_pure(src, n.token, "print");
         }
+        // A printed type PARAMETER, found without typing the expression. Calling `type_of`
+        // here would fill the cache that the rules below read, and those rules have been
+        // switching on `unknown` — so making them live rejected nine programs stage-0
+        // accepts. That is a real gap in this branch, recorded rather than fixed blind:
+        // the rules were written against an assumption this file no longer holds.
+        let printed: Node = self.nodes[n.a];
+        if printed.kind == 5 {
+            let referenced: Token = self.tokens[printed.token];
+            let where: Int = self.find_sym(src, referenced.start, referenced.length);
+            if where >= 0 && self.syms[where].bound_type.kind == 50 {
+                let named: Type = self.syms[where].bound_type;
+                let complained: Int = self.complain_at(src, n.token,
+                    "`" + substring(src, named.name_start, named.name_len)
+                    + "` is a type parameter with no bound, so a value of it can be stored, "
+                    + "copied, passed and returned — not printed, which needs to know what "
+                    + "the value IS");
+            }
+        }
         let shown: Type = self.type_at(n.a);
+        if shown.kind == 50 {
+            let complained: Int = self.complain_at(src, n.token,
+                "`" + substring(src, shown.name_start, shown.name_len)
+                + "` is a type parameter with no bound, so a value of it can be stored, "
+                + "copied, passed and returned — not printed, which needs to know what the "
+                + "value IS");
+        }
         if shown.kind == 46 || shown.kind == 49 || shown.kind == 47 || shown.kind == 48 {
             let complained: Int = self.complain_at(src, n.token,
                 "`print` renders a number, a Bool, a Decimal or a String — "
@@ -1347,6 +1621,10 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int allocat
         p += 1;
     }
     let return_type: Type = self.declared_type(src, signature.c);
+    // Which generic this is, so a parameter's bound is looked up in its own declaration.
+    let outer_generic: Int = self.current_generic;
+    let named_here: Token = self.tokens[item.token];
+    self.current_generic = self.generic_named(src, named_here.start, named_here.length);
     let clauses: Int = self.check_clauses(src, index, signature, return_type);
     let outer_function: Int = self.in_function;
     let outer_loop: Int = self.loop_depth;
@@ -1373,6 +1651,7 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int allocat
     self.depth -= 1;
     self.in_caller_region = outer_caller;
     self.in_pure = outer_pure;
+    self.current_generic = outer_generic;
     return 1;
 }
 
@@ -1714,11 +1993,12 @@ function (self: Unit) uses_generics() -> Int {
     let mutable at: Int = 0;
     while at < len(self.nodes) {
         let n: Node = self.nodes[at];
-        if n.kind == 50 {
-            return at;                               // a type parameter
-        }
         if n.kind == 46 && n.b > 0 {
-            return at;                               // a generic application, `Option<Int>`
+            // A generic APPLICATION — `Option<Int>`. Instantiating a record or enum needs one
+            // layout per argument list, which is the slice after this one. Generic FUNCTIONS
+            // are checked now: their type parameters are bound at the call site and resolved
+            // as comparison recurses, needing no new layout at all.
+            return at;
         }
         at += 1;
     }
@@ -1729,9 +2009,10 @@ function (mutable self: Unit) check(src: String) -> Int allocates {
     let generic: Int = self.uses_generics();
     if generic >= 0 {
         let complained: Int = self.complain_at(src, self.nodes[generic].token,
-            "the Burxt-hosted compiler does not check generics yet — it parses them, and "
-            + "monomorphising them is the last piece of M7. Compile this with the Rust "
-            + "compiler for now; see spec/M7-GENERICS.md §5");
+            "the Burxt-hosted compiler does not instantiate generic records and enums yet — "
+            + "it checks generic FUNCTIONS, and giving `Option<Int>` its own layout is the "
+            + "next slice. Compile this with the Rust compiler for now; "
+            + "see spec/M7-GENERICS.md §5");
         return self.problems;
     }
     let collected: Int = self.collect_declarations(src);

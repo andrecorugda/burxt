@@ -122,15 +122,19 @@ function (mutable self: Unit) parse_type_params(src: String) -> Int allocates {
         let n: Int = self.advance();
         push(self.params_in_scope, name_tok);
         count += 1;
-        // `<T: Ordered>` — one bound per parameter. The bound is a name, checked later.
+        // `<T: Ordered>` — one bound per parameter, remembered so the body can be checked
+        // against it. The two arrays stay parallel: one bound per parameter, always pushed.
+        let mutable bound_tok: Int = 0 - 1;
         if self.at(20) {                             // ':'
             let colon: Int = self.advance();
             if !self.at(1) {
                 let complained: Int = self.complain(src, "a trait name after the parameter's `:`");
                 return 0 - 1;
             }
+            bound_tok = self.pos;
             let b: Int = self.advance();
         }
+        push(self.pending_bounds, bound_tok);
         if self.more_in_list(36) {
             continue;
         }
@@ -149,10 +153,14 @@ function (mutable self: Unit) note_generic(name_tok: Int, count: Int) -> Int all
     let name: Token = self.tokens[name_tok];
     let type_param_start: Int = len(self.type_params);
     let mutable i: Int = len(self.params_in_scope) - count;
+    let mutable b: Int = len(self.pending_bounds) - count;
     while i < len(self.params_in_scope) {
         let noted: Int = push(self.type_params, self.params_in_scope[i]);
+        let bounded: Int = push(self.type_param_bounds, self.pending_bounds[b]);
         i += 1;
+        b += 1;
     }
+    let cleared: Int = truncate(self.pending_bounds, 0);
     let noted: Int = push(self.generics, Generic { start: name.start, length: name.length,
                                                    type_param_start: type_param_start, type_param_count: count });
     return 1;

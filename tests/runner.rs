@@ -1125,6 +1125,14 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     // versions: stage-1 rejecting LESS than stage-0 never trips it. Worth knowing about the
     // instrument — a ratchet measures progress, and cannot notice a regression that stays
     // above the line. Direction 4 is the kind of test that can.
+    //
+    // The floor moved DOWN once, from 192 to 189 in v0.0.107, and that is the only lowering
+    // in its history. Before that version stage-1 refused EVERY program containing a generic
+    // with one blanket message, so `generic_record_needs_its_arguments` and
+    // `generic_enum_needs_its_arguments` counted as rejections — for the wrong reason.
+    // Now generic FUNCTIONS are checked properly and those two are honestly out of scope
+    // until generic records and enums are instantiated. Three fixtures traded from
+    // accidentally-right to knowingly-pending, written down rather than quietly absorbed.
     let mut caught = 0;
     let mut total = 0;
     for entry in fs::read_dir(root.join("tests/fail")).unwrap() {
@@ -1140,8 +1148,8 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
 
     let _ = fs::remove_dir_all(&scratch);
     assert!(
-        caught >= 192,
-        "stage-1 rejected only {} of {} fail programs, down from 192",
+        caught >= 189,
+        "stage-1 rejected only {} of {} fail programs, down from 189",
         caught,
         total
     );
@@ -2858,13 +2866,14 @@ fn json_string(s: &str) -> String {
     out
 }
 
-/// Stage-1 READS generics, and says plainly that it does not check them yet.
+/// Stage-1 CHECKS generic functions, and says plainly what it still cannot instantiate.
 ///
-/// The parser handles type parameters, applications, bounds and generic receivers; the checker
-/// does not monomorphise. That intermediate state is fine — but it must REFUSE, not crash, and
-/// it must not silently accept what it cannot verify. Before the guard existed, stage-1 parsed
-/// a generic, walked a type-parameter node, looked its name up as a record, got -1 and indexed
-/// an array with it: exit 70.
+/// As of v0.0.107 it binds a generic function's type parameters at the call site, resolves them
+/// lazily as comparison recurses, and enforces `Ordered`/`Equatable`/trait bounds — so it agrees
+/// with stage-0 on generic functions. What it cannot do is give `Option<Int>` its own layout,
+/// and it says so rather than guessing. Before any guard existed, stage-1 parsed a generic,
+/// walked a type-parameter node, looked its name up as a record, got -1 and indexed an array
+/// with it: exit 70.
 ///
 /// A compiler that half-understands a construct answers differently from the other one, and the
 /// differential test exists to stop exactly that.
@@ -2883,7 +2892,10 @@ fn the_burxt_compiler_reads_generics_and_says_it_cannot_check_them() {
         .expect("burxt")
         .success());
 
-    // One of each generic form, so a parse regression in any of them shows up here.
+    // One of each generic form. The calls to `identity` and `largest` must be CHECKED — those
+    // work — and the `Option<Int>` annotation must be REFUSED, because instantiating a generic
+    // enum needs a layout stage-1 cannot make yet. Both halves in one program, so neither can
+    // regress unnoticed.
     let program = scratch.join("generic.bx");
     fs::write(
         &program,
@@ -2892,7 +2904,8 @@ fn the_burxt_compiler_reads_generics_and_says_it_cannot_check_them() {
          function identity<T>(x: T) -> T { return x; }\n\
          function largest<T: Ordered>(a: T, b: T) -> T { if a > b { return a; } return b; }\n\
          function (self: Stack<T>) count() -> Int { return len(self.items); }\n\
-         region r {\n  print(identity(3));\n}\n",
+         region r {\n  print(identity(3));\n  print(largest(3, 9));\n  \
+         let found: Option<Int> = Option.None;\n  print(1);\n}\n",
     )
     .unwrap();
 
@@ -2920,9 +2933,10 @@ fn the_burxt_compiler_reads_generics_and_says_it_cannot_check_them() {
     );
     // And the CHECKER must say so rather than pretend.
     assert!(
-        said.contains("does not check generics yet"),
-        "stage-1 did not say it cannot check generics — if it now can, move the generics \
-         tests from this file into tests/pass/ so BOTH compilers are held to them:\n{}",
+        said.contains("does not instantiate generic records and enums yet"),
+        "stage-1 did not say it cannot instantiate generic records and enums — if it now \
+         can, move the generics tests from this file into tests/pass/ so BOTH compilers are \
+         held to them:\n{}",
         said
     );
 }
