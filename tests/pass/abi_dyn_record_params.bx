@@ -1,0 +1,98 @@
+// A record passed to a method THROUGH A TRAIT OBJECT — the intersection of two
+// well-tested families that nobody had written a program in.
+//
+// `tests/pass/abi_*` covers records across call boundaries. `tests/pass/trait_dyn_*`
+// covers dispatch through a trait object. Seven fixtures pass a record to a method and
+// not one of them does it dynamically, so this path had no test at all — and it was
+// WRONG. A vtable target declares its record parameter `byval(T)`, meaning the aggregate
+// travels in the stack argument area; the indirect call passed a bare pointer, which
+// travels in a register. The callee read its record from wherever the stack happened to
+// be, and a `Bool` field decided the answer from garbage.
+//
+// It was a wrong answer in money — a taxable item taxed at 0.0000 — and it did not crash
+// or warn. Found by writing examples/pos/ and comparing against the same app in Python,
+// PHP and Rust, all three of which agreed with each other and not with Burxt.
+//
+// The two record SIZES both matter, which is why both are here: without the attributes,
+// the 32-byte record came out wrong and the 16-byte one came out right. Correctness
+// depended on layout, so a fixture with one shape would have proven nothing.
+
+// ---- 32 bytes: two pointers and two words. The shape that was wrong. --------
+record Item { sku: String, name: String, price: Decimal<2>, taxable: Bool }
+
+// ---- 16 bytes: two words. The shape that was accidentally right. -----------
+record Pair { lo: Int, hi: Int }
+
+trait Rule {
+    function rate_for(self, item: Item) -> Decimal<4>
+    function fold(self, p: Pair) -> Int
+    function shift(self, p: Pair) -> Pair
+}
+
+record Flat { rate: Decimal<4>, bias: Int }
+
+implement Rule for Flat {
+    // Reads the Bool FIRST. That is the field that read as garbage, and a Bool is the
+    // worst case: any nonzero byte answers `true`, so a wrong read is usually silent.
+    function (self) rate_for(item: Item) -> Decimal<4> {
+        if !item.taxable {
+            return 0.0000;
+        }
+        return self.rate;
+    }
+    // Reads every field of both the parameter and the receiver, so a misread argument
+    // cannot coincide with the right answer.
+    function (self) fold(p: Pair) -> Int {
+        return p.lo * 100 + p.hi + self.bias;
+    }
+    // An aggregate RETURN through the vtable as well: the hidden `sret` pointer has to
+    // be declared at the call site too, and it was not.
+    function (self) shift(p: Pair) -> Pair {
+        return Pair { lo: p.lo + self.bias, hi: p.hi - self.bias };
+    }
+}
+
+// A `dynamic` FORWARDED through a call, which is how the original wrong answer was
+// reached: the trait object is a parameter here, not a value coerced at this call site.
+function tax_of(rule: dynamic Rule, item: Item, quantity: Int) -> Decimal<2, RoundHalfUp> {
+    let rate: Decimal<4> = rule.rate_for(item);
+    let base: Decimal<2> = item.price * quantity;
+    return base * rate;
+}
+
+// Accumulated in a loop, because reading the sum AFTER the call is what made the
+// original failure visible: using the result immediately hid it.
+function total_tax(rule: dynamic Rule, item: Item, times: Int) -> Decimal<2, RoundHalfUp> {
+    let mutable sum: Decimal<2, RoundHalfUp> = 0.00;
+    let mutable i: Int = 0;
+    while i < times {
+        sum += tax_of(rule, item, 3);
+        i += 1;
+    }
+    return sum;
+}
+
+region r {
+    let rice: Item = Item { sku: "RICE", name: "Rice 5kg", price: 52.75, taxable: true };
+    let news: Item = Item { sku: "NEWS", name: "Newspaper", price: 12.00, taxable: false };
+    let flat: Flat = Flat { rate: 0.1200, bias: 7 };
+    let rule: dynamic Rule = flat;
+
+    // 52.75 * 3 = 158.25, at 12% = 18.99 exactly.
+    print(tax_of(rule, rice, 3));
+    // Not taxable: the rate is 0.0000 and so is the tax. This is the case that was
+    // WRONG in the other direction — it answered 0.00 for the taxable item too.
+    print(tax_of(rule, news, 3));
+    // Twice through the accumulator.
+    print(total_tax(rule, rice, 2));
+
+    // 16-byte record, in and out.
+    let p: Pair = Pair { lo: 4, hi: 9 };
+    print(rule.fold(p));
+    let moved: Pair = rule.shift(p);
+    print(moved.lo);
+    print(moved.hi);
+
+    // A literal argument has no home of its own, and still has to arrive intact.
+    print(rule.fold(Pair { lo: 1, hi: 2 }));
+}

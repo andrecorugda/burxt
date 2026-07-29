@@ -1,0 +1,55 @@
+// ============================================================================
+// pos/tax.bx — how much tax a line attracts.
+//
+//     use "tax.bx";
+//
+// A trait with two implementations, which is the shape any configurable service
+// takes here: the till does not know which rule it is running.
+// ============================================================================
+
+use "items.bx";
+
+// A rate is written `0.1200`, not `$0.1200`. `$` means MONEY, which is Decimal<2> — and a
+// twelve-percent rate is not an amount of money, it is a multiplier with four digits of
+// precision. The language refuses `$0.1200` by name rather than rounding it to `$0.12`.
+
+// ---- The interface ---------------------------------------------------------
+trait Tax {
+    function rate_for(self, item: Item) -> Decimal<4>
+    function label(self) -> String
+}
+
+// ---- One rule: the same rate on everything taxable -------------------------
+record FlatTax { rate: Decimal<4> }
+
+implement Tax for FlatTax {
+    function (self) rate_for(item: Item) -> Decimal<4> {
+        if !item.taxable { return 0.0000; }
+        return self.rate;
+    }
+    function (self: FlatTax) label() -> String { return "flat"; }
+}
+
+// ---- Another: staples cheaper than the rest --------------------------------
+record SplitTax { staples: Decimal<4>, rest: Decimal<4> }
+
+implement Tax for SplitTax {
+    function (self) rate_for(item: Item) -> Decimal<4> {
+        if !item.taxable { return 0.0000; }
+        if item.sku == "RICE" { return self.staples; }
+        if item.sku == "MILK" { return self.staples; }
+        return self.rest;
+    }
+    function (self: SplitTax) label() -> String { return "split"; }
+}
+
+// ---- The tax on one line ---------------------------------------------------
+// The rate is a Decimal<4> and the money is a Decimal<2>, so the exact product has SIX decimal
+// places, and landing it on two is a rounding. A rounding needs a named rule, and the rule goes
+// on the RETURN TYPE — that is the one place a reader looking for "what does this promise" will
+// find it. `RoundHalfUp` is what a till does.
+function line_tax(rule: dynamic Tax, line: Line) -> Decimal<2, RoundHalfUp> {
+    let rate: Decimal<4> = rule.rate_for(line.item);
+    let base: Decimal<2, RoundHalfUp> = line_subtotal(line);
+    return base * rate;
+}

@@ -2262,6 +2262,45 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_indirect_call(fn_ty, fn_ptr, &vals, "dyncall")
                     .map_err(|e| e.to_string())?;
 
+                // Mirror the declared ABI attributes onto the call site — the same
+                // sweep the direct call and the direct method call already do.
+                //
+                // This was MISSING, and it was a wrong answer in money rather than a
+                // crash. `byval` is not decoration: on x86-64 it means the aggregate
+                // travels in the stack argument area, while a bare pointer travels in
+                // a register. A vtable target declares `byval(%bx.Item)` and this call
+                // passed a plain pointer, so the callee read its record from wherever
+                // the stack happened to be — and `if !item.taxable` then answered from
+                // garbage. It returned a 0.0000 tax rate on a taxable item, silently.
+                //
+                // Two properties of the bug are worth recording, because they are what
+                // made it survive so long. It is stack-layout dependent, so adding a
+                // `print` moved the frame and the same program started answering
+                // correctly — which is why six reductions all "passed". And the
+                // receiver was already handled (see `declare_method`), so the code
+                // above looks like someone thought about the ABI here.
+                use inkwell::attributes::{Attribute, AttributeLoc};
+                let mut idx = 0u32;
+                if ret_is_agg {
+                    let attr = self.ctx.create_type_attribute(
+                        Attribute::get_named_enum_kind_id("sret"),
+                        self.llvm_type(&ret_ty).as_any_type_enum(),
+                    );
+                    call.add_attribute(AttributeLoc::Param(0), attr);
+                    idx = 1;
+                }
+                idx += 1; // the receiver: a plain pointer in both forms, never byval
+                for p in &param_tys {
+                    if is_aggregate(p) {
+                        let attr = self.ctx.create_type_attribute(
+                            Attribute::get_named_enum_kind_id("byval"),
+                            self.llvm_type(p).as_any_type_enum(),
+                        );
+                        call.add_attribute(AttributeLoc::Param(idx), attr);
+                    }
+                    idx += 1;
+                }
+
                 if let Some(s) = sret_slot {
                     return self
                         .builder

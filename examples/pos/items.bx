@@ -1,0 +1,30 @@
+// ============================================================================
+// pos/items.bx — what a shop sells, and what a customer is buying.
+//
+//     use "items.bx";
+//
+// Data only. Every other file in this app depends on this one and it depends on
+// nothing, which is the only reason `use` can have no cycles to worry about.
+// ============================================================================
+
+// One thing on the shelf. `price` is a Decimal<2> because it is money, and money
+// in this language is an integer and a scale — never a float.
+record Item {
+    sku: String,
+    name: String,
+    price: Decimal<2, RoundHalfUp>,
+    taxable: Bool,
+}
+
+// One line on a receipt: a thing, and how many of it.
+record Line {
+    item: Item,
+    quantity: Int,
+}
+
+// What a line costs before tax. `quantity` is an Int and `price` is a Decimal<2>,
+// so the product is a Decimal<2> exactly — no rounding happens here, and none is
+// allowed to happen silently.
+function line_subtotal(line: Line) -> Decimal<2, RoundHalfUp> {
+    return line.item.price * line.quantity;
+}

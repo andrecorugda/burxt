@@ -58,3 +58,4 @@ node_modules/
 *.zip
 *.tar.gz
 *:Zone.Identifier
+__pycache__/

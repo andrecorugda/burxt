@@ -1,0 +1,83 @@
+// ============================================================================
+// pos/till.bx — the app. Run this one:
+//
+//     burxt run examples/pos/till.bx
+//
+// A static point-of-sale: a fixed catalogue, one sale, two tax rules, one
+// receipt. Four files, and this is the only one that knows they exist.
+// ============================================================================
+
+use "items.bx";
+use "tax.bx";
+use "receipt.bx";
+
+// ---- The catalogue ---------------------------------------------------------
+// A function rather than a constant, because a growable array lives in a region
+// and a top-level constant has no region to live in. `allocates` again.
+function catalogue() -> [Item] allocates {
+    let mutable shelf: [Item] = [];
+    let a: Int = push(shelf, Item { sku: "RICE", name: "Rice 5kg",
+                                    price: $52.75, taxable: true });
+    let b: Int = push(shelf, Item { sku: "MILK", name: "Milk 1L",
+                                    price: $18.40, taxable: true });
+    let c: Int = push(shelf, Item { sku: "NEWS", name: "Newspaper",
+                                    price: $12.00, taxable: false });
+    return shelf;
+}
+
+function find_item(shelf: [Item], sku: String) -> Item
+    requires len(shelf) > 0
+{
+    let mutable i: Int = 0;
+    while i < len(shelf) {
+        if shelf[i].sku == sku {
+            return shelf[i];
+        }
+        i += 1;
+    }
+    return shelf[0];
+}
+
+// ---- Ringing up a sale -----------------------------------------------------
+// Two accumulators, because the receipt wants both and recomputing would be a
+// second pass over the same lines.
+function ring_up(rule: dynamic Tax, sale: [Line]) -> Int allocates {
+    let mutable subtotal: Decimal<2, RoundHalfUp> = $0.00;
+    // `Decimal<2, RoundHalfUp>`, not `Decimal<2>`, because that is what `line_tax` answers and a
+    // rounding contract is part of the TYPE. Adding two of these needs no rounding at all, so the
+    // contract is doing nothing here except recording where the value came from — which is honest,
+    // and is also the kind of thing you only notice by writing a real program.
+    let mutable tax: Decimal<2, RoundHalfUp> = $0.00;
+    print("--- " + rule.label() + " tax ---");
+    let mutable i: Int = 0;
+    while i < len(sale) {
+        let line: Line = sale[i];
+        print(line_text(rule, line));
+        subtotal += line_subtotal(line);
+        tax += line_tax(rule, line);
+        i += 1;
+    }
+    print(totals_text(subtotal, tax));
+    return 0;
+}
+
+// ---- The program -----------------------------------------------------------
+region sale {
+    let shelf: [Item] = catalogue();
+
+    let mutable basket: [Line] = [];
+    let one: Int = push(basket, Line { item: find_item(shelf, "RICE"), quantity: 3 });
+    let two: Int = push(basket, Line { item: find_item(shelf, "MILK"), quantity: 2 });
+    let three: Int = push(basket, Line { item: find_item(shelf, "NEWS"), quantity: 1 });
+
+    // The same basket, priced two ways. Neither `ring_up` nor `receipt.bx` knows
+    // which rule it is running — that is what the trait is for.
+    let flat: FlatTax = FlatTax { rate: 0.1200 };
+    let split: SplitTax = SplitTax { staples: 0.0200, rest: 0.1200 };
+
+    let a: Int = ring_up(flat, basket);
+
+    print("");
+    // The same lines again, under `split`: staples at 2%, everything else at 12%.
+    let b: Int = ring_up(split, basket);
+}

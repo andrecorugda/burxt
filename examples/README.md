@@ -51,6 +51,23 @@ more about it than what it accepts.
 These read their inputs from [`inputs/`](inputs) (valid Burxt) and
 [`negative/`](negative) (**deliberately** wrong — that is what they exist to catch).
 
+## The same app, four times
+
+A point-of-sale — a fixed catalogue, one sale, two tax rules, one receipt — written four
+times, split the same four ways every time. Same module boundaries, same function names,
+same order inside each file, so they can be read side by side.
+
+| | |
+|---|---|
+| [`pos/`](pos) | **Burxt.** `items.bx` · `tax.bx` · `receipt.bx` · `till.bx` — and [the four-way comparison](pos/README.md) |
+| [`pos-python/`](pos-python) | Python, with `decimal.Decimal` and an explicit `ROUND_HALF_UP` per operation |
+| [`pos-php/`](pos-php) | PHP, with bcmath strings — every arithmetic op is a call, and half-up is hand-rolled |
+| [`pos-rust/`](pos-rust) | Rust, with `i64` cents in a newtype — there is no decimal in its standard library |
+
+All four print the same receipt. Writing them found a **wrong answer in money** in the Burxt
+compiler that 36 invariants had missed, which is the argument for the exercise: three
+independent implementations agreeing with each other and not with you is hard to argue with.
+
 ## Learning the language
 
 The guide in [`../docs/guide/`](../docs/guide) is the prose version of all of this, in

@@ -790,7 +790,11 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
     if n.kind == 14 {                                // a method call
         let holder: Type = self.type_at(n.a);
         if holder.kind == 49 {
-            return self.emit_dynamic_call(src, holder, n);
+            // The call's own type, resolved here because a dynamic call needs it for the
+            // same reason a direct one does: an aggregate answer travels through the
+            // caller's storage and the call has to hand over a pointer.
+            let dyn_answers: Type = self.type_at(node);
+            return self.emit_dynamic_call(src, holder, n, dyn_answers);
         }
         let receiver: String = self.emit_expr(src, n.a);
         let list: Node = self.nodes[n.b];
@@ -1852,7 +1856,18 @@ function (mutable self: Unit) emit_dynamic(src: String, want: Type, node: Int) -
 // Calling a method through a trait object: load the table, take the slot the trait gave
 // this method, and call what is there with the DATA pointer as the receiver. The concrete
 // type is not known here and does not need to be — that is what the indirection buys.
-function (mutable self: Unit) emit_dynamic_call(src: String, holder: Type, call: Node) -> String allocates {
+// A method call through a trait object. `answers` is the call's own type, handed in rather
+// than looked up, because the caller holds the node index and this holds only the node.
+//
+// The aggregate return below was MISSING, and the program segfaulted: the call passed the
+// receiver where the callee expected its `%sret` pointer, so a method returning a record
+// wrote the answer through whatever the receiver happened to be. Stage-0 had the identical
+// omission at the identical place — a vtable call that never learned what the direct call
+// already knew — which is worth recording, because two independent implementations failing
+// the same way at the same site says the fault is in how the shape was thought about rather
+// than in either translation.
+function (mutable self: Unit) emit_dynamic_call(src: String, holder: Type, call: Node,
+                                                answers: Type) -> String allocates {
     let fat: String = self.emit_expr(src, call.a);
     let base: String = self.fresh();
     let cast: Int = self.write_body("  " + base + " = inttoptr i64 " + fat + " to ptr\n");
@@ -1880,6 +1895,19 @@ function (mutable self: Unit) emit_dynamic_call(src: String, holder: Type, call:
         let value: String = self.emit_expr(src, self.children[list.a + i]);
         args += ", i64 " + value;
         i += 1;
+    }
+    // An aggregate answer: hand over storage the CALLER owns and answer its address, the
+    // same shape the direct method call uses. Returning a pointer into the callee's frame
+    // would be a dangling one, so this is the only correct form rather than a choice.
+    if self.is_aggregate_written(src, answers) {
+        let storage: String = self.scratch(self.cells_of(src, answers));
+        let dropped: String = self.fresh();
+        let filled: Int = self.write_body("  " + dropped + " = call i64 " + target
+                                 + "(ptr " + storage + ", " + args + ")\n");
+        let address: String = self.fresh();
+        let taken: Int = self.write_body("  " + address + " = ptrtoint ptr " + storage
+                                + " to i64\n");
+        return address;
     }
     let answer: String = self.fresh();
     let called: Int = self.write_body("  " + answer + " = call i64 " + target + "(" + args + ")\n");

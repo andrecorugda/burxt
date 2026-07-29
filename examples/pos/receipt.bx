@@ -1,0 +1,49 @@
+// ============================================================================
+// pos/receipt.bx — turning a sale into something a customer can read.
+//
+//     use "receipt.bx";
+//
+// This is the file where the memory model becomes visible, and it is worth
+// noticing WHY: every function here builds a String, and a built value needs
+// somewhere to live. `allocates` says "I build in my caller's region", so the
+// text outlives the call that made it.
+// ============================================================================
+
+use "items.bx";
+use "tax.bx";
+
+// A width-padded amount, so the column lines up. Every `+` on Strings allocates,
+// which is why this says `allocates` — and why a function that only did Int
+// arithmetic would not have to.
+function money_column(amount: Decimal<2, RoundHalfUp>) -> String allocates {
+    let shown: String = to_string(amount);
+    let mutable padded: String = "";
+    let mutable pad: Int = 10 - len(shown);
+    while pad > 0 {
+        padded += " ";
+        pad -= 1;
+    }
+    return padded + shown;
+}
+
+function line_text(rule: dynamic Tax, line: Line) -> String allocates {
+    let subtotal: Decimal<2, RoundHalfUp> = line_subtotal(line);
+    return line.item.name + "  x" + to_string(line.quantity)
+        + money_column(subtotal);
+}
+
+// The totals block. Three amounts, and the one that matters is the last.
+//
+// Note the second parameter: `Decimal<2, RoundHalfUp>`, not `Decimal<2>`. This file does not round
+// anything and does not care how the tax was rounded — but a rounding contract is part of the type
+// and cannot be dropped, so the fact travels here from `tax.bx` and has to be written down. It also
+// forces `due` to carry it, because adding the two produces the contracted type.
+//
+// That is a real cost of the current design, met by writing a real program rather than predicted.
+function totals_text(subtotal: Decimal<2, RoundHalfUp>,
+                     tax: Decimal<2, RoundHalfUp>) -> String allocates {
+    let due: Decimal<2, RoundHalfUp> = subtotal + tax;
+    return "subtotal" + money_column(subtotal) + "\n"
+        + "tax     " + money_column(tax) + "\n"
+        + "due     " + money_column(due);
+}

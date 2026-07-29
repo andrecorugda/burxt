@@ -3408,3 +3408,71 @@ fn every_source_and_document_is_in_version_control() {
         untracked.join("\n")
     );
 }
+
+/// Every call site that can pass a record mirrors the ABI attributes the callee declares.
+///
+/// This exists because it did not, and the result was a **wrong answer in money**. A vtable
+/// target declares its record parameter `byval(T)` — on x86-64 that means the aggregate
+/// travels in the stack argument area. The indirect call passed a bare pointer, which
+/// travels in a register. The callee read its record from wherever the stack happened to
+/// be, and a `Bool` field decided the answer from garbage: a taxable item taxed at 0.0000,
+/// no crash, no warning.
+///
+/// `tests/pass/abi_dyn_record_params.bx` reproduces it, and that fixture is necessary but
+/// NOT sufficient — the failure is stack-layout dependent, so it is caught by luck. Adding
+/// a `print` to the failing program made it start answering correctly, which is exactly why
+/// six earlier reductions all "passed". A test that depends on frame layout is a test that
+/// will stop working without telling anyone.
+///
+/// So the durable guard is structural, and the shape of the defect says why: there are
+/// three places that build a call passing user arguments, and **two of them** mirrored the
+/// attributes. Not a hard problem — an incomplete sweep, the same failure as the thirteen
+/// runtime guarantees stage-1 silently dropped. This asserts the sweep is complete: any
+/// site that inspects `is_aggregate` while building arguments must also attach `byval`.
+#[test]
+fn every_call_site_mirrors_the_declared_abi() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = fs::read_to_string(root.join("src/codegen.rs")).unwrap();
+    let lines: Vec<&str> = src.lines().collect();
+
+    let mut sites = 0;
+    let mut missing = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if !(line.contains(".build_call(") || line.contains(".build_indirect_call(")) {
+            continue;
+        }
+        // Only calls that pass USER arguments are at risk. The runtime helpers
+        // (`burxt.checked.add` and friends) take i64 and can hold no aggregate, and they
+        // are recognised by the absence of any `is_aggregate` test while building values.
+        //
+        // `return tail` is the one user call deliberately not counted: it never tests
+        // `is_aggregate` because typeck refuses an aggregate there outright — *"a
+        // guaranteed tail call is limited to scalar parameters and returns"*. Checked, not
+        // assumed. If that restriction is ever lifted, this sweep will start counting the
+        // site and demand the attributes, which is the behaviour we want.
+        let before = lines[i.saturating_sub(60)..i].join("\n");
+        if !before.contains("is_aggregate") {
+            continue;
+        }
+        sites += 1;
+        let after = lines[i..(i + 45).min(lines.len())].join("\n");
+        if !after.contains("\"byval\"") {
+            missing.push(format!("  src/codegen.rs:{} — {}", i + 1, line.trim()));
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "these call sites pass records but never attach `byval`, so the callee reads its \
+         argument from the wrong place — a wrong answer, not a crash:\n{}",
+        missing.join("\n")
+    );
+    // A floor, so deleting the mirroring by deleting the call site is not a way to pass.
+    assert!(
+        sites >= 3,
+        "expected at least 3 call sites passing records (direct call, direct method, \
+         vtable); found {}. If a site was removed, say so here — this number is the \
+         evidence that the sweep is complete.",
+        sites
+    );
+}
