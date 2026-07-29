@@ -1,3 +1,7 @@
+---
+title: Maps
+---
+
 # 10. Maps
 
 A key-value table, in **insertion order**.

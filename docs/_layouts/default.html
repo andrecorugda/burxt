@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if page.title %}{{ page.title }} · Burxt{% else %}Burxt{% endif %}</title>
+<meta name="description" content="{{ page.description | default: site.description }}">
+
+<link rel="icon" href="{{ site.baseurl }}/assets/favicon.ico">
+<link rel="apple-touch-icon" href="{{ site.baseurl }}/assets/burxt-b-favicon-180.png">
+<link rel="stylesheet" href="{{ site.baseurl }}/assets/site.css">
+<!-- The marks are copied into docs/assets/ rather than referenced from the repository's assets/,
+     because Pages serves ONE root and that root is /docs. A relative ../assets path would 404. -->
+
+<meta property="og:title" content="{{ page.title | default: 'Burxt' }}">
+<meta property="og:description" content="{{ page.description | default: site.description }}">
+<meta property="og:type" content="website">
+</head>
+<body>
+
+<nav class="bar">
+  <a class="mark" href="{{ site.baseurl }}/">
+    <img src="{{ site.baseurl }}/assets/burxt-lockup-light.png" alt="Burxt">
+  </a>
+  <a href="{{ site.baseurl }}/guide/"     class="{% if page.section == 'guide' %}here{% endif %}">Guide</a>
+  <a href="{{ site.baseurl }}/examples/"  class="{% if page.section == 'examples' %}here{% endif %}">Examples</a>
+  <a href="{{ site.baseurl }}/install/"   class="{% if page.section == 'install' %}here{% endif %}">Install</a>
+  <a href="https://github.com/andrecorugda/burxt">GitHub</a>
+</nav>
+
+<main>
+  <div class="{{ page.width | default: 'wrap' }}">
+    {{ content }}
+  </div>
+</main>
+
+<footer>
+  <p>
+    Burxt is <a href="https://github.com/andrecorugda/burxt">open source</a>,
+    MIT or Apache-2.0. Built in small, verified increments.
+  </p>
+</footer>
+
+<script>
+// Markdown tables need a scroll container so a wide one cannot make the whole page scroll
+// sideways. Done here rather than in the markdown, because kramdown emits bare <table>.
+document.querySelectorAll('main table').forEach(function (t) {
+  if (t.parentElement.classList.contains('tablewrap')) return;
+  var box = document.createElement('div');
+  box.className = 'tablewrap';
+  t.parentNode.insertBefore(box, t);
+  box.appendChild(t);
+});
+</script>
+
+</body>
+</html>

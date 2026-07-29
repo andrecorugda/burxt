@@ -1,3 +1,7 @@
+---
+title: The C boundary
+---
+
 # 6. The C boundary
 
 Burxt calls C, because a language that cannot is a language you cannot deploy. What crosses

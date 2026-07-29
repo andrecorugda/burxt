@@ -1,3 +1,7 @@
+---
+title: Modules
+---
+
 # 7. Modules
 
 One file is a module. `use` names a path.

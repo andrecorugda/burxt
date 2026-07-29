@@ -1,0 +1,41 @@
+# GitHub Pages, served from /docs on the default branch.
+#
+# No theme. Jekyll is here for one job — rendering the guide's markdown, which it does correctly and
+# which this repository has no local renderer for — and every pixel comes from _layouts/default.html
+# and assets/site.css instead of a theme's opinions.
+title: Burxt
+description: A typed, compiled, native language where exact decimals are the default.
+# On a CUSTOM DOMAIN these two lines become:
+#     url: https://your-domain
+#     baseurl: ""
+# and `docs/CNAME` holds the bare hostname on one line. Nothing else in the site changes — every
+# internal link goes through `{{ site.baseurl }}`, so the switch is these two lines and that file.
+url: https://andrecorugda.github.io
+baseurl: /burxt
+
+# The milestone log and the specs are for people reading the repository, not visitors to the site.
+# They stay in git and out of the build rather than being half-styled pages nobody links to.
+exclude:
+  - log
+  - README.md
+
+# Every page in guide/ gets the same layout without eleven copies of the same front matter.
+defaults:
+  - scope:
+      path: "guide"
+    values:
+      layout: default
+      section: guide
+  - scope:
+      path: ""
+    values:
+      layout: default
+
+# Ordinary code fences, highlighted by rouge. `burxt` is not a language rouge knows, so those blocks
+# come out unhighlighted rather than wrongly highlighted — which is the better failure, and the site
+# does its own colouring for them.
+markdown: kramdown
+highlighter: rouge
+kramdown:
+  input: GFM
+  hard_wrap: false

@@ -1,3 +1,7 @@
+---
+title: Getting started
+---
+
 # 1. Getting started
 
 ## Install

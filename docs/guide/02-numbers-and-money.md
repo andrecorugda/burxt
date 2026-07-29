@@ -1,3 +1,7 @@
+---
+title: Numbers and money
+---
+
 # 2. Numbers and money
 
 This is the page the language exists for.

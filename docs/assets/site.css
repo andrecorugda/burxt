@@ -1,0 +1,217 @@
+/* Burxt — white, quiet, and out of the way.
+ *
+ * The brief was "clean simple minimalist yet sophisticated apple looking, white only, so the burxt
+ * logo stands out". So: one background colour, one text colour, one accent that appears only where
+ * something is actually interactive, and hairlines instead of shadows. Nothing here glows.
+ *
+ * The logo is the only strong colour on any page. That is the whole design decision — everything
+ * else is restraint in service of it.
+ *
+ * No dark mode, on purpose and per the brief. A white-only site that is genuinely white beats one
+ * that is two mediocre themes. */
+
+:root {
+  --ink: #1d1d1f;          /* Apple's near-black: softer than #000 and easier over long reading */
+  --ink-soft: #6e6e73;
+  --hair: #e8e8ed;
+  --paper: #ffffff;
+  --wash: #fbfbfd;         /* the only non-white, for code and quiet panels */
+  --accent: #0071e3;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --measure: 44rem;        /* ~72 characters: the line length prose is actually readable at */
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 17px/1.6 var(--sans);
+  letter-spacing: -0.011em;   /* the small negative tracking that makes system fonts look set */
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- the frame ------------------------------------------------------------------------------- */
+
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  padding: 0 1.5rem;
+  height: 52px;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 1px solid var(--hair);
+}
+.bar a { color: var(--ink-soft); text-decoration: none; font-size: 14px; }
+.bar a:hover { color: var(--ink); }
+.bar a.here { color: var(--ink); }
+.bar .mark { display: flex; align-items: center; margin-right: auto; }
+.bar .mark img { height: 22px; width: auto; display: block; }
+
+main { padding: 0 1.5rem 6rem; }
+.wrap { max-width: var(--measure); margin: 0 auto; }
+.wide { max-width: 60rem; margin: 0 auto; }
+
+/* ---- the hero: mostly empty, which is the point -------------------------------------------- */
+
+.hero { text-align: center; padding: 7rem 0 4rem; }
+.hero img.lockup { width: min(340px, 72vw); height: auto; }
+.hero p.line {
+  margin: 2rem auto 0;
+  max-width: 34rem;
+  font-size: 21px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+.hero .cta { margin-top: 2.5rem; display: flex; gap: .75rem; justify-content: center; flex-wrap: wrap; }
+
+.btn {
+  display: inline-block;
+  padding: .65rem 1.4rem;
+  border-radius: 980px;          /* the fully-round pill */
+  background: var(--accent);
+  color: #fff;
+  text-decoration: none;
+  font-size: 15px;
+  transition: opacity .15s;
+}
+.btn:hover { opacity: .85; }
+.btn.ghost { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px var(--hair); }
+.btn.ghost:hover { background: var(--wash); opacity: 1; }
+
+/* ---- type ----------------------------------------------------------------------------------- */
+
+h1, h2, h3 { letter-spacing: -0.021em; line-height: 1.15; font-weight: 600; }
+h1 { font-size: 40px; margin: 3rem 0 1rem; }
+h2 { font-size: 27px; margin: 3.5rem 0 1rem; }
+h3 { font-size: 20px; margin: 2.5rem 0 .75rem; }
+h1:first-child, h2:first-child { margin-top: 2rem; }
+
+p { margin: 1.15rem 0; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+strong { font-weight: 600; }
+hr { border: 0; border-top: 1px solid var(--hair); margin: 3rem 0; }
+
+blockquote {
+  margin: 1.5rem 0;
+  padding: .25rem 0 .25rem 1.25rem;
+  border-left: 2px solid var(--hair);
+  color: var(--ink-soft);
+}
+
+ul, ol { padding-left: 1.35rem; }
+li { margin: .45rem 0; }
+
+/* ---- code ----------------------------------------------------------------------------------- */
+
+code {
+  font-family: var(--mono);
+  font-size: .89em;
+  background: var(--wash);
+  padding: .12em .38em;
+  border-radius: 5px;
+}
+
+pre {
+  background: var(--wash);
+  border: 1px solid var(--hair);
+  border-radius: 12px;
+  padding: 1.1rem 1.25rem;
+  overflow-x: auto;        /* wide code scrolls in its own box; the page never scrolls sideways */
+  font-size: 14.5px;
+  line-height: 1.55;
+}
+pre code { background: none; padding: 0; font-size: inherit; }
+
+/* The one place the hero shows code: bigger, centred, nothing around it. */
+.hero pre {
+  text-align: left;
+  max-width: 30rem;
+  margin: 2.5rem auto 0;
+  font-size: 16px;
+}
+
+/* ---- tables --------------------------------------------------------------------------------- */
+
+.tablewrap { overflow-x: auto; margin: 1.5rem 0; }
+table { border-collapse: collapse; width: 100%; font-size: 15px; }
+th, td { text-align: left; padding: .6rem .8rem; border-bottom: 1px solid var(--hair); }
+th { font-weight: 600; color: var(--ink-soft); font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
+
+/* ---- the examples page --------------------------------------------------------------------- */
+
+.picker { display: flex; flex-wrap: wrap; gap: .4rem; margin: 2rem 0 1.5rem; }
+.picker button {
+  font: inherit;
+  font-size: 14px;
+  padding: .4rem .9rem;
+  border-radius: 980px;
+  border: 1px solid var(--hair);
+  background: var(--paper);
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: all .15s;
+}
+.picker button:hover { color: var(--ink); }
+.picker button[aria-selected="true"] { background: var(--ink); border-color: var(--ink); color: #fff; }
+
+.pane { display: grid; grid-template-columns: 1fr 16rem; gap: 1rem; align-items: start; }
+@media (max-width: 800px) { .pane { grid-template-columns: 1fr; } }
+
+.pane .source textarea {
+  width: 100%;
+  min-height: 21rem;
+  font-family: var(--mono);
+  font-size: 14.5px;
+  line-height: 1.55;
+  padding: 1.1rem 1.25rem;
+  border: 1px solid var(--hair);
+  border-radius: 12px;
+  background: var(--wash);
+  color: var(--ink);
+  resize: vertical;
+}
+.pane .source textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.out { border: 1px solid var(--hair); border-radius: 12px; overflow: hidden; }
+.out h4 {
+  margin: 0;
+  padding: .6rem .9rem;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--ink-soft);
+  font-weight: 600;
+  border-bottom: 1px solid var(--hair);
+}
+.out pre { border: 0; border-radius: 0; margin: 0; background: var(--paper); }
+.note { font-size: 13px; color: var(--ink-soft); padding: .7rem .9rem; border-top: 1px solid var(--hair); }
+.stale { color: #b25000; }
+
+/* ---- guide navigation ----------------------------------------------------------------------- */
+
+.pages { list-style: none; padding: 0; margin: 2rem 0; }
+.pages li { margin: 0; border-bottom: 1px solid var(--hair); }
+.pages a { display: flex; gap: 1rem; padding: .9rem .25rem; color: var(--ink); }
+.pages a:hover { text-decoration: none; background: var(--wash); }
+.pages .n { color: var(--ink-soft); font-variant-numeric: tabular-nums; min-width: 1.5rem; }
+.pages .what { color: var(--ink-soft); margin-left: auto; font-size: 14px; text-align: right; }
+@media (max-width: 620px) { .pages .what { display: none; } }
+
+footer {
+  border-top: 1px solid var(--hair);
+  padding: 2.5rem 1.5rem;
+  color: var(--ink-soft);
+  font-size: 13px;
+  text-align: center;
+}
+footer a { color: var(--ink-soft); }

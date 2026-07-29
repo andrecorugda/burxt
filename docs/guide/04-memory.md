@@ -1,3 +1,7 @@
+---
+title: Memory
+---
+
 # 4. Memory
 
 No garbage collector. No reference counting. No borrow checker. One idea instead: **the

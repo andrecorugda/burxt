@@ -1,3 +1,7 @@
+---
+title: Contracts
+---
+
 # 5. Contracts
 
 A type says what shape a value has. A contract says what must be **true** about it.

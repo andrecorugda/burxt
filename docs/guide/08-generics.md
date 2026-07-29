@@ -1,3 +1,7 @@
+---
+title: Generics
+---
+
 # 8. Generics
 
 One definition, one copy per type that uses it.

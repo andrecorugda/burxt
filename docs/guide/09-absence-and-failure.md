@@ -1,3 +1,7 @@
+---
+title: Absence and failure
+---
+
 # 9. Absence and failure
 
 There is no null. No `nil`, no `undefined`, no `NULL`, and no `""` standing in for missing.

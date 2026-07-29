@@ -1,3 +1,7 @@
+---
+title: Types
+---
+
 # 3. Types
 
 ## Bindings, and where the type goes
