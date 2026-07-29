@@ -2827,3 +2827,72 @@ fn json_string(s: &str) -> String {
     out.push('"');
     out
 }
+
+/// Stage-1 READS generics, and says plainly that it does not check them yet.
+///
+/// The parser handles type parameters, applications, bounds and generic receivers; the checker
+/// does not monomorphise. That intermediate state is fine — but it must REFUSE, not crash, and
+/// it must not silently accept what it cannot verify. Before the guard existed, stage-1 parsed
+/// a generic, walked a type-parameter node, looked its name up as a record, got -1 and indexed
+/// an array with it: exit 70.
+///
+/// A compiler that half-understands a construct answers differently from the other one, and the
+/// differential test exists to stop exactly that.
+#[test]
+fn the_burxt_compiler_reads_generics_and_says_it_cannot_check_them() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("stage1-generics");
+    fs::create_dir_all(&scratch).unwrap();
+    let stage1 = scratch.join("stage1");
+    assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("examples/stage1.bx"))
+        .arg("-o")
+        .arg(&stage1)
+        .status()
+        .expect("burxt")
+        .success());
+
+    // One of each generic form, so a parse regression in any of them shows up here.
+    let program = scratch.join("generic.bx");
+    fs::write(
+        &program,
+        "enum Option<T> { None, Some(T) }\n\
+         record Stack<T> { items: [T] }\n\
+         function identity<T>(x: T) -> T { return x; }\n\
+         function largest<T: Ordered>(a: T, b: T) -> T { if a > b { return a; } return b; }\n\
+         function (self: Stack<T>) count() -> Int { return len(self.items); }\n\
+         region r {\n  print(identity(3));\n}\n",
+    )
+    .unwrap();
+
+    let ran = Command::new(&stage1)
+        .arg(&program)
+        .current_dir(&scratch)
+        .output()
+        .expect("stage1");
+    let said = String::from_utf8_lossy(&ran.stdout).to_string();
+    let complained = String::from_utf8_lossy(&ran.stderr).to_string();
+    let _ = fs::remove_dir_all(&scratch);
+
+    // It must not die. A runtime failure exits 70; a refusal is an ordinary run.
+    assert!(
+        ran.status.success(),
+        "stage-1 died on a generic program instead of refusing it:\n{}\n{}",
+        said,
+        complained
+    );
+    // The PARSER must be complete: every form above read without complaint.
+    assert!(
+        said.contains("parse errors: 0"),
+        "stage-1 could not parse a generic form the Rust parser accepts:\n{}",
+        said
+    );
+    // And the CHECKER must say so rather than pretend.
+    assert!(
+        said.contains("does not check generics yet"),
+        "stage-1 did not say it cannot check generics — if it now can, move the generics \
+         tests from this file into tests/pass/ so BOTH compilers are held to them:\n{}",
+        said
+    );
+}

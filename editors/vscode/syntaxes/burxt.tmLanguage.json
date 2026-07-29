@@ -178,8 +178,8 @@
     "declarations": {
       "patterns": [
         {
-          "comment": "Method declaration: function (self: Type) name(...) or function (mutable self: Type) name(...)",
-          "match": "\\b(function)\\s*\\(\\s*(mutable\\s+)?(self)\\s*:\\s*([A-Z][A-Za-z0-9_]*)\\s*\\)\\s*([a-z_][A-Za-z0-9_]*)",
+          "comment": "Method declaration: function (self: Type) name(...), with the receiver's type arguments when the record is generic — function (mutable self: Stack<T>) push_one(...)",
+          "match": "\\b(function)\\s*\\(\\s*(mutable\\s+)?(self)\\s*:\\s*([A-Z][A-Za-z0-9_]*)(<[A-Za-z0-9_,\\s]*>)?\\s*\\)\\s*([a-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": {
               "name": "keyword.declaration.function.burxt"
@@ -194,6 +194,9 @@
               "name": "entity.name.type.burxt"
             },
             "5": {
+              "name": "entity.name.type.burxt"
+            },
+            "6": {
               "name": "entity.name.function.burxt"
             }
           }
@@ -218,7 +221,7 @@
         },
         {
           "comment": "Function declaration, including `external function`.",
-          "match": "\\b(external\\s+)?(function)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(external\\s+)?(function)\\s+([A-Za-z_][A-Za-z0-9_]*)(<[A-Za-z0-9_,:\\s]*>)?",
           "captures": {
             "1": {
               "name": "storage.modifier.external.burxt"
@@ -228,17 +231,23 @@
             },
             "3": {
               "name": "entity.name.function.burxt"
+            },
+            "4": {
+              "name": "entity.name.type.burxt"
             }
           }
         },
         {
           "comment": "Nominal type declarations.",
-          "match": "\\b(record|enum|trait|interface)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(record|enum|trait|interface)\\s+([A-Za-z_][A-Za-z0-9_]*)(<[A-Za-z0-9_,:\\s]*>)?",
           "captures": {
             "1": {
               "name": "keyword.declaration.type.burxt"
             },
             "2": {
+              "name": "entity.name.type.burxt"
+            },
+            "3": {
               "name": "entity.name.type.burxt"
             }
           }

@@ -86,6 +86,60 @@ function (mutable self: Unit) add(kind: Int, a: Int, b: Int, c: Int, value: Int,
 }
 
 // ---- types -------------------------------------------------------------------
+// Is this token the name of a type parameter the declaration being parsed put in scope?
+//
+// Compared by BYTES, because a parameter's name is a span like every other name here — which
+// is what lets stage-1 hold a generic without inventing a name it could not point at.
+function (self: Unit) names_a_parameter(src: String, tok: Int) -> Bool {
+    let want: Tok = self.toks[tok];
+    for held in self.params_in_scope {
+        let have: Tok = self.toks[held];
+        if spans_eq(src, have.start, have.length, want.start, want.length) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// `<T>` or `<T: Ordered>` after a declaration's name, or nothing. The names go into scope for
+// the rest of the declaration; the caller truncates when it ends.
+function (mutable self: Unit) parse_type_params(src: String) -> Int allocates {
+    if !self.at(35) {                                // '<'
+        return 0;
+    }
+    let open: Int = self.advance();
+    let mutable count: Int = 0;
+    while true {
+        if !self.at(1) {
+            let e: Int = self.complain(src, "a type parameter name");
+            return 0 - 1;
+        }
+        let name_tok: Int = self.pos;
+        if self.names_a_parameter(src, name_tok) {
+            let e: Int = self.complain(src, "a type parameter name used only once here");
+            return 0 - 1;
+        }
+        let n: Int = self.advance();
+        push(self.params_in_scope, name_tok);
+        count += 1;
+        // `<T: Ordered>` — one bound per parameter. The bound is a name, checked later.
+        if self.at(20) {                             // ':'
+            let colon: Int = self.advance();
+            if !self.at(1) {
+                let e: Int = self.complain(src, "a trait name after the parameter's `:`");
+                return 0 - 1;
+            }
+            let b: Int = self.advance();
+        }
+        if self.more_in_list(36) {
+            continue;
+        }
+        break;
+    }
+    if !self.eat(src, 36, "`>` closing the type parameters") { return 0 - 1; }
+    return count;
+}
+
 function (mutable self: Unit) parse_type(src: String) -> Int allocates {
     let here: Int = self.pos;
     let k: Int = self.kind_at(0);
@@ -140,6 +194,30 @@ function (mutable self: Unit) parse_type(src: String) -> Int allocates {
     if k == 1 {                                      // a named record, enum or trait
         let name_tok: Int = self.pos;
         let n: Int = self.advance();
+        // A type PARAMETER, if the declaration being parsed put this name in scope. Kind 50
+        // rather than 46, so nothing mistakes `T` for a record called `T`.
+        if self.names_a_parameter(src, name_tok) {
+            return self.add(50, 0, 0, 0, 0, name_tok);
+        }
+        // `Option<Int>` — a generic applied. The arguments are type NODES, held in `subs`
+        // the way every other nested list is, with the start in `a` and the count in `b`.
+        if self.at(35) {                             // '<'
+            let open: Int = self.advance();
+            let args_start: Int = len(self.subs);
+            let mutable count: Int = 0;
+            while true {
+                let arg: Int = self.parse_type(src);
+                if arg < 0 { return -1; }
+                push(self.subs, arg);
+                count += 1;
+                if self.more_in_list(36) {           // ',' — a trailing one is allowed
+                    continue;
+                }
+                break;
+            }
+            if !self.eat(src, 36, "`>` closing the type arguments") { return -1; }
+            return self.add(46, args_start, count, 0, 0, name_tok);
+        }
         return self.add(46, 0, 0, 0, 0, name_tok);
     }
     return self.complain(src, "a type");
@@ -1430,6 +1508,10 @@ function (mutable self: Unit) parse_fn(src: String, is_pure: Int, owner: Int) ->
             }
             receiver_tok = self.pos;
             let r: Int = self.advance();
+            // `self: Stack<T>` — the receiver names the record's parameters, which are
+            // then in scope for the rest of the signature and the body.
+            let receiver_params: Int = self.parse_type_params(src);
+            if receiver_params < 0 { return -1; }
         }
         if !self.eat(src, 30, "`)` closing the receiver clause") { return -1; }
     }
@@ -1439,6 +1521,10 @@ function (mutable self: Unit) parse_fn(src: String, is_pure: Int, owner: Int) ->
     }
     let name_tok: Int = self.pos;
     let n2: Int = self.advance();
+    // `function largest<T: Ordered>(...)`. A method declares none of its own — its
+    // receiver already named the record's — so this adds nothing there.
+    let declared_params: Int = self.parse_type_params(src);
+    if declared_params < 0 { return -1; }
     let params: Int = self.parse_params(src);
     if params < 0 { return -1; }
     if !self.eat(src, 10, "`->` and a return type — every Burxt function returns one") {
@@ -1477,6 +1563,9 @@ function (mutable self: Unit) parse_struct(src: String) -> Int allocates {
     if !self.at(1) { return self.complain(src, "a record name"); }
     let name_tok: Int = self.pos;
     let n: Int = self.advance();
+    // `record Name<T> { ... }` — the parameters are in scope for the fields or variants.
+    let declared_params: Int = self.parse_type_params(src);
+    if declared_params < 0 { return -1; }
     if !self.eat(src, 31, "`\{` opening the fields") { return -1; }
     let base: Int = len(self.stack);
     let mutable count: Int = 0;
@@ -1506,6 +1595,9 @@ function (mutable self: Unit) parse_enum(src: String) -> Int allocates {
     if !self.at(1) { return self.complain(src, "an enum name"); }
     let name_tok: Int = self.pos;
     let n: Int = self.advance();
+    // `enum Name<T> { ... }` — the parameters are in scope for the fields or variants.
+    let declared_params: Int = self.parse_type_params(src);
+    if declared_params < 0 { return -1; }
     if !self.eat(src, 31, "`\{` opening the variants") { return -1; }
     let base: Int = len(self.stack);
     let mutable count: Int = 0;
@@ -1633,6 +1725,10 @@ function (mutable self: Unit) parse_extern(src: String) -> Int allocates {
 
 // One item, or a top-level statement: the same dispatch the Rust parser makes.
 function (mutable self: Unit) parse_item(src: String) -> Int allocates {
+    // Type parameters belong to one declaration. Cleared here rather than at every exit
+    // inside the declaration parsers, of which there are dozens and each one a chance to
+    // forget — the same argument `commit(base)` makes for child lists.
+    let dropped: Int = truncate(self.params_in_scope, 0);
     let k: Int = self.kind_at(0);
     if k == 124 {                                    // pure function
         let n: Int = self.advance();

@@ -53,7 +53,9 @@ record Kw { word: String, code: Int }
 // Type kinds:
 //  40 Int  41 Bool  42 String  43 CInt  44 CDouble
 //  45 Decimal (scale in `a`, contract in `b`)   46 named   47 slice   48 array
-//  49 dynamic
+//  49 dynamic   50 type parameter
+//  A named type may be a generic APPLICATION: `a` is the start of its type-argument
+//  nodes in `subs` and `b` is how many.
 // Statement kinds:
 //  60 let (name tok in `tok`, type in `a`, value in `b`, writable in `value`)
 //  61 assign            62 print               63 return            64 tail return
@@ -88,12 +90,20 @@ record Node {
 // payload enum would need a match at every use.
 record Ty {
     // The node kinds the parser produces: 40 Int, 41 Bool, 42 String, 43 CInt,
-    // 44 CDouble, 45 Decimal, 46 named, 47 slice, 48 array, 49 dynamic. 0 is unknown,
-    // which never equals anything — including another unknown.
+    // 44 CDouble, 45 Decimal, 46 named, 47 slice, 48 array, 49 dynamic,
+    // 50 type PARAMETER. 0 is unknown, which never equals anything — including
+    // another unknown.
     kind: Int,
+    // Decimal: the scale. Slice or array: the ELEMENT type's node. A named type that
+    // is a generic APPLICATION — `Option<Int>` — holds the start of its type arguments
+    // in `subs`, and how many in `contract`; both are 0 for a plain named type, which
+    // is why no field had to be added. Type arguments are node indices, exactly as a
+    // slice's element already is.
     scale: Int,
     contract: Int,
-    // For a named type, the span of its name in the source.
+    // For a named type or a parameter, the span of its name in the source. A parameter's
+    // name is a real span — `T` is written down — which is the whole reason stage-1 can
+    // hold generics at all without inventing names it cannot point at.
     name_start: Int,
     name_len: Int,
 }
@@ -152,6 +162,11 @@ record Unit {
     loop_depth: Int,
     in_contract: Int,
     in_ensures: Int,
+    // The type parameters of the declaration being parsed, as TOKEN indices, so
+    // `parse_type` can tell `T` from a record called `T`. Truncated when the
+    // declaration ends. Token indices rather than spans because that is what the
+    // parser has in hand, and one comparison away from the bytes either way.
+    params_in_scope: [Int],
     // Which function is being checked, so a `tail` call can be compared with the
     // signature it must replace. -1 at top level and inside a method.
     current_fn: Int,

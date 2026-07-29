@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.100)
+# Burxt — Design Notes (v0.0.101)
 
 **Burxt** is a typed, compiled programming language: exact decimals for money,
 correctness by construction, native code through LLVM.

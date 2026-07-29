@@ -249,14 +249,39 @@ point at.
 
 So the design has to differ, and the shape that fits stage-1's representation is:
 
-- **`Ty` gains `args_start` and `args_count`**, indexing a new `Unit.type_args: [Ty]` side array
-  — the same trick `kids` and `subs` already use for child lists. A generic application is then a
-  named type (real span, pointing at `Option` in the source) plus its arguments, held
-  structurally rather than as a mangled name.
+- **A generic application needs no new `Ty` field at all** — which the design got wrong before
+  it was built. For a named type (`kind: 46`), `scale` and `contract` are *unused*, and a slice
+  already stores its element as a **node index** in `scale`. So `Option<Int>` is a named type
+  whose `scale` is the start of its argument nodes in `subs` and whose `contract` is how many:
+  the same trick `kids` and `subs` already use, and one that reuses two dead fields instead of
+  widening a record that is copied at every comparison in the checker.
+- **A type parameter is `kind: 50`**, carrying the span of its own name. `T` is written down in
+  the source, so it has a real span — which is the whole reason stage-1 can hold generics
+  without inventing a name it could not point at.
 - **Comparison becomes structural** for applications: `ty_same` recurses through the arguments
   instead of comparing one span.
 - **Mangling moves to the emitter**, which already builds strings freely, so the LLVM symbol name
   is computed where symbol names belong and nowhere else.
+
+### Where it actually stands (v0.0.101)
+
+**The parser is done.** Type parameters on functions, records and enums, bounds, generic
+receivers (`self: Stack<T>`) and applications in any type position all read with zero parse
+errors. Parameters go in scope as **token indices** and are compared by bytes, like every other
+name in stage-1; `parse_item` truncates the list at each declaration boundary rather than each
+parser exit, for the reason `commit(base)` gives about child lists — dozens of exits are dozens
+of chances to forget.
+
+**The checker refuses, and says why.** It does not monomorphise yet, and the honest intermediate
+state is a refusal naming the milestone — not a crash, and not silent acceptance. Before the
+guard existed, stage-1 parsed a generic, walked a type-parameter node, looked its name up as a
+record, got -1 and indexed an array with it: exit 70. A compiler that half-understands a
+construct answers differently from the other one, which is what the differential test exists to
+prevent.
+
+`the_burxt_compiler_reads_generics_and_says_it_cannot_check_them` pins both halves: the parser
+must stay complete, and the checker must keep saying so — with a message telling whoever removes
+it to move the generics tests into `tests/pass/`, where both compilers are held to them.
 
 That is a genuinely different implementation of one language, which is what the differential test
 exists to police: the two must agree on what they accept and what they answer, never on how.
