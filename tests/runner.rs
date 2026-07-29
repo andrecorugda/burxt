@@ -3099,6 +3099,31 @@ fn the_site_is_honest_and_complete() {
         );
     }
 
+    // Every link in the site's NAVIGATION has a page behind it.
+    //
+    // This is the check that was missing when the site first went live: `/examples/` and `/install/`
+    // both 404'd, because Jekyll serves a bare `examples.md` at `/examples.html` and only
+    // `<dir>/index.md` earns the directory URL. `/guide/` worked from the start for exactly that
+    // reason, which is what made the other two look like they should.
+    //
+    // A 404 on a launched site is the cheapest possible bug to prevent and one of the most
+    // embarrassing to ship.
+    let layout = fs::read_to_string(root.join("docs/_layouts/default.html")).expect("the layout");
+    for target in ["guide", "examples", "install"] {
+        let link = format!("{{{{ site.baseurl }}}}/{}/", target);
+        if !layout.contains(&link) {
+            continue;                       // not in the nav, so nothing to serve
+        }
+        let page = root.join("docs").join(target).join("index.md");
+        assert!(
+            page.exists(),
+            "the navigation links /{}/ but docs/{}/index.md does not exist — that URL will 404. \
+             Jekyll only gives a directory URL to <dir>/index.md; a bare {}.md is served at \
+             /{}.html",
+            target, target, target, target
+        );
+    }
+
     // The generated examples page is current. Skipped rather than failed when the release binary is
     // absent, because the generator needs a compiler and a debug build is not what the site quotes.
     if !root.join("target/release/burxt").exists() {
@@ -3113,7 +3138,7 @@ fn the_site_is_honest_and_complete() {
         .expect("the site example generator");
     assert!(
         checked.status.success(),
-        "docs/examples.md no longer matches what the compiler does. Regenerate it:\n    \
+        "docs/examples/index.md no longer matches what the compiler does. Regenerate it:\n    \
          python3 scripts/site-examples.py\n{}{}",
         String::from_utf8_lossy(&checked.stdout),
         String::from_utf8_lossy(&checked.stderr)

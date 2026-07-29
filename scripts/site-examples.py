@@ -21,7 +21,10 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BURXT = os.path.join(ROOT, "target", "release", "burxt")
-OUT = os.path.join(ROOT, "docs", "examples.md")
+# docs/examples/index.md, not docs/examples.md. Jekyll serves a bare `examples.md` at
+# `/examples.html`, and only `<dir>/index.md` gets the directory URL — so the nav linking
+# `/examples/` 404'd until the file moved. Same reason `guide/` worked from the start.
+OUT = os.path.join(ROOT, "docs", "examples", "index.md")
 
 # (id, tab label, one-line point, source). Short on purpose: a panel is a thing you read at a
 # glance, not a program you study. The long ones live in examples/.
@@ -276,9 +279,9 @@ if __name__ == "__main__":
     if "--check" in sys.argv:
         on_disk = open(OUT).read() if os.path.exists(OUT) else ""
         if on_disk != page:
-            sys.exit("docs/examples.md is out of date — run: python3 scripts/site-examples.py")
-        print("docs/examples.md is current")
+            sys.exit("docs/examples/index.md is out of date — run: python3 scripts/site-examples.py")
+        print("docs/examples/index.md is current")
     else:
         with open(OUT, "w") as f:
             f.write(page)
-        print("wrote docs/examples.md")
+        print("wrote docs/examples/index.md")
