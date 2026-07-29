@@ -263,7 +263,37 @@ So the design has to differ, and the shape that fits stage-1's representation is
 - **Mangling moves to the emitter**, which already builds strings freely, so the LLVM symbol name
   is computed where symbol names belong and nowhere else.
 
-### Where it actually stands (v0.0.107)
+### Where it actually stands (v0.0.108)
+
+**The whole front end checks generics — functions, records and enums — in both compilers**, and
+the generics tests now live in `tests/pass/`, which is the bar that matters: a fixture in
+`tests/pass/` is held against *both* compilers by the differential test, while a test written
+inline in `tests/runner.rs` is only ever held against whatever it asserts. `generics_types.bx`
+and `generics_functions.bx` moved there, and both compilers run them to the same output.
+
+Four things had to be right for the second one, and each was a distinction I could not see until
+a fixture failed:
+
+1. **A generic calling a generic.** `function echo<T>(x: T) -> T { return identity(x); }` binds
+   `identity`'s `T` to `echo`'s `T` — still abstract, and correct: the concrete type appears when
+   `echo` is instantiated. The check that every parameter be *settled* was asking what the
+   parameter resolved to, and an unbound parameter and one bound to another parameter both
+   resolve to kind 50. It now asks the binding table whether a binding **exists**
+   (`has_binding`), because existence is the question and resolution never was.
+2. **Arity and genericness over every application**, in one sweep of the arena rather than at
+   each type position — a rule spread over every position is a rule with a hole in it.
+3. **A generic `external function` is refused**: C has no type parameters, so there would be no
+   symbol to link against.
+4. **A generic named with nothing to infer from** — `let nothing = Option.None;` — says to write
+   the type, and shows the annotation that would fix it.
+
+What remains is layout: giving `Option<Int>` its own record or enum in the **emitter**, which is
+genuinely one copy per argument list and cannot be done lazily. `emit_module` holds that refusal
+now, moved out of `check()` because checking works and only layout does not. One fail fixture,
+`generic_enum_payload_must_be_scalar`, is knowingly out of scope until then, and the ratchet
+comment in `tests/runner.rs` names it rather than absorbing it.
+
+### Where it stood (v0.0.107)
 
 **Generic functions are checked.** Type parameters are bound at the call site by structural
 unification, resolved **lazily** as comparison recurses, and their bounds enforced — so stage-1

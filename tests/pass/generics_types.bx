@@ -1,0 +1,48 @@
+// Generic records and enums, and `Option`/`Result` as ordinary Burxt. BOTH compilers check
+// this: stage-1 binds a type argument from the annotation, resolves a field's or payload's
+// type deeply where it is read, and needs no instantiated layout to do it.
+record Holder<T> { one: T }
+
+enum Option<T> { None, Some(T) }
+
+enum Result<T, E> { Ok(T), Error(E) }
+
+function divide(a: Int, b: Int) -> Result<Int, String> {
+    if b == 0 {
+        return Result.Error("division by zero");
+    }
+    return Result.Ok(divide_toward_zero(a, b));
+}
+
+function or_else<T>(found: Option<T>, fallback: T) -> T {
+    match found {
+        None => { return fallback; }
+        Some(value) => { return value; }
+    }
+}
+
+region r {
+    let held: Holder<Int> = Holder { one: 42 };
+    print(held.one);
+
+    let text: Holder<String> = Holder { one: "kept" };
+    print(text.one);
+
+    let found: Option<Int> = Option.Some(3);
+    match found {
+        None => { print(0); }
+        Some(n) => { print(n); }
+    }
+
+    let missing: Option<Int> = Option.None;
+    print(or_else(missing, 0 - 1));
+
+    match divide(10, 2) {
+        Ok(answer) => { print(answer); }
+        Error(why) => { print(why); }
+    }
+    match divide(1, 0) {
+        Ok(answer) => { print(answer); }
+        Error(why) => { print(why); }
+    }
+}

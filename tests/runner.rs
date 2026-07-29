@@ -1130,9 +1130,16 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     // in its history. Before that version stage-1 refused EVERY program containing a generic
     // with one blanket message, so `generic_record_needs_its_arguments` and
     // `generic_enum_needs_its_arguments` counted as rejections — for the wrong reason.
-    // Now generic FUNCTIONS are checked properly and those two are honestly out of scope
-    // until generic records and enums are instantiated. Three fixtures traded from
+    // Now generic FUNCTIONS are checked properly and those two were honestly out of scope
+    // until generic records and enums were instantiated. Three fixtures traded from
     // accidentally-right to knowingly-pending, written down rather than quietly absorbed.
+    //
+    // v0.0.108 raised it to 190 and earned the three back for the right reason: the arity and
+    // not-generic rules over every type application, the generic-`external function` refusal,
+    // and the message for a generic named with nothing to infer from. ONE fixture is still
+    // knowingly out of scope — `generic_enum_payload_must_be_scalar` — because it is a rule
+    // about an instantiated enum's LAYOUT, and layout is exactly the half stage-1's emitter
+    // does not do yet. Named here so it is a pending item and not a silent gap.
     let mut caught = 0;
     let mut total = 0;
     for entry in fs::read_dir(root.join("tests/fail")).unwrap() {
@@ -1148,8 +1155,8 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
 
     let _ = fs::remove_dir_all(&scratch);
     assert!(
-        caught >= 189,
-        "stage-1 rejected only {} of {} fail programs, down from 189",
+        caught >= 190,
+        "stage-1 rejected only {} of {} fail programs, down from 190",
         caught,
         total
     );
@@ -2866,14 +2873,17 @@ fn json_string(s: &str) -> String {
     out
 }
 
-/// Stage-1 CHECKS generic functions, and says plainly what it still cannot instantiate.
+/// Stage-1's front end handles generics; only its backend does not.
 ///
-/// As of v0.0.107 it binds a generic function's type parameters at the call site, resolves them
-/// lazily as comparison recurses, and enforces `Ordered`/`Equatable`/trait bounds — so it agrees
-/// with stage-0 on generic functions. What it cannot do is give `Option<Int>` its own layout,
-/// and it says so rather than guessing. Before any guard existed, stage-1 parsed a generic,
-/// walked a type-parameter node, looked its name up as a record, got -1 and indexed an array
-/// with it: exit 70.
+/// It binds type parameters at the call site and from an application's arguments, resolves them
+/// lazily as comparison recurses, resolves a field's or payload's type DEEPLY where it is read,
+/// and enforces `Ordered`/`Equatable`/trait bounds. What remains is layout — `Option<Int>` needs
+/// its own tag-and-payload sizing, one copy per argument list — so the refusal lives in the
+/// emitter, and the backend ratchet covers it as a floor.
+///
+/// Before any guard existed, stage-1 parsed a generic, walked a type-parameter node, looked its
+/// name up as a record, got -1 and indexed an array with it: exit 70. That is why this test also
+/// asserts it does not die.
 ///
 /// A compiler that half-understands a construct answers differently from the other one, and the
 /// differential test exists to stop exactly that.
@@ -2933,10 +2943,10 @@ fn the_burxt_compiler_reads_generics_and_says_it_cannot_check_them() {
     );
     // And the CHECKER must say so rather than pretend.
     assert!(
-        said.contains("does not instantiate generic records and enums yet"),
-        "stage-1 did not say it cannot instantiate generic records and enums — if it now \
-         can, move the generics tests from this file into tests/pass/ so BOTH compilers are \
-         held to them:\n{}",
+        said.contains("type errors: 0"),
+        "stage-1's FRONT END must accept generics — it binds type parameters at the call \
+         site, resolves them lazily, and resolves a field or payload deeply where it is \
+         read. Only its BACKEND still refuses, for layout:\n{}",
         said
     );
 }

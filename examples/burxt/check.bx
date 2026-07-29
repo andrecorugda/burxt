@@ -147,14 +147,19 @@ function (mutable self: Unit) bind_type_arguments(src: String, generic: Int, arg
     while p < declaration.type_param_count {
         let slot: Int = declaration.type_param_start + p;
         let named: Token = self.tokens[self.type_params[slot]];
+        // "Settled" means a binding EXISTS, not that it is concrete. A generic calling a
+        // generic binds `T` to the enclosing `T` — still abstract, and correct: the copy
+        // appears when the outer generic is instantiated. Asking whether the resolved kind is
+        // still 50 cannot tell that from "nobody said", which is why this asks the table.
+        let settled: Bool = self.has_binding(src, named.start, named.length);
         let stands_for: Type = self.resolve_shallow(src,
             Type { kind: 50, scale: 0, contract: 0,
                    name_start: named.start, name_len: named.length });
-        if stands_for.kind == 50 {
+        if !settled {
             let complained: Int = self.complain_at(src, at,
                 "cannot tell what `" + substring(src, named.start, named.length)
                 + "` is from this call: no argument mentions it");
-        } else {
+        } else if stands_for.kind != 50 {
             let satisfied: Int = self.check_bound(src, self.type_param_bounds[slot],
                                                  stands_for, named, at);
         }
@@ -231,6 +236,101 @@ function (mutable self: Unit) check_bound(src: String, bound: Int, argument: Typ
 // The bound declared for this type parameter, as the token of the trait's name, or -1.
 // Looked up by the parameter's own name span, which is unique within the declaration that
 // owns it.
+// A node that denotes this type, so a resolved element can be pointed AT.
+//
+// The inverse of `declared_type`, and the one place stage-1 does synthesize an arena entry. A
+// slice holds its element as a node index, so turning `[T]` into `[Int]` means there has to BE
+// a node for `Int` — and until a use asks, there is not. The token is borrowed from `at`, so a
+// diagnostic about a synthesized type still points at the source that caused it.
+function (mutable self: Unit) node_for(t: Type, at: Int) -> Int allocates {
+    if t.kind == 45 {
+        return self.add(45, t.scale, t.contract, 0, 0, at);
+    }
+    if t.kind == 46 || t.kind == 49 || t.kind == 50 {
+        // A named type's node identifies its name by TOKEN and a Type carries only the span,
+        // so the token has to be found. Every name came from the source, so one exists.
+        let token: Int = self.token_starting_at(t.name_start);
+        if token < 0 {
+            return 0 - 1;
+        }
+        return self.add(t.kind, t.scale, t.contract, 0, 0, token);
+    }
+    return self.add(t.kind, t.scale, t.contract, 0, 0, at);
+}
+
+function (self: Unit) token_starting_at(start: Int) -> Int {
+    let mutable i: Int = 0;
+    while i < len(self.tokens) {
+        if self.tokens[i].start == start {
+            return i;
+        }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+// This type with every parameter replaced, all the way down — the deep form of
+// `resolve_shallow`, for the places that must hand back a self-contained answer rather than
+// resolve as they go. A field's type is one: `Stack<Int>.items` has to BE `[Int]`, because
+// whoever receives it no longer has the bindings.
+//
+// Nothing is rebuilt unless it changed, so an ordinary type costs no arena entry.
+function (mutable self: Unit) resolve_deep(src: String, t: Type, at: Int) -> Type allocates {
+    let here: Type = self.resolve_shallow(src, t);
+    if here.kind != 47 && here.kind != 48 {
+        return here;
+    }
+    let declared: Type = self.declared_type(src, here.scale);
+    let element: Type = self.resolve_deep(src, declared, at);
+    if self.same_type(src, element, declared) {
+        return here;
+    }
+    let node: Int = self.node_for(element, at);
+    if node < 0 {
+        return here;
+    }
+    return Type { kind: here.kind, scale: node, contract: here.contract,
+                  name_start: 0, name_len: 0 };
+}
+
+// Bind a generic type's parameters from an APPLICATION's arguments: `Stack<Int>` binds `T`.
+// Answers the base to truncate back to, so the caller's bindings survive.
+function (mutable self: Unit) bind_from_application(src: String, holder: Type) -> Int allocates {
+    let base: Int = len(self.type_bindings);
+    if holder.kind != 46 || holder.contract <= 0 {
+        return base;
+    }
+    let generic: Int = self.generic_named(src, holder.name_start, holder.name_len);
+    if generic < 0 {
+        return base;
+    }
+    let declaration: Generic = self.generics[generic];
+    let mutable i: Int = 0;
+    while i < declaration.type_param_count && i < holder.contract {
+        let named: Token = self.tokens[self.type_params[declaration.type_param_start + i]];
+        let argument: Type = self.declared_type(src, self.nested_children[holder.scale + i]);
+        push(self.type_bindings, TypeBinding { name_start: named.start,
+                                              name_len: named.length, bound: argument });
+        i += 1;
+    }
+    return base;
+}
+
+// Is there a binding for this parameter at all? Distinct from asking what it resolves to: a
+// parameter bound to ANOTHER parameter resolves to something still abstract, and that is
+// settled, not missing.
+function (self: Unit) has_binding(src: String, start: Int, length: Int) -> Bool {
+    let mutable i: Int = 0;
+    while i < len(self.type_bindings) {
+        let binding: TypeBinding = self.type_bindings[i];
+        if spans_equal(src, binding.name_start, binding.name_len, start, length) {
+            return true;
+        }
+        i += 1;
+    }
+    return false;
+}
+
 function (self: Unit) bound_of(src: String, start: Int, length: Int) -> Int {
     if self.current_generic < 0 {
         return 0 - 1;
@@ -929,9 +1029,17 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             let declared: Int = self.find_type(src, base_name.start, base_name.length);
             if declared >= 0 {
                 if self.types[declared].kind == 83 {
-                    let holder: Type = Type { kind: 46, scale: 0, contract: 0,
+                    let mutable holder: Type = Type { kind: 46, scale: 0, contract: 0,
                                           name_start: base_name.start,
                                           name_len: base_name.length };
+                    // A generic enum's arguments come from the context: `Option.Some(3)` is an
+                    // `Option<Int>` because something said so, and `Option.None` has nothing
+                    // else to go on.
+                    if expected.kind == 46 && expected.contract > 0
+                       && spans_equal(src, expected.name_start, expected.name_len,
+                                      base_name.start, base_name.length) {
+                        holder = expected;
+                    }
                     let checked: Int = self.check_construction(src, holder, n);
                     return holder;
                 }
@@ -1037,7 +1145,12 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
         if is_unknown(holder) {
             return unknown_type();
         }
-        let field: Type = self.field_type(src, holder, n.token);
+        // The field's type as the HOLDER sees it: `Stack<Int>.items` is `[Int]`, not `[T]`,
+        // because whoever receives this answer no longer has the bindings.
+        let base: Int = self.bind_from_application(src, holder);
+        let declared: Type = self.field_type(src, holder, n.token);
+        let field: Type = self.resolve_deep(src, declared, n.token);
+        let dropped: Int = truncate(self.type_bindings, base);
         if is_unknown(field) {
             let complained: Int = self.complain_at(src, n.token,
                 self.show_type(src, holder) + " has no such field");
@@ -1053,12 +1166,20 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             let visited: Int = self.visit_children(src, node);
             return unknown_type();
         }
-        let holder: Type = Type { kind: 46, scale: 0, contract: 0,
+        let mutable holder: Type = Type { kind: 46, scale: 0, contract: 0,
                               name_start: name.start, name_len: name.length };
+        if expected.kind == 46 && expected.contract > 0
+           && spans_equal(src, expected.name_start, expected.name_len,
+                          name.start, name.length) {
+            holder = expected;                       // `Holder<Int>` said what T is
+        }
         let mutable i: Int = 0;
         while i < n.b {
             let pair: Node = self.nodes[self.children[n.a + i]];
-            let want: Type = self.field_type(src, holder, pair.token);
+            let base: Int = self.bind_from_application(src, holder);
+            let stated: Type = self.field_type(src, holder, pair.token);
+            let want: Type = self.resolve_deep(src, stated, pair.token);
+            let dropped: Int = truncate(self.type_bindings, base);
             if is_unknown(want) {
                 let complained: Int = self.complain_at(src, pair.token,
                     self.show_type(src, holder) + " has no such field");
@@ -1306,6 +1427,16 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
             }
         } else {
             declared = self.type_of(src, n.b, unknown_type());
+            // `let nothing = Option.None;` and `let b = Bag { items: [] };` name a generic
+            // and settle nothing: the value carries no type to read `T` off. With an
+            // annotation both are fine, so the fix is to write one, and the message says so
+            // rather than reporting the missing type as a mystery later.
+            if self.unsettled_generic(src, declared) {
+                let complained: Int = self.complain_at(src, n.token,
+                    "cannot tell what " + self.show_type(src, declared)
+                    + " holds from this value: write the type, as in "
+                    + "`let x: " + self.show_type(src, declared) + "<Int> = ...`");
+            }
         }
         let name: Token = self.tokens[n.token];
         // Shadowing is refused, so a second `let` of the same name is an error.
@@ -2005,17 +2136,56 @@ function (self: Unit) uses_generics() -> Int {
     return 0 - 1;
 }
 
-function (mutable self: Unit) check(src: String) -> Int allocates {
-    let generic: Int = self.uses_generics();
-    if generic >= 0 {
-        let complained: Int = self.complain_at(src, self.nodes[generic].token,
-            "the Burxt-hosted compiler does not instantiate generic records and enums yet — "
-            + "it checks generic FUNCTIONS, and giving `Option<Int>` its own layout is the "
-            + "next slice. Compile this with the Rust compiler for now; "
-            + "see spec/M7-GENERICS.md §5");
-        return self.problems;
+// Every generic APPLICATION written in the program, checked against the declaration it names:
+// the name must be generic, and the argument count must match. Done in one sweep because an
+// application can appear in any type position, and a rule spread over every position is a rule
+// with a hole in it.
+// A named type whose declaration takes type parameters, written with none of them — which is
+// only ever a question the program has not answered.
+function (self: Unit) unsettled_generic(src: String, t: Type) -> Bool {
+    if t.kind != 46 && t.kind != 49 {
+        return false;
     }
+    if t.contract > 0 {                               // arguments were given
+        return false;
+    }
+    let named: Int = self.generic_named(src, t.name_start, t.name_len);
+    if named < 0 {
+        return false;
+    }
+    let declaration: Generic = self.generics[named];
+    return declaration.type_param_count > 0;
+}
+
+function (mutable self: Unit) check_applications(src: String) -> Int allocates {
+    let mutable at: Int = 0;
+    while at < len(self.nodes) {
+        let n: Node = self.nodes[at];
+        if n.kind == 46 && n.b > 0 {
+            let named: Token = self.tokens[n.token];
+            let generic: Int = self.generic_named(src, named.start, named.length);
+            if generic < 0 {
+                let complained: Int = self.complain_at(src, n.token,
+                    "`" + substring(src, named.start, named.length)
+                    + "` is not generic, so it takes no type arguments");
+            } else {
+                let declaration: Generic = self.generics[generic];
+                if declaration.type_param_count != n.b {
+                    let complained: Int = self.complain_at(src, n.token,
+                        "`" + substring(src, named.start, named.length) + "` takes "
+                        + to_string(declaration.type_param_count) + " type argument(s), and "
+                        + to_string(n.b) + " were given");
+                }
+            }
+        }
+        at += 1;
+    }
+    return 1;
+}
+
+function (mutable self: Unit) check(src: String) -> Int allocates {
     let collected: Int = self.collect_declarations(src);
+    let applications: Int = self.check_applications(src);
     let mutable i: Int = 0;
     while i < len(self.items) {
         let index: Int = self.items[i];

@@ -1,0 +1,41 @@
+// Generic functions: one definition, one copy per type that uses it. BOTH compilers are held
+// to this fixture — stage-1's front end binds type parameters at the call site and resolves
+// them lazily, so it agrees with stage-0 on what this program means.
+function identity<T>(x: T) -> T {
+    return x;
+}
+
+function largest<T: Ordered>(a: T, b: T) -> T {
+    if a > b {
+        return a;
+    }
+    return b;
+}
+
+function first<T>(items: [T]) -> T {
+    return items[0];
+}
+
+// A generic calling a generic: `T` binds to the OUTER `T`, still abstract, and the copy
+// appears only when this one is instantiated.
+function echo<T>(x: T) -> T {
+    return identity(x);
+}
+
+region r {
+    print(identity(3));
+    print(identity("text"));
+    print(identity(true));
+    print(identity($1.50));
+    print(largest(3, 9));
+    print(largest($1.50, $1.25));
+    print(echo(7));
+
+    let mutable numbers: [Int] = [];
+    let added = push(numbers, 10);
+    print(first(numbers));
+
+    let mutable words: [String] = [];
+    let noted = push(words, "one");
+    print(first(words));
+}

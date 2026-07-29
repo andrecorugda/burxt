@@ -1921,6 +1921,19 @@ function (mutable self: Unit) emit_function(src: String, index: Int) -> Int allo
 }
 
 function (mutable self: Unit) emit_module(src: String) -> Int allocates {
+    // The CHECKER handles generic applications: parameters resolve lazily as comparison
+    // recurses, and a field's type is resolved deeply where it is read. LAYOUT is the part
+    // that cannot be lazy — `Option<Int>` needs its own tag-and-payload sizing, one copy per
+    // argument list — so the refusal lives here rather than in the checker, which no longer
+    // needs it. See spec/M7-GENERICS.md §5.
+    let generic: Int = self.uses_generics();
+    if generic >= 0 {
+        let complained: Int = self.complain_at(src, self.nodes[generic].token,
+            "the Burxt backend does not lay out generic records and enums yet: giving "
+            + "`Option<Int>` its own size is one copy per argument list, which is the next "
+            + "slice. Its front end checks them, and the Rust compiler emits them");
+        return 0;
+    }
     let mutable preamble: Int = self.write_module("declare i32 @printf(ptr, ...)\n");
     preamble = self.write_module("declare void @exit(i32)\n\n");
     // The overflow helpers, written once. They are what makes `a + b` a claim rather
