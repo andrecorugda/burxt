@@ -4,8 +4,8 @@
 //!   burxt lsp                              language server over stdio
 //!   burxt check <file.bx>                  parse and typecheck only, no codegen
 //!   burxt check -                          ... reading the program from stdin
-//!   burxt build <file.bx> [link args...]   compile to a native executable
-//!   burxt run   <file.bx> [link args...]   compile, then run it
+//!   burxt build <file.bx> [link arguments...]   compile to a native executable
+//!   burxt run   <file.bx> [link arguments...]   compile, then run it
 //!   burxt emit-ir <file.bx>                print the LLVM IR (for the curious)
 //!
 //! Anything after the source file is handed to the system linker unchanged
@@ -45,11 +45,11 @@ fn main() {
 }
 
 fn compile_main() {
-    let args: Vec<String> = std::env::args().collect();
+    let arguments: Vec<String> = std::env::args().collect();
 
     // `lsp` takes no file: the editor sends the buffers. Handled before the
     // usage check for that reason.
-    if args.len() == 2 && args[1] == "lsp" {
+    if arguments.len() == 2 && arguments[1] == "lsp" {
         if let Err(e) = lsp::serve() {
             eprintln!("burxt lsp: {}", e);
             std::process::exit(1);
@@ -57,7 +57,7 @@ fn compile_main() {
         return;
     }
 
-    if args.len() < 3 {
+    if arguments.len() < 3 {
         eprintln!("burxt {} — the Burxt compiler", env!("CARGO_PKG_VERSION"));
         eprintln!("usage:");
         eprintln!("  burxt check   <file.bx>                  parse and typecheck only");
@@ -75,9 +75,9 @@ fn compile_main() {
         eprintln!("e.g. `burxt run pay.bx cside.o -lm` to link the C you call.");
         std::process::exit(2);
     }
-    let cmd = &args[1];
-    let path = &args[2];
-    let rest = &args[3..];
+    let cmd = &arguments[1];
+    let path = &arguments[2];
+    let rest = &arguments[3..];
     // `--json` makes diagnostics machine-readable: one JSON object per line, for
     // editors and CI. It is not passed on to the linker.
     let json = rest.iter().any(|a| a == "--json");

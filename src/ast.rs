@@ -74,7 +74,7 @@ pub enum Type {
     /// It exists only between parsing and monomorphisation — the checker replaces every
     /// concrete one with `Named` of the instantiation's mangled name, so everything
     /// after it (layout, `match`, codegen) sees an ordinary nominal type.
-    Generic { name: String, args: Vec<Type> },
+    Generic { name: String, arguments: Vec<Type> },
     /// A type PARAMETER, inside a generic's own body and signature — the `T` of
     /// `fn largest<T>(xs: [T]) -> T`. It is not a type any value has: every one is
     /// replaced by a concrete type before codegen, one copy per instantiation.
@@ -112,8 +112,8 @@ impl std::fmt::Display for Type {
             Type::Slice(elem) => write!(f, "[{}]", elem),
             Type::Array { elem, len } => write!(f, "[{}; {}]", elem, len),
             Type::Param(name) => write!(f, "{}", name),
-            Type::Generic { name, args } => {
-                let inner: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            Type::Generic { name, arguments } => {
+                let inner: Vec<String> = arguments.iter().map(|a| a.to_string()).collect();
                 write!(f, "{}<{}>", name, inner.join(", "))
             }
             Type::Dyn(name) => write!(f, "dynamic {}", name),
@@ -246,14 +246,14 @@ pub enum ExprKind {
         rhs: Box<Expr>,
     },
     /// A function call, e.g. `total(19.99, 3)`.
-    Call { name: String, args: Vec<Expr> },
+    Call { name: String, arguments: Vec<Expr> },
     /// Struct construction: `LineItem { price: 19.99, qty: 3 }`.
     /// Every field must be given by name; any order.
     StructLit { name: String, fields: Vec<(String, Expr)> },
     /// Field access: `item.price` (chains for nested structs).
     Field { base: Box<Expr>, field: String },
     /// Method call: `item.total()`.
-    MethodCall { base: Box<Expr>, method: String, args: Vec<Expr> },
+    MethodCall { base: Box<Expr>, method: String, arguments: Vec<Expr> },
     /// An array literal `[10.00, 5.99, 4.01]` — only valid as a `let`
     /// initializer with a declared array type.
     ArrayLit(Vec<Expr>),
@@ -347,7 +347,7 @@ pub enum StmtKind {
     Break,
     /// `continue;` — jump to the enclosing loop's next test.
     Continue,
-    /// `return tail f(args);` — a call the compiler must turn into a real tail
+    /// `return tail f(arguments);` — a call the compiler must turn into a real tail
     /// call (constant stack) or refuse to compile. Never a silent difference
     /// between "optimized" and "hoped for".
     TailReturn(Expr),
@@ -401,15 +401,15 @@ pub struct TypeParam {
     pub bound: Option<String>,
 }
 
-/// `fn name(params) -> ret { body }`. Every function returns a value, and the
+/// `fn name(parameters) -> ret { body }`. Every function returns a value, and the
 /// typechecker proves it returns on every path.
 #[derive(Debug, Clone)]
 pub struct FnDef {
     pub name: String,
     /// `fn largest<T: Ordered, U>(...)` — what this function is generic over, in order.
     /// Empty for the overwhelming majority of functions.
-    pub type_params: Vec<TypeParam>,
-    pub params: Vec<Param>,
+    pub type_parameters: Vec<TypeParam>,
+    pub parameters: Vec<Param>,
     pub ret: Type,
     /// Declared `allocates`: builds values in the CALLER's region, so it may
     /// allocate without opening one and may return what it built. One bit, not a
@@ -431,7 +431,7 @@ pub struct FnDef {
     pub span: Span,
 }
 
-/// `fn (self: Type) name(params) -> ret { body }` — a method: a function in
+/// `fn (self: Type) name(parameters) -> ret { body }` — a method: a function in
 /// the receiver type's namespace. `fn (mut self: Type) ...` declares a
 /// MUTATING method, callable only through a `let mut` binding; the receiver
 /// is then passed as a true reference, not a value copy (see the aggregate
@@ -444,10 +444,10 @@ pub struct MethodDef {
     /// which for a method are always the record's own parameter NAMES. A method may use the
     /// parameters of the type it is on and declare none of its own, per
     /// spec/M7-GENERICS.md Decision 3 — so these are names, not types.
-    pub receiver_args: Vec<String>,
+    pub receiver_arguments: Vec<String>,
     pub receiver_mut: bool,
     pub name: String,
-    pub params: Vec<Param>,
+    pub parameters: Vec<Param>,
     pub ret: Type,
     /// Declared `allocates`: builds values in the CALLER's region, exactly as on a
     /// free function. The M1a spec deferred this with the trigger "a required
@@ -469,7 +469,7 @@ pub struct MethodDef {
 pub struct TraitSig {
     pub name: String,
     pub receiver_mut: bool,
-    pub params: Vec<Param>,
+    pub parameters: Vec<Param>,
     pub ret: Type,
 }
 
@@ -495,13 +495,13 @@ pub struct ImplBlock {
     pub span: Span,
 }
 
-/// `extern fn name(params) -> ret;` — a C function Burxt may call. The name
+/// `extern fn name(parameters) -> ret;` — a C function Burxt may call. The name
 /// is the real linker symbol (never mangled); matching the C side's actual
 /// signature is the programmer's contract, as in every FFI.
 #[derive(Debug, Clone)]
 pub struct ExternFn {
     pub name: String,
-    pub params: Vec<Param>,
+    pub parameters: Vec<Param>,
     pub ret: Type,
     /// Where this item was written, for errors about the item itself.
     pub span: Span,
@@ -520,7 +520,7 @@ pub struct EnumDef {
     pub name: String,
     /// `enum Option<T> { ... }` — what this enum is generic over. Empty for the
     /// overwhelming majority. See spec/M7-GENERICS.md.
-    pub type_params: Vec<TypeParam>,
+    pub type_parameters: Vec<TypeParam>,
     pub variants: Vec<Variant>,
     /// Where this item was written, for errors about the item itself.
     pub span: Span,
@@ -542,7 +542,7 @@ pub struct StructDef {
     pub name: String,
     /// `record List<T> { items: [T] }` — what this record is generic over. Empty for the
     /// overwhelming majority. See spec/M7-GENERICS.md.
-    pub type_params: Vec<TypeParam>,
+    pub type_parameters: Vec<TypeParam>,
     pub fields: Vec<Param>,
     /// Where this item was written, for errors about the item itself.
     pub span: Span,

@@ -118,7 +118,7 @@ pub struct CodeGen<'ctx> {
     /// clause and the name to write its message.
     current_ensures: Vec<(crate::typeck::TypedContract, String)>,
     /// argc and argv, stashed by `main` so any function can read them
-    args: Option<(inkwell::values::GlobalValue<'ctx>, inkwell::values::GlobalValue<'ctx>)>,
+    arguments: Option<(inkwell::values::GlobalValue<'ctx>, inkwell::values::GlobalValue<'ctx>)>,
     /// the bump-cursor mark of the region currently open, so a `return` from
     /// inside it releases the region on the way out. One level, per M1.
     region_mark: Option<IntValue<'ctx>>,
@@ -165,7 +165,7 @@ impl<'ctx> CodeGen<'ctx> {
             vtables: HashMap::new(),
             trait_slots: HashMap::new(),
             current_sret: None,
-            args: None,
+            arguments: None,
             region_mark: None,
             current_ensures: Vec::new(),
             loop_stack: Vec::new(),
@@ -236,7 +236,7 @@ impl<'ctx> CodeGen<'ctx> {
         // the whole point of FFI. (Int -> i64, String -> const char*.)
         for e in &prog.externs {
             let param_tys: Vec<BasicMetadataTypeEnum> =
-                e.params.iter().map(|t| self.llvm_type(t).into()).collect();
+                e.parameters.iter().map(|t| self.llvm_type(t).into()).collect();
             let fn_ty = self.llvm_type(&e.ret).fn_type(&param_tys, false);
             // Two modules may declare the same extern — `lib/fs.bx` and `lib/os.bx` both
             // need `system` — and the typechecker allows it when the signatures match.
@@ -247,12 +247,12 @@ impl<'ctx> CodeGen<'ctx> {
                 None => self.module.add_function(&e.name, fn_ty, None),
             };
             self.user_fns.insert(e.name.clone(), llf);
-            self.extern_sigs.insert(e.name.clone(), (e.params.clone(), e.ret.clone()));
+            self.extern_sigs.insert(e.name.clone(), (e.parameters.clone(), e.ret.clone()));
         }
 
         // Declare every user function up front (mutual recursion, any order).
         for f in &prog.fns {
-            let param_tys: Vec<Type> = f.params.iter().map(|(_, t)| t.clone()).collect();
+            let param_tys: Vec<Type> = f.parameters.iter().map(|(_, t)| t.clone()).collect();
             let llf = self.declare_fn(&format!("bx.{}", f.name), &param_tys, &f.ret);
             self.user_fns.insert(f.name.clone(), llf);
             self.fn_sigs.insert(f.name.clone(), (param_tys, f.ret.clone()));
@@ -260,7 +260,7 @@ impl<'ctx> CodeGen<'ctx> {
 
         // Methods: namespaced by (receiver, name), mangled `bx.<Recv>.<name>`.
         for m in &prog.methods {
-            let param_tys: Vec<Type> = m.params.iter().map(|(_, t)| t.clone()).collect();
+            let param_tys: Vec<Type> = m.parameters.iter().map(|(_, t)| t.clone()).collect();
             let mangled = format!("bx.{}.{}", m.receiver, m.name);
             let llf = self.declare_method(
                 &mangled,
@@ -312,7 +312,7 @@ impl<'ctx> CodeGen<'ctx> {
                             .find(|tm| tm.receiver == vt.concrete && tm.name == *m)
                             .expect("vtable slot method must exist");
                         (
-                            f.params.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>(),
+                            f.parameters.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>(),
                             f.ret.clone(),
                         )
                     })
@@ -384,7 +384,7 @@ impl<'ctx> CodeGen<'ctx> {
         };
         let offset = if ret_is_agg { 1 } else { 0 };
 
-        for (i, (name, ty)) in f.params.iter().enumerate() {
+        for (i, (name, ty)) in f.parameters.iter().enumerate() {
             let argument = llf.get_nth_param((i + offset) as u32).unwrap();
             if is_aggregate(ty) {
                 // byval already gave us a pointer to our OWN copy, so it is
@@ -826,13 +826,13 @@ impl<'ctx> CodeGen<'ctx> {
             // The call must sit IMMEDIATELY before the `ret`, with nothing in
             // between. That is why a tail call inside a region is refused
             // earlier: the region release would land in that gap.
-            TypedStmt::TailReturn { name, args } => {
+            TypedStmt::TailReturn { name, arguments } => {
                 let f = *self
                     .user_fns
                     .get(name.as_str())
                     .ok_or_else(|| format!("codegen bug: unknown function {}", name))?;
                 let mut plain: Vec<BasicValueEnum> = Vec::new();
-                for a in args {
+                for a in arguments {
                     plain.push(self.gen_expr(a)?);
                 }
                 // Before the call, because after it there is no frame to be in: a
@@ -969,14 +969,14 @@ impl<'ctx> CodeGen<'ctx> {
     ///     bugs live);
     ///   * aggregate RETURNS use an `sret(T)` hidden first pointer — one code
     ///     path on every target, and the only shape wasm can express.
-    fn declare_fn(&self, name: &str, params: &[Type], ret: &Type) -> FunctionValue<'ctx> {
+    fn declare_fn(&self, name: &str, parameters: &[Type], ret: &Type) -> FunctionValue<'ctx> {
         let ptr = self.ctx.ptr_type(AddressSpace::default());
         let mut ll_params: Vec<BasicMetadataTypeEnum> = Vec::new();
         let ret_is_agg = is_aggregate(ret);
         if ret_is_agg {
             ll_params.push(ptr.into());
         }
-        for p in params {
+        for p in parameters {
             if is_aggregate(p) {
                 ll_params.push(ptr.into());
             } else {
@@ -1000,7 +1000,7 @@ impl<'ctx> CodeGen<'ctx> {
             f.add_attribute(AttributeLoc::Param(0), attr);
         }
         let offset = if ret_is_agg { 1 } else { 0 };
-        for (i, p) in params.iter().enumerate() {
+        for (i, p) in parameters.iter().enumerate() {
             if is_aggregate(p) {
                 let attr = self.ctx.create_type_attribute(
                     inkwell::attributes::Attribute::get_named_enum_kind_id("byval"),
@@ -1033,7 +1033,7 @@ impl<'ctx> CodeGen<'ctx> {
         name: &str,
         receiver_ty: &Type,
         receiver_mut: bool,
-        params: &[Type],
+        parameters: &[Type],
         ret: &Type,
     ) -> FunctionValue<'ctx> {
         let ptr = self.ctx.ptr_type(AddressSpace::default());
@@ -1043,7 +1043,7 @@ impl<'ctx> CodeGen<'ctx> {
             ll_params.push(ptr.into());
         }
         ll_params.push(ptr.into()); // self, always by address
-        for p in params {
+        for p in parameters {
             if is_aggregate(p) {
                 ll_params.push(ptr.into());
             } else {
@@ -1070,7 +1070,7 @@ impl<'ctx> CodeGen<'ctx> {
         // The receiver carries no byval attribute — see the doc comment.
         let _ = (receiver_mut, receiver_ty);
         idx += 1;
-        for p in params {
+        for p in parameters {
             if is_aggregate(p) {
                 let attr = self.ctx.create_type_attribute(
                     inkwell::attributes::Attribute::get_named_enum_kind_id("byval"),
@@ -1109,7 +1109,7 @@ impl<'ctx> CodeGen<'ctx> {
         );
 
         let param_offset = self_idx + 1;
-        for (i, (name, ty)) in m.params.iter().enumerate() {
+        for (i, (name, ty)) in m.parameters.iter().enumerate() {
             let argument = llf.get_nth_param((param_offset + i) as u32).unwrap();
             if is_aggregate(ty) {
                 self.vars.insert(name.clone(), (argument.into_pointer_value(), ty.clone()));
@@ -1374,9 +1374,9 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_select(is_true, t, f, "bool_str")
                     .map_err(|e| e.to_string())?;
                 let fmt = self.global_str("%s", "fmt_bool");
-                let args: Vec<BasicMetadataValueEnum> = vec![fmt.into(), s.into()];
+                let arguments: Vec<BasicMetadataValueEnum> = vec![fmt.into(), s.into()];
                 self.builder
-                    .build_call(printf, &args, "printf_bool")
+                    .build_call(printf, &arguments, "printf_bool")
                     .map_err(|e| e.to_string())?;
             }
             Type::Named(_) | Type::CInt | Type::CDouble | Type::Array { .. }
@@ -1421,10 +1421,10 @@ impl<'ctx> CodeGen<'ctx> {
                     // show a digit that does not exist.
                     let int_part = narrow(&self.builder, abs, "int_part")?;
                     let fmt = self.global_str("%s%llu", "fmt_dec0");
-                    let args: Vec<BasicMetadataValueEnum> =
+                    let arguments: Vec<BasicMetadataValueEnum> =
                         vec![fmt.into(), sign.into(), int_part.into()];
                     self.builder
-                        .build_call(printf, &args, "printf_dec")
+                        .build_call(printf, &arguments, "printf_dec")
                         .map_err(|e| e.to_string())?;
                 } else {
                     let pow = self.pow10_i128(*scale);
@@ -1443,10 +1443,10 @@ impl<'ctx> CodeGen<'ctx> {
                     // "%s%llu.%0<scale>llu\n" — sign, then zero-padded digits.
                     let fmt_str = format!("%s%llu.%0{}llu", scale);
                     let fmt = self.global_str(&fmt_str, "fmt_dec");
-                    let args: Vec<BasicMetadataValueEnum> =
+                    let arguments: Vec<BasicMetadataValueEnum> =
                         vec![fmt.into(), sign.into(), int_part.into(), frac_part.into()];
                     self.builder
-                        .build_call(printf, &args, "printf_dec")
+                        .build_call(printf, &arguments, "printf_dec")
                         .map_err(|e| e.to_string())?;
                 }
             }
@@ -1765,7 +1765,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .map(Into::into)
                     .map_err(|e| e.to_string())
             }
-            TypedExprKind::Call { name, args } => {
+            TypedExprKind::Call { name, arguments } => {
                 let f = *self
                     .user_fns
                     .get(name)
@@ -1790,7 +1790,7 @@ impl<'ctx> CodeGen<'ctx> {
                 // values (truncated CInts, doubles); the measure needs the Burxt
                 // ones, and an sret slot at index 0 would misalign the parameters.
                 let mut plain: Vec<BasicValueEnum> = Vec::new();
-                for (i, a) in args.iter().enumerate() {
+                for (i, a) in arguments.iter().enumerate() {
                     // Aggregate arguments pass as an address; LLVM's byval
                     // makes the callee's copy.
                     if is_aggregate(&a.ty) {
@@ -2002,7 +2002,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_load(self.llvm_type(&ok_payload[0]), p, "unwrapped")
                     .map_err(err)
             }
-            TypedExprKind::VariantLit { enum_name, tag, args } => {
+            TypedExprKind::VariantLit { enum_name, tag, arguments } => {
                 let (st, _) = self.enum_types[enum_name.as_str()];
                 let slot = self.create_entry_alloca("variant", &e.ty)?;
                 // tag first
@@ -2014,7 +2014,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_store(tag_ptr, i64t.const_int(*tag as u64, false))
                     .map_err(|e| e.to_string())?;
                 // then each payload value into its slot
-                if !args.is_empty() {
+                if !arguments.is_empty() {
                     let payload_ptr = self
                         .builder
                         .build_struct_gep(st, slot, 1, "payload_ptr")
@@ -2025,7 +2025,7 @@ impl<'ctx> CodeGen<'ctx> {
                     // `store` places a whole LLVM aggregate as happily as an i64, so a record
                     // payload needs no memcpy here — only the right address.
                     let (offsets, _) = self.payload_offsets(&variants[*tag as usize]);
-                    for (i, a) in args.iter().enumerate() {
+                    for (i, a) in arguments.iter().enumerate() {
                         let v = self.gen_expr(a)?;
                         let idx = i64t.const_int(offsets[i] as u64, false);
                         let p = unsafe {
@@ -2072,7 +2072,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_extract_value(agg, *index, "field")
                     .map_err(|e| e.to_string())
             }
-            TypedExprKind::MethodCall { receiver, method, receiver_mut, base, args } => {
+            TypedExprKind::MethodCall { receiver, method, receiver_mut, base, arguments } => {
                 let f = *self
                     .methods
                     .get(&(receiver.clone(), method.clone()))
@@ -2098,7 +2098,7 @@ impl<'ctx> CodeGen<'ctx> {
                 let recv_addr = self.gen_aggregate_addr(base)?;
                 vals.push(recv_addr.into());
 
-                for a in args {
+                for a in arguments {
                     if is_aggregate(&a.ty) {
                         vals.push(self.gen_aggregate_addr(a)?.into());
                     } else {
@@ -2125,7 +2125,7 @@ impl<'ctx> CodeGen<'ctx> {
                 // call and a vtable call agree on the ABI. (See declare_method.)
                 let _ = receiver_mut;
                 idx += 1;
-                for a in args {
+                for a in arguments {
                     if is_aggregate(&a.ty) {
                         let attr = self.ctx.create_type_attribute(
                             Attribute::get_named_enum_kind_id("byval"),
@@ -2179,7 +2179,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .into_struct_value();
                 Ok(fat.into())
             }
-            TypedExprKind::DynCall { trait_name, method, slot, base, args } => {
+            TypedExprKind::DynCall { trait_name, method, slot, base, arguments } => {
                 let fat = self.gen_expr(base)?.into_struct_value();
                 let data = self
                     .builder
@@ -2210,7 +2210,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(|e| e.to_string())?
                     .into_pointer_value();
 
-                // Rebuild the callee's type: (receiver ptr, params...) -> ret.
+                // Rebuild the callee's type: (receiver ptr, parameters...) -> ret.
                 // Typeck refused mutating methods here, so the receiver is the
                 // byval form — the callee copies from `data`.
                 let (param_tys, ret_ty) = self
@@ -2249,7 +2249,7 @@ impl<'ctx> CodeGen<'ctx> {
                     None
                 };
                 vals.push(data.into());
-                for a in args {
+                for a in arguments {
                     if is_aggregate(&a.ty) {
                         vals.push(self.gen_aggregate_addr(a)?.into());
                     } else {
@@ -2636,7 +2636,7 @@ impl<'ctx> CodeGen<'ctx> {
 
         // Build the same argument list the printer would, then size it with a
         // dry run before allocating.
-        let (fmt, args): (PointerValue<'ctx>, Vec<BasicMetadataValueEnum>) = match ty {
+        let (fmt, arguments): (PointerValue<'ctx>, Vec<BasicMetadataValueEnum>) = match ty {
             Type::Int => (self.global_str("%lld", "f_int"), vec![val.into()]),
             Type::Decimal { scale, .. } => {
                 let v = val.into_int_value();
@@ -2670,7 +2670,7 @@ impl<'ctx> CodeGen<'ctx> {
 
         let mut dry: Vec<BasicMetadataValueEnum> =
             vec![ptr.const_null().into(), i64t.const_zero().into(), fmt.into()];
-        dry.extend(args.iter().cloned());
+        dry.extend(arguments.iter().cloned());
         let need = self.builder.build_call(snprintf, &dry, "need").map_err(err)?;
         let n32 = match need.try_as_basic_value() {
             inkwell::values::ValueKind::Basic(v) => v.into_int_value(),
@@ -2686,7 +2686,7 @@ impl<'ctx> CodeGen<'ctx> {
             .map_err(err)?;
         let buf = self.build_alloc_string(n)?;
         let mut real: Vec<BasicMetadataValueEnum> = vec![buf.into(), cap.into(), fmt.into()];
-        real.extend(args);
+        real.extend(arguments);
         self.builder.build_call(snprintf, &real, "render").map_err(err)?;
         Ok(buf)
     }
@@ -2819,9 +2819,9 @@ impl<'ctx> CodeGen<'ctx> {
             .builder
             .build_int_sub(n, i64t.const_int(1, false), "n_minus_1")
             .map_err(err)?;
-        let args: Vec<BasicMetadataValueEnum> =
+        let arguments: Vec<BasicMetadataValueEnum> =
             vec![stream.into(), fmt.into(), i.into(), n.into(), n_minus_1.into()];
-        self.builder.build_call(fprintf, &args, "fprintf").map_err(err)?;
+        self.builder.build_call(fprintf, &arguments, "fprintf").map_err(err)?;
         self.build_exit70(exit)?;
 
         self.builder.position_at_end(ok_bb);
@@ -3064,7 +3064,7 @@ impl<'ctx> CodeGen<'ctx> {
         inkwell::values::GlobalValue<'ctx>,
         inkwell::values::GlobalValue<'ctx>,
     ) {
-        if let Some(g) = self.args {
+        if let Some(g) = self.arguments {
             return g;
         }
         let i64t = self.ctx.i64_type();
@@ -3073,7 +3073,7 @@ impl<'ctx> CodeGen<'ctx> {
         argc.set_initializer(&i64t.const_zero());
         let argv = self.module.add_global(ptr, None, "burxt.argv");
         argv.set_initializer(&ptr.const_null());
-        *self.args.insert((argc, argv))
+        *self.arguments.insert((argc, argv))
     }
 
     /// `argument(n)` — the n-th command-line argument, bounds-checked.
@@ -3167,8 +3167,8 @@ impl<'ctx> CodeGen<'ctx> {
             "fmt_arg_oob",
         );
         let stream = self.load_stderr(stderr_g)?;
-        let args: Vec<BasicMetadataValueEnum> = vec![stream.into(), fmt.into(), i.into(), n.into()];
-        self.builder.build_call(fprintf, &args, "fprintf").map_err(err)?;
+        let arguments: Vec<BasicMetadataValueEnum> = vec![stream.into(), fmt.into(), i.into(), n.into()];
+        self.builder.build_call(fprintf, &arguments, "fprintf").map_err(err)?;
         self.build_exit70(exit)?;
 
         self.builder.position_at_end(ok);
@@ -3496,9 +3496,9 @@ impl<'ctx> CodeGen<'ctx> {
             "fmt_truncate",
         );
         let stream = self.load_stderr(stderr_g)?;
-        let args: Vec<BasicMetadataValueEnum> =
+        let arguments: Vec<BasicMetadataValueEnum> =
             vec![stream.into(), fmt.into(), new_len.into(), len.into()];
-        self.builder.build_call(fprintf, &args, "fprintf").map_err(err)?;
+        self.builder.build_call(fprintf, &arguments, "fprintf").map_err(err)?;
         self.build_exit70(exit)?;
 
         self.builder.position_at_end(ok);
@@ -3651,7 +3651,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.current_measure = Some(MeasureState {
             slot,
             measure: clause.cond.clone(),
-            params: f.params.clone(),
+            parameters: f.parameters.clone(),
             text: clause.text.clone(),
             function: f.name.clone(),
         });
@@ -3666,14 +3666,14 @@ impl<'ctx> CodeGen<'ctx> {
     fn gen_measure_check(
         &mut self,
         callee: &str,
-        args: &[BasicValueEnum<'ctx>],
+        arguments: &[BasicValueEnum<'ctx>],
     ) -> Result<(), String> {
         let Some(state) = self.current_measure.clone() else { return Ok(()) };
-        if state.function != callee || args.len() != state.params.len() {
+        if state.function != callee || arguments.len() != state.parameters.len() {
             return Ok(());
         }
         let saved = self.vars.clone();
-        for ((name, ty), value) in state.params.iter().zip(args) {
+        for ((name, ty), value) in state.parameters.iter().zip(arguments) {
             if is_aggregate(ty) {
                 // An aggregate argument is already a pointer to our own copy.
                 self.vars.insert(name.clone(), (value.into_pointer_value(), ty.clone()));
@@ -3999,9 +3999,9 @@ impl<'ctx> CodeGen<'ctx> {
             .builder
             .build_int_sub(n, i64t.const_int(1, false), "n_minus_1")
             .map_err(err)?;
-        let args: Vec<BasicMetadataValueEnum> =
+        let arguments: Vec<BasicMetadataValueEnum> =
             vec![stream.into(), fmt.into(), i.into(), n.into(), last.into()];
-        self.builder.build_call(fprintf, &args, "fprintf").map_err(err)?;
+        self.builder.build_call(fprintf, &arguments, "fprintf").map_err(err)?;
         self.build_exit70(exit)?;
 
         self.builder.position_at_end(ok_bb);
@@ -4194,9 +4194,9 @@ impl<'ctx> CodeGen<'ctx> {
             "fmt_substring_oob",
         );
         let stream = self.load_stderr(stderr_g)?;
-        let args: Vec<BasicMetadataValueEnum> =
+        let arguments: Vec<BasicMetadataValueEnum> =
             vec![stream.into(), fmt.into(), at.into(), count.into(), source_len.into()];
-        self.builder.build_call(fprintf, &args, "fprintf").map_err(err)?;
+        self.builder.build_call(fprintf, &arguments, "fprintf").map_err(err)?;
         self.build_exit70(exit)?;
 
         self.builder.position_at_end(ok);
@@ -4721,7 +4721,7 @@ impl<'ctx> CodeGen<'ctx> {
 struct MeasureState<'ctx> {
     slot: PointerValue<'ctx>,
     measure: crate::typeck::TypedExpr,
-    params: Vec<(String, Type)>,
+    parameters: Vec<(String, Type)>,
     text: String,
     function: String,
 }

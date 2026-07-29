@@ -97,7 +97,7 @@ pub enum TypedExprKind {
         lhs: Box<TypedExpr>,
         rhs: Box<TypedExpr>,
     },
-    Call { name: String, args: Vec<TypedExpr> },
+    Call { name: String, arguments: Vec<TypedExpr> },
     /// Method call, resolved to its receiver type. `receiver_mut` decides how
     /// codegen passes `base`: a true reference (mutating) or a value copy.
     MethodCall {
@@ -105,7 +105,7 @@ pub enum TypedExprKind {
         method: String,
         receiver_mut: bool,
         base: Box<TypedExpr>,
-        args: Vec<TypedExpr>,
+        arguments: Vec<TypedExpr>,
     },
     /// Build a trait object from a concrete binding: a fat pointer pairing the
     /// binding's storage with the static (Type, Trait) vtable.
@@ -117,7 +117,7 @@ pub enum TypedExprKind {
         method: String,
         slot: u32,
         base: Box<TypedExpr>,
-        args: Vec<TypedExpr>,
+        arguments: Vec<TypedExpr>,
     },
     /// Struct construction; fields re-emitted in DECLARATION order, so
     /// codegen is purely positional.
@@ -146,7 +146,7 @@ pub enum TypedExprKind {
         ret_fail_tag: u32,
     },
     /// Enum construction: the variant's index plus its payload values.
-    VariantLit { enum_name: String, tag: u32, args: Vec<TypedExpr> },
+    VariantLit { enum_name: String, tag: u32, arguments: Vec<TypedExpr> },
     /// Bounds-checked indexed read from a place; `len` is the static length.
     Index { base: Box<TypedExpr>, len: u32, index: Box<TypedExpr> },
 }
@@ -188,7 +188,7 @@ pub enum TypedStmt {
     /// A guaranteed tail call: the frame is replaced, not stacked. Typeck has
     /// already proven the two signatures match, so codegen can emit `musttail`
     /// knowing LLVM will accept it.
-    TailReturn { name: String, args: Vec<TypedExpr> },
+    TailReturn { name: String, arguments: Vec<TypedExpr> },
     While { cond: TypedExpr, body: Vec<TypedStmt> },
     If {
         cond: TypedExpr,
@@ -222,7 +222,7 @@ pub enum TypedInterpPart {
 #[derive(Debug, Clone)]
 pub struct TypedFn {
     pub name: String,
-    pub params: Vec<(String, Type)>,
+    pub parameters: Vec<(String, Type)>,
     pub ret: Type,
     pub body: Vec<TypedStmt>,
     /// Preconditions, in the order written: checked on entry.
@@ -254,7 +254,7 @@ pub struct TypedMethod {
     pub receiver: String,
     pub receiver_mut: bool,
     pub name: String,
-    pub params: Vec<(String, Type)>,
+    pub parameters: Vec<(String, Type)>,
     pub ret: Type,
     pub body: Vec<TypedStmt>,
     pub requires: Vec<TypedContract>,
@@ -267,7 +267,7 @@ pub struct TypedMethod {
 #[derive(Debug, Clone)]
 pub struct TypedExtern {
     pub name: String,
-    pub params: Vec<Type>,
+    pub parameters: Vec<Type>,
     pub ret: Type,
 }
 
@@ -353,7 +353,7 @@ pub struct TypeChecker {
     /// extern name -> each parameter's DECLARED C-side shape (type, marshaller).
     /// `fns` holds what Burxt code must pass; this holds what C receives, which
     /// is what boundary-exactness errors have to talk about.
-    extern_params: HashMap<String, Vec<(Type, Option<Marshal>)>>,
+    extern_parameters: HashMap<String, Vec<(Type, Option<Marshal>)>>,
     /// struct name -> fields (name, type) in declaration order; hoisted first.
     structs: HashMap<String, Vec<(String, Type)>>,
     /// enum name -> variants (name, payload types) in declaration order, which
@@ -391,7 +391,7 @@ pub struct TypeChecker {
     /// The enclosing function's name and parameter types. A guaranteed tail
     /// call needs them: LLVM only guarantees the call when caller and callee
     /// prototypes match, so that has to be checked before promising it.
-    current_sig: Option<(String, Vec<Type>)>,
+    current_signature: Option<(String, Vec<Type>)>,
     /// Function names declared `allocates`: they build values in their CALLER's
     /// region, so they may allocate without opening one and may return what they
     /// built. Hoisted with the signatures, so call sites can be checked in one
@@ -455,7 +455,7 @@ impl TypeChecker {
             olds: RefCell::new(Vec::new()),
             in_caller_region: false,
             extern_names: HashSet::new(),
-            extern_params: HashMap::new(),
+            extern_parameters: HashMap::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
             methods: HashMap::new(),
@@ -467,7 +467,7 @@ impl TypeChecker {
             expr_types: RefCell::new(Vec::new()),
             errors: Vec::new(),
             current_ret: None,
-            current_sig: None,
+            current_signature: None,
             current_region: None,
         }
     }
@@ -630,7 +630,7 @@ impl TypeChecker {
         // the declaration that caused it rather than at the top of the file.
         for st in &mut prog.structs {
             self.current_span.set(st.span);
-            if !st.type_params.is_empty() {
+            if !st.type_parameters.is_empty() {
                 continue;             // the generic itself: its parameters stay parameters
             }
             for f in &mut st.fields {
@@ -639,7 +639,7 @@ impl TypeChecker {
         }
         for e in &mut prog.enums {
             self.current_span.set(e.span);
-            if !e.type_params.is_empty() {
+            if !e.type_parameters.is_empty() {
                 continue;             // the generic itself: its parameters stay parameters
             }
             for v in &mut e.variants {
@@ -650,24 +650,24 @@ impl TypeChecker {
         }
         for ex in &mut prog.externs {
             self.current_span.set(ex.span);
-            for p in &mut ex.params {
+            for p in &mut ex.parameters {
                 p.ty = self.expand(&p.ty)?;
             }
             ex.ret = self.expand(&ex.ret)?;
         }
         for f in &mut prog.fns {
             self.current_span.set(f.span);
-            self.expand_fn_types(&mut f.params, &mut f.ret, &mut f.body)?;
+            self.expand_fn_types(&mut f.parameters, &mut f.ret, &mut f.body)?;
         }
         for m in &mut prog.methods {
             self.current_span.set(m.span);
-            self.expand_fn_types(&mut m.params, &mut m.ret, &mut m.body)?;
+            self.expand_fn_types(&mut m.parameters, &mut m.ret, &mut m.body)?;
         }
         for im in &mut prog.impls {
             self.current_span.set(im.span);
             for m in &mut im.methods {
                 self.current_span.set(m.span);
-                self.expand_fn_types(&mut m.params, &mut m.ret, &mut m.body)?;
+                self.expand_fn_types(&mut m.parameters, &mut m.ret, &mut m.body)?;
             }
         }
         self.expand_block(&mut prog.stmts)?;
@@ -676,11 +676,11 @@ impl TypeChecker {
 
     fn expand_fn_types(
         &self,
-        params: &mut [Param],
+        parameters: &mut [Param],
         ret: &mut Type,
         body: &mut [Stmt],
     ) -> Result<(), String> {
-        for p in params.iter_mut() {
+        for p in parameters.iter_mut() {
             p.ty = self.expand(&p.ty)?;
         }
         *ret = self.expand(ret)?;
@@ -758,30 +758,30 @@ impl TypeChecker {
             // A generic RECORD application. Same shape as the enum case below: the concrete
             // instantiation becomes an ordinary nominal record, made once, and after that no
             // rule in this file knows generics exist.
-            Type::Generic { name, args } if self.generic_records.contains_key(name) => {
-                let (params, fields) = self.generic_records[name].clone();
-                let args: Vec<Type> =
-                    args.iter().map(|a| self.expand(a)).collect::<Result<_, _>>()?;
-                if args.len() != params.len() {
+            Type::Generic { name, arguments } if self.generic_records.contains_key(name) => {
+                let (parameters, fields) = self.generic_records[name].clone();
+                let arguments: Vec<Type> =
+                    arguments.iter().map(|a| self.expand(a)).collect::<Result<_, _>>()?;
+                if arguments.len() != parameters.len() {
                     return Err(format!(
                         "`{}` takes {} type argument(s), but {} were given",
                         name,
-                        params.len(),
-                        args.len()
+                        parameters.len(),
+                        arguments.len()
                     ));
                 }
-                if args.iter().any(mentions_param) {
-                    return Ok(Type::Generic { name: name.clone(), args });
+                if arguments.iter().any(mentions_param) {
+                    return Ok(Type::Generic { name: name.clone(), arguments });
                 }
-                let symbol = mangle(name, &args);
+                let symbol = mangle(name, &arguments);
                 if !self.is_record(&symbol) {
                     // Reserved before it is filled in, so a record whose field mentions
                     // itself cannot make this recurse forever.
                     self.made_records.borrow_mut().insert(symbol.clone(), Vec::new());
-                    let map: HashMap<String, Type> = params
+                    let map: HashMap<String, Type> = parameters
                         .iter()
                         .map(|p| p.name.clone())
-                        .zip(args.iter().cloned())
+                        .zip(arguments.iter().cloned())
                         .collect();
                     let mut made: Vec<(String, Type)> = Vec::new();
                     for (fname, ty) in &fields {
@@ -800,19 +800,19 @@ impl TypeChecker {
                     self.made_records.borrow_mut().insert(symbol.clone(), made.clone());
                     self.instance_of
                         .borrow_mut()
-                        .insert(symbol.clone(), (name.clone(), args.clone()));
+                        .insert(symbol.clone(), (name.clone(), arguments.clone()));
                     self.made_record_order.borrow_mut().push(TypedStruct {
                         name: symbol.clone(),
                         fields: made.iter().map(|(_, t)| t.clone()).collect(),
                     });
                     self.wanted_records
                         .borrow_mut()
-                        .push((name.clone(), args.clone()));
+                        .push((name.clone(), arguments.clone()));
                 }
                 Ok(Type::Named(symbol))
             }
-            Type::Generic { name, args } => {
-                let (params, variants) = self.generic_enums.get(name).cloned().ok_or_else(|| {
+            Type::Generic { name, arguments } => {
+                let (parameters, variants) = self.generic_enums.get(name).cloned().ok_or_else(|| {
                     if self.declared_type_names.contains(name) {
                         format!(
                             "`{}` is not generic, so it takes no type arguments — write \
@@ -823,28 +823,28 @@ impl TypeChecker {
                         format!("unknown generic type `{}`", name)
                     }
                 })?;
-                let args: Vec<Type> =
-                    args.iter().map(|a| self.expand(a)).collect::<Result<_, _>>()?;
-                if args.len() != params.len() {
+                let arguments: Vec<Type> =
+                    arguments.iter().map(|a| self.expand(a)).collect::<Result<_, _>>()?;
+                if arguments.len() != parameters.len() {
                     return Err(format!(
                         "`{}` takes {} type argument(s), but {} were given",
                         name,
-                        params.len(),
-                        args.len()
+                        parameters.len(),
+                        arguments.len()
                     ));
                 }
-                if args.iter().any(mentions_param) {
-                    return Ok(Type::Generic { name: name.clone(), args });
+                if arguments.iter().any(mentions_param) {
+                    return Ok(Type::Generic { name: name.clone(), arguments });
                 }
-                let symbol = mangle(name, &args);
+                let symbol = mangle(name, &arguments);
                 if !self.is_enum(&symbol) {
                     // Reserve the name BEFORE filling it in, so an enum whose payload
                     // mentions itself cannot make this recurse forever.
                     self.made_enums.borrow_mut().insert(symbol.clone(), Vec::new());
-                    let map: HashMap<String, Type> = params
+                    let map: HashMap<String, Type> = parameters
                         .iter()
                         .map(|p| p.name.clone())
-                        .zip(args.iter().cloned())
+                        .zip(arguments.iter().cloned())
                         .collect();
                     let mut made: Vec<(String, Vec<Type>)> = Vec::new();
                     for (vname, payload) in &variants {
@@ -877,7 +877,7 @@ impl TypeChecker {
                                          scalar, a String, a record or an array.",
                                         Type::Generic {
                                             name: name.clone(),
-                                            args: args.clone()
+                                            arguments: arguments.clone()
                                         },
                                         name,
                                         vname,
@@ -901,7 +901,7 @@ impl TypeChecker {
                     self.made_enums.borrow_mut().insert(symbol.clone(), made.clone());
                     self.instance_of
                         .borrow_mut()
-                        .insert(symbol.clone(), (name.clone(), args.clone()));
+                        .insert(symbol.clone(), (name.clone(), arguments.clone()));
                     self.made_order.borrow_mut().push(TypedEnum {
                         name: symbol.clone(),
                         variants: made.into_iter().map(|(_, p)| p).collect(),
@@ -926,10 +926,10 @@ impl TypeChecker {
         &self,
         enum_name: &str,
         variant: &str,
-        args: &[Expr],
+        arguments: &[Expr],
         expected: Option<&Type>,
     ) -> Result<TypedExpr, String> {
-        let (params, variants) = self.generic_enums[enum_name].clone();
+        let (parameters, variants) = self.generic_enums[enum_name].clone();
         let tag = variants.iter().position(|(n, _)| n == variant).ok_or_else(|| {
             format!(
                 "`{}` has no variant named `{}`. Its variants are: {}.",
@@ -939,13 +939,13 @@ impl TypeChecker {
             )
         })?;
         let payload = &variants[tag].1;
-        if args.len() != payload.len() {
+        if arguments.len() != payload.len() {
             return Err(format!(
                 "`{}.{}` carries {} value(s), but {} were given",
                 enum_name,
                 variant,
                 payload.len(),
-                args.len()
+                arguments.len()
             ));
         }
 
@@ -955,13 +955,13 @@ impl TypeChecker {
         if let Some(Type::Named(want)) = expected {
             if let Some((of, type_args)) = self.instance_of.borrow().get(want).cloned() {
                 if of == enum_name {
-                    for (p, a) in params.iter().zip(type_args) {
+                    for (p, a) in parameters.iter().zip(type_args) {
                         map.insert(p.name.clone(), a);
                     }
                 }
             }
         }
-        for (i, (declared, argument)) in payload.iter().zip(args).enumerate() {
+        for (i, (declared, argument)) in payload.iter().zip(arguments).enumerate() {
             if !mentions_param(declared) {
                 continue;
             }
@@ -971,8 +971,8 @@ impl TypeChecker {
                 format!("in `{}.{}`, payload {}: {}", enum_name, variant, i + 1, why)
             })?;
         }
-        let mut type_args = Vec::with_capacity(params.len());
-        for p in &params {
+        let mut type_args = Vec::with_capacity(parameters.len());
+        for p in &parameters {
             match map.get(&p.name) {
                 Some(t) => type_args.push(t.clone()),
                 None => {
@@ -992,7 +992,7 @@ impl TypeChecker {
         }
         let concrete = self.expand(&Type::Generic {
             name: enum_name.to_string(),
-            args: type_args,
+            arguments: type_args,
         })?;
         let Type::Named(symbol) = &concrete else {
             return Err("codegen bug: an instantiation is not a named type".to_string());
@@ -1000,7 +1000,7 @@ impl TypeChecker {
         let variants = self
             .variants_of(symbol)
             .ok_or_else(|| format!("codegen bug: `{}` was not made", symbol))?;
-        self.build_variant(symbol, variants, variant, args)
+        self.build_variant(symbol, variants, variant, arguments)
     }
 
     /// Does this type argument satisfy the bound the signature declared?
@@ -1093,24 +1093,24 @@ impl TypeChecker {
         given: &[(String, Expr)],
         expected: Option<&Type>,
     ) -> Result<Type, String> {
-        let Some((params, fields)) = self.generic_records.get(name).cloned() else {
+        let Some((parameters, fields)) = self.generic_records.get(name).cloned() else {
             return Ok(Type::Named(name.to_string()));
         };
         let mut map: HashMap<String, Type> = HashMap::new();
         // An expectation that is itself an application — `-> Map<K, V>` inside a generic, or
         // `Map<String, Int>` before instantiation — names the arguments directly. Read first,
         // because what the context says beats what the field values imply.
-        if let Some(Type::Generic { name: want, args }) = expected {
-            if want == name && args.len() == params.len() {
-                for (p, a) in params.iter().zip(args) {
+        if let Some(Type::Generic { name: want, arguments }) = expected {
+            if want == name && arguments.len() == parameters.len() {
+                for (p, a) in parameters.iter().zip(arguments) {
                     map.insert(p.name.clone(), a.clone());
                 }
             }
         }
         if let Some(Type::Named(want)) = expected {
-            if let Some((of, args)) = self.instance_of.borrow().get(want).cloned() {
+            if let Some((of, arguments)) = self.instance_of.borrow().get(want).cloned() {
                 if of == name {
-                    for (p, a) in params.iter().zip(args) {
+                    for (p, a) in parameters.iter().zip(arguments) {
                         map.insert(p.name.clone(), a);
                     }
                 }
@@ -1124,7 +1124,7 @@ impl TypeChecker {
             // Only fields that could still settle something. `Stack<Int>` in the annotation
             // has already said what T is, and asking `items: []` to say it too would fail —
             // an empty array literal cannot name its own type, which is a rule of its own.
-            if params.iter().all(|p| map.contains_key(&p.name)) {
+            if parameters.iter().all(|p| map.contains_key(&p.name)) {
                 break;
             }
             let Some((_, value)) = given.iter().find(|(n, _)| n == fname) else {
@@ -1136,8 +1136,8 @@ impl TypeChecker {
             unify(declared, &typed.ty, &mut map, &instances)
                 .map_err(|why| format!("in `{}.{}`: {}", name, fname, why))?;
         }
-        let mut type_args = Vec::with_capacity(params.len());
-        for p in &params {
+        let mut type_args = Vec::with_capacity(parameters.len());
+        for p in &parameters {
             match map.get(&p.name) {
                 Some(t) => type_args.push(t.clone()),
                 None => {
@@ -1149,12 +1149,12 @@ impl TypeChecker {
                 }
             }
         }
-        for (p, argument) in params.iter().zip(&type_args) {
+        for (p, argument) in parameters.iter().zip(&type_args) {
             if let Some(bound) = &p.bound {
                 self.satisfies(argument, bound, name, &p.name)?;
             }
         }
-        match self.expand(&Type::Generic { name: name.to_string(), args: type_args })? {
+        match self.expand(&Type::Generic { name: name.to_string(), arguments: type_args })? {
             Type::Named(symbol) => Ok(Type::Named(symbol)),
             // Still abstract, because an argument mentions a type parameter — which is what
             // `Map { entries: [], slots: [], live: 0 }` looks like INSIDE `Map`'s own generic
@@ -1223,15 +1223,15 @@ impl TypeChecker {
     // method has to exist before the function that calls it is checked.
     let records: Vec<(String, Vec<Type>)> =
         std::mem::take(&mut *self.wanted_records.borrow_mut());
-    for (record, args) in records {
-        let Some((params, _)) = self.generic_records.get(&record).cloned() else {
+    for (record, arguments) in records {
+        let Some((parameters, _)) = self.generic_records.get(&record).cloned() else {
             continue;
         };
-        let symbol = mangle(&record, &args);
-        let map: HashMap<String, Type> = params
+        let symbol = mangle(&record, &arguments);
+        let map: HashMap<String, Type> = parameters
             .iter()
             .map(|p| p.name.clone())
-            .zip(args.iter().cloned())
+            .zip(arguments.iter().cloned())
             .collect();
         let mine: Vec<MethodDef> = self
             .generic_methods
@@ -1243,14 +1243,14 @@ impl TypeChecker {
             // The receiver's own parameter names are what the record's arguments
             // bind to, in order — `self: Stack<T>` against `Stack<Int>` binds T.
             let mut local: HashMap<String, Type> = HashMap::new();
-            for (named, p) in m.receiver_args.iter().zip(&params) {
+            for (named, p) in m.receiver_arguments.iter().zip(&parameters) {
                 if let Some(t) = map.get(&p.name) {
                     local.insert(named.clone(), t.clone());
                 }
             }
             let mut concrete = specialise_method(&m, &local, &symbol);
             self.expand_fn_types(
-                &mut concrete.params,
+                &mut concrete.parameters,
                 &mut concrete.ret,
                 &mut concrete.body,
             )?;
@@ -1260,7 +1260,7 @@ impl TypeChecker {
                 continue;      // made already, for an earlier use of the same type
             }
             let param_tys: Vec<Type> =
-                concrete.params.iter().map(|p| p.ty.clone()).collect();
+                concrete.parameters.iter().map(|p| p.ty.clone()).collect();
             self.methods.insert(
                 key,
                 (concrete.receiver_mut, param_tys, concrete.ret.clone()),
@@ -1280,12 +1280,12 @@ impl TypeChecker {
         // application of one — `Option<Int>` — into the nominal type of its instantiation.
         // After this pass no rule below has to know that generics exist.
         for st in &prog.structs {
-            if st.type_params.is_empty() {
+            if st.type_parameters.is_empty() {
                 continue;
             }
             self.current_span.set(st.span);
             let mut seen: Vec<&str> = Vec::new();
-            for p in &st.type_params {
+            for p in &st.type_parameters {
                 if seen.contains(&p.name.as_str()) {
                     return Err(format!(
                         "`{}` declares the type parameter `{}` twice",
@@ -1297,20 +1297,20 @@ impl TypeChecker {
             self.generic_records.insert(
                 st.name.clone(),
                 (
-                    st.type_params.clone(),
+                    st.type_parameters.clone(),
                     st.fields.iter().map(|f| (f.name.clone(), f.ty.clone())).collect(),
                 ),
             );
         }
         for e in &prog.enums {
-            if e.type_params.is_empty() {
+            if e.type_parameters.is_empty() {
                 continue;
             }
             self.current_span.set(e.span);
             // The parser already refuses a duplicate; this is the same rule stated where
             // the declaration is registered, which is where a reader looks for it.
             let mut seen: Vec<&str> = Vec::new();
-            for p in &e.type_params {
+            for p in &e.type_parameters {
                 if seen.contains(&p.name.as_str()) {
                     return Err(format!(
                         "`{}` declares the type parameter `{}` twice",
@@ -1322,7 +1322,7 @@ impl TypeChecker {
             self.generic_enums.insert(
                 e.name.clone(),
                 (
-                    e.type_params.clone(),
+                    e.type_parameters.clone(),
                     e.variants.iter().map(|v| (v.name.clone(), v.payload.clone())).collect(),
                 ),
             );
@@ -1344,7 +1344,7 @@ impl TypeChecker {
             // A GENERIC record has no layout until a use says what its arguments are, so it
             // was collected in pass -1 rather than registered here. Its instantiations become
             // ordinary records, made on demand.
-            if !s.type_params.is_empty() {
+            if !s.type_parameters.is_empty() {
                 continue;
             }
             if self.structs.contains_key(&s.name) {
@@ -1395,7 +1395,7 @@ impl TypeChecker {
             }
             // A GENERIC enum has no layout until a use says what its arguments are, so it
             // was collected in pass -1 rather than registered here.
-            if !e.type_params.is_empty() {
+            if !e.type_parameters.is_empty() {
                 continue;
             }
             self.enums.insert(
@@ -1419,14 +1419,14 @@ impl TypeChecker {
                 ));
             }
             let mut seen: Vec<&str> = Vec::new();
-            for sig in &t.methods {
-                if seen.contains(&sig.name.as_str()) {
+            for signature in &t.methods {
+                if seen.contains(&signature.name.as_str()) {
                     return Err(format!(
                         "trait `{}` declares the method `{}` twice",
-                        t.name, sig.name
+                        t.name, signature.name
                     ));
                 }
-                seen.push(&sig.name);
+                seen.push(&signature.name);
             }
             self.traits.insert(t.name.clone(), t.methods.clone());
         }
@@ -1434,11 +1434,11 @@ impl TypeChecker {
         // is known, so traits may reference each other in any order.
         for t in &prog.traits {
             self.current_span.set(t.span);
-            for sig in &t.methods {
-                for p in &sig.params {
+            for signature in &t.methods {
+                for p in &signature.parameters {
                     self.validate_type(&p.ty)?;
                 }
-                self.validate_type(&sig.ret)?;
+                self.validate_type(&signature.ret)?;
             }
         }
 
@@ -1450,7 +1450,7 @@ impl TypeChecker {
             // A generic declaration's payload is a parameter, which is neither a scalar
             // nor an aggregate until a use says what it is. Its INSTANTIATIONS are checked
             // where they are made, in `expand`.
-            if !e.type_params.is_empty() {
+            if !e.type_parameters.is_empty() {
                 continue;
             }
             for v in &e.variants {
@@ -1513,7 +1513,7 @@ impl TypeChecker {
         let structs: Vec<TypedStruct> = prog
             .structs
             .iter()
-            .filter(|s| s.type_params.is_empty())
+            .filter(|s| s.type_parameters.is_empty())
             .map(|s| TypedStruct {
                 name: s.name.clone(),
                 fields: s.fields.iter().map(|f| f.ty.clone()).collect(),
@@ -1535,16 +1535,16 @@ impl TypeChecker {
                 Type::CInt | Type::CDouble => Type::Int,
                 other => other.clone(),
             };
-            let param_tys: Vec<Type> = e.params.iter().map(|p| seen(&p.ty)).collect();
+            let param_tys: Vec<Type> = e.parameters.iter().map(|p| seen(&p.ty)).collect();
             self.fns.insert(e.name.clone(), (param_tys, seen(&e.ret)));
             self.extern_names.insert(e.name.clone());
-            self.extern_params.insert(
+            self.extern_parameters.insert(
                 e.name.clone(),
-                e.params.iter().map(|p| (p.ty.clone(), p.marshal)).collect(),
+                e.parameters.iter().map(|p| (p.ty.clone(), p.marshal)).collect(),
             );
             externs.push(TypedExtern {
                 name: e.name.clone(),
-                params: e.params.iter().map(|p| p.ty.clone()).collect(),
+                parameters: e.parameters.iter().map(|p| p.ty.clone()).collect(),
                 ret: e.ret.clone(),
             });
         }
@@ -1559,7 +1559,7 @@ impl TypeChecker {
                     f.name
                 ));
             }
-            for p in &f.params {
+            for p in &f.parameters {
                 self.validate_type(&p.ty)?;
             }
             self.validate_type(&f.ret)?;
@@ -1602,10 +1602,10 @@ impl TypeChecker {
                     f.name
                 ));
             }
-            let param_tys = f.params.iter().map(|p| p.ty.clone()).collect();
+            let param_tys = f.parameters.iter().map(|p| p.ty.clone()).collect();
             self.fns.insert(f.name.clone(), (param_tys, f.ret.clone()));
-            if !f.type_params.is_empty() {
-                self.generics.insert(f.name.clone(), f.type_params.clone());
+            if !f.type_parameters.is_empty() {
+                self.generics.insert(f.name.clone(), f.type_parameters.clone());
             }
             if f.allocates {
                 self.alloc_fns.insert(f.name.clone());
@@ -1632,20 +1632,20 @@ impl TypeChecker {
             // A method on a GENERIC record is held back: its receiver has no layout until a
             // use says what the arguments are. One copy is registered per instantiation, in
             // the drain loop below, so `Stack<Int>` and `Stack<String>` get their own.
-            if !m.receiver_args.is_empty() {
+            if !m.receiver_arguments.is_empty() {
                 self.current_span.set(m.span);
-                let Some((params, _)) = self.generic_records.get(&m.receiver) else {
+                let Some((parameters, _)) = self.generic_records.get(&m.receiver) else {
                     return Err(format!(
                         "`self: {}<...>` names type parameters, and `{}` is not generic.",
                         m.receiver, m.receiver
                     ));
                 };
-                if params.len() != m.receiver_args.len() {
+                if parameters.len() != m.receiver_arguments.len() {
                     return Err(format!(
                         "`{}` is generic over {} parameter(s), and this receiver names {}.",
                         m.receiver,
-                        params.len(),
-                        m.receiver_args.len()
+                        parameters.len(),
+                        m.receiver_arguments.len()
                     ));
                 }
                 self.generic_methods.push((*m).clone());
@@ -1665,7 +1665,7 @@ impl TypeChecker {
                     m.receiver, m.name
                 ));
             }
-            for p in &m.params {
+            for p in &m.parameters {
                 self.validate_type(&p.ty)?;
             }
             self.validate_type(&m.ret)?;
@@ -1676,7 +1676,7 @@ impl TypeChecker {
                     m.receiver, m.name
                 ));
             }
-            let param_tys = m.params.iter().map(|p| p.ty.clone()).collect();
+            let param_tys = m.parameters.iter().map(|p| p.ty.clone()).collect();
             if m.allocates {
                 self.alloc_methods.insert(key.clone());
             }
@@ -1710,7 +1710,7 @@ impl TypeChecker {
             // which operations are allowed. An instantiation has no parameters left, so
             // this is empty for every other function.
             self.param_bounds = f
-                .type_params
+                .type_parameters
                 .iter()
                 .map(|p| (p.name.clone(), p.bound.clone()))
                 .collect();
@@ -1718,12 +1718,12 @@ impl TypeChecker {
             self.param_bounds.clear();
             // The generic itself is CHECKED and never EMITTED: there is no layout for a
             // `T` until a caller says what it is. Its instantiations are added below.
-            if f.type_params.is_empty() {
+            if f.type_parameters.is_empty() {
                 fns.push(checked);
             }
         }
         for m in all_methods.iter().copied() {
-            if !m.receiver_args.is_empty() {
+            if !m.receiver_arguments.is_empty() {
                 continue;             // held back; checked per instantiation below
             }
             methods.push(self.check_method(m)?);
@@ -1776,24 +1776,24 @@ impl TypeChecker {
                 let generic = by_name
                     .get(name.as_str())
                     .ok_or_else(|| format!("codegen bug: no generic named `{}`", name))?;
-                let params = self
+                let parameters = self
                     .generics
                     .get(&name)
                     .ok_or_else(|| format!("codegen bug: `{}` is not generic", name))?;
                 let map: HashMap<String, Type> =
-                    params.iter().map(|p| p.name.clone()).zip(type_args.iter().cloned()).collect();
+                    parameters.iter().map(|p| p.name.clone()).zip(type_args.iter().cloned()).collect();
                 let mut concrete = specialise(generic, &map, &mangle(&name, &type_args));
                 // Substituting can make a generic application concrete — `Option<T>`
                 // becomes `Option<Int>` — so the instantiation is expanded again here.
                 self.expand_fn_types(
-                    &mut concrete.params,
+                    &mut concrete.parameters,
                     &mut concrete.ret,
                     &mut concrete.body,
                 )?;
                 self.current_span.set(concrete.span);
                 // Registered under its mangled name so a recursive generic call inside
                 // the body resolves, and so `allocates`/`pure` carry over.
-                let param_tys = concrete.params.iter().map(|p| p.ty.clone()).collect();
+                let param_tys = concrete.parameters.iter().map(|p| p.ty.clone()).collect();
                 self.fns
                     .insert(concrete.name.clone(), (param_tys, concrete.ret.clone()));
                 if concrete.allocates {
@@ -1878,55 +1878,55 @@ impl TypeChecker {
         }
 
         // ...and every trait method must be present, matching exactly.
-        for sig in sigs {
-            let found = im.methods.iter().find(|m| m.name == sig.name).ok_or_else(|| {
+        for signature in sigs {
+            let found = im.methods.iter().find(|m| m.name == signature.name).ok_or_else(|| {
                 format!(
                     "`implement {} for {}` is missing the method `{}`. Every trait \
                      method must be implemented — Burxt has no default bodies.",
-                    im.trait_name, im.type_name, sig.name
+                    im.trait_name, im.type_name, signature.name
                 )
             })?;
-            if found.receiver_mut != sig.receiver_mut {
+            if found.receiver_mut != signature.receiver_mut {
                 return Err(format!(
                     "in `implement {} for {}`, method `{}` declares `{}self` but the \
                      trait declares `{}self`.",
                     im.trait_name,
                     im.type_name,
-                    sig.name,
+                    signature.name,
                     if found.receiver_mut { "mutable " } else { "" },
-                    if sig.receiver_mut { "mutable " } else { "" }
+                    if signature.receiver_mut { "mutable " } else { "" }
                 ));
             }
-            if found.params.len() != sig.params.len() {
+            if found.parameters.len() != signature.parameters.len() {
                 return Err(format!(
                     "in `implement {} for {}`, method `{}` takes {} parameter(s) but \
                      the trait declares {}.",
                     im.trait_name,
                     im.type_name,
-                    sig.name,
-                    found.params.len(),
-                    sig.params.len()
+                    signature.name,
+                    found.parameters.len(),
+                    signature.parameters.len()
                 ));
             }
-            for (i, (fp, sp)) in found.params.iter().zip(&sig.params).enumerate() {
+            for (i, (fp, sp)) in found.parameters.iter().zip(&signature.parameters).enumerate() {
                 if fp.ty != sp.ty {
                     return Err(format!(
                         "in `implement {} for {}`, method `{}` parameter {} is {} but \
                          the trait declares {}.",
                         im.trait_name,
                         im.type_name,
-                        sig.name,
+                        signature.name,
                         i + 1,
                         fp.ty,
                         sp.ty
                     ));
                 }
             }
-            if found.ret != sig.ret {
+            if found.ret != signature.ret {
                 return Err(format!(
                     "in `implement {} for {}`, method `{}` returns {} but the trait \
                      declares {}.",
-                    im.trait_name, im.type_name, sig.name, found.ret, sig.ret
+                    im.trait_name, im.type_name, signature.name, found.ret, signature.ret
                 ));
             }
         }
@@ -2054,8 +2054,8 @@ impl TypeChecker {
             TypedExprKind::StructLit { fields, .. } => {
                 fields.iter().any(|f| self.expr_allocates(f))
             }
-            TypedExprKind::VariantLit { args, .. } => {
-                args.iter().any(|a| self.expr_allocates(a))
+            TypedExprKind::VariantLit { arguments, .. } => {
+                arguments.iter().any(|a| self.expr_allocates(a))
             }
             TypedExprKind::ArrayLit(items) => items.iter().any(|i| self.expr_allocates(i)),
             TypedExprKind::Field { base, .. } => self.expr_allocates(base),
@@ -2222,16 +2222,16 @@ impl TypeChecker {
         // both declare it — `use "lib/fs.bx"` and `use "lib/os.bx"` both need `system`,
         // and neither can know the other did. Identical signatures are harmless; a
         // MISMATCH is not, because then the program holds two beliefs about one symbol.
-        if let Some((params, ret)) = self.fns.get(&e.name) {
+        if let Some((parameters, ret)) = self.fns.get(&e.name) {
             let seen = |t: &Type| match t {
                 Type::CInt | Type::CDouble => Type::Int,
                 other => other.clone(),
             };
-            let mine: Vec<Type> = e.params.iter().map(|p| seen(&p.ty)).collect();
+            let mine: Vec<Type> = e.parameters.iter().map(|p| seen(&p.ty)).collect();
             if !self.extern_names.contains(&e.name) {
                 return Err(format!("function `{}` is defined twice", e.name));
             }
-            if params != &mine || ret != &seen(&e.ret) {
+            if parameters != &mine || ret != &seen(&e.ret) {
                 return Err(format!(
                     "external function `{}` is declared twice with different signatures — one \
                      symbol cannot be two functions, and a program holding both beliefs \
@@ -2241,7 +2241,7 @@ impl TypeChecker {
             }
             return Ok(());
         }
-        for p in &e.params {
+        for p in &e.parameters {
             match (&p.ty, p.marshal) {
                 // A Decimal crosses ONLY through a declared marshaller. This is
                 // the boundary-exactness rule: not "Decimals cannot cross" (a
@@ -2309,8 +2309,8 @@ impl TypeChecker {
     fn check_fn(&mut self, f: &FnDef) -> Result<TypedFn, String> {
         self.current_span.set(f.span);
         self.env.clear();
-        let mut params = Vec::new();
-        for p in &f.params {
+        let mut parameters = Vec::new();
+        for p in &f.parameters {
             if let Some(m) = p.marshal {
                 return Err(format!(
                     "in `function {}`, parameter `{}` is marked `as {}`, but marshalling \
@@ -2326,13 +2326,13 @@ impl TypeChecker {
                     f.name, p.name
                 ));
             }
-            params.push((p.name.clone(), p.ty.clone()));
+            parameters.push((p.name.clone(), p.ty.clone()));
         }
         self.current_ret = Some(f.ret.clone());
         self.in_caller_region = f.allocates;
         self.in_pure = if f.is_pure { Some(f.name.clone()) } else { None };
-        self.current_sig =
-            Some((f.name.clone(), f.params.iter().map(|p| p.ty.clone()).collect()));
+        self.current_signature =
+            Some((f.name.clone(), f.parameters.iter().map(|p| p.ty.clone()).collect()));
         // Contracts are checked BEFORE the body, in the parameter scope, because
         // that is the scope they run in. `requires` sees the arguments; `ensures`
         // additionally sees `result`.
@@ -2397,7 +2397,7 @@ impl TypeChecker {
         self.current_ret = None;
         self.in_caller_region = false;
         self.in_pure = None;
-        self.current_sig = None;
+        self.current_signature = None;
         self.env.clear();
 
         // Only prove the return paths if the body actually checked. A statement
@@ -2415,7 +2415,7 @@ impl TypeChecker {
             ));
         }
         let olds = std::mem::take(&mut *self.olds.borrow_mut());
-        Ok(TypedFn { name: f.name.clone(), params, ret: f.ret.clone(), body, requires, ensures, decreases, olds })
+        Ok(TypedFn { name: f.name.clone(), parameters, ret: f.ret.clone(), body, requires, ensures, decreases, olds })
     }
 
     /// Check a method body. `self` is bound like any parameter, with its
@@ -2428,8 +2428,8 @@ impl TypeChecker {
             "self".to_string(),
             (Type::Named(m.receiver.clone()), m.receiver_mut),
         );
-        let mut params = Vec::new();
-        for p in &m.params {
+        let mut parameters = Vec::new();
+        for p in &m.parameters {
             if let Some(mar) = p.marshal {
                 return Err(format!(
                     "in `{}.{}`, parameter `{}` is marked `as {}`, but marshalling \
@@ -2451,7 +2451,7 @@ impl TypeChecker {
                     m.receiver, m.name, p.name
                 ));
             }
-            params.push((p.name.clone(), p.ty.clone()));
+            parameters.push((p.name.clone(), p.ty.clone()));
         }
         self.current_ret = Some(m.ret.clone());
         self.in_caller_region = m.allocates;
@@ -2505,7 +2505,7 @@ impl TypeChecker {
             receiver: m.receiver.clone(),
             receiver_mut: m.receiver_mut,
             name: m.name.clone(),
-            params,
+            parameters,
             ret: m.ret.clone(),
             body,
             requires,
@@ -2514,7 +2514,7 @@ impl TypeChecker {
         })
     }
 
-    /// `return tail f(args)` — the guarantee, checked.
+    /// `return tail f(arguments)` — the guarantee, checked.
     ///
     /// LLVM's `musttail` either compiles to a real tail call or fails the build,
     /// which is exactly the contract Burxt wants: declare the intent, and the
@@ -2526,11 +2526,11 @@ impl TypeChecker {
         let ret = self.current_ret.clone().ok_or_else(|| {
             "`return` only makes sense inside a function".to_string()
         })?;
-        let (caller, caller_params) = self.current_sig.clone().ok_or_else(|| {
+        let (caller, caller_params) = self.current_signature.clone().ok_or_else(|| {
             "a guaranteed tail call only makes sense inside a function".to_string()
         })?;
-        let (name, args) = match &e.kind {
-            ExprKind::Call { name, args } => (name.clone(), args),
+        let (name, arguments) = match &e.kind {
+            ExprKind::Call { name, arguments } => (name.clone(), arguments),
             // The parser already refused anything else.
             _ => return Err("`return tail` must be followed by a call".to_string()),
         };
@@ -2557,7 +2557,7 @@ impl TypeChecker {
                 name
             ));
         }
-        let (params, callee_ret) = self.fns.get(&name).cloned().ok_or_else(|| {
+        let (parameters, callee_ret) = self.fns.get(&name).cloned().ok_or_else(|| {
             format!(
                 "unknown function `{}` — a guaranteed tail call needs a `function` \
                  declared in this program.",
@@ -2573,7 +2573,7 @@ impl TypeChecker {
                 Type::Int | Type::Bool | Type::String | Type::CInt | Type::Decimal { .. }
             )
         };
-        if callee_ret != ret || params != caller_params {
+        if callee_ret != ret || parameters != caller_params {
             return Err(format!(
                 "a guaranteed tail call reuses this frame, so `{}` and `{}` must \
                  have the SAME signature — `{}` takes ({}) -> {}, but `{}` takes \
@@ -2584,11 +2584,11 @@ impl TypeChecker {
                 Self::type_list(&caller_params),
                 ret,
                 name,
-                Self::type_list(&params),
+                Self::type_list(&parameters),
                 callee_ret
             ));
         }
-        if !params.iter().all(scalar) || !scalar(&ret) {
+        if !parameters.iter().all(scalar) || !scalar(&ret) {
             return Err(format!(
                 "a guaranteed tail call is limited to scalar parameters and \
                  returns for now — `{}` passes or returns an aggregate, which \
@@ -2599,18 +2599,18 @@ impl TypeChecker {
         }
 
         // Ordinary argument checking: a tail call is still a call.
-        if args.len() != params.len() {
+        if arguments.len() != parameters.len() {
             return Err(format!(
                 "`{}` takes {} argument{}, but {} {} given",
                 name,
-                params.len(),
-                if params.len() == 1 { "" } else { "s" },
-                args.len(),
-                if args.len() == 1 { "was" } else { "were" }
+                parameters.len(),
+                if parameters.len() == 1 { "" } else { "s" },
+                arguments.len(),
+                if arguments.len() == 1 { "was" } else { "were" }
             ));
         }
         let mut typed_args = Vec::new();
-        for (argument, want) in args.iter().zip(params.iter()) {
+        for (argument, want) in arguments.iter().zip(parameters.iter()) {
             let t = self.check_expr(argument, Some(want))?;
             if t.ty != *want {
                 return Err(format!(
@@ -2623,7 +2623,7 @@ impl TypeChecker {
             }
             typed_args.push(t);
         }
-        Ok(TypedStmt::TailReturn { name, args: typed_args })
+        Ok(TypedStmt::TailReturn { name, arguments: typed_args })
     }
 
 
@@ -3037,10 +3037,10 @@ impl TypeChecker {
                 // `Option<T>`: its VARIANTS are known even though `T` is not, so the arms,
                 // the exhaustiveness and the payload bindings can all be checked here —
                 // once, at the declaration — rather than at every instantiation.
-                if let Type::Generic { name, args } = &scrutinee.ty {
-                    if let Some((params, variants)) = self.generic_enums.get(name).cloned() {
+                if let Type::Generic { name, arguments } = &scrutinee.ty {
+                    if let Some((parameters, variants)) = self.generic_enums.get(name).cloned() {
                         let map: HashMap<String, Type> =
-                            params.iter().map(|p| p.name.clone()).zip(args.iter().cloned()).collect();
+                            parameters.iter().map(|p| p.name.clone()).zip(arguments.iter().cloned()).collect();
                         let open: Vec<(String, Vec<Type>)> = variants
                             .into_iter()
                             .map(|(v, payload)| {
@@ -3632,7 +3632,7 @@ impl TypeChecker {
                 })
             }
 
-            ExprKind::Call { name, args } => {
+            ExprKind::Call { name, arguments } => {
                 // `len` is a builtin over both arrays and strings, but the two
                 // are different KINDS of length, and the difference is worth
                 // keeping visible:
@@ -3650,14 +3650,14 @@ impl TypeChecker {
                 // Earned by a self-hosted checker: leaving a block has to drop the
                 // bindings it made, and without this a scope could only ever grow.
                 if name == "truncate" {
-                    if args.len() != 2 {
+                    if arguments.len() != 2 {
                         return Err(
                             "truncate(...) takes a growable array and a length: \
                              truncate(xs, n)"
                                 .to_string(),
                         );
                     }
-                    let place = self.check_expr(&args[0], None)?;
+                    let place = self.check_expr(&arguments[0], None)?;
                     if !matches!(place.ty, Type::Slice(_)) {
                         return Err(format!(
                             "truncate(...) needs a growable array `[T]`, but this has \
@@ -3665,8 +3665,8 @@ impl TypeChecker {
                             place.ty
                         ));
                     }
-                    self.require_mutable_place(&args[0])?;
-                    let length = self.check_expr(&args[1], Some(&Type::Int))?;
+                    self.require_mutable_place(&arguments[0])?;
+                    let length = self.check_expr(&arguments[1], Some(&Type::Int))?;
                     if length.ty != Type::Int {
                         return Err(format!(
                             "truncate(...) takes an Int length, but this has type {}",
@@ -3682,14 +3682,14 @@ impl TypeChecker {
                     });
                 }
                 if name == "push" {
-                    if args.len() != 2 {
+                    if arguments.len() != 2 {
                         return Err(
                             "push(...) takes a growable array and a value: \
                              push(xs, v)"
                                 .to_string(),
                         );
                     }
-                    let place = self.check_expr(&args[0], None)?;
+                    let place = self.check_expr(&arguments[0], None)?;
                     let elem = match &place.ty {
                         Type::Slice(e) => e.as_ref().clone(),
                         other => {
@@ -3700,8 +3700,8 @@ impl TypeChecker {
                             ))
                         }
                     };
-                    self.require_mutable_place(&args[0])?;
-                    let value = self.check_expr(&args[1], Some(&elem))?;
+                    self.require_mutable_place(&arguments[0])?;
+                    let value = self.check_expr(&arguments[1], Some(&elem))?;
                     if value.ty != elem {
                         return Err(format!(
                             "push(...) appends {} to a {}, but the value has type {}",
@@ -3725,16 +3725,16 @@ impl TypeChecker {
                 // The command line, and writing a file: between them, a program can be
                 // a compiler rather than a demonstration.
                 if name == "argument_count" {
-                    if !args.is_empty() {
+                    if !arguments.is_empty() {
                         return Err("argument_count() takes no arguments".to_string());
                     }
                     return Ok(TypedExpr { ty: Type::Int, kind: TypedExprKind::ArgCount });
                 }
                 if name == "argument" {
-                    if args.len() != 1 {
+                    if arguments.len() != 1 {
                         return Err("argument(n) takes one Int".to_string());
                     }
-                    let index = self.check_expr(&args[0], Some(&Type::Int))?;
+                    let index = self.check_expr(&arguments[0], Some(&Type::Int))?;
                     if index.ty != Type::Int {
                         return Err(format!(
                             "argument(n) takes an Int, but this has type {}",
@@ -3749,11 +3749,11 @@ impl TypeChecker {
                     });
                 }
                 if name == "write_file" {
-                    if args.len() != 2 {
+                    if arguments.len() != 2 {
                         return Err("write_file(path, contents) takes two Strings".to_string());
                     }
-                    let path = self.check_expr(&args[0], Some(&Type::String))?;
-                    let contents = self.check_expr(&args[1], Some(&Type::String))?;
+                    let path = self.check_expr(&arguments[0], Some(&Type::String))?;
+                    let contents = self.check_expr(&arguments[1], Some(&Type::String))?;
                     for (which, side) in [("path", &path), ("contents", &contents)] {
                         if side.ty != Type::String {
                             return Err(format!(
@@ -3785,19 +3785,19 @@ impl TypeChecker {
                 // Anyone producing large output — a report, a serialiser, an HTML renderer,
                 // a compiler — needs exactly this, which is the test a builtin has to pass.
                 if name == "write_bytes" {
-                    if args.len() != 2 {
+                    if arguments.len() != 2 {
                         return Err(
                             "write_bytes(path, buffer) takes a String and a [Int]".to_string()
                         );
                     }
-                    let path = self.check_expr(&args[0], Some(&Type::String))?;
+                    let path = self.check_expr(&arguments[0], Some(&Type::String))?;
                     if path.ty != Type::String {
                         return Err(format!(
                             "write_bytes(...) takes a String path, but this has type {}",
                             path.ty
                         ));
                     }
-                    let buffer = self.check_expr(&args[1], None)?;
+                    let buffer = self.check_expr(&arguments[1], None)?;
                     match &buffer.ty {
                         Type::Slice(elem) if **elem == Type::Int => {}
                         other => {
@@ -3825,13 +3825,13 @@ impl TypeChecker {
                 // what it could not do was KEEP the text, which is what a table of
                 // names is made of.
                 if name == "substring" {
-                    if args.len() != 3 {
+                    if arguments.len() != 3 {
                         return Err(
                             "substring(...) takes a String, a start offset and a length"
                                 .to_string(),
                         );
                     }
-                    let source = self.check_expr(&args[0], Some(&Type::String))?;
+                    let source = self.check_expr(&arguments[0], Some(&Type::String))?;
                     if source.ty != Type::String {
                         return Err(format!(
                             "substring(...) reads a String, but the first argument has \
@@ -3839,8 +3839,8 @@ impl TypeChecker {
                             source.ty
                         ));
                     }
-                    let at = self.check_expr(&args[1], Some(&Type::Int))?;
-                    let len = self.check_expr(&args[2], Some(&Type::Int))?;
+                    let at = self.check_expr(&arguments[1], Some(&Type::Int))?;
+                    let len = self.check_expr(&arguments[2], Some(&Type::Int))?;
                     for (which, side) in [("offset", &at), ("length", &len)] {
                         if side.ty != Type::Int {
                             return Err(format!(
@@ -3870,11 +3870,11 @@ impl TypeChecker {
                     "remainder" => Some(crate::codegen::IntDiv::Rem),
                     _ => None,
                 } {
-                    if args.len() != 2 {
+                    if arguments.len() != 2 {
                         return Err(format!("{}(...) takes two Ints", name));
                     }
-                    let lhs = self.check_expr(&args[0], Some(&Type::Int))?;
-                    let rhs = self.check_expr(&args[1], Some(&Type::Int))?;
+                    let lhs = self.check_expr(&arguments[0], Some(&Type::Int))?;
+                    let rhs = self.check_expr(&arguments[1], Some(&Type::Int))?;
                     for (which, side) in [("first", &lhs), ("second", &rhs)] {
                         if side.ty != Type::Int {
                             return Err(format!(
@@ -3906,21 +3906,21 @@ impl TypeChecker {
                                 .to_string(),
                         );
                     }
-                    if args.len() != 1 {
+                    if arguments.len() != 1 {
                         return Err("old(...) takes one expression".to_string());
                     }
                     // `result` has no meaning inside `old`: the point of `old` is the
                     // state BEFORE the call, and there was no result then. Checked on
                     // the expression as written, which gives a better message than
                     // letting name resolution fail.
-                    if mentions(&args[0], "result") {
+                    if mentions(&arguments[0], "result") {
                         return Err(
                             "`old(result)` is a contradiction: `old` is the state \
                              before the call, and there was no result then."
                                 .to_string(),
                         );
                     }
-                    let inner = self.check_expr(&args[0], None)?;
+                    let inner = self.check_expr(&arguments[0], None)?;
                     if crate::codegen::is_aggregate(&inner.ty) {
                         return Err(format!(
                             "`old(...)` holds {} {} at the moment of entry, and copying \
@@ -3939,10 +3939,10 @@ impl TypeChecker {
                     if let Some(why) = self.impure("read a file") {
                         return Err(why);
                     }
-                    if args.len() != 1 {
+                    if arguments.len() != 1 {
                         return Err("read_file(...) takes one path".to_string());
                     }
-                    let path = self.check_expr(&args[0], Some(&Type::String))?;
+                    let path = self.check_expr(&arguments[0], Some(&Type::String))?;
                     if path.ty != Type::String {
                         return Err(format!(
                             "read_file(...) takes a String path, but this has type {}",
@@ -3962,10 +3962,10 @@ impl TypeChecker {
                 // `to_string(v)` — a value's exact display form, as a String.
                 // Same formatting the printer uses, so the two can never drift.
                 if name == "to_string" {
-                    if args.len() != 1 {
+                    if arguments.len() != 1 {
                         return Err("to_string(...) takes one value".to_string());
                     }
-                    let v = self.check_expr(&args[0], None)?;
+                    let v = self.check_expr(&arguments[0], None)?;
                     match &v.ty {
                         Type::Int | Type::Bool | Type::Decimal { .. } => {}
                         Type::String => {
@@ -3998,10 +3998,10 @@ impl TypeChecker {
                     });
                 }
                 if name == "hash" {
-                    if args.len() != 1 {
+                    if arguments.len() != 1 {
                         return Err("hash(...) takes one value: hash(key)".to_string());
                     }
-                    let v = self.check_expr(&args[0], None)?;
+                    let v = self.check_expr(&arguments[0], None)?;
                     // Exactly the Equatable set — the types `==` works on. A key needs equality
                     // and a hash, and the set of types that have equality is the set that can
                     // have one, which is why there is no separate `Hashable`.
@@ -4023,13 +4023,13 @@ impl TypeChecker {
                     });
                 }
                 if name == "byte_at" {
-                    if args.len() != 2 {
+                    if arguments.len() != 2 {
                         return Err(
                             "byte_at(...) takes a string and an index: byte_at(s, i)"
                                 .to_string(),
                         );
                     }
-                    let s = self.check_expr(&args[0], None)?;
+                    let s = self.check_expr(&arguments[0], None)?;
                     if s.ty != Type::String {
                         return Err(format!(
                             "byte_at(...) reads a String, but the first argument has \
@@ -4037,7 +4037,7 @@ impl TypeChecker {
                             s.ty
                         ));
                     }
-                    let idx = self.check_expr(&args[1], None)?;
+                    let idx = self.check_expr(&arguments[1], None)?;
                     if idx.ty != Type::Int {
                         return Err(format!(
                             "a byte index must be an Int, but this one has type {}",
@@ -4053,12 +4053,12 @@ impl TypeChecker {
                     });
                 }
                 if name == "len" {
-                    if args.len() != 1 {
+                    if arguments.len() != 1 {
                         return Err(
                             "len(...) takes exactly one array or string".to_string()
                         );
                     }
-                    let argument = self.check_expr(&args[0], None)?;
+                    let argument = self.check_expr(&arguments[0], None)?;
                     return match argument.ty {
                         Type::Array { len, .. } => Ok(TypedExpr {
                             ty: Type::Int,
@@ -4090,17 +4090,17 @@ impl TypeChecker {
                 // purity, `allocates`, codegen — sees an ordinary function.
                 let mut instantiated: Option<String> = None;
                 let written_name = name.clone();
-                if let Some(type_params) = self.generics.get(name).cloned() {
-                    if args.len() != param_tys.len() {
+                if let Some(type_parameters) = self.generics.get(name).cloned() {
+                    if arguments.len() != param_tys.len() {
                         return Err(format!(
                             "function `{}` takes {} argument(s), but {} were given",
                             name,
                             param_tys.len(),
-                            args.len()
+                            arguments.len()
                         ));
                     }
                     let mut map: HashMap<String, Type> = HashMap::new();
-                    for (i, (declared, argument)) in param_tys.iter().zip(args).enumerate() {
+                    for (i, (declared, argument)) in param_tys.iter().zip(arguments).enumerate() {
                         if !mentions_param(declared) {
                             continue;
                         }
@@ -4121,7 +4121,7 @@ impl TypeChecker {
                     // Second, not first: an argument is more specific than a context, and a
                     // context that disagrees should be reported as a mismatch by the ordinary
                     // return check rather than silently win here.
-                    if type_params.iter().any(|p| !map.contains_key(&p.name)) {
+                    if type_parameters.iter().any(|p| !map.contains_key(&p.name)) {
                         if let Some(want) = expected {
                             let instances = self.instance_of.borrow().clone();
                             // A failure is not an error here. The expectation may legitimately be
@@ -4131,8 +4131,8 @@ impl TypeChecker {
                             let _ = unify(&ret, want, &mut map, &instances);
                         }
                     }
-                    let mut type_args = Vec::with_capacity(type_params.len());
-                    for p in &type_params {
+                    let mut type_args = Vec::with_capacity(type_parameters.len());
+                    for p in &type_parameters {
                         match map.get(&p.name) {
                             Some(t) => type_args.push(t.clone()),
                             None => {
@@ -4158,7 +4158,7 @@ impl TypeChecker {
                     }
                     param_tys = substituted;
                     ret = self.expand(&substitute(&ret, &map))?;
-                    for (p, argument) in type_params.iter().zip(&type_args) {
+                    for (p, argument) in type_parameters.iter().zip(&type_args) {
                         if let Some(bound) = &p.bound {
                             self.satisfies(argument, bound, &written_name, &p.name)?;
                         }
@@ -4176,12 +4176,12 @@ impl TypeChecker {
                 // that is what a message must say.
                 let written = name.clone();
                 let name = &instantiated.clone().unwrap_or_else(|| name.clone());
-                if args.len() != param_tys.len() {
+                if arguments.len() != param_tys.len() {
                     return Err(format!(
                         "function `{}` takes {} argument(s), but {} were given",
                         name,
                         param_tys.len(),
-                        args.len()
+                        arguments.len()
                     ));
                 }
                 // Purity is transitive without being inferred: a pure function may
@@ -4224,9 +4224,9 @@ impl TypeChecker {
                         name
                     ));
                 }
-                let declared = self.extern_params.get(name).cloned();
+                let declared = self.extern_parameters.get(name).cloned();
                 let mut typed_args = Vec::new();
-                for (i, (argument, param_ty)) in args.iter().zip(&param_tys).enumerate() {
+                for (i, (argument, param_ty)) in arguments.iter().zip(&param_tys).enumerate() {
                     let typed = self.check_expr(argument, Some(param_ty))?;
                     if &typed.ty != param_ty {
                         // Point at the argument, not at the whole call.
@@ -4261,7 +4261,7 @@ impl TypeChecker {
                     }
                     typed_args.push(typed);
                 }
-                Ok(TypedExpr { ty: ret, kind: TypedExprKind::Call { name: name.clone(), args: typed_args } })
+                Ok(TypedExpr { ty: ret, kind: TypedExprKind::Call { name: name.clone(), arguments: typed_args } })
             }
 
             ExprKind::StructLit { name, fields } => {
@@ -4347,7 +4347,7 @@ impl TypeChecker {
                 })
             }
 
-            ExprKind::MethodCall { base, method, args } => {
+            ExprKind::MethodCall { base, method, arguments } => {
                 // Methods cannot carry the marker yet, so a pure function cannot
                 // call one. Said plainly, with the reason, rather than by letting
                 // some later check produce something confusing.
@@ -4360,7 +4360,7 @@ impl TypeChecker {
                         name, method
                     ));
                 }
-                if let Some(r) = self.check_variant_lit(base, method, args, expected) {
+                if let Some(r) = self.check_variant_lit(base, method, arguments, expected) {
                     return r;
                 }
                 let typed_base = self.check_expr(base, None)?;
@@ -4384,8 +4384,8 @@ impl TypeChecker {
                                     .join(", ")
                             )
                         })?;
-                    let sig = sigs[slot].clone();
-                    if sig.receiver_mut {
+                    let signature = sigs[slot].clone();
+                    if signature.receiver_mut {
                         return Err(format!(
                             "`{}` takes `mutable self`, and calling a mutating method \
                              through a trait object is not available yet: the \
@@ -4396,17 +4396,17 @@ impl TypeChecker {
                             method
                         ));
                     }
-                    if args.len() != sig.params.len() {
+                    if arguments.len() != signature.parameters.len() {
                         return Err(format!(
                             "`dynamic {}.{}` takes {} argument(s), but {} were given",
                             trait_name,
                             method,
-                            sig.params.len(),
-                            args.len()
+                            signature.parameters.len(),
+                            arguments.len()
                         ));
                     }
                     let mut typed_args = Vec::new();
-                    for (i, (argument, p)) in args.iter().zip(&sig.params).enumerate() {
+                    for (i, (argument, p)) in arguments.iter().zip(&signature.parameters).enumerate() {
                         let typed = self.check_expr(argument, Some(&p.ty))?;
                         if typed.ty != p.ty {
                             return Err(format!(
@@ -4422,13 +4422,13 @@ impl TypeChecker {
                         typed_args.push(typed);
                     }
                     return Ok(TypedExpr {
-                        ty: sig.ret.clone(),
+                        ty: signature.ret.clone(),
                         kind: TypedExprKind::DynCall {
                             trait_name,
                             method: method.clone(),
                             slot: slot as u32,
                             base: Box::new(typed_base),
-                            args: typed_args,
+                            arguments: typed_args,
                         },
                     });
                 }
@@ -4448,7 +4448,7 @@ impl TypeChecker {
                             p, trait_name
                         ));
                     };
-                    let Some(sig) = sigs.iter().find(|s| &s.name == method) else {
+                    let Some(signature) = sigs.iter().find(|s| &s.name == method) else {
                         return Err(format!(
                             "`{}: {}` has no method `{}`. `{}` declares: {}.",
                             p,
@@ -4458,17 +4458,17 @@ impl TypeChecker {
                             sigs.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")
                         ));
                     };
-                    if args.len() != sig.params.len() {
+                    if arguments.len() != signature.parameters.len() {
                         return Err(format!(
                             "`{}.{}` takes {} argument(s), but {} were given",
                             p,
                             method,
-                            sig.params.len(),
-                            args.len()
+                            signature.parameters.len(),
+                            arguments.len()
                         ));
                     }
                     let mut typed_args = Vec::new();
-                    for (argument, want) in args.iter().zip(&sig.params) {
+                    for (argument, want) in arguments.iter().zip(&signature.parameters) {
                         let t = self.check_expr(argument, Some(&want.ty))?;
                         if t.ty != want.ty {
                             self.blame(argument.span);
@@ -4480,13 +4480,13 @@ impl TypeChecker {
                         typed_args.push(t);
                     }
                     return Ok(TypedExpr {
-                        ty: sig.ret.clone(),
+                        ty: signature.ret.clone(),
                         kind: TypedExprKind::MethodCall {
                             receiver: p.clone(),
                             method: method.clone(),
-                            receiver_mut: sig.receiver_mut,
+                            receiver_mut: signature.receiver_mut,
                             base: Box::new(typed_base),
-                            args: typed_args,
+                            arguments: typed_args,
                         },
                     });
                 }
@@ -4549,17 +4549,17 @@ impl TypeChecker {
                         receiver, method
                     ));
                 }
-                if args.len() != param_tys.len() {
+                if arguments.len() != param_tys.len() {
                     return Err(format!(
                         "method `{}.{}` takes {} argument(s), but {} were given",
                         receiver,
                         method,
                         param_tys.len(),
-                        args.len()
+                        arguments.len()
                     ));
                 }
                 let mut typed_args = Vec::new();
-                for (i, (argument, param_ty)) in args.iter().zip(&param_tys).enumerate() {
+                for (i, (argument, param_ty)) in arguments.iter().zip(&param_tys).enumerate() {
                     let typed = self.check_expr(argument, Some(param_ty))?;
                     if &typed.ty != param_ty {
                         return Err(format!(
@@ -4581,7 +4581,7 @@ impl TypeChecker {
                         method: method.clone(),
                         receiver_mut,
                         base: Box::new(typed_base),
-                        args: typed_args,
+                        arguments: typed_args,
                     },
                 })
             }
@@ -4753,7 +4753,7 @@ impl TypeChecker {
         &self,
         base: &Expr,
         variant: &str,
-        args: &[Expr],
+        arguments: &[Expr],
         expected: Option<&Type>,
     ) -> Option<Result<TypedExpr, String>> {
         let ExprKind::Var(enum_name) = &base.kind else { return None };
@@ -4765,10 +4765,10 @@ impl TypeChecker {
         // A generic enum needs its arguments worked out first, and that is a different
         // question with a different answer, so it gets its own path.
         if self.generic_enums.contains_key(enum_name) {
-            return Some(self.build_generic_variant(enum_name, variant, args, expected));
+            return Some(self.build_generic_variant(enum_name, variant, arguments, expected));
         }
         let variants = self.variants_of(enum_name)?;
-        Some(self.build_variant(enum_name, variants, variant, args))
+        Some(self.build_variant(enum_name, variants, variant, arguments))
     }
 
     fn build_variant(
@@ -4776,7 +4776,7 @@ impl TypeChecker {
         enum_name: &str,
         variants: Vec<(String, Vec<Type>)>,
         variant: &str,
-        args: &[Expr],
+        arguments: &[Expr],
     ) -> Result<TypedExpr, String> {
         let tag = variants
             .iter()
@@ -4790,17 +4790,17 @@ impl TypeChecker {
                 )
             })?;
         let payload = &variants[tag].1;
-        if args.len() != payload.len() {
+        if arguments.len() != payload.len() {
             return Err(format!(
                 "`{}.{}` carries {} value(s), but {} were given",
                 enum_name,
                 variant,
                 payload.len(),
-                args.len()
+                arguments.len()
             ));
         }
         let mut typed_args = Vec::new();
-        for (i, (argument, want)) in args.iter().zip(payload).enumerate() {
+        for (i, (argument, want)) in arguments.iter().zip(payload).enumerate() {
             let t = self.check_expr(argument, Some(want))?;
             if &t.ty != want {
                 return Err(format!(
@@ -4819,7 +4819,7 @@ impl TypeChecker {
             kind: TypedExprKind::VariantLit {
                 enum_name: enum_name.to_string(),
                 tag: tag as u32,
-                args: typed_args,
+                arguments: typed_args,
             },
         })
     }
@@ -5156,12 +5156,12 @@ fn calls_itself(body: &[Stmt], name: &str) -> bool {
     fn in_expr(e: &Expr, name: &str) -> bool {
         let any = |list: &[Expr]| list.iter().any(|x| in_expr(x, name));
         match &e.kind {
-            ExprKind::Call { name: callee, args } => callee == name || any(args),
+            ExprKind::Call { name: callee, arguments } => callee == name || any(arguments),
             ExprKind::Neg(i) | ExprKind::Not(i) => in_expr(i, name),
             ExprKind::Logical { lhs, rhs, .. }
             | ExprKind::Binary { lhs, rhs, .. }
             | ExprKind::Compare { lhs, rhs, .. } => in_expr(lhs, name) || in_expr(rhs, name),
-            ExprKind::MethodCall { base, args, .. } => in_expr(base, name) || any(args),
+            ExprKind::MethodCall { base, arguments, .. } => in_expr(base, name) || any(arguments),
             ExprKind::StructLit { fields, .. } => fields.iter().any(|(_, v)| in_expr(v, name)),
             ExprKind::Field { base, .. } => in_expr(base, name),
             ExprKind::ArrayLit(items) => any(items),
@@ -5222,8 +5222,8 @@ fn mentions(e: &Expr, name: &str) -> bool {
         ExprKind::Logical { lhs, rhs, .. }
         | ExprKind::Binary { lhs, rhs, .. }
         | ExprKind::Compare { lhs, rhs, .. } => mentions(lhs, name) || mentions(rhs, name),
-        ExprKind::Call { args, .. } => any(args),
-        ExprKind::MethodCall { base, args, .. } => mentions(base, name) || any(args),
+        ExprKind::Call { arguments, .. } => any(arguments),
+        ExprKind::MethodCall { base, arguments, .. } => mentions(base, name) || any(arguments),
         ExprKind::StructLit { fields, .. } => fields.iter().any(|(_, v)| mentions(v, name)),
         ExprKind::Field { base, .. } => mentions(base, name),
         ExprKind::ArrayLit(items) => any(items),
@@ -5357,9 +5357,9 @@ pub fn substitute(ty: &Type, map: &HashMap<String, Type>) -> Type {
             len: *len,
         },
         Type::Slice(elem) => Type::Slice(Box::new(substitute(elem, map))),
-        Type::Generic { name, args } => Type::Generic {
+        Type::Generic { name, arguments } => Type::Generic {
             name: name.clone(),
-            args: args.iter().map(|a| substitute(a, map)).collect(),
+            arguments: arguments.iter().map(|a| substitute(a, map)).collect(),
         },
         other => other.clone(),
     }
@@ -5371,7 +5371,7 @@ pub fn mentions_param(ty: &Type) -> bool {
     match ty {
         Type::Param(_) => true,
         Type::Array { elem, .. } | Type::Slice(elem) => mentions_param(elem),
-        Type::Generic { args, .. } => args.iter().any(mentions_param),
+        Type::Generic { arguments, .. } => arguments.iter().any(mentions_param),
         _ => false,
     }
 }
@@ -5388,16 +5388,16 @@ pub fn mentions_param(ty: &Type) -> bool {
 pub fn show(ty: &Type, instances: &HashMap<String, (String, Vec<Type>)>) -> String {
     match ty {
         Type::Named(n) => match instances.get(n) {
-            Some((of, args)) => {
-                let inner: Vec<String> = args.iter().map(|a| show(a, instances)).collect();
+            Some((of, arguments)) => {
+                let inner: Vec<String> = arguments.iter().map(|a| show(a, instances)).collect();
                 format!("{}<{}>", of, inner.join(", "))
             }
             None => n.clone(),
         },
         Type::Array { elem, len } => format!("[{}; {}]", show(elem, instances), len),
         Type::Slice(elem) => format!("[{}]", show(elem, instances)),
-        Type::Generic { name, args } => {
-            let inner: Vec<String> = args.iter().map(|a| show(a, instances)).collect();
+        Type::Generic { name, arguments } => {
+            let inner: Vec<String> = arguments.iter().map(|a| show(a, instances)).collect();
             format!("{}<{}>", name, inner.join(", "))
         }
         other => other.to_string(),
@@ -5437,7 +5437,7 @@ fn unify(
         (Type::Slice(d), Type::Slice(a)) => unify(d, a, map, instances),
         // `Option<T>` against `Option$String`: the instantiation remembers what it was
         // made from, so the arguments line up and `T` binds to String.
-        (Type::Generic { name: dn, args: dargs }, Type::Named(m)) => {
+        (Type::Generic { name: dn, arguments: dargs }, Type::Named(m)) => {
             match instances.get(m) {
                 Some((of, aargs)) if of == dn && aargs.len() == dargs.len() => {
                     for (d, a) in dargs.iter().zip(aargs) {
@@ -5464,9 +5464,9 @@ fn unify(
 /// The symbol one instantiation gets: `identity$Int`, `largest$Decimal_2`. `$` and `_`
 /// are both legal in an LLVM symbol and neither can appear in a Burxt identifier, so a
 /// mangled name can never collide with a name the program wrote.
-pub fn mangle(name: &str, args: &[Type]) -> String {
+pub fn mangle(name: &str, arguments: &[Type]) -> String {
     let mut out = String::from(name);
-    for a in args {
+    for a in arguments {
         out.push('$');
         for c in a.to_string().chars() {
             match c {
@@ -5488,8 +5488,8 @@ pub fn mangle(name: &str, args: &[Type]) -> String {
 fn specialise(f: &FnDef, map: &HashMap<String, Type>, symbol: &str) -> FnDef {
     let mut out = f.clone();
     out.name = symbol.to_string();
-    out.type_params.clear();
-    for p in &mut out.params {
+    out.type_parameters.clear();
+    for p in &mut out.parameters {
         p.ty = substitute(&p.ty, map);
     }
     out.ret = substitute(&out.ret, map);
@@ -5564,8 +5564,8 @@ fn unbounded_compare(param: &str, op: CmpOp) -> String {
 fn specialise_method(m: &MethodDef, map: &HashMap<String, Type>, receiver: &str) -> MethodDef {
     let mut out = m.clone();
     out.receiver = receiver.to_string();
-    out.receiver_args.clear();
-    for p in &mut out.params {
+    out.receiver_arguments.clear();
+    for p in &mut out.parameters {
         p.ty = substitute(&p.ty, map);
     }
     out.ret = substitute(&out.ret, map);

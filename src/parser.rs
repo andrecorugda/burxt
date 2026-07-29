@@ -31,8 +31,8 @@ use crate::diag::{Diagnostic, Span};
 use crate::lexer::Token;
 
 pub struct Parser {
-    toks: Vec<Token>,
-    /// Where each token came from, indexed alongside `toks`. Kept parallel
+    tokens: Vec<Token>,
+    /// Where each token came from, indexed alongside `tokens`. Kept parallel
     /// rather than packed into the token so every `self.at(&Token::X)` in this
     /// file reads exactly as it did before spans existed.
     spans: Vec<Span>,
@@ -45,7 +45,7 @@ pub struct Parser {
     allow_struct_lit: bool,
     /// The type parameters of the generic being parsed, so `parse_type` can tell `T`
     /// from a struct called `T`. Cleared when the declaration ends.
-    type_params: Vec<String>,
+    type_parameters: Vec<String>,
 }
 
 impl Parser {
@@ -57,14 +57,14 @@ impl Parser {
     /// written when it fails at runtime. Spans alone are not enough: the message is
     /// baked into the compiled program, long after the source has gone.
     pub fn with_source(tokens: Vec<(Token, Span)>, src: &str) -> Self {
-        let (toks, spans) = tokens.into_iter().unzip();
+        let (tokens, spans) = tokens.into_iter().unzip();
         Parser {
-            toks,
+            tokens,
             spans,
             pos: 0,
             allow_struct_lit: true,
             src: src.to_string(),
-            type_params: Vec::new(),
+            type_parameters: Vec::new(),
         }
     }
 
@@ -177,11 +177,11 @@ impl Parser {
 
     /// Peek `offset` tokens ahead without consuming (0 = current).
     fn peek_at(&self, offset: usize) -> &Token {
-        self.toks.get(self.pos + offset).unwrap_or(&Token::Eof)
+        self.tokens.get(self.pos + offset).unwrap_or(&Token::Eof)
     }
 
     fn peek(&self) -> &Token {
-        &self.toks[self.pos]
+        &self.tokens[self.pos]
     }
 
     fn at(&self, t: &Token) -> bool {
@@ -189,8 +189,8 @@ impl Parser {
     }
 
     fn bump(&mut self) -> Token {
-        let t = self.toks[self.pos].clone();
-        if self.pos < self.toks.len() - 1 {
+        let t = self.tokens[self.pos].clone();
+        if self.pos < self.tokens.len() - 1 {
             self.pos += 1;
         }
         t
@@ -214,8 +214,8 @@ impl Parser {
             Token::Ident(s) => s,
             other => return Err(format!("expected a record name after 'record', found {}", other.describe())),
         };
-        let type_params = self.parse_type_params(&name)?;
-        self.type_params = type_params.iter().map(|p| p.name.clone()).collect();
+        let type_parameters = self.parse_type_params(&name)?;
+        self.type_parameters = type_parameters.iter().map(|p| p.name.clone()).collect();
         self.expect(&Token::LBrace)?;
         let mut fields = Vec::new();
         while !self.at(&Token::RBrace) {
@@ -236,8 +236,8 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace)?;
-        self.type_params.clear();
-        Ok(StructDef { name, type_params, fields, span: Span { start, end: self.prev_end().max(start + 1) } })
+        self.type_parameters.clear();
+        Ok(StructDef { name, type_parameters, fields, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `enum Name { Unit, WithPayload(Int, String), }`
@@ -253,8 +253,8 @@ impl Parser {
                 ))
             }
         };
-        let type_params = self.parse_type_params(&name)?;
-        self.type_params = type_params.iter().map(|p| p.name.clone()).collect();
+        let type_parameters = self.parse_type_params(&name)?;
+        self.type_parameters = type_parameters.iter().map(|p| p.name.clone()).collect();
         self.expect(&Token::LBrace)?;
         let mut variants = Vec::new();
         while !self.at(&Token::RBrace) {
@@ -290,8 +290,8 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace)?;
-        self.type_params.clear();
-        Ok(EnumDef { name, type_params, variants, span: Span { start, end: self.prev_end().max(start + 1) } })
+        self.type_parameters.clear();
+        Ok(EnumDef { name, type_parameters, variants, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     // ---- traits and impls ----
@@ -358,7 +358,7 @@ impl Parser {
             ));
         }
         self.bump();
-        let mut params = Vec::new();
+        let mut parameters = Vec::new();
         while self.at(&Token::Comma) {
             self.bump();
             let pname = match self.bump() {
@@ -369,7 +369,7 @@ impl Parser {
             };
             self.expect(&Token::Colon)?;
             let ty = self.parse_type()?;
-            params.push(Param { name: pname, ty, marshal: None });
+            parameters.push(Param { name: pname, ty, marshal: None });
         }
         self.expect(&Token::RParen)?;
         if !self.at(&Token::Arrow) {
@@ -383,7 +383,7 @@ impl Parser {
         }
         self.bump();
         let ret = self.parse_type()?;
-        Ok(TraitSig { name, receiver_mut, params, ret })
+        Ok(TraitSig { name, receiver_mut, parameters, ret })
     }
 
     /// `impl Trait for Type { <method definitions> }`
@@ -438,8 +438,8 @@ impl Parser {
         let start = self.span().start;
         self.expect(&Token::Extern)?;
         self.expect(&Token::Fn)?;
-        let (name, type_params, params, ret) = self.parse_fn_signature()?;
-        if !type_params.is_empty() {
+        let (name, type_parameters, parameters, ret) = self.parse_fn_signature()?;
+        if !type_parameters.is_empty() {
             // C has no notion of a type parameter, and a monomorphised C symbol is a
             // symbol that does not exist. See spec/M7-GENERICS.md §2.
             return Err(format!(
@@ -449,7 +449,7 @@ impl Parser {
             ));
         }
         self.expect(&Token::Semicolon)?;
-        Ok(ExternFn { name, params, ret, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok(ExternFn { name, parameters, ret, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// Contract clauses sit between the signature and the body, where a reader
@@ -502,7 +502,7 @@ impl Parser {
             self.bump();
         }
         self.expect(&Token::Fn)?;
-        let (name, type_params, params, ret) = self.parse_fn_signature()?;
+        let (name, type_parameters, parameters, ret) = self.parse_fn_signature()?;
         // `-> T allocates` reads as what it is: returns a T, and allocates.
         let allocates = self.at_word("allocates");
         if allocates {
@@ -511,11 +511,11 @@ impl Parser {
         let (requires, ensures, decreases) = self.parse_contracts()?;
         let body = self.parse_block()?;
         // The parameters are only in scope for this signature and body.
-        self.type_params.clear();
-        Ok(FnDef { name, type_params, params, ret, allocates, is_pure, requires, ensures, decreases, body, span: Span { start, end: self.prev_end().max(start + 1) } })
+        self.type_parameters.clear();
+        Ok(FnDef { name, type_parameters, parameters, ret, allocates, is_pure, requires, ensures, decreases, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
-    /// `fn (self: Type) name(params) -> ret { body }`, or `fn (mut self: ...)`
+    /// `fn (self: Type) name(parameters) -> ret { body }`, or `fn (mut self: ...)`
     /// for a mutating method.
     fn parse_method(&mut self, owner: Option<&str>) -> Result<MethodDef, String> {
         let start = self.span().start;
@@ -565,12 +565,12 @@ impl Parser {
         };
         // `self: Stack<T>` — the receiver names the record's own type parameters, which are
         // then in scope for the rest of the signature and the body.
-        let mut receiver_args: Vec<String> = Vec::new();
+        let mut receiver_arguments: Vec<String> = Vec::new();
         if self.at(&Token::Lt) {
             self.bump();
             loop {
                 match self.bump() {
-                    Token::Ident(a) => receiver_args.push(a),
+                    Token::Ident(a) => receiver_arguments.push(a),
                     other => {
                         return Err(format!(
                             "`self: {}<...>` names the record's type parameters, so each one \
@@ -586,10 +586,10 @@ impl Parser {
             }
             self.expect(&Token::Gt)?;
         }
-        self.type_params = receiver_args.clone();
+        self.type_parameters = receiver_arguments.clone();
         self.expect(&Token::RParen)?;
-        let (name, type_params, params, ret) = self.parse_fn_signature()?;
-        if !type_params.is_empty() {
+        let (name, type_parameters, parameters, ret) = self.parse_fn_signature()?;
+        if !type_parameters.is_empty() {
             // A method may use its TYPE's parameters; its own are a later slice, and a
             // parameter list that silently did nothing would be worse than a refusal.
             // See spec/M7-GENERICS.md §3.
@@ -613,8 +613,8 @@ impl Parser {
             );
         }
         let body = self.parse_block()?;
-        self.type_params.clear();
-        Ok(MethodDef { receiver, receiver_args, receiver_mut, name, params, ret, allocates, requires, ensures, body, span: Span { start, end: self.prev_end().max(start + 1) } })
+        self.type_parameters.clear();
+        Ok(MethodDef { receiver, receiver_arguments, receiver_mut, name, parameters, ret, allocates, requires, ensures, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `as <marshaller>` declares how a value crosses a foreign boundary.
@@ -716,14 +716,14 @@ impl Parser {
         // `fn name<T, U>(...)`. Recorded on the parser so `parse_type` can tell a type
         // parameter from a struct name — which is the only place that distinction is
         // visible, since both are spelled as a bare identifier.
-        let type_params = self.parse_type_params(&name)?;
+        let type_parameters = self.parse_type_params(&name)?;
         // EXTEND, not replace: a method's receiver has already put the record's parameters
         // in scope (`self: Stack<T>`), and replacing them turned `item: T` into an ordinary
         // NAMED type — which then looked identical when printed and silently failed to
         // substitute at instantiation. Cleared after each declaration, so nothing leaks.
-        self.type_params.extend(type_params.iter().map(|p| p.name.clone()));
+        self.type_parameters.extend(type_parameters.iter().map(|p| p.name.clone()));
         self.expect(&Token::LParen)?;
-        let mut params = Vec::new();
+        let mut parameters = Vec::new();
         if !self.at(&Token::RParen) {
             loop {
                 let pname = match self.bump() {
@@ -733,7 +733,7 @@ impl Parser {
                 self.expect(&Token::Colon)?;
                 let ty = self.parse_type()?;
                 let marshal = self.parse_marshal()?;
-                params.push(Param { name: pname, ty, marshal });
+                parameters.push(Param { name: pname, ty, marshal });
                 if !self.more_in_list(&Token::RParen) {
                     break;
                 }
@@ -750,7 +750,7 @@ impl Parser {
         }
         self.bump();
         let ret = self.parse_type()?;
-        Ok((name, type_params, params, ret))
+        Ok((name, type_parameters, parameters, ret))
     }
 
     fn parse_block(&mut self) -> Result<Vec<Stmt>, String> {
@@ -805,8 +805,8 @@ impl Parser {
     ///   name = value;                  assignment
     ///   name[index] = value;           element assignment
     ///   name.a.b = value;              field assignment
-    ///   name(args);                    a call kept for its side effect
-    ///   name.a.b.method(args);         a method call kept for its side effect
+    ///   name(arguments);                    a call kept for its side effect
+    ///   name.a.b.method(arguments);         a method call kept for its side effect
     /// The dot-chain is walked once; hitting `(` after a segment means that
     /// segment is a method name, not a field, and everything read so far
     /// becomes the call's base expression.
@@ -851,9 +851,9 @@ impl Parser {
         };
 
         if self.at(&Token::LParen) {
-            let args = self.parse_call_args()?;
+            let arguments = self.parse_call_args()?;
             self.expect(&Token::Semicolon)?;
-            return Ok(StmtKind::ExprStmt(self.expr(ExprKind::Call { name, args }, start)));
+            return Ok(StmtKind::ExprStmt(self.expr(ExprKind::Call { name, arguments }, start)));
         }
 
         if self.at(&Token::LBracket) {
@@ -884,14 +884,14 @@ impl Parser {
                 other => return Err(format!("expected a field name after '.', found {}", other.describe())),
             };
             if self.at(&Token::LParen) {
-                let args = self.parse_call_args()?;
+                let arguments = self.parse_call_args()?;
                 self.expect(&Token::Semicolon)?;
                 let mut base = self.expr(ExprKind::Var(name), start);
                 for f in path {
                     base = self.expr(ExprKind::Field { base: Box::new(base), field: f }, start);
                 }
                 return Ok(StmtKind::ExprStmt(
-                    self.expr(ExprKind::MethodCall { base: Box::new(base), method: seg, args }, start),
+                    self.expr(ExprKind::MethodCall { base: Box::new(base), method: seg, arguments }, start),
                 ));
             }
             path.push(seg);
@@ -954,17 +954,17 @@ impl Parser {
     /// parens: `(a, b, c)`.
     fn parse_call_args(&mut self) -> Result<Vec<Expr>, String> {
         self.expect(&Token::LParen)?;
-        let mut args = Vec::new();
+        let mut arguments = Vec::new();
         if !self.at(&Token::RParen) {
             loop {
-                args.push(self.parse_expr()?);
+                arguments.push(self.parse_expr()?);
                 if !self.more_in_list(&Token::RParen) {
                     break;
                 }
             }
         }
         self.expect(&Token::RParen)?;
-        Ok(args)
+        Ok(arguments)
     }
 
     /// `match value { Variant => { .. }  Other(a, b) => { .. } }`
@@ -1179,7 +1179,7 @@ impl Parser {
             self.bump();
             Ok(())
         } else if self.at(&Token::Ge) {
-            self.toks[self.pos] = Token::Equals;
+            self.tokens[self.pos] = Token::Equals;
             Ok(())
         } else {
             Err(format!("expected `>` to close Decimal<..>, found {}", self.peek().describe()))
@@ -1232,22 +1232,22 @@ impl Parser {
             // parsed declared it as a type parameter, which is the only thing that tells
             // `T` from a struct called `T`.
             Token::Ident(name) => {
-                if self.type_params.contains(&name) {
+                if self.type_parameters.contains(&name) {
                     return Ok(Type::Param(name));
                 }
                 // `Option<Int>` — a generic applied. `<` after a type name can only mean
                 // this, so no lookahead beyond the one token is needed.
                 if self.at(&Token::Lt) {
                     self.bump();
-                    let mut args = Vec::new();
+                    let mut arguments = Vec::new();
                     loop {
-                        args.push(self.parse_type()?);
+                        arguments.push(self.parse_type()?);
                         if !self.more_in_list(&Token::Gt) {
                             break;
                         }
                     }
                     self.expect(&Token::Gt)?;
-                    return Ok(Type::Generic { name, args });
+                    return Ok(Type::Generic { name, arguments });
                 }
                 Ok(Type::Named(name))
             }
@@ -1398,7 +1398,7 @@ impl Parser {
     }
 
     /// A factor is a primary followed by any chain of `.field` accesses and
-    /// `.method(args)` calls, optionally negated:
+    /// `.method(arguments)` calls, optionally negated:
     /// `-item.price` is Neg(Field(item, price)).
     fn parse_factor(&mut self) -> Result<Expr, String> {
         let start = self.span().start;
@@ -1438,17 +1438,17 @@ impl Parser {
             };
             if self.at(&Token::LParen) {
                 self.bump();
-                let mut args = Vec::new();
+                let mut arguments = Vec::new();
                 if !self.at(&Token::RParen) {
                     loop {
-                        args.push(self.parse_expr()?);
+                        arguments.push(self.parse_expr()?);
                         if !self.more_in_list(&Token::RParen) {
                             break;
                         }
                     }
                 }
                 self.expect(&Token::RParen)?;
-                e = self.expr(ExprKind::MethodCall { base: Box::new(e), method: name, args }, start);
+                e = self.expr(ExprKind::MethodCall { base: Box::new(e), method: name, arguments }, start);
             } else {
                 e = self.expr(ExprKind::Field { base: Box::new(e), field: name }, start);
             }
@@ -1495,10 +1495,10 @@ impl Parser {
                             // message travels out; the caret lands on the string
                             // literal, which is the right place until fragment
                             // offsets are recorded (see `StrPart`).
-                            let toks = crate::lexer::Lexer::new(&src).tokenize().map_err(|e| {
+                            let tokens = crate::lexer::Lexer::new(&src).tokenize().map_err(|e| {
                                 format!("in the interpolation `{{{}}}`: {}", src.trim(), e.message)
                             })?;
-                            let mut sub = Parser::new(toks);
+                            let mut sub = Parser::new(tokens);
                             let e = sub.parse_expr().map_err(|e| {
                                 format!("in the interpolation `{{{}}}`: {}", src.trim(), e)
                             })?;
@@ -1522,17 +1522,17 @@ impl Parser {
             Token::Ident(s) => {
                 if self.at(&Token::LParen) {
                     self.bump();
-                    let mut args = Vec::new();
+                    let mut arguments = Vec::new();
                     if !self.at(&Token::RParen) {
                         loop {
-                            args.push(self.parse_expr()?);
+                            arguments.push(self.parse_expr()?);
                             if !self.more_in_list(&Token::RParen) {
                                 break;
                             }
                         }
                     }
                     self.expect(&Token::RParen)?;
-                    Ok(ExprKind::Call { name: s, args })
+                    Ok(ExprKind::Call { name: s, arguments })
                 } else if self.at(&Token::LBrace) && self.allow_struct_lit {
                     self.bump();
                     let mut fields = Vec::new();

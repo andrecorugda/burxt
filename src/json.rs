@@ -334,6 +334,10 @@ mod tests {
         let v = parse(msg).unwrap();
         assert_eq!(v.get("method").unwrap().as_str(), Some("initialize"));
         assert_eq!(v.get("id"), Some(&Value::num(1)));
+        // `params` is the LSP wire key, not a name this project chose, so it is spelled the way
+        // the protocol spells it. The naming sweep in v0.0.123 renamed this line by accident: the
+        // raw string above contains quotes, which desynchronised a scan that was skipping string
+        // literals by counting them. Same file and same cause as the `'"'` mistake in v0.0.9x.
         assert_eq!(v.path(&["params", "rootUri"]), Some(&Value::Null));
     }
 
