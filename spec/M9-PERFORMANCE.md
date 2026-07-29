@@ -164,6 +164,20 @@ is over a megabyte on the numbers above, and is not the compiler's own 200 KB.
 >
 > That makes the pointer-plus-length String the next performance milestone rather than a deferred
 > note. §3's reasoning stands unchanged; only the "not yet" does not.
+>
+> **DONE (v0.0.120), and the answer was not pointer-plus-length.** It is a length HEADER in the
+> eight bytes before the first byte, because a two-cell String would have broken stage-1's
+> one-value-per-i64 invariant to gain a register read over a cached load — see spec/M12-STRINGS.md
+> §1. The expensive property was O(1), not zero-load.
+>
+> | Statements | 12800 | 25600 | 51200 | 102400 |
+> |---|---|---|---|---|
+> | Before | 0.40 s | 1.46 s | 6.10 s | **31.67 s** |
+> | After | 0.00 s | 0.01 s | 0.03 s | **0.05 s** |
+>
+> Linear, finally. The self-compile went 1.55 s → 0.11 s, and peak RSS rose 262 → 267 MB, which is
+> the eight bytes per String. The prediction in this section — that this was the ONE fix that
+> removes the class rather than the instances — held.
 
 **Also still linear scans, and smaller:** `find_fun`, `find_sym`, `find_type` and the parser's
 `find_method` each walk a growing array per lookup, so the checker is O(n²) in declaration

@@ -1,7 +1,20 @@
 # Burxt — a String with an O(1) length (M12)
 
-> Status: **specified, implementing.** The trigger fired and was measured; see
-> `spec/M9-PERFORMANCE.md` §3 for the numbers that earned this milestone.
+> Status: **stage-0 done (v0.0.120), and it was enough to remove the quadratic.**
+>
+> | Statements | 12800 | 25600 | 51200 | 102400 |
+> |---|---|---|---|---|
+> | Before | 0.40 s | 1.46 s | 6.10 s | **31.67 s** |
+> | After | 0.00 s | 0.01 s | 0.03 s | **0.05 s** |
+>
+> **633× at 102400 statements, and the new curve is linear** — 0.01 → 0.03 → 0.05 for 2× the input
+> each time. The self-compile went **1.55 s → 0.11 s**. Peak RSS went 262 MB → 267 MB, which is the
+> eight bytes per String and is the cost §1 said to expect.
+>
+> The surprise is that **stage-1's source did not change at all**. Its own `len` calls are compiled
+> by stage-0, so making stage-0 emit a header made the Burxt-written compiler O(1) without touching
+> a line of it. Slice 4 is still needed — programs that stage-1 COMPILES get the old representation
+> until its emitter changes too — but the compiler itself was fixed by fixing the other compiler.
 
 ## 0. The problem, measured
 
@@ -96,14 +109,24 @@ milestone would introduce a memory bug.
 **Burxt → C is free.** The pointer already points at NUL-terminated bytes. C never looks behind it.
 An `external function` taking a `String` needs no marshalling at all.
 
-**C → Burxt must copy.** A `char*` from `getenv`, `fgets` or any other C function has no header,
-and reading `ptr[-8]` would read whatever happens to precede it — a silent wrong length, which is
-worse than a crash. So a foreign string is **copied into the current region with a header**, and
-that copy needs one `strlen`, at the boundary, once.
+**C → Burxt does not exist yet**, and that was checked before designing around it rather than
+after. Stage-0 refuses it by name:
 
-This is the honest accounting: the strlen does not disappear, it becomes **one per foreign string**
-instead of one per byte read. And it becomes visible at the boundary, where a reader can see it,
-rather than hidden inside `len`.
+```
+error: external function `getenv` returns String, but only Int or CInt may cross the C boundary as
+       a return for now — Burxt cannot yet track who owns memory a C function returns.
+```
+
+So there is no foreign-string direction to marshal today, and this milestone adds no marshalling.
+What it adds is a **second reason that restriction exists**, and a sharper one: a `char*` from C has
+no header, so reading `ptr[-8]` would read whatever happens to precede it — a silent wrong length,
+which is worse than a crash. The ownership question was the first reason; the header is the second.
+
+**When that restriction is lifted**, the answer is already known and should be written here rather
+than rediscovered: a foreign string is **copied into the current region with a header**, and the
+copy needs one `strlen`, at the boundary, once. The strlen does not disappear — it becomes one per
+foreign string instead of one per byte read, and it becomes visible at the boundary rather than
+hidden inside `len`.
 
 It also does not widen the pointer wall that `docs/guide/06-ffi.md` documents. Burxt still refuses
 to receive a bare pointer as a `String` without going through the marshaller. If that page's rules

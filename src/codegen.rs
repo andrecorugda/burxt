@@ -77,7 +77,6 @@ pub struct CodeGen<'ctx> {
     /// lazily created i128 -> i64 checked narrowing helper
     narrow_check_fn: Option<FunctionValue<'ctx>>,
     /// lazily created string byte-scan helpers
-    str_len_fn: Option<FunctionValue<'ctx>>,
     /// (heap base, bump cursor) globals for region allocation
     heap: Option<(
         inkwell::values::GlobalValue<'ctx>,
@@ -157,7 +156,6 @@ impl<'ctx> CodeGen<'ctx> {
             cdouble_fn: None,
             index_check_fn: None,
             narrow_check_fn: None,
-            str_len_fn: None,
             heap: None,
             alloc_fn: None,
             byte_index_check_fn: None,
@@ -1226,7 +1224,6 @@ impl<'ctx> CodeGen<'ctx> {
                 }
                 1
             }
-            _ => 1,
         }
     }
 
@@ -2585,11 +2582,7 @@ impl<'ctx> CodeGen<'ctx> {
             )
             .map_err(err)?;
 
-        let with_nul = self
-            .builder
-            .build_int_add(size, i64t.const_int(1, false), "with_nul")
-            .map_err(err)?;
-        let buf = self.build_alloc_bytes(with_nul)?;
+        let buf = self.build_alloc_string(size)?;
         self.builder
             .build_call(
                 fread,
@@ -2684,11 +2677,14 @@ impl<'ctx> CodeGen<'ctx> {
             _ => return Err("snprintf returned void".to_string()),
         };
         let n = self.builder.build_int_s_extend(n32, i64t, "need64").map_err(err)?;
+        // `n` is what snprintf said it needs, NOT counting the NUL. `build_alloc_string` writes
+        // that as the header and reserves the NUL, and snprintf is then handed the capacity
+        // including it — the two counts differ by one and mixing them up truncates the last byte.
         let cap = self
             .builder
             .build_int_add(n, i64t.const_int(1, false), "cap")
             .map_err(err)?;
-        let buf = self.build_alloc_bytes(cap)?;
+        let buf = self.build_alloc_string(n)?;
         let mut real: Vec<BasicMetadataValueEnum> = vec![buf.into(), cap.into(), fmt.into()];
         real.extend(args);
         self.builder.build_call(snprintf, &real, "render").map_err(err)?;
@@ -3102,10 +3098,35 @@ impl<'ctx> CodeGen<'ctx> {
             .map_err(err)?
             .into_pointer_value();
         let slot = unsafe { self.builder.build_gep(ptr, argv, &[checked], "argslot") }.map_err(err)?;
-        self.builder
+        let borrowed = self
+            .builder
             .build_load(ptr, slot, "argument")
-            .map(|v| v.into_pointer_value())
-            .map_err(err)
+            .map_err(err)?
+            .into_pointer_value();
+        // COPIED into the region, with a header. `argv` holds C's strings, which have no header, so
+        // handing one back directly would make `len` of it read whatever the loader happened to place
+        // before it — a silent wrong length, which is worse than a crash.
+        //
+        // This is the one place a foreign string enters a Burxt program, and it is why `argument`
+        // needs a region now when it did not before. The strlen does not disappear: it happens ONCE
+        // here, at the boundary, instead of once per byte read afterwards. See
+        // spec/M12-STRINGS.md §3 — the accounting it describes for a future `char*` return is
+        // exactly this, arrived at early because `argument` was already that case.
+        let strlen = self.libc(
+            "strlen",
+            self.ctx.i64_type().fn_type(&[ptr.into()], false),
+        );
+        let measured = self
+            .builder
+            .build_call(strlen, &[borrowed.into()], "arglen")
+            .map_err(err)?;
+        let n = match measured.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => v.into_int_value(),
+            _ => return Err("strlen returned void".to_string()),
+        };
+        let owned = self.build_alloc_string(n)?;
+        self.builder.build_memcpy(owned, 1, borrowed, 1, n).map_err(err)?;
+        Ok(owned)
     }
 
     fn build_arg_count(&mut self) -> Result<IntValue<'ctx>, String> {
@@ -3327,14 +3348,11 @@ impl<'ctx> CodeGen<'ctx> {
         let err = |e: inkwell::builder::BuilderError| e.to_string();
         let i64t = self.ctx.i64_type();
         let i8t = self.ctx.i8_type();
+        let _ = i64t;
         let la = self.build_str_len(a)?;
         let lb = self.build_str_len(b)?;
         let total = self.builder.build_int_add(la, lb, "join_len").map_err(err)?;
-        let with_nul = self
-            .builder
-            .build_int_add(total, i64t.const_int(1, false), "with_nul")
-            .map_err(err)?;
-        let dest = self.build_alloc_bytes(with_nul)?;
+        let dest = self.build_alloc_string(total)?;
         self.builder.build_memcpy(dest, 1, a, 1, la).map_err(|e| e.to_string())?;
         let second = unsafe { self.builder.build_gep(i8t, dest, &[la], "second") }.map_err(err)?;
         self.builder.build_memcpy(second, 1, b, 1, lb).map_err(|e| e.to_string())?;
@@ -3344,6 +3362,36 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     /// Allocate raw bytes in the current region.
+    /// Allocate a String of `len` bytes in the current region and write its LENGTH HEADER.
+    ///
+    /// The layout is `[ i64 length ][ len bytes ][ NUL ]`, and the pointer answered points at the
+    /// first BYTE, not at the header. So a Burxt String is still one pointer and still a valid
+    /// `char*` for C — the header is additional information sitting behind it, which C never looks
+    /// at. See spec/M12-STRINGS.md §1.
+    ///
+    /// Every place that makes a String goes through here, which is the point: a length written in
+    /// one place and read in another is exactly the kind of thing that works for the case you
+    /// tested.
+    fn build_alloc_string(&mut self, len: IntValue<'ctx>) -> Result<PointerValue<'ctx>, String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+        let i8t = self.ctx.i8_type();
+        let total = self
+            .builder
+            .build_int_add(len, i64t.const_int(9, false), "with_header_and_nul")
+            .map_err(err)?;
+        let base = self.build_alloc_bytes(total)?;
+        self.builder.build_store(base, len).map_err(err)?;
+        let bytes = unsafe {
+            self.builder.build_gep(i8t, base, &[i64t.const_int(8, false)], "bytes")
+        }
+        .map_err(err)?;
+        // NUL written here rather than left to each caller, so no maker can forget it.
+        let end = unsafe { self.builder.build_gep(i8t, bytes, &[len], "end") }.map_err(err)?;
+        self.builder.build_store(end, i8t.const_zero()).map_err(err)?;
+        Ok(bytes)
+    }
+
     fn build_alloc_bytes(&mut self, bytes: IntValue<'ctx>) -> Result<PointerValue<'ctx>, String> {
         let f = self.alloc_fn()?;
         let call = self
@@ -3854,16 +3902,24 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     /// Emit a call to `@burxt.strlen(s)` — the byte length of a String.
+    /// A String's length: ONE LOAD, from the eight bytes before its first byte.
+    ///
+    /// This was a `strlen` until v0.0.120, which is why reading n bytes cost n² — a bounds check
+    /// is a length, and a length was a scan. M9 §3 measured that and named this as the only fix
+    /// that changes the shape rather than how often the scan happens.
     fn build_str_len(&mut self, s: PointerValue<'ctx>) -> Result<IntValue<'ctx>, String> {
-        let f = self.str_len_fn()?;
-        let call = self
-            .builder
-            .build_call(f, &[s.into()], "strlen")
-            .map_err(|e| e.to_string())?;
-        match call.try_as_basic_value() {
-            inkwell::values::ValueKind::Basic(v) => Ok(v.into_int_value()),
-            _ => Err("string-length helper returned void".to_string()),
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+        let i8t = self.ctx.i8_type();
+        let header = unsafe {
+            self.builder.build_gep(i8t, s, &[i64t.const_int(-8i64 as u64, true)], "header")
         }
+        .map_err(err)?;
+        Ok(self
+            .builder
+            .build_load(i64t, header, "len")
+            .map_err(err)?
+            .into_int_value())
     }
 
     /// Emit a call to `@burxt.streq(a, b)` — 1 if the bytes match, else 0.
@@ -3963,36 +4019,6 @@ impl<'ctx> CodeGen<'ctx> {
     /// Burxt generates its own loop instead of calling libc `strlen` so that
     /// `extern fn strlen` stays available to user code — a builtin must not
     /// quietly consume a C symbol name — and so nothing here depends on libc
-    /// for a future wasm target.
-    fn str_len_fn(&mut self) -> Result<FunctionValue<'ctx>, String> {
-        if let Some(f) = self.str_len_fn {
-            return Ok(f);
-        }
-        let i64t = self.ctx.i64_type();
-        let ptr = self.ctx.ptr_type(AddressSpace::default());
-        // libc's `strlen`, called by its real name. The name is load-bearing twice over.
-        //
-        // Until v0.0.90 this was a hand-written byte-at-a-time scan called `burxt.strlen`,
-        // and both halves of that were expensive. LLVM cannot prove such a loop terminates,
-        // so the call was never `willreturn`, so LICM refused to hoist it out of any loop —
-        // and `byte_at` bounds-checks against the length, which made reading a string one
-        // byte at a time cost the SQUARE of its length. That is what a compiler does all
-        // day, and it is why stage-1 took three minutes on its own source.
-        //
-        // Under its real name LLVM recognises it as a library function: it knows it only
-        // reads its argument and always returns, and hoists it out of the loop by itself.
-        // It also links to the vectorised implementation libc ships, which reads a whole
-        // register at a time instead of a byte. Stage-1's emitter already did it this way;
-        // this is stage-0 catching up with the compiler it wrote.
-        let f = match self.module.get_function("strlen") {
-            Some(f) => f,
-            None => self
-                .module
-                .add_function("strlen", i64t.fn_type(&[ptr.into()], false), None),
-        };
-        self.str_len_fn = Some(f);
-        Ok(f)
-    }
 
     /// Get (or lazily define) `i64 @burxt.streq(ptr, ptr)`: byte equality,
     /// returning Burxt's 0/1 Bool. Two strings are equal when their bytes are
@@ -4174,11 +4200,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.build_exit70(exit)?;
 
         self.builder.position_at_end(ok);
-        let with_nul = self
-            .builder
-            .build_int_add(count, i64t.const_int(1, false), "with_nul")
-            .map_err(err)?;
-        let out = self.build_alloc_bytes(with_nul)?;
+        let out = self.build_alloc_string(count)?;
         let from = unsafe { self.builder.build_gep(i8t, bytes, &[at], "from") }.map_err(err)?;
         self.builder
             .build_memcpy(out, 1, from, 1, count)
@@ -4580,12 +4602,34 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     /// Create a global null-terminated string constant and return an i8* to it.
+    /// A string literal, as `{ i64 length, [n+1 x i8] bytes }` in the module's globals, answering a
+    /// pointer to the BYTES.
+    ///
+    /// A literal needs the same header every region-built String has, or `len` of one would read
+    /// whatever the linker happened to place before it. Constant rather than allocated: a literal
+    /// outlives every region, which is why it never needed one.
     fn global_str(&self, s: &str, name: &str) -> PointerValue<'ctx> {
-        let gv = self
-            .builder
-            .build_global_string_ptr(s, name)
-            .expect("global string");
-        gv.as_pointer_value()
+        let i64t = self.ctx.i64_type();
+        let i8t = self.ctx.i8_type();
+        let mut bytes: Vec<inkwell::values::IntValue> =
+            s.bytes().map(|b| i8t.const_int(b as u64, false)).collect();
+        bytes.push(i8t.const_zero());
+        let body = i8t.const_array(&bytes);
+        let whole = self.ctx.const_struct(&[i64t.const_int(s.len() as u64, false).into(), body.into()], false);
+        let gv = self.module.add_global(whole.get_type(), None, name);
+        gv.set_initializer(&whole);
+        gv.set_constant(true);
+        gv.set_linkage(inkwell::module::Linkage::Private);
+        unsafe {
+            self.builder
+                .build_gep(
+                    self.ctx.i8_type(),
+                    gv.as_pointer_value(),
+                    &[i64t.const_int(8, false)],
+                    "literal_bytes",
+                )
+                .expect("literal bytes")
+        }
     }
 
     // (rounding helpers above; printing/IO below)
