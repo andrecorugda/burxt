@@ -19,6 +19,32 @@
 | 133 KB of comments and one statement | 36 s | 0.014 s |
 | `cargo test`, all 27 invariants | — | 40 s |
 
+## 0a. The numbers since, and the prediction coming true (v0.0.110)
+
+Re-measured after generics landed, because a figure recorded once and never checked is a figure
+nobody knows the truth of:
+
+| | v0.0.90 | v0.0.110 | ratio |
+|---|---|---|---|
+| The compiler's own source | 283 KB | 365 KB | **1.29×** |
+| `stage1 examples/stage1.bx` | 1.17 s | 1.96 s | **1.67×** |
+| Peak RSS for that run | 196 MB | 239 MB | **1.22×** |
+
+**Memory grew slightly LESS than the source did** — linear, which is what §3's note about a
+linear working set predicts and what the region model should deliver.
+
+**Time grew faster than the source, by a factor of 1.29** — and §3 named the cause in advance:
+`find_fun`, `find_sym`, `find_type` and `find_method` each walk a growing array per lookup, so
+the checker is O(n²) in declaration count. That was written down as "it does not bite yet: the
+compiler has 40 functions". It has many more now, and the prediction is visible in the ratio.
+
+It is not urgent — 1.96 s against a 20-second budget — and it is recorded rather than fixed for
+the reason §5 gives about guessing: the fix is an index, Burxt has no map type, so it is a
+feature and not a patch. **What changed is that there is now a test for the memory figure**, so
+the next 20% cannot arrive unnoticed the way this one did. The 200 MB acceptance figure in §6.2
+was true when written and is no longer; the ceiling the test enforces is 400 MB, which is a
+guard against the 1 GB wall rather than a restatement of a past measurement.
+
 ## 1. The cause, and why it hid for eleven versions
 
 **`byte_at(s, i)` bounds-checks against the string's length, and a Burxt String is

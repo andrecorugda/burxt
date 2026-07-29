@@ -1781,14 +1781,14 @@ fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
         "the Burxt backend compiles {} of {} pass programs correctly ({} refused outright)",
         correct, total, refused
     );
-    // 98 of 101 in v0.0.109. The three it does not do are named, so the gap is a list and not
-    // a number: `generics_functions.bx` and `generics_types.bx` need one machine function per
-    // instantiation, and `write_bytes_buffer.bx` needs `write_bytes`. Generic records and enums
-    // ARE emitted — their layout is a cell count read under the arguments in scope, so it needs
-    // no copy of the declaration at all.
+    // 100 of 101 in v0.0.110, and the one it does not do has nothing to do with generics:
+    // `write_bytes_buffer.bx` needs `write_bytes`. Keeping the gap as a NAME rather than a
+    // number is the point — a count tells you how far along you are and a name tells you what
+    // to do next.
     assert!(
-        correct >= 98,
-        "the Burxt backend went backwards: {} of {} correct, was 98 of 101",
+        correct >= 100,
+        "the Burxt backend went backwards: {} of {} correct, was 100 of 101 (the one is \
+         write_bytes_buffer.bx, which needs `write_bytes`)",
         correct,
         total
     );
@@ -2263,6 +2263,41 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
         .expect("stage1 on its own source");
     let self_compile = started.elapsed();
     let said = String::from_utf8_lossy(&emitted.stdout).to_string();
+    // And a ceiling on MEMORY, which had no test until v0.0.110 and drifted 196 MB -> 239 MB
+    // across the generics work without anybody noticing. The number that matters is not the
+    // last measurement — it is the 1 GB region the compiler reserves, which it came within a
+    // hair of exhausting before v0.0.90. So the ceiling is 400 MB: high enough that ordinary
+    // growth does not trip it, low enough that a return to the wall fails here first.
+    //
+    // Peak RSS, not allocation count, because the region touches its pages and the pages are
+    // what run out. Skipped rather than failed when /usr/bin/time is absent, since a test that
+    // cannot measure must not claim a verdict.
+    if std::path::Path::new("/usr/bin/time").exists() {
+        let measured = Command::new("/usr/bin/time")
+            .arg("-f")
+            .arg("%M")
+            .arg(&stage1)
+            .arg(root.join("examples/stage1.bx"))
+            .arg(scratch.join("self-memory.ll"))
+            .output()
+            .expect("time on stage1");
+        let reported = String::from_utf8_lossy(&measured.stderr);
+        let kb: u64 = reported
+            .lines()
+            .last()
+            .unwrap_or("0")
+            .trim()
+            .parse()
+            .unwrap_or(0);
+        assert!(kb > 0, "could not read peak RSS from:\n{}", reported);
+        eprintln!("the compiler's peak RSS on its own source: {} MB", kb / 1024);
+        assert!(
+            kb < 400 * 1024,
+            "the compiler's peak RSS on its own source is {} MB; the ceiling is 400 MB, and \
+             the region it reserves is 1 GB (196 MB at v0.0.90, 239 MB at v0.0.110)",
+            kb / 1024
+        );
+    }
     let _ = fs::remove_dir_all(&scratch);
     assert!(said.contains("bytes of IR"), "stage-1 did not emit its own source:\n{}", said);
     assert!(
@@ -2271,6 +2306,7 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
          1.2 s after)",
         self_compile
     );
+
 }
 
 /// M7 slice 1: generic functions, monomorphised.

@@ -124,6 +124,12 @@ record TypeBinding { name_start: Int, name_len: Int, bound: Type }
 // like every other declaration here, because every field of a node is already spoken for.
 // `type_param_start`/`type_param_count` index `type_params`, which holds the TOKEN of each parameter's name —
 // so a parameter is a span, exactly as a record name or a variable is.
+// One instantiation of a generic function: which declaration, and what its parameters stand
+// for. Two calls with the same arguments are the same instance and share one machine function,
+// which is what `find_instance` is for — otherwise a generic called twice would be defined
+// twice and the linker would refuse the module.
+record Instance { generic: Int, args_start: Int, args_count: Int }
+
 record Generic { start: Int, length: Int, type_param_start: Int, type_param_count: Int }
 
 // A declared function: its name span, its return type, and its parameter list node.
@@ -185,6 +191,17 @@ record Unit {
     // Every generic declaration, and the parameter-name tokens they index into.
     generics: [Generic],
     type_bindings: [TypeBinding],
+    // One machine function per instantiation of a generic. This is the only part of generics
+    // that genuinely needs a COPY: a layout is a cell count and resolves lazily, but a BODY
+    // whose parameter may be one cell or four compiles to different instructions.
+    //
+    // Also the work list. Emitting `echo$Int` discovers that `identity$Int` is wanted, so the
+    // list grows while it is being drained — which is what makes a generic calling a generic
+    // work, and why draining is a `while` over a growing array rather than a `for`.
+    instances: [Instance],
+    // The type arguments of every instance, laid end to end. `Instance` carries a start and a
+    // count into this, the same shape `nested_children` and `type_params` use.
+    instance_args: [Type],
     type_params: [Int],
     // Each parameter's bound, as the token of the trait's name, or -1 for none. Parallel to
     // `type_params`, because a parameter has exactly one bound and two arrays are cheaper

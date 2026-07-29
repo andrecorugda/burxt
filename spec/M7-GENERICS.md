@@ -263,7 +263,44 @@ So the design has to differ, and the shape that fits stage-1's representation is
 - **Mangling moves to the emitter**, which already builds strings freely, so the LLVM symbol name
   is computed where symbol names belong and nowhere else.
 
-### Where it actually stands (v0.0.109)
+### Where it actually stands (v0.0.110) — DONE, bar generic methods
+
+**Generic functions are emitted by both compilers, and stage-1 now compiles 100 of the 101 pass
+programs** (the one left needs `write_bytes`, nothing to do with generics). This is the piece
+that genuinely needed monomorphisation, and it is worth being precise about why, because the
+rest of generics did not:
+
+> A **layout** is a count, and a count can be recomputed under different bindings.
+> A **body** is instructions, and `identity<T>` is a load for `T = Int` and a memcpy for
+> `T = Point`. There is no one function to emit, so there has to be one per argument list.
+
+Four pieces, and the shape is stage-0's:
+
+1. **`mangle_type`** — a type as a symbol fragment, total by construction. Every kind answers
+   something, because a kind that fell through to `""` would collide two instances into one
+   definition and the module would define a function twice.
+2. **`find_instance`** — find-or-add, so two calls with the same arguments share one copy.
+3. **`instance_of_call`** — the type arguments worked out the way the checker worked them out:
+   unify the declared parameter types against the actual ones. The actuals come from the
+   checker's own cache and are **resolved deeply first**, because inside `echo<T>` the recorded
+   type of the argument is `T` and what this needs is the Int that `T` stands for right here.
+   Answers -1 when an argument is still abstract, which is not a failure — it means the
+   enclosing generic has not been instantiated yet, and the call will be reached again when it is.
+4. **The work list**, drained after `main` rather than before it. A `while` over `len`, re-read
+   each turn: emitting `echo$Int` discovers that `identity$Int` is wanted, so the list grows
+   while it is being walked. It terminates because a program writes finitely many argument lists
+   and `find_instance` makes each one entry. After `main` because before it the list is empty —
+   nothing has been walked yet, and LLVM does not mind a call to a function defined further down.
+
+`echo$Int` calling `identity$Int` is the case that proves the work list, and the test greps for
+a call to an *unmangled* generic, because that is what a missed suffix looks like: a link error
+rather than a wrong answer.
+
+**What is left is METHODS on a generic type.** `Stack<T>.push` wants a mangled receiver as well
+as a mangled name, and a receiver that is itself an application. `emit_module` names that and
+refuses it; stage-0 emits it. That is the last item in M7.
+
+### Where it stood (v0.0.109)
 
 **Generic records and enums are EMITTED**, by both compilers, and they needed no
 monomorphisation at all — which was the surprise. In Burxt a layout is a **count of eight-byte

@@ -826,6 +826,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
             let dropped: String = self.fresh();
             let called_it: Int = self.write_body("  " + dropped + " = call i64 @"
                                         + substring(src, t.start, t.length)
+                                        + self.call_suffix(src, t, n.a)
                                         + "(" + all + ")\n");
             let reg: String = self.fresh();
             let address: Int = self.write_body("  " + reg + " = ptrtoint ptr " + storage
@@ -834,7 +835,8 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
         }
         let reg: String = self.fresh();
         let visited: Int = self.write_body("  " + reg + " = call i64 @" + substring(src, t.start,
-                                  t.length) + "(" + args + ")\n");
+                                  t.length) + self.call_suffix(src, t, n.a)
+                                  + "(" + args + ")\n");
         return reg;
     }
     // Anything this slice does not cover is named rather than emitted wrongly.
@@ -1406,7 +1408,8 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates
         }
         let answer: String = self.fresh();
         let jumped: Int = self.write_body("  " + answer + " = musttail call i64 @"
-            + substring(src, target.start, target.length) + "(" + args + ")\n");
+            + substring(src, target.start, target.length)
+            + self.call_suffix(src, target, value.a) + "(" + args + ")\n");
         return self.write_body("  ret i64 " + answer + "\n");
     }
 
@@ -1847,7 +1850,196 @@ function (mutable self: Unit) emit_extern(src: String, index: Int) -> Int alloca
 // function whose first parameter is the receiver — `mutable self` is handed the ADDRESS and
 // writes through it, plain `self` gets a copy, which is exactly what the two spellings
 // promise a reader.
-function (mutable self: Unit) emit_function(src: String, index: Int) -> Int allocates {
+// ============================================================================
+// GENERIC FUNCTIONS: one machine function per instantiation.
+//
+// Everything else about generics resolves lazily — a layout is a cell count, so `Pair<Int>` and
+// `Pair<Point>` are read from one declaration under different bindings. A BODY cannot do that.
+// `identity<T>` compiles to a load for `T = Int` and a memcpy for `T = Point`, so there has to
+// be one function per argument list, with a name the linker can tell apart.
+//
+// The pieces: a mangled symbol, a find-or-add so two identical calls share one copy, and a work
+// list drained to a fixpoint because emitting one instance can discover another.
+// ============================================================================
+
+// A type as a symbol fragment. Total by construction: every kind answers something, because a
+// name that falls through to "" would collide two instances into one definition.
+function (self: Unit) mangle_type(src: String, t: Type) -> String allocates {
+    if t.kind == 40 { return "Int"; }
+    if t.kind == 41 { return "Bool"; }
+    if t.kind == 42 { return "String"; }
+    if t.kind == 43 { return "Unit"; }
+    if t.kind == 45 { return "Decimal" + to_string(t.scale) + "r" + to_string(t.contract); }
+    if t.kind == 46 || t.kind == 49 || t.kind == 50 {
+        let mutable base: String = substring(src, t.name_start, t.name_len);
+        if t.kind == 49 {
+            base = "dyn." + base;
+        }
+        let mutable i: Int = 0;
+        while i < t.contract {
+            base += "." + self.mangle_type(src, self.declared_type(src,
+                                              self.nested_children[t.scale + i]));
+            i += 1;
+        }
+        return base;
+    }
+    if t.kind == 47 {
+        return "slice." + self.mangle_type(src, self.declared_type(src, t.scale));
+    }
+    if t.kind == 48 {
+        return "array" + to_string(t.contract) + "."
+            + self.mangle_type(src, self.declared_type(src, t.scale));
+    }
+    return "k" + to_string(t.kind);
+}
+
+// `identity$Int`. A dollar cannot appear in a Burxt identifier, so a mangled name can never
+// collide with one a program wrote — the same reason stage-0 chose it.
+function (self: Unit) instance_symbol(src: String, instance: Int) -> String allocates {
+    let it: Instance = self.instances[instance];
+    let declaration: Generic = self.generics[it.generic];
+    let mutable symbol: String = substring(src, declaration.start, declaration.length);
+    let mutable i: Int = 0;
+    while i < it.args_count {
+        symbol += "$" + self.mangle_type(src, self.instance_args[it.args_start + i]);
+        i += 1;
+    }
+    return symbol;
+}
+
+// The suffix alone — what `emit_function` appends to the declaration's own name. Kept separate
+// from `instance_symbol` because the definition builds its name from the node it is emitting and
+// only needs the tail.
+function (self: Unit) instance_suffix(src: String, instance: Int) -> String allocates {
+    let it: Instance = self.instances[instance];
+    let mutable suffix: String = "";
+    let mutable i: Int = 0;
+    while i < it.args_count {
+        suffix += "$" + self.mangle_type(src, self.instance_args[it.args_start + i]);
+        i += 1;
+    }
+    return suffix;
+}
+
+// The instance for this generic and these arguments, adding it if it is new. Two calls with the
+// same arguments must answer the same index, or the module would define one function twice.
+function (mutable self: Unit) find_instance(src: String, generic: Int, args_start: Int,
+                                            args_count: Int) -> Int allocates {
+    let mutable i: Int = 0;
+    while i < len(self.instances) {
+        let it: Instance = self.instances[i];
+        if it.generic == generic && it.args_count == args_count {
+            let mutable same: Bool = true;
+            let mutable k: Int = 0;
+            while k < args_count {
+                if !type_identical(self.instance_args[it.args_start + k],
+                                   self.instance_args[args_start + k]) {
+                    same = false;
+                }
+                k += 1;
+            }
+            if same {
+                let dropped: Int = truncate(self.instance_args, args_start);
+                return i;                            // already wanted: reuse it
+            }
+        }
+        i += 1;
+    }
+    let noted: Int = push(self.instances, Instance { generic: generic, args_start: args_start,
+                                                     args_count: args_count });
+    return len(self.instances) - 1;
+}
+
+// Which instance a call resolves to, working out its type arguments the way the checker did:
+// unify the declared parameter types against the actual ones. The actuals come from the
+// checker's own cache and are resolved DEEPLY first, because inside `echo<T>` the argument's
+// recorded type is `T`, and what this needs is the Int that `T` stands for right here.
+//
+// Answers -1 when a type argument is still abstract, which is not a failure: it means the
+// enclosing generic has not been instantiated yet, and this call will be reached again when it
+// is. That is exactly the case a work list exists to handle.
+function (mutable self: Unit) instance_of_call(src: String, generic: Int, params: Int,
+                                               args: Int) -> Int allocates {
+    let base: Int = len(self.type_bindings);
+    let wanted: Node = self.nodes[params];
+    let given: Node = self.nodes[args];
+    let mutable i: Int = 0;
+    while i < wanted.b && i < given.b {
+        let parameter: Node = self.nodes[self.children[wanted.a + i]];
+        let declared: Type = self.declared_type(src, parameter.a);
+        if declared.kind == 50 || declared.kind == 47 || declared.kind == 48 {
+            let recorded: Type = self.type_at(self.children[given.a + i]);
+            let actual: Type = self.resolve_deep(src, recorded, self.children[given.a + i]);
+            let matched: Bool = self.unify(src, declared, actual);
+        }
+        i += 1;
+    }
+    let declaration: Generic = self.generics[generic];
+    let args_start: Int = len(self.instance_args);
+    let mutable settled: Bool = true;
+    let mutable p: Int = 0;
+    while p < declaration.type_param_count {
+        let named: Token = self.tokens[self.type_params[declaration.type_param_start + p]];
+        let stands_for: Type = self.resolve_shallow(src,
+            Type { kind: 50, scale: 0, contract: 0,
+                   name_start: named.start, name_len: named.length });
+        if stands_for.kind == 50 {
+            settled = false;
+        }
+        let noted: Int = push(self.instance_args, stands_for);
+        p += 1;
+    }
+    let dropped: Int = truncate(self.type_bindings, base);
+    if !settled {
+        let unwound: Int = truncate(self.instance_args, args_start);
+        return 0 - 1;
+    }
+    return self.find_instance(src, generic, args_start, declaration.type_param_count);
+}
+
+// The suffix a call site must add to name the copy it is calling, or "" when the callee is not
+// generic. Also the moment an instance is DISCOVERED, which is why it is not a pure lookup: a
+// call reached while emitting one instance adds the next one to the list.
+function (mutable self: Unit) call_suffix(src: String, name: Token, args: Int) -> String allocates {
+    let generic: Int = self.generic_named(src, name.start, name.length);
+    if generic < 0 {
+        return "";
+    }
+    let found: Int = self.find_fun(src, name.start, name.length);
+    if found < 0 {
+        return "";
+    }
+    let instance: Int = self.instance_of_call(src, generic, self.funs[found].params, args);
+    if instance < 0 {
+        return "";                                   // still abstract: nothing to name yet
+    }
+    let it: Instance = self.instances[instance];
+    let mutable suffix: String = "";
+    let mutable i: Int = 0;
+    while i < it.args_count {
+        suffix += "$" + self.mangle_type(src, self.instance_args[it.args_start + i]);
+        i += 1;
+    }
+    return suffix;
+}
+
+// Put an instance's arguments in scope, so every layout question asked while its body is emitted
+// answers for THIS instantiation. Returns the base to truncate back to.
+function (mutable self: Unit) install_instance(src: String, instance: Int) -> Int allocates {
+    let base: Int = len(self.type_bindings);
+    let it: Instance = self.instances[instance];
+    let declaration: Generic = self.generics[it.generic];
+    let mutable i: Int = 0;
+    while i < it.args_count {
+        let named: Token = self.tokens[self.type_params[declaration.type_param_start + i]];
+        push(self.type_bindings, TypeBinding { name_start: named.start, name_len: named.length,
+                                               bound: self.instance_args[it.args_start + i] });
+        i += 1;
+    }
+    return base;
+}
+
+function (mutable self: Unit) emit_function(src: String, index: Int, suffix: String) -> Int allocates {
     let item: Node = self.nodes[index];
     let name: Token = self.tokens[item.token];
     let params: Node = self.nodes[item.a];
@@ -1871,12 +2063,12 @@ function (mutable self: Unit) emit_function(src: String, index: Int) -> Int allo
         first = 1;
     }
 
-    let mutable symbol: String = substring(src, name.start, name.length);
+    let mutable symbol: String = substring(src, name.start, name.length) + suffix;
     if is_method {
         let receiver: Token = self.tokens[signature_node.value];
         let holder: Type = Type { kind: 46, scale: 0, contract: 0,
                               name_start: receiver.start, name_len: receiver.length };
-        symbol = method_symbol(src, holder, name);
+        symbol = method_symbol(src, holder, name) + suffix;
         if first > 0 {
             signature += ", ";
         }
@@ -1955,13 +2147,16 @@ function (mutable self: Unit) emit_module(src: String) -> Int allocates {
     // that cannot be lazy — `Option<Int>` needs its own tag-and-payload sizing, one copy per
     // argument list — so the refusal lives here rather than in the checker, which no longer
     // needs it. See spec/M7-GENERICS.md §5.
-    let generic: Int = self.generic_function(src);
-    if generic >= 0 {
-        let complained: Int = self.complain_at(src, self.nodes[generic].token,
-            "the Burxt backend does not emit generic FUNCTIONS yet: a body whose parameter "
-            + "may be one cell or four needs one copy per instantiation, which is the next "
-            + "slice. Generic records and enums do work — their layout is a count, so it is "
-            + "read under the arguments rather than copied. The Rust compiler emits both");
+    // A generic METHOD is the one thing left: `Stack<T>.push` wants a mangled receiver as well
+    // as a mangled name, and a receiver that is itself an application. Named rather than emitted
+    // wrongly, which is the rule every gap in this file follows.
+    let method: Int = self.generic_method(src);
+    if method >= 0 {
+        let complained: Int = self.complain_at(src, self.nodes[method].token,
+            "the Burxt backend does not emit METHODS on a generic type yet: `Stack<T>.push` "
+            + "needs one copy per instantiation like a generic function, and a mangled receiver "
+            + "besides. Generic functions, records and enums all work. The Rust compiler emits "
+            + "this one");
         return 0;
     }
     let mutable preamble: Int = self.write_module("declare i32 @printf(ptr, ...)\n");
@@ -1996,12 +2191,18 @@ function (mutable self: Unit) emit_module(src: String) -> Int allocates {
         if item.kind == 85 {                         // an implementation block's methods
             let mutable k: Int = 0;
             while k < item.b {
-                let done: Int = self.emit_function(src, self.children[item.a + k]);
+                let done: Int = self.emit_function(src, self.children[item.a + k], "");
                 k += 1;
             }
         }
         if item.kind == 80 || item.kind == 81 {
-            let done: Int = self.emit_function(src, index);
+            // A generic declaration is NOT emitted here. There is no one function to emit: it
+            // becomes one copy per instantiation, and the instantiations are only known once
+            // every body that calls it has been walked. Skipped now, drained below.
+            let name: Token = self.tokens[item.token];
+            if self.generic_named(src, name.start, name.length) < 0 {
+                let done: Int = self.emit_function(src, index, "");
+            }
         }
         i += 1;
     }
@@ -2023,7 +2224,48 @@ function (mutable self: Unit) emit_module(src: String) -> Int allocates {
         i += 1;
     }
     let closed: Int = self.close_function("  ret i32 0\n\}\n");
+
+    // The work list, drained to a fixpoint. Every call emitted above added the instance it
+    // needs; emitting those bodies discovers the instances THEY need, so the list grows while it
+    // is being walked. A `while` over `len`, re-read each turn, is what makes that terminate for
+    // the right reason: a generic can only be instantiated at finitely many argument lists that
+    // the program actually writes, and `find_instance` makes each of them one entry.
+    //
+    // After main rather than before it, because before it the list is empty — nothing has been
+    // walked yet. LLVM does not mind a call to a function defined further down the module.
+    let mutable pending: Int = 0;
+    while pending < len(self.instances) {
+        let it: Instance = self.instances[pending];
+        let declaration: Generic = self.generics[it.generic];
+        let node: Int = self.declaration_node(src, declaration.start, declaration.length);
+        if node >= 0 {
+            let base: Int = self.install_instance(src, pending);
+            let suffix: String = self.instance_suffix(src, pending);
+            let done: Int = self.emit_function(src, node, suffix);
+            let dropped: Int = truncate(self.type_bindings, base);
+        }
+        pending += 1;
+    }
     return 1;
+}
+
+// The declaration node for a function of this name. The generics list holds a name span, not a
+// node, because a generic may be a record or an enum too — so the node is found where every
+// other name in stage-1 is found: by comparing bytes.
+function (self: Unit) declaration_node(src: String, start: Int, length: Int) -> Int {
+    let mutable i: Int = 0;
+    while i < len(self.items) {
+        let index: Int = self.items[i];
+        let item: Node = self.nodes[index];
+        if item.kind == 80 {
+            let name: Token = self.tokens[item.token];
+            if spans_equal(src, name.start, name.length, start, length) {
+                return index;
+            }
+        }
+        i += 1;
+    }
+    return 0 - 1;
 }
 
 // Every symbol here lives under `burxt.` — a program that defines `function bump()` must not
