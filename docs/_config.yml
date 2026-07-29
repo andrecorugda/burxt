@@ -5,13 +5,15 @@
 # and assets/site.css instead of a theme's opinions.
 title: Burxt
 description: A typed, compiled, native language where exact decimals are the default.
-# On a CUSTOM DOMAIN these two lines become:
-#     url: https://your-domain
-#     baseurl: ""
-# and `docs/CNAME` holds the bare hostname on one line. Nothing else in the site changes — every
-# internal link goes through `{{ site.baseurl }}`, so the switch is these two lines and that file.
-url: https://andrecorugda.github.io
-baseurl: /burxt
+# The custom domain. `docs/CNAME` holds the bare hostname, and it is COMMITTED rather than left to
+# GitHub's settings page to write — GitHub does create it when a custom domain is set, but a branch
+# change or a rebuild can drop it, and the failure looks like DNS rather than a missing file.
+#
+# `baseurl` is empty because the site is at the root of its own domain. Every internal link goes
+# through `{{ site.baseurl }}`, so it stays correct either way and moving the site again is two
+# lines here.
+url: https://burxt-lang.org
+baseurl: ""
 
 # The milestone log and the specs are for people reading the repository, not visitors to the site.
 # They stay in git and out of the build rather than being half-styled pages nobody links to.

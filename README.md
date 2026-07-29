@@ -12,7 +12,9 @@ and correctness is enforced by the compiler — not left to discipline.**
 [![Self-hosting](https://img.shields.io/badge/self--hosting-byte--identical%20fixpoint-111)](spec/M4-SELF-HOSTING.md)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-111)](#licence)
 
-[The guide](docs/guide/) · [Install](#installing-without-rust) · [Examples](examples/) · [Design notes](DESIGN.md)
+**[burxt-lang.org](https://burxt-lang.org)**
+
+[The guide](https://burxt-lang.org/guide/) · [Install](https://burxt-lang.org/install/) · [Examples](https://burxt-lang.org/examples/) · [Design notes](DESIGN.md)
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/andrecorugda/burxt?quickstart=1)
 
