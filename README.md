@@ -79,9 +79,11 @@ Burxt is early and built in small, verified increments. It is **not yet ready fo
 
 **Stage-1 compiles all 108 pass programs and every one prints the same bytes as the Rust compiler's build of it** — Decimals, `match`, `return tail`, `external function`, interpolation, generics and maps included.
 
-**Where it is still behind, stated precisely, because "compiles every program" reads like more than it is:** that measure covers programs that *succeed*. Stage-1's backend keeps **8 of the 21 runtime guarantees** in `tests/panic/` — it does not yet emit contract checks, several bounds checks, or the `decreases` measure. A test holds that number as a floor and names every one that is missing, so the gap is a list rather than a surprise.
+**And it keeps every runtime guarantee.** "Compiles every program" would read like more than it is on its own, because that measure only covers programs that *succeed*. So a second test runs the 21 programs in `tests/panic/` — a broken contract, an overflow, an index out of range, a `decreases` measure that does not decrease — through stage-1's backend and requires each one to fail. **It keeps 21 of 21**, and that is an equality rather than a floor, so losing one is a failing test.
 
-None of this reaches anyone who installs Burxt: **the release binary is the Rust compiler**, which keeps 21 of 21. Stage-1 exists to prove the language can describe itself, and it does — the fixpoint is byte-identical. It is not yet the compiler you would ship. The Rust compiler stays as the trust anchor and as the other half of a differential test, so a change to the language has two implementations that must agree or a test fails. Details in [`spec/M4-SELF-HOSTING.md`](spec/M4-SELF-HOSTING.md).
+Worth knowing how that number got written down: when the test was first added it was **8 of 21**. Stage-1 had been compiling every program correctly and silently discarding contracts, bounds checks and the termination measure — because every contract fixture in `tests/pass/` has contracts that *succeed*, and a satisfied contract produces identical output whether or not it was ever checked. The gap was shaped exactly like a directory boundary.
+
+The Rust compiler stays as the trust anchor and as the other half of a differential test, so a change to the language has two implementations that must agree or a test fails. Details in [`spec/M4-SELF-HOSTING.md`](spec/M4-SELF-HOSTING.md).
 
 Every push runs **34 invariants**, including that fixpoint, the differential test, 108 pass and 228 fail fixtures, and performance ratios that fail if a known quadratic returns.
 

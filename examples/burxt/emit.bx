@@ -936,8 +936,20 @@ function (mutable self: Unit) emit_c_call(src: String, n: Node, signature: Decla
             passed = as_ptr;
         }
         if shape == "i32" {
+            // Narrow, widen back, and compare. `trunc` silently keeps the low 32 bits, so
+            // 4294967296 arrives in C as 0 — a wrong answer that looks like a valid one, and the
+            // exact class of silent corruption this language exists to refuse.
+            //
+            // Real instructions rather than a constant expression: LLVM 18 no longer accepts a
+            // `sext` constexpr, and the round trip reads more plainly anyway.
             let narrow: String = self.fresh();
             let cast: Int = self.write_body("  " + narrow + " = trunc i64 " + value + " to i32\n");
+            let widened: String = self.fresh();
+            let back: Int = self.write_body("  " + widened + " = sext i32 " + narrow
+                                   + " to i64\n");
+            let refused: Int = self.check_or_die("eq", value, widened,
+                "burxt runtime error: this value does not fit in a C int — the external "
+                + "parameter is 32-bit\n");
             passed = narrow;
         }
         if i > 0 {
@@ -1195,10 +1207,34 @@ function (mutable self: Unit) emit_rounded(left: String, right: String, shift: I
     let wide: String = self.fresh();
     let called: Int = self.write_body("  " + wide + " = call i128 @burxt.round." + mode
                              + "(i128 " + numerator + ", i128 " + divisor + ")\n");
-    // Back to an i64. The checker proved the declared scale can hold the answer; a value
-    // that cannot fit is the overflow error, which the arithmetic helpers already raise.
+    // Back to an i64, and CHECKED on the way. The comment here used to say the arithmetic helpers
+    // already raise this — they do not: they guard `+`, `-` and `*` on Ints, and nothing guarded
+    // this narrowing. A product too large for the declared scale wrapped and printed a negative
+    // number, which is the one thing a money type must never do.
+    //
+    // Narrow, widen back, compare — the same round trip the C-int boundary uses, for the same
+    // reason: `trunc` keeps the low bits and says nothing.
     let reg: String = self.fresh();
     let narrowed: Int = self.write_body("  " + reg + " = trunc i128 " + wide + " to i64\n");
+    let again: String = self.fresh();
+    let widened: Int = self.write_body("  " + again + " = sext i64 " + reg + " to i128\n");
+    let same: String = self.fresh();
+    let compared: Int = self.write_body("  " + same + " = icmp eq i128 " + wide + ", " + again
+                               + "\n");
+    let ok: String = self.fresh_label("fits.ok");
+    let over: String = self.fresh_label("fits.over");
+    let branched: Int = self.write_body("  br i1 " + same + ", label %" + ok + ", label %"
+                               + over + "\n");
+    let opened: Int = self.write_body(over + ":\n");
+    // A FRESH register, not "%oerr" glued to one that already carries its sigil — that produced
+    // `%oerr%t7`, which llc reads as an instruction name and refuses.
+    let stream: String = self.fresh();
+    let told: Int = self.write_body("  " + stream + " = load ptr, ptr @stderr\n");
+    let printed: Int = self.write_body("  call i32 (ptr, ptr, ...) @fprintf(ptr " + stream
+                              + ", ptr @burxt.overflow_msg)\n");
+    let stopped: Int = self.write_body("  call void @exit(i32 70)\n");
+    let dead: Int = self.write_body("  unreachable\n");
+    let resumed: Int = self.write_body(ok + ":\n");
     return reg;
 }
 
@@ -3130,6 +3166,8 @@ function runtime_ir() -> String allocates {
         // platforms that translate newlines, and a buffer of bytes is exactly the case where a
         // translated newline would corrupt the output. Stage-0 opens it the same way.
         + "@burxt.mode_wb = private unnamed_addr constant [3 x i8] c\"wb\\00\"\n"
+        + "@burxt.no_read_msg = private unnamed_addr constant [51 x i8] "
+        + "c\"burxt runtime error: cannot open file for reading\\0A\\00\"\n"
         + "@burxt.no_write_msg = private unnamed_addr constant [51 x i8] "
         + "c\"burxt runtime error: cannot open file for writing\\0A\\00\"\n\n"
         + "define i64 @burxt.argument_count() \{\n"
@@ -3157,9 +3195,15 @@ function runtime_ir() -> String allocates {
         + "  %f = call ptr @fopen(ptr %p, ptr @burxt.mode_read)\n"
         + "  %missing = icmp eq ptr %f, null\n"
         + "  br i1 %missing, label %nothing, label %read\n"
+        // FAILS rather than answering an empty String. An unreadable file that reads as empty is a
+        // wrong answer a program cannot tell from a real empty file — and stage-0 has always
+        // refused it. The silent version was the more dangerous of the two divergences this file
+        // had, because nothing downstream could detect it.
         + "nothing:\n"
-        + "  %empty = call i64 @burxt.alloc_string(i64 0)\n"
-        + "  ret i64 %empty\n"
+        + "  %rerr = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %rerr, ptr @burxt.no_read_msg)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n"
         + "read:\n"
         + "  %sought = call i32 @fseek(ptr %f, i64 0, i32 2)\n"
         + "  %size = call i64 @ftell(ptr %f)\n"

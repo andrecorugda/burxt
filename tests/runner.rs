@@ -3316,10 +3316,17 @@ fn the_burxt_backend_keeps_every_runtime_guarantee() {
         "the Burxt backend keeps {} of {} runtime guarantees",
         kept, total
     );
-    assert!(
-        kept >= 18,
-        "the Burxt backend keeps {} of {} runtime guarantees, was 18 of 21 at v0.0.139 — 8 when the sweep was added at v0.0.136, then 11, 13, 18. \
-         These are lost — a program compiled by stage-1 does not enforce them:\n  {}",
+    // ALL of them, since v0.0.140 — so this stops being a ratchet and becomes an equality, for the
+    // reason the backend-coverage test gives: a floor cannot see a regression that stays above the
+    // line, and there is no line left below full.
+    //
+    // It got here as a floor: 8 when the sweep was added at v0.0.136, then 11 with contracts, 13
+    // with the `decreases` measure, 18 with bounds and remainder, 21 with CInt range, mixed-scale
+    // overflow and read_file.
+    assert_eq!(
+        kept, total,
+        "the Burxt backend kept {} of {} runtime guarantees. It kept ALL of them from v0.0.140, \
+         so this is a regression — a program compiled by stage-1 no longer enforces:\n  {}",
         kept,
         total,
         lost.join("\n  ")
