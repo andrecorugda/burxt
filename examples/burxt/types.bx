@@ -208,6 +208,19 @@ record Unit {
     // of two so the fold is a `remainder` of a positive number, which is all `span_hash` promises.
     function_buckets: [Int],
     function_chain: [Int],
+    // The `ensures` clauses of the function being emitted, as a range into `children`, plus the
+    // name to quote. `ensures` fires at EVERY return — verified against stage-0, which checks each
+    // return path rather than one exit — so the return statement needs them, and it is nowhere near
+    // the signature that declared them.
+    // `old(expr)` inside an `ensures`: the expression is evaluated at function ENTRY and read at the
+    // return, so a conservation law can compare after against before. These two arrays are the
+    // mapping from the `old` CALL NODE to the slot holding its entry value — parallel, because a
+    // pair of Ints is cheaper than a record copied at every lookup.
+    old_nodes: [Int],
+    old_slots: [Int],
+    ensures_start: Int,
+    ensures_count: Int,
+    ensures_owner: String,
     instances: [Instance],
     // The type arguments of every instance, laid end to end. `Instance` carries a start and a
     // count into this, the same shape `nested_children` and `type_parameters` use.

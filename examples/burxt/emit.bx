@@ -831,6 +831,16 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
         if builtin_arity(called) >= 0 {
             return self.emit_builtin(src, n, called);
         }
+        // `old(expr)` is not a call. Its value was captured at function entry — see hoist_old — so
+        // this reads the slot rather than calling anything, and must do so BEFORE the arguments are
+        // emitted or the expression would be evaluated a second time, at the wrong moment.
+        let captured: Int = self.old_slot_for(node);
+        if captured >= 0 {
+            let held: String = self.fresh();
+            let loaded: Int = self.write_body("  " + held + " = load i64, ptr %old"
+                                     + to_string(captured) + "\n");
+            return held;
+        }
         let mutable args: String = "";
         let mutable i: Int = 0;
         while i < list.b {
@@ -1465,8 +1475,14 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates
         let value: String = self.emit_expr(src, n.a);
         if self.sret != "" {
             let copied: Int = self.copy_cells(src, self.sret, value, self.sret_cells);
+            // No `ensures` here: the checker already refuses one on a function whose answer
+            // travels through the caller's storage, because binding `result` to it needs care a
+            // scalar does not.
             return self.write_body("  ret i64 0\n");
         }
+        // `ensures` at EVERY return, not at one exit. Verified against stage-0, which fires on each
+        // return path — a function with an early return has two places the promise must hold.
+        let checked: Int = self.emit_ensures(src, value);
         return self.write_body("  ret i64 " + value + "\n");
     }
 
@@ -2204,6 +2220,149 @@ function (mutable self: Unit) install_instance(src: String, instance: Int) -> In
     return base;
 }
 
+// Every `old(...)` in this clause, evaluated NOW and remembered.
+//
+// A conservation law compares the state after a function against the state before it, so `old` is
+// not a function call at all — it is a value captured at entry. Emitting it as a call produced
+// `@old`, which nothing defines, and the IR would not assemble. That is the better failure: a
+// missing check that silently passed would have been worse.
+//
+// The walk is over the whole clause because `old` may sit anywhere in it — inside an addition,
+// inside a comparison, nested in another call's arguments.
+function (mutable self: Unit) hoist_old(src: String, node: Int) -> Int allocates {
+    if node < 0 {
+        return 0;
+    }
+    let n: Node = self.nodes[node];
+    if n.kind == 13 {                                // a call
+        let named: Token = self.tokens[n.token];
+        if span_equal(src, named.start, named.length, "old") {
+            let list: Node = self.nodes[n.a];
+            if list.b == 1 {
+                let inner: Int = self.children[list.a];
+                let captured: String = self.emit_expr(src, inner);
+                let slot: Int = self.next_slot;
+                self.next_slot += 1;
+                let made: Int = self.write_entry("  %old" + to_string(slot)
+                                        + " = alloca i64\n");
+                let stored: Int = self.write_body("  store i64 " + captured + ", ptr %old"
+                                         + to_string(slot) + "\n");
+                push(self.old_nodes, node);
+                push(self.old_slots, slot);
+                return 1;
+            }
+        }
+    }
+    // Kind by kind, and it has to be: a node's `a`/`b`/`c` hold a child index for SOME kinds and
+    // payload for others — a scale, a token, a count. Walking all three unconditionally recursed
+    // into node 0 forever, because 0 is a valid index and `a` is 0 for every leaf. It segfaulted,
+    // which is the better failure, and it is why the guard is a whitelist rather than a guess.
+    if n.kind == 8 || n.kind == 9 || n.kind == 10 || n.kind == 12 {
+        let left: Int = self.hoist_old(src, n.a);      // binary, comparison, logic, index
+        let right: Int = self.hoist_old(src, n.b);
+        return 1;
+    }
+    if n.kind == 6 || n.kind == 7 || n.kind == 11 {
+        return self.hoist_old(src, n.a);               // unary not/negate, field access
+    }
+    if n.kind == 13 {                                  // an ordinary call: walk its arguments
+        let list: Node = self.nodes[n.a];
+        let mutable i: Int = 0;
+        while i < list.b {
+            let done: Int = self.hoist_old(src, self.children[list.a + i]);
+            i += 1;
+        }
+        return 1;
+    }
+    if n.kind == 14 {                                  // a method call: receiver, then arguments
+        let receiver: Int = self.hoist_old(src, n.a);
+        let list: Node = self.nodes[n.b];
+        let mutable i: Int = 0;
+        while i < list.b {
+            let done: Int = self.hoist_old(src, self.children[list.a + i]);
+            i += 1;
+        }
+        return 1;
+    }
+    return 1;                                          // a leaf: a name, a literal, `self`
+}
+
+// The slot holding an `old(...)` capture, or -1 if this call node is not one.
+function (self: Unit) old_slot_for(node: Int) -> Int {
+    let mutable i: Int = 0;
+    while i < len(self.old_nodes) {
+        if self.old_nodes[i] == node {
+            return self.old_slots[i];
+        }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+// Every `ensures` of the function being emitted, checked against the value about to be returned.
+//
+// `result` is bound by declaring a slot at the span of the word "result" in the SOURCE, which is the
+// same span the checker binds — the two have to agree, and neither invents a name. Stage-1 names
+// every binding by where it is written, and this is that rule applied to a name the language
+// introduces rather than the programmer.
+function (mutable self: Unit) emit_ensures(src: String, value: String) -> Int allocates {
+    if self.ensures_count == 0 {
+        return 0;
+    }
+    let mutable any: Int = 0;
+    let mutable c: Int = 0;
+    while c < self.ensures_count {
+        let clause: Node = self.nodes[self.children[self.ensures_start + c]];
+        if clause.value == 127 {
+            any += 1;
+        }
+        c += 1;
+    }
+    if any == 0 {
+        return 0;
+    }
+    // The slot has to exist before the clause is emitted, because the clause reads it.
+    let spelling: Int = find_text(src, "result");
+    if spelling >= 0 {
+        let slot: Int = self.declare_slot(src, spelling, 6, 1, 0);
+        let stored: Int = self.write_body("  store i64 " + value + ", ptr %v" + to_string(slot)
+                                 + "\n");
+    }
+    c = 0;
+    while c < self.ensures_count {
+        let clause: Node = self.nodes[self.children[self.ensures_start + c]];
+        if clause.value == 127 {
+            let done: Int = self.emit_clause_check(src, clause, self.ensures_owner);
+        }
+        c += 1;
+    }
+    return 1;
+}
+
+// One contract clause, checked. `kind` is the word to quote — "requires" or "ensures" — and the
+// message is built here, at compile time, so the runtime helper takes a pointer and does no work.
+//
+// The message matches stage-0's byte for byte, deliberately: the two compilers agreeing about what
+// a program PRINTS is what the differential test measures, and a failure is output like any other.
+function (mutable self: Unit) emit_clause_check(src: String, clause: Node,
+                                       owner: String) -> Int allocates {
+    let condition: String = self.emit_expr(src, clause.a);
+    let held: String = self.fresh();
+    let checked: Int = self.write_body("  " + held + " = icmp ne i64 " + condition + ", 0\n");
+    let ok: String = self.fresh_label("contract.ok");
+    let broken: String = self.fresh_label("contract.broken");
+    let branched: Int = self.write_body("  br i1 " + held + ", label %" + ok + ", label %"
+                               + broken + "\n");
+    let opened: Int = self.write_body(broken + ":\n");
+    let text: String = substring(src, clause.b, clause.c);
+    let message: String = self.intern_text("burxt runtime error: `" + text + "` failed in `"
+                                  + owner + "`\n");
+    let told: Int = self.write_body("  call void @burxt.contract_failed(i64 ptrtoint (ptr "
+                           + message + " to i64))\n");
+    let dead: Int = self.write_body("  unreachable\n");
+    return self.write_body(ok + ":\n");
+}
+
 function (mutable self: Unit) emit_function(src: String, index: Int, suffix: String) -> Int allocates {
     let item: Node = self.nodes[index];
     let name: Token = self.tokens[item.token];
@@ -2297,12 +2456,53 @@ function (mutable self: Unit) emit_function(src: String, index: Int, suffix: Str
         }
         p += 1;
     }
+
+    // `requires`, after the parameters are in their slots — the clause names them, so they have to
+    // exist — and before a single statement of the body runs. A precondition that was checked after
+    // the work would be a report, not a guard.
+    let outer_ensures_start: Int = self.ensures_start;
+    let outer_ensures_count: Int = self.ensures_count;
+    let outer_ensures_owner: String = self.ensures_owner;
+    self.ensures_start = 0;
+    self.ensures_count = 0;
+    self.ensures_owner = symbol;
+    let mutable c: Int = 0;
+    while c < signature_node.b {
+        let clause: Node = self.nodes[self.children[signature_node.a + c]];
+        if clause.value == 126 {                     // requires
+            let checked: Int = self.emit_clause_check(src, clause, symbol);
+        }
+        c += 1;
+    }
+    // `old(...)` captured at ENTRY, before the body can change anything. This is the whole reason a
+    // conservation law works: `ensures self.a + self.b == old(self.a + self.b)` compares the state
+    // after against a value taken before.
+    let old_base: Int = len(self.old_nodes);
+    c = 0;
+    while c < signature_node.b {
+        let clause: Node = self.nodes[self.children[signature_node.a + c]];
+        if clause.value == 127 {                     // ensures
+            let hoisted: Int = self.hoist_old(src, clause.a);
+        }
+        c += 1;
+    }
+
+    // The `ensures` range is remembered rather than emitted: it belongs at every `return`, which is
+    // in emit_stmt and may be forty lines away.
+    self.ensures_start = signature_node.a;
+    self.ensures_count = signature_node.b;
+
     let body: Int = self.emit_block(src, item.b);
     // Unreachable, since the checker proved every path returns — but LLVM requires every
     // block to end in a terminator, and a module that does not verify is not a program.
     let closed: Int = self.close_function("  ret i64 0\n\}\n\n");
     let dropped: Int = truncate(self.slots, base);
     self.sret = outer_sret;
+    self.ensures_start = outer_ensures_start;
+    self.ensures_count = outer_ensures_count;
+    self.ensures_owner = outer_ensures_owner;
+    let forgotten: Int = truncate(self.old_nodes, old_base);
+    let released: Int = truncate(self.old_slots, old_base);
     return 1;
 }
 
@@ -2902,6 +3102,17 @@ function runtime_ir() -> String allocates {
         + "  %written = call i64 @fwrite(ptr %fp, i64 1, i64 %count, ptr %f)\n"
         + "  %closed = call i32 @fclose(ptr %f)\n"
         + "  ret i64 %written\n\}\n\n"
+        // A contract that did not hold. The whole message is built at COMPILE time and interned,
+        // so this helper takes one pointer and needs no formatting — and the text it prints is the
+        // clause exactly as the programmer wrote it, which is the difference between a message that
+        // names the promise and one that says a precondition was violated.
+        + "define void @burxt.contract_failed(i64 %msg) \{\n"
+        + "entry:\n"
+        + "  %m = inttoptr i64 %msg to ptr\n"
+        + "  %err = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.fmt_str, ptr %m)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n\}\n\n"
         + "define void @burxt.bounds(i64 %i, i64 %limit, i64 %at) \{\n"
         + "entry:\n"
         + "  %low = icmp slt i64 %i, 0\n"

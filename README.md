@@ -77,7 +77,11 @@ Burxt is early and built in small, verified increments. It is **not yet ready fo
 
 **Burxt compiles Burxt, and the two compilers agree.** The compiler is written in Burxt — lexer, parser, typechecker and an LLVM-IR backend, **8,300 lines** of it — and it compiles its own source. The compiler *it* produces emits **byte-identical** output for that same source: the fixpoint that says the two implementations agree about the whole language, rather than about the programs someone thought to test.
 
-It is no longer a partial backend. **Stage-1 compiles all 108 pass programs and every one prints the same bytes as the Rust compiler's build of it** — Decimals, `match`, `return tail`, contracts, `external function`, interpolation, generics and maps included. The Rust compiler (15,000 lines) stays as the trust anchor and as the other half of a differential test, so a change to the language now has two implementations that must agree or a test fails. Details in [`spec/M4-SELF-HOSTING.md`](spec/M4-SELF-HOSTING.md).
+**Stage-1 compiles all 108 pass programs and every one prints the same bytes as the Rust compiler's build of it** — Decimals, `match`, `return tail`, `external function`, interpolation, generics and maps included.
+
+**Where it is still behind, stated precisely, because "compiles every program" reads like more than it is:** that measure covers programs that *succeed*. Stage-1's backend keeps **8 of the 21 runtime guarantees** in `tests/panic/` — it does not yet emit contract checks, several bounds checks, or the `decreases` measure. A test holds that number as a floor and names every one that is missing, so the gap is a list rather than a surprise.
+
+None of this reaches anyone who installs Burxt: **the release binary is the Rust compiler**, which keeps 21 of 21. Stage-1 exists to prove the language can describe itself, and it does — the fixpoint is byte-identical. It is not yet the compiler you would ship. The Rust compiler stays as the trust anchor and as the other half of a differential test, so a change to the language has two implementations that must agree or a test fails. Details in [`spec/M4-SELF-HOSTING.md`](spec/M4-SELF-HOSTING.md).
 
 Every push runs **34 invariants**, including that fixpoint, the differential test, 108 pass and 228 fail fixtures, and performance ratios that fail if a known quadratic returns.
 

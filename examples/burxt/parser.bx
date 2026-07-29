@@ -1549,13 +1549,26 @@ function (mutable self: Unit) parse_clauses(src: String, return_type: Int, recei
         let mutable which: Int = 126;
         if self.at_word(src, "ensures") { which = 127; }
         if self.at_word(src, "decreases") { which = 128; }
+        let clause_start: Int = self.position;
         let n: Int = self.advance();
         // A clause is a condition, so a `{` after it opens the BODY.
         self.no_record_literal += 1;
         let cond: Int = self.parse_expr(src);
         self.no_record_literal -= 1;
         if cond < 0 { return -1; }
-        let clause: Int = self.add(93, cond, 0, 0, which, here);
+        // The clause's TEXT, as a byte span, in the two spare slots. A failure has to quote what
+        // the programmer wrote — "a precondition was violated" makes the reader go and find which
+        // one, and there is usually more than one. Recorded here because this is the only place
+        // that knows where the clause began and ended.
+        // `here` is the position before the FIRST clause and is shared by all of them — the node's
+        // token has always been that, and the checker points diagnostics at it. So the TEXT span
+        // needs its own start, captured per clause, or every clause after the first quotes its
+        // predecessors too. It did exactly that until this line existed.
+        let opened: Token = self.tokens[clause_start];
+        let last: Token = self.tokens[self.position - 1];
+        let text_start: Int = opened.start;
+        let text_length: Int = last.start + last.length - opened.start;
+        let clause: Int = self.add(93, cond, text_start, text_length, which, here);
         push(self.stack, clause);
         count += 1;
     }
