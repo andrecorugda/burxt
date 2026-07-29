@@ -1522,13 +1522,14 @@ fn the_repository_root_holds_only_what_belongs_there() {
         // everything else lives in a directory that says what it is
         "",
     ];
-    const DIRS: [&str; 11] = [
+    const DIRS: [&str; 12] = [
         "src", "spec", "tests", "examples", "editors", "assets", "docs", "lib", "scripts",
         // built by scripts/release.sh, ignored by git, never committed
         "dist",
-        // CI and the release workflow. GitHub fixes this name, so it is the one directory here
-        // whose spelling is not ours to choose.
+        // CI and the release workflow, and the Codespaces container. GitHub fixes both names, so
+        // they are the two directories here whose spelling is not ours to choose.
         ".github",
+        ".devcontainer",
     ];
 
     let mut strays = Vec::new();

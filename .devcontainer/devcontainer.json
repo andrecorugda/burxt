@@ -1,0 +1,42 @@
+{
+  "// what this is": [
+    "The 'try Burxt in your browser' path, chosen over a hosted playground because it costs",
+    "nothing and shows more: a real compiler, a real run, and the editor extension with its",
+    "syntax highlighting, diagnostics and Run button working on real code. A print-output box",
+    "cannot demonstrate an LSP.",
+    "",
+    "It installs the RELEASE BINARY rather than building from source, and that is the point of",
+    "the exercise as well as a shortcut: the binary statically links LLVM, so a container with",
+    "nothing but a C compiler is enough. If this works, the install page's claim is true.",
+    "",
+    "It falls back to building from source when no release exists yet, so the button works on a",
+    "fresh clone before the first tag is cut. That path is slow — it installs Rust and LLVM 18 —",
+    "and says so while it runs rather than looking hung."
+  ],
+
+  "name": "Burxt",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {}
+  },
+
+  "onCreateCommand": "sudo apt-get update && sudo apt-get install -y build-essential curl",
+
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "files.associations": { "*.bx": "burxt" },
+        "editor.formatOnSave": false,
+        "workbench.colorTheme": "Default Light Modern"
+      }
+    }
+  },
+
+  "// opens on": "the tour, which is one file that touches most of the language",
+  "postAttachCommand": "code examples/tour.bx || true",
+
+  "remoteUser": "vscode"
+}

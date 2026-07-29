@@ -14,6 +14,11 @@ and correctness is enforced by the compiler — not left to discipline.**
 
 [The guide](docs/guide/) · [Install](#installing-without-rust) · [Examples](examples/) · [Design notes](DESIGN.md)
 
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/andrecorugda/burxt?quickstart=1)
+
+**Try it without installing anything** — a browser, the real compiler, and the editor extension
+with live diagnostics.
+
 </div>
 
 ---
