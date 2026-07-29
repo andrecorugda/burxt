@@ -36,9 +36,13 @@ jobs:
       # so without this step the suite would pass while silently testing less.
       - name: Install LLVM 18
         run: |
-          wget -q https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 18
+          # Into /tmp, NOT the workspace. Downloading it beside the checkout left `llvm.sh` in the
+          # repository root, and two tests correctly refused it — `the_repository_root_holds_only
+          # _what_belongs_there` and `every_source_and_document_is_in_version_control`. The tests
+          # were right and this workflow was the thing littering.
+          wget -q https://apt.llvm.org/llvm.sh -O /tmp/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 18
           sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev
           /usr/lib/llvm-18/bin/llc --version | head -2
           test -x /usr/lib/llvm-18/bin/llc
