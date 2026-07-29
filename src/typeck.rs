@@ -424,6 +424,60 @@ pub struct TypeChecker {
     /// the region currently open, if any. One level only in this slice, so
     /// this doubles as the nesting guard.
     current_region: Option<String>,
+
+    /// Bindings holding storage from a region THIS function opened.
+    ///
+    /// Found while testing M14, and it is a use-after-free that produced a silently wrong
+    /// answer — the failure class this language exists to refuse:
+    ///
+    /// ```text
+    /// function leaked(tag: Int) -> String {
+    ///     region inner {
+    ///         let s: String = "secret-" + to_string(tag);
+    ///         return s;                    // accepted, and printed an EMPTY string
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// The return rule asks `expr_allocates`, which answers for a concatenation but not for
+    /// a NAME bound to one — a variable read fell through to `false`. So returning the
+    /// expression was refused and returning it via a binding was not, and codegen releases
+    /// the region before the `ret`, so the pointer handed back was into freed bytes.
+    ///
+    /// The type cannot carry this: a literal String lives in `.rodata` and a concatenated
+    /// one lives in a region, and both are `String`. So it is recorded per binding, at the
+    /// `let` — which is the one place the checker already knows, because it computes
+    /// exactly this to decide whether the `let` needed a region at all.
+    ///
+    /// A PARAMETER is deliberately never in here. A String parameter may well be region
+    /// storage, but it is the CALLER's, and the caller's region outlives the call — so
+    /// returning a parameter is safe and must keep working.
+    region_locals: HashSet<String>,
+
+    // ---- M14 slice 1: working out `allocates` instead of asking for it ------
+    //
+    // The compiler has always computed this. `expr_allocates` walks a body and answers
+    // whether it allocates, and the declared word was then checked against that answer —
+    // so the programmer was being asked to write down a fact the checker derived. In
+    // `examples/pos/receipt.bx` it was on 3 functions out of 3, which is an annotation
+    // carrying no information at all.
+    //
+    // It was REQUIRED for an ordering reason rather than a semantic one: a call site has
+    // to know whether its callee allocates, and a callee may be declared 200 lines later,
+    // so the answer had to be available before any body was read. Inference needs a
+    // fixpoint over the call graph instead of one pass — `a` allocates because it calls
+    // `b`, which allocates because it calls `c`.
+    /// True in a THROWAWAY checker whose only job is to answer "which functions
+    /// allocate?". While set, `has_region` never refuses — it records what wanted a
+    /// region and answers yes, so the pass reaches the end of every body instead of
+    /// stopping at the first allocation.
+    probing: bool,
+    /// Who is being probed: `(receiver, name)`, receiver empty for a free function.
+    probe_owner: RefCell<(String, String)>,
+    /// What the probe found. `RefCell` because `has_region` is a query — it answers a
+    /// question about the checker and must not need `&mut` to do it.
+    probe_fns: RefCell<HashSet<String>>,
+    probe_methods: RefCell<HashSet<(String, String)>>,
 }
 
 /// The names a program may not declare.
@@ -495,6 +549,11 @@ impl TypeChecker {
             current_ret: None,
             current_signature: None,
             current_region: None,
+            region_locals: HashSet::new(),
+            probing: false,
+            probe_owner: RefCell::new((String::new(), String::new())),
+            probe_fns: RefCell::new(HashSet::new()),
+            probe_methods: RefCell::new(HashSet::new()),
         }
     }
 
@@ -505,6 +564,13 @@ impl TypeChecker {
     /// a nested statement naturally yields the most precise position because it
     /// was the last thing entered.
     pub fn check(&mut self, prog: &Program) -> Result<TypedProgram, Vec<Diagnostic>> {
+        // M14: work out which functions allocate before checking anything, so `allocates`
+        // need not be written. See `probing` on the struct for why this needs a fixpoint
+        // and not a pass.
+        let (fns, methods) = Self::infer_allocates(prog);
+        self.alloc_fns.extend(fns);
+        self.alloc_methods.extend(methods);
+
         let result = self.check_program_inner(prog);
         if let Err(message) = result {
             // A declaration-level failure stops the pass it was in, so it arrives
@@ -606,7 +672,81 @@ impl TypeChecker {
     /// the caller's region is in effect. The two are the same question everywhere
     /// allocation is checked, so they are answered in one place.
     fn has_region(&self) -> bool {
+        // Probing: nothing is refused, and anything that wanted a region while none was
+        // lexically open is exactly the definition of "this function allocates in its
+        // caller's region". One choke point answers the question for all eight sites that
+        // ask it, which is why the inference is a dozen lines rather than a sweep.
+        if self.probing {
+            if self.current_region.is_none() {
+                let (receiver, name) = self.probe_owner.borrow().clone();
+                if name.is_empty() {
+                    // The top level. It has no signature to carry the answer, and it is
+                    // where the program's own region lives — nothing to record.
+                } else if receiver.is_empty() {
+                    self.probe_fns.borrow_mut().insert(name);
+                } else {
+                    self.probe_methods.borrow_mut().insert((receiver, name));
+                }
+            }
+            return true;
+        }
         self.current_region.is_some() || self.in_caller_region
+    }
+
+    /// Which functions and methods allocate — worked out rather than declared.
+    ///
+    /// A THROWAWAY checker per round, never this one. Sharing would be a real bug and not
+    /// merely untidy: checking a body creates generic instantiations and records them in
+    /// `seen_instantiations` so each is emitted once, so a probe pass on the live checker
+    /// would mark them seen and the real pass would emit none of them.
+    ///
+    /// The fixpoint is least-to-greatest and therefore correct rather than merely
+    /// terminating: each round starts from what the last one found, `expr_allocates` is
+    /// monotone in that set, and a set that only grows over a finite number of names has
+    /// to stop growing. `a` allocates because it calls `b`, which allocates because it
+    /// calls `c` — so one round per link in the longest chain, which is why this iterates
+    /// instead of asking once.
+    ///
+    /// Errors are DISCARDED here, deliberately. A body that does not typecheck contributes
+    /// nothing, and the real pass reports the problem with its own message — so the
+    /// diagnostics a user sees are exactly the ones they saw before M14, in the same order.
+    /// A probe that reported anything would be a second source of truth for error text.
+    fn infer_allocates(prog: &Program) -> (HashSet<String>, HashSet<(String, String)>) {
+        let mut fns: HashSet<String> = HashSet::new();
+        let mut methods: HashSet<(String, String)> = HashSet::new();
+        // One round per link in the longest call chain. The bound is the number of
+        // functions, which no chain can exceed without repeating a name, and it is a
+        // backstop rather than an expectation — real programs settle in two or three.
+        let ceiling = prog.fns.len() + prog.methods.len() + 1;
+        for _ in 0..ceiling {
+            let mut probe = TypeChecker::new();
+            probe.probing = true;
+            probe.alloc_fns = fns.clone();
+            probe.alloc_methods = methods.clone();
+            let _ = probe.check_program_inner(prog);
+            let found_fns = probe.probe_fns.borrow().clone();
+            let found_methods = probe.probe_methods.borrow().clone();
+            let grew = !found_fns.is_subset(&fns) || !found_methods.is_subset(&methods);
+            fns.extend(found_fns);
+            methods.extend(found_methods);
+            if !grew {
+                break;
+            }
+        }
+        (fns, methods)
+    }
+
+    /// Does this function build its answer in the caller's region?
+    ///
+    /// One question, one answer, whether the programmer wrote `allocates` or the probe
+    /// worked it out. Everything below asks through here rather than reading the AST flag,
+    /// so there is no way for the two to disagree.
+    fn allocates_fn(&self, name: &str) -> bool {
+        self.alloc_fns.contains(name)
+    }
+
+    fn allocates_method(&self, receiver: &str, name: &str) -> bool {
+        self.alloc_methods.contains(&(receiver.to_string(), name.to_string()))
     }
 
     /// The sentence that tells a reader how to get a region, written once.
@@ -1607,7 +1747,16 @@ impl TypeChecker {
             // and it applies to a growable array for exactly the same reason. The rule
             // predated `allocates` and never learned about it, which came out the first
             // time a standard-library function wanted to answer `[String]`.
-            if self.region_allocated(&f.ret) && !f.allocates {
+            // `self.alloc_fns` rather than `f.allocates`: it is seeded with what the probe
+            // worked out (M14), so a function that plainly builds its answer no longer has
+            // to say so. Writing the word still works and is still verified.
+            //
+            // Not while PROBING: this rule is a consequence of not allocating, and the
+            // probe is what decides that. Applied early it aborted the declaration pass
+            // before a single body was read, so the probe found nothing and every function
+            // that builds its own answer stayed refused — the inference silently did
+            // nothing at all. The real pass applies it with the answer in hand.
+            if !self.probing && self.region_allocated(&f.ret) && !self.allocates_fn(&f.name) {
                 return Err(format!(
                     "function `{}` cannot return {}, because its storage lives in a region \
                      and would not outlive it. Fill an array the caller owns, or \
@@ -1756,6 +1905,11 @@ impl TypeChecker {
         }
 
         // Pass 3: top-level statements (the implicit main).
+        //
+        // No owner: an allocation out here belongs to the program, which has no signature
+        // to carry the answer. Without clearing it, a probing pass would credit whichever
+        // function happened to be checked last.
+        *self.probe_owner.borrow_mut() = (String::new(), String::new());
         let mut stmts = Vec::new();
         // Top-level statements recover exactly as a function body's do.
         for s in &prog.stmts {
@@ -2084,6 +2238,9 @@ impl TypeChecker {
                 arguments.iter().any(|a| self.expr_allocates(a))
             }
             TypedExprKind::ArrayLit(items) => items.iter().any(|i| self.expr_allocates(i)),
+            // A name bound to region storage IS region storage. Without this, `return s`
+            // slipped past the rule that refuses `return "a" + "b"` — see `region_locals`.
+            TypedExprKind::Var(name) => self.region_locals.contains(name),
             TypedExprKind::Field { base, .. } => self.expr_allocates(base),
             TypedExprKind::Index { base, index, .. } => {
                 self.expr_allocates(base) || self.expr_allocates(index)
@@ -2334,7 +2491,10 @@ impl TypeChecker {
 
     fn check_fn(&mut self, f: &FnDef) -> Result<TypedFn, String> {
         self.current_span.set(f.span);
+        // Who a probing pass should credit for an allocation found in this body.
+        *self.probe_owner.borrow_mut() = (String::new(), f.name.clone());
         self.env.clear();
+        self.region_locals.clear();
         let mut parameters = Vec::new();
         for p in &f.parameters {
             if let Some(m) = p.marshal {
@@ -2355,7 +2515,10 @@ impl TypeChecker {
             parameters.push((p.name.clone(), p.ty.clone()));
         }
         self.current_ret = Some(f.ret.clone());
-        self.in_caller_region = f.allocates;
+        // From the set, not the word: an inferred `allocates` has to put the body in the
+        // same state a written one does, or the inference would only remove the error and
+        // not the reason for it.
+        self.in_caller_region = self.allocates_fn(&f.name);
         self.in_pure = if f.is_pure { Some(f.name.clone()) } else { None };
         self.current_signature =
             Some((f.name.clone(), f.parameters.iter().map(|p| p.ty.clone()).collect()));
@@ -2425,6 +2588,7 @@ impl TypeChecker {
         self.in_pure = None;
         self.current_signature = None;
         self.env.clear();
+        self.region_locals.clear();
 
         // Only prove the return paths if the body actually checked. A statement
         // that failed produced no TypedStmt, so "must end by returning" would be
@@ -2449,7 +2613,9 @@ impl TypeChecker {
     /// exact same AssignField rule an ordinary `let mut` binding would.
     fn check_method(&mut self, m: &MethodDef) -> Result<TypedMethod, String> {
         self.current_span.set(m.span);
+        *self.probe_owner.borrow_mut() = (m.receiver.clone(), m.name.clone());
         self.env.clear();
+        self.region_locals.clear();
         self.env.insert(
             "self".to_string(),
             (Type::Named(m.receiver.clone()), m.receiver_mut),
@@ -2480,7 +2646,7 @@ impl TypeChecker {
             parameters.push((p.name.clone(), p.ty.clone()));
         }
         self.current_ret = Some(m.ret.clone());
-        self.in_caller_region = m.allocates;
+        self.in_caller_region = self.allocates_method(&m.receiver, &m.name);
 
         // Contracts, in the receiver-and-parameter scope, under the `pure` rule —
         // exactly as on a free function. A MUTATING method is where they earn the
@@ -2515,6 +2681,7 @@ impl TypeChecker {
         self.current_ret = None;
         self.in_caller_region = false;
         self.env.clear();
+        self.region_locals.clear();
 
         if !block_returns(&body) {
             return Err(format!(
@@ -2880,6 +3047,13 @@ impl TypeChecker {
                         (typed.ty.clone(), typed)
                     }
                 };
+                // The same question the rules above just asked, remembered instead of
+                // discarded: did this initializer build something in a region THIS
+                // function opened? If so the binding cannot leave, and `return name` has
+                // to be refused exactly as `return <that expression>` already was.
+                if self.current_region.is_some() && self.expr_allocates(&typed) {
+                    self.region_locals.insert(name.clone());
+                }
                 self.env.insert(name.clone(), (bound.clone(), *mutable));
                 Ok(TypedStmt::Let { name: name.clone(), ty: bound, value: typed })
             }
@@ -2909,6 +3083,12 @@ impl TypeChecker {
                         "cannot assign {} {} to `{}`, which was declared {}",
                         typed.ty.article(), typed.ty, name, declared
                     ));
+                }
+                // Assignment can put region storage into a binding that did not hold any:
+                // `let mutable s: String = "x"; region r { s = "a" + "b"; }`. The `let`
+                // saw a literal, so only this can know.
+                if self.current_region.is_some() && self.expr_allocates(&typed) {
+                    self.region_locals.insert(name.clone());
                 }
                 Ok(TypedStmt::Assign { name: name.clone(), value: typed })
             }

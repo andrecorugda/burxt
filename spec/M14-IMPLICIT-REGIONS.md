@@ -1,12 +1,55 @@
 # Burxt — every block is a region (M14)
 
-> Status: **DESIGNED, not started.** Recorded now because the design came out of a four-language
-> comparison and the reasoning should not have to be rediscovered.
+> Status: **slice 1 DONE in stage-0 (v0.0.142) — `allocates` is inferred. Slices 2–3 pending.**
 >
-> **Blocked on the wrong answer in `tests/wrong-answer/`, deliberately.** This milestone moves
-> allocation decisions in both compilers. Starting it on top of an unexplained wrong answer in
-> money means the next failure has two possible causes instead of one. Fix that first — and note
-> that it sits at the same `dynamic` boundary as §5's hole, so they may not be unrelated.
+> | | |
+> |---|---|
+> | `examples/pos/` with every `allocates` deleted | **compiles, same receipt** |
+> | Fixpoint rounds, `examples/stage1.bx` (8.3k lines, ~500 functions) | **2** |
+> | Fixpoint rounds, a 4-deep forwarding chain | **5** — one per link, plus one to confirm |
+> | `burxt check examples/stage1.bx` | **0.26 s** (3 typecheck passes: 2 probe + 1 real) |
+> | Suite | 38 invariants, fixpoint intact, stage-1 still 109 of 109 |
+>
+> The cost is the honest one: checking now runs *rounds + 1* times instead of once. Two rounds
+> for real code, so ~3×, and it is bounded by the number of functions. A program with a 20-deep
+> forwarding chain would pay 21 passes; the fix if that ever bites is to process in
+> reverse-topological order, which makes an acyclic call graph converge in one. Not done, because
+> nothing measured needs it.
+>
+> ### A use-after-free found while testing this, and fixed with it
+>
+> Not caused by M14 — it was there before, and it produced a **silently wrong answer**:
+>
+> ```burxt
+> function leaked(tag: Int) -> String allocates {
+>     region inner {
+>         let s: String = "secret-" + to_string(tag);
+>         return s;                        // accepted. Printed an EMPTY string.
+>     }
+> }
+> ```
+>
+> The return rule asks `expr_allocates`, which answers for a concatenation but **not for a name
+> bound to one** — a variable read fell through to `false`. So `return "a" + "b"` inside a region
+> was refused and `return s` was not, and codegen releases the region before the `ret`.
+>
+> `tests/fail/allocates_cannot_escape_inner_region.bx` had caught the expression form since the
+> beginning, which is exactly what made this hard to see: the case looked covered. The two
+> fixtures now sit side by side, one spelling each. The fix records, per binding, whether it
+> holds storage from a region *this* function opened — which the checker already computed at the
+> `let` to decide whether the `let` needed a region at all, and then threw away.
+>
+> ### What is NOT done
+>
+> - **Stage-1 still requires the word.** Slice 1 is stage-0 only, staged the way M7 staged
+>   generics. That is why the proof lives in `tests/stage0-only/` and not `tests/pass/`: that
+>   directory's contract is that both compilers accept everything in it, and an exemption list on
+>   the 109-of-109 equality would be worse than a separate directory — a floor with holes cannot
+>   see a regression.
+> - **§5's hole is still open.** A trait signature still cannot declare `allocates`, so the region
+>   check is skipped through a trait object. Slice 2 closes it by construction; if slice 2 slips
+>   again, fix it on its own.
+> - Slices 2 and 3: implicit block regions, `allocates nothing`, `burxt explain memory`.
 
 ## 0. Where this came from
 

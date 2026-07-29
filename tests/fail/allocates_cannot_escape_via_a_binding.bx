@@ -1,0 +1,17 @@
+// The same escape as allocates_cannot_escape_inner_region.bx, one step apart: the value
+// leaves through a NAME rather than as the returned expression.
+//
+// This was ACCEPTED until v0.0.142, and it was a use-after-free with a silent result — the
+// region is released before the `ret`, so the caller received a pointer into freed bytes
+// and `print` showed an empty line where "secret-1" belonged.
+//
+// The rule asked `expr_allocates`, which answered for a concatenation and not for a name
+// bound to one. Its sibling fixture caught the expression form from the beginning, which is
+// what made the gap hard to see: the case was covered, just not this spelling of it.
+function leaked(tag: Int) -> String allocates {
+    region inner {
+        let s: String = "secret-" + to_string(tag);
+        return s;
+    }
+}
+region outer { print(leaked(1)); }
