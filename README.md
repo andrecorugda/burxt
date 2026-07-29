@@ -1,9 +1,29 @@
+<div align="center">
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/burxt-lockup-dark.png">
-  <img src="assets/burxt-lockup-light.png" alt="Burxt" width="300">
+  <img src="assets/burxt-lockup-light.png" alt="Burxt" width="320">
 </picture>
 
-**A typed, compiled, native language where exact decimals are the default and correctness is enforced by the compiler — not left to discipline.**
+**A typed, compiled, native language where exact decimals are the default
+and correctness is enforced by the compiler — not left to discipline.**
+
+[![CI](https://github.com/andrecorugda/burxt/actions/workflows/ci.yml/badge.svg)](https://github.com/andrecorugda/burxt/actions/workflows/ci.yml)
+[![Self-hosting](https://img.shields.io/badge/self--hosting-byte--identical%20fixpoint-111)](spec/M4-SELF-HOSTING.md)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-111)](#licence)
+
+[The guide](docs/guide/) · [Install](#installing-without-rust) · [Examples](examples/) · [Design notes](DESIGN.md)
+
+</div>
+
+---
+
+```burxt
+print("Hello, world!");
+```
+
+That is a complete Burxt program. There is no entry point to declare — your top-level
+statements *are* the program, and the compiler writes `main` for you.
 
 Burxt compiles to native machine code through LLVM. It is built around one conviction: the dangerous defaults that cause real bugs — binary floats for money, silent overflow, null, implicit coercion — should be *compile errors*, not habits you have to remember to avoid.
 
@@ -46,11 +66,13 @@ The same principle generalizes. Burxt's identity is: **the compiler refuses to l
 
 ## Status
 
-Burxt is early and built in small, verified increments. The numeric core is solid and the object model is taking shape. It is **not yet ready for production use** — it is ready to watch, try, and shape.
+Burxt is early and built in small, verified increments. It is **not yet ready for production use** — it is ready to try, read and shape.
 
-**Burxt compiles Burxt.** As of v0.0.73 the compiler is written in Burxt — lexer, parser, typechecker and an LLVM-IR backend, 4,900 lines of it — and it compiles its own source. The compiler *it* produces emits **byte-identical** output for that same source, which is the fixpoint that says the two implementations agree about the whole language rather than about the programs someone thought to test. A test runs the chain on every commit.
+**Burxt compiles Burxt, and the two compilers agree.** The compiler is written in Burxt — lexer, parser, typechecker and an LLVM-IR backend, **8,300 lines** of it — and it compiles its own source. The compiler *it* produces emits **byte-identical** output for that same source: the fixpoint that says the two implementations agree about the whole language, rather than about the programs someone thought to test.
 
-The honest scope, because it matters: the Burxt backend does not emit Decimals, `match`, `tail` or contracts yet — none of which its own source uses — and anything it cannot lower is refused by name rather than emitted wrongly. The Rust compiler stays as the trust anchor and as a differential test, so a change to the language now has two implementations that must agree. Details in [`spec/M4-SELF-HOSTING.md`](spec/M4-SELF-HOSTING.md).
+It is no longer a partial backend. **Stage-1 compiles all 108 pass programs and every one prints the same bytes as the Rust compiler's build of it** — Decimals, `match`, `return tail`, contracts, `external function`, interpolation, generics and maps included. The Rust compiler (15,000 lines) stays as the trust anchor and as the other half of a differential test, so a change to the language now has two implementations that must agree or a test fails. Details in [`spec/M4-SELF-HOSTING.md`](spec/M4-SELF-HOSTING.md).
+
+Every push runs **34 invariants**, including that fixpoint, the differential test, 108 pass and 228 fail fixtures, and performance ratios that fail if a known quadratic returns.
 
 **Working today:**
 
@@ -132,17 +154,37 @@ open, with the reasoning beside it.
 
 ## Installing without Rust
 
+From a published release — Linux x86-64, the only platform built and tested here:
+
 ```sh
-sh scripts/release.sh                 # → dist/burxt-<version>-linux-x86_64.tar.gz (14 MB)
-sh scripts/install.sh                 # → /usr/local/bin/burxt + /usr/local/lib/burxt/
+sh scripts/install.sh https://github.com/andrecorugda/burxt/releases/latest/download/burxt-linux-x86_64.tar.gz
 ```
 
-The binary **statically links LLVM**, so whoever installs it needs no Rust, no cargo and no
-LLVM. The one thing it cannot carry is a **C compiler**: `burxt build` hands the object file
-to the system linker, so `cc` must exist. `burxt check` needs nothing at all.
+Or build the artifact yourself:
 
-`PREFIX=~/.local sh scripts/install.sh` installs somewhere else, and
-`sh scripts/install.sh <url.tar.gz>` installs from a published release.
+```sh
+sh scripts/release.sh          # → dist/burxt-<version>-linux-x86_64.tar.gz, and smoke-tests it
+sh scripts/install.sh          # → /usr/local/bin/burxt + /usr/local/lib/burxt/
+```
+
+`PREFIX=~/.local sh scripts/install.sh` installs somewhere else.
+
+**What you need: a C compiler.** That is the whole list. The binary **statically links LLVM**, so
+there is no Rust, no cargo, no LLVM to install and no version to match — `burxt build` hands its
+object file to the system linker, so `cc` has to exist. `burxt check` needs nothing at all.
+
+**What the programs you compile need: libc.** A Burxt executable is about **16 KB** with no runtime
+behind it — the allocator, the string operations and the overflow checks are emitted into every
+module.
+
+The sizes, measured rather than estimated: **48 MB** for the stripped binary, **18 MB** compressed
+in the tarball. Almost all of that is LLVM, and it is a deliberate trade — one download now against
+a version-matched system dependency forever, which is the commonest first-run failure for languages
+that go the other way.
+
+`scripts/release.sh` unpacks its own tarball into a scratch directory and compiles a program with
+the *unpacked* binary before it reports success, so a broken artifact fails at build time rather
+than on somebody's machine.
 
 ## Building the compiler
 

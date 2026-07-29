@@ -55,7 +55,7 @@ install -m 644 "$UNPACKED"/lib/*.bx "$PREFIX/lib/burxt/"
 echo
 echo "installed $("$PREFIX/bin/burxt" 2>&1 | head -1)"
 echo "  binary:  $PREFIX/bin/burxt"
-echo "  library: $PREFIX/lib/burxt/    (use \"$PREFIX/lib/burxt/str.bx\";)"
+echo "  library: $PREFIX/lib/burxt/    (use \"$PREFIX/lib/burxt/string.bx\";)"
 case ":$PATH:" in
     *":$PREFIX/bin:"*) ;;
     *) echo "  note:    $PREFIX/bin is not on your PATH" ;;

@@ -1,0 +1,78 @@
+# Every push runs the whole suite, including the byte-identical fixpoint.
+#
+# The README says "a test runs the chain on every commit". Until v0.0.124 that was not true —
+# there was no CI at all — and a document that lies is the rot this project spends versions
+# removing. This is the file that makes the sentence honest.
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Job-wide, so `build` and `test` compile with the SAME flags and share one cache entry. Setting
+  # it on the build step alone made cargo rebuild everything for the test step.
+  RUSTFLAGS: -D warnings
+  # `.cargo/config.toml` already sets LLVM_SYS_181_PREFIX to /usr/lib/llvm-18, which is exactly
+  # where apt.llvm.org installs it — so the checkout carries its own build configuration and this
+  # workflow does not have to know about it.
+
+jobs:
+  suite:
+    name: Build and run every invariant
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # LLVM **18**, pinned. inkwell is on feature `llvm18-1`, so a floating LLVM is how this
+      # breaks silently in six months: a newer one would fail to link against a feature-gated
+      # crate, and the failure would look like the compiler's fault rather than the runner's.
+      #
+      # `llvm-18-dev` is what provides llvm-config and the static libraries the build links; the
+      # binary alone is not enough. `tests/runner.rs` also invokes /usr/lib/llvm-18/bin/llc by
+      # absolute path to assemble stage-1's textual IR, and skips those tests when it is absent —
+      # so without this step the suite would pass while silently testing less.
+      - name: Install LLVM 18
+        run: |
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 18
+          sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev
+          /usr/lib/llvm-18/bin/llc --version | head -2
+          test -x /usr/lib/llvm-18/bin/llc
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-llvm18-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-llvm18-
+
+      # Warnings are errors in CI. The tree is at zero warnings, and the cheapest moment to keep
+      # it there is the one where nobody has to remember to look.
+      - name: Build
+        run: cargo build --locked --verbose
+
+      # All of them, and the list is the point: the byte-identical self-hosting fixpoint, the
+      # differential test between the two compilers, every pass fixture compiled by BOTH and
+      # compared byte for byte, the rejection ratchet, the performance ratios, the editor grammar,
+      # the packaged extension, the guide's links and keyword currency, and the naming rule.
+      - name: Run the suite
+        run: cargo test --locked -- --nocapture
+
+      # A cheap end-to-end check that the thing a user actually types works. `print("...");` with
+      # no wrapper is a whole Burxt program — no entry point to declare — and if that ever stops
+      # being true the landing page is wrong.
+      - name: A one-line program is a whole program
+        run: |
+          printf 'print("Hello, world!");\n' > /tmp/hello.bx
+          # From /tmp, because `burxt run` writes the executable it builds into the working
+          # directory — and a stray binary in the repository root is a thing the suite refuses.
+          cd /tmp && "$GITHUB_WORKSPACE/target/debug/burxt" run hello.bx | tee out
+          grep -qx 'Hello, world!' /tmp/out

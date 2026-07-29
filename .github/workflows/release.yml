@@ -1,0 +1,68 @@
+# Tag a version, get a tarball people can actually install.
+#
+# `scripts/release.sh` does the work and carries its own smoke test — it unpacks the tarball into a
+# directory that has never seen this project and compiles a program with the UNPACKED binary. So
+# this workflow is thin on purpose: if the artifact is broken, the script fails here for the same
+# reason it would fail on a laptop, and the failure is reproducible by running one command.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # So the artifact can be built and downloaded without cutting a tag — useful for checking that a
+  # change to the packaging works before it is permanent.
+  workflow_dispatch:
+
+jobs:
+  tarball:
+    name: Build, smoke-test and publish the tarball
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # only to attach assets to the release
+    steps:
+      - uses: actions/checkout@v4
+
+      # LLVM **18**, pinned, for the reason CI pins it: inkwell is on feature `llvm18-1`, and this
+      # is also the LLVM that ends up statically linked INSIDE the published binary. The version
+      # here is the version users get.
+      - name: Install LLVM 18
+        run: |
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 18
+          sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # The whole suite before publishing anything. A release that fails its own tests is worse
+      # than no release, because someone will install it.
+      - name: Run the suite
+        run: cargo test --locked
+
+      - name: Build the tarball
+        run: sh scripts/release.sh
+
+      # The extension too, so the editor experience is one download away rather than a build step.
+      - name: Package the VS Code extension
+        run: python3 editors/vscode/pack.py
+
+      - name: Collect the assets
+        run: |
+          mkdir -p upload
+          cp dist/burxt-*.tar.gz upload/
+          cp editors/vscode/*.vsix upload/
+          cd upload && sha256sum * > SHA256SUMS && cat SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: burxt-release
+          path: upload/
+
+      # Only on a real tag. `workflow_dispatch` runs stop at the artifact above, which is the point
+      # of having both triggers.
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: upload/*
+          generate_release_notes: true
