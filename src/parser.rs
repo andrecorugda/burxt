@@ -438,7 +438,19 @@ impl Parser {
         let start = self.span().start;
         self.expect(&Token::Extern)?;
         self.expect(&Token::Fn)?;
-        let (name, type_parameters, parameters, ret) = self.parse_fn_signature()?;
+        let (name, type_parameters, parameters, ret, bracket_requires, bracket_ensures) =
+            self.parse_fn_signature()?;
+        // An `external function` is a declaration, not a definition: there is no body to insert a
+        // check into, and the C function on the other side will not honour a promise it cannot see.
+        // Refused by name rather than accepted and ignored.
+        if !bracket_requires.is_empty() || !bracket_ensures.is_empty() {
+            return Err(format!(
+                "`external function {}` cannot carry a contract: there is no body to check it in, \
+                 and C will not honour a promise it cannot see. Check the values before you call \
+                 it, in a Burxt function that can.",
+                name
+            ));
+        }
         if !type_parameters.is_empty() {
             // C has no notion of a type parameter, and a monomorphised C symbol is a
             // symbol that does not exist. See spec/M7-GENERICS.md §2.
@@ -455,6 +467,80 @@ impl Parser {
     /// Contract clauses sit between the signature and the body, where a reader
     /// looks for what a function demands and promises. Shared by functions and
     /// methods, so the two can never drift.
+    /// `[> $0.00, < balance]` after a type — contracts on the value that type describes.
+    ///
+    /// The subject is ELIDED: a clause beginning with a comparison operator gets `subject` inserted
+    /// on its left, so `[> $0.00]` on a parameter named `amount` becomes `amount > $0.00`. Position
+    /// decides what the clause is about, which is why there is no `self` here to be confused with a
+    /// method's receiver. See spec/M13-CONTRACT-SYNTAX.md Decision 1.
+    ///
+    /// A clause that needs the subject anywhere else writes `it`, and that is left to the ordinary
+    /// expression parser — `it` is an identifier like any other here, resolved later against a
+    /// binding this function installs nowhere. The checker is what knows it means the subject.
+    ///
+    /// Each comma is a SEPARATE clause rather than one `&&`, so a failure can name the one that
+    /// broke. Decision 3.
+    fn parse_value_contracts(&mut self, subject: &str) -> Result<Vec<Contract>, String> {
+        let mut clauses = Vec::new();
+        if !self.at(&Token::LBracket) {
+            return Ok(clauses);
+        }
+        self.bump();
+        if self.at(&Token::RBracket) {
+            return Err(format!(
+                "`[]` after the type of `{}` promises nothing. Write a clause — `[> 0]` — or \
+                 leave the brackets off.",
+                subject
+            ));
+        }
+        loop {
+            let start = self.span().start;
+            let leading = match self.peek() {
+                Token::Gt => Some(CmpOp::Gt),
+                Token::Lt => Some(CmpOp::Lt),
+                Token::Ge => Some(CmpOp::Ge),
+                Token::Le => Some(CmpOp::Le),
+                Token::EqEq => Some(CmpOp::Eq),
+                Token::NotEq => Some(CmpOp::Ne),
+                _ => None,
+            };
+            let cond = if let Some(op) = leading {
+                // The elided form. The subject is synthesized at the operator's own span, so a
+                // failure points at the clause the reader wrote rather than at the parameter.
+                self.bump();
+                let here = Span { start, end: self.prev_end().max(start + 1) };
+                let lhs = Expr { kind: ExprKind::Var(subject.to_string()), span: here };
+                let rhs = self.parse_cond()?;
+                Expr {
+                    kind: ExprKind::Compare { op, lhs: Box::new(lhs), rhs: Box::new(rhs) },
+                    span: Span { start, end: self.prev_end().max(start + 1) },
+                }
+            } else {
+                self.parse_cond()?
+            };
+            let span = Span { start, end: self.prev_end().max(start + 1) };
+            // The text records the clause as a reader would WRITE it, subject included — so an
+            // elided `[<= balance]` on `amount` reports `amount <= balance` rather than a fragment
+            // that does not say which value broke.
+            //
+            // It also makes the desugaring observable: the same program written with brackets and
+            // with `requires` produces byte-identical failure messages, which is what
+            // tests/pass/contract_brackets.bx checks rather than asserts.
+            let written = self.text_of(span);
+            let text = if leading.is_some() {
+                format!("{} {}", subject, written)
+            } else {
+                written
+            };
+            clauses.push(Contract { cond, text, span });
+            if !self.more_in_list(&Token::RBracket) {
+                break;
+            }
+        }
+        self.expect(&Token::RBracket)?;
+        Ok(clauses)
+    }
+
     fn parse_contracts(
         &mut self,
     ) -> Result<(Vec<Contract>, Vec<Contract>, Option<Contract>), String> {
@@ -502,13 +588,24 @@ impl Parser {
             self.bump();
         }
         self.expect(&Token::Fn)?;
-        let (name, type_parameters, parameters, ret) = self.parse_fn_signature()?;
+        let (name, type_parameters, parameters, ret, bracket_requires, bracket_ensures) =
+            self.parse_fn_signature()?;
         // `-> T allocates` reads as what it is: returns a T, and allocates.
         let allocates = self.at_word("allocates");
         if allocates {
             self.bump();
         }
-        let (requires, ensures, decreases) = self.parse_contracts()?;
+        let (mut requires, mut ensures, decreases) = self.parse_contracts()?;
+        // Brackets FIRST, then the written clauses. A precondition on a parameter is about a value
+        // the caller already passed, so it should be the first thing checked and the first thing
+        // reported — and the escape-hatch `requires`, which is usually about the call as a whole,
+        // reads naturally after.
+        let mut all_requires = bracket_requires;
+        all_requires.append(&mut requires);
+        let requires = all_requires;
+        let mut all_ensures = bracket_ensures;
+        all_ensures.append(&mut ensures);
+        let ensures = all_ensures;
         let body = self.parse_block()?;
         // The parameters are only in scope for this signature and body.
         self.type_parameters.clear();
@@ -588,7 +685,8 @@ impl Parser {
         }
         self.type_parameters = receiver_arguments.clone();
         self.expect(&Token::RParen)?;
-        let (name, type_parameters, parameters, ret) = self.parse_fn_signature()?;
+        let (name, type_parameters, parameters, ret, bracket_requires, bracket_ensures) =
+            self.parse_fn_signature()?;
         if !type_parameters.is_empty() {
             // A method may use its TYPE's parameters; its own are a later slice, and a
             // parameter list that silently did nothing would be worse than a refusal.
@@ -603,7 +701,14 @@ impl Parser {
         if allocates {
             self.bump();
         }
-        let (requires, ensures, decreases) = self.parse_contracts()?;
+        let (mut requires, mut ensures, decreases) = self.parse_contracts()?;
+        // Same order as a free function: brackets first, then the written clauses.
+        let mut all_requires = bracket_requires;
+        all_requires.append(&mut requires);
+        let requires = all_requires;
+        let mut all_ensures = bracket_ensures;
+        all_ensures.append(&mut ensures);
+        let ensures = all_ensures;
         if let Some(d) = &decreases {
             let _ = d;
             return Err(
@@ -708,7 +813,13 @@ impl Parser {
         Ok(names)
     }
 
-    fn parse_fn_signature(&mut self) -> Result<(String, Vec<TypeParam>, Vec<Param>, Type), String> {
+    /// Also answers the contracts written as brackets on the parameters and the return type,
+    /// already desugared to ordinary `requires`/`ensures` clauses. The caller appends them to
+    /// whatever `parse_contracts` finds, so the two forms are the same thing by the time anything
+    /// downstream sees them — which is why this milestone touches almost nothing but the parser.
+    fn parse_fn_signature(
+        &mut self,
+    ) -> Result<(String, Vec<TypeParam>, Vec<Param>, Type, Vec<Contract>, Vec<Contract>), String> {
         let name = match self.bump() {
             Token::Ident(s) => s,
             other => return Err(format!("expected a function name after 'function', found {}", other.describe())),
@@ -724,6 +835,7 @@ impl Parser {
         self.type_parameters.extend(type_parameters.iter().map(|p| p.name.clone()));
         self.expect(&Token::LParen)?;
         let mut parameters = Vec::new();
+        let mut bracket_requires: Vec<Contract> = Vec::new();
         if !self.at(&Token::RParen) {
             loop {
                 let pname = match self.bump() {
@@ -733,6 +845,9 @@ impl Parser {
                 self.expect(&Token::Colon)?;
                 let ty = self.parse_type()?;
                 let marshal = self.parse_marshal()?;
+                // Brackets AFTER the marshaller, so `as scaled` still reads as part of the type
+                // and the contract reads as a statement about the value.
+                bracket_requires.extend(self.parse_value_contracts(&pname)?);
                 parameters.push(Param { name: pname, ty, marshal });
                 if !self.more_in_list(&Token::RParen) {
                     break;
@@ -750,7 +865,11 @@ impl Parser {
         }
         self.bump();
         let ret = self.parse_type()?;
-        Ok((name, type_parameters, parameters, ret))
+        // On the return type the subject is `result` — the same name `ensures` already binds, so a
+        // bracket there is an `ensures` in every respect. It is also the "on exit" slot, which is
+        // where a conservation law lives even though it is not about the returned value.
+        let bracket_ensures = self.parse_value_contracts("result")?;
+        Ok((name, type_parameters, parameters, ret, bracket_requires, bracket_ensures))
     }
 
     fn parse_block(&mut self) -> Result<Vec<Stmt>, String> {
