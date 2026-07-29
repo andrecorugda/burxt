@@ -83,7 +83,7 @@ lands** rather than from an argument:
 ```burxt
 record Bag<T> { items: [T], count: Int }
 
-function empty_bag<T>() -> Bag<T> allocates {
+function empty_bag<T>() -> Bag<T> {
     return Bag { items: [], count: 0 };
 }
 

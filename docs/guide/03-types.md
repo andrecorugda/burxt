@@ -110,7 +110,7 @@ trait Priced {
 
 implement Priced for Book {
     function (self: Book) price() -> Decimal<2> { return self.cost; }
-    function (self: Book) label() -> String allocates { return "book: " + self.title; }
+    function (self: Book) label() -> String { return "book: " + self.title; }
 }
 ```
 
@@ -124,7 +124,7 @@ and the receiver form.
 ```burxt
 implement Priced for Book {
     function (self) price() -> Decimal<2> { return self.cost; }
-    function (self) label() -> String allocates { return "book: " + self.title; }
+    function (self) label() -> String { return "book: " + self.title; }
 }
 ```
 

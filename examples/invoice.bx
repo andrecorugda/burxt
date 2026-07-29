@@ -19,7 +19,7 @@ function (self: Line) amount() -> Decimal<2> {
     return self.unit * self.quantity;
 }
 
-function (self: Line) render() -> String allocates {
+function (self: Line) render() -> String {
     return self.label + " x" + to_string(self.quantity)
          + " @ " + to_string(self.unit)
          + " = " + to_string(self.amount());

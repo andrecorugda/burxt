@@ -21,18 +21,18 @@ record Meal { dish: String, cost: Decimal<2>, covers: Int }
 // compiler checks the implementation answers EVERY signature, with no extras.
 implement Priced for Book {
     function (self) price() -> Decimal<2> { return self.cost; }
-    function (self) label() -> String allocates { return "book: " + self.title; }
+    function (self) label() -> String { return "book: " + self.title; }
 }
 
 implement Priced for Meal {
     function (self) price() -> Decimal<2> { return self.cost * self.covers; }
-    function (self) label() -> String allocates { return "meal: " + self.dish; }
+    function (self) label() -> String { return "meal: " + self.dish; }
 }
 
 // ---- Static dispatch: the default, and it costs nothing -------------------
 // `item: Book` is a concrete type, so the call is direct. No vtable, no
 // indirection, and the optimiser can see through it.
-function describe_book(item: Book) -> String allocates {
+function describe_book(item: Book) -> String {
     return item.label() + " at " + to_string(item.price());
 }
 

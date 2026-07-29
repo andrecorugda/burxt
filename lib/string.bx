@@ -72,7 +72,7 @@ function string_ends_with(text: String, suffix: String) -> Bool {
 }
 
 // Whitespace removed from both ends: space, tab, newline, carriage return.
-function string_trim(text: String) -> String allocates {
+function string_trim(text: String) -> String {
     let mutable from: Int = 0;
     while from < len(text) && string_is_space(byte_at(text, from)) {
         from += 1;
@@ -90,7 +90,7 @@ function string_is_space(byte: Int) -> Bool {
 
 // Split on a single byte. Answers a growable array, so it needs a region — the
 // pieces are new Strings and they have to live somewhere.
-function string_split(text: String, separator: Int) -> [String] allocates {
+function string_split(text: String, separator: Int) -> [String] {
     let mutable pieces: [String] = [];
     let mutable from: Int = 0;
     let mutable i: Int = 0;
@@ -104,7 +104,7 @@ function string_split(text: String, separator: Int) -> [String] allocates {
     return pieces;
 }
 
-function string_lines(text: String) -> [String] allocates {
+function string_lines(text: String) -> [String] {
     return string_split(text, 10);
 }
 
@@ -135,7 +135,7 @@ function string_to_int(text: String) -> Int {
 }
 
 // The separator between each piece. The join a program would write, written once.
-function string_join(pieces: [String], separator: String) -> String allocates {
+function string_join(pieces: [String], separator: String) -> String {
     if len(pieces) == 0 {
         return "";
     }
@@ -148,7 +148,7 @@ function string_join(pieces: [String], separator: String) -> String allocates {
     return out;
 }
 
-function string_repeat(text: String, times: Int) -> String allocates {
+function string_repeat(text: String, times: Int) -> String {
     let mutable out: String = "";
     let mutable i: Int = 0;
     while i < times {

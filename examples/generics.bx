@@ -122,9 +122,9 @@ record Stack<T> {
 // the rest of the signature and the body. A method may use its type's parameters and
 // declares none of its own.
 //
-// `allocates` for the ordinary reason: the array lives in the CALLER's region, so
+// This builds in the CALLER's region, for the ordinary reason: the array lives there, so
 // growing it builds there. Being generic changes what is allowed, never what it means.
-function (mutable self: Stack<T>) push_one(item: T) -> Int allocates {
+function (mutable self: Stack<T>) push_one(item: T) -> Int {
     return push(self.items, item);
 }
 

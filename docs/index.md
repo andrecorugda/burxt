@@ -57,7 +57,7 @@ remember:
 | **No binary floats for money** | Exact decimals are the default; scales must match |
 | **No garbage collector** | Regions: a bump pointer and a mark. Release is O(1), whatever you allocated |
 | **No inheritance** | Traits and composition. No fragile base class, no constructor order to remember |
-| **No hidden allocation** | A function that builds in your region says `allocates` in its signature |
+| **No hidden allocation** | Building a value needs somewhere to put it, and the compiler works out where — you never write it down |
 
 </div>
 

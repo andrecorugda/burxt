@@ -97,7 +97,7 @@ SNIPPETS = [
      '}\n'),
 
     ("regions", "Memory", "No collector. A region is a bump pointer and a mark.",
-     'function label(n: Int) -> String allocates {\n'
+     'function label(n: Int) -> String {\n'
      '    return "item " + to_string(n);\n'
      '}\n'
      '\n'

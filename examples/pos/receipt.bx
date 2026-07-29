@@ -3,19 +3,23 @@
 //
 //     use "receipt.bx";
 //
-// This is the file where the memory model becomes visible, and it is worth
-// noticing WHY: every function here builds a String, and a built value needs
-// somewhere to live. `allocates` says "I build in my caller's region", so the
-// text outlives the call that made it.
+// This is the file where the memory model USED to become visible. Every function here
+// builds a String, and a built value needs somewhere to live — so each one used to be
+// declared `allocates`, meaning "I build in my caller's region".
+//
+// Not one of them says it now: the compiler works it out. The rule is unchanged and so is
+// the machine code; what went is the obligation to write down a fact the compiler had
+// already derived. This file is where that became obvious — the word was on 3 functions
+// out of 3, which is an annotation carrying no information at all.
 // ============================================================================
 
 use "items.bx";
 use "tax.bx";
 
-// A width-padded amount, so the column lines up. Every `+` on Strings allocates,
-// which is why this says `allocates` — and why a function that only did Int
-// arithmetic would not have to.
-function money_column(amount: Decimal<2, RoundHalfUp>) -> String allocates {
+// A width-padded amount, so the column lines up. Every `+` on Strings builds a new one,
+// which is why this function allocates in its caller's region — and why one doing only Int
+// arithmetic would not.
+function money_column(amount: Decimal<2, RoundHalfUp>) -> String {
     let shown: String = to_string(amount);
     let mutable padded: String = "";
     let mutable pad: Int = 10 - len(shown);
@@ -26,7 +30,7 @@ function money_column(amount: Decimal<2, RoundHalfUp>) -> String allocates {
     return padded + shown;
 }
 
-function line_text(rule: dynamic Tax, line: Line) -> String allocates {
+function line_text(rule: dynamic Tax, line: Line) -> String {
     let subtotal: Decimal<2, RoundHalfUp> = line_subtotal(line);
     return line.item.name + "  x" + to_string(line.quantity)
         + money_column(subtotal);
@@ -41,7 +45,7 @@ function line_text(rule: dynamic Tax, line: Line) -> String allocates {
 //
 // That is a real cost of the current design, met by writing a real program rather than predicted.
 function totals_text(subtotal: Decimal<2, RoundHalfUp>,
-                     tax: Decimal<2, RoundHalfUp>) -> String allocates {
+                     tax: Decimal<2, RoundHalfUp>) -> String {
     let due: Decimal<2, RoundHalfUp> = subtotal + tax;
     return "subtotal" + money_column(subtotal) + "\n"
         + "tax     " + money_column(tax) + "\n"

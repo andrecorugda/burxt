@@ -54,7 +54,7 @@ record Map<K: Equatable, V> { entries: [MapEntry<K, V>], slots: [Int], live: Int
 // container that changes has to change through `mutable self`. The API is better for it —
 // `counts.set("k", 1)` rather than `map_set(counts, "k", 1)` — which is the usual way a real
 // constraint turns out to have been pointing at the nicer design.
-function map_new<K: Equatable, V>() -> Map<K, V> allocates {
+function map_new<K: Equatable, V>() -> Map<K, V> {
     return Map { entries: [], slots: [], live: 0 };
 }
 
@@ -102,7 +102,7 @@ function (self: Map<K, V>) probe(key: K) -> Int {
 // across a growth, and it is the difference between this and a plain hash table. Tombstones are
 // dropped here, which is the one moment an entry's index can change — and it changes for every
 // entry at once, so no slot survives to point at the wrong one.
-function (mutable self: Map<K, V>) rehash(wanted: Int) -> Int allocates {
+function (mutable self: Map<K, V>) rehash(wanted: Int) -> Int {
     let mutable fresh: [MapEntry<K, V>] = [];
     let mutable i: Int = 0;
     while i < len(self.entries) {
@@ -149,7 +149,7 @@ function (mutable self: Map<K, V>) rehash(wanted: Int) -> Int allocates {
 //
 // The table grows when it is more than half full. Half rather than the usual seven-eighths because
 // linear probing degrades sharply near full, and the memory is a region's to reclaim in O(1).
-function (mutable self: Map<K, V>) set(key: K, value: V) -> Int allocates {
+function (mutable self: Map<K, V>) set(key: K, value: V) -> Int {
     if len(self.slots) == 0 {
         let started: Int = self.rehash(8);
     }
@@ -229,7 +229,7 @@ function (self: Map<K, V>) get(key: K, fallback: V) -> V {
 // `get` stays, and is still the right call when a default is genuinely right. `find` is for when it
 // is not, and it answers with the one type in this language that cannot be read without saying what
 // happens when there is nothing there.
-function (self: Map<K, V>) find(key: K) -> Option<V> allocates {
+function (self: Map<K, V>) find(key: K) -> Option<V> {
     if len(self.slots) == 0 {
         return Option.None;
     }
@@ -254,7 +254,7 @@ function (self: Map<K, V>) count() -> Int {
 
 // Every live key, in insertion order. The answer is a fresh array, so a caller may iterate it
 // while changing the map — which a view into the entries could not promise.
-function (self: Map<K, V>) keys() -> [K] allocates {
+function (self: Map<K, V>) keys() -> [K] {
     let mutable out: [K] = [];
     let mutable i: Int = 0;
     while i < len(self.entries) {
@@ -274,7 +274,7 @@ function (self: Map<K, V>) keys() -> [K] allocates {
 // The entry is TOMBSTONED, not moved and not deleted, so every entry after it keeps its insertion
 // position. Its slot is left pointing at the tombstone rather than cleared, because clearing it
 // would break the probe chain of any key that collided with it and landed further along.
-function (mutable self: Map<K, V>) remove(key: K) -> Bool allocates {
+function (mutable self: Map<K, V>) remove(key: K) -> Bool {
     if len(self.slots) == 0 {
         return false;
     }

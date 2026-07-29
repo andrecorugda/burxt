@@ -104,16 +104,16 @@ function next_token(src: String, from: Int) -> Scan {
 }
 
 // A real lexer reports problems, and reporting means BUILDING a message. These
-// helpers are declared `allocates`: they construct their result in the caller's
+// helpers build in the caller's region: they construct their result where the caller's
 // region, which is what makes a diagnostic returnable at all. The requirement is
 // visible all the way up the chain — `show` says it too, because it calls one.
-function unexpected(byte: Int, at: Int) -> String allocates {
+function unexpected(byte: Int, at: Int) -> String {
     return "byte " + to_string(byte) + " at offset " + to_string(at) + " starts no token";
 }
 
 // Printing a token is where `match` earns its keep: add a variant to Token and
 // this function stops compiling until the new case is handled.
-function show(t: Token, offset: Int) -> Int allocates {
+function show(t: Token, offset: Int) -> Int {
     match t {
         Plus => { print("PLUS"); return 1; }
         Minus => { print("MINUS"); return 1; }
@@ -130,7 +130,7 @@ function show(t: Token, offset: Int) -> Int allocates {
     }
 }
 
-function tokenize(src: String) -> Int allocates {
+function tokenize(src: String) -> Int {
     let mutable pos: Int = 0;
     let mutable count: Int = 0;
     // `while true { ... break; }` says "until the end token" directly. Before

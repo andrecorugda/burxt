@@ -16,7 +16,7 @@ pure function total_with_interest(balance: Decimal<2, RoundHalfEven>, rate: Deci
 
 // `pure` AND `allocates`: a bump allocator observes nothing about the outside
 // world, so building a string is deterministic.
-pure function render(amount: Decimal<2, RoundHalfEven>) -> String allocates {
+pure function render(amount: Decimal<2, RoundHalfEven>) -> String {
     return "amount " + to_string(amount);
 }
 

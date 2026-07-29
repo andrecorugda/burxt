@@ -17,12 +17,12 @@
 record Box<T> { held: T }
 record Pair<K: Equatable, V> { key: K, value: V }
 
-function make_box<T>(x: T) -> Box<T> allocates {
+function make_box<T>(x: T) -> Box<T> {
     return Box { held: x };
 }
 
 // Nothing to infer from but the annotation at the call site.
-function empty_pair<K: Equatable, V>(k: K, v: V) -> Pair<K, V> allocates {
+function empty_pair<K: Equatable, V>(k: K, v: V) -> Pair<K, V> {
     return Pair { key: k, value: v };
 }
 
@@ -32,7 +32,7 @@ function empty_pair<K: Equatable, V>(k: K, v: V) -> Pair<K, V> allocates {
 // no `T` to hold — and asking for one says so by name.
 record Bag<T> { items: [T], count: Int }
 
-function empty_bag<T>() -> Bag<T> allocates {
+function empty_bag<T>() -> Bag<T> {
     return Bag { items: [], count: 0 };
 }
 

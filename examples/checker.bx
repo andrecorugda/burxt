@@ -88,7 +88,7 @@ function digit_count(src: String, from: Int) -> Int {
 }
 
 // How a type is written back out, for a message.
-function ty_name(t: Type) -> String allocates {
+function ty_name(t: Type) -> String {
     match t {
         Unknown => { return "?"; }
         IntTy => { return "Int"; }
@@ -275,7 +275,7 @@ function (self: Table) find(name: String) -> Int {
 }
 
 // An operand is a declared name or a literal.
-function (self: Table) operand_ty(src: String, from: Int) -> Scan allocates {
+function (self: Table) operand_ty(src: String, from: Int) -> Scan {
     let at: Int = skip_spaces(src, from);
     let n: Int = name_length(src, at);
     if n == 0 {
@@ -294,7 +294,7 @@ function (self: Table) operand_ty(src: String, from: Int) -> Scan allocates {
 }
 
 // The rule this whole language exists for, applied to one expression.
-function combine(op: Int, left: Type, right: Type, declared: Type) -> Type allocates {
+function combine(op: Int, left: Type, right: Type, declared: Type) -> Type {
     if op == 42 {                                   // '*'
         if is_decimal(left) && is_decimal(right) {
             if !decimal_has_contract(declared) {
@@ -324,7 +324,7 @@ function combine(op: Int, left: Type, right: Type, declared: Type) -> Type alloc
 }
 
 // `let [mutable] NAME : TYPE = OPERAND [op OPERAND] ;`
-function (mutable self: Table) check_let(src: String, from: Int) -> Int allocates {
+function (mutable self: Table) check_let(src: String, from: Int) -> Int {
     let at: Int = skip_spaces(src, from);
     if at >= len(src) {
         return at;

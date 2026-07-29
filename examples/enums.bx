@@ -26,7 +26,7 @@ function owed(s: Status) -> Decimal<2> {
 
 // A payload binding is a normal binding: it exists inside its arm and nowhere
 // else, and it has the type the variant declared.
-function describe(s: Status) -> String allocates {
+function describe(s: Status) -> String {
     match s {
         Paid => { return "settled"; }
         Owing(amount) => { return "owes " + to_string(amount); }

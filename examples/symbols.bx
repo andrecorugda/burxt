@@ -94,7 +94,7 @@ function (mutable self: Table) declare(name: String, type_name: String, at: Int)
 // parameters — mutation goes through a `mutable self` receiver, so a pass that fills a
 // table has to be a method on it. Writing this file is what surfaced that, and it
 // also fired the trigger the M1a spec recorded for `allocates` on methods.
-function (mutable self: Table) collect(src: String, from: Int) -> Int allocates {
+function (mutable self: Table) collect(src: String, from: Int) -> Int {
     let at: Int = skip_spaces(src, from);
     if at >= len(src) {
         return at;

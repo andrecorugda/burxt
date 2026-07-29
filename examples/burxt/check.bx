@@ -55,7 +55,7 @@ record Implementation { trait_start: Int, trait_len: Int, type_start: Int, type_
 // message this file produced
 // after element comparison started working read "argument 1 should be a growable array, but it
 // is a growable array". A refusal a reader cannot act on is barely better than no refusal.
-function (self: Unit) show_type(src: String, t: Type) -> String allocates {
+function (self: Unit) show_type(src: String, t: Type) -> String {
     if t.kind == 47 {
         return "[" + self.show_type(src, self.declared_type(src, t.scale)) + "]";
     }
@@ -120,7 +120,7 @@ function (self: Unit) show_type(src: String, t: Type) -> String allocates {
 // the type argument is chosen — which is the point of a bound, and the same place stage-0
 // checks it.
 function (mutable self: Unit) bind_type_arguments(src: String, generic: Int, args: Int,
-                                                 params: Int, at: Int) -> Int allocates {
+                                                 params: Int, at: Int) -> Int {
     let declaration: Generic = self.generics[generic];
     let given: Node = self.nodes[args];
     let wanted: Node = self.nodes[params];
@@ -174,7 +174,7 @@ function (mutable self: Unit) bind_type_arguments(src: String, generic: Int, arg
 // Decimal, the types `<` works on; `Equatable` adds Bool and String, the types `==` works on.
 // A bound cannot promise more than the language delivers.
 function (mutable self: Unit) check_bound(src: String, bound: Int, argument: Type,
-                                         parameter: Token, at: Int) -> Int allocates {
+                                         parameter: Token, at: Int) -> Int {
     if bound < 0 {
         return 0;
     }
@@ -242,7 +242,7 @@ function (mutable self: Unit) check_bound(src: String, bound: Int, argument: Typ
 // slice holds its element as a node index, so turning `[T]` into `[Int]` means there has to BE
 // a node for `Int` — and until a use asks, there is not. The token is borrowed from `at`, so a
 // diagnostic about a synthesized type still points at the source that caused it.
-function (mutable self: Unit) node_for(t: Type, at: Int) -> Int allocates {
+function (mutable self: Unit) node_for(t: Type, at: Int) -> Int {
     if t.kind == 45 {
         return self.add(45, t.scale, t.contract, 0, 0, at);
     }
@@ -283,7 +283,7 @@ function type_identical(a: Type, b: Type) -> Bool {
         && a.name_start == b.name_start && a.name_length == b.name_length;
 }
 
-function (mutable self: Unit) resolve_deep(src: String, t: Type, at: Int) -> Type allocates {
+function (mutable self: Unit) resolve_deep(src: String, t: Type, at: Int) -> Type {
     let here: Type = self.resolve_shallow(src, t);
     // A generic inside a generic: `Nested<Point>.inner` is written `Pair<T>`, and whoever
     // receives it has no bindings left, so the argument has to travel down into the
@@ -341,7 +341,7 @@ function (mutable self: Unit) resolve_deep(src: String, t: Type, at: Int) -> Typ
 
 // Bind a generic type's parameters from an APPLICATION's arguments: `Stack<Int>` binds `T`.
 // Answers the base to truncate back to, so the caller's bindings survive.
-function (mutable self: Unit) bind_from_application(src: String, holder: Type) -> Int allocates {
+function (mutable self: Unit) bind_from_application(src: String, holder: Type) -> Int {
     let base: Int = len(self.type_bindings);
     if holder.kind != 46 || holder.contract <= 0 {
         return base;
@@ -418,7 +418,7 @@ function (self: Unit) resolve_shallow(src: String, t: Type) -> Type {
 // Match a declared parameter type against an argument's actual type, binding type parameters
 // as it goes. The whole of stage-1's inference: structural, one direction, no backtracking —
 // the same shape stage-0 uses, so the two agree by construction rather than by coincidence.
-function (mutable self: Unit) unify(src: String, declared: Type, actual: Type) -> Bool allocates {
+function (mutable self: Unit) unify(src: String, declared: Type, actual: Type) -> Bool {
     if declared.kind == 50 {
         let already: Type = self.resolve_shallow(src, declared);
         if already.kind != 50 {
@@ -546,7 +546,7 @@ function (self: Unit) declared_type(src: String, node: Int) -> Type {
     return unknown_type();
 }
 
-function (mutable self: Unit) complain_at(src: String, token: Int, message: String) -> Int allocates {
+function (mutable self: Unit) complain_at(src: String, token: Int, message: String) -> Int {
     // A probe round is silent. It refuses nothing, so anything it found is about a question
     // still being answered — and this function PRINTS, so without the guard the user would
     // read complaints that the real pass then does not make. The real pass reports
@@ -594,7 +594,7 @@ function span_hash(src: String, start: Int, length: Int) -> Int {
 }
 
 // Note the function just declared, so `find_function` can reach it without a scan.
-function (mutable self: Unit) index_fun(src: String, start: Int, length: Int) -> Int allocates {
+function (mutable self: Unit) index_fun(src: String, start: Int, length: Int) -> Int {
     if len(self.function_buckets) == 0 {
         let mutable b: Int = 0;
         while b < 1024 {
@@ -693,7 +693,7 @@ function (self: Unit) self_token(from: Int) -> Int {
     return 0 - 1;
 }
 
-function (mutable self: Unit) collect_method(src: String, index: Int) -> Int allocates {
+function (mutable self: Unit) collect_method(src: String, index: Int) -> Int {
     let item: Node = self.nodes[index];
     let name: Token = self.tokens[item.token];
     let signature: Node = self.nodes[item.c];
@@ -719,7 +719,7 @@ function (mutable self: Unit) collect_method(src: String, index: Int) -> Int all
     return 1;
 }
 
-function (mutable self: Unit) collect_declarations(src: String) -> Int allocates {
+function (mutable self: Unit) collect_declarations(src: String) -> Int {
     let mutable i: Int = 0;
     while i < len(self.items) {
         let index: Int = self.items[i];
@@ -882,7 +882,7 @@ function (mutable self: Unit) collect_declarations(src: String) -> Int allocates
 // Every expression's type, recorded as it is decided. The escape check asks about
 // expressions the checker has already seen — whether a `+` joined two Strings, say —
 // and re-walking them would report every complaint a second time.
-function (mutable self: Unit) type_of(src: String, node: Int, expected: Type) -> Type allocates {
+function (mutable self: Unit) type_of(src: String, node: Int, expected: Type) -> Type {
     self.type_of_calls += 1;
     let t: Type = self.type_of_inner(src, node, expected);
     // The cache is a slot per NODE. It grows to reach the node being recorded, which costs
@@ -910,7 +910,7 @@ function (self: Unit) type_at(node: Int) -> Type {
     return self.typed[node];
 }
 
-function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Type) -> Type allocates {
+function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Type) -> Type {
     if node < 0 {
         return unknown_type();
     }
@@ -1464,7 +1464,7 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
 }
 
 // Walk an expression's children without judging the node itself.
-function (mutable self: Unit) visit_children(src: String, node: Int) -> Int allocates {
+function (mutable self: Unit) visit_children(src: String, node: Int) -> Int {
     let n: Node = self.nodes[node];
     if n.kind == 11 || n.kind == 6 || n.kind == 7 {
         let a: Type = self.type_of(src, n.a, unknown_type());
@@ -1497,7 +1497,7 @@ function (mutable self: Unit) visit_children(src: String, node: Int) -> Int allo
 // Arity and argument types against a declared parameter list. Shared by function and
 // method calls, because what the reader needs to be told is the same either way.
 function (mutable self: Unit) check_against_params(src: String, at: Int, list_node: Int,
-                                        params_node: Int, what: String) -> Int allocates {
+                                        params_node: Int, what: String) -> Int {
     let list: Node = self.nodes[list_node];
     let params: Node = self.nodes[params_node];
     if list.b != params.b {
@@ -1524,7 +1524,7 @@ function (mutable self: Unit) check_against_params(src: String, at: Int, list_no
     return 1;
 }
 
-function (mutable self: Unit) check_args(src: String, list_node: Int) -> Int allocates {
+function (mutable self: Unit) check_args(src: String, list_node: Int) -> Int {
     if list_node < 0 {
         return 0;
     }
@@ -1538,7 +1538,7 @@ function (mutable self: Unit) check_args(src: String, list_node: Int) -> Int all
 }
 
 // ---- statements --------------------------------------------------------------
-function (mutable self: Unit) check_block_nodes(src: String, block: Int, return_type: Type) -> Int allocates {
+function (mutable self: Unit) check_block_nodes(src: String, block: Int, return_type: Type) -> Int {
     if block < 0 {
         return 0;
     }
@@ -1569,7 +1569,7 @@ function (mutable self: Unit) check_block_nodes(src: String, block: Int, return_
     return node.b;
 }
 
-function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_type: Type) -> Int allocates {
+function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_type: Type) -> Int {
     if stmt < 0 {
         return 0;
     }
@@ -1741,6 +1741,17 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
         // A `region` block ends at its closing brace, so anything built inside it
         // would outlive its storage.
         if self.expr_allocates(src, n.a) {
+            // Probing: the SECOND way a function turns out to allocate, and missing it made
+            // the inference silently incomplete rather than wrong. `has_region` catches the
+            // first way — something in the body wanted a region — but a function can allocate
+            // purely by RETURNING built data it never bound. `lib/map.bx`'s `map_new` returns
+            // `Map { entries: [], slots: [], live: 0 }` straight out, with no `let` anywhere,
+            // so nothing ever asked and the probe credited nothing. Asking here records it,
+            // and records it in the one place that knows how.
+            if self.probing == 1 {
+                let asked: Bool = self.has_region();
+                return 1;
+            }
             if self.in_caller_region == 0 {
                 let complained: Int = self.complain_at(src, n.token,
                     "cannot return this: it allocates, and a function that returns "
@@ -1873,7 +1884,7 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
 
 // ---- the pass ----------------------------------------------------------------
 // A function or method body, with its parameters — and a method's `self` — in scope.
-function (mutable self: Unit) check_body(src: String, index: Int) -> Int allocates {
+function (mutable self: Unit) check_body(src: String, index: Int) -> Int {
     let item: Node = self.nodes[index];
     let base: Int = len(self.bindings);
     self.depth += 1;
@@ -1985,7 +1996,7 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int allocat
 // for the reason A5 gives: a contract that can change the program is not a check, it
 // is a second program that only runs when someone is looking.
 function (mutable self: Unit) check_clauses(src: String, index: Int, signature: Node,
-                                  return_type: Type) -> Int allocates {
+                                  return_type: Type) -> Int {
     let item: Node = self.nodes[index];
     let outer_pure: Int = self.in_pure;
     self.in_pure = 1;
@@ -2085,7 +2096,7 @@ function find_text(src: String, needle: String) -> Int {
 // `return tail f(...)` is a guarantee, not a hope: the frame is REPLACED. Everything
 // below is a condition for that being possible at all, which is why each one is a
 // compile error rather than a quiet fallback to an ordinary call.
-function (mutable self: Unit) check_tail(src: String, n: Node, return_type: Type) -> Int allocates {
+function (mutable self: Unit) check_tail(src: String, n: Node, return_type: Type) -> Int {
     let value: Node = self.nodes[n.a];
     if value.kind != 13 {
         let complained: Int = self.complain_at(src, n.token,
@@ -2186,7 +2197,7 @@ function (self: Unit) body_calls(src: String, body: Int, name: Token) -> Bool {
 // An `implement` answers a trait exactly: every signature, no extras, same shapes. A trait
 // is a promise a `dynamic` value makes on the implementor's behalf, so a mismatch here is a
 // promise nobody keeps.
-function (mutable self: Unit) check_impl(src: String, index: Int) -> Int allocates {
+function (mutable self: Unit) check_impl(src: String, index: Int) -> Int {
     let item: Node = self.nodes[index];
     let trait_name: Token = self.tokens[item.token];
     let found: Int = self.find_type(src, trait_name.start, trait_name.length);
@@ -2284,7 +2295,7 @@ function (mutable self: Unit) check_impl(src: String, index: Int) -> Int allocat
 // need a layout rule for arrays of arrays that M1 does not have, and a zero-length array
 // describes nothing. A growable array inside a record is fine — stage-1's own Unit is
 // made of them — and what it costs is that the record must be built in a region.
-function (mutable self: Unit) check_type_shape(src: String, node: Int, at: Int) -> Int allocates {
+function (mutable self: Unit) check_type_shape(src: String, node: Int, at: Int) -> Int {
     if node < 0 {
         return 0;
     }
@@ -2367,7 +2378,7 @@ function (self: Unit) unsettled_generic(src: String, t: Type) -> Bool {
 // The rule itself is a cut, not a principle — an aggregate payload reopens the question of how
 // wide a variant is when the widest one holds a record. Stage-0 draws the same line, and the
 // two must draw it in the same place or a program compiles with one compiler and not the other.
-function (mutable self: Unit) check_payloads(src: String, application: Int) -> Int allocates {
+function (mutable self: Unit) check_payloads(src: String, application: Int) -> Int {
     let applied: Type = self.declared_type(src, application);
     let found: Int = self.find_type(src, applied.name_start, applied.name_length);
     if found < 0 {
@@ -2419,7 +2430,7 @@ function (mutable self: Unit) check_payloads(src: String, application: Int) -> I
     return 1;
 }
 
-function (mutable self: Unit) check_applications(src: String) -> Int allocates {
+function (mutable self: Unit) check_applications(src: String) -> Int {
     let mutable at: Int = 0;
     while at < len(self.nodes) {
         let n: Node = self.nodes[at];
@@ -2463,7 +2474,7 @@ function (mutable self: Unit) check_applications(src: String) -> Int allocates {
 //
 // Terminates because the flags only ever go from 0 to 1, over a finite number of signatures.
 // The ceiling is a backstop for that argument being wrong, not an expectation.
-function (mutable self: Unit) infer_allocates(src: String) -> Int allocates {
+function (mutable self: Unit) infer_allocates(src: String) -> Int {
     self.probing = 1;
     let ceiling: Int = len(self.functions) + len(self.methods) + 1;
     // Where the binding stack stood before any round ran.
@@ -2488,7 +2499,7 @@ function (mutable self: Unit) infer_allocates(src: String) -> Int allocates {
     return round;
 }
 
-function (mutable self: Unit) check(src: String) -> Int allocates {
+function (mutable self: Unit) check(src: String) -> Int {
     let collected: Int = self.collect_declarations(src);
     let applications: Int = self.check_applications(src);
     // Before anything is refused: a body may call a function declared 200 lines below it, so
@@ -2499,7 +2510,7 @@ function (mutable self: Unit) check(src: String) -> Int allocates {
     return self.problems;
 }
 
-function (mutable self: Unit) check_bodies(src: String) -> Int allocates {
+function (mutable self: Unit) check_bodies(src: String) -> Int {
     let mutable i: Int = 0;
     while i < len(self.items) {
         let index: Int = self.items[i];
@@ -2524,7 +2535,7 @@ function (mutable self: Unit) check_bodies(src: String) -> Int allocates {
 }
 
 // ---- reporting -------------------------------------------------------------
-function kind_name(kind: Int) -> String allocates {
+function kind_name(kind: Int) -> String {
     if kind == 1 { return "ident"; }
     if kind == 2 { return "int"; }
     if kind == 3 { return "decimal"; }
@@ -2534,7 +2545,7 @@ function kind_name(kind: Int) -> String allocates {
     return "punct";
 }
 
-function (self: Unit) report(src: String, limit: Int) -> Int allocates {
+function (self: Unit) report(src: String, limit: Int) -> Int {
     let mutable i: Int = 0;
     while i < len(self.tokens) && i < limit {
         let t: Token = self.tokens[i];

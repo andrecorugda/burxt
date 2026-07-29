@@ -17,7 +17,7 @@ pure function doubled(n: Int) -> Int
     return n * 2;
 }
 
-function label(n: Int) -> String allocates
+function label(n: Int) -> String
     requires n > 0
 {
     return "n=" + to_string(n);

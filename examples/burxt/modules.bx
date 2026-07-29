@@ -55,7 +55,7 @@ function starts_with_at(text: String, at: Int, prefix: String, width: Int) -> Bo
 }
 
 // The quoted path in `use "..."`, or the empty String if this line is not one.
-function import_on_line(text: String, at: Int, stop: Int) -> String allocates {
+function import_on_line(text: String, at: Int, stop: Int) -> String {
     let begin: Int = first_non_space(text, at, stop);
     if !starts_with_at(text, begin, "use ", stop) {
         return "";
@@ -77,7 +77,7 @@ function import_on_line(text: String, at: Int, stop: Int) -> String allocates {
 
 // The directory a path lives in, with its trailing slash, so an import resolves
 // relative to the file that wrote it rather than to wherever the compiler was run.
-function directory_of(path: String) -> String allocates {
+function directory_of(path: String) -> String {
     let mutable cut: Int = 0 - 1;
     let mutable i: Int = 0;
     while i < len(path) {
@@ -98,7 +98,7 @@ function directory_of(path: String) -> String allocates {
 // Only the HEADER is rewritten. The body is appended in one piece, because building a
 // six-thousand-line file line by line means six thousand copies of a growing String —
 // which is how splitting this compiler into modules first exhausted its own region.
-function spaces(count: Int) -> String allocates {
+function spaces(count: Int) -> String {
     let mutable out: String = "";
     let mutable i: Int = 0;
     while i < count {
@@ -108,7 +108,7 @@ function spaces(count: Int) -> String allocates {
     return out;
 }
 
-function blank_imports(text: String) -> String allocates {
+function blank_imports(text: String) -> String {
     let width: Int = len(text);
     // Only the `use` lines change, so only they are rebuilt. Everything else travels in
     // whole spans: `copied` is how far the answer has been filled in, and the gap from
@@ -147,7 +147,7 @@ function blank_imports(text: String) -> String allocates {
 // and the seen-list live on a record and the walk is a method on it.
 record Loader { seen: [String], buffer: String }
 
-function (mutable self: Loader) load(path: String) -> Int allocates {
+function (mutable self: Loader) load(path: String) -> Int {
     for seen in self.seen {
         if seen == path {
             return 0;                            // read once already; cycles are fine
@@ -186,7 +186,7 @@ function (mutable self: Loader) load(path: String) -> Int allocates {
     return 1;
 }
 
-function load_program(path: String) -> String allocates {
+function load_program(path: String) -> String {
     let mutable loader: Loader = Loader { seen: [], buffer: "" };
     let done: Int = loader.load(path);
     return loader.buffer;

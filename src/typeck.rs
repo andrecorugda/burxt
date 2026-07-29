@@ -3446,6 +3446,30 @@ impl TypeChecker {
                 //     receives them. Fine — this is the whole point of `allocates`.
                 if self.expr_allocates(&typed) && !(self.in_caller_region && self.current_region.is_none())
                 {
+                    // Probing: this is the SECOND way a function turns out to allocate, and
+                    // missing it made the inference silently incomplete rather than wrong.
+                    //
+                    // `has_region` catches the first way — something inside the body wanted a
+                    // region. But a function can allocate purely by RETURNING built data it
+                    // never bound. `lib/map.bx`'s `map_new` is exactly that:
+                    //
+                    //     function map_new<K: Equatable, V>() -> Map<K, V> {
+                    //         return Map { entries: [], slots: [], live: 0 };
+                    //     }
+                    //
+                    // Two slice literals inside a struct literal, straight into the `return`.
+                    // No `let`, so nothing ever asked `has_region`, so the probe credited
+                    // nothing and the function stayed refused forever. `catalogue()` in the POS
+                    // only worked because it happens to bind `let mutable shelf: [Item] = []`
+                    // first — which is luck, not a rule.
+                    //
+                    // Asking `has_region` here records it, and records it in the one place that
+                    // knows how: it credits the owner only when no local region is open, which
+                    // is the same condition this rule is testing.
+                    if self.probing {
+                        let _ = self.has_region();
+                        return Ok(TypedStmt::Return(typed));
+                    }
                     return Err(format!(
                         "cannot return this {}: it was built in a region, so its \
                          storage would not outlive it. Return a scalar summary, fill \

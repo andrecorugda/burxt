@@ -27,7 +27,7 @@ record Outcome { ran: Int, passed: Int, failed: Int }
 
 // Every name in a directory, one per line, via the shell. `ls` is the only thing
 // here that is not Burxt, and it is doing what a directory read would do.
-function listing_of(directory: String, into: String) -> String allocates {
+function listing_of(directory: String, into: String) -> String {
     let command: String = "ls " + directory + " > " + into + " 2>/dev/null";
     let status: Int = system(command);
     return read_file(into);
@@ -35,7 +35,7 @@ function listing_of(directory: String, into: String) -> String allocates {
 
 // Run a command, capturing everything it says, and answer its exit code.
 // `system` reports the wait status, and the exit code is the high byte of it.
-function run_capturing(command: String, output: String) -> Int allocates {
+function run_capturing(command: String, output: String) -> Int {
     let status: Int = system(command + " > " + output + " 2>&1");
     return divide_floor(status, 256);
 }
@@ -59,7 +59,7 @@ function ends_with_bx(name: String) -> Bool {
         && byte_at(name, n - 1) == 120;
 }
 
-function without_extension(name: String) -> String allocates {
+function without_extension(name: String) -> String {
     return substring(name, 0, len(name) - 3);
 }
 
@@ -94,7 +94,7 @@ function contains(haystack: String, needle: String) -> Bool {
 }
 
 // The recorded text, with the trailing newline a file always has removed.
-function trimmed(text: String) -> String allocates {
+function trimmed(text: String) -> String {
     let mutable n: Int = len(text);
     while n > 0 && byte_at(text, n - 1) == 10 {
         n -= 1;
@@ -104,7 +104,7 @@ function trimmed(text: String) -> String allocates {
 
 // ---- the three kinds of check -----------------------------------------------
 
-function (mutable self: Outcome) note(passed: Bool, name: String, why: String) -> Int allocates {
+function (mutable self: Outcome) note(passed: Bool, name: String, why: String) -> Int {
     self.ran += 1;
     if passed {
         self.passed += 1;
@@ -116,7 +116,7 @@ function (mutable self: Outcome) note(passed: Bool, name: String, why: String) -
 }
 
 function (mutable self: Outcome) check_pass(compiler: String, name: String, work: String)
-    -> Int allocates
+    -> Int
 {
     let source: String = "tests/pass/" + name + ".bx";
     let expected: String = trimmed(read_file("tests/pass/" + name + ".stdout"));
@@ -144,7 +144,7 @@ function (mutable self: Outcome) check_pass(compiler: String, name: String, work
 }
 
 function (mutable self: Outcome) check_fail(compiler: String, name: String, work: String)
-    -> Int allocates
+    -> Int
 {
     let source: String = "tests/fail/" + name + ".bx";
     let wanted: String = trimmed(read_file("tests/fail/" + name + ".stderr"));
@@ -168,7 +168,7 @@ function (mutable self: Outcome) check_fail(compiler: String, name: String, work
 }
 
 function (mutable self: Outcome) check_panic(compiler: String, name: String, work: String)
-    -> Int allocates
+    -> Int
 {
     let source: String = "tests/panic/" + name + ".bx";
     let wanted: String = trimmed(read_file("tests/panic/" + name + ".stderr"));
@@ -197,7 +197,7 @@ function (mutable self: Outcome) check_panic(compiler: String, name: String, wor
 // ---- the sweep ---------------------------------------------------------------
 
 function (mutable self: Outcome) sweep(compiler: String, kind: String, work: String)
-    -> Int allocates
+    -> Int
 {
     let names: String = listing_of("tests/" + kind, work + "/listing");
     let mutable at: Int = 0;

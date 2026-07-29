@@ -13,7 +13,7 @@ the language refuses is usually the interesting part.
 <li><a href="01-getting-started.html"><span class="n">1</span> <span>Getting started</span> <span class="what">Install, run a file, the editor</span></a></li>
 <li><a href="02-numbers-and-money.html"><span class="n">2</span> <span>Numbers and money</span> <span class="what">Scales, rounding contracts, why <code>+</code> is strict</span></a></li>
 <li><a href="03-types.html"><span class="n">3</span> <span>Types</span> <span class="what">Records, enums, traits, <code>dynamic</code>, value semantics</span></a></li>
-<li><a href="04-memory.html"><span class="n">4</span> <span>Memory</span> <span class="what">Regions, <code>allocates</code>, escapes</span></a></li>
+<li><a href="04-memory.html"><span class="n">4</span> <span>Memory</span> <span class="what">Regions, escapes, and why you never write <code>allocates</code></span></a></li>
 <li><a href="05-contracts.html"><span class="n">5</span> <span>Contracts</span> <span class="what"><code>requires</code>, <code>ensures</code>, <code>pure</code>, <code>decreases</code></span></a></li>
 <li><a href="06-ffi.html"><span class="n">6</span> <span>The C boundary</span> <span class="what"><code>external function</code>, <code>as scaled</code>, the pointer wall</span></a></li>
 <li><a href="07-modules.html"><span class="n">7</span> <span>Modules</span> <span class="what"><code>use</code>, one file per module, what is visible</span></a></li>

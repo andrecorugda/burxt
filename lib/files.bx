@@ -24,7 +24,7 @@ external function mkdir(path: String, mode: Int) -> CInt;
 // which is indistinguishable from an empty file, and the honest fix is
 // `Option<String>`, which the language does not have yet. Said plainly rather
 // than papered over.
-function file_read(path: String) -> String allocates {
+function file_read(path: String) -> String {
     return read_file(path);
 }
 
@@ -36,12 +36,12 @@ function file_write(path: String, text: String) -> Int {
 // Adds to the end, leaving what was there. Read-modify-write, because the
 // builtin replaces rather than appends — fine for a log line, wrong for a
 // gigabyte, and that is worth knowing before you use it.
-function file_append(path: String, text: String) -> Int allocates {
+function file_append(path: String, text: String) -> Int {
     let existing: String = read_file(path);
     return write_file(path, existing + text);
 }
 
-function file_exists(path: String) -> Bool allocates {
+function file_exists(path: String) -> Bool {
     // `test -e` rather than a read: a file may exist and be unreadable, and it may
     // be a directory, and both are still "it exists".
     return system("test -e " + file_quote(path)) == 0;
@@ -56,14 +56,14 @@ function file_move(from: String, to: String) -> Bool {
 }
 
 // 0755: readable and executable by everyone, writable by its owner.
-function file_make_directory(path: String) -> Bool allocates {
+function file_make_directory(path: String) -> Bool {
     return system("mkdir -p " + file_quote(path)) == 0;
 }
 
 // Every name in a directory. The shell does the reading because `opendir` returns
 // a pointer Burxt will not accept, and the answer comes back through a file —
 // visible here, so no program has to know it.
-function file_list_directory(directory: String) -> [String] allocates {
+function file_list_directory(directory: String) -> [String] {
     let scratch: String = "/tmp/burxt-fs-list";
     let status: Int = system("ls -1 " + file_quote(directory) + " > " + scratch + " 2>/dev/null");
     let text: String = read_file(scratch);
@@ -74,7 +74,7 @@ function file_list_directory(directory: String) -> [String] allocates {
 // A path made safe for the shell. Single quotes stop every expansion there is, and
 // a single quote inside a path is the one case they cannot hold — so it is refused
 // rather than mishandled.
-function file_quote(path: String) -> String allocates {
+function file_quote(path: String) -> String {
     let mutable i: Int = 0;
     while i < len(path) {
         if byte_at(path, i) == 39 {
@@ -89,7 +89,7 @@ function file_quote(path: String) -> String allocates {
 // Split on newlines, dropping the empty piece a trailing newline leaves. Local
 // rather than borrowed from lib/string.bx, so `use "lib/files.bx"` pulls in files and
 // nothing else.
-function file_split_lines(text: String) -> [String] allocates {
+function file_split_lines(text: String) -> [String] {
     let mutable lines: [String] = [];
     let mutable from: Int = 0;
     let mutable i: Int = 0;

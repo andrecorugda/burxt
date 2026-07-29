@@ -10,7 +10,7 @@ record Book { title: String, cost: Decimal<2> }
 
 implement Priced for Book {
     function (self) price() -> Decimal<2> { return self.cost; }
-    function (self) label() -> String allocates { return "book: " + self.title; }
+    function (self) label() -> String { return "book: " + self.title; }
 }
 
 record Counter { n: Int }
@@ -18,7 +18,7 @@ record Counter { n: Int }
 implement Priced for Counter {
     // The long form still works, and is still required outside an `implement`.
     function (self: Counter) price() -> Decimal<2> { return $0.00; }
-    function (self) label() -> String allocates { return "counter " + to_string(self.n); }
+    function (self) label() -> String { return "counter " + to_string(self.n); }
 }
 
 // A mutating receiver abbreviates too. Free-standing methods are not inside an `implement`,

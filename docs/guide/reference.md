@@ -21,6 +21,8 @@ if something is missing here it is probably missing from the language too.
 Reserved but not yet used: `for`, `is`, `interface`.
 
 **Contextual markers** — `allocates`, `requires`, `ensures`, `decreases`, `old`, `result`.
+`allocates` is **optional and inferred** since v0.0.142; writing it is still legal and still
+checked. Every one of these may also be used as an ordinary name.
 These are only special where they appear (on a signature, inside a clause), so a variable
 may still be called `ensures` anywhere else.
 
@@ -128,7 +130,7 @@ what more is allowed:
 ```burxt
 function largest<T: Ordered>(a: T, b: T) -> T { if a > b { return a; } return b; }
 function same<T: Equatable>(a: T, b: T) -> Bool { return a == b; }
-function describe<T: Priced>(item: T) -> String allocates { return item.label(); }
+function describe<T: Priced>(item: T) -> String { return item.label(); }
 ```
 
 | Bound | What it allows | Which types have it |
@@ -187,7 +189,7 @@ Records are generic too, which is what containers are for:
 ```burxt
 record Stack<T> { items: [T] }
 
-function (mutable self: Stack<T>) push_one(item: T) -> Int allocates {
+function (mutable self: Stack<T>) push_one(item: T) -> Int {
     return push(self.items, item);
 }
 

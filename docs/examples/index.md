@@ -115,7 +115,7 @@ const PANELS = [
   "id": "regions",
   "label": "Memory",
   "point": "No collector. A region is a bump pointer and a mark.",
-  "source": "function label(n: Int) -> String allocates {\n    return \"item \" + to_string(n);\n}\n\nregion r {\n    let mutable i: Int = 1;\n    while i <= 3 {\n        print(label(i));\n        i += 1;\n    }\n}\n// every String built above is released here, at once, in O(1)",
+  "source": "function label(n: Int) -> String {\n    return \"item \" + to_string(n);\n}\n\nregion r {\n    let mutable i: Int = 1;\n    while i <= 3 {\n        print(label(i));\n        i += 1;\n    }\n}\n// every String built above is released here, at once, in O(1)",
   "output": "item 1\nitem 2\nitem 3",
   "kind": "ok"
  },

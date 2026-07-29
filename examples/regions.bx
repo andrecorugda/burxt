@@ -33,7 +33,7 @@ region report {
 // A function body has no region of its own. Without `allocates` it cannot build
 // anything, which would make a helper that formats a message impossible to
 // write. `allocates` says: I build in MY CALLER'S region.
-function describe(line: Int, byte: Int) -> String allocates {
+function describe(line: Int, byte: Int) -> String {
     return "line " + to_string(line) + ": unexpected byte " + to_string(byte);
 }
 

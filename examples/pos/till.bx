@@ -13,8 +13,8 @@ use "receipt.bx";
 
 // ---- The catalogue ---------------------------------------------------------
 // A function rather than a constant, because a growable array lives in a region
-// and a top-level constant has no region to live in. `allocates` again.
-function catalogue() -> [Item] allocates {
+// and a top-level constant has no region to live in.
+function catalogue() -> [Item] {
     let mutable shelf: [Item] = [];
     let a: Int = push(shelf, Item { sku: "RICE", name: "Rice 5kg",
                                     price: $52.75, taxable: true });
@@ -41,7 +41,7 @@ function find_item(shelf: [Item], sku: String) -> Item
 // ---- Ringing up a sale -----------------------------------------------------
 // Two accumulators, because the receipt wants both and recomputing would be a
 // second pass over the same lines.
-function ring_up(rule: dynamic Tax, sale: [Line]) -> Int allocates {
+function ring_up(rule: dynamic Tax, sale: [Line]) -> Int {
     let mutable subtotal: Decimal<2, RoundHalfUp> = $0.00;
     // `Decimal<2, RoundHalfUp>`, not `Decimal<2>`, because that is what `line_tax` answers and a
     // rounding contract is part of the TYPE. Adding two of these needs no rounding at all, so the

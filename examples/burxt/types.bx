@@ -495,7 +495,7 @@ function skip_trivia(src: String, from: Int, stop: Int) -> Int {
 // ---- numbers ---------------------------------------------------------------
 // `19.99` is the unscaled integer 1999 with scale 2 — accumulated digit by digit,
 // never through a float. `$19.99` is the same. `8.25%` is two places finer.
-function (mutable self: Unit) scan_number(src: String, from: Int, stop: Int) -> Int allocates {
+function (mutable self: Unit) scan_number(src: String, from: Int, stop: Int) -> Int {
     let mutable i: Int = from;
     let money: Bool = byte_at(src, i) == 36;         // '$'
     if money {
@@ -530,7 +530,7 @@ function (mutable self: Unit) scan_number(src: String, from: Int, stop: Int) -> 
 }
 
 // ---- strings ---------------------------------------------------------------
-function (mutable self: Unit) scan_string(src: String, from: Int, stop: Int) -> Int allocates {
+function (mutable self: Unit) scan_string(src: String, from: Int, stop: Int) -> Int {
     let mutable i: Int = from + 1;
     let mutable interpolated: Bool = false;
     while true {
@@ -562,7 +562,7 @@ function (mutable self: Unit) scan_string(src: String, from: Int, stop: Int) -> 
 // ---- punctuation -----------------------------------------------------------
 // Two-character forms are tried first: `-` and `->` differ by one byte and mean
 // entirely different things.
-function (mutable self: Unit) scan_punct(src: String, from: Int, stop: Int) -> Int allocates {
+function (mutable self: Unit) scan_punct(src: String, from: Int, stop: Int) -> Int {
     let one: Int = byte_at(src, from);
     // Same as skip_trivia: the bound is already known, so it is tested rather than
     // measured. A punctuation mark is roughly one token in three.
@@ -610,7 +610,7 @@ function (mutable self: Unit) scan_punct(src: String, from: Int, stop: Int) -> I
 }
 
 // ---- the loop --------------------------------------------------------------
-function (mutable self: Unit) run(src: String) -> Int allocates {
+function (mutable self: Unit) run(src: String) -> Int {
     let count: Int = self.run_range(src, 0, len(src));
     // Where the PROGRAM's tokens end. An interpolation fragment is lexed later and its
     // tokens are appended, so without this the parser would walk off the end of the
@@ -623,7 +623,7 @@ function (mutable self: Unit) run(src: String) -> Int allocates {
 // bytes between `{` and `}` are real Burxt, and the honest way to read them is with the
 // lexer that reads everything else. The tokens are appended, and their spans are absolute,
 // so nothing already parsed shifts and every diagnostic still points at the right byte.
-function (mutable self: Unit) run_range(src: String, from: Int, until: Int) -> Int allocates {
+function (mutable self: Unit) run_range(src: String, from: Int, until: Int) -> Int {
     let mutable i: Int = from;
     while true {
         i = skip_trivia(src, i, until);

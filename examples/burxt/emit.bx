@@ -42,7 +42,7 @@ record Slot { start: Int, length: Int, index: Int, cells: Int, aggregate: Int }
 //
 // The entry buffer stays a plain String: allocas are few and short, so it never grows
 // enough for the quadratic term to matter.
-function (mutable self: Unit) write_body(text: String) -> Int allocates {
+function (mutable self: Unit) write_body(text: String) -> Int {
     self.body_pending += text;
     if len(self.body_pending) > 512 {
         push(self.body_chunks, self.body_pending);
@@ -67,7 +67,7 @@ function (mutable self: Unit) write_body(text: String) -> Int allocates {
 //
 // The real fix is a byte buffer that grows in place, which needs a builtin that writes
 // one. Recorded rather than pretended away: this is a cost, not a design.
-function (mutable self: Unit) write_module(text: String) -> Int allocates {
+function (mutable self: Unit) write_module(text: String) -> Int {
     self.pending += text;
     if len(self.pending) > 512 {
         push(self.chunks, self.pending);
@@ -84,7 +84,7 @@ function (mutable self: Unit) write_module(text: String) -> Int allocates {
 //
 // The honest fix is still a byte buffer that grows in place, which needs a builtin that
 // writes one. This buys the room to get there.
-function (mutable self: Unit) finish() -> String allocates {
+function (mutable self: Unit) finish() -> String {
     if len(self.pending) > 0 {
         push(self.chunks, self.pending);
         self.pending = "";
@@ -108,19 +108,19 @@ function (mutable self: Unit) finish() -> String allocates {
     return self.chunks[0];
 }
 
-function (mutable self: Unit) write_entry(text: String) -> Int allocates {
+function (mutable self: Unit) write_entry(text: String) -> Int {
     self.function_entry += text;
     return 0;
 }
 
-function (mutable self: Unit) open_function(header: String) -> Int allocates {
+function (mutable self: Unit) open_function(header: String) -> Int {
     self.function_entry = "";
     self.body_pending = "";
     self.body_chunks = [];
     return self.write_entry(header);
 }
 
-function (mutable self: Unit) close_function(closing: String) -> Int allocates {
+function (mutable self: Unit) close_function(closing: String) -> Int {
     let entry_written: Int = self.write_module(self.function_entry);
     let mutable i: Int = 0;
     while i < len(self.body_chunks) {
@@ -135,12 +135,12 @@ function (mutable self: Unit) close_function(closing: String) -> Int allocates {
     return 0;
 }
 
-function (mutable self: Unit) fresh() -> String allocates {
+function (mutable self: Unit) fresh() -> String {
     self.next_register += 1;
     return "%t" + to_string(self.next_register);
 }
 
-function (mutable self: Unit) fresh_label(stem: String) -> String allocates {
+function (mutable self: Unit) fresh_label(stem: String) -> String {
     self.next_label += 1;
     return stem + to_string(self.next_label);
 }
@@ -148,7 +148,7 @@ function (mutable self: Unit) fresh_label(stem: String) -> String allocates {
 // A local's alloca, named by its position in the table rather than by the source
 // name, so two blocks that both say `x` cannot collide in the IR.
 function (mutable self: Unit) declare_slot(src: String, start: Int, length: Int, cells: Int,
-                                 aggregate: Int) -> Int allocates {
+                                 aggregate: Int) -> Int {
     // The NAME comes from a counter that only grows, not from the table's length. A match
     // arm's bindings leave scope by truncating the table, so lengths repeat — and two
     // allocas called `%v3` in one function is not a program LLVM will accept.
@@ -163,7 +163,7 @@ function (mutable self: Unit) declare_slot(src: String, start: Int, length: Int,
 
 // Scratch storage for a value that has no name — a record literal, an array literal.
 // In the entry block for the same reason every other alloca is.
-function (mutable self: Unit) scratch(cells: Int) -> String allocates {
+function (mutable self: Unit) scratch(cells: Int) -> String {
     self.next_register += 1;
     let name: String = "%scratch" + to_string(self.next_register);
     let visited: Int = self.write_entry("  " + name + " = alloca [" + to_string(cells)
@@ -187,7 +187,7 @@ function (self: Unit) slot_is_aggregate(src: String, start: Int, length: Int) ->
 // eight bytes wide or an aggregate of things that are — a String and a growable array
 // are pointers, a Decimal is a scaled i64 — so a layout is a COUNT, and nothing here
 // needs an alignment rule.
-function (mutable self: Unit) cells_of(src: String, written: Type) -> Int allocates {
+function (mutable self: Unit) cells_of(src: String, written: Type) -> Int {
     // A type parameter is whatever it was bound to, and a generic's fields are sized with its
     // ARGUMENTS in scope. Because a layout is a count and not a named LLVM type, nothing is
     // rewritten and no copy of the declaration is made: `Pair<Int>` is 2 cells and
@@ -252,7 +252,7 @@ function (mutable self: Unit) cells_of(src: String, written: Type) -> Int alloca
 
 // Where a field starts, in cells, and -1 when the holder has no such field. The walk is
 // the same one `cells_of` does, which is why the two cannot disagree about a layout.
-function (mutable self: Unit) offset_of(src: String, holder: Type, name: Token) -> Int allocates {
+function (mutable self: Unit) offset_of(src: String, holder: Type, name: Token) -> Int {
     let found: Int = self.find_type(src, holder.name_start, holder.name_length);
     if found < 0 {
         return -1;
@@ -281,7 +281,7 @@ function (mutable self: Unit) offset_of(src: String, holder: Type, name: Token) 
 // and stored the value's ADDRESS in the field instead of copying its cells — a record that
 // looked the right size and held a pointer where a Point belonged. check.bx's record-literal
 // rule does exactly this, which is the argument for it living in one named function.
-function (mutable self: Unit) field_type_here(src: String, holder: Type, at: Int) -> Type allocates {
+function (mutable self: Unit) field_type_here(src: String, holder: Type, at: Int) -> Type {
     let base: Int = self.bind_from_application(src, holder);
     let stated: Type = self.field_type(src, holder, at);
     let settled: Type = self.resolve_deep(src, stated, at);
@@ -319,7 +319,7 @@ function (self: Unit) find_slot(src: String, start: Int, length: Int) -> Int {
 // Every byte as a hex escape. LLVM accepts c"\68\69\00", and emitting only escapes
 // means no byte needs a character to stand for it — which matters in a language whose
 // own `to_string` answers with digits, not letters.
-function hex_of(value: Int) -> String allocates {
+function hex_of(value: Int) -> String {
     let digits: String = "0123456789abcdef";
     return "\\" + substring(digits, divide_floor(value, 16), 1)
                 + substring(digits, remainder(value, 16), 1);
@@ -330,7 +330,7 @@ function hex_of(value: Int) -> String allocates {
 // source said.
 // A constant holding bytes the EMITTER produced — a printf format built for a scale,
 // say — rather than bytes quoted from the program. Same escaping, different source.
-function (mutable self: Unit) intern_text(text: String) -> String allocates {
+function (mutable self: Unit) intern_text(text: String) -> String {
     let name: String = "@burxt.k" + to_string(len(self.strings));
     push(self.strings, 0);
     // Measured once. `len` on a String walks it, so leaving it in the condition makes
@@ -374,7 +374,7 @@ function power_of_ten(scale: Int) -> Int {
     return n;
 }
 
-function (mutable self: Unit) intern(src: String, start: Int, length: Int) -> String allocates {
+function (mutable self: Unit) intern(src: String, start: Int, length: Int) -> String {
     let name: String = "@burxt.s" + to_string(len(self.strings));
     push(self.strings, start);
     let mutable body: String = "";
@@ -411,7 +411,7 @@ function (mutable self: Unit) intern(src: String, start: Int, length: Int) -> St
 // register. Shared by `xs[i]` and by `for x in xs`, so the two cannot drift apart —
 // which they would, because the slice and fixed-array paths differ.
 function (mutable self: Unit) emit_element(src: String, holder: Type, base: String, index: String,
-                                 token: Int) -> String allocates {
+                                 token: Int) -> String {
         if holder.kind == 47 {
             let element: Type = self.declared_type(src, holder.scale);
             let at: String = self.fresh();
@@ -456,7 +456,7 @@ function (mutable self: Unit) emit_element(src: String, holder: Type, base: Stri
         let loaded: Int = self.write_body("  " + reg + " = load i64, ptr " + at + "\n");
         return reg;
 }
-function (mutable self: Unit) emit_expr(src: String, node: Int) -> String allocates {
+function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
     let n: Node = self.nodes[node];
     if n.kind == 1 {                                 // an Int literal
         return to_string(n.value);
@@ -903,7 +903,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
 
 // ---- statements --------------------------------------------------------------
 // The return type an `external function` declared, read from the declaration itself.
-function (mutable self: Unit) extern_return(src: String, signature: DeclaredFunction) -> Type allocates {
+function (mutable self: Unit) extern_return(src: String, signature: DeclaredFunction) -> Type {
     let mutable i: Int = 0;
     while i < len(self.items) {
         let item: Node = self.nodes[self.items[i]];
@@ -921,7 +921,7 @@ function (mutable self: Unit) extern_return(src: String, signature: DeclaredFunc
 // A call into C. Every Burxt value is an i64 here, and C's types are not, so each
 // argument is cast at the boundary and the answer is cast back — which is the only place
 // in the emitter where a value changes representation rather than meaning.
-function (mutable self: Unit) emit_c_call(src: String, n: Node, signature: DeclaredFunction) -> String allocates {
+function (mutable self: Unit) emit_c_call(src: String, n: Node, signature: DeclaredFunction) -> String {
     let list: Node = self.nodes[n.a];
     let params: Node = self.nodes[signature.parameters];
     let mutable args: String = "";
@@ -982,7 +982,7 @@ function (mutable self: Unit) emit_c_call(src: String, n: Node, signature: Decla
 
 // One piece of an interpolation, as a String. A String piece is itself; anything else is
 // rendered the way `to_string` would render it, because interpolation IS `to_string`.
-function (mutable self: Unit) emit_piece(src: String, node: Int) -> String allocates {
+function (mutable self: Unit) emit_piece(src: String, node: Int) -> String {
     let value: String = self.emit_expr(src, node);
     let shown: Type = self.type_at(node);
     if shown.kind == 42 {
@@ -1014,7 +1014,7 @@ function (mutable self: Unit) emit_piece(src: String, node: Int) -> String alloc
 // is where that promise is kept: a copy at the point a copy is meant, and nowhere else.
 // The ADDRESS a place names, for the left of an assignment. Reading `x.f` loads from
 // here; writing stores to here.
-function (mutable self: Unit) place_of(src: String, node: Int) -> String allocates {
+function (mutable self: Unit) place_of(src: String, node: Int) -> String {
     let n: Node = self.nodes[node];
     if n.kind == 11 {                                // x.f
         let holder: Type = self.type_at(n.a);
@@ -1070,7 +1070,7 @@ function (mutable self: Unit) place_of(src: String, node: Int) -> String allocat
 // Where a variant sits in its enum's declaration — that position IS the tag, so the two
 // compilers agree on it without recording anything: the declaration is the shared fact.
 // -1 when the name is not a variant of this enum.
-function (mutable self: Unit) variant_index(src: String, holder: Type, name: Token) -> Int allocates {
+function (mutable self: Unit) variant_index(src: String, holder: Type, name: Token) -> Int {
     let found: Int = self.find_type(src, holder.name_start, holder.name_length);
     if found < 0 {
         return -1;
@@ -1094,7 +1094,7 @@ function (mutable self: Unit) variant_index(src: String, holder: Type, name: Tok
 
 // `Enum.Variant` or `Enum.Variant(payload)`: the tag in cell 0, the payload after it.
 function (mutable self: Unit) emit_construction(src: String, holder: Type, call: Node,
-                                      has_args: Bool) -> String allocates {
+                                      has_args: Bool) -> String {
     let tag: Int = self.variant_index(src, holder, self.tokens[call.token]);
     let storage: String = self.scratch(self.cells_of(src, holder));
     let stored: Int = self.write_body("  store i64 " + to_string(tag) + ", ptr " + storage + "\n");
@@ -1126,13 +1126,13 @@ function (mutable self: Unit) emit_construction(src: String, holder: Type, call:
 
 // A method's symbol: the receiver's type, a dot, the method's name. Two types may both
 // have a `label`, and the linker needs to tell them apart.
-function method_symbol(src: String, holder: Type, name: Token) -> String allocates {
+function method_symbol(src: String, holder: Type, name: Token) -> String {
     return substring(src, holder.name_start, holder.name_length) + "."
         + substring(src, name.start, name.length);
 }
 
 function (mutable self: Unit) copy_cells(src: String, destination: String, source: String,
-                               cells: Int) -> Int allocates {
+                               cells: Int) -> Int {
     let from: String = self.fresh();
     let cast: Int = self.write_body("  " + from + " = inttoptr i64 " + source + " to ptr\n");
     return self.write_body("  call ptr @memcpy(ptr " + destination + ", ptr " + from + ", i64 "
@@ -1146,7 +1146,7 @@ function (mutable self: Unit) copy_cells(src: String, destination: String, sourc
 // Scale 0 prints NO decimal point: showing ".0" would display a digit that does not exist.
 // The printf format for a Decimal of this scale. Scale 0 prints no decimal point at all:
 // showing ".0" would display a digit the value does not have.
-function (mutable self: Unit) decimal_format(scale: Int) -> String allocates {
+function (mutable self: Unit) decimal_format(scale: Int) -> String {
     if scale == 0 {
         return self.intern_text("%s%llu");
     }
@@ -1158,7 +1158,7 @@ function (mutable self: Unit) decimal_format(scale: Int) -> String allocates {
 // product is too fine and must be divided down, negative means the dividend must be scaled
 // up first. `dividing` picks which operand becomes the divisor.
 function (mutable self: Unit) emit_rounded(left: String, right: String, shift: Int, contract: Int,
-                                 dividing: Int) -> String allocates {
+                                 dividing: Int) -> String {
     let lw: String = self.fresh();
     let w1: Int = self.write_body("  " + lw + " = sext i64 " + left + " to i128\n");
     let rw: String = self.fresh();
@@ -1242,7 +1242,7 @@ function (mutable self: Unit) emit_rounded(left: String, right: String, shift: I
     return reg;
 }
 
-function (mutable self: Unit) emit_decimal_print(value: String, scale: Int) -> Int allocates {
+function (mutable self: Unit) emit_decimal_print(value: String, scale: Int) -> Int {
     let wide: String = self.fresh();
     let widened: Int = self.write_body("  " + wide + " = sext i64 " + value + " to i128\n");
     let negative: String = self.fresh();
@@ -1280,7 +1280,7 @@ function (mutable self: Unit) emit_decimal_print(value: String, scale: Int) -> I
                   + ", i64 " + whole + ", i64 " + frac + ")\n");
 }
 
-function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String) -> String allocates {
+function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String) -> String {
     let list: Node = self.nodes[n.a];
     let mutable first: String = "0";
     let mutable second: String = "0";
@@ -1408,7 +1408,7 @@ function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String)
     return "0";
 }
 
-function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates {
+function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int {
     let n: Node = self.nodes[node];
 
     if n.kind == 60 {                                // let
@@ -1727,7 +1727,7 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates
 // into its own slot; an aggregate one is named by its address, exactly as any other
 // aggregate is.
 function (mutable self: Unit) bind_payload(src: String, holder: Type, arm: Node,
-                                 base: String) -> Int allocates {
+                                 base: String) -> Int {
     let found: Int = self.find_type(src, holder.name_start, holder.name_length);
     if found < 0 {
         return 0;
@@ -1780,7 +1780,7 @@ function (mutable self: Unit) bind_payload(src: String, holder: Type, arm: Node,
     return 0;
 }
 
-function (mutable self: Unit) emit_block(src: String, block: Int) -> Int allocates {
+function (mutable self: Unit) emit_block(src: String, block: Int) -> Int {
     if block < 0 {
         return 0;
     }
@@ -1798,12 +1798,12 @@ function (mutable self: Unit) emit_block(src: String, block: Int) -> Int allocat
 
 // ---- the module --------------------------------------------------------------
 // The symbol naming a trait's table for one concrete type.
-function vtable_symbol(src: String, trait_name: Token, type_name: Token) -> String allocates {
+function vtable_symbol(src: String, trait_name: Token, type_name: Token) -> String {
     return "@burxt.vt." + substring(src, trait_name.start, trait_name.length) + "."
         + substring(src, type_name.start, type_name.length);
 }
 
-function (mutable self: Unit) emit_vtable(src: String, index: Int) -> Int allocates {
+function (mutable self: Unit) emit_vtable(src: String, index: Int) -> Int {
     let item: Node = self.nodes[index];
     let trait_name: Token = self.tokens[item.token];
     let type_name: Token = self.tokens[item.c];
@@ -1831,7 +1831,7 @@ function (mutable self: Unit) emit_vtable(src: String, index: Int) -> Int alloca
 // A concrete value becoming a `dynamic Trait`: the address in cell 0, the table in cell 1.
 // This is the ONLY coercion in the language, and it happens where a value is STORED —
 // a binding, a field, an argument, a return — never silently mid-expression.
-function (mutable self: Unit) emit_dynamic(src: String, want: Type, node: Int) -> String allocates {
+function (mutable self: Unit) emit_dynamic(src: String, want: Type, node: Int) -> String {
     let concrete: Type = self.type_at(node);
     let value: String = self.emit_expr(src, node);
     if concrete.kind == 49 {
@@ -1867,7 +1867,7 @@ function (mutable self: Unit) emit_dynamic(src: String, want: Type, node: Int) -
 // the same way at the same site says the fault is in how the shape was thought about rather
 // than in either translation.
 function (mutable self: Unit) emit_dynamic_call(src: String, holder: Type, call: Node,
-                                                answers: Type) -> String allocates {
+                                                answers: Type) -> String {
     let fat: String = self.emit_expr(src, call.a);
     let base: String = self.fresh();
     let cast: Int = self.write_body("  " + base + " = inttoptr i64 " + fat + " to ptr\n");
@@ -1915,7 +1915,7 @@ function (mutable self: Unit) emit_dynamic_call(src: String, holder: Type, call:
 }
 
 // Which slot a trait gives a method — its position in the trait's declaration.
-function (mutable self: Unit) trait_slot(src: String, holder: Type, name: Token) -> Int allocates {
+function (mutable self: Unit) trait_slot(src: String, holder: Type, name: Token) -> Int {
     let found: Int = self.find_type(src, holder.name_start, holder.name_length);
     if found < 0 {
         return 0;
@@ -1935,7 +1935,7 @@ function (mutable self: Unit) trait_slot(src: String, holder: Type, name: Token)
 
 // A value on its way into a place that wants `want`. Everything goes through here so the
 // coercion has exactly one home.
-function (mutable self: Unit) emit_value_for(src: String, want: Type, node: Int) -> String allocates {
+function (mutable self: Unit) emit_value_for(src: String, want: Type, node: Int) -> String {
     if want.kind == 49 {
         return self.emit_dynamic(src, want, node);
     }
@@ -1973,7 +1973,7 @@ function declared_by_runtime(name: String) -> Bool {
         || name == "fseek" || name == "ftell";
 }
 
-function (mutable self: Unit) emit_extern(src: String, index: Int) -> Int allocates {
+function (mutable self: Unit) emit_extern(src: String, index: Int) -> Int {
     let item: Node = self.nodes[index];
     let name: Token = self.tokens[item.token];
     let called: String = substring(src, name.start, name.length);
@@ -2025,7 +2025,7 @@ function (mutable self: Unit) emit_extern(src: String, index: Int) -> Int alloca
 
 // A type as a symbol fragment. Total by construction: every kind answers something, because a
 // name that falls through to "" would collide two instances into one definition.
-function (self: Unit) mangle_type(src: String, written: Type) -> String allocates {
+function (self: Unit) mangle_type(src: String, written: Type) -> String {
     // Resolved at every level, like `cells_of`. So `Pair<Pair<T>>` mangles correctly with the
     // bindings in scope and nothing has to be substituted first — the argument list travels down
     // by being looked up rather than rewritten.
@@ -2060,7 +2060,7 @@ function (self: Unit) mangle_type(src: String, written: Type) -> String allocate
 
 // `identity$Int`. A dollar cannot appear in a Burxt identifier, so a mangled name can never
 // collide with one a program wrote — the same reason stage-0 chose it.
-function (self: Unit) instance_symbol(src: String, instance: Int) -> String allocates {
+function (self: Unit) instance_symbol(src: String, instance: Int) -> String {
     let it: Instance = self.instances[instance];
     let declaration: Generic = self.generics[it.generic];
     let mutable symbol: String = substring(src, declaration.start, declaration.length);
@@ -2075,7 +2075,7 @@ function (self: Unit) instance_symbol(src: String, instance: Int) -> String allo
 // The suffix alone — what `emit_function` appends to the declaration's own name. Kept separate
 // from `instance_symbol` because the definition builds its name from the node it is emitting and
 // only needs the tail.
-function (self: Unit) instance_suffix(src: String, instance: Int) -> String allocates {
+function (self: Unit) instance_suffix(src: String, instance: Int) -> String {
     let it: Instance = self.instances[instance];
     let mutable suffix: String = "";
     let mutable i: Int = 0;
@@ -2089,7 +2089,7 @@ function (self: Unit) instance_suffix(src: String, instance: Int) -> String allo
 // The instance for this generic and these arguments, adding it if it is new. Two calls with the
 // same arguments must answer the same index, or the module would define one function twice.
 function (mutable self: Unit) find_instance(src: String, generic: Int, args_start: Int,
-                                            args_count: Int) -> Int allocates {
+                                            args_count: Int) -> Int {
     let mutable i: Int = 0;
     while i < len(self.instances) {
         let it: Instance = self.instances[i];
@@ -2139,7 +2139,7 @@ function (self: Unit) find_function_by_index(generic: Int) -> Int {
 // enclosing generic has not been instantiated yet, and this call will be reached again when it
 // is. That is exactly the case a work list exists to handle.
 function (mutable self: Unit) instance_of_call(src: String, generic: Int, params: Int,
-                                               args: Int, call: Int) -> Int allocates {
+                                               args: Int, call: Int) -> Int {
     let base: Int = len(self.type_bindings);
     // What the CALL's type turned out to be settles anything the arguments cannot — which for a
     // constructor is everything, since `-> Map<K, V>` mentions its parameters only in the return.
@@ -2189,7 +2189,7 @@ function (mutable self: Unit) instance_of_call(src: String, generic: Int, params
 // generic. Also the moment an instance is DISCOVERED, which is why it is not a pure lookup: a
 // call reached while emitting one instance adds the next one to the list.
 function (mutable self: Unit) call_suffix(src: String, name: Token, args: Int,
-                                          call: Int) -> String allocates {
+                                          call: Int) -> String {
     let generic: Int = self.generic_named(src, name.start, name.length);
     if generic < 0 {
         return "";
@@ -2216,7 +2216,7 @@ function (mutable self: Unit) call_suffix(src: String, name: Token, args: Int,
 // gives `$Point`, so the symbol is `Pair$Point.left`. A method on a generic type is the one case
 // where the copy is chosen by the RECEIVER rather than by the arguments, which is also why it
 // needs no unification — the call site already knows what it is holding.
-function (self: Unit) holder_suffix(src: String, holder: Type) -> String allocates {
+function (self: Unit) holder_suffix(src: String, holder: Type) -> String {
     if holder.kind != 46 {
         return "";
     }
@@ -2265,7 +2265,7 @@ function (self: Unit) holder_suffix(src: String, holder: Type) -> String allocat
 //
 // Answers nothing. Skipped when an argument is still abstract, because the enclosing generic has
 // not been instantiated yet and this receiver will be seen again when it is.
-function (mutable self: Unit) note_holder(src: String, holder: Type) -> Int allocates {
+function (mutable self: Unit) note_holder(src: String, holder: Type) -> Int {
     if holder.kind != 46 || holder.contract <= 0 {
         return 0;
     }
@@ -2295,7 +2295,7 @@ function (mutable self: Unit) note_holder(src: String, holder: Type) -> Int allo
 
 // Put an instance's arguments in scope, so every layout question asked while its body is emitted
 // answers for THIS instantiation. Returns the base to truncate back to.
-function (mutable self: Unit) install_instance(src: String, instance: Int) -> Int allocates {
+function (mutable self: Unit) install_instance(src: String, instance: Int) -> Int {
     let base: Int = len(self.type_bindings);
     let it: Instance = self.instances[instance];
     let declaration: Generic = self.generics[it.generic];
@@ -2312,7 +2312,7 @@ function (mutable self: Unit) install_instance(src: String, instance: Int) -> In
 // `left <predicate> right`, or die with a message built at compile time. The shape every runtime
 // check in this emitter has: a comparison, a branch, and a named failure.
 function (mutable self: Unit) check_or_die(predicate: String, left: String, right: String,
-                                 message: String) -> Int allocates {
+                                 message: String) -> Int {
     let held: String = self.fresh();
     let compared: Int = self.write_body("  " + held + " = icmp " + predicate + " i64 " + left
                                + ", " + right + "\n");
@@ -2335,7 +2335,7 @@ function (mutable self: Unit) check_or_die(predicate: String, left: String, righ
 // values. `find_slot` searches backwards, so the newest binding wins, and truncating restores the
 // caller's — the same shape every scope in this emitter uses. Stage-0 does exactly this with its
 // variable map, which is why the two agree.
-function (mutable self: Unit) check_measure_at_call(src: String, values: [String]) -> Int allocates {
+function (mutable self: Unit) check_measure_at_call(src: String, values: [String]) -> Int {
     if self.measure_clause < 0 {
         return 0;
     }
@@ -2371,7 +2371,7 @@ function (mutable self: Unit) check_measure_at_call(src: String, values: [String
 //
 // The walk is over the whole clause because `old` may sit anywhere in it — inside an addition,
 // inside a comparison, nested in another call's arguments.
-function (mutable self: Unit) hoist_old(src: String, node: Int) -> Int allocates {
+function (mutable self: Unit) hoist_old(src: String, node: Int) -> Int {
     if node < 0 {
         return 0;
     }
@@ -2447,7 +2447,7 @@ function (self: Unit) old_slot_for(node: Int) -> Int {
 // same span the checker binds — the two have to agree, and neither invents a name. Stage-1 names
 // every binding by where it is written, and this is that rule applied to a name the language
 // introduces rather than the programmer.
-function (mutable self: Unit) emit_ensures(src: String, value: String) -> Int allocates {
+function (mutable self: Unit) emit_ensures(src: String, value: String) -> Int {
     if self.ensures_count == 0 {
         return 0;
     }
@@ -2487,7 +2487,7 @@ function (mutable self: Unit) emit_ensures(src: String, value: String) -> Int al
 // The message matches stage-0's byte for byte, deliberately: the two compilers agreeing about what
 // a program PRINTS is what the differential test measures, and a failure is output like any other.
 function (mutable self: Unit) emit_clause_check(src: String, clause: Node,
-                                       owner: String) -> Int allocates {
+                                       owner: String) -> Int {
     let condition: String = self.emit_expr(src, clause.a);
     let held: String = self.fresh();
     let checked: Int = self.write_body("  " + held + " = icmp ne i64 " + condition + ", 0\n");
@@ -2505,7 +2505,7 @@ function (mutable self: Unit) emit_clause_check(src: String, clause: Node,
     return self.write_body(ok + ":\n");
 }
 
-function (mutable self: Unit) emit_function(src: String, index: Int, suffix: String) -> Int allocates {
+function (mutable self: Unit) emit_function(src: String, index: Int, suffix: String) -> Int {
     let item: Node = self.nodes[index];
     let name: Token = self.tokens[item.token];
     let params: Node = self.nodes[item.a];
@@ -2681,7 +2681,7 @@ function (mutable self: Unit) emit_function(src: String, index: Int, suffix: Str
     return 1;
 }
 
-function (mutable self: Unit) emit_module(src: String) -> Int allocates {
+function (mutable self: Unit) emit_module(src: String) -> Int {
     // The CHECKER handles generic applications: parameters resolve lazily as comparison
     // recurses, and a field's type is resolved deeply where it is read. LAYOUT is the part
     // that cannot be lazy — `Option<Int>` needs its own tag-and-payload sizing, one copy per
@@ -2799,7 +2799,7 @@ function (mutable self: Unit) emit_module(src: String) -> Int allocates {
 
 // Every method declared on this generic type, emitted once for the arguments now in scope.
 function (mutable self: Unit) emit_methods_of(src: String, declaration: Generic,
-                                             suffix: String) -> Int allocates {
+                                             suffix: String) -> Int {
     let mutable i: Int = 0;
     while i < len(self.items) {
         let index: Int = self.items[i];
@@ -2851,7 +2851,7 @@ function (self: Unit) declaration_node(src: String, start: Int, length: Int) -> 
 // that could fall out of step with its bytes. The bump allocator's MARK is the region:
 // opening one remembers where the pointer stood, closing it puts the pointer back, and
 // that is the whole of release — O(1) for any number of allocations.
-function runtime_ir() -> String allocates {
+function runtime_ir() -> String {
     return "@burxt.arena = global ptr null\n"
         + "@burxt.bump = global i64 0\n"
         + "declare ptr @malloc(i64)\n"
@@ -3407,7 +3407,7 @@ function runtime_ir() -> String allocates {
 // One rounding helper per mode, differing only in the tie rule. Written as text with the
 // mode's name substituted, because the two bodies are otherwise identical and a copy would
 // be two places to fix a bug in.
-function round_helper(mode: String) -> String allocates {
+function round_helper(mode: String) -> String {
     let mutable tie: String = "";
     if mode == "half_even" {
         // A tie goes to the even quotient, so repeated rounding does not drift upward.
@@ -3449,7 +3449,7 @@ function round_helper(mode: String) -> String allocates {
         + "  ret i128 %answer\n\}\n\n";
 }
 
-function overflow_helper(name: String, intrinsic: String) -> String allocates {
+function overflow_helper(name: String, intrinsic: String) -> String {
     return "define i64 @burxt.checked." + name + "(i64 %a, i64 %b) \{\n"
         + "entry:\n"
         + "  %r = call \{i64, i1\} @llvm." + intrinsic + ".with.overflow.i64(i64 %a, i64 %b)\n"

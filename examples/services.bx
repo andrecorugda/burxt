@@ -68,7 +68,7 @@ function (self: Checkout) total_for(order: Order) -> Decimal<2, RoundHalfEven> {
     return order.subtotal + tax;
 }
 
-function (self: Checkout) describe() -> String allocates {
+function (self: Checkout) describe() -> String {
     return "checkout using " + self.rates.name() + " rates";
 }
 
