@@ -30,7 +30,15 @@
       "settings": {
         "files.associations": { "*.bx": "burxt" },
         "editor.formatOnSave": false,
-        "workbench.colorTheme": "Default Light Modern"
+        "workbench.colorTheme": "Default Light Modern",
+        "// burxt.path": [
+          "Named explicitly rather than left to PATH. The extension resolves the compiler as: this",
+          "setting, then ./target/debug/burxt in the workspace, then `burxt` from PATH — and an",
+          "extension host does not reliably inherit a PATH edited in .bashrc. setup.sh installs to",
+          "/usr/local/bin for the same reason; this is the belt to that braces, so the language",
+          "server starts even if the install location ever moves."
+        ],
+        "burxt.path": "/usr/local/bin/burxt"
       }
     }
   },

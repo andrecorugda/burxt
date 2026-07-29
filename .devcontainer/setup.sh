@@ -9,8 +9,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 REPO="andrecorugda/burxt"
-DEST="$HOME/.local"
-mkdir -p "$DEST/bin" "$DEST/lib/burxt"
+
+# /usr/local, not ~/.local. The editor extension resolves the compiler as: the `burxt.path`
+# setting, then ./target/debug/burxt in the workspace, then `burxt` from PATH. A VS Code extension
+# host does not reliably inherit a PATH set in .bashrc, so ~/.local/bin left the language server
+# unable to start — the compiler worked in the terminal and the editor had no diagnostics, which is
+# exactly what the first real Codespace showed.
+DEST="/usr/local"
+sudo mkdir -p "$DEST/bin" "$DEST/lib/burxt"
 
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
@@ -29,8 +35,8 @@ if [ -n "${URL:-}" ]; then
         tar xzf "$WORK/burxt.tar.gz" -C "$WORK"
         UNPACKED="$(find "$WORK" -maxdepth 1 -type d -name 'burxt-*' | head -1)"
         if [ -n "$UNPACKED" ] && [ -x "$UNPACKED/burxt" ]; then
-            install -m 755 "$UNPACKED/burxt" "$DEST/bin/burxt"
-            install -m 644 "$UNPACKED"/lib/*.bx "$DEST/lib/burxt/" 2>/dev/null || true
+            sudo install -m 755 "$UNPACKED/burxt" "$DEST/bin/burxt"
+            sudo install -m 644 "$UNPACKED"/lib/*.bx "$DEST/lib/burxt/" 2>/dev/null || true
             installed_from_release=1
         fi
     fi
@@ -52,25 +58,30 @@ if [ "$installed_from_release" = "0" ]; then
         . "$HOME/.cargo/env"
     fi
     cargo build --release --locked
-    install -m 755 target/release/burxt "$DEST/bin/burxt"
-    install -m 644 lib/*.bx "$DEST/lib/burxt/"
+    sudo install -m 755 target/release/burxt "$DEST/bin/burxt"
+    sudo install -m 644 lib/*.bx "$DEST/lib/burxt/"
 fi
 
-# PATH for every future shell in this container.
-if ! grep -qs 'HOME/.local/bin' "$HOME/.bashrc"; then
-    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
-fi
-export PATH="$DEST/bin:$PATH"
+# No PATH edit needed: /usr/local/bin is already on the default PATH, including the one a VS Code
+# extension host runs with. That is the entire reason for installing there.
 
-# The extension, from the repository rather than a marketplace — it is not published, and installing
-# the checked-in .vsix means this works on any branch instead of only after a release. `|| true`
-# because a missing `code` CLI should not fail the container; the compiler still works without it.
-say "Installing the editor extension"
+# The extension, BUILT here rather than downloaded or read from the checkout.
+#
+# `.gitignore` has `*.vsix`, on the sound principle that a binary in a repository is a binary nobody
+# can reproduce — so a fresh clone has no package at all, and the first real Codespace found exactly
+# that: the compiler ran and the editor had no highlighting and no diagnostics. `pack.py` uses only
+# the standard library, so building it in the container costs nothing and needs no network.
+say "Building and installing the editor extension"
+python3 editors/vscode/pack.py
 VSIX="$(ls editors/vscode/burxt-*.vsix 2>/dev/null | head -1 || true)"
-if [ -n "$VSIX" ] && command -v code >/dev/null 2>&1; then
-    code --install-extension "$VSIX" 2>&1 | tail -1 || true
+if [ -z "$VSIX" ]; then
+    echo "    FAILED: pack.py produced no .vsix" >&2
+    exit 1
+fi
+if command -v code >/dev/null 2>&1; then
+    code --install-extension "$VSIX" --force 2>&1 | tail -2 || true
 else
-    echo "    skipped (no .vsix or no code CLI) — run: python3 editors/vscode/pack.py"
+    echo "    no \`code\` CLI here — install it by hand: code --install-extension $VSIX"
 fi
 
 # Prove it, rather than claiming it. If this fails the container is broken and the log says how.
@@ -79,6 +90,7 @@ cd /tmp
 printf 'print("Hello, world!");\n' > burxt_check.bx
 if "$DEST/bin/burxt" run burxt_check.bx | grep -qx 'Hello, world!'; then
     echo "    a one-line program is a whole program — no entry point to declare"
+    echo "    and the language server answers: $("$DEST/bin/burxt" --version 2>/dev/null || echo "$DEST/bin/burxt")"
 else
     echo "    FAILED: burxt could not compile and run a one-line program" >&2
     exit 1

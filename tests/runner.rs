@@ -3141,6 +3141,29 @@ fn the_site_is_honest_and_complete() {
         }
     }
 
+    // The Codespace must BUILD the extension, not assume one is lying around.
+    //
+    // `.gitignore` has `*.vsix`, on the sound principle that a binary in a repository is a binary
+    // nobody can reproduce. So a fresh clone has no package — and the first real Codespace found
+    // exactly that: the compiler ran fine and the editor had no highlighting and no diagnostics,
+    // because setup.sh looked for a .vsix that git had never carried.
+    //
+    // `pack.py` needs only the standard library, so building it in the container is free. This
+    // asserts the container does that rather than hoping.
+    let setup = fs::read_to_string(root.join(".devcontainer/setup.sh")).expect("the setup script");
+    assert!(
+        setup.contains("pack.py"),
+        ".devcontainer/setup.sh must BUILD the extension with editors/vscode/pack.py. The .vsix is \
+         git-ignored, so a fresh clone has none and the editor gets no highlighting or diagnostics."
+    );
+    // And the compiler has to land where an extension host can find it. A PATH edited in .bashrc is
+    // not inherited by one, which is why ~/.local/bin left the language server unable to start.
+    assert!(
+        setup.contains("/usr/local"),
+        ".devcontainer/setup.sh must install the compiler somewhere already on PATH — an extension \
+         host does not inherit a PATH set in .bashrc, so the language server will not start"
+    );
+
     // Every link in the site's NAVIGATION has a page behind it.
     //
     // This is the check that was missing when the site first went live: `/examples/` and `/install/`
