@@ -3317,8 +3317,8 @@ fn the_burxt_backend_keeps_every_runtime_guarantee() {
         kept, total
     );
     assert!(
-        kept >= 11,
-        "the Burxt backend keeps {} of {} runtime guarantees, was 11 of 21 at v0.0.137, and 8 when the sweep was added at v0.0.136. \
+        kept >= 13,
+        "the Burxt backend keeps {} of {} runtime guarantees, was 13 of 21 at v0.0.138, 11 at v0.0.137, and 8 when the sweep was added at v0.0.136. \
          These are lost — a program compiled by stage-1 does not enforce them:\n  {}",
         kept,
         total,

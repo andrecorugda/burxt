@@ -842,6 +842,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
             return held;
         }
         let mutable args: String = "";
+        let mutable arg_values: [String] = [];
         let mutable i: Int = 0;
         while i < list.b {
             let value: String = self.emit_expr(src, self.children[list.a + i]);
@@ -849,7 +850,17 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
                 args += ", ";
             }
             args += "i64 " + value;
+            let kept: Int = push(arg_values, value);
             i += 1;
+        }
+        // A RECURSIVE call, in a function with a `decreases` measure: the measure must be strictly
+        // smaller with these arguments than it was at entry. Checked BEFORE the call, because after
+        // it the recursion has already happened — which is the difference between a guarantee and a
+        // post-mortem.
+        if self.measure_clause >= 0 {
+            if span_equal(src, t.start, t.length, self.measure_owner) {
+                let bounded: Int = self.check_measure_at_call(src, arg_values);
+            }
         }
         let found_fn: Int = self.find_function(src, t.start, t.length);
         if found_fn >= 0 {
@@ -1455,6 +1466,7 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates
         let target: Token = self.tokens[value.token];
         let list: Node = self.nodes[value.a];
         let mutable args: String = "";
+        let mutable arg_values: [String] = [];
         let mutable i: Int = 0;
         while i < list.b {
             let argument: String = self.emit_expr(src, self.children[list.a + i]);
@@ -1462,7 +1474,17 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates
                 args += ", ";
             }
             args += "i64 " + argument;
+            let kept: Int = push(arg_values, argument);
             i += 1;
+        }
+        // A tail call is still a recursive call, and it is the one that MUST be checked: `musttail`
+        // reuses the frame, so a measure that does not shrink loops forever without even growing
+        // the stack. `tests/panic/termination_does_not_decrease.bx` is exactly that program, and it
+        // ran until a timeout killed it until this check existed.
+        if self.measure_clause >= 0 {
+            if span_equal(src, target.start, target.length, self.measure_owner) {
+                let bounded: Int = self.check_measure_at_call(src, arg_values);
+            }
         }
         let answer: String = self.fresh();
         let jumped: Int = self.write_body("  " + answer + " = musttail call i64 @"
@@ -2220,6 +2242,59 @@ function (mutable self: Unit) install_instance(src: String, instance: Int) -> In
     return base;
 }
 
+// `left <predicate> right`, or die with a message built at compile time. The shape every runtime
+// check in this emitter has: a comparison, a branch, and a named failure.
+function (mutable self: Unit) check_or_die(predicate: String, left: String, right: String,
+                                 message: String) -> Int allocates {
+    let held: String = self.fresh();
+    let compared: Int = self.write_body("  " + held + " = icmp " + predicate + " i64 " + left
+                               + ", " + right + "\n");
+    let ok: String = self.fresh_label("check.ok");
+    let broken: String = self.fresh_label("check.broken");
+    let branched: Int = self.write_body("  br i1 " + held + ", label %" + ok + ", label %"
+                               + broken + "\n");
+    let opened: Int = self.write_body(broken + ":\n");
+    let text: String = self.intern_text(message);
+    let told: Int = self.write_body("  call void @burxt.contract_failed(i64 ptrtoint (ptr "
+                           + text + " to i64))\n");
+    let dead: Int = self.write_body("  unreachable\n");
+    return self.write_body(ok + ":\n");
+}
+
+// The measure at a RECURSIVE call: re-evaluated with this call's arguments in place of the
+// parameters, and required to be strictly smaller than the one taken at entry.
+//
+// The substitution works by declaring slots for the parameter names holding the call's argument
+// values. `find_slot` searches backwards, so the newest binding wins, and truncating restores the
+// caller's — the same shape every scope in this emitter uses. Stage-0 does exactly this with its
+// variable map, which is why the two agree.
+function (mutable self: Unit) check_measure_at_call(src: String, values: [String]) -> Int allocates {
+    if self.measure_clause < 0 {
+        return 0;
+    }
+    let clause: Node = self.nodes[self.measure_clause];
+    let params: Node = self.nodes[self.measure_parameters];
+    let base: Int = len(self.slots);
+    let mutable i: Int = 0;
+    while i < params.b && i < len(values) {
+        let param: Node = self.nodes[self.children[params.a + i]];
+        let named: Token = self.tokens[param.token];
+        let slot: Int = self.declare_slot(src, named.start, named.length, 1, 0);
+        let stored: Int = self.write_body("  store i64 " + values[i] + ", ptr %v"
+                                 + to_string(slot) + "\n");
+        i += 1;
+    }
+    let next: String = self.emit_expr(src, clause.a);
+    let dropped: Int = truncate(self.slots, base);
+    let mine: String = self.fresh();
+    let loaded: Int = self.write_body("  " + mine + " = load i64, ptr %measure"
+                             + to_string(self.measure_slot) + "\n");
+    let text: String = substring(src, clause.b, clause.c);
+    return self.check_or_die("slt", next, mine,
+        "burxt runtime error: `" + text + "` did not decrease on a recursive call to `"
+        + self.measure_owner + "`\n");
+}
+
 // Every `old(...)` in this clause, evaluated NOW and remembered.
 //
 // A conservation law compares the state after a function against the state before it, so `old` is
@@ -2474,6 +2549,35 @@ function (mutable self: Unit) emit_function(src: String, index: Int, suffix: Str
         }
         c += 1;
     }
+    // The `decreases` measure, captured at entry and refused if negative. A measure that can fall
+    // below zero is not a ladder to the floor, it is a hole: "strictly smaller" alone would let it
+    // descend forever.
+    let outer_measure_clause: Int = self.measure_clause;
+    let outer_measure_slot: Int = self.measure_slot;
+    let outer_measure_params: Int = self.measure_parameters;
+    let outer_measure_owner: String = self.measure_owner;
+    self.measure_clause = 0 - 1;
+    c = 0;
+    while c < signature_node.b {
+        let clause: Node = self.nodes[self.children[signature_node.a + c]];
+        if clause.value == 128 {                     // decreases
+            let value: String = self.emit_expr(src, clause.a);
+            self.measure_slot = self.next_slot;
+            self.next_slot += 1;
+            let made: Int = self.write_entry("  %measure" + to_string(self.measure_slot)
+                                    + " = alloca i64\n");
+            let stored: Int = self.write_body("  store i64 " + value + ", ptr %measure"
+                                     + to_string(self.measure_slot) + "\n");
+            let text: String = substring(src, clause.b, clause.c);
+            let refused: Int = self.check_or_die("sge", value, "0",
+                "burxt runtime error: `" + text + "` is negative in `" + symbol + "`\n");
+            self.measure_clause = self.children[signature_node.a + c];
+            self.measure_parameters = item.a;
+            self.measure_owner = substring(src, name.start, name.length);
+        }
+        c += 1;
+    }
+
     // `old(...)` captured at ENTRY, before the body can change anything. This is the whole reason a
     // conservation law works: `ensures self.a + self.b == old(self.a + self.b)` compares the state
     // after against a value taken before.
@@ -2503,6 +2607,10 @@ function (mutable self: Unit) emit_function(src: String, index: Int, suffix: Str
     self.ensures_owner = outer_ensures_owner;
     let forgotten: Int = truncate(self.old_nodes, old_base);
     let released: Int = truncate(self.old_slots, old_base);
+    self.measure_clause = outer_measure_clause;
+    self.measure_slot = outer_measure_slot;
+    self.measure_parameters = outer_measure_params;
+    self.measure_owner = outer_measure_owner;
     return 1;
 }
 

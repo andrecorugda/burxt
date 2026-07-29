@@ -216,6 +216,16 @@ record Unit {
     // return, so a conservation law can compare after against before. These two arrays are the
     // mapping from the `old` CALL NODE to the slot holding its entry value — parallel, because a
     // pair of Ints is cheaper than a record copied at every lookup.
+    // The `decreases` measure of the function being emitted. A measure is checked in TWO places —
+    // at entry it must not be negative, and at every recursive call the new measure must be
+    // strictly smaller — so the call site needs to know about a clause written in the signature.
+    //
+    // Without the second check the guarantee does not merely fail to fire: the program recurses
+    // until the stack goes. An unbounded loop is a worse answer than an error.
+    measure_clause: Int,
+    measure_slot: Int,
+    measure_parameters: Int,
+    measure_owner: String,
     old_nodes: [Int],
     old_slots: [Int],
     ensures_start: Int,
