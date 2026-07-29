@@ -88,7 +88,7 @@ record Node {
 // A declared type: `Int`, `Decimal<2, RoundHalfEven>`, `[Int]`, a record name.
 // A record rather than an enum, because it is compared and copied constantly and a
 // payload enum would need a match at every use.
-record Ty {
+record Type {
     // The node kinds the parser produces: 40 Int, 41 Bool, 42 String, 43 CInt,
     // 44 CDouble, 45 Decimal, 46 named, 47 slice, 48 array, 49 dynamic,
     // 50 type PARAMETER. 0 is unknown, which never equals anything — including
@@ -110,7 +110,7 @@ record Ty {
 
 // A binding in scope: its name as a SPAN, so the checker allocates nothing to
 // remember a variable.
-record Sym { start: Int, length: Int, ty: Ty, writable: Int, depth: Int }
+record Sym { start: Int, length: Int, ty: Type, writable: Int, depth: Int }
 // Which declaration is generic over which parameters. A side table, looked up by name span
 // like every other declaration here, because every field of a node is already spoken for.
 // `tp_start`/`tp_count` index `type_params`, which holds the TOKEN of each parameter's name —
@@ -118,14 +118,14 @@ record Sym { start: Int, length: Int, ty: Ty, writable: Int, depth: Int }
 record Generic { start: Int, length: Int, tp_start: Int, tp_count: Int }
 
 // A declared function: its name span, its return type, and its parameter list node.
-record Fun { start: Int, length: Int, ret: Ty, params: Int, flags: Int }
+record Fun { start: Int, length: Int, ret: Type, params: Int, flags: Int }
 // A declared record or enum: its name span and the item node that declared it.
 record TypeDecl { start: Int, length: Int, kind: Int, node: Int }
 // A declared method, keyed by the receiver's name and its own.
 record Method {
     receiver_start: Int, receiver_len: Int,
     start: Int, length: Int,
-    ret: Ty, params: Int, mutating: Int, flags: Int,
+    ret: Type, params: Int, mutating: Int, flags: Int,
 }
 
 record Unit {
@@ -158,7 +158,7 @@ record Unit {
     impls: [Impl],
     // Every expression's type, indexed by node. See check.bx's type_at for why it is
     // indexed rather than searched.
-    typed: [Ty],
+    typed: [Type],
     // How many regions are open, and whether the function being checked declared
     // `allocates` — which means the caller's region is the region in effect. Together
     // these answer M1's one question: is there somewhere to allocate?
@@ -219,7 +219,7 @@ record Unit {
     n_type_of: Int,
     n_find_sym: Int,
     n_find_fun: Int,
-    n_ty_show: Int,
+    n_show_type: Int,
     n_expr_allocates: Int,
     n_type_at: Int,
 }

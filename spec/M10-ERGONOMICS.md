@@ -401,6 +401,42 @@ Checking a module now loads its whole program on every keystroke. For this compi
 which is a few milliseconds, and it is what M9 bought. If it ever bites, the answer is to cache
 the program per root and re-check incrementally, not to go back to checking files.
 
+## 2e. The rule reaches the compiler's own names (v0.0.103)
+
+Andre asked why a type is `Ty`, and then said why he dislikes it: **`ty` already reads as
+"thank you" or "typo".** That is a sharper argument than mine and it generalises — it is the same
+test that chose `record` over `capsule`:
+
+> **A name that reads as the wrong thing is worse than a name that is merely short.** An
+> abbreviation colliding with a common meaning does not save characters, it spends a beat of
+> confusion at every occurrence.
+
+`fn`/`mut`/`struct` were the language's *keywords*, and v0.0.98 fixed those. `Ty` is an
+identifier in the compiler's own source — which is the reference Burxt program and the most-read
+Burxt in existence, so the rule reaches it too.
+
+| Old | New | Why |
+|---|---|---|
+| `Ty` | `Type` | reads as the wrong thing; `type` was never a reserved word |
+| `ty_of` | `declared_type` | the type a written **annotation** denotes |
+| `ty_unknown` `ty_simple` `ty_decimal` | `unknown_type` `simple_type` `decimal_type` | constructors, named for what they build |
+| `ty_same` + `types_same` | `same_type` | one function, not two |
+| `ty_show` + `show_ty` | `show_type` | one function, not two |
+
+**What kept `Ty` short was a collision, not a preference.** `type_of` already existed — the
+expression typer — so the *annotation* reader could not have it, and past-me took the leftover
+short name instead of finding a better pair. `declared_type` versus `type_of` says which is which
+in a way neither `ty_of` nor `type_of` ever did: one reads what was **written down**, the other
+works out what an **expression** is.
+
+**And it cleaned up a smell I had made myself.** Two versions earlier I needed arena access and
+added a *method* beside each free function, naming them `types_same`/`ty_same` and
+`show_ty`/`ty_show` — near-homophones distinguished by nothing meaningful. The only callers of
+each free version turned out to be the method that delegated to it, so both merged away. One
+concept, one function.
+
+445 occurrences across five files, fixpoint intact.
+
 ## 3. Deferred, with triggers
 
 | Feature | Why deferred | Earns its place when |

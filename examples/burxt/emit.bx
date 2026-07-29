@@ -187,7 +187,7 @@ function (self: Unit) slot_is_aggregate(src: String, start: Int, length: Int) ->
 // eight bytes wide or an aggregate of things that are — a String and a growable array
 // are pointers, a Decimal is a scaled i64 — so a layout is a COUNT, and nothing here
 // needs an alignment rule.
-function (mutable self: Unit) cells_of(src: String, ty: Ty) -> Int allocates {
+function (mutable self: Unit) cells_of(src: String, ty: Type) -> Int allocates {
     if ty.kind == 46 {
         let found: Int = self.find_type(src, ty.name_start, ty.name_len);
         if found < 0 {
@@ -206,7 +206,7 @@ function (mutable self: Unit) cells_of(src: String, ty: Ty) -> Int allocates {
                 let mutable carried: Int = 0;
                 let mutable p: Int = 0;
                 while p < variant.c {
-                    carried += self.cells_of(src, self.ty_of(src, self.subs[variant.b + p]));
+                    carried += self.cells_of(src, self.declared_type(src, self.subs[variant.b + p]));
                     p += 1;
                 }
                 if carried > widest { widest = carried; }
@@ -221,13 +221,13 @@ function (mutable self: Unit) cells_of(src: String, ty: Ty) -> Int allocates {
         let mutable f: Int = 0;
         while f < item.b {
             let field: Node = self.nodes[self.kids[item.a + f]];
-            total += self.cells_of(src, self.ty_of(src, field.a));
+            total += self.cells_of(src, self.declared_type(src, field.a));
             f += 1;
         }
         return total;
     }
     if ty.kind == 48 {                               // [T; N]
-        return ty.contract * self.cells_of(src, self.ty_of(src, ty.scale));
+        return ty.contract * self.cells_of(src, self.declared_type(src, ty.scale));
     }
     if ty.kind == 49 {
         // A trait object is a FAT POINTER: the value, and the table of the trait's
@@ -240,7 +240,7 @@ function (mutable self: Unit) cells_of(src: String, ty: Ty) -> Int allocates {
 
 // Where a field starts, in cells, and -1 when the holder has no such field. The walk is
 // the same one `cells_of` does, which is why the two cannot disagree about a layout.
-function (mutable self: Unit) offset_of(src: String, holder: Ty, name: Tok) -> Int allocates {
+function (mutable self: Unit) offset_of(src: String, holder: Type, name: Tok) -> Int allocates {
     let found: Int = self.find_type(src, holder.name_start, holder.name_len);
     if found < 0 {
         return -1;
@@ -254,13 +254,13 @@ function (mutable self: Unit) offset_of(src: String, holder: Ty, name: Tok) -> I
         if spans_eq(src, field_name.start, field_name.length, name.start, name.length) {
             return offset;
         }
-        offset += self.cells_of(src, self.ty_of(src, field.a));
+        offset += self.cells_of(src, self.declared_type(src, field.a));
         f += 1;
     }
     return -1;
 }
 
-function (self: Unit) is_aggregate(ty: Ty) -> Bool {
+function (self: Unit) is_aggregate(ty: Type) -> Bool {
     return ty.kind == 46 || ty.kind == 48 || ty.kind == 49;
 }
 
@@ -354,10 +354,10 @@ function (mutable self: Unit) intern(src: String, start: Int, length: Int) -> St
 // The element at `index` of an array whose type is `holder`, given the array's `base`
 // register. Shared by `xs[i]` and by `for x in xs`, so the two cannot drift apart —
 // which they would, because the slice and fixed-array paths differ.
-function (mutable self: Unit) emit_element(src: String, holder: Ty, base: String, index: String,
+function (mutable self: Unit) emit_element(src: String, holder: Type, base: String, index: String,
                                  tok: Int) -> String allocates {
         if holder.kind == 47 {
-            let element: Ty = self.ty_of(src, holder.scale);
+            let element: Type = self.declared_type(src, holder.scale);
             let at: String = self.fresh();
             let found: Int = self.w("  " + at + " = call i64 @burxt.slot(i64 " + base
                                     + ", i64 " + index + ", i64 "
@@ -376,7 +376,7 @@ function (mutable self: Unit) emit_element(src: String, holder: Ty, base: String
                 "the Burxt backend cannot index this");
             return "0";
         }
-        let element: Ty = self.ty_of(src, holder.scale);
+        let element: Type = self.declared_type(src, holder.scale);
         let stride: Int = self.cells_of(src, element);
         // The bounds check is not optional and not a build mode: an index past the end
         // is a named failure, exit 70, like every other one.
@@ -410,7 +410,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
         // of its CONTEXT when that loses nothing — `$5` in a Decimal<2> is 5.00, the
         // integer 500 — and the checker recorded which scale it settled on. Emitting the
         // lexer's raw digits instead printed `$5` as 0.05.
-        let settled: Ty = self.type_at(node);
+        let settled: Type = self.type_at(node);
         let mutable value: Int = n.value;
         if settled.kind == 45 {
             if settled.scale > n.a {
@@ -491,7 +491,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
             let declared: Int = self.find_type(src, base_name.start, base_name.length);
             if declared >= 0 {
                 if self.types[declared].kind == 83 {
-                    let holder: Ty = Ty { kind: 46, scale: 0, contract: 0,
+                    let holder: Type = Type { kind: 46, scale: 0, contract: 0,
                                           name_start: base_name.start,
                                           name_len: base_name.length };
                     return self.emit_construction(src, holder, n, n.kind == 14);
@@ -501,7 +501,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
     }
 
     if n.kind == 11 {                                // a field
-        let holder: Ty = self.type_at(n.a);
+        let holder: Type = self.type_at(n.a);
         let base: String = self.emit_expr(src, n.a);
         let field: Tok = self.toks[n.tok];
         let offset: Int = self.offset_of(src, holder, field);
@@ -515,7 +515,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
         let at: String = self.fresh();
         let stepped: Int = self.w("  " + at + " = getelementptr i64, ptr " + as_ptr
                                   + ", i64 " + to_string(offset) + "\n");
-        let mine: Ty = self.type_at(node);
+        let mine: Type = self.type_at(node);
         if self.is_aggregate(mine) {
             // A field that is itself an aggregate answers an INTERIOR address, which is
             // the same kind of value as any other aggregate's.
@@ -529,14 +529,14 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
     }
 
     if n.kind == 12 {                                // xs[i]
-        let holder: Ty = self.type_at(n.a);
+        let holder: Type = self.type_at(n.a);
         let base: String = self.emit_expr(src, n.a);
         let index: String = self.emit_expr(src, n.b);
         return self.emit_element(src, holder, base, index, n.tok);
     }
 
     if n.kind == 19 {                                // a record literal
-        let mine: Ty = self.type_at(node);
+        let mine: Type = self.type_at(node);
         let cells: Int = self.cells_of(src, mine);
         let storage: String = self.scratch(cells);
         let mutable i: Int = 0;
@@ -544,7 +544,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
             let pair: Node = self.nodes[self.kids[n.a + i]];
             let field: Tok = self.toks[pair.tok];
             let offset: Int = self.offset_of(src, mine, field);
-            let field_ty: Ty = self.field_type(src, mine, pair.tok);
+            let field_ty: Type = self.field_type(src, mine, pair.tok);
             let value: String = self.emit_value_for(src, field_ty, pair.a);
             let at: String = self.fresh();
             let stepped: Int = self.w("  " + at + " = getelementptr i64, ptr " + storage
@@ -565,9 +565,9 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
     }
 
     if n.kind == 17 {                                // an array literal
-        let mine: Ty = self.type_at(node);
+        let mine: Type = self.type_at(node);
         if mine.kind == 47 {                         // [T] — a header in the region
-            let element: Ty = self.ty_of(src, mine.scale);
+            let element: Type = self.declared_type(src, mine.scale);
             let reg: String = self.fresh();
             let made: Int = self.w("  " + reg + " = call i64 @burxt.new_array(i64 "
                                    + to_string(self.cells_of(src, element)) + ")\n");
@@ -586,7 +586,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
                 "the Burxt backend cannot build this array");
             return "0";
         }
-        let element: Ty = self.ty_of(src, mine.scale);
+        let element: Type = self.declared_type(src, mine.scale);
         let stride: Int = self.cells_of(src, element);
         let storage: String = self.scratch(self.cells_of(src, mine));
         let mutable i: Int = 0;
@@ -627,9 +627,9 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
                                       + left + ", i64 " + right + ")\n");
             return joined;
         }
-        let left_ty: Ty = self.type_at(n.a);
-        let right_ty: Ty = self.type_at(n.b);
-        let answer_ty: Ty = self.type_at(node);
+        let left_ty: Type = self.type_at(n.a);
+        let right_ty: Type = self.type_at(n.b);
+        let answer_ty: Type = self.type_at(node);
 
         if n.value == 27 && left_ty.kind == 45 && right_ty.kind == 45 {
             // The exact product of two scaled integers has the SUM of their scales. Landing
@@ -732,7 +732,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
         return reg;
     }
     if n.kind == 14 {                                // a method call
-        let holder: Ty = self.type_at(n.a);
+        let holder: Type = self.type_at(n.a);
         if holder.kind == 49 {
             return self.emit_dyn_call(src, holder, n);
         }
@@ -745,7 +745,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
             args += ", i64 " + value;
             k += 1;
         }
-        let answers: Ty = self.type_at(node);
+        let answers: Type = self.type_at(node);
         if self.is_aggregate(answers) {
             let storage: String = self.scratch(self.cells_of(src, answers));
             let dropped: String = self.fresh();
@@ -787,7 +787,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
                 return self.emit_c_call(src, n, self.funs[found_fn]);
             }
         }
-        let answers: Ty = self.type_at(node);
+        let answers: Type = self.type_at(node);
         if self.is_aggregate(answers) {
             let storage: String = self.scratch(self.cells_of(src, answers));
             let mutable all: String = "ptr " + storage;
@@ -816,14 +816,14 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
 
 // ---- statements --------------------------------------------------------------
 // The return type an `external function` declared, read from the declaration itself.
-function (mutable self: Unit) extern_return(src: String, signature: Fun) -> Ty allocates {
+function (mutable self: Unit) extern_return(src: String, signature: Fun) -> Type allocates {
     let mutable i: Int = 0;
     while i < len(self.items) {
         let item: Node = self.nodes[self.items[i]];
         if item.kind == 86 {
             let named: Tok = self.toks[item.tok];
             if spans_eq(src, named.start, named.length, signature.start, signature.length) {
-                return self.ty_of(src, item.b);
+                return self.declared_type(src, item.b);
             }
         }
         i += 1;
@@ -841,9 +841,9 @@ function (mutable self: Unit) emit_c_call(src: String, n: Node, signature: Fun) 
     let mutable i: Int = 0;
     while i < list.b {
         let value: String = self.emit_expr(src, self.kids[list.a + i]);
-        let mutable want: Ty = ty_simple(40);
+        let mutable want: Type = simple_type(40);
         if i < params.b {
-            want = self.ty_of(src, self.nodes[self.kids[params.a + i]].a);
+            want = self.declared_type(src, self.nodes[self.kids[params.a + i]].a);
         }
         let shape: String = c_type_of(want);
         let mutable passed: String = value;
@@ -885,7 +885,7 @@ function (mutable self: Unit) emit_c_call(src: String, n: Node, signature: Fun) 
 // rendered the way `to_string` would render it, because interpolation IS `to_string`.
 function (mutable self: Unit) emit_piece(src: String, node: Int) -> String allocates {
     let value: String = self.emit_expr(src, node);
-    let shown: Ty = self.type_at(node);
+    let shown: Type = self.type_at(node);
     if shown.kind == 42 {
         return value;
     }
@@ -919,7 +919,7 @@ function (mutable self: Unit) emit_piece(src: String, node: Int) -> String alloc
 function (mutable self: Unit) place_of(src: String, node: Int) -> String allocates {
     let n: Node = self.nodes[node];
     if n.kind == 11 {                                // x.f
-        let holder: Ty = self.type_at(n.a);
+        let holder: Type = self.type_at(n.a);
         let base: String = self.emit_expr(src, n.a);
         let offset: Int = self.offset_of(src, holder, self.toks[n.tok]);
         if offset < 0 {
@@ -934,7 +934,7 @@ function (mutable self: Unit) place_of(src: String, node: Int) -> String allocat
         return at;
     }
     if n.kind == 12 {                                // xs[i]
-        let holder: Ty = self.type_at(n.a);
+        let holder: Type = self.type_at(n.a);
         let base: String = self.emit_expr(src, n.a);
         let index: String = self.emit_expr(src, n.b);
         if holder.kind == 47 {
@@ -951,7 +951,7 @@ function (mutable self: Unit) place_of(src: String, node: Int) -> String allocat
                 "the Burxt backend cannot write into this");
             return "";
         }
-        let stride: Int = self.cells_of(src, self.ty_of(src, holder.scale));
+        let stride: Int = self.cells_of(src, self.declared_type(src, holder.scale));
         let checked: Int = self.w("  call void @burxt.bounds(i64 " + index + ", i64 "
                                   + to_string(holder.contract) + ", i64 "
                                   + to_string(self.toks[n.tok].start) + ")\n");
@@ -972,7 +972,7 @@ function (mutable self: Unit) place_of(src: String, node: Int) -> String allocat
 // Where a variant sits in its enum's declaration — that position IS the tag, so the two
 // compilers agree on it without recording anything: the declaration is the shared fact.
 // -1 when the name is not a variant of this enum.
-function (mutable self: Unit) variant_index(src: String, holder: Ty, name: Tok) -> Int allocates {
+function (mutable self: Unit) variant_index(src: String, holder: Type, name: Tok) -> Int allocates {
     let found: Int = self.find_type(src, holder.name_start, holder.name_len);
     if found < 0 {
         return -1;
@@ -995,7 +995,7 @@ function (mutable self: Unit) variant_index(src: String, holder: Ty, name: Tok) 
 }
 
 // `Enum.Variant` or `Enum.Variant(payload)`: the tag in cell 0, the payload after it.
-function (mutable self: Unit) emit_construction(src: String, holder: Ty, call: Node,
+function (mutable self: Unit) emit_construction(src: String, holder: Type, call: Node,
                                       has_args: Bool) -> String allocates {
     let tag: Int = self.variant_index(src, holder, self.toks[call.tok]);
     let storage: String = self.scratch(self.cells_of(src, holder));
@@ -1010,7 +1010,7 @@ function (mutable self: Unit) emit_construction(src: String, holder: Ty, call: N
             let at: String = self.fresh();
             let stepped: Int = self.w("  " + at + " = getelementptr i64, ptr " + storage
                                       + ", i64 " + to_string(cell) + "\n");
-            let payload_ty: Ty = self.type_at(self.kids[list.a + i]);
+            let payload_ty: Type = self.type_at(self.kids[list.a + i]);
             let width: Int = self.cells_of(src, payload_ty);
             if self.is_aggregate(payload_ty) {
                 let copied: Int = self.copy_cells(src, at, value, width);
@@ -1028,7 +1028,7 @@ function (mutable self: Unit) emit_construction(src: String, holder: Ty, call: N
 
 // A method's symbol: the receiver's type, a dot, the method's name. Two types may both
 // have a `label`, and the linker needs to tell them apart.
-function method_symbol(src: String, holder: Ty, name: Tok) -> String allocates {
+function method_symbol(src: String, holder: Type, name: Tok) -> String allocates {
     return substring(src, holder.name_start, holder.name_len) + "."
         + substring(src, name.start, name.length);
 }
@@ -1169,7 +1169,7 @@ function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String)
     let reg: String = self.fresh();
 
     if called == "to_string" {
-        let held: Ty = self.type_at(self.kids[list.a]);
+        let held: Type = self.type_at(self.kids[list.a]);
         if held.kind == 45 {                         // a Decimal renders with its scale
             let format: String = self.decimal_format(held.scale);
             let visited: Int = self.w("  " + reg + " = call i64 @burxt.to_string_dec(i64 "
@@ -1190,7 +1190,7 @@ function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String)
         return reg;
     }
     if called == "len" {
-        let held: Ty = self.type_at(self.kids[list.a]);
+        let held: Type = self.type_at(self.kids[list.a]);
         if held.kind == 42 {
             let visited: Int = self.w("  " + reg + " = call i64 @burxt.len_str(i64 "
                                       + first + ")\n");
@@ -1272,9 +1272,9 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates
         let name: Tok = self.toks[n.tok];
         // The DECLARED type, not the value's: `let d: dynamic Priced = book;` stores a trait
         // object, and the coercion happens here or nowhere.
-        let mutable declared: Ty = self.type_at(n.b);
+        let mutable declared: Type = self.type_at(n.b);
         if n.a >= 0 {
-            declared = self.ty_of(src, n.a);
+            declared = self.declared_type(src, n.a);
         }
         let value: String = self.emit_value_for(src, declared, n.b);
         let cells: Int = self.cells_of(src, declared);
@@ -1290,7 +1290,7 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates
 
     if n.kind == 61 {                                // assignment
         let target: Node = self.nodes[n.a];
-        let into: Ty = self.type_at(n.a);
+        let into: Type = self.type_at(n.a);
         let value: String = self.emit_value_for(src, into, n.b);
         if target.kind == 5 {                        // a name
             let name: Tok = self.toks[target.tok];
@@ -1330,7 +1330,7 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates
             }
             return self.w("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_nl)\n");
         }
-        let shown: Ty = self.type_at(n.a);
+        let shown: Type = self.type_at(n.a);
         let value: String = self.emit_expr(src, n.a);
         if shown.kind == 41 {                        // a Bool renders as a word
             let bit: String = self.fresh();
@@ -1429,8 +1429,8 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates
     }
 
     if n.kind == 72 {                                // for x in xs
-        let holder: Ty = self.type_at(n.a);
-        let element: Ty = self.ty_of(src, holder.scale);
+        let holder: Type = self.type_at(n.a);
+        let element: Type = self.declared_type(src, holder.scale);
         let name: Tok = self.toks[n.tok];
         // The index has no name in the program, so it gets scratch storage rather than a
         // named slot: nothing can refer to it, and nothing should be able to.
@@ -1517,7 +1517,7 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates
         // against the variant's position in the declaration, and the arm's bindings are
         // the payload cells that follow. No jump table: a chain of comparisons is what a
         // reader would write, and LLVM turns a dense one into a switch anyway.
-        let holder: Ty = self.type_at(n.a);
+        let holder: Type = self.type_at(n.a);
         let subject: String = self.emit_expr(src, n.a);
         let as_ptr: String = self.fresh();
         let cast: Int = self.w("  " + as_ptr + " = inttoptr i64 " + subject + " to ptr\n");
@@ -1565,7 +1565,7 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates
 // An arm's bindings, pointing into the value being matched. A scalar payload is loaded
 // into its own slot; an aggregate one is named by its address, exactly as any other
 // aggregate is.
-function (mutable self: Unit) bind_payload(src: String, holder: Ty, arm: Node,
+function (mutable self: Unit) bind_payload(src: String, holder: Type, arm: Node,
                                  base: String) -> Int allocates {
     let found: Int = self.find_type(src, holder.name_start, holder.name_len);
     if found < 0 {
@@ -1582,7 +1582,7 @@ function (mutable self: Unit) bind_payload(src: String, holder: Ty, arm: Node,
             let mutable p: Int = 0;
             while p < arm.c && p < variant.c {
                 let name: Tok = self.toks[self.subs[arm.b + p]];
-                let payload: Ty = self.ty_of(src, self.subs[variant.b + p]);
+                let payload: Type = self.declared_type(src, self.subs[variant.b + p]);
                 let width: Int = self.cells_of(src, payload);
                 let at: String = self.fresh();
                 let stepped: Int = self.w("  " + at + " = getelementptr i64, ptr " + base
@@ -1662,8 +1662,8 @@ function (mutable self: Unit) emit_vtable(src: String, index: Int) -> Int alloca
 // A concrete value becoming a `dynamic Trait`: the address in cell 0, the table in cell 1.
 // This is the ONLY coercion in the language, and it happens where a value is STORED —
 // a binding, a field, an argument, a return — never silently mid-expression.
-function (mutable self: Unit) emit_dyn(src: String, want: Ty, node: Int) -> String allocates {
-    let concrete: Ty = self.type_at(node);
+function (mutable self: Unit) emit_dyn(src: String, want: Type, node: Int) -> String allocates {
+    let concrete: Type = self.type_at(node);
     let value: String = self.emit_expr(src, node);
     if concrete.kind == 49 {
         return value;                                // already a trait object
@@ -1687,7 +1687,7 @@ function (mutable self: Unit) emit_dyn(src: String, want: Ty, node: Int) -> Stri
 // Calling a method through a trait object: load the table, take the slot the trait gave
 // this method, and call what is there with the DATA pointer as the receiver. The concrete
 // type is not known here and does not need to be — that is what the indirection buys.
-function (mutable self: Unit) emit_dyn_call(src: String, holder: Ty, call: Node) -> String allocates {
+function (mutable self: Unit) emit_dyn_call(src: String, holder: Type, call: Node) -> String allocates {
     let fat: String = self.emit_expr(src, call.a);
     let base: String = self.fresh();
     let cast: Int = self.w("  " + base + " = inttoptr i64 " + fat + " to ptr\n");
@@ -1722,7 +1722,7 @@ function (mutable self: Unit) emit_dyn_call(src: String, holder: Ty, call: Node)
 }
 
 // Which slot a trait gives a method — its position in the trait's declaration.
-function (mutable self: Unit) trait_slot(src: String, holder: Ty, name: Tok) -> Int allocates {
+function (mutable self: Unit) trait_slot(src: String, holder: Type, name: Tok) -> Int allocates {
     let found: Int = self.find_type(src, holder.name_start, holder.name_len);
     if found < 0 {
         return 0;
@@ -1742,7 +1742,7 @@ function (mutable self: Unit) trait_slot(src: String, holder: Ty, name: Tok) -> 
 
 // A value on its way into a place that wants `want`. Everything goes through here so the
 // coercion has exactly one home.
-function (mutable self: Unit) emit_value_for(src: String, want: Ty, node: Int) -> String allocates {
+function (mutable self: Unit) emit_value_for(src: String, want: Type, node: Int) -> String allocates {
     if want.kind == 49 {
         return self.emit_dyn(src, want, node);
     }
@@ -1753,7 +1753,7 @@ function (mutable self: Unit) emit_value_for(src: String, want: Ty, node: Int) -
 // be declared as such or the sign is lost on the way back; everything else is an i64,
 // including a Decimal — which crosses as the exact scaled integer it already is, and that
 // is the whole of `as scaled`: no conversion, because none is needed.
-function c_type_of(ty: Ty) -> String {
+function c_type_of(ty: Type) -> String {
     if ty.kind == 42 {
         return "ptr";
     }
@@ -1806,10 +1806,10 @@ function (mutable self: Unit) emit_extern(src: String, index: Int) -> Int alloca
             signature += ", ";
         }
         let param: Node = self.nodes[self.kids[params.a + p]];
-        signature += c_type_of(self.ty_of(src, param.a));
+        signature += c_type_of(self.declared_type(src, param.a));
         p += 1;
     }
-    let answers: Ty = self.ty_of(src, item.b);
+    let answers: Type = self.declared_type(src, item.b);
     return self.w_out("declare " + c_type_of(answers) + " @"
                       + substring(src, name.start, name.length) + "(" + signature + ")\n");
 }
@@ -1830,7 +1830,7 @@ function (mutable self: Unit) emit_function(src: String, index: Int) -> Int allo
     // pointer as the first argument and the callee copies into it. Returning a pointer
     // into the callee's own frame would be a dangling one, which is why this is not an
     // optimisation but the only correct shape.
-    let answers: Ty = self.ty_of(src, signature_node.c);
+    let answers: Type = self.declared_type(src, signature_node.c);
     let outer_sret: String = self.sret;
     self.sret = "";
     let mutable signature: String = "";
@@ -1845,7 +1845,7 @@ function (mutable self: Unit) emit_function(src: String, index: Int) -> Int allo
     let mutable symbol: String = substring(src, name.start, name.length);
     if is_method {
         let receiver: Tok = self.toks[signature_node.value];
-        let holder: Ty = Ty { kind: 46, scale: 0, contract: 0,
+        let holder: Type = Type { kind: 46, scale: 0, contract: 0,
                               name_start: receiver.start, name_len: receiver.length };
         symbol = method_symbol(src, holder, name);
         if first > 0 {
@@ -1884,7 +1884,7 @@ function (mutable self: Unit) emit_function(src: String, index: Int) -> Int allo
             let stored: Int = self.w("  store i64 " + receiver_arg + ", ptr %v"
                                      + to_string(slot) + "\n");
         } else {
-            let holder: Ty = Ty { kind: 46, scale: 0, contract: 0,
+            let holder: Type = Type { kind: 46, scale: 0, contract: 0,
                                   name_start: receiver.start, name_len: receiver.length };
             let cells: Int = self.cells_of(src, holder);
             let slot: Int = self.declare_slot(src, word.start, word.length, cells, 1);
@@ -1896,7 +1896,7 @@ function (mutable self: Unit) emit_function(src: String, index: Int) -> Int allo
     while p < params.b {
         let param: Node = self.nodes[self.kids[params.a + p]];
         let pname: Tok = self.toks[param.tok];
-        let declared: Ty = self.ty_of(src, param.a);
+        let declared: Type = self.declared_type(src, param.a);
         if self.is_aggregate(declared) {
             // By value across a call too: the callee copies what it was handed, so
             // writing to a parameter cannot reach back into the caller.

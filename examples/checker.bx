@@ -9,7 +9,7 @@
 // Types are a sum type here, which is what they are in the Rust compiler too.
 // ============================================================================
 
-enum Ty {
+enum Type {
     Unknown,
     IntTy,
     BoolTy,
@@ -18,11 +18,11 @@ enum Ty {
     Dec(Int, Bool),
 }
 
-record Sym { name: String, ty: Ty }
+record Sym { name: String, ty: Type }
 record Table { rows: [Sym] }
 
 // A scan result: what was read, and where to continue from.
-record Scan { ty: Ty, next: Int }
+record Scan { ty: Type, next: Int }
 
 function is_alpha(b: Int) -> Bool {
     return (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95;
@@ -88,7 +88,7 @@ function digit_count(src: String, from: Int) -> Int {
 }
 
 // How a type is written back out, for a message.
-function ty_name(t: Ty) -> String allocates {
+function ty_name(t: Type) -> String allocates {
     match t {
         Unknown => { return "?"; }
         IntTy => { return "Int"; }
@@ -104,7 +104,7 @@ function ty_name(t: Ty) -> String allocates {
 }
 
 // Exactly equal, contract included: that is the language's own rule.
-function ty_eq(a: Ty, b: Ty) -> Bool {
+function ty_eq(a: Type, b: Type) -> Bool {
     match a {
         Unknown => { return false; }
         IntTy => {
@@ -148,10 +148,10 @@ function ty_eq(a: Ty, b: Ty) -> Bool {
     }
 }
 
-// Deliberately NOT `ty_eq(t, Ty.Unknown)`: an unknown type must never compare equal
+// Deliberately NOT `ty_eq(t, Type.Unknown)`: an unknown type must never compare equal
 // to anything, including another unknown, or one bad expression makes every later
 // comparison succeed. Suppressing the cascade needs its own predicate.
-function is_unknown(t: Ty) -> Bool {
+function is_unknown(t: Type) -> Bool {
     match t {
         Unknown => { return true; }
         IntTy => { return false; }
@@ -161,7 +161,7 @@ function is_unknown(t: Ty) -> Bool {
     }
 }
 
-function is_decimal(t: Ty) -> Bool {
+function is_decimal(t: Type) -> Bool {
     match t {
         Dec(s, c) => { return true; }
         Unknown => { return false; }
@@ -171,7 +171,7 @@ function is_decimal(t: Ty) -> Bool {
     }
 }
 
-function decimal_scale(t: Ty) -> Int {
+function decimal_scale(t: Type) -> Int {
     match t {
         Dec(scale, contract) => { return scale; }
         Unknown => { return -1; }
@@ -181,7 +181,7 @@ function decimal_scale(t: Ty) -> Int {
     }
 }
 
-function decimal_has_contract(t: Ty) -> Bool {
+function decimal_has_contract(t: Type) -> Bool {
     match t {
         Dec(scale, contract) => { return contract; }
         Unknown => { return false; }
@@ -195,16 +195,16 @@ function decimal_has_contract(t: Ty) -> Bool {
 function parse_ty(src: String, from: Int) -> Scan {
     let at: Int = skip_spaces(src, from);
     if word_at(src, at, "Int") {
-        return Scan { ty: Ty.IntTy, next: at + 3 };
+        return Scan { ty: Type.IntTy, next: at + 3 };
     }
     if word_at(src, at, "Bool") {
-        return Scan { ty: Ty.BoolTy, next: at + 4 };
+        return Scan { ty: Type.BoolTy, next: at + 4 };
     }
     if word_at(src, at, "String") {
-        return Scan { ty: Ty.StringTy, next: at + 6 };
+        return Scan { ty: Type.StringTy, next: at + 6 };
     }
     if !word_at(src, at, "Decimal<") {
-        return Scan { ty: Ty.Unknown, next: at };
+        return Scan { ty: Type.Unknown, next: at };
     }
     let scale_at: Int = at + 8;
     let scale: Int = digits_at(src, scale_at);
@@ -219,7 +219,7 @@ function parse_ty(src: String, from: Int) -> Scan {
     if byte_at(src, cursor) == 62 {                 // '>'
         cursor = cursor + 1;
     }
-    return Scan { ty: Ty.Dec(scale, contract), next: cursor };
+    return Scan { ty: Type.Dec(scale, contract), next: cursor };
 }
 
 // A literal's type. `$19.99` is a Decimal whose scale is the digits written after
@@ -228,7 +228,7 @@ function parse_ty(src: String, from: Int) -> Scan {
 function literal_ty(src: String, from: Int) -> Scan {
     let at: Int = skip_spaces(src, from);
     if at >= len(src) {
-        return Scan { ty: Ty.Unknown, next: at };
+        return Scan { ty: Type.Unknown, next: at };
     }
     let first: Int = byte_at(src, at);
     if first == 34 {                                // '"'
@@ -236,31 +236,31 @@ function literal_ty(src: String, from: Int) -> Scan {
         while i < len(src) && byte_at(src, i) != 34 {
             i = i + 1;
         }
-        return Scan { ty: Ty.StringTy, next: i + 1 };
+        return Scan { ty: Type.StringTy, next: i + 1 };
     }
     if word_at(src, at, "true") {
-        return Scan { ty: Ty.BoolTy, next: at + 4 };
+        return Scan { ty: Type.BoolTy, next: at + 4 };
     }
     if word_at(src, at, "false") {
-        return Scan { ty: Ty.BoolTy, next: at + 5 };
+        return Scan { ty: Type.BoolTy, next: at + 5 };
     }
     let mutable cursor: Int = at;
     if first == 36 {                                // '$'
         cursor = cursor + 1;
     }
     if cursor >= len(src) || !is_digit(byte_at(src, cursor)) {
-        return Scan { ty: Ty.Unknown, next: at };
+        return Scan { ty: Type.Unknown, next: at };
     }
     cursor = cursor + digit_count(src, cursor);
     if cursor < len(src) && byte_at(src, cursor) == 46 {   // '.'
         let frac_at: Int = cursor + 1;
         let places: Int = digit_count(src, frac_at);
-        return Scan { ty: Ty.Dec(places, false), next: frac_at + places };
+        return Scan { ty: Type.Dec(places, false), next: frac_at + places };
     }
     if first == 36 {
-        return Scan { ty: Ty.Dec(0, false), next: cursor };
+        return Scan { ty: Type.Dec(0, false), next: cursor };
     }
-    return Scan { ty: Ty.IntTy, next: cursor };
+    return Scan { ty: Type.IntTy, next: cursor };
 }
 
 function (self: Table) find(name: String) -> Int {
@@ -288,13 +288,13 @@ function (self: Table) operand_ty(src: String, from: Int) -> Scan allocates {
     let found: Int = self.find(word);
     if found < 0 {
         print("  unknown name `" + word + "`");
-        return Scan { ty: Ty.Unknown, next: at + n };
+        return Scan { ty: Type.Unknown, next: at + n };
     }
     return Scan { ty: self.rows[found].ty, next: at + n };
 }
 
 // The rule this whole language exists for, applied to one expression.
-function combine(op: Int, left: Ty, right: Ty, declared: Ty) -> Ty allocates {
+function combine(op: Int, left: Type, right: Type, declared: Type) -> Type allocates {
     if op == 42 {                                   // '*'
         if is_decimal(left) && is_decimal(right) {
             if !decimal_has_contract(declared) {
@@ -302,7 +302,7 @@ function combine(op: Int, left: Ty, right: Ty, declared: Ty) -> Ty allocates {
                       + " needs a rounding contract on the result: the exact product "
                       + "has " + to_string(decimal_scale(left) + decimal_scale(right))
                       + " decimal places");
-                return Ty.Unknown;
+                return Type.Unknown;
             }
             return declared;
         }
@@ -312,13 +312,13 @@ function combine(op: Int, left: Ty, right: Ty, declared: Ty) -> Ty allocates {
         if is_decimal(right) {
             return right;
         }
-        return Ty.IntTy;
+        return Type.IntTy;
     }
     // `+` and `-` combine like quantities, so the types must match exactly.
     if !ty_eq(left, right) {
         print("  cannot apply `+` to " + ty_name(left) + " and " + ty_name(right)
               + ": addition combines like quantities, so the scales must match");
-        return Ty.Unknown;
+        return Type.Unknown;
     }
     return left;
 }
@@ -353,7 +353,7 @@ function (mutable self: Table) check_let(src: String, from: Int) -> Int allocate
 
     print("let " + name + " : " + ty_name(declared.ty));
     let left: Scan = self.operand_ty(src, cursor + 1);
-    let mutable found: Ty = left.ty;
+    let mutable found: Type = left.ty;
     cursor = skip_spaces(src, left.next);
     let op: Int = byte_at(src, cursor);
     if op == 43 || op == 45 || op == 42 {           // '+' '-' '*'

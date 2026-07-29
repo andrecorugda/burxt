@@ -244,17 +244,17 @@ function (mutable self: Unit) parse_type(src: String) -> Int allocates {
 // The type of `Name.field`, found by walking the record's declaration. Linear, like
 // every other lookup here: a record has a handful of fields, and a map would be a
 // dependency on machinery the language does not have.
-function (self: Unit) field_type(src: String, holder: Ty, name_tok: Int) -> Ty {
+function (self: Unit) field_type(src: String, holder: Type, name_tok: Int) -> Type {
     if holder.kind != 46 {
-        return ty_unknown();
+        return unknown_type();
     }
     let found: Int = self.find_type(src, holder.name_start, holder.name_len);
     if found < 0 {
-        return ty_unknown();
+        return unknown_type();
     }
     let decl: TypeDecl = self.types[found];
     if decl.kind != 82 {
-        return ty_unknown();
+        return unknown_type();
     }
     let item: Node = self.nodes[decl.node];
     let wanted: Tok = self.toks[name_tok];
@@ -263,11 +263,11 @@ function (self: Unit) field_type(src: String, holder: Ty, name_tok: Int) -> Ty {
         let field: Node = self.nodes[self.kids[item.a + i]];
         let field_name: Tok = self.toks[field.tok];
         if spans_eq(src, field_name.start, field_name.length, wanted.start, wanted.length) {
-            return self.ty_of(src, field.a);
+            return self.declared_type(src, field.a);
         }
         i += 1;
     }
-    return ty_unknown();
+    return unknown_type();
 }
 
 // A builtin's return type. They are not in the function table because they are not
@@ -294,40 +294,40 @@ function builtin_arity(name: String) -> Int {
     return -1;
 }
 
-function builtin_result(name: String) -> Ty {
-    if name == "to_string" { return ty_simple(42); }
-    if name == "read_file" { return ty_simple(42); }
-    if name == "substring" { return ty_simple(42); }
-    if name == "arg" { return ty_simple(42); }
-    if name == "len" { return ty_simple(40); }
-    if name == "byte_at" { return ty_simple(40); }
-    if name == "push" { return ty_simple(40); }
-    if name == "truncate" { return ty_simple(40); }
-    if name == "arg_count" { return ty_simple(40); }
-    if name == "write_file" { return ty_simple(40); }
-    if name == "write_bytes" { return ty_simple(40); }
-    if name == "div_floor" { return ty_simple(40); }
-    if name == "div_trunc" { return ty_simple(40); }
-    if name == "rem" { return ty_simple(40); }
-    return ty_unknown();
+function builtin_result(name: String) -> Type {
+    if name == "to_string" { return simple_type(42); }
+    if name == "read_file" { return simple_type(42); }
+    if name == "substring" { return simple_type(42); }
+    if name == "arg" { return simple_type(42); }
+    if name == "len" { return simple_type(40); }
+    if name == "byte_at" { return simple_type(40); }
+    if name == "push" { return simple_type(40); }
+    if name == "truncate" { return simple_type(40); }
+    if name == "arg_count" { return simple_type(40); }
+    if name == "write_file" { return simple_type(40); }
+    if name == "write_bytes" { return simple_type(40); }
+    if name == "div_floor" { return simple_type(40); }
+    if name == "div_trunc" { return simple_type(40); }
+    if name == "rem" { return simple_type(40); }
+    return unknown_type();
 }
 
 // What each builtin will accept. The receiver-shaped ones — `push` and `truncate` —
 // also need a MUTABLE binding, because they change the array in place.
-function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: String, first: Ty,
-                                       second: Ty, first_node: Int) -> Int allocates {
+function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: String, first: Type,
+                                       second: Type, first_node: Int) -> Int allocates {
     if called == "len" {
         if !is_unknown(first) && first.kind != 47 && first.kind != 48 && first.kind != 42 {
             let e: Int = self.complain_at(src, at,
                 "`len` counts the elements of an array or the bytes of a String, but "
-                + "this is " + self.show_ty(src, first));
+                + "this is " + self.show_type(src, first));
         }
         return 1;
     }
     if called == "byte_at" || called == "substring" {
         if !is_unknown(first) && first.kind != 42 {
             let e: Int = self.complain_at(src, at,
-                "`" + called + "` reads a String, but this is " + self.show_ty(src, first));
+                "`" + called + "` reads a String, but this is " + self.show_type(src, first));
         }
         return 1;
     }
@@ -338,7 +338,7 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
         }
         if first.kind == 46 || first.kind == 49 || first.kind == 47 || first.kind == 48 {
             let e: Int = self.complain_at(src, at,
-                "`to_string` renders a number, a Bool or a Decimal — " + self.show_ty(src, first)
+                "`to_string` renders a number, a Bool or a Decimal — " + self.show_type(src, first)
                 + " has no one rendering the language can choose for it");
         }
         return 1;
@@ -346,11 +346,11 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
     if called == "div_floor" || called == "div_trunc" || called == "rem" {
         if !is_unknown(first) && first.kind != 40 {
             let e: Int = self.complain_at(src, at,
-                "`" + called + "` divides Ints, but the left side is " + self.show_ty(src, first));
+                "`" + called + "` divides Ints, but the left side is " + self.show_type(src, first));
         }
         if !is_unknown(second) && second.kind != 40 {
             let e: Int = self.complain_at(src, at,
-                "`" + called + "` divides Ints, but the right side is " + self.show_ty(src, second));
+                "`" + called + "` divides Ints, but the right side is " + self.show_type(src, second));
         }
         return 1;
     }
@@ -359,23 +359,23 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
         // building. `push` fills the buffer; this empties it.
         if !is_unknown(first) && first.kind != 42 {
             let e: Int = self.complain_at(src, at,
-                "a path is a String, but this is " + self.show_ty(src, first));
+                "a path is a String, but this is " + self.show_type(src, first));
         }
         if !is_unknown(second) && second.kind != 47 {
             let e: Int = self.complain_at(src, at,
                 "`write_bytes` writes the bytes of a growable `[Int]`, but this is "
-                + self.show_ty(src, second));
+                + self.show_type(src, second));
         }
         return 1;
     }
     if called == "read_file" || called == "write_file" {
         if !is_unknown(first) && first.kind != 42 {
             let e: Int = self.complain_at(src, at,
-                "a path is a String, but this is " + self.show_ty(src, first));
+                "a path is a String, but this is " + self.show_type(src, first));
         }
         if called == "write_file" && !is_unknown(second) && second.kind != 42 {
             let e: Int = self.complain_at(src, at,
-                "`write_file` writes a String, but this is " + self.show_ty(src, second));
+                "`write_file` writes a String, but this is " + self.show_type(src, second));
         }
         return 1;
     }
@@ -389,7 +389,7 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
         if !is_unknown(first) && first.kind != 47 {
             let e: Int = self.complain_at(src, at,
                 "`" + called + "` needs a growable array — a `[T]` — but this is "
-                + self.show_ty(src, first));
+                + self.show_type(src, first));
             return 1;
         }
         // In place means the binding itself changes, so it must be one that may.
@@ -409,11 +409,11 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
             }
         }
         if called == "push" && !is_unknown(first) {
-            let want: Ty = self.ty_of(src, first.scale);
-            if !is_unknown(second) && !self.types_same(src, second, want) {
+            let want: Type = self.declared_type(src, first.scale);
+            if !is_unknown(second) && !self.same_type(src, second, want) {
                 let e: Int = self.complain_at(src, at,
-                    "this array holds " + self.show_ty(src, want) + ", but the value is "
-                    + self.show_ty(src, second));
+                    "this array holds " + self.show_type(src, want) + ", but the value is "
+                    + self.show_type(src, second));
             }
         }
         if called == "truncate" && !is_unknown(second) && second.kind != 40 {
@@ -424,11 +424,11 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
     return 1;
 }
 
-function (mutable self: Unit) builtin_type(src: String, name: Tok, at: Int, args: Int) -> Ty allocates {
+function (mutable self: Unit) builtin_type(src: String, name: Tok, at: Int, args: Int) -> Type allocates {
     // The arguments are typed here rather than by `check_args`, because their types
     // and their count decide most of the rules below.
-    let mutable first: Ty = ty_unknown();
-    let mutable second: Ty = ty_unknown();
+    let mutable first: Type = unknown_type();
+    let mutable second: Type = unknown_type();
     let mutable count: Int = 0;
     let mutable first_node: Int = -1;
     if args >= 0 {
@@ -436,7 +436,7 @@ function (mutable self: Unit) builtin_type(src: String, name: Tok, at: Int, args
         count = list.b;
         let mutable i: Int = 0;
         while i < list.b {
-            let t: Ty = self.type_of(src, self.kids[list.a + i], ty_unknown());
+            let t: Type = self.type_of(src, self.kids[list.a + i], unknown_type());
             if i == 0 {
                 first = t;
                 first_node = self.kids[list.a];
@@ -479,32 +479,32 @@ function (mutable self: Unit) builtin_type(src: String, name: Tok, at: Int, args
             let e: Int = self.not_pure(src, at, "write a file");
         }
     }
-    if span_eq(src, name.start, name.length, "len") { return ty_simple(40); }
-    if span_eq(src, name.start, name.length, "byte_at") { return ty_simple(40); }
-    if span_eq(src, name.start, name.length, "push") { return ty_simple(40); }
-    if span_eq(src, name.start, name.length, "truncate") { return ty_simple(40); }
-    if span_eq(src, name.start, name.length, "arg_count") { return ty_simple(40); }
-    if span_eq(src, name.start, name.length, "write_file") { return ty_simple(40); }
-    if span_eq(src, name.start, name.length, "write_bytes") { return ty_simple(40); }
-    if span_eq(src, name.start, name.length, "div_floor") { return ty_simple(40); }
-    if span_eq(src, name.start, name.length, "div_trunc") { return ty_simple(40); }
-    if span_eq(src, name.start, name.length, "rem") { return ty_simple(40); }
-    if span_eq(src, name.start, name.length, "to_string") { return ty_simple(42); }
-    if span_eq(src, name.start, name.length, "read_file") { return ty_simple(42); }
-    if span_eq(src, name.start, name.length, "substring") { return ty_simple(42); }
-    if span_eq(src, name.start, name.length, "arg") { return ty_simple(42); }
-    return ty_unknown();
+    if span_eq(src, name.start, name.length, "len") { return simple_type(40); }
+    if span_eq(src, name.start, name.length, "byte_at") { return simple_type(40); }
+    if span_eq(src, name.start, name.length, "push") { return simple_type(40); }
+    if span_eq(src, name.start, name.length, "truncate") { return simple_type(40); }
+    if span_eq(src, name.start, name.length, "arg_count") { return simple_type(40); }
+    if span_eq(src, name.start, name.length, "write_file") { return simple_type(40); }
+    if span_eq(src, name.start, name.length, "write_bytes") { return simple_type(40); }
+    if span_eq(src, name.start, name.length, "div_floor") { return simple_type(40); }
+    if span_eq(src, name.start, name.length, "div_trunc") { return simple_type(40); }
+    if span_eq(src, name.start, name.length, "rem") { return simple_type(40); }
+    if span_eq(src, name.start, name.length, "to_string") { return simple_type(42); }
+    if span_eq(src, name.start, name.length, "read_file") { return simple_type(42); }
+    if span_eq(src, name.start, name.length, "substring") { return simple_type(42); }
+    if span_eq(src, name.start, name.length, "arg") { return simple_type(42); }
+    return unknown_type();
 }
 
 // A `dynamic Trait` value can do exactly what the trait says, so the trait's signature
 // is what the call is checked against — no concrete type is involved, which is the
 // whole point of the indirection.
-function (mutable self: Unit) dyn_method(src: String, holder: Ty, call: Node) -> Ty allocates {
+function (mutable self: Unit) dyn_method(src: String, holder: Type, call: Node) -> Type allocates {
     let wanted: Tok = self.toks[call.tok];
     let found: Int = self.find_type(src, holder.name_start, holder.name_len);
     if found < 0 {
         let e: Int = self.complain_at(src, call.tok, "no trait of this name is declared");
-        return ty_unknown();
+        return unknown_type();
     }
     let decl: TypeDecl = self.types[found];
     let item: Node = self.nodes[decl.node];
@@ -519,27 +519,27 @@ function (mutable self: Unit) dyn_method(src: String, holder: Ty, call: Node) ->
                 let e: Int = self.complain_at(src, call.tok,
                     "this call passes " + to_string(list.b) + " argument(s), but the "
                     + "method takes " + to_string(sig.c));
-                return self.ty_of(src, sig.a);
+                return self.declared_type(src, sig.a);
             }
             let mutable p: Int = 0;
             while p < sig.c {
                 let param: Node = self.nodes[self.subs[sig.b + p]];
-                let want: Ty = self.ty_of(src, param.a);
-                let got: Ty = self.type_of(src, self.kids[list.a + p], want);
+                let want: Type = self.declared_type(src, param.a);
+                let got: Type = self.type_of(src, self.kids[list.a + p], want);
                 if !is_unknown(got) && !self.fits(src, got, want) {
                     let e: Int = self.complain_at(src, call.tok,
-                        "argument " + to_string(p + 1) + " should be " + self.show_ty(src, want)
-                        + ", but it is " + self.show_ty(src, got));
+                        "argument " + to_string(p + 1) + " should be " + self.show_type(src, want)
+                        + ", but it is " + self.show_type(src, got));
                 }
                 p += 1;
             }
-            return self.ty_of(src, sig.a);
+            return self.declared_type(src, sig.a);
         }
         i += 1;
     }
     let e: Int = self.complain_at(src, call.tok,
-        self.show_ty(src, holder) + " has no such method");
-    return ty_unknown();
+        self.show_type(src, holder) + " has no such method");
+    return unknown_type();
 }
 
 function (self: Unit) find_method_named(src: String, holder_start: Int, holder_len: Int,
@@ -557,7 +557,7 @@ function (self: Unit) find_method_named(src: String, holder_start: Int, holder_l
     return -1;
 }
 
-function (self: Unit) find_method(src: String, holder: Ty, name_tok: Int) -> Int {
+function (self: Unit) find_method(src: String, holder: Type, name_tok: Int) -> Int {
     if holder.kind != 46 {
         return -1;
     }
@@ -568,7 +568,7 @@ function (self: Unit) find_method(src: String, holder: Ty, name_tok: Int) -> Int
 
 // `Enum.Variant(payload)`: the variant has to exist, and the payload has to match it.
 // A constructor is the mirror of a match arm, so the two read alike on purpose.
-function (mutable self: Unit) check_construction(src: String, holder: Ty, call: Node) -> Int allocates {
+function (mutable self: Unit) check_construction(src: String, holder: Type, call: Node) -> Int allocates {
     let variant_name: Tok = self.toks[call.tok];
     let found: Int = self.find_type(src, holder.name_start, holder.name_len);
     let item: Node = self.nodes[self.types[found].node];
@@ -591,12 +591,12 @@ function (mutable self: Unit) check_construction(src: String, holder: Ty, call: 
             let list: Node = self.nodes[call.b];
             let mutable p: Int = 0;
             while p < given {
-                let want: Ty = self.ty_of(src, self.subs[variant.b + p]);
-                let got: Ty = self.type_of(src, self.kids[list.a + p], want);
+                let want: Type = self.declared_type(src, self.subs[variant.b + p]);
+                let got: Type = self.type_of(src, self.kids[list.a + p], want);
                 if !is_unknown(got) && !self.fits(src, got, want) {
                     let e: Int = self.complain_at(src, call.tok,
-                        "this variant carries " + self.show_ty(src, want) + ", but the value "
-                        + "is " + self.show_ty(src, got));
+                        "this variant carries " + self.show_type(src, want) + ", but the value "
+                        + "is " + self.show_type(src, got));
                 }
                 p += 1;
             }
@@ -605,7 +605,7 @@ function (mutable self: Unit) check_construction(src: String, holder: Ty, call: 
         i += 1;
     }
     let e: Int = self.complain_at(src, call.tok,
-        self.show_ty(src, holder) + " has no variant of this name");
+        self.show_type(src, holder) + " has no variant of this name");
     return 0;
 }
 
@@ -615,11 +615,11 @@ function (mutable self: Unit) check_pieces(src: String, n: Node) -> Int allocate
     let mutable i: Int = 0;
     while i < n.b {
         let piece: Int = self.kids[n.a + i];
-        let shown: Ty = self.type_of(src, piece, ty_unknown());
+        let shown: Type = self.type_of(src, piece, unknown_type());
         if shown.kind == 46 || shown.kind == 47 || shown.kind == 48 || shown.kind == 49 {
             let e: Int = self.complain_at(src, self.nodes[piece].tok,
                 "an interpolated value renders a number, a Bool, a Decimal or a String — "
-                + self.show_ty(src, shown) + " has none the language can choose for it");
+                + self.show_type(src, shown) + " has none the language can choose for it");
         }
         i += 1;
     }
@@ -627,7 +627,7 @@ function (mutable self: Unit) check_pieces(src: String, n: Node) -> Int allocate
 }
 
 // The payload types of `Enum.Variant`, bound to an arm's names.
-function (mutable self: Unit) bind_arm(src: String, holder: Ty, arm: Node) -> Int allocates {
+function (mutable self: Unit) bind_arm(src: String, holder: Type, arm: Node) -> Int allocates {
     if holder.kind != 46 {
         return 0;
     }
@@ -655,7 +655,7 @@ function (mutable self: Unit) bind_arm(src: String, holder: Ty, arm: Node) -> In
             let mutable p: Int = 0;
             while p < arm.c && p < variant.c {
                 let name: Tok = self.toks[self.subs[arm.b + p]];
-                let ty: Ty = self.ty_of(src, self.subs[variant.b + p]);
+                let ty: Type = self.declared_type(src, self.subs[variant.b + p]);
                 push(self.syms, Sym { start: name.start, length: name.length,
                                       ty: ty, writable: 0, depth: self.depth + 1 });
                 p += 1;
@@ -670,9 +670,9 @@ function (mutable self: Unit) bind_arm(src: String, holder: Ty, arm: Node) -> In
 
 // Where a value is stored rather than combined, `dynamic Trait` accepts a type that
 // implements it. This is the ONLY widening in the language, which is why it is a
-// separate question from `ty_same`: equality must stay equality.
-function (mutable self: Unit) fits(src: String, got: Ty, want: Ty) -> Bool {
-    if self.types_same(src, got, want) {
+// separate question from `same_type`: equality must stay equality.
+function (mutable self: Unit) fits(src: String, got: Type, want: Type) -> Bool {
+    if self.same_type(src, got, want) {
         return true;
     }
     // A rounding contract may be ADDED to a value that has none. The representation is
@@ -766,7 +766,7 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
         return false;
     }
     if n.kind == 14 {                                // a method call
-        let holder: Ty = self.type_at(n.a);
+        let holder: Type = self.type_at(n.a);
         let found: Int = self.find_method(src, holder, n.tok);
         if found >= 0 {
             return flag_allocates(self.methods[found].flags) == 1;

@@ -13,31 +13,31 @@
 // compiler enforces, applied to the AST the parser just built.
 // ============================================================================
 
-function ty_unknown() -> Ty {
-    return Ty { kind: 0, scale: 0, contract: 0, name_start: 0, name_len: 0 };
+function unknown_type() -> Type {
+    return Type { kind: 0, scale: 0, contract: 0, name_start: 0, name_len: 0 };
 }
 
-function ty_simple(kind: Int) -> Ty {
-    return Ty { kind: kind, scale: 0, contract: 0, name_start: 0, name_len: 0 };
+function simple_type(kind: Int) -> Type {
+    return Type { kind: kind, scale: 0, contract: 0, name_start: 0, name_len: 0 };
 }
 
 // C's widths as Burxt sees them at the boundary. See N1-BOUNDARY-EXACTNESS: the
 // exactness rule lives in `as scaled`, and the widths themselves are C's business.
-function as_burxt_sees(t: Ty) -> Ty {
+function as_burxt_sees(t: Type) -> Type {
     if t.kind == 43 || t.kind == 44 {
-        return ty_simple(40);
+        return simple_type(40);
     }
     return t;
 }
 
-function ty_decimal(scale: Int, contract: Int) -> Ty {
-    return Ty { kind: 45, scale: scale, contract: contract, name_start: 0, name_len: 0 };
+function decimal_type(scale: Int, contract: Int) -> Type {
+    return Type { kind: 45, scale: scale, contract: contract, name_start: 0, name_len: 0 };
 }
 
 // An unknown type never equals anything, including another unknown: one bad
 // expression must not make every later comparison succeed. The stage-1 checker in
 // examples/checker.bx learned this the hard way, and so did stage-0's recovery.
-function is_unknown(t: Ty) -> Bool {
+function is_unknown(t: Type) -> Bool {
     return t.kind == 0;
 }
 
@@ -45,26 +45,36 @@ function is_unknown(t: Ty) -> Bool {
 // The method table already knows what the type can do.
 record Impl { trait_start: Int, trait_len: Int, type_start: Int, type_len: Int }
 
-record Typed { node: Int, ty: Ty }
+record Typed { node: Int, ty: Type }
 
-function ty_same(src: String, a: Ty, b: Ty) -> Bool {
-    if a.kind == 0 || b.kind == 0 {
-        return false;
-    }
-    if a.kind != b.kind {
-        return false;
-    }
-    if a.kind == 45 {
-        // The rounding contract is part of the type, so it is part of equality.
-        return a.scale == b.scale && a.contract == b.contract;
-    }
-    if a.kind == 46 || a.kind == 49 {
-        return spans_eq(src, a.name_start, a.name_len, b.name_start, b.name_len);
-    }
-    return true;
-}
 
-function ty_show(src: String, t: Ty) -> String allocates {
+
+// The same, for the types whose ELEMENT has to be read out of the arena. A method, because a
+// slice holds its element as a node index and rendering it needs the nodes.
+//
+// Rendering a slice used to say the words "a growable array" and nothing more, so the first
+// message this file produced
+// after element comparison started working read "argument 1 should be a growable array, but it
+// is a growable array". A refusal a reader cannot act on is barely better than no refusal.
+function (self: Unit) show_type(src: String, t: Type) -> String allocates {
+    if t.kind == 47 {
+        return "[" + self.show_type(src, self.declared_type(src, t.scale)) + "]";
+    }
+    if t.kind == 48 {
+        return "[" + self.show_type(src, self.declared_type(src, t.scale)) + "; "
+               + to_string(t.contract) + "]";
+    }
+    if t.kind == 46 && t.contract > 0 {
+        // A generic application: the name, then its arguments.
+        let mutable out: String = substring(src, t.name_start, t.name_len) + "<";
+        let mutable i: Int = 0;
+        while i < t.contract {
+            if i > 0 { out += ", "; }
+            out += self.show_type(src, self.declared_type(src, self.subs[t.scale + i]));
+            i += 1;
+        }
+        return out + ">";
+    }
     if t.kind == 0 { return "?"; }
     if t.kind == 40 { return "Int"; }
     if t.kind == 41 { return "Bool"; }
@@ -85,47 +95,20 @@ function ty_show(src: String, t: Ty) -> String allocates {
     return substring(src, t.name_start, t.name_len);
 }
 
-// The same, for the types whose ELEMENT has to be read out of the arena. A method, because a
-// slice holds its element as a node index and rendering it needs the nodes.
-//
-// `ty_show` said "a growable array" for every slice, so the first message this file produced
-// after element comparison started working read "argument 1 should be a growable array, but it
-// is a growable array". A refusal a reader cannot act on is barely better than no refusal.
-function (self: Unit) show_ty(src: String, t: Ty) -> String allocates {
-    if t.kind == 47 {
-        return "[" + self.show_ty(src, self.ty_of(src, t.scale)) + "]";
-    }
-    if t.kind == 48 {
-        return "[" + self.show_ty(src, self.ty_of(src, t.scale)) + "; "
-               + to_string(t.contract) + "]";
-    }
-    if t.kind == 46 && t.contract > 0 {
-        // A generic application: the name, then its arguments.
-        let mutable out: String = substring(src, t.name_start, t.name_len) + "<";
-        let mutable i: Int = 0;
-        while i < t.contract {
-            if i > 0 { out += ", "; }
-            out += self.show_ty(src, self.ty_of(src, self.subs[t.scale + i]));
-            i += 1;
-        }
-        return out + ">";
-    }
-    return ty_show(src, t);
-}
-
-// Read a type NODE into a Ty.
+// Read a type NODE into a Type.
 // Two types are the same only if their ELEMENTS are.
 //
-// This could not live in `ty_same`, which is a free function: a slice or array holds its
-// element type as a NODE INDEX, so comparing those two integers compares positions rather
-// than types, and reading the element back needs the arena. `ty_same` therefore fell through
-// to `true` for both kinds — which meant `[Int]` and `[String]` were the same type to
-// stage-1 for eleven versions, and it accepted `takes_ints(words)` where stage-0 refused it.
+// This has to be a METHOD: a slice or array holds its element type as a NODE INDEX, so
+// comparing those two integers compares positions rather than types, and reading the element
+// back needs the arena. It used to be a free function that could not reach the nodes, so it
+// fell through to `true` for both kinds — which meant `[Int]` and `[String]` were the same
+// type to stage-1 for eleven versions, and it accepted `takes_ints(words)` where stage-0
+// refused it.
 //
 // Nothing caught it because the differential test's rejection count is a FLOOR, not an
 // equality: stage-1 rejecting less than stage-0 kept the ratchet green. Found by trying to
 // build generic unification on top of it, which needed element comparison to mean something.
-function (self: Unit) types_same(src: String, a: Ty, b: Ty) -> Bool {
+function (self: Unit) same_type(src: String, a: Type, b: Type) -> Bool {
     if a.kind == 0 || b.kind == 0 {
         return false;
     }
@@ -133,42 +116,55 @@ function (self: Unit) types_same(src: String, a: Ty, b: Ty) -> Bool {
         return false;
     }
     if a.kind == 47 {
-        return self.types_same(src, self.ty_of(src, a.scale), self.ty_of(src, b.scale));
+        return self.same_type(src, self.declared_type(src, a.scale), self.declared_type(src, b.scale));
     }
     if a.kind == 48 {
         // A fixed array's length is part of its type, and so is its element's type.
         if a.contract != b.contract {
             return false;
         }
-        return self.types_same(src, self.ty_of(src, a.scale), self.ty_of(src, b.scale));
+        return self.same_type(src, self.declared_type(src, a.scale), self.declared_type(src, b.scale));
     }
-    return ty_same(src, a, b);
+    if a.kind == 0 || b.kind == 0 {
+        return false;
+    }
+    if a.kind != b.kind {
+        return false;
+    }
+    if a.kind == 45 {
+        // The rounding contract is part of the type, so it is part of equality.
+        return a.scale == b.scale && a.contract == b.contract;
+    }
+    if a.kind == 46 || a.kind == 49 {
+        return spans_eq(src, a.name_start, a.name_len, b.name_start, b.name_len);
+    }
+    return true;
 }
 
-function (self: Unit) ty_of(src: String, node: Int) -> Ty {
+function (self: Unit) declared_type(src: String, node: Int) -> Type {
     if node < 0 {
-        return ty_unknown();
+        return unknown_type();
     }
     let n: Node = self.nodes[node];
     if n.kind == 45 {
-        return ty_decimal(n.a, n.b);
+        return decimal_type(n.a, n.b);
     }
     if n.kind == 46 || n.kind == 49 {
         let t: Tok = self.toks[n.tok];
-        return Ty { kind: n.kind, scale: 0, contract: 0,
+        return Type { kind: n.kind, scale: 0, contract: 0,
                     name_start: t.start, name_len: t.length };
     }
     if n.kind == 47 || n.kind == 48 {
         // `scale` holds the ELEMENT type's node for a slice or an array, and
         // `contract` the declared length. Reusing two fields rather than widening a
         // record that is copied at every comparison in the checker.
-        return Ty { kind: n.kind, scale: n.a, contract: n.b,
+        return Type { kind: n.kind, scale: n.a, contract: n.b,
                     name_start: 0, name_len: 0 };
     }
     if n.kind >= 40 && n.kind <= 48 {
-        return ty_simple(n.kind);
+        return simple_type(n.kind);
     }
-    return ty_unknown();
+    return unknown_type();
 }
 
 function (mutable self: Unit) complain_at(src: String, tok: Int, message: String) -> Int allocates {
@@ -277,7 +273,7 @@ function (mutable self: Unit) collect_method(src: String, index: Int) -> Int all
     push(self.methods, Method {
         receiver_start: receiver.start, receiver_len: receiver.length,
         start: name.start, length: name.length,
-        ret: self.ty_of(src, signature.c), params: item.a,
+        ret: self.declared_type(src, signature.c), params: item.a,
         mutating: mutating, flags: item.value,
     });
     return 1;
@@ -411,12 +407,12 @@ function (mutable self: Unit) collect_declarations(src: String) -> Int allocates
             if clash {
                 let e: Int = self.complain_at(src, item.tok, "this function is declared twice");
             } else {
-                let mutable ret: Ty = ty_unknown();
+                let mutable ret: Type = unknown_type();
                 if item.kind == 80 {
                     let signature: Node = self.nodes[item.c];
-                    ret = self.ty_of(src, signature.c);
+                    ret = self.declared_type(src, signature.c);
                 } else {
-                    ret = self.ty_of(src, item.b);   // an external holds it directly
+                    ret = self.declared_type(src, item.b);   // an external holds it directly
                     // CInt and CDouble are C's widths, not Burxt types: a Burxt caller
                     // passes and receives an Int. So an external's signature is recorded
                     // as Burxt sees it, which is why `strcmp(a, b) < 0` compares two
@@ -440,20 +436,20 @@ function (mutable self: Unit) collect_declarations(src: String) -> Int allocates
 // Every expression's type, recorded as it is decided. The escape check asks about
 // expressions the checker has already seen — whether a `+` joined two Strings, say —
 // and re-walking them would report every complaint a second time.
-function (mutable self: Unit) type_of(src: String, node: Int, expected: Ty) -> Ty allocates {
+function (mutable self: Unit) type_of(src: String, node: Int, expected: Type) -> Type allocates {
     self.n_type_of += 1;
-    let t: Ty = self.type_of_inner(src, node, expected);
+    let t: Type = self.type_of_inner(src, node, expected);
     // The cache is a slot per NODE. It grows to reach the node being recorded, which costs
     // one push per node over a whole compile, and the last answer for a node stands — a
     // retyped operand (multiplication does that) settles on its second reading.
     while len(self.typed) <= node {
-        let filled: Int = push(self.typed, ty_unknown());
+        let filled: Int = push(self.typed, unknown_type());
     }
     self.typed[node] = t;
     return t;
 }
 
-function (self: Unit) type_at(node: Int) -> Ty {
+function (self: Unit) type_at(node: Int) -> Type {
     // Indexed BY NODE, so a lookup is one load.
     //
     // This was a backwards linear scan until v0.0.87, over a list that grew with every
@@ -463,27 +459,27 @@ function (self: Unit) type_at(node: Int) -> Ty {
     // grow further until this changed. The lesson is the placeholder, not the algorithm —
     // "fine for now" needs a number attached, or nobody notices when now ends.
     if node < 0 || node >= len(self.typed) {
-        return ty_unknown();
+        return unknown_type();
     }
     return self.typed[node];
 }
 
-function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty) -> Ty allocates {
+function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Type) -> Type allocates {
     if node < 0 {
-        return ty_unknown();
+        return unknown_type();
     }
     let n: Node = self.nodes[node];
 
-    if n.kind == 1 { return ty_simple(40); }
+    if n.kind == 1 { return simple_type(40); }
     if n.kind == 2 {                                 // a decimal, money or percent
         if expected.kind != 45 {
-            return ty_decimal(n.a, 0);
+            return decimal_type(n.a, 0);
         }
         if expected.scale >= n.a {
             // Widening a literal is exact: $5 in a Decimal<2> context is 5.00. The
             // contract comes from the context too, and never rounds the literal —
             // a literal that needed rounding would be refused below.
-            return ty_decimal(expected.scale, expected.contract);
+            return decimal_type(expected.scale, expected.contract);
         }
         // Narrowing: allowed only when every digit dropped is a zero.
         let mutable factor: Int = 1;
@@ -493,19 +489,19 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             drop -= 1;
         }
         if rem(n.value, factor) == 0 {
-            return ty_decimal(expected.scale, expected.contract);
+            return decimal_type(expected.scale, expected.contract);
         }
         if self.in_mul == 1 {
-            return ty_decimal(n.a, 0);
+            return decimal_type(n.a, 0);
         }
         let e: Int = self.complain_at(src, n.tok,
             "this literal needs " + to_string(n.a) + " decimal places but the context "
             + "has only " + to_string(expected.scale) + ", and dropping digits from "
             + "money is refused");
-        return ty_unknown();
+        return unknown_type();
     }
     if n.kind == 3 {                                 // a String literal, or a piece of one
-        return ty_simple(42);
+        return simple_type(42);
     }
 
     if n.kind == 18 {                                // an interpolated String
@@ -516,16 +512,16 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             let r: Int = self.needs_region(src, n.tok, "this interpolated String");
         }
         let checked: Int = self.check_pieces(src, n);
-        return ty_simple(42);
+        return simple_type(42);
     }
-    if n.kind == 4 { return ty_simple(41); }
+    if n.kind == 4 { return simple_type(41); }
 
     if n.kind == 5 {                                 // a name
         let t: Tok = self.toks[n.tok];
         let found: Int = self.find_sym(src, t.start, t.length);
         if found < 0 {
             let e: Int = self.complain_at(src, n.tok, "unknown name");
-            return ty_unknown();
+            return unknown_type();
         }
         return self.syms[found].ty;
     }
@@ -534,22 +530,22 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
         return self.type_of(src, n.a, expected);
     }
     if n.kind == 7 {                                 // !x
-        let inner: Ty = self.type_of(src, n.a, ty_simple(41));
+        let inner: Type = self.type_of(src, n.a, simple_type(41));
         if !is_unknown(inner) && inner.kind != 41 {
             let e: Int = self.complain_at(src, n.tok,
-                "`!` needs a Bool, but this is " + self.show_ty(src, inner));
+                "`!` needs a Bool, but this is " + self.show_type(src, inner));
         }
-        return ty_simple(41);
+        return simple_type(41);
     }
 
     if n.kind == 8 {                                 // a + b, a * b
         let outer: Int = self.in_mul;
         if n.value == 27 { self.in_mul = 1; }
-        let left: Ty = self.type_of(src, n.a, expected);
-        let right: Ty = self.type_of(src, n.b, expected);
+        let left: Type = self.type_of(src, n.a, expected);
+        let right: Type = self.type_of(src, n.b, expected);
         self.in_mul = outer;
         if is_unknown(left) || is_unknown(right) {
-            return ty_unknown();
+            return unknown_type();
         }
         // `*` combines a quantity with a rate, so the scales may differ — but the
         // product's scale is their SUM, and landing it needs a declared contract.
@@ -569,31 +565,31 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
                 }
                 if expected.kind == 45 {
                     if representable && expected.scale == exact {
-                        return ty_decimal(exact, 0);  // the product's own width: exact
+                        return decimal_type(exact, 0);  // the product's own width: exact
                     }
                     let e: Int = self.complain_at(src, n.tok,
-                        "`*` on " + self.show_ty(src, left) + " and " + self.show_ty(src, right)
+                        "`*` on " + self.show_type(src, left) + " and " + self.show_type(src, right)
                         + " has an exact product with " + to_string(exact)
-                        + " decimal places, and reaching " + self.show_ty(src, expected)
+                        + " decimal places, and reaching " + self.show_type(src, expected)
                         + " means rounding it: say how with a rounding contract, or take "
                         + "the exact answer");
-                    return ty_unknown();
+                    return unknown_type();
                 }
                 // Nothing asked for it. Identical operands that carry a contract land the
                 // product at their OWN scale — the context does not have to repeat what the
                 // operands already say, so `print(a * b)` on money answers in money.
-                if self.types_same(src, left, right) && left.contract != 0 {
+                if self.same_type(src, left, right) && left.contract != 0 {
                     return left;
                 }
                 if representable {
-                    return ty_decimal(exact, 0);
+                    return decimal_type(exact, 0);
                 }
                 let e2: Int = self.complain_at(src, n.tok,
-                    "`*` on " + self.show_ty(src, left) + " and " + self.show_ty(src, right)
+                    "`*` on " + self.show_type(src, left) + " and " + self.show_type(src, right)
                     + " has an exact product with " + to_string(exact)
                     + " decimal places, which does not fit a scaled i64: bind it to a "
                     + "Decimal with a rounding contract");
-                return ty_unknown();
+                return unknown_type();
             }
             if left.kind == 45 && right.kind == 40 { return left; }
             if left.kind == 40 && right.kind == 45 { return right; }
@@ -603,24 +599,24 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
                 let e: Int = self.complain_at(src, n.tok,
                     "`/` on two Ints would have to round, and one operator cannot say "
                     + "which way — use div_floor, div_trunc or rem");
-                return ty_unknown();
+                return unknown_type();
             }
             // A quotient can fall between two representable values — 1.00 / 3 — so
             // unlike `*`, division needs a contract even when the scales match, and
             // the contract has to be on the value being divided.
             if left.kind == 45 && (right.kind == 45 || right.kind == 40) {
-                if right.kind == 45 && !self.types_same(src, left, right) {
+                if right.kind == 45 && !self.same_type(src, left, right) {
                     let e: Int = self.complain_at(src, n.tok,
-                        "cannot divide " + self.show_ty(src, left) + " by " + self.show_ty(src, right)
+                        "cannot divide " + self.show_type(src, left) + " by " + self.show_type(src, right)
                         + ": division needs the same type, scale included");
-                    return ty_unknown();
+                    return unknown_type();
                 }
                 if left.contract == 0 {
                     let e: Int = self.complain_at(src, n.tok,
-                        "`/` on " + self.show_ty(src, left) + " needs a rounding contract, "
+                        "`/` on " + self.show_type(src, left) + " needs a rounding contract, "
                         + "because the exact quotient can have more than "
                         + to_string(left.scale) + " decimal places");
-                    return ty_unknown();
+                    return unknown_type();
                 }
                 return left;
             }
@@ -639,16 +635,16 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             // (Relaxed in v0.0.86, together with stage-0.)
             if left.scale != right.scale {
                 let e: Int = self.complain_at(src, n.tok,
-                    "cannot combine " + self.show_ty(src, left) + " and " + self.show_ty(src, right)
+                    "cannot combine " + self.show_type(src, left) + " and " + self.show_type(src, right)
                     + ": scales must match. Burxt does not silently rescale money");
-                return ty_unknown();
+                return unknown_type();
             }
             if left.contract != 0 && right.contract != 0 && left.contract != right.contract {
                 let e: Int = self.complain_at(src, n.tok,
-                    "cannot combine " + self.show_ty(src, left) + " and " + self.show_ty(src, right)
+                    "cannot combine " + self.show_type(src, left) + " and " + self.show_type(src, right)
                     + ": these are two different rounding contracts, and picking one would "
                     + "be a decision nobody wrote down");
-                return ty_unknown();
+                return unknown_type();
             }
             if left.contract != 0 {
                 return left;
@@ -656,36 +652,36 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             return right;
         }
         // `+` and `-` combine like quantities: every other type must match exactly.
-        if !self.types_same(src, left, right) {
+        if !self.same_type(src, left, right) {
             let e: Int = self.complain_at(src, n.tok,
-                "cannot combine " + self.show_ty(src, left) + " and " + self.show_ty(src, right)
+                "cannot combine " + self.show_type(src, left) + " and " + self.show_type(src, right)
                 + ": addition and subtraction need the same type, scale included");
-            return ty_unknown();
+            return unknown_type();
         }
         return left;
     }
 
     if n.kind == 9 {                                 // a comparison
-        let left: Ty = self.type_of(src, n.a, ty_unknown());
-        let right: Ty = self.type_of(src, n.b, left);
-        if !is_unknown(left) && !is_unknown(right) && !self.types_same(src, left, right) {
+        let left: Type = self.type_of(src, n.a, unknown_type());
+        let right: Type = self.type_of(src, n.b, left);
+        if !is_unknown(left) && !is_unknown(right) && !self.same_type(src, left, right) {
             let e: Int = self.complain_at(src, n.tok,
-                "cannot compare " + self.show_ty(src, left) + " with " + self.show_ty(src, right)
+                "cannot compare " + self.show_type(src, left) + " with " + self.show_type(src, right)
                 + ": one equality, no coercion");
         }
-        return ty_simple(41);
+        return simple_type(41);
     }
 
     if n.kind == 10 {                                // && ||
-        let left: Ty = self.type_of(src, n.a, ty_simple(41));
-        let right: Ty = self.type_of(src, n.b, ty_simple(41));
+        let left: Type = self.type_of(src, n.a, simple_type(41));
+        let right: Type = self.type_of(src, n.b, simple_type(41));
         if !is_unknown(left) && left.kind != 41 {
             let e: Int = self.complain_at(src, n.tok, "this operator needs a Bool");
         }
         if !is_unknown(right) && right.kind != 41 {
             let e: Int = self.complain_at(src, n.tok, "this operator needs a Bool");
         }
-        return ty_simple(41);
+        return simple_type(41);
     }
 
     // `Enum.Variant` and `Enum.Variant(payload)` — the base names a TYPE, not a
@@ -698,7 +694,7 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             let declared: Int = self.find_type(src, base_name.start, base_name.length);
             if declared >= 0 {
                 if self.types[declared].kind == 83 {
-                    let holder: Ty = Ty { kind: 46, scale: 0, contract: 0,
+                    let holder: Type = Type { kind: 46, scale: 0, contract: 0,
                                           name_start: base_name.start,
                                           name_len: base_name.length };
                     let checked: Int = self.check_construction(src, holder, n);
@@ -711,9 +707,9 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
     if n.kind == 17 {                                // an array literal
         if expected.kind != 47 && expected.kind != 48 {
             let visited: Int = self.visit_children(src, node);
-            return ty_unknown();
+            return unknown_type();
         }
-        let want: Ty = self.ty_of(src, expected.scale);
+        let want: Type = self.declared_type(src, expected.scale);
         if expected.kind == 47 && !self.has_region() {
             let r: Int = self.needs_region(src, n.tok, "a growable array");
         }
@@ -725,11 +721,11 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
         }
         let mutable i: Int = 0;
         while i < n.b {
-            let got: Ty = self.type_of(src, self.kids[n.a + i], want);
+            let got: Type = self.type_of(src, self.kids[n.a + i], want);
             if !is_unknown(got) && !self.fits(src, got, want) {
                 let e: Int = self.complain_at(src, n.tok,
-                    "element " + to_string(i + 1) + " should be " + self.show_ty(src, want)
-                    + ", but it is " + self.show_ty(src, got));
+                    "element " + to_string(i + 1) + " should be " + self.show_type(src, want)
+                    + ", but it is " + self.show_type(src, got));
             }
             i += 1;
         }
@@ -737,23 +733,23 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
     }
 
     if n.kind == 12 {                                // xs[i]
-        let holder: Ty = self.type_of(src, n.a, ty_unknown());
-        let index: Ty = self.type_of(src, n.b, ty_simple(40));
+        let holder: Type = self.type_of(src, n.a, unknown_type());
+        let index: Type = self.type_of(src, n.b, simple_type(40));
         if !is_unknown(index) && index.kind != 40 {
             let e: Int = self.complain_at(src, n.tok, "an index must be an Int");
         }
         if is_unknown(holder) {
-            return ty_unknown();
+            return unknown_type();
         }
         if holder.kind == 42 {
             let e: Int = self.complain_at(src, n.tok,
                 "a String is indexed with byte_at(s, i), which says it reads a BYTE");
-            return ty_unknown();
+            return unknown_type();
         }
         if holder.kind != 47 && holder.kind != 48 {
             let e: Int = self.complain_at(src, n.tok,
-                "indexing needs an array, but this is " + self.show_ty(src, holder));
-            return ty_unknown();
+                "indexing needs an array, but this is " + self.show_type(src, holder));
+            return unknown_type();
         }
         if holder.kind == 48 {
             let index_node: Node = self.nodes[n.b];
@@ -768,14 +764,14 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
                 }
             }
         }
-        return self.ty_of(src, holder.scale);
+        return self.declared_type(src, holder.scale);
     }
 
     if n.kind == 14 {                                // a method call on a value
-        let holder: Ty = self.type_of(src, n.a, ty_unknown());
+        let holder: Type = self.type_of(src, n.a, unknown_type());
         if is_unknown(holder) {
             let visited: Int = self.check_args(src, n.b);
-            return ty_unknown();
+            return unknown_type();
         }
         if holder.kind == 49 {                       // dynamic Trait
             return self.dyn_method(src, holder, n);
@@ -784,8 +780,8 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
         if found < 0 {
             let visited: Int = self.check_args(src, n.b);
             let e: Int = self.complain_at(src, n.tok,
-                self.show_ty(src, holder) + " has no such method");
-            return ty_unknown();
+                self.show_type(src, holder) + " has no such method");
+            return unknown_type();
         }
         let m: Method = self.methods[found];
         if flag_allocates(m.flags) == 1 && !self.has_region() {
@@ -802,14 +798,14 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
     }
 
     if n.kind == 11 {                                // a field access
-        let holder: Ty = self.type_of(src, n.a, ty_unknown());
+        let holder: Type = self.type_of(src, n.a, unknown_type());
         if is_unknown(holder) {
-            return ty_unknown();
+            return unknown_type();
         }
-        let field: Ty = self.field_type(src, holder, n.tok);
+        let field: Type = self.field_type(src, holder, n.tok);
         if is_unknown(field) {
             let e: Int = self.complain_at(src, n.tok,
-                self.show_ty(src, holder) + " has no such field");
+                self.show_type(src, holder) + " has no such field");
         }
         return field;
     }
@@ -820,23 +816,23 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
         if found < 0 {
             let e: Int = self.complain_at(src, n.tok, "unknown type");
             let visited: Int = self.visit_children(src, node);
-            return ty_unknown();
+            return unknown_type();
         }
-        let holder: Ty = Ty { kind: 46, scale: 0, contract: 0,
+        let holder: Type = Type { kind: 46, scale: 0, contract: 0,
                               name_start: name.start, name_len: name.length };
         let mutable i: Int = 0;
         while i < n.b {
             let pair: Node = self.nodes[self.kids[n.a + i]];
-            let want: Ty = self.field_type(src, holder, pair.tok);
+            let want: Type = self.field_type(src, holder, pair.tok);
             if is_unknown(want) {
                 let e: Int = self.complain_at(src, pair.tok,
-                    self.show_ty(src, holder) + " has no such field");
+                    self.show_type(src, holder) + " has no such field");
             }
-            let got: Ty = self.type_of(src, pair.a, want);
+            let got: Type = self.type_of(src, pair.a, want);
             if !is_unknown(got) && !is_unknown(want) && !self.fits(src, got, want) {
                 let e: Int = self.complain_at(src, pair.tok,
-                    "this field is " + self.show_ty(src, want) + ", but the value is "
-                    + self.show_ty(src, got));
+                    "this field is " + self.show_type(src, want) + ", but the value is "
+                    + self.show_type(src, got));
             }
             i += 1;
         }
@@ -882,7 +878,7 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             let list: Node = self.nodes[n.a];
             if list.b != 1 {
                 let e: Int = self.complain_at(src, n.tok, "`old` takes one expression");
-                return ty_unknown();
+                return unknown_type();
             }
             let inner: Int = self.kids[list.a];
             let held: Node = self.nodes[inner];
@@ -892,15 +888,15 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
                     let e: Int = self.complain_at(src, n.tok,
                         "`old(result)` is a contradiction: the result does not exist "
                         + "on entry");
-                    return ty_unknown();
+                    return unknown_type();
                 }
             }
-            let got: Ty = self.type_of(src, inner, ty_unknown());
+            let got: Type = self.type_of(src, inner, unknown_type());
             if got.kind == 46 || got.kind == 47 || got.kind == 48 || got.kind == 49 {
                 let e: Int = self.complain_at(src, n.tok,
-                    "`old` of " + self.show_ty(src, got) + " would need a copy of the whole "
+                    "`old` of " + self.show_type(src, got) + " would need a copy of the whole "
                     + "value at entry, which is not built: name the fields instead");
-                return ty_unknown();
+                return unknown_type();
             }
             return got;
         }
@@ -908,7 +904,7 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
         if found < 0 {
             // A builtin, or a name nobody declared. The compiler knows the builtins,
             // so the checker knows them too rather than staying silent about calls.
-            let builtin: Ty = self.builtin_type(src, t, n.tok, n.a);
+            let builtin: Type = self.builtin_type(src, t, n.tok, n.a);
             if is_unknown(builtin) {
                 let e: Int = self.complain_at(src, n.tok, "unknown function");
             }
@@ -932,20 +928,20 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
     // Anything else — fields, method calls, indexing, record and array literals —
     // is phase 4b. Its children are still visited so unknown names are still found.
     let visited: Int = self.visit_children(src, node);
-    return ty_unknown();
+    return unknown_type();
 }
 
 // Walk an expression's children without judging the node itself.
 function (mutable self: Unit) visit_children(src: String, node: Int) -> Int allocates {
     let n: Node = self.nodes[node];
     if n.kind == 11 || n.kind == 6 || n.kind == 7 {
-        let a: Ty = self.type_of(src, n.a, ty_unknown());
+        let a: Type = self.type_of(src, n.a, unknown_type());
         return 1;
     }
     if n.kind == 12 || n.kind == 14 {
-        let a: Ty = self.type_of(src, n.a, ty_unknown());
+        let a: Type = self.type_of(src, n.a, unknown_type());
         if n.kind == 12 {
-            let b: Ty = self.type_of(src, n.b, ty_simple(40));
+            let b: Type = self.type_of(src, n.b, simple_type(40));
         }
         return 1;
     }
@@ -955,9 +951,9 @@ function (mutable self: Unit) visit_children(src: String, node: Int) -> Int allo
             let child: Int = self.kids[n.a + i];
             let field: Node = self.nodes[child];
             if n.kind == 19 {
-                let v: Ty = self.type_of(src, field.a, ty_unknown());
+                let v: Type = self.type_of(src, field.a, unknown_type());
             } else {
-                let v: Ty = self.type_of(src, child, ty_unknown());
+                let v: Type = self.type_of(src, child, unknown_type());
             }
             i += 1;
         }
@@ -981,15 +977,15 @@ function (mutable self: Unit) check_against_params(src: String, at: Int, list_no
     let mutable i: Int = 0;
     while i < list.b {
         let param: Node = self.nodes[self.kids[params.a + i]];
-        let want: Ty = as_burxt_sees(self.ty_of(src, param.a));
+        let want: Type = as_burxt_sees(self.declared_type(src, param.a));
         let outer: Int = self.in_mul;
         self.in_mul = 0;                             // an argument is its own context
-        let got: Ty = self.type_of(src, self.kids[list.a + i], want);
+        let got: Type = self.type_of(src, self.kids[list.a + i], want);
         self.in_mul = outer;
         if !is_unknown(got) && !self.fits(src, got, want) {
             let e: Int = self.complain_at(src, at,
-                "argument " + to_string(i + 1) + " should be " + self.show_ty(src, want)
-                + ", but it is " + self.show_ty(src, got));
+                "argument " + to_string(i + 1) + " should be " + self.show_type(src, want)
+                + ", but it is " + self.show_type(src, got));
         }
         i += 1;
     }
@@ -1003,14 +999,14 @@ function (mutable self: Unit) check_args(src: String, list_node: Int) -> Int all
     let list: Node = self.nodes[list_node];
     let mutable i: Int = 0;
     while i < list.b {
-        let arg: Ty = self.type_of(src, self.kids[list.a + i], ty_unknown());
+        let arg: Type = self.type_of(src, self.kids[list.a + i], unknown_type());
         i += 1;
     }
     return list.b;
 }
 
 // ---- statements --------------------------------------------------------------
-function (mutable self: Unit) check_block_nodes(src: String, block: Int, ret: Ty) -> Int allocates {
+function (mutable self: Unit) check_block_nodes(src: String, block: Int, ret: Type) -> Int allocates {
     if block < 0 {
         return 0;
     }
@@ -1041,7 +1037,7 @@ function (mutable self: Unit) check_block_nodes(src: String, block: Int, ret: Ty
     return node.b;
 }
 
-function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -> Int allocates {
+function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, ret: Type) -> Int allocates {
     if stmt < 0 {
         return 0;
     }
@@ -1051,17 +1047,17 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -
         // Two paths, and only the first line differs: with an annotation the value is
         // checked AGAINST a type, without one the value IS the type. Inference removes
         // typing, not checking. See spec/M10-ERGONOMICS.md §1.
-        let mutable declared: Ty = ty_unknown();
+        let mutable declared: Type = unknown_type();
         if n.a >= 0 {
-            declared = self.ty_of(src, n.a);
-            let actual: Ty = self.type_of(src, n.b, declared);
+            declared = self.declared_type(src, n.a);
+            let actual: Type = self.type_of(src, n.b, declared);
             if !is_unknown(actual) && !self.fits(src, actual, declared) {
                 let e: Int = self.complain_at(src, n.tok,
-                    "declared " + self.show_ty(src, declared) + ", but the value is "
-                    + self.show_ty(src, actual));
+                    "declared " + self.show_type(src, declared) + ", but the value is "
+                    + self.show_type(src, actual));
             }
         } else {
-            declared = self.type_of(src, n.b, ty_unknown());
+            declared = self.type_of(src, n.b, unknown_type());
         }
         let name: Tok = self.toks[n.tok];
         // Shadowing is refused, so a second `let` of the same name is an error.
@@ -1075,7 +1071,7 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -
     }
 
     if n.kind == 72 {                                // for x in xs
-        let holder: Ty = self.type_of(src, n.a, ty_unknown());
+        let holder: Type = self.type_of(src, n.a, unknown_type());
         let name: Tok = self.toks[n.tok];
         if is_unknown(holder) {
             let skipped: Int = self.check_block_nodes(src, n.b, ret);
@@ -1089,7 +1085,7 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -
         }
         if holder.kind != 47 && holder.kind != 48 {
             let e: Int = self.complain_at(src, n.tok,
-                "`for` iterates an array, and this is " + self.show_ty(src, holder));
+                "`for` iterates an array, and this is " + self.show_type(src, holder));
             return 1;
         }
         if self.find_sym(src, name.start, name.length) >= 0 {
@@ -1098,7 +1094,7 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -
                 + "binding is a binding");
         }
         // The element is a COPY, and immutable: nothing may be written back through it.
-        let element: Ty = self.ty_of(src, holder.scale);
+        let element: Type = self.declared_type(src, holder.scale);
         let base: Int = len(self.syms);
         self.depth += 1;
         push(self.syms, Sym { start: name.start, length: name.length, ty: element,
@@ -1113,11 +1109,11 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -
 
     if n.kind == 61 {                                // assignment
         let target: Node = self.nodes[n.a];
-        let want: Ty = self.type_of(src, n.a, ty_unknown());
-        let got: Ty = self.type_of(src, n.b, want);
+        let want: Type = self.type_of(src, n.a, unknown_type());
+        let got: Type = self.type_of(src, n.b, want);
         if !is_unknown(got) && !is_unknown(want) && !self.fits(src, got, want) {
             let e: Int = self.complain_at(src, n.tok,
-                "cannot assign " + self.show_ty(src, got) + " to " + self.show_ty(src, want));
+                "cannot assign " + self.show_type(src, got) + " to " + self.show_type(src, want));
         }
         // Only a `let mutable` binding may be assigned to.
         if target.kind == 5 {
@@ -1135,11 +1131,11 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -
         if self.in_pure == 1 {
             let e: Int = self.not_pure(src, n.tok, "print");
         }
-        let shown: Ty = self.type_at(n.a);
+        let shown: Type = self.type_at(n.a);
         if shown.kind == 46 || shown.kind == 49 || shown.kind == 47 || shown.kind == 48 {
             let e: Int = self.complain_at(src, n.tok,
                 "`print` renders a number, a Bool, a Decimal or a String — "
-                + self.show_ty(src, shown) + " has no one rendering the language can choose "
+                + self.show_type(src, shown) + " has no one rendering the language can choose "
                 + "for it");
         }
         let target: Node = self.nodes[n.a];
@@ -1151,7 +1147,7 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -
         }
     }
     if n.kind == 62 || n.kind == 70 {                // print, expression statement
-        let value: Ty = self.type_of(src, n.a, ty_unknown());
+        let value: Type = self.type_of(src, n.a, unknown_type());
         return 1;
     }
 
@@ -1160,14 +1156,14 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -
             let e: Int = self.complain_at(src, n.tok,
                 "there is nothing here to return from: top-level code runs, it does "
                 + "not answer");
-            let visited: Ty = self.type_of(src, n.a, ty_unknown());
+            let visited: Type = self.type_of(src, n.a, unknown_type());
             return 1;
         }
-        let value: Ty = self.type_of(src, n.a, ret);
+        let value: Type = self.type_of(src, n.a, ret);
         if !is_unknown(value) && !is_unknown(ret) && !self.fits(src, value, ret) {
             let e: Int = self.complain_at(src, n.tok,
-                "this function returns " + self.show_ty(src, ret) + ", but the value is "
-                + self.show_ty(src, value));
+                "this function returns " + self.show_type(src, ret) + ", but the value is "
+                + self.show_type(src, value));
         }
         if n.kind == 64 {
             let checked: Int = self.check_tail(src, n, ret);
@@ -1196,7 +1192,7 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -
     }
 
     if n.kind == 65 {                                // if
-        let cond: Ty = self.type_of(src, n.a, ty_simple(41));
+        let cond: Type = self.type_of(src, n.a, simple_type(41));
         if !is_unknown(cond) && cond.kind != 41 {
             let e: Int = self.complain_at(src, n.tok, "an `if` condition must be a Bool");
         }
@@ -1213,7 +1209,7 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -
     }
 
     if n.kind == 66 {                                // while
-        let cond: Ty = self.type_of(src, n.a, ty_simple(41));
+        let cond: Type = self.type_of(src, n.a, simple_type(41));
         if !is_unknown(cond) && cond.kind != 41 {
             let e: Int = self.complain_at(src, n.tok, "a `while` condition must be a Bool");
         }
@@ -1245,7 +1241,7 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -
     }
 
     if n.kind == 71 {                                // match
-        let value: Ty = self.type_of(src, n.a, ty_unknown());
+        let value: Type = self.type_of(src, n.a, unknown_type());
         let mutable enum_decl: Int = -1;
         if value.kind == 46 {
             let declared: Int = self.find_type(src, value.name_start, value.name_len);
@@ -1255,7 +1251,7 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, ret: Ty) -
         }
         if !is_unknown(value) && enum_decl < 0 {
             let e: Int = self.complain_at(src, n.tok,
-                "`match` chooses between an enum's variants, and " + self.show_ty(src, value)
+                "`match` chooses between an enum's variants, and " + self.show_type(src, value)
                 + " has none");
         }
         if enum_decl >= 0 {
@@ -1336,7 +1332,7 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int allocat
         let mutable writable: Int = 0;
         if item.value >= 4 { writable = 1; }
         push(self.syms, Sym { start: word.start, length: word.length,
-                              ty: Ty { kind: 46, scale: 0, contract: 0,
+                              ty: Type { kind: 46, scale: 0, contract: 0,
                                        name_start: receiver.start,
                                        name_len: receiver.length },
                               writable: writable, depth: self.depth });
@@ -1347,11 +1343,11 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int allocat
         let param: Node = self.nodes[self.kids[params.a + p]];
         let name: Tok = self.toks[param.tok];
         push(self.syms, Sym { start: name.start, length: name.length,
-                              ty: self.ty_of(src, param.a), writable: 0,
+                              ty: self.declared_type(src, param.a), writable: 0,
                               depth: self.depth });
         p += 1;
     }
-    let ret: Ty = self.ty_of(src, signature.c);
+    let ret: Type = self.declared_type(src, signature.c);
     let clauses: Int = self.check_clauses(src, index, signature, ret);
     let outer_function: Int = self.in_function;
     let outer_loop: Int = self.loop_depth;
@@ -1385,7 +1381,7 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int allocat
 // for the reason A5 gives: a contract that can change the program is not a check, it
 // is a second program that only runs when someone is looking.
 function (mutable self: Unit) check_clauses(src: String, index: Int, signature: Node,
-                                  ret: Ty) -> Int allocates {
+                                  ret: Type) -> Int allocates {
     let item: Node = self.nodes[index];
     let outer_pure: Int = self.in_pure;
     self.in_pure = 1;
@@ -1402,7 +1398,7 @@ function (mutable self: Unit) check_clauses(src: String, index: Int, signature: 
             if ret.kind == 46 || ret.kind == 47 || ret.kind == 48 {
                 let e: Int = self.complain_at(src, clause.tok,
                     "`ensures` cannot see the result of a function returning "
-                    + self.show_ty(src, ret) + ": it travels through the caller's storage, "
+                    + self.show_type(src, ret) + ": it travels through the caller's storage, "
                     + "and binding `result` to it needs care a scalar does not");
             }
             self.in_ensures = 1;
@@ -1412,7 +1408,7 @@ function (mutable self: Unit) check_clauses(src: String, index: Int, signature: 
                                       ty: ret, writable: 0, depth: self.depth });
             }
         }
-        let got: Ty = self.type_of(src, clause.a, ty_simple(41));
+        let got: Type = self.type_of(src, clause.a, simple_type(41));
         if clause.value == 128 {                     // decreases
             measures += 1;
             if !is_unknown(got) && got.kind != 40 {
@@ -1434,7 +1430,7 @@ function (mutable self: Unit) check_clauses(src: String, index: Int, signature: 
             if !is_unknown(got) && got.kind != 41 {
                 let e: Int = self.complain_at(src, clause.tok,
                     "a contract is a claim, so it must be a Bool, but this is "
-                    + self.show_ty(src, got));
+                    + self.show_type(src, got));
             }
         }
         self.in_ensures = 0;
@@ -1485,7 +1481,7 @@ function find_text(src: String, needle: String) -> Int {
 // `return tail f(...)` is a guarantee, not a hope: the frame is REPLACED. Everything
 // below is a condition for that being possible at all, which is why each one is a
 // compile error rather than a quiet fallback to an ordinary call.
-function (mutable self: Unit) check_tail(src: String, n: Node, ret: Ty) -> Int allocates {
+function (mutable self: Unit) check_tail(src: String, n: Node, ret: Type) -> Int allocates {
     let value: Node = self.nodes[n.a];
     if value.kind != 13 {
         let e: Int = self.complain_at(src, n.tok,
@@ -1499,7 +1495,7 @@ function (mutable self: Unit) check_tail(src: String, n: Node, ret: Ty) -> Int a
     }
     if ret.kind == 46 || ret.kind == 47 || ret.kind == 48 {
         let e: Int = self.complain_at(src, n.tok,
-            "a `tail` call cannot return " + self.show_ty(src, ret) + ": an aggregate travels "
+            "a `tail` call cannot return " + self.show_type(src, ret) + ": an aggregate travels "
             + "through the caller's storage, and the frame that owns it is the one being "
             + "replaced");
     }
@@ -1521,10 +1517,10 @@ function (mutable self: Unit) check_tail(src: String, n: Node, ret: Ty) -> Int a
         return 0;
     }
     let here: Fun = self.funs[self.current_fn];
-    if !self.types_same(src, callee.ret, here.ret) {
+    if !self.same_type(src, callee.ret, here.ret) {
         let e: Int = self.complain_at(src, n.tok,
-            "a `tail` call must answer what this function answers: " + self.show_ty(src, here.ret)
-            + ", not " + self.show_ty(src, callee.ret));
+            "a `tail` call must answer what this function answers: " + self.show_type(src, here.ret)
+            + ", not " + self.show_type(src, callee.ret));
     }
     let mine: Node = self.nodes[here.params];
     let theirs: Node = self.nodes[callee.params];
@@ -1537,12 +1533,12 @@ function (mutable self: Unit) check_tail(src: String, n: Node, ret: Ty) -> Int a
     }
     let mutable i: Int = 0;
     while i < mine.b {
-        let want: Ty = self.ty_of(src, self.nodes[self.kids[mine.a + i]].a);
-        let got: Ty = self.ty_of(src, self.nodes[self.kids[theirs.a + i]].a);
-        if !self.types_same(src, got, want) {
+        let want: Type = self.declared_type(src, self.nodes[self.kids[mine.a + i]].a);
+        let got: Type = self.declared_type(src, self.nodes[self.kids[theirs.a + i]].a);
+        if !self.same_type(src, got, want) {
             let e: Int = self.complain_at(src, n.tok,
-                "parameter " + to_string(i + 1) + " is " + self.show_ty(src, want) + " here and "
-                + self.show_ty(src, got) + " there, and a replaced frame has one shape");
+                "parameter " + to_string(i + 1) + " is " + self.show_type(src, want) + " here and "
+                + self.show_type(src, got) + " there, and a replaced frame has one shape");
         }
         i += 1;
     }
@@ -1636,22 +1632,22 @@ function (mutable self: Unit) check_impl(src: String, index: Int) -> Int allocat
             } else {
                 let mutable p: Int = 0;
                 while p < sig.c {
-                    let want: Ty = self.ty_of(src, self.nodes[self.subs[sig.b + p]].a);
-                    let got: Ty = self.ty_of(src, self.nodes[self.kids[params.a + p]].a);
-                    if !self.types_same(src, got, want) {
+                    let want: Type = self.declared_type(src, self.nodes[self.subs[sig.b + p]].a);
+                    let got: Type = self.declared_type(src, self.nodes[self.kids[params.a + p]].a);
+                    if !self.same_type(src, got, want) {
                         let e: Int = self.complain_at(src, method.tok,
-                            "parameter " + to_string(p + 1) + " is " + self.show_ty(src, want)
-                            + " in the trait, and " + self.show_ty(src, got) + " here");
+                            "parameter " + to_string(p + 1) + " is " + self.show_type(src, want)
+                            + " in the trait, and " + self.show_type(src, got) + " here");
                     }
                     p += 1;
                 }
             }
-            let want_ret: Ty = self.ty_of(src, sig.a);
-            let got_ret: Ty = self.ty_of(src, self.nodes[method.c].c);
-            if !self.types_same(src, got_ret, want_ret) {
+            let want_ret: Type = self.declared_type(src, sig.a);
+            let got_ret: Type = self.declared_type(src, self.nodes[method.c].c);
+            if !self.same_type(src, got_ret, want_ret) {
                 let e: Int = self.complain_at(src, method.tok,
-                    "the trait returns " + self.show_ty(src, want_ret) + ", and this returns "
-                    + self.show_ty(src, got_ret));
+                    "the trait returns " + self.show_type(src, want_ret) + ", and this returns "
+                    + self.show_type(src, got_ret));
             }
         }
         i += 1;
@@ -1756,7 +1752,7 @@ function (mutable self: Unit) check(src: String) -> Int allocates {
             }
         }
         if item.kind >= 60 && item.kind <= 72 {      // a top-level statement
-            let checked: Int = self.check_stmt_node(src, index, ty_unknown());
+            let checked: Int = self.check_stmt_node(src, index, unknown_type());
         }
         i += 1;
     }
