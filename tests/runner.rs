@@ -1658,7 +1658,7 @@ fn the_guide_and_examples_are_linked_and_compile() {
             assert!(index.contains(&name), "docs/guide/README.md does not link {}", name);
         }
     }
-    assert!(pages >= 9, "the guide lost pages: {} left", pages);
+    assert!(pages >= 10, "the guide lost pages: {} left", pages);
     // Every `burxt` code block in the guide and the README must use the language's CURRENT
     // spelling. This is the rot that actually happened: v0.0.98 renamed six keywords, and prose
     // does not fail to compile, so a page can go on teaching `fn` and `struct` indefinitely while

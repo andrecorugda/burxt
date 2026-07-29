@@ -1,6 +1,8 @@
 # Burxt — Maps (M11)
 
-> Status: **the library works in both compilers (v0.0.115).** `hash` landed in v0.0.114 and
+> Status: **DONE (v0.0.119).** All eight acceptance items are met.
+>
+> Previously: **the library works in both compilers (v0.0.115).** `hash` landed in v0.0.114 and
 > `lib/map.bx` runs identically under stage-0 and stage-1, including `Map<Int, Int>` through a
 > rehash and `Map<String, Point>`. What remains is Acceptance 6 — the compiler using it — and a
 > guide page.
@@ -266,6 +268,9 @@ The lowering is **one helper written once**, not a loop emitted per call site �
    which quadratic it still tolerates and what the bar should become when that one goes.
 7. The fixpoint still holds, byte for byte, and the backend equality stays at all-of-them.
 8. A guide page, because a container people will reach for daily is not documented by a spec.
+   ✅ `docs/guide/10-maps.md` (v0.0.119). Every example in it was RUN before it was written down —
+   the practice that caught four fabrications the last time a guide page was written, including two
+   error messages quoted from memory and a builtin that does not exist.
 
 ## 4. What this must NOT do
 

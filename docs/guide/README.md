@@ -1,6 +1,6 @@
 # The Burxt guide
 
-Ten pages, in reading order. Each one explains a decision and the reasoning behind it —
+Eleven pages, in reading order. Each one explains a decision and the reasoning behind it —
 what the language refuses is usually the interesting part.
 
 | | Page | |
@@ -14,6 +14,7 @@ what the language refuses is usually the interesting part.
 | 7 | [Modules](07-modules.md) | `use`, one file per module, what is visible |
 | 8 | [Generics](08-generics.md) | Type parameters, bounds, why nothing is erased |
 | 9 | [Absence and failure](09-absence-and-failure.md) | `Option`, `Result`, `?`, and no null |
+| 10 | [Maps](10-maps.md) | Insertion order, `Equatable` keys, `get` and `find` |
 | — | [Reference](reference.md) | Every keyword, builtin, operator and error |
 
 Running code beats prose: [`../../examples/`](../../examples) has one program per idea, and
