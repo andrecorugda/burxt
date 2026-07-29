@@ -30,6 +30,40 @@
 > The fix is a synthetic token whose span the checker agrees to treat as `result`, which is real work
 > rather than a patch — and it is the same wall that killed the `for` desugar in M10. Until it is
 > done, stage-0 has both forms and stage-1 has neither, exactly as M7 staged generics.
+>
+> ### A SECOND obstacle, found v0.0.147, and it is the harder one
+>
+> Parameter brackets are **not** straightforward after all, and the reason is the clause TEXT
+> rather than the subject. The subject is fine — a parameter has a real name token, so a
+> synthesized comparison can point at it.
+>
+> But stage-1 stores a clause's text as a **byte span into the source**
+> (`parse_clauses` records `text_start` / `text_length`), because a failure has to quote what the
+> programmer wrote and a span costs nothing. Stage-0 builds that text as a **String**, which is
+> what lets it synthesize `a <= b` from an elided `[<= b]`.
+>
+> In `balance: Decimal<2> [> $0.00]` the subject and the clause are **not contiguous** — the type
+> sits between them. So no span can spell `balance > $0.00`, and §1 Decision 3's whole point is
+> that the message must name the value that broke:
+>
+> ```
+> burxt runtime error: `> $0.00` failed in `withdraw`     ← what a span can say
+> burxt runtime error: `balance > $0.00` failed in ...    ← what acceptance item 4 requires
+> ```
+>
+> Three ways out, none of them small, and the choice is a design decision rather than a detail:
+>
+> 1. **Give stage-1 synthesized clause text.** It would need somewhere to keep built Strings for
+>    clause text instead of spans — the honest fix, and it touches how every clause is stored.
+> 2. **Quote the written form in BOTH compilers** — `balance: Decimal<2> [> $0.00]`, verbatim,
+>    subject included because the whole declaration is contiguous. Arguably better than a
+>    synthesized rewrite, and it costs acceptance item 4 as currently written plus the fixture
+>    that proves the two spellings produce byte-identical messages.
+> 3. **Let the messages diverge.** Rejected on sight: two compilers, one language, and the
+>    `.stderr` fixtures pin one text.
+>
+> Nothing was built for M13 in stage-1. This note exists so the next attempt starts from the real
+> problem rather than the one the spec used to describe.
 
 ## 0. What is wrong with the current form
 
