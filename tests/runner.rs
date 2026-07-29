@@ -2768,7 +2768,7 @@ fn the_language_server_checks_the_program_a_file_belongs_to() {
         let text = fs::read_to_string(source).unwrap();
         let uri = format!("file://{}", source.display());
         let mut request = String::new();
-        let mut add = |body: String, request: &mut String| {
+        let add = |body: String, request: &mut String| {
             request.push_str(&format!("Content-Length: {}\r\n\r\n{}", body.len(), body));
         };
         add(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#.to_string(), &mut request);

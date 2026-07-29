@@ -56,6 +56,13 @@ jobs:
 
       # Warnings are errors in CI. The tree is at zero warnings, and the cheapest moment to keep
       # it there is the one where nobody has to remember to look.
+      #
+      # NOTE, learned from the first run of this workflow, which failed: `cargo build` does not
+      # compile the TEST target, so `-D warnings` never reaches tests/runner.rs during a build.
+      # A stray `mut` sat in that file through 130 versions because no local command ever saw it.
+      # `cargo test` below compiles it, which is where it surfaced. To reproduce this job locally:
+      #
+      #     RUSTFLAGS="-D warnings" cargo test --locked --no-run
       - name: Build
         run: cargo build --locked --verbose
 
