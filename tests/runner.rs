@@ -1819,16 +1819,21 @@ fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
         "the Burxt backend compiles {} of {} pass programs correctly ({} refused outright)",
         correct, total, refused
     );
-    // 101 of 102 in v0.0.111. The one left is `write_bytes_buffer.bx`, which needs
-    // `write_bytes` — nothing to do with generics, and the last item on this list. Keeping the
-    // gap as a NAME rather than a number is the point: a count tells you how far along you are
-    // and a name tells you what to do next.
-    assert!(
-        correct >= 101,
-        "the Burxt backend went backwards: {} of {} correct, was 101 of 102 (the one is \
-         write_bytes_buffer.bx, which needs `write_bytes`)",
-        correct,
-        total
+    // **ALL of them, since v0.0.113.** The ratchet has run out of room, which means it stops
+    // being a ratchet and becomes an equality: the Burxt backend compiles every program the Rust
+    // one does, and each prints the same bytes either way. A floor was the right instrument while
+    // there was a gap to close; keeping one now would let a regression hide above the line, which
+    // is the mistake `Direction 4` was added to fix elsewhere in this file.
+    //
+    // It got here as a ratchet: 31 with no Decimals, 58 with them, 77 with enums, `match`,
+    // interpolation, `external function` and `musttail`, 88 once `dynamic` dispatch landed, 98
+    // with generic records and enums, 101 with generic functions and methods, 102 with
+    // `write_bytes`.
+    assert_eq!(
+        correct, total,
+        "the Burxt backend compiled {} of {} pass programs. It compiled ALL of them from \
+         v0.0.113, so this is a regression, and `refused` was {}",
+        correct, total, refused
     );
 }
 

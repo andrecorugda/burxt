@@ -1288,6 +1288,11 @@ function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String)
                                   + ")\n");
         return reg;
     }
+    if called == "write_bytes" {
+        let visited: Int = self.write_body("  " + reg + " = call i64 @burxt.write_bytes(i64 "
+                                  + first + ", i64 " + second + ")\n");
+        return reg;
+    }
     if called == "write_file" {
         let visited: Int = self.write_body("  " + reg + " = call i64 @burxt.write_file(i64 " + first
                                   + ", i64 " + second + ")\n");
@@ -2613,7 +2618,13 @@ function runtime_ir() -> String allocates {
         + "declare i32 @fseek(ptr, i64, i32)\n"
         + "declare i64 @ftell(ptr)\n"
         + "@burxt.mode_read = private unnamed_addr constant [2 x i8] c\"r\\00\"\n"
-        + "@burxt.mode_write = private unnamed_addr constant [2 x i8] c\"w\\00\"\n\n"
+        + "@burxt.mode_write = private unnamed_addr constant [2 x i8] c\"w\\00\"\n"
+        // "wb" and not "w" for a byte buffer. Identical on Linux; the distinction is real on
+        // platforms that translate newlines, and a buffer of bytes is exactly the case where a
+        // translated newline would corrupt the output. Stage-0 opens it the same way.
+        + "@burxt.mode_wb = private unnamed_addr constant [3 x i8] c\"wb\\00\"\n"
+        + "@burxt.no_write_msg = private unnamed_addr constant [51 x i8] "
+        + "c\"burxt runtime error: cannot open file for writing\\0A\\00\"\n\n"
         + "define i64 @burxt.argument_count() \{\n"
         + "entry:\n  %n = load i64, ptr @burxt.argc\n  ret i64 %n\n\}\n\n"
         + "define i64 @burxt.argument(i64 %i) \{\n"
@@ -2659,6 +2670,58 @@ function runtime_ir() -> String allocates {
         + "write:\n"
         + "  %size = call i64 @strlen(ptr %t)\n"
         + "  %written = call i64 @fwrite(ptr %t, i64 1, i64 %size, ptr %f)\n"
+        + "  %closed = call i32 @fclose(ptr %f)\n"
+        + "  ret i64 %written\n\}\n\n"
+        // `write_bytes(path, buffer)` — the low byte of every element, written out.
+        //
+        // Elements are i64 because a growable array's element type is one of Burxt's and there is
+        // no byte type yet. The narrowing is deliberate: an element outside 0..255 keeps its low
+        // eight bits, which is what a byte buffer means. The 8x memory cost of holding bytes in
+        // i64s is the price of not adding a type, and it is paid in a buffer that lives for one
+        // region.
+        //
+        // One narrow pass into region memory, then a SINGLE fwrite. Writing byte by byte through
+        // the C library would be a million calls for a megabyte, which is the whole reason this
+        // builtin exists — see the fixture, which is about not building a String in a loop.
+        + "define i64 @burxt.write_bytes(i64 %path, i64 %xs) \{\n"
+        + "entry:\n"
+        + "  %h = inttoptr i64 %xs to ptr\n"
+        + "  %datap = getelementptr i64, ptr %h, i64 2\n"
+        + "  %count = load i64, ptr %h\n"
+        + "  %data = load i64, ptr %datap\n"
+        + "  %dp = inttoptr i64 %data to ptr\n"
+        + "  %flat = call i64 @burxt.alloc(i64 %count)\n"
+        + "  %fp = inttoptr i64 %flat to ptr\n"
+        + "  %i0 = alloca i64\n"
+        + "  store i64 0, ptr %i0\n"
+        + "  br label %narrow_head\n"
+        + "narrow_head:\n"
+        + "  %i = load i64, ptr %i0\n"
+        + "  %more = icmp slt i64 %i, %count\n"
+        + "  br i1 %more, label %narrow_body, label %narrow_done\n"
+        + "narrow_body:\n"
+        + "  %src = getelementptr i64, ptr %dp, i64 %i\n"
+        + "  %wide = load i64, ptr %src\n"
+        + "  %byte = trunc i64 %wide to i8\n"
+        + "  %dst = getelementptr i8, ptr %fp, i64 %i\n"
+        + "  store i8 %byte, ptr %dst\n"
+        + "  %next = add i64 %i, 1\n"
+        + "  store i64 %next, ptr %i0\n"
+        + "  br label %narrow_head\n"
+        + "narrow_done:\n"
+        + "  %pp = inttoptr i64 %path to ptr\n"
+        + "  %f = call ptr @fopen(ptr %pp, ptr @burxt.mode_wb)\n"
+        + "  %missing = icmp eq ptr %f, null\n"
+        + "  br i1 %missing, label %refused, label %opened\n"
+        // A refusal EXITS rather than answering 0, because stage-0 does: a program that cannot
+        // write the file it was told to write has not half-succeeded.
+        + "refused:\n"
+        + "  %err = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.no_write_msg)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n"
+        + "opened:\n"
+        + "  %written = call i64 @fwrite(ptr %fp, i64 1, i64 %count, ptr %f)\n"
         + "  %closed = call i32 @fclose(ptr %f)\n"
         + "  ret i64 %written\n\}\n\n"
         + "define void @burxt.bounds(i64 %i, i64 %limit, i64 %at) \{\n"
