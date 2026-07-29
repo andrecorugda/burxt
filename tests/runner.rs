@@ -2572,6 +2572,27 @@ fn matches_at_start(pattern: &str, line: &str) -> bool {
     fn in_class(class: &[u8], c: u8) -> bool {
         let mut i = 0;
         while i < class.len() {
+            // An escape INSIDE a class. Without this, `[A-Za-z0-9_,\s]` read the backslash and
+            // the `s` as two literal bytes, so a space never matched and
+            // `function (self: Map<K, V>) probe(...)` was reported as un-highlighted while the
+            // grammar highlighted it perfectly well. `Pair<T>` has no space, which is why the
+            // hole survived until a generic with two parameters was written.
+            //
+            // A test that cannot read its own input reports a fault in the wrong place, and that
+            // is worse than a test that fails: it sends the reader to fix something that is right.
+            if class[i] == b'\\' && i + 1 < class.len() {
+                let matched = match class[i + 1] {
+                    b's' => (c as char).is_whitespace(),
+                    b'w' => (c as char).is_alphanumeric() || c == b'_',
+                    b'd' => c.is_ascii_digit(),
+                    other => other == c,
+                };
+                if matched {
+                    return true;
+                }
+                i += 2;
+                continue;
+            }
             if i + 2 < class.len() && class[i + 1] == b'-' {
                 if c >= class[i] && c <= class[i + 2] {
                     return true;

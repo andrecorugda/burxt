@@ -1,7 +1,9 @@
 # Burxt — Maps (M11)
 
-> Status: **specified, in progress.** The `hash` builtin and `lib/map.bx` are the work; the
-> compiler's own `find_fun`/`find_sym`/`find_type` are the acceptance test.
+> Status: **the library works in both compilers (v0.0.115).** `hash` landed in v0.0.114 and
+> `lib/map.bx` runs identically under stage-0 and stage-1, including `Map<Int, Int>` through a
+> rehash and `Map<String, Point>`. What remains is Acceptance 6 — the compiler using it — and a
+> guide page.
 
 ## 0. Why this is a milestone and not a nicety
 
@@ -137,6 +139,37 @@ It is also the same shape `lib/option.bx` chose (`option_or`, `option_is_some`, 
 They need a function as a value, and a closure needs an owner for its captured state, which is a
 memory question and not a syntax one. Iteration is a `for` loop over `map_keys`, which is a
 construct the language already has and which cannot capture anything by accident.
+
+### Decision 7 — there is no `map_new()`, and that is a language gap, not a preference
+
+An empty map is written as a literal with its type named:
+
+```burxt
+let mutable counts: Map<String, Int> = Map { entries: [], slots: [], live: 0 };
+```
+
+A constructor cannot be written today, and two separate holes are why:
+
+1. **A type parameter that appears only in the RETURN type cannot be inferred.**
+   `function map_new<K, V>() -> Map<K, V>` has no argument to infer from, and Burxt has no
+   turbofish. The fix is **inference from the expectation** — `let m: Map<String, Int> = map_new();`
+   already says what `K` and `V` are, in the place the guide says a type belongs. That is strictly
+   better than a turbofish and keeps the guide's "there is no turbofish" true.
+2. **A generic record literal inside the generic that declares it is refused by stage-0**, with
+   `codegen bug: Box instantiated to Box<T>`. `expand` correctly leaves `Box<T>` abstract when an
+   argument still mentions a parameter — the same rule the function path uses — but
+   `instantiate_record` only accepts a `Type::Named` back and treats the abstract answer as a bug.
+   It also only reads an expectation when the expectation is `Type::Named`, so a `Type::Generic`
+   expectation contributes nothing.
+
+Stage-1 does **not** have hole 2: it resolves lazily and never needs a symbol until layout. So
+this is one compiler behind the other, which is the situation the differential test exists to
+surface, and it is surfaced here rather than worked around silently.
+
+Until both are fixed, the three fields are visible at each construction site. That is the one
+place `lib/map.bx` is less friendly than this language should be, and it is written down rather
+than papered over. **Trigger:** these two fixes, which are worth doing for every generic
+constructor anyone writes, not just this one.
 
 ## 2. What has to change in the compilers
 

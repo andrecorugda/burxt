@@ -323,7 +323,12 @@ function (mutable self: Unit) resolve_deep(src: String, t: Type, at: Int) -> Typ
     }
     let declared: Type = self.declared_type(src, here.scale);
     let element: Type = self.resolve_deep(src, declared, at);
-    if self.same_type(src, element, declared) {
+    // `type_identical` and NOT `same_type`, which resolves both sides before comparing and would
+    // therefore call a resolved `String` and the `K` it came from equal — the exact question being
+    // asked. `[K]` then answered `[K]` and a method returning `[K]` did not resolve at its call
+    // site. The nested-application branch above learned this first; this one had the same bug and
+    // kept it two versions longer.
+    if type_identical(element, declared) {
         return here;
     }
     let node: Int = self.node_for(element, at);
@@ -1808,9 +1813,20 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int allocat
     }
     let return_type: Type = self.declared_type(src, signature.c);
     // Which generic this is, so a parameter's bound is looked up in its own declaration.
+    //
+    // For a METHOD the answer is its RECEIVER's declaration, not its own name: `Map<K: Equatable,
+    // V>.probe` is an ordinary name, and the bound that justifies `entry.key == key` inside it was
+    // written on the record. Looking only at the method's own name found no bound and refused a
+    // program that says exactly what it needs — and stage-0 never noticed, because it checks
+    // instantiated COPIES where `K` is already String.
     let outer_generic: Int = self.current_generic;
     let named_here: Token = self.tokens[item.token];
-    self.current_generic = self.generic_named(src, named_here.start, named_here.length);
+    let mutable enclosing: Int = self.generic_named(src, named_here.start, named_here.length);
+    if item.kind == 81 && enclosing < 0 {
+        let receiver: Token = self.tokens[signature.value];
+        enclosing = self.generic_named(src, receiver.start, receiver.length);
+    }
+    self.current_generic = enclosing;
     let clauses: Int = self.check_clauses(src, index, signature, return_type);
     let outer_function: Int = self.in_function;
     let outer_loop: Int = self.loop_depth;

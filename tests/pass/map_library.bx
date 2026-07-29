@@ -1,0 +1,65 @@
+// `lib/map.bx` — a key-value table in INSERTION order, written in Burxt with no compiler support
+// beyond `hash`. See spec/M11-MAPS.md.
+//
+// The last four lines are the point of the whole design. After removing the FIRST key inserted,
+// iteration still answers the survivors in the order they went in. A hash-ordered map gets this
+// wrong, and Go and Rust both had to paper over it — Go randomises iteration so nobody can depend
+// on it, Rust randomises its seed per process. A language whose thesis is reproducibility should
+// not ship a container whose order depends on a hash function's internals.
+
+use "../../lib/map.bx";
+
+record Point { x: Int, y: Int }
+
+region r {
+    let mutable m: Map<String, Int> = Map { entries: [], slots: [], live: 0 };
+    let a: Int = m.set("alpha", 1);
+    let b: Int = m.set("beta", 2);
+    let c: Int = m.set("gamma", 3);
+    print(m.count());
+    print(m.get("beta", 0 - 1));
+    print(m.get("missing", 0 - 1));       // the fallback, and no way to crash instead
+    print(m.has("gamma"));
+    print(m.has("delta"));
+
+    // Overwriting answers 0, so a caller can count DISTINCT keys without a second lookup.
+    let over: Int = m.set("beta", 99);
+    print(over);
+    print(m.get("beta", 0 - 1));
+    print(m.count());
+
+    // Removal tombstones in place: the entry keeps its slot so that no probe chain is broken, and
+    // keeps its position so that no later key moves.
+    let gone: Bool = m.remove("alpha");
+    print(gone);
+    print(m.remove("alpha"));             // already gone, and says so rather than pretending
+    print(m.count());
+    print(m.has("alpha"));
+
+    // Enough keys to force a rehash — the table grows past 8 slots — so that insertion order is
+    // shown surviving a growth and not just a removal.
+    let mutable big: Map<Int, Int> = Map { entries: [], slots: [], live: 0 };
+    let mutable i: Int = 0;
+    while i < 20 {
+        let put: Int = big.set(i * 7, i);
+        i += 1;
+    }
+    print(big.count());
+    print(big.get(91, 0 - 1));            // 13 * 7
+    let keys: [Int] = big.keys();
+    print(keys[0]);
+    print(keys[19]);
+
+    // A record VALUE, which is the case Decision 5 exists to protect: an `Option<V>` return would
+    // have restricted values to scalars, because a generic enum payload must be one.
+    let mutable places: Map<String, Point> = Map { entries: [], slots: [], live: 0 };
+    let put: Int = places.set("origin", Point { x: 3, y: 4 });
+    let here: Point = places.get("origin", Point { x: 0, y: 0 });
+    print(here.x + here.y);
+
+    // Insertion order, after a removal.
+    let names: [String] = m.keys();
+    for k in names {
+        print(k);
+    }
+}

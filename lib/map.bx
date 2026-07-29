@@ -1,0 +1,282 @@
+// ============================================================================
+// lib/map.bx — a key-value table, in insertion order.
+//
+//     use "lib/map.bx";
+//
+// A LIBRARY file, like lib/option.bx and lib/result.bx. The only compiler support it needs is
+// `hash(x)`; everything else here is ordinary Burxt written with generics. If a map had needed a
+// keyword, the generics would not be real.
+//
+// Iteration is INSERTION order, always — not "unspecified", not "arbitrary". Go randomises
+// iteration deliberately and Rust randomises its hash seed per process, and both are admissions
+// that hash order leaked into programs that then broke. A language whose thesis is reproducibility
+// should not ship a container whose iteration order depends on a hash function's internals.
+// See spec/M11-MAPS.md Decision 1.
+// ============================================================================
+
+// One key and its value. `live` is false for a tombstone: a removed entry keeps its place in the
+// entry array so that everything after it keeps its insertion position, which is the whole point.
+record MapEntry<K: Equatable, V> { key: K, value: V, live: Bool }
+
+// Two arrays rather than buckets of lists.
+//
+//   entries — insertion order, and therefore iteration order. Holes are tombstoned, never moved.
+//   slots   — open addressed, linear probing. Holds an index into `entries` PLUS ONE, so that 0
+//             means empty without a sentinel constant and without a parallel array of flags.
+//   live    — how many entries are not tombstones, which is what `count` answers.
+//
+// This is the compact-table shape, and it is the right one here for a reason particular to Burxt:
+// there is no per-entry allocation at all. Every allocation lands in a region, and a region is a
+// bump pointer, so a container that allocates once per insertion is a container that makes the
+// region grow for no reason.
+// `K: Equatable` is not decoration. It is what justifies `entry.key == key` in `probe` and
+// `hash(key)` alongside it, and Equatable is exactly the set `==` works on — Int, Bool, String and
+// Decimal. A key needs equality and a hash, and the types that have equality are the types that
+// can have one, which is why there is no separate `Hashable` naming the same four.
+record Map<K: Equatable, V> { entries: [MapEntry<K, V>], slots: [Int], live: Int }
+
+// ---- Building one ----------------------------------------------------------
+
+// An empty map is written as a literal with its type named:
+//
+//     let mutable counts: Map<String, Int> = Map { entries: [], slots: [], live: 0 };
+//
+// There is deliberately no `map_new()`. It cannot be written today, and the reason is a real
+// language gap rather than a preference: a generic function whose type parameters appear ONLY in
+// its return type has nothing to infer them from, and a generic record literal inside the generic
+// that declares it is not yet accepted by stage-0 (`codegen bug: Box instantiated to Box<T>`).
+// Both are recorded in spec/M11-MAPS.md Decision 7 with what it would take to fix them — and the
+// fix is inference from the expectation, NOT a turbofish, because the type is already written
+// where the value lands.
+//
+// Until then the three fields are visible at each construction site. That is the one place this
+// file is not as friendly as it should be, and it is written down rather than papered over.
+//
+// Everything else is a METHOD, and not for tidiness: Burxt has no writable parameters, so a
+// container that changes has to change through `mutable self`. The API is better for it —
+// `counts.set("k", 1)` rather than `map_set(counts, "k", 1)` — which is the usual way a real
+// constraint turns out to have been pointing at the nicer design.
+
+
+// Where a key wants to live, as an index into `slots`.
+//
+// The slot table is kept a power of two so that this is a mask rather than a division — except
+// Burxt has no bitwise operators, so it is `remainder`, which is exactly why `hash` clears its
+// sign bit: `remainder` keeps the sign of its left operand, and a negative index is a bounds
+// failure rather than a wrong answer.
+function (self: Map<K, V>) slot_count() -> Int {
+    return len(self.slots);
+}
+
+// The probe sequence for a key, answering the slot index where the key was found, or where it
+// would go if it is not there. Linear probing: cache-friendly, and one sequence to get right
+// rather than two.
+//
+// The caller must have made room first — a full table would loop forever, and `set` is what
+// guarantees it never is.
+function (self: Map<K, V>) probe(key: K) -> Int {
+    let count: Int = len(self.slots);
+    let mutable at: Int = remainder(hash(key), count);
+    let mutable steps: Int = 0;
+    while steps < count {
+        let holds: Int = self.slots[at];
+        if holds == 0 {
+            return at;                               // empty: this is where it would go
+        }
+        let entry: MapEntry<K, V> = self.entries[holds - 1];
+        if entry.live && entry.key == key {
+            return at;                               // found
+        }
+        at += 1;
+        if at >= count {
+            at = 0;
+        }
+        steps += 1;
+    }
+    return 0 - 1;                                    // full, which map_set prevents
+}
+
+// Grow the slot table and re-place every live entry in it.
+//
+// The ENTRY array is not rebuilt and not reordered: that is what keeps insertion order stable
+// across a growth, and it is the difference between this and a plain hash table. Tombstones are
+// dropped here, which is the one moment an entry's index can change — and it changes for every
+// entry at once, so no slot survives to point at the wrong one.
+function (mutable self: Map<K, V>) rehash(wanted: Int) -> Int allocates {
+    let mutable fresh: [MapEntry<K, V>] = [];
+    let mutable i: Int = 0;
+    while i < len(self.entries) {
+        let entry: MapEntry<K, V> = self.entries[i];
+        if entry.live {
+            let kept: Int = push(fresh, entry);
+        }
+        i += 1;
+    }
+
+    let mutable slots: [Int] = [];
+    let mutable s: Int = 0;
+    while s < wanted {
+        let blank: Int = push(slots, 0);
+        s += 1;
+    }
+
+    self.entries = fresh;
+    self.slots = slots;
+    self.live = len(fresh);
+
+    // Placed by probing the new table directly rather than through `probe`, because the map is
+    // half-built here: `self.slots` is empty of everything and every probe must find a hole.
+    let mutable e: Int = 0;
+    while e < len(self.entries) {
+        let entry: MapEntry<K, V> = self.entries[e];
+        let mutable at: Int = remainder(hash(entry.key), wanted);
+        while self.slots[at] != 0 {
+            at += 1;
+            if at >= wanted {
+                at = 0;
+            }
+        }
+        self.slots[at] = e + 1;
+        e += 1;
+    }
+    return 1;
+}
+
+// Insert, or overwrite what is there.
+//
+// Answers 1 if the key is new and 0 if it replaced a value, so a caller can count distinct keys
+// without a second lookup.
+//
+// The table grows when it is more than half full. Half rather than the usual seven-eighths because
+// linear probing degrades sharply near full, and the memory is a region's to reclaim in O(1).
+function (mutable self: Map<K, V>) set(key: K, value: V) -> Int allocates {
+    if len(self.slots) == 0 {
+        let started: Int = self.rehash(8);
+    }
+    if (len(self.entries) + 1) * 2 > len(self.slots) {
+        let grown: Int = self.rehash(len(self.slots) * 2);
+    }
+    let at: Int = self.probe(key);
+    let holds: Int = self.slots[at];
+    if holds != 0 {
+        let existing: MapEntry<K, V> = self.entries[holds - 1];
+        self.entries[holds - 1] = MapEntry { key: key, value: value, live: true };
+        if existing.live {
+            return 0;                                // overwrote a value
+        }
+        self.live += 1;
+        return 1;                                    // revived a tombstone in place
+    }
+    let added: Int = push(self.entries, MapEntry { key: key, value: value, live: true });
+    self.slots[at] = len(self.entries);
+    self.live += 1;
+    return 1;
+}
+
+// ---- Reading one -----------------------------------------------------------
+
+// Whether the key is there.
+function (self: Map<K, V>) has(key: K) -> Bool {
+    if len(self.slots) == 0 {
+        return false;
+    }
+    let at: Int = self.probe(key);
+    if at < 0 {
+        return false;
+    }
+    let holds: Int = self.slots[at];
+    if holds == 0 {
+        return false;
+    }
+    return self.entries[holds - 1].live;
+}
+
+// The value, or the fallback.
+//
+// A fallback rather than an `Option<V>`, and the reason is a current limitation rather than a
+// preference: a generic enum payload must be a scalar, so `Option<Point>` is refused, so an
+// `Option<V>` return would restrict values to scalars — a worse limitation than the one it
+// removes. spec/M11-MAPS.md Decision 5 records the trigger that would add `find`.
+//
+// Asking then reading is two lookups. That cost is documented rather than hidden, and it is the
+// same shape lib/option.bx chose: `option_or` and `option_is_some`, and deliberately no `unwrap`.
+function (self: Map<K, V>) get(key: K, fallback: V) -> V {
+    if len(self.slots) == 0 {
+        return fallback;
+    }
+    let at: Int = self.probe(key);
+    if at < 0 {
+        return fallback;
+    }
+    let holds: Int = self.slots[at];
+    if holds == 0 {
+        return fallback;
+    }
+    let entry: MapEntry<K, V> = self.entries[holds - 1];
+    if !entry.live {
+        return fallback;
+    }
+    return entry.value;
+}
+
+function (self: Map<K, V>) count() -> Int {
+    return self.live;
+}
+
+// Every live key, in insertion order. The answer is a fresh array, so a caller may iterate it
+// while changing the map — which a view into the entries could not promise.
+function (self: Map<K, V>) keys() -> [K] allocates {
+    let mutable out: [K] = [];
+    let mutable i: Int = 0;
+    while i < len(self.entries) {
+        let entry: MapEntry<K, V> = self.entries[i];
+        if entry.live {
+            let kept: Int = push(out, entry.key);
+        }
+        i += 1;
+    }
+    return out;
+}
+
+// ---- Removing ---------------------------------------------------------------
+
+// Answers whether the key was there to remove.
+//
+// The entry is TOMBSTONED, not moved and not deleted, so every entry after it keeps its insertion
+// position. Its slot is left pointing at the tombstone rather than cleared, because clearing it
+// would break the probe chain of any key that collided with it and landed further along.
+function (mutable self: Map<K, V>) remove(key: K) -> Bool allocates {
+    if len(self.slots) == 0 {
+        return false;
+    }
+    let at: Int = self.probe(key);
+    if at < 0 {
+        return false;
+    }
+    let holds: Int = self.slots[at];
+    if holds == 0 {
+        return false;
+    }
+    let entry: MapEntry<K, V> = self.entries[holds - 1];
+    if !entry.live {
+        return false;
+    }
+    self.entries[holds - 1] = MapEntry { key: entry.key, value: entry.value, live: false };
+    self.live -= 1;
+    return true;
+}
+
+// ---- What is deliberately absent -------------------------------------------
+//
+// No `map`, `filter` or `each`. They need a function as a value, and a closure needs an owner for
+// its captured state — a memory question, not a syntax one. Iteration is a `for` loop over
+// `keys`, which cannot capture anything by accident.
+//
+// No record or array as a KEY. It would need structural hashing, which needs a per-type walk,
+// which needs a derive mechanism or a trait with a method. `hash` says so by name. For a compound
+// key, build a String from the parts.
+//
+// No seeded constructor yet, and therefore no HashDoS protection. spec/M11-MAPS.md Decision 4
+// states the trade and the trigger: a program serving untrusted input where keys come from the
+// request, answered with `map_seeded(seed)` rather than a global change, because a security
+// property should be visible in the code that needs it.

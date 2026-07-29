@@ -2065,15 +2065,44 @@ function (mutable self: Unit) call_suffix(src: String, name: Token, args: Int) -
 // where the copy is chosen by the RECEIVER rather than by the arguments, which is also why it
 // needs no unification — the call site already knows what it is holding.
 function (self: Unit) holder_suffix(src: String, holder: Type) -> String allocates {
-    if holder.kind != 46 || holder.contract <= 0 {
+    if holder.kind != 46 {
         return "";
     }
+    if holder.contract > 0 {
+        let mutable suffix: String = "";
+        let mutable i: Int = 0;
+        while i < holder.contract {
+            suffix += "$" + self.mangle_type(src,
+                self.declared_type(src, self.nested_children[holder.scale + i]));
+            i += 1;
+        }
+        return suffix;
+    }
+    // No arguments WRITTEN, which is what `self` looks like inside the generic's own methods: the
+    // receiver's type comes from a bare name in the clause. So the suffix comes from the
+    // declaration's parameters resolved through the bindings in scope — which, while an instance
+    // is being emitted, are exactly that instance's arguments.
+    //
+    // Without this, `probe` called from `set` inside `Map$String$Int` emitted a call to the
+    // unmangled `@Map.probe`, which nothing defines. A link error rather than a wrong answer,
+    // which is the failure mode a mangled name is supposed to have.
+    let generic: Int = self.generic_named(src, holder.name_start, holder.name_len);
+    if generic < 0 {
+        return "";
+    }
+    let declaration: Generic = self.generics[generic];
     let mutable suffix: String = "";
-    let mutable i: Int = 0;
-    while i < holder.contract {
-        suffix += "$" + self.mangle_type(src,
-            self.declared_type(src, self.nested_children[holder.scale + i]));
-        i += 1;
+    let mutable p: Int = 0;
+    while p < declaration.type_param_count {
+        let named: Token = self.tokens[self.type_params[declaration.type_param_start + p]];
+        let stands_for: Type = self.resolve_shallow(src,
+            Type { kind: 50, scale: 0, contract: 0,
+                   name_start: named.start, name_len: named.length });
+        if stands_for.kind == 50 {
+            return "";                               // still abstract: nothing to name yet
+        }
+        suffix += "$" + self.mangle_type(src, stands_for);
+        p += 1;
     }
     return suffix;
 }
