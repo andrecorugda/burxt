@@ -68,7 +68,7 @@ function option_is_none<T>(o: Option<T>) -> Bool {
 // owner for its captured state — see spec/M10-ERGONOMICS.md §3.
 //
 // `?` does work here: in a function that itself answers with an `Option`,
-// `let v = find(xs, 9)?;` yields the value or returns `None` immediately. It
+// `let at: Int = index_of(xs, 8)?;` yields the value or returns `None` immediately. It
 // recognises absence by the variant name `None`, so nothing in the compiler needs
 // to know this file exists.
 //

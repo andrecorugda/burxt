@@ -56,11 +56,15 @@ function result_is_ok<T, E>(r: Result<T, E>) -> Bool {
 //
 // ---- `?` ---------------------------------------------------------------------
 //
-//     function read_total(path: String) -> Result<Int, String> {
-//         let text = read_file(path);
-//         let n = parse_int(text)?;        // the value, or return the error
+//     function halve_then_double(a: Int, b: Int) -> Result<Int, String> {
+//         let n: Int = divide(a, b)?;      // the value, or return the error
 //         return Result.Ok(n * 2);
 //     }
+//
+// (An earlier version of this comment used a `parse_int` that does not exist. The real one is
+// `string_to_int` in lib/string.bx, and it answers an Int rather than a Result — so it was the
+// wrong function to illustrate `?` with, twice over. A comment is documentation and rots the
+// same way.)
 //
 // `?` yields the success value, or returns the failure from the enclosing function
 // immediately. It recognises a failure by the VARIANT name — `Error` here, `None` in

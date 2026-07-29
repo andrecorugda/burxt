@@ -1658,7 +1658,45 @@ fn the_guide_and_examples_are_linked_and_compile() {
             assert!(index.contains(&name), "docs/guide/README.md does not link {}", name);
         }
     }
-    assert!(pages >= 7, "the guide lost pages: {} left", pages);
+    assert!(pages >= 9, "the guide lost pages: {} left", pages);
+    // Every `burxt` code block in the guide and the README must use the language's CURRENT
+    // spelling. This is the rot that actually happened: v0.0.98 renamed six keywords, and prose
+    // does not fail to compile, so a page can go on teaching `fn` and `struct` indefinitely while
+    // every test stays green.
+    //
+    // What this does NOT check is that the blocks compile. Most are fragments — three lines of a
+    // record, a call with no declaration in sight — and wrapping them in a guessed context would
+    // fail for reasons the guide is not wrong about. The examples are the compiled artefact, and
+    // every page points at one.
+    let stale: &[(&str, &str)] = &[
+        ("fn ", "function"),
+        ("struct ", "record"),
+        ("impl ", "implement"),
+        ("mut ", "mutable"),
+        ("extern ", "external function"),
+        (": ty", ": type"),
+    ];
+    let mut prose = vec![root.join("README.md")];
+    for entry in fs::read_dir(root.join("docs/guide")).unwrap() {
+        prose.push(entry.unwrap().path());
+    }
+    for path in &prose {
+        let text = fs::read_to_string(path).unwrap();
+        for block in text.split("```burxt").skip(1) {
+            let code = block.split("```").next().unwrap_or("");
+            for (old_spelling, now) in stale {
+                assert!(
+                    !code.contains(old_spelling),
+                    "{} teaches `{}`, which the language renamed to `{}`:\n{}",
+                    path.display(),
+                    old_spelling.trim(),
+                    now,
+                    code.trim()
+                );
+            }
+        }
+    }
+
     let readme = fs::read_to_string(root.join("README.md")).unwrap();
     assert!(readme.contains("docs/guide/"), "README.md must link the guide");
     assert!(readme.contains("examples/"), "README.md must link the examples");

@@ -96,3 +96,8 @@ error: cannot + Decimal<2> and Decimal<4>: scales must match.
 
 The full reasoning, including what was deferred and why, is in
 [`spec/M6-MODULES.md`](../../spec/M6-MODULES.md).
+
+## Next
+
+[Generics](08-generics.md) — one definition, one copy per type that uses it. Which is also what
+makes `lib/option.bx` and `lib/result.bx` possible as libraries rather than keywords.

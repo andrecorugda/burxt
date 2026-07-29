@@ -122,9 +122,9 @@ open, with the reasoning beside it.
 
 ## Learning it
 
-- **[The guide](docs/guide/)** — seven pages in reading order: getting started, numbers and
-  money, types, memory, contracts, the C boundary, and a full reference of every keyword,
-  builtin, operator and error message.
+- **[The guide](docs/guide/)** — nine pages in reading order: getting started, numbers and
+  money, types, memory, contracts, the C boundary, modules, generics, absence and failure —
+  plus a full reference of every keyword, builtin, operator and error message.
 - **[The examples](examples/)** — one program per idea, all of them compiling. Each ends
   with a *"what the compiler refuses, and why"* section quoting the real error text, because
   what a compiler declines to compile says more about it than what it accepts.
