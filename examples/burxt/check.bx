@@ -567,14 +567,61 @@ function (mutable self: Unit) find_sym(src: String, start: Int, length: Int) -> 
     return -1;
 }
 
+// FNV-1a over a SPAN, without building a String from it.
+//
+// The point is what it does not do: `hash(substring(src, start, length))` would allocate once per
+// lookup, in a region, in a compiler — which trades a quadratic for a leak. This reads the bytes
+// where they are.
+//
+// Kept under 2^30 so the multiply cannot overflow: `*` panics on overflow in Burxt, deliberately,
+// and a hash is the one place that would be an unwelcome surprise rather than a caught bug. 2^30
+// times 16777619 is about 2^54, which fits an i64 with room to spare.
+function span_hash(src: String, start: Int, length: Int) -> Int {
+    let mutable h: Int = 2166136261;
+    let mutable i: Int = 0;
+    while i < length {
+        h = remainder((h + byte_at(src, start + i)) * 16777619, 1073741824);
+        i += 1;
+    }
+    return remainder(h, 1024);
+}
+
+// Note the function just declared, so `find_fun` can reach it without a scan.
+function (mutable self: Unit) index_fun(src: String, start: Int, length: Int) -> Int allocates {
+    if len(self.fun_buckets) == 0 {
+        let mutable b: Int = 0;
+        while b < 1024 {
+            let blank: Int = push(self.fun_buckets, 0 - 1);
+            b += 1;
+        }
+    }
+    let at: Int = span_hash(src, start, length);
+    let linked: Int = push(self.fun_chain, self.fun_buckets[at]);
+    self.fun_buckets[at] = len(self.fun_chain) - 1;
+    return 1;
+}
+
+// The declared function of this name, through the index.
+//
+// Was a scan of every function declared so far, which made DECLARING n functions cost O(n^2) — the
+// duplicate-name check is a lookup, so the table is walked once per declaration while it grows.
+// 3200 declarations took 5.5 seconds and nothing else in the compiler was superlinear.
+//
+// The chain is walked NEWEST first, which matters: `find_fun` answered the first match in
+// declaration order before, and a chain built by prepending answers the last. Both are the same
+// answer, because a duplicate name is refused — and that refusal is the reason this is a lookup at
+// all.
 function (mutable self: Unit) find_fun(src: String, start: Int, length: Int) -> Int {
     self.find_function_calls += 1;
-    let mutable i: Int = 0;
-    while i < len(self.funs) {
+    if len(self.fun_buckets) == 0 {
+        return -1;                                   // nothing declared yet
+    }
+    let mutable i: Int = self.fun_buckets[span_hash(src, start, length)];
+    while i >= 0 {
         if spans_equal(src, self.funs[i].start, self.funs[i].length, start, length) {
             return i;
         }
-        i += 1;
+        i = self.fun_chain[i];
     }
     return -1;
 }
@@ -809,6 +856,7 @@ function (mutable self: Unit) collect_declarations(src: String) -> Int allocates
                 if item.kind == 86 { flags = 8; }    // the external marker
                 push(self.funs, DeclaredFunction { start: name.start, length: name.length,
                                       return_type: return_type, params: item.a, flags: flags });
+                let indexed: Int = self.index_fun(src, name.start, name.length);
             }
         }
         i += 1;

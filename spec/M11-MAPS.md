@@ -241,17 +241,26 @@ The lowering is **one helper written once**, not a loop emitted per call site �
    a removal** — the case Decision 1 is about, and the one a hash-ordered map gets wrong.
 4. `Map<String, Point>` works. A record VALUE is the case Decision 5 exists to protect.
 5. A fail fixture per refusal: a record as a key, and `hash` of a record.
-6. **A program with thousands of declarations gets dramatically faster** — and NOT, as this list
-   said first, "the compiler uses it". The compiler makes 907 lookups over 39 functions, so
-   converting its lookups would be optimising a path that is not hot, and the before-and-after
-   number would be noise dressed as progress. The measurable claim is the table in §0: **3200
-   declarations in 5.52 s today.** A map should make that roughly linear, and the acceptance is a
-   ratchet on that number, machine-independent as a ratio the way M9's is.
-   
-   The compiler may well use maps afterwards — for clarity, and because `find_sym` is called
-   10,644 times and scope lookup is the one that could plausibly matter — but that is a
-   readability change to be justified on its own terms, with its own measurement, not a
-   performance claim borrowed from this table.
+6. **A program with thousands of declarations gets dramatically faster.** ✅ **5.52 s → 0.33 s**
+   for 3200 declarations in v0.0.117, a 16.7× improvement, guarded by a ratio in
+   `the_compiler_compiles_itself_without_going_quadratic`.
+
+   The cause was measured, not guessed: **declaring** a function looks it up first, to refuse a
+   duplicate, so declaring n of them scanned a growing table n times. The fix is a hash index over
+   the name spans — chained buckets, `span_hash` computed **over the bytes where they are**, because
+   `hash(substring(...))` would allocate once per lookup in a region and trade a quadratic for a
+   leak.
+
+   Not `lib/map.bx` itself, and that is the honest outcome: the compiler keys by a span into its
+   source, and a `Map<String, Int>` would need a String built per lookup. The map earned its place
+   as a language feature; the compiler needed the same idea with no allocation. Both are in this
+   milestone and only one is a library.
+
+   **What did NOT get fixed, measured:** the ratio is still ~16× for 4× the input, because 4× the
+   declarations is also 4× the bytes and the front end has an older quadratic in input size — `len`
+   on a String is `strlen`. M9 §3 named it and its fix is a milestone of its own. Chasing it here
+   would have been a second milestone smuggled into this one; the ratchet's comment says exactly
+   which quadratic it still tolerates and what the bar should become when that one goes.
 7. The fixpoint still holds, byte for byte, and the backend equality stays at all-of-them.
 8. A guide page, because a container people will reach for daily is not documented by a spec.
 

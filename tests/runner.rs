@@ -2306,6 +2306,70 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
         .expect("stage1 on its own source");
     let self_compile = started.elapsed();
     let said = String::from_utf8_lossy(&emitted.stdout).to_string();
+    // DECLARATION COUNT, which is a different axis from bytes and had its own quadratic until
+    // v0.0.117: declaring a function looked it up first, to refuse a duplicate, so declaring n of
+    // them scanned a growing table n times. 3200 declarations took 5.52 s; with a hash index over
+    // the name spans it takes 0.33 s.
+    //
+    // A ratio against the same compiler on a quarter of the input, so it does not depend on the
+    // machine.
+    //
+    // **The bar is 25x and not 8x, and the reason is worth reading.** Today's ratio is about 16x,
+    // which is still quadratic — because 4x the declarations is also 4x the BYTES, and the front
+    // end has a second, older quadratic in input size: `len` on a String is `strlen`, so reading
+    // bytes costs the square of the file. M9 §3 measured and named it, and its fix is a milestone
+    // of its own (a String carried as pointer-plus-length). Fixing the declaration scan could not
+    // make this ratio linear, and pretending otherwise would be a test asserting a claim its
+    // subject does not make.
+    //
+    // What it does guard is real: before the index the same ratio was **50x** (0.11 s to 5.52 s).
+    // 25x sits between the two, so removing the index fails here and ordinary drift does not. When
+    // the String quadratic goes, this bar should come down to ~6x in the same commit that earns it.
+    {
+        let mut wide = String::new();
+        for i in 0..3200 {
+            wide.push_str(&format!("function f{}(x: Int) -> Int {{ return x + {}; }}\n", i, i));
+        }
+        wide.push_str("region r {\n  print(f0(1));\n}\n");
+        let quarter: String = wide.lines().take(800).collect::<Vec<_>>().join("\n")
+            + "\nregion r {\n  print(f0(1));\n}\n";
+
+        let big = scratch.join("wide.bx");
+        let small = scratch.join("narrow.bx");
+        fs::write(&big, &wide).unwrap();
+        fs::write(&small, &quarter).unwrap();
+
+        let time_of = |path: &PathBuf| {
+            let started = std::time::Instant::now();
+            let ran = Command::new(&stage1).arg(path).output().expect("stage1");
+            assert!(
+                String::from_utf8_lossy(&ran.stdout).contains("type errors: 0"),
+                "stage-1 did not accept a program of plain declarations:\n{}",
+                String::from_utf8_lossy(&ran.stdout)
+            );
+            started.elapsed().as_secs_f64()
+        };
+        // Warmed first: the first run pays for reading the binary off disk, and that lands
+        // entirely in whichever measurement goes first.
+        let _ = time_of(&small);
+        let narrow = time_of(&small).max(0.001);
+        let broad = time_of(&big);
+        let ratio = broad / narrow;
+        eprintln!(
+            "3200 declarations took {:.3} s, 800 took {:.3} s — {:.1}x for 4x the input",
+            broad, narrow, ratio
+        );
+        assert!(
+            ratio < 25.0,
+            "declaring functions costs {:.1}x for 4x the declarations ({:.3} s vs {:.3} s). It \
+             was 50x before the name-span index in check.bx and about 16x after, the remainder \
+             being the String-length quadratic in M9 §3. Above 25x means the index is gone.",
+            ratio,
+            broad,
+            narrow
+        );
+    }
+
     // And a ceiling on MEMORY, which had no test until v0.0.110 and drifted 196 MB -> 239 MB
     // across the generics work without anybody noticing. The number that matters is not the
     // last measurement — it is the 1 GB region the compiler reserves, which it came within a

@@ -149,6 +149,22 @@ is a milestone and not a patch.
 **Earns its place when:** a Burxt program processes a file large enough for it to bite — which
 is over a megabyte on the numbers above, and is not the compiler's own 200 KB.
 
+> **The trigger has fired (measured 2026-07-29, v0.0.117).** It did not need a megabyte, because
+> the estimate above only counted the lexer and the cost is in the whole front end. Programs of
+> nothing but statements, checked by stage-1:
+>
+> | Statements | 1600 | 3200 | 6400 | 12800 |
+> |---|---|---|---|---|
+> | Time | 0.00 s | 0.02 s | 0.09 s | **0.39 s** |
+>
+> **4× per doubling, at 180 KB.** Declarations behave the same way, and after v0.0.117 removed a
+> separate quadratic in declaration COUNT the remaining 16× ratio for 4× the input is entirely
+> this. So a 400 KB Burxt program — the size this compiler's own source already is — pays about
+> 1.6 seconds to be read, and 800 KB pays six.
+>
+> That makes the pointer-plus-length String the next performance milestone rather than a deferred
+> note. §3's reasoning stands unchanged; only the "not yet" does not.
+
 **Also still linear scans, and smaller:** `find_fun`, `find_sym`, `find_type` and the parser's
 `find_method` each walk a growing array per lookup, so the checker is O(n²) in declaration
 count. On generated programs: 0.008 / 0.028 / 0.168 / 0.974 s for 100 / 200 / 400 / 800

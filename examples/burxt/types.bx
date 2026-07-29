@@ -198,6 +198,16 @@ record Unit {
     // Also the work list. Emitting `echo$Int` discovers that `identity$Int` is wanted, so the
     // list grows while it is being drained — which is what makes a generic calling a generic
     // work, and why draining is a `while` over a growing array rather than a `for`.
+    // An index over `funs`, so declaring N functions is not N scans of a growing array.
+    //
+    //   fun_buckets — 1024 slots, each the head of a chain, or -1 for empty
+    //   fun_chain   — parallel to `funs`: the next entry in the same bucket, or -1
+    //
+    // A chain and not open addressing, because entries are only ever added and the chain costs one
+    // Int per function rather than a table that has to be grown and re-placed. Buckets are a power
+    // of two so the fold is a `remainder` of a positive number, which is all `span_hash` promises.
+    fun_buckets: [Int],
+    fun_chain: [Int],
     instances: [Instance],
     // The type arguments of every instance, laid end to end. `Instance` carries a start and a
     // count into this, the same shape `nested_children` and `type_params` use.
