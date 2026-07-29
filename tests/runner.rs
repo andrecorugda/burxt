@@ -3210,6 +3210,122 @@ fn the_site_is_honest_and_complete() {
     );
 }
 
+/// **Every runtime guarantee, held against the Burxt backend too.**
+///
+/// `tests/panic/` is the suite's record of what must FAIL at run time: a broken contract, an
+/// overflow, an index out of range, a `decreases` measure that does not decrease. Until v0.0.136 it
+/// was checked against stage-0 only, and the hole that left was not small — **12 of its 21
+/// guarantees did not survive stage-1's backend, and one hung forever.**
+///
+/// Why 35 other invariants missed it, which is the part worth remembering: every contract fixture in
+/// `tests/pass/` has contracts that SUCCEED, and a satisfied contract produces identical output
+/// whether or not it was checked. So those fixtures prove contracts do not break working programs —
+/// not that they fire. The programs where one fires exit 70, so they live here, and the pass-suite
+/// sweep only ever reads `.stdout` from `tests/pass/`.
+///
+/// The one test that would have caught it was in the one directory that test never looked at. A gap
+/// shaped exactly like a directory boundary.
+///
+/// A FLOOR, not an equality, because the fix is a family of runtime checks in stage-1's emitter and
+/// they will land a few at a time. It may only go up.
+#[test]
+fn the_burxt_backend_keeps_every_runtime_guarantee() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    if !llc.exists() {
+        eprintln!("skipping: {} is not installed", llc.display());
+        return;
+    }
+    // One fixture recurses forever when its `decreases` measure is not enforced, so every run is
+    // bounded. Without `timeout` the whole suite would hang rather than report.
+    if Command::new("timeout").arg("1").arg("true").status().is_err() {
+        eprintln!("skipping: `timeout` is not available to bound a runaway program");
+        return;
+    }
+    let scratch = scratch_dir("panic-backend");
+    fs::create_dir_all(&scratch).unwrap();
+    let stage1 = scratch.join("stage1");
+    assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("examples/stage1.bx"))
+        .arg("-o")
+        .arg(&stage1)
+        .status()
+        .expect("burxt")
+        .success());
+
+    let mut kept = 0;
+    let mut total = 0;
+    let mut lost: Vec<String> = Vec::new();
+    for entry in fs::read_dir(root.join("tests/panic")).unwrap() {
+        let source = entry.unwrap().path();
+        if source.extension().and_then(|e| e.to_str()) != Some("bx") {
+            continue;
+        }
+        let name = source.file_stem().unwrap().to_string_lossy().into_owned();
+        total += 1;
+        let ll = scratch.join("panic.ll");
+        let emitted = Command::new(&stage1).arg(&source).arg(&ll).output().expect("stage-1");
+        if !String::from_utf8_lossy(&emitted.stdout).contains("bytes of IR") {
+            lost.push(format!("{} (backend refused it)", name));
+            continue;
+        }
+        let obj = scratch.join("panic.o");
+        let exe = scratch.join("panic-run");
+        if !Command::new(llc)
+            .args(["-filetype=obj", "-relocation-model=pic"])
+            .arg(&ll)
+            .arg("-o")
+            .arg(&obj)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            lost.push(format!("{} (its IR does not assemble)", name));
+            continue;
+        }
+        if !Command::new("cc")
+            .arg(&obj)
+            .arg("-o")
+            .arg(&exe)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            lost.push(format!("{} (does not link)", name));
+            continue;
+        }
+        // Must die. Which signal or code does not matter here — the pass-suite sweep already
+        // checks the MESSAGE for programs that succeed, and what this test is about is whether the
+        // guarantee exists at all.
+        let ran = Command::new("timeout")
+            .arg("5")
+            .arg(&exe)
+            .current_dir(&scratch)
+            .output()
+            .expect("the compiled program");
+        match ran.status.code() {
+            Some(0) => lost.push(format!("{} (ran to completion — the check is missing)", name)),
+            Some(124) => lost.push(format!("{} (never terminated)", name)),
+            _ => kept += 1,
+        }
+    }
+
+    let _ = fs::remove_dir_all(&scratch);
+    eprintln!(
+        "the Burxt backend keeps {} of {} runtime guarantees",
+        kept, total
+    );
+    assert!(
+        kept >= 8,
+        "the Burxt backend keeps {} of {} runtime guarantees, was 8 of 21 at v0.0.136. \
+         These are lost — a program compiled by stage-1 does not enforce them:\n  {}",
+        kept,
+        total,
+        lost.join("\n  ")
+    );
+}
+
 /// Every source and documentation file must be IN version control.
 ///
 /// `.gitignore` uses a whitelist — `/*` then re-admit — which is the right shape for keeping
