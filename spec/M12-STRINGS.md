@@ -1,6 +1,27 @@
 # Burxt — a String with an O(1) length (M12)
 
-> Status: **stage-0 done (v0.0.120), and it was enough to remove the quadratic.**
+> Status: **DONE (v0.0.121).** Both compilers, all eight acceptance items, fixpoint intact.
+>
+> | | v0.0.119 | v0.0.121 |
+> |---|---|---|
+> | 102400 statements, checked | **31.67 s** | **0.05 s** |
+> | Ratio for 4× the declarations | 16.5× | **3.4×** — linear |
+> | Self-compile | 1.55 s | **0.22 s** |
+> | Peak RSS on its own source | 255 MB | **335 MB** |
+>
+> The memory rose 31%, and that is the honest cost: eight bytes on every String, plus larger
+> emitted IR because a literal's byte pointer is a `getelementptr` constant expression rather than
+> a bare name. It is recorded here rather than in a footnote, and the 400 MB ceiling test now names
+> both causes.
+>
+> **A measured wrong turn, kept because it would be made again on principle.** Naming each
+> literal's byte pointer with an LLVM `alias` — obviously tidier than repeating a sixty-character
+> GEP at every use — cost **0.99 s and 968 MB** against 0.11 s and 326 MB. `self.globals` is a
+> growing String, so one more append per literal is quadratic in the literal count. The tidier IR
+> was three times slower to produce. If `globals` ever becomes a chunk list like `chunks` and
+> `body_chunks` already are, this is worth re-measuring.
+>
+> Previously: **stage-0 done (v0.0.120), and it was enough to remove the quadratic.**
 >
 > | Statements | 12800 | 25600 | 51200 | 102400 |
 > |---|---|---|---|---|

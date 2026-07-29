@@ -2314,17 +2314,16 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
     // A ratio against the same compiler on a quarter of the input, so it does not depend on the
     // machine.
     //
-    // **The bar is 25x and not 8x, and the reason is worth reading.** Today's ratio is about 16x,
-    // which is still quadratic — because 4x the declarations is also 4x the BYTES, and the front
-    // end has a second, older quadratic in input size: `len` on a String is `strlen`, so reading
-    // bytes costs the square of the file. M9 §3 measured and named it, and its fix is a milestone
-    // of its own (a String carried as pointer-plus-length). Fixing the declaration scan could not
-    // make this ratio linear, and pretending otherwise would be a test asserting a claim its
-    // subject does not make.
+    // **The bar is 6x, and it got there the way the comment above it said it would.** The history,
+    // because a ratchet whose number nobody can account for is a number nobody will dare move:
     //
-    // What it does guard is real: before the index the same ratio was **50x** (0.11 s to 5.52 s).
-    // 25x sits between the two, so removing the index fails here and ordinary drift does not. When
-    // the String quadratic goes, this bar should come down to ~6x in the same commit that earns it.
+    //   50x  — a scan of every declared function per declaration, plus the String quadratic
+    //   25x  — v0.0.117 indexed the declaration scan; the remaining ~16x was the String quadratic,
+    //          and the bar was deliberately set above what the fix could reach rather than
+    //          asserting a claim its subject did not make
+    //   6x   — v0.0.121 gave a String an O(1) length, and the measured ratio is **3.4x**
+    //
+    // Linear is ~4x for 4x the input. 6x leaves room for constant-factor drift and nothing else.
     {
         let mut wide = String::new();
         for i in 0..3200 {
@@ -2360,10 +2359,10 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
             broad, narrow, ratio
         );
         assert!(
-            ratio < 25.0,
-            "declaring functions costs {:.1}x for 4x the declarations ({:.3} s vs {:.3} s). It \
-             was 50x before the name-span index in check.bx and about 16x after, the remainder \
-             being the String-length quadratic in M9 §3. Above 25x means the index is gone.",
+            ratio < 6.0,
+            "declaring functions costs {:.1}x for 4x the declarations ({:.3} s vs {:.3} s). \
+             Linear is ~4x and it measured 3.4x at v0.0.121. Above 6x means either the name-span \
+             index in check.bx is gone or a String has stopped carrying its length.",
             ratio,
             broad,
             narrow
@@ -2401,7 +2400,8 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
         assert!(
             kb < 400 * 1024,
             "the compiler's peak RSS on its own source is {} MB; the ceiling is 400 MB, and \
-             the region it reserves is 1 GB (196 MB at v0.0.90, 239 MB at v0.0.110)",
+             the region it reserves is 1 GB (196 MB at v0.0.90, 239 MB at v0.0.110, 335 MB at \
+             v0.0.121 — the eight-byte length header on every String, and larger emitted IR)",
             kb / 1024
         );
     }

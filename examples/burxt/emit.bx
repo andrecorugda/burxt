@@ -343,9 +343,23 @@ function (mutable self: Unit) intern_text(text: String) -> String allocates {
         body += hex_of(byte_at(text, i));
         i += 1;
     }
-    self.globals += name + " = private unnamed_addr constant ["
-        + to_string(width + 1) + " x i8] c\"" + body + hex_of(0) + "\"\n";
-    return name;
+    // `{ i64 length, [n+1 x i8] bytes }`, and the operand answered is a GEP past the header, so a
+    // literal looks exactly like a region-built String to everything downstream. Without the header
+    // `len("hello")` would read whatever the linker placed before the bytes.
+    let shape: String = "\{ i64, [" + to_string(width + 1) + " x i8] \}";
+    self.globals += name + " = private unnamed_addr constant " + shape + " \{ i64 "
+        + to_string(width) + ", [" + to_string(width + 1) + " x i8] c\"" + body + hex_of(0)
+        + "\" \}\n";
+    // The GEP expression inline, repeated at each use, and that is the MEASURED choice rather than
+    // the tidy one. An `alias` naming the byte pointer once looks obviously better — a short name
+    // instead of sixty characters — and cost 0.99 s and 968 MB against 0.11 s and 326 MB, because
+    // `self.globals` is a growing String and one more append per literal is quadratic in the
+    // literal count. The tidier IR was three times slower to produce.
+    //
+    // Recorded because it is the kind of change that would be made again on principle. If
+    // `globals` ever becomes a chunk list like `chunks` and `body_chunks` already are, this is
+    // worth re-measuring.
+    return "getelementptr inbounds (" + shape + ", ptr " + name + ", i32 0, i32 1)";
 }
 
 // Ten to the power of a scale. A scale is at most 18 and 10^18 fits in an i64, so this
@@ -383,9 +397,11 @@ function (mutable self: Unit) intern(src: String, start: Int, length: Int) -> St
             i += 1;
         }
     }
-    self.globals += name + " = private unnamed_addr constant ["
-        + to_string(count + 1) + " x i8] c\"" + body + hex_of(0) + "\"\n";
-    return name;
+    let shape: String = "\{ i64, [" + to_string(count + 1) + " x i8] \}";
+    self.globals += name + " = private unnamed_addr constant " + shape + " \{ i64 "
+        + to_string(count) + ", [" + to_string(count + 1) + " x i8] c\"" + body + hex_of(0)
+        + "\" \}\n";
+    return "getelementptr inbounds (" + shape + ", ptr " + name + ", i32 0, i32 1)";
 }
 
 // ---- expressions -------------------------------------------------------------
@@ -947,8 +963,7 @@ function (mutable self: Unit) emit_piece(src: String, node: Int) -> String alloc
         let bit: String = self.fresh();
         let tested: Int = self.write_body("  " + bit + " = icmp ne i64 " + value + ", 0\n");
         let chosen: Int = self.write_body("  " + reg + " = select i1 " + bit
-            + ", i64 ptrtoint (ptr @burxt.string_true to i64), i64 ptrtoint (ptr "
-            + "@burxt.string_false to i64)\n");
+            + ", i64 ptrtoint (ptr getelementptr inbounds (\{ i64, [5 x i8] \}, ptr @burxt.string_true, i32 0, i32 1) to i64), i64 ptrtoint (ptr getelementptr inbounds (\{ i64, [6 x i8] \}, ptr @burxt.string_false, i32 0, i32 1) to i64)\n");
         return reg;
     }
     let called: Int = self.write_body("  " + reg + " = call i64 @burxt.to_string_int(i64 " + value
@@ -1178,7 +1193,7 @@ function (mutable self: Unit) emit_decimal_print(value: String, scale: Int) -> I
                              + flipped + ", i128 " + wide + "\n");
     let sign: String = self.fresh();
     let signed: Int = self.write_body("  " + sign + " = select i1 " + negative
-        + ", ptr @burxt.string_minus, ptr @burxt.string_empty\n");
+        + ", ptr getelementptr inbounds (\{ i64, [2 x i8] \}, ptr @burxt.string_minus, i32 0, i32 1), ptr getelementptr inbounds (\{ i64, [1 x i8] \}, ptr @burxt.string_empty, i32 0, i32 1)\n");
 
     if scale == 0 {
         let whole: String = self.fresh();
@@ -1228,7 +1243,7 @@ function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String)
             let bit: String = self.fresh();
             let tested: Int = self.write_body("  " + bit + " = icmp ne i64 " + first + ", 0\n");
             let chosen: Int = self.write_body("  " + reg + " = select i1 " + bit
-                + ", i64 ptrtoint (ptr @burxt.string_true to i64), i64 ptrtoint (ptr @burxt.string_false to i64)\n");
+                + ", i64 ptrtoint (ptr getelementptr inbounds (\{ i64, [5 x i8] \}, ptr @burxt.string_true, i32 0, i32 1) to i64), i64 ptrtoint (ptr getelementptr inbounds (\{ i64, [6 x i8] \}, ptr @burxt.string_false, i32 0, i32 1) to i64)\n");
             return reg;
         }
         let visited: Int = self.write_body("  " + reg + " = call i64 @burxt.to_string_int(i64 "
@@ -1401,7 +1416,7 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates
             let visited: Int = self.write_body("  " + bit + " = icmp ne i64 " + value + ", 0\n");
             let text: String = self.fresh();
             let chosen: Int = self.write_body("  " + text + " = select i1 " + bit
-                                     + ", ptr @burxt.string_true, ptr @burxt.string_false\n");
+                                     + ", ptr getelementptr inbounds (\{ i64, [5 x i8] \}, ptr @burxt.string_true, i32 0, i32 1), ptr getelementptr inbounds (\{ i64, [6 x i8] \}, ptr @burxt.string_false, i32 0, i32 1)\n");
             let printed: Int = self.write_body("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_str, ptr "
                                       + text + ")\n");
             return self.write_body("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_nl)\n");
@@ -2506,26 +2521,40 @@ function runtime_ir() -> String allocates {
         + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.region_msg)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n\}\n\n"
+        // Every String this runtime makes goes through here, and it is the whole of M12: the
+        // length lives in the eight bytes BEFORE the first byte, so `len` is a load rather than a
+        // scan. The pointer answered points at the first byte, so a Burxt String is still one
+        // pointer and still a valid `char*` — C never looks behind it.
+        //
+        // Reading n bytes used to cost n squared, because a bounds check is a length and a length
+        // was a strlen. 102400 statements took 31.67 seconds; they take 0.05 now.
+        + "define i64 @burxt.alloc_string(i64 %len) \{\n"
+        + "entry:\n"
+        + "  %total = add i64 %len, 9\n"
+        + "  %base = call i64 @burxt.alloc(i64 %total)\n"
+        + "  %hp = inttoptr i64 %base to ptr\n"
+        + "  store i64 %len, ptr %hp\n"
+        + "  %bytes = add i64 %base, 8\n"
+        + "  %bp = inttoptr i64 %bytes to ptr\n"
+        + "  %end = getelementptr i8, ptr %bp, i64 %len\n"
+        + "  store i8 0, ptr %end\n"
+        + "  ret i64 %bytes\n\}\n\n"
         + "define i64 @burxt.concat(i64 %a, i64 %b) \{\n"
         + "entry:\n"
         + "  %pa = inttoptr i64 %a to ptr\n"
         + "  %pb = inttoptr i64 %b to ptr\n"
-        + "  %la = call i64 @strlen(ptr %pa)\n"
-        + "  %lb = call i64 @strlen(ptr %pb)\n"
+        + "  %la = call i64 @burxt.len_str(i64 %a)\n"
+        + "  %lb = call i64 @burxt.len_str(i64 %b)\n"
         + "  %total = add i64 %la, %lb\n"
-        + "  %size = add i64 %total, 1\n"
-        + "  %out = call i64 @burxt.alloc(i64 %size)\n"
+        + "  %out = call i64 @burxt.alloc_string(i64 %total)\n"
         + "  %pout = inttoptr i64 %out to ptr\n"
         + "  %c1 = call ptr @memcpy(ptr %pout, ptr %pa, i64 %la)\n"
         + "  %tail = getelementptr i8, ptr %pout, i64 %la\n"
         + "  %c2 = call ptr @memcpy(ptr %tail, ptr %pb, i64 %lb)\n"
-        + "  %end = getelementptr i8, ptr %pout, i64 %total\n"
-        + "  store i8 0, ptr %end\n"
         + "  ret i64 %out\n\}\n\n"
         + "define i64 @burxt.substring(i64 %s, i64 %from, i64 %count) \{\n"
         + "entry:\n"
-        + "  %size = add i64 %count, 1\n"
-        + "  %out = call i64 @burxt.alloc(i64 %size)\n"
+        + "  %out = call i64 @burxt.alloc_string(i64 %count)\n"
         + "  %pout = inttoptr i64 %out to ptr\n"
         + "  %ps = inttoptr i64 %s to ptr\n"
         + "  %from_ptr = getelementptr i8, ptr %ps, i64 %from\n"
@@ -2533,12 +2562,20 @@ function runtime_ir() -> String allocates {
         + "  %end = getelementptr i8, ptr %pout, i64 %count\n"
         + "  store i8 0, ptr %end\n"
         + "  ret i64 %out\n\}\n\n"
+        // Room for the widest i64 reserved up front, then the header CORRECTED to what snprintf
+        // actually wrote. Reserving and correcting rather than measuring twice: snprintf already
+        // answers the length, so asking anything else for it would be asking a second source the
+        // same question — which is how a length and its bytes drift apart.
         + "define i64 @burxt.to_string_int(i64 %v) \{\n"
         + "entry:\n"
-        + "  %out = call i64 @burxt.alloc(i64 24)\n"
+        + "  %out = call i64 @burxt.alloc_string(i64 24)\n"
         + "  %p = inttoptr i64 %out to ptr\n"
-        + "  %n = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %p, i64 24, ptr @burxt.fmt_int, "
+        + "  %n = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %p, i64 25, ptr @burxt.fmt_int, "
         + "i64 %v)\n"
+        + "  %wrote = sext i32 %n to i64\n"
+        + "  %hdr = sub i64 %out, 8\n"
+        + "  %hp = inttoptr i64 %hdr to ptr\n"
+        + "  store i64 %wrote, ptr %hp\n"
         + "  ret i64 %out\n\}\n\n"
         + "define i64 @burxt.byte_at(i64 %s, i64 %i) \{\n"
         + "entry:\n"
@@ -2556,8 +2593,9 @@ function runtime_ir() -> String allocates {
         + "  ret i64 %answer\n\}\n\n"
         + "define i64 @burxt.len_str(i64 %s) \{\n"
         + "entry:\n"
-        + "  %p = inttoptr i64 %s to ptr\n"
-        + "  %l = call i64 @strlen(ptr %p)\n"
+        + "  %header = sub i64 %s, 8\n"
+        + "  %hp = inttoptr i64 %header to ptr\n"
+        + "  %l = load i64, ptr %hp\n"
         + "  ret i64 %l\n\}\n\n"
         // A growable array is a four-cell header in the region: length, capacity, the
         // data pointer, and the ELEMENT WIDTH in cells. The width is stored rather than
@@ -2573,20 +2611,24 @@ function runtime_ir() -> String allocates {
         + round_helper("half_up")
         + "define i64 @burxt.to_string_dec(i64 %v, i64 %pow, ptr %fmt) \{\n"
         + "entry:\n"
-        + "  %out = call i64 @burxt.alloc(i64 48)\n"
+        + "  %out = call i64 @burxt.alloc_string(i64 48)\n"
         + "  %p = inttoptr i64 %out to ptr\n"
         + "  %wide = sext i64 %v to i128\n"
         + "  %isneg = icmp slt i64 %v, 0\n"
         + "  %flip = sub i128 0, %wide\n"
         + "  %abs = select i1 %isneg, i128 %flip, i128 %wide\n"
-        + "  %sign = select i1 %isneg, ptr @burxt.string_minus, ptr @burxt.string_empty\n"
+        + "  %sign = select i1 %isneg, ptr getelementptr inbounds (\{ i64, [2 x i8] \}, ptr @burxt.string_minus, i32 0, i32 1), ptr getelementptr inbounds (\{ i64, [1 x i8] \}, ptr @burxt.string_empty, i32 0, i32 1)\n"
         + "  %poww = sext i64 %pow to i128\n"
         + "  %iw = udiv i128 %abs, %poww\n"
         + "  %fw = urem i128 %abs, %poww\n"
         + "  %ip = trunc i128 %iw to i64\n"
         + "  %fp = trunc i128 %fw to i64\n"
-        + "  %n = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %p, i64 48, ptr %fmt, "
+        + "  %n = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %p, i64 49, ptr %fmt, "
         + "ptr %sign, i64 %ip, i64 %fp)\n"
+        + "  %wrote = sext i32 %n to i64\n"
+        + "  %hdr = sub i64 %out, 8\n"
+        + "  %hp = inttoptr i64 %hdr to ptr\n"
+        + "  store i64 %wrote, ptr %hp\n"
         + "  ret i64 %out\n\}\n\n"
         + "define i64 @burxt.new_array(i64 %elem) \{\n"
         + "entry:\n"
@@ -2708,8 +2750,16 @@ function runtime_ir() -> String allocates {
         + "  %argv = load ptr, ptr @burxt.argv\n"
         + "  %at = getelementptr ptr, ptr %argv, i64 %i\n"
         + "  %s = load ptr, ptr %at\n"
-        + "  %answer = ptrtoint ptr %s to i64\n"
-        + "  ret i64 %answer\n\}\n\n"
+        // COPIED into the region, with a header. `argv` holds C's strings, which have none, so
+        // handing one back directly would make `len` of it read whatever the loader placed before
+        // it — a silent wrong length, worse than a crash. This is the one place a foreign string
+        // enters a Burxt program, and the strlen happens ONCE here rather than once per byte read
+        // afterwards. See spec/M12-STRINGS.md §3.
+        + "  %borrowed = call i64 @strlen(ptr %s)\n"
+        + "  %owned = call i64 @burxt.alloc_string(i64 %borrowed)\n"
+        + "  %op = inttoptr i64 %owned to ptr\n"
+        + "  %moved = call ptr @memcpy(ptr %op, ptr %s, i64 %borrowed)\n"
+        + "  ret i64 %owned\n\}\n\n"
         + "define i64 @burxt.read_file(i64 %path) \{\n"
         + "entry:\n"
         + "  %p = inttoptr i64 %path to ptr\n"
@@ -2717,19 +2767,22 @@ function runtime_ir() -> String allocates {
         + "  %missing = icmp eq ptr %f, null\n"
         + "  br i1 %missing, label %nothing, label %read\n"
         + "nothing:\n"
-        + "  %empty = call i64 @burxt.alloc(i64 1)\n"
-        + "  %ep = inttoptr i64 %empty to ptr\n"
-        + "  store i8 0, ptr %ep\n"
+        + "  %empty = call i64 @burxt.alloc_string(i64 0)\n"
         + "  ret i64 %empty\n"
         + "read:\n"
         + "  %sought = call i32 @fseek(ptr %f, i64 0, i32 2)\n"
         + "  %size = call i64 @ftell(ptr %f)\n"
         + "  %rewound = call i32 @fseek(ptr %f, i64 0, i32 0)\n"
-        + "  %room = add i64 %size, 1\n"
-        + "  %buffer = call i64 @burxt.alloc(i64 %room)\n"
+        + "  %buffer = call i64 @burxt.alloc_string(i64 %size)\n"
         + "  %bp = inttoptr i64 %buffer to ptr\n"
         + "  %got = call i64 @fread(ptr %bp, i64 1, i64 %size, ptr %f)\n"
         + "  %closed = call i32 @fclose(ptr %f)\n"
+        // ftell may report more than fread delivers — a text-mode translation, a file that
+        // shrank — so the header is corrected to what actually arrived. A length that disagrees
+        // with the bytes is exactly what this representation exists to prevent.
+        + "  %hdr = sub i64 %buffer, 8\n"
+        + "  %hp2 = inttoptr i64 %hdr to ptr\n"
+        + "  store i64 %got, ptr %hp2\n"
         + "  %end = getelementptr i8, ptr %bp, i64 %got\n"
         + "  store i8 0, ptr %end\n"
         + "  ret i64 %buffer\n\}\n\n"
@@ -2742,7 +2795,7 @@ function runtime_ir() -> String allocates {
         + "  br i1 %missing, label %refused, label %write\n"
         + "refused:\n  ret i64 0\n"
         + "write:\n"
-        + "  %size = call i64 @strlen(ptr %t)\n"
+        + "  %size = call i64 @burxt.len_str(i64 %text)\n"
         + "  %written = call i64 @fwrite(ptr %t, i64 1, i64 %size, ptr %f)\n"
         + "  %closed = call i32 @fclose(ptr %f)\n"
         + "  ret i64 %written\n\}\n\n"

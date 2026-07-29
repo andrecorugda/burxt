@@ -86,10 +86,18 @@ region compile {
                     + "@burxt.fmt_int = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n"
                     + "@burxt.fmt_str = private unnamed_addr constant [3 x i8] c\"%s\\00\"\n"
                     + "@burxt.fmt_nl = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n"
-                    + "@burxt.string_true = private unnamed_addr constant [5 x i8] c\"true\\00\"\n"
-                    + "@burxt.string_false = private unnamed_addr constant [6 x i8] c\"false\\00\"\n"
-                    + "@burxt.string_minus = private unnamed_addr constant [2 x i8] c\"-\\00\"\n"
-                    + "@burxt.string_empty = private unnamed_addr constant [1 x i8] c\"\\00\"\n"
+                    // These four are Burxt STRINGS, not printf formats, so they carry a length
+                    // header like every other String — `to_string(true)` answers one of them, and
+                    // `len` of it would otherwise read whatever the linker placed before the bytes.
+                    // The `fmt_*` globals above are C format strings and need none.
+                    + "@burxt.string_true = private unnamed_addr constant \{ i64, [5 x i8] \} "
+                    + "\{ i64 4, [5 x i8] c\"true\\00\" \}\n"
+                    + "@burxt.string_false = private unnamed_addr constant \{ i64, [6 x i8] \} "
+                    + "\{ i64 5, [6 x i8] c\"false\\00\" \}\n"
+                    + "@burxt.string_minus = private unnamed_addr constant \{ i64, [2 x i8] \} "
+                    + "\{ i64 1, [2 x i8] c\"-\\00\" \}\n"
+                    + "@burxt.string_empty = private unnamed_addr constant \{ i64, [1 x i8] \} "
+                    + "\{ i64 0, [1 x i8] c\"\\00\" \}\n"
                     + "@burxt.overflow_msg = private unnamed_addr constant [42 x i8] "
                     + "c\"burxt runtime error: arithmetic overflow\\0A\\00\"\n"
                     + "@burxt.region_msg = private unnamed_addr constant [87 x i8] "

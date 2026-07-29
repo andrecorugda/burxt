@@ -1,0 +1,79 @@
+// A String carries its LENGTH in the eight bytes before its first byte. See spec/M12-STRINGS.md.
+//
+// This fixture exists because a length written in one place and read in another is exactly the kind
+// of thing that works for the case you tested. So every WAY of making a String is made here and
+// then measured, sliced, joined and read byte by byte — a literal, a join, a slice, a rendered
+// number, a rendered decimal, an interpolation, a file, and the empty string.
+//
+// The bug it would have caught: `to_string` reserves room for the widest i64 and lets snprintf write
+// into it, so its header has to be corrected to what snprintf actually wrote. Reserving 24 and
+// claiming 24 would make `len(to_string(7))` answer 24.
+
+region r {
+    // A literal, which lives in the module's globals and needs the same header a region-built
+    // String has.
+    let hello: String = "hello";
+    print(len(hello));
+    print(byte_at(hello, 0));
+    print(byte_at(hello, 4));
+
+    // The empty String, where "did anything get written" is visible in the answer.
+    print(len(""));
+    let empty: String = "";
+    print(len(empty + empty));
+    print(len(empty + hello));
+
+    // A join.
+    let greeting: String = hello + ", " + "world";
+    print(greeting);
+    print(len(greeting));
+
+    // A slice, including one that reaches the very end.
+    print(substring(greeting, 7, 5));
+    print(len(substring(greeting, 7, 5)));
+    print(len(substring(greeting, 0, 0)));
+    print(len(substring(greeting, 11, 1)));
+
+    // A rendered Int. The header is corrected to what snprintf wrote, not to the room reserved.
+    print(len(to_string(7)));
+    print(len(to_string(1234567)));
+    print(len(to_string(0 - 42)));
+
+    // A rendered Decimal, which reserves more room and renders less.
+    let money: Decimal<2> = $19.99;
+    print(to_string(money));
+    print(len(to_string(money)));
+
+    // A Bool, which answers one of two static globals rather than allocating — so those globals
+    // need headers too, and `len` of one would otherwise read whatever the linker put before it.
+    print(to_string(true));
+    print(len(to_string(true)));
+    print(len(to_string(false)));
+
+    // Interpolation, which desugars to the join above and must agree with it byte for byte.
+    let woven: String = "{hello}, world";
+    print(woven == greeting);
+    print(len(woven));
+
+    // A file, whose length comes from what fread DELIVERED rather than what ftell promised. Written
+    // here first so the fixture is self-contained — and `write_file` measures its argument with the
+    // same header, so this checks both directions against one another.
+    let payload: String = greeting + "\n" + to_string(money);
+    let wrote: Int = write_file("string_length_probe.txt", payload);
+    print(wrote == len(payload));
+    let back: String = read_file("string_length_probe.txt");
+    print(len(back) == len(payload));
+    print(back == payload);
+    print(byte_at(back, 0) == 104);           // 'h'
+    let gone: Int = write_file("string_length_probe.txt", "");
+    print(len(read_file("string_length_probe.txt")));
+
+    // And the loop that used to be quadratic: every byte read, with the bound measured each time.
+    let mutable total: Int = 0;
+    let mutable i: Int = 0;
+    while i < len(greeting) {
+        total += byte_at(greeting, i);
+        i += 1;
+    }
+    print(total);
+}
