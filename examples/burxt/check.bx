@@ -14,11 +14,11 @@
 // ============================================================================
 
 function unknown_type() -> Type {
-    return Type { kind: 0, scale: 0, contract: 0, name_start: 0, name_len: 0 };
+    return Type { kind: 0, scale: 0, contract: 0, name_start: 0, name_length: 0 };
 }
 
 function simple_type(kind: Int) -> Type {
-    return Type { kind: kind, scale: 0, contract: 0, name_start: 0, name_len: 0 };
+    return Type { kind: kind, scale: 0, contract: 0, name_start: 0, name_length: 0 };
 }
 
 // C's widths as Burxt sees them at the boundary. See N1-BOUNDARY-EXACTNESS: the
@@ -31,7 +31,7 @@ function as_burxt_sees(t: Type) -> Type {
 }
 
 function decimal_type(scale: Int, contract: Int) -> Type {
-    return Type { kind: 45, scale: scale, contract: contract, name_start: 0, name_len: 0 };
+    return Type { kind: 45, scale: scale, contract: contract, name_start: 0, name_length: 0 };
 }
 
 // An unknown type never equals anything, including another unknown: one bad
@@ -65,7 +65,7 @@ function (self: Unit) show_type(src: String, t: Type) -> String allocates {
     }
     if t.kind == 46 && t.contract > 0 {
         // A generic application: the name, then its arguments.
-        let mutable out: String = substring(src, t.name_start, t.name_len) + "<";
+        let mutable out: String = substring(src, t.name_start, t.name_length) + "<";
         let mutable i: Int = 0;
         while i < t.contract {
             if i > 0 { out += ", "; }
@@ -89,9 +89,9 @@ function (self: Unit) show_type(src: String, t: Type) -> String allocates {
         }
         return "Decimal<" + to_string(t.scale) + ">";
     }
-    if t.kind == 49 { return "dynamic " + substring(src, t.name_start, t.name_len); }
-    if t.kind == 50 { return substring(src, t.name_start, t.name_len); }
-    return substring(src, t.name_start, t.name_len);
+    if t.kind == 49 { return "dynamic " + substring(src, t.name_start, t.name_length); }
+    if t.kind == 50 { return substring(src, t.name_start, t.name_length); }
+    return substring(src, t.name_start, t.name_length);
 }
 
 // Read a type NODE into a Type.
@@ -146,7 +146,7 @@ function (mutable self: Unit) bind_type_arguments(src: String, generic: Int, arg
     let mutable p: Int = 0;
     while p < declaration.type_param_count {
         let slot: Int = declaration.type_param_start + p;
-        let named: Token = self.tokens[self.type_params[slot]];
+        let named: Token = self.tokens[self.type_parameters[slot]];
         // "Settled" means a binding EXISTS, not that it is concrete. A generic calling a
         // generic binds `T` to the enclosing `T` — still abstract, and correct: the copy
         // appears when the outer generic is instantiated. Asking whether the resolved kind is
@@ -154,7 +154,7 @@ function (mutable self: Unit) bind_type_arguments(src: String, generic: Int, arg
         let settled: Bool = self.has_binding(src, named.start, named.length);
         let stands_for: Type = self.resolve_shallow(src,
             Type { kind: 50, scale: 0, contract: 0,
-                   name_start: named.start, name_len: named.length });
+                   name_start: named.start, name_length: named.length });
         if !settled {
             let complained: Int = self.complain_at(src, at,
                 "cannot tell what `" + substring(src, named.start, named.length)
@@ -220,7 +220,7 @@ function (mutable self: Unit) check_bound(src: String, bound: Int, argument: Typ
         let candidate: Implementation = self.impls[i];
         if spans_equal(src, candidate.trait_start, candidate.trait_len, named.start, named.length) {
             if spans_equal(src, candidate.type_start, candidate.type_len,
-                           argument.name_start, argument.name_len) {
+                           argument.name_start, argument.name_length) {
                 return 1;
             }
         }
@@ -280,7 +280,7 @@ function (self: Unit) token_starting_at(start: Int) -> Int {
 // asked here, so the answer has to be about what is WRITTEN and not what it means.
 function type_identical(a: Type, b: Type) -> Bool {
     return a.kind == b.kind && a.scale == b.scale && a.contract == b.contract
-        && a.name_start == b.name_start && a.name_len == b.name_len;
+        && a.name_start == b.name_start && a.name_length == b.name_length;
 }
 
 function (mutable self: Unit) resolve_deep(src: String, t: Type, at: Int) -> Type allocates {
@@ -316,7 +316,7 @@ function (mutable self: Unit) resolve_deep(src: String, t: Type, at: Int) -> Typ
             i += 1;
         }
         return Type { kind: 46, scale: start, contract: here.contract,
-                      name_start: here.name_start, name_len: here.name_len };
+                      name_start: here.name_start, name_length: here.name_length };
     }
     if here.kind != 47 && here.kind != 48 {
         return here;
@@ -336,7 +336,7 @@ function (mutable self: Unit) resolve_deep(src: String, t: Type, at: Int) -> Typ
         return here;
     }
     return Type { kind: here.kind, scale: node, contract: here.contract,
-                  name_start: 0, name_len: 0 };
+                  name_start: 0, name_length: 0 };
 }
 
 // Bind a generic type's parameters from an APPLICATION's arguments: `Stack<Int>` binds `T`.
@@ -346,14 +346,14 @@ function (mutable self: Unit) bind_from_application(src: String, holder: Type) -
     if holder.kind != 46 || holder.contract <= 0 {
         return base;
     }
-    let generic: Int = self.generic_named(src, holder.name_start, holder.name_len);
+    let generic: Int = self.generic_named(src, holder.name_start, holder.name_length);
     if generic < 0 {
         return base;
     }
     let declaration: Generic = self.generics[generic];
     let mutable i: Int = 0;
     while i < declaration.type_param_count && i < holder.contract {
-        let named: Token = self.tokens[self.type_params[declaration.type_param_start + i]];
+        let named: Token = self.tokens[self.type_parameters[declaration.type_param_start + i]];
         let written: Type = self.declared_type(src, self.nested_children[holder.scale + i]);
         // Resolved BEFORE it is pushed, under the bindings already in scope. `Nested<Point>`
         // holds a `Pair<T>`, and binding Pair's `T` to the literal `T` would shadow the
@@ -362,7 +362,7 @@ function (mutable self: Unit) bind_from_application(src: String, holder: Type) -
         // `Pair<Point>` was 2 cells instead of 4 for exactly this reason.
         let argument: Type = self.resolve_shallow(src, written);
         push(self.type_bindings, TypeBinding { name_start: named.start,
-                                              name_len: named.length, bound: argument });
+                                              name_length: named.length, bound: argument });
         i += 1;
     }
     return base;
@@ -375,7 +375,7 @@ function (self: Unit) has_binding(src: String, start: Int, length: Int) -> Bool 
     let mutable i: Int = 0;
     while i < len(self.type_bindings) {
         let binding: TypeBinding = self.type_bindings[i];
-        if spans_equal(src, binding.name_start, binding.name_len, start, length) {
+        if spans_equal(src, binding.name_start, binding.name_length, start, length) {
             return true;
         }
         i += 1;
@@ -391,7 +391,7 @@ function (self: Unit) bound_of(src: String, start: Int, length: Int) -> Int {
     let mutable i: Int = 0;
     while i < declaration.type_param_count {
         let at: Int = declaration.type_param_start + i;
-        let named: Token = self.tokens[self.type_params[at]];
+        let named: Token = self.tokens[self.type_parameters[at]];
         if spans_equal(src, named.start, named.length, start, length) {
             return self.type_param_bounds[at];
         }
@@ -407,7 +407,7 @@ function (self: Unit) resolve_shallow(src: String, t: Type) -> Type {
     let mutable i: Int = len(self.type_bindings) - 1;
     while i >= 0 {
         let binding: TypeBinding = self.type_bindings[i];
-        if spans_equal(src, binding.name_start, binding.name_len, t.name_start, t.name_len) {
+        if spans_equal(src, binding.name_start, binding.name_length, t.name_start, t.name_length) {
             return binding.bound;
         }
         i -= 1;
@@ -425,7 +425,7 @@ function (mutable self: Unit) unify(src: String, declared: Type, actual: Type) -
             return self.same_type(src, already, actual);   // bound once, so it must agree
         }
         let noted: Int = push(self.type_bindings,
-            TypeBinding { name_start: declared.name_start, name_len: declared.name_len,
+            TypeBinding { name_start: declared.name_start, name_length: declared.name_length,
                           bound: actual });
         return true;
     }
@@ -451,8 +451,8 @@ function (mutable self: Unit) unify(src: String, declared: Type, actual: Type) -
         if declared.contract != actual.contract {
             return false;
         }
-        if !spans_equal(src, declared.name_start, declared.name_len,
-                        actual.name_start, actual.name_len) {
+        if !spans_equal(src, declared.name_start, declared.name_length,
+                        actual.name_start, actual.name_length) {
             return false;
         }
         let mutable i: Int = 0;
@@ -510,8 +510,8 @@ function (self: Unit) same_type(src: String, a: Type, b: Type) -> Bool {
         return left.scale == right.scale && left.contract == right.contract;
     }
     if left.kind == 46 || left.kind == 49 || left.kind == 50 {
-        return spans_equal(src, left.name_start, left.name_len,
-                           right.name_start, right.name_len);
+        return spans_equal(src, left.name_start, left.name_length,
+                           right.name_start, right.name_length);
     }
     return true;
 }
@@ -531,14 +531,14 @@ function (self: Unit) declared_type(src: String, node: Int) -> Type {
         // `nested_children` and `b` is how many.
         let t: Token = self.tokens[n.token];
         return Type { kind: n.kind, scale: n.a, contract: n.b,
-                    name_start: t.start, name_len: t.length };
+                    name_start: t.start, name_length: t.length };
     }
     if n.kind == 47 || n.kind == 48 {
         // `scale` holds the ELEMENT type's node for a slice or an array, and
         // `contract` the declared length. Reusing two fields rather than widening a
         // record that is copied at every comparison in the checker.
         return Type { kind: n.kind, scale: n.a, contract: n.b,
-                    name_start: 0, name_len: 0 };
+                    name_start: 0, name_length: 0 };
     }
     if n.kind >= 40 && n.kind <= 48 {
         return simple_type(n.kind);
@@ -554,12 +554,12 @@ function (mutable self: Unit) complain_at(src: String, token: Int, message: Stri
 }
 
 // ---- declarations ------------------------------------------------------------
-function (mutable self: Unit) find_sym(src: String, start: Int, length: Int) -> Int {
+function (mutable self: Unit) find_binding(src: String, start: Int, length: Int) -> Int {
     self.find_binding_calls += 1;
     // Backwards: the innermost binding with this name is the one in scope.
-    let mutable i: Int = len(self.syms) - 1;
+    let mutable i: Int = len(self.bindings) - 1;
     while i >= 0 {
-        if spans_equal(src, self.syms[i].start, self.syms[i].length, start, length) {
+        if spans_equal(src, self.bindings[i].start, self.bindings[i].length, start, length) {
             return i;
         }
         i -= 1;
@@ -586,18 +586,18 @@ function span_hash(src: String, start: Int, length: Int) -> Int {
     return remainder(h, 1024);
 }
 
-// Note the function just declared, so `find_fun` can reach it without a scan.
+// Note the function just declared, so `find_function` can reach it without a scan.
 function (mutable self: Unit) index_fun(src: String, start: Int, length: Int) -> Int allocates {
-    if len(self.fun_buckets) == 0 {
+    if len(self.function_buckets) == 0 {
         let mutable b: Int = 0;
         while b < 1024 {
-            let blank: Int = push(self.fun_buckets, 0 - 1);
+            let blank: Int = push(self.function_buckets, 0 - 1);
             b += 1;
         }
     }
     let at: Int = span_hash(src, start, length);
-    let linked: Int = push(self.fun_chain, self.fun_buckets[at]);
-    self.fun_buckets[at] = len(self.fun_chain) - 1;
+    let linked: Int = push(self.function_chain, self.function_buckets[at]);
+    self.function_buckets[at] = len(self.function_chain) - 1;
     return 1;
 }
 
@@ -607,21 +607,21 @@ function (mutable self: Unit) index_fun(src: String, start: Int, length: Int) ->
 // duplicate-name check is a lookup, so the table is walked once per declaration while it grows.
 // 3200 declarations took 5.5 seconds and nothing else in the compiler was superlinear.
 //
-// The chain is walked NEWEST first, which matters: `find_fun` answered the first match in
+// The chain is walked NEWEST first, which matters: `find_function` answered the first match in
 // declaration order before, and a chain built by prepending answers the last. Both are the same
 // answer, because a duplicate name is refused — and that refusal is the reason this is a lookup at
 // all.
-function (mutable self: Unit) find_fun(src: String, start: Int, length: Int) -> Int {
+function (mutable self: Unit) find_function(src: String, start: Int, length: Int) -> Int {
     self.find_function_calls += 1;
-    if len(self.fun_buckets) == 0 {
+    if len(self.function_buckets) == 0 {
         return -1;                                   // nothing declared yet
     }
-    let mutable i: Int = self.fun_buckets[span_hash(src, start, length)];
+    let mutable i: Int = self.function_buckets[span_hash(src, start, length)];
     while i >= 0 {
-        if spans_equal(src, self.funs[i].start, self.funs[i].length, start, length) {
+        if spans_equal(src, self.functions[i].start, self.functions[i].length, start, length) {
             return i;
         }
-        i = self.fun_chain[i];
+        i = self.function_chain[i];
     }
     return -1;
 }
@@ -704,9 +704,9 @@ function (mutable self: Unit) collect_method(src: String, index: Int) -> Int all
         return 0;
     }
     push(self.methods, Method {
-        receiver_start: receiver.start, receiver_len: receiver.length,
+        receiver_start: receiver.start, receiver_length: receiver.length,
         start: name.start, length: name.length,
-        return_type: self.declared_type(src, signature.c), params: item.a,
+        return_type: self.declared_type(src, signature.c), parameters: item.a,
         mutating: mutating, flags: item.value,
     });
     return 1;
@@ -831,14 +831,14 @@ function (mutable self: Unit) collect_declarations(src: String) -> Int allocates
                     "`" + substring(src, name.start, name.length) + "` is a name the "
                     + "language owns, so a program may not declare it");
             }
-            let already: Int = self.find_fun(src, name.start, name.length);
+            let already: Int = self.find_function(src, name.start, name.length);
             let mutable clash: Bool = already >= 0;
             if already >= 0 && item.kind == 86 {
                 // An `external function` declares an external FACT, not a definition, so two
                 // modules may both declare it — `lib/files.bx` and `lib/os.bx` both need
                 // `system`, and neither can know the other did. Stage-0 allows this when
                 // the signatures match, and the two must agree.
-                if flag_external(self.funs[already].flags) == 1 {
+                if flag_external(self.functions[already].flags) == 1 {
                     clash = false;
                 }
             }
@@ -859,14 +859,14 @@ function (mutable self: Unit) collect_declarations(src: String) -> Int allocates
                 }
                 let mutable flags: Int = item.value;
                 if item.kind == 86 { flags = 8; }    // the external marker
-                push(self.funs, DeclaredFunction { start: name.start, length: name.length,
-                                      return_type: return_type, params: item.a, flags: flags });
+                push(self.functions, DeclaredFunction { start: name.start, length: name.length,
+                                      return_type: return_type, parameters: item.a, flags: flags });
                 let indexed: Int = self.index_fun(src, name.start, name.length);
             }
         }
         i += 1;
     }
-    return len(self.funs);
+    return len(self.functions);
 }
 
 // ---- expressions -------------------------------------------------------------
@@ -957,12 +957,12 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
 
     if n.kind == 5 {                                 // a name
         let t: Token = self.tokens[n.token];
-        let found: Int = self.find_sym(src, t.start, t.length);
+        let found: Int = self.find_binding(src, t.start, t.length);
         if found < 0 {
             let complained: Int = self.complain_at(src, n.token, "unknown name");
             return unknown_type();
         }
-        return self.syms[found].bound_type;
+        return self.bindings[found].bound_type;
     }
 
     if n.kind == 6 {                                 // -x
@@ -1114,11 +1114,11 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
         // whatever the instantiations happen to permit.
         let abstract_left: Type = self.resolve_shallow(src, left);
         if abstract_left.kind == 50 {
-            let bound: Int = self.bound_of(src, abstract_left.name_start, abstract_left.name_len);
+            let bound: Int = self.bound_of(src, abstract_left.name_start, abstract_left.name_length);
             let ordering: Bool = n.value != 12 && n.value != 13;   // not `==` and not `!=`
             if bound < 0 {
                 let complained: Int = self.complain_at(src, n.token,
-                    "`" + substring(src, abstract_left.name_start, abstract_left.name_len)
+                    "`" + substring(src, abstract_left.name_start, abstract_left.name_length)
                     + "` is a type parameter with no bound, so two values of it cannot be "
                     + "compared: say so in the signature with a bound");
             } else {
@@ -1128,7 +1128,7 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
                 if !is_ordered && (ordering || !is_equatable) {
                     let complained: Int = self.complain_at(src, n.token,
                         "comparing two values of `"
-                        + substring(src, abstract_left.name_start, abstract_left.name_len)
+                        + substring(src, abstract_left.name_start, abstract_left.name_length)
                         + "` needs `Ordered`, or `Equatable` for `==` and `!=`");
                 }
             }
@@ -1160,12 +1160,12 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
                 if self.types[declared].kind == 83 {
                     let mutable holder: Type = Type { kind: 46, scale: 0, contract: 0,
                                           name_start: base_name.start,
-                                          name_len: base_name.length };
+                                          name_length: base_name.length };
                     // A generic enum's arguments come from the context: `Option.Some(3)` is an
                     // `Option<Int>` because something said so, and `Option.None` has nothing
                     // else to go on.
                     if expected.kind == 46 && expected.contract > 0
-                       && spans_equal(src, expected.name_start, expected.name_len,
+                       && spans_equal(src, expected.name_start, expected.name_length,
                                       base_name.start, base_name.length) {
                         holder = expected;
                     }
@@ -1270,7 +1270,7 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
         // a Point, because whoever receives it no longer has the bindings. The same shape the
         // field rule below uses — a method is a field's worth of resolution plus arguments.
         let base: Int = self.bind_from_application(src, holder);
-        let ok: Int = self.check_against_params(src, n.token, n.b, m.params, "method");
+        let ok: Int = self.check_against_params(src, n.token, n.b, m.parameters, "method");
         let answer: Type = self.resolve_deep(src, m.return_type, n.token);
         let dropped: Int = truncate(self.type_bindings, base);
         return answer;
@@ -1303,9 +1303,9 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             return unknown_type();
         }
         let mutable holder: Type = Type { kind: 46, scale: 0, contract: 0,
-                              name_start: name.start, name_len: name.length };
+                              name_start: name.start, name_length: name.length };
         if expected.kind == 46 && expected.contract > 0
-           && spans_equal(src, expected.name_start, expected.name_len,
+           && spans_equal(src, expected.name_start, expected.name_length,
                           name.start, name.length) {
             holder = expected;                       // `Holder<Int>` said what T is
         }
@@ -1392,7 +1392,7 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             }
             return got;
         }
-        let found: Int = self.find_fun(src, t.start, t.length);
+        let found: Int = self.find_function(src, t.start, t.length);
         if found < 0 {
             // A builtin, or a name nobody declared. The compiler knows the builtins,
             // so the checker knows them too rather than staying silent about calls.
@@ -1402,7 +1402,7 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             }
             return builtin;
         }
-        let signature: DeclaredFunction = self.funs[found];
+        let signature: DeclaredFunction = self.functions[found];
         if flag_allocates(signature.flags) == 1 && !self.has_region() {
             let r: Int = self.needs_region(src, n.token,
                 "`" + substring(src, signature.start, signature.length) + "`");
@@ -1433,10 +1433,10 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             if !is_unknown(expected) {
                 let from_context: Bool = self.unify(src, signature.return_type, expected);
             }
-            let bound: Int = self.bind_type_arguments(src, generic, n.a, signature.params,
+            let bound: Int = self.bind_type_arguments(src, generic, n.a, signature.parameters,
                                                       n.token);
         }
-        let ok: Int = self.check_against_params(src, n.token, n.a, signature.params,
+        let ok: Int = self.check_against_params(src, n.token, n.a, signature.parameters,
                                                 "function");
         // DEEPLY, not shallowly. `resolve_shallow` only answers for a bare parameter, so a
         // function returning `Map<K, V>` answered `Map<K, V>` — with the parameters still in it —
@@ -1553,11 +1553,11 @@ function (mutable self: Unit) check_block_nodes(src: String, block: Int, return_
     }
     // Everything declared inside the block leaves scope at the closing brace. One
     // `truncate` rather than a loop: the bindings a block made are the ones on top.
-    let mutable keep: Int = len(self.syms);
-    while keep > 0 && self.syms[keep - 1].depth >= self.depth {
+    let mutable keep: Int = len(self.bindings);
+    while keep > 0 && self.bindings[keep - 1].depth >= self.depth {
         keep -= 1;
     }
-    let dropped: Int = truncate(self.syms, keep);
+    let dropped: Int = truncate(self.bindings, keep);
     self.depth -= 1;
     return node.b;
 }
@@ -1596,11 +1596,11 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
         }
         let name: Token = self.tokens[n.token];
         // Shadowing is refused, so a second `let` of the same name is an error.
-        if self.find_sym(src, name.start, name.length) >= 0 {
+        if self.find_binding(src, name.start, name.length) >= 0 {
             let complained: Int = self.complain_at(src, n.token,
                 "this name is already declared — Burxt does not shadow");
         }
-        push(self.syms, Binding { start: name.start, length: name.length,
+        push(self.bindings, Binding { start: name.start, length: name.length,
                               bound_type: declared, writable: n.value, depth: self.depth });
         return 1;
     }
@@ -1623,22 +1623,22 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
                 "`for` iterates an array, and this is " + self.show_type(src, holder));
             return 1;
         }
-        if self.find_sym(src, name.start, name.length) >= 0 {
+        if self.find_binding(src, name.start, name.length) >= 0 {
             let complained: Int = self.complain_at(src, n.token,
                 "this name is already declared — Burxt does not shadow, and a `for` "
                 + "binding is a binding");
         }
         // The element is a COPY, and immutable: nothing may be written back through it.
         let element: Type = self.declared_type(src, holder.scale);
-        let base: Int = len(self.syms);
+        let base: Int = len(self.bindings);
         self.depth += 1;
-        push(self.syms, Binding { start: name.start, length: name.length, bound_type: element,
+        push(self.bindings, Binding { start: name.start, length: name.length, bound_type: element,
                               writable: 0, depth: self.depth });
         self.loop_depth += 1;
         let body: Int = self.check_block_nodes(src, n.b, return_type);
         self.loop_depth -= 1;
         self.depth -= 1;
-        let dropped: Int = truncate(self.syms, base);
+        let dropped: Int = truncate(self.bindings, base);
         return 1;
     }
 
@@ -1653,8 +1653,8 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
         // Only a `let mutable` binding may be assigned to.
         if target.kind == 5 {
             let name: Token = self.tokens[target.token];
-            let found: Int = self.find_sym(src, name.start, name.length);
-            if found >= 0 && self.syms[found].writable == 0 {
+            let found: Int = self.find_binding(src, name.start, name.length);
+            if found >= 0 && self.bindings[found].writable == 0 {
                 let complained: Int = self.complain_at(src, target.token,
                     "this was declared immutable — declare it `let mutable` to allow it");
             }
@@ -1674,11 +1674,11 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
         let printed: Node = self.nodes[n.a];
         if printed.kind == 5 {
             let referenced: Token = self.tokens[printed.token];
-            let where: Int = self.find_sym(src, referenced.start, referenced.length);
-            if where >= 0 && self.syms[where].bound_type.kind == 50 {
-                let named: Type = self.syms[where].bound_type;
+            let where: Int = self.find_binding(src, referenced.start, referenced.length);
+            if where >= 0 && self.bindings[where].bound_type.kind == 50 {
+                let named: Type = self.bindings[where].bound_type;
                 let complained: Int = self.complain_at(src, n.token,
-                    "`" + substring(src, named.name_start, named.name_len)
+                    "`" + substring(src, named.name_start, named.name_length)
                     + "` is a type parameter with no bound, so a value of it can be stored, "
                     + "copied, passed and returned — not printed, which needs to know what "
                     + "the value IS");
@@ -1687,7 +1687,7 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
         let shown: Type = self.type_at(n.a);
         if shown.kind == 50 {
             let complained: Int = self.complain_at(src, n.token,
-                "`" + substring(src, shown.name_start, shown.name_len)
+                "`" + substring(src, shown.name_start, shown.name_length)
                 + "` is a type parameter with no bound, so a value of it can be stored, "
                 + "copied, passed and returned — not printed, which needs to know what the "
                 + "value IS");
@@ -1804,7 +1804,7 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
         let value: Type = self.type_of(src, n.a, unknown_type());
         let mutable enum_decl: Int = -1;
         if value.kind == 46 {
-            let declared: Int = self.find_type(src, value.name_start, value.name_len);
+            let declared: Int = self.find_type(src, value.name_start, value.name_length);
             if declared >= 0 {
                 if self.types[declared].kind == 83 { enum_decl = declared; }
             }
@@ -1852,10 +1852,10 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
             let arm: Node = self.nodes[self.children[n.b + i]];
             // The arm's bindings take the variant's payload types, and leave scope
             // with the arm — which is what `truncate` is for.
-            let base: Int = len(self.syms);
+            let base: Int = len(self.bindings);
             let bound: Int = self.bind_arm(src, value, arm);
             let body: Int = self.check_block_nodes(src, arm.a, return_type);
-            let dropped: Int = truncate(self.syms, base);
+            let dropped: Int = truncate(self.bindings, base);
             i += 1;
         }
         return 1;
@@ -1868,7 +1868,7 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
 // A function or method body, with its parameters — and a method's `self` — in scope.
 function (mutable self: Unit) check_body(src: String, index: Int) -> Int allocates {
     let item: Node = self.nodes[index];
-    let base: Int = len(self.syms);
+    let base: Int = len(self.bindings);
     self.depth += 1;
     // The markers are the body's rules: `allocates` means the caller's region is in
     // effect throughout, `pure` means the world is off limits.
@@ -1891,10 +1891,10 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int allocat
         let word: Token = self.tokens[self_tok];
         let mutable writable: Int = 0;
         if item.value >= 4 { writable = 1; }
-        push(self.syms, Binding { start: word.start, length: word.length,
+        push(self.bindings, Binding { start: word.start, length: word.length,
                               bound_type: Type { kind: 46, scale: 0, contract: 0,
                                        name_start: receiver.start,
-                                       name_len: receiver.length },
+                                       name_length: receiver.length },
                               writable: writable, depth: self.depth });
     }
     let params: Node = self.nodes[item.a];
@@ -1902,7 +1902,7 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int allocat
     while p < params.b {
         let param: Node = self.nodes[self.children[params.a + p]];
         let name: Token = self.tokens[param.token];
-        push(self.syms, Binding { start: name.start, length: name.length,
+        push(self.bindings, Binding { start: name.start, length: name.length,
                               bound_type: self.declared_type(src, param.a), writable: 0,
                               depth: self.depth });
         p += 1;
@@ -1929,7 +1929,7 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int allocat
     let outer_fn: Int = self.current_function;
     self.current_function = -1;
     if item.kind == 80 {
-        self.current_function = self.find_fun(src, self.tokens[item.token].start,
+        self.current_function = self.find_function(src, self.tokens[item.token].start,
                                        self.tokens[item.token].length);
     }
     self.in_function = 1;
@@ -1945,7 +1945,7 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int allocat
     self.in_function = outer_function;
     self.loop_depth = outer_loop;
     self.current_function = outer_fn;
-    let dropped: Int = truncate(self.syms, base);
+    let dropped: Int = truncate(self.bindings, base);
     self.depth -= 1;
     self.in_caller_region = outer_caller;
     self.in_pure = outer_pure;
@@ -1966,7 +1966,7 @@ function (mutable self: Unit) check_clauses(src: String, index: Int, signature: 
     let mutable i: Int = 0;
     while i < signature.b {
         let clause: Node = self.nodes[self.children[signature.a + i]];
-        let base: Int = len(self.syms);
+        let base: Int = len(self.bindings);
         if clause.value == 127 {                     // ensures
             // `result` is bound here and nowhere else. It is not a keyword: a
             // parameter may still be called `result`, and then it collides, which is
@@ -1980,7 +1980,7 @@ function (mutable self: Unit) check_clauses(src: String, index: Int, signature: 
             self.in_ensures = 1;
             let spelling: Int = find_text(src, "result");
             if spelling >= 0 {
-                push(self.syms, Binding { start: spelling, length: 6,
+                push(self.bindings, Binding { start: spelling, length: 6,
                                       bound_type: return_type, writable: 0, depth: self.depth });
             }
         }
@@ -2010,7 +2010,7 @@ function (mutable self: Unit) check_clauses(src: String, index: Int, signature: 
             }
         }
         self.in_ensures = 0;
-        let dropped: Int = truncate(self.syms, base);
+        let dropped: Int = truncate(self.bindings, base);
         i += 1;
     }
     if measures > 1 {
@@ -2076,13 +2076,13 @@ function (mutable self: Unit) check_tail(src: String, n: Node, return_type: Type
             + "replaced");
     }
     let called: Token = self.tokens[value.token];
-    let target: Int = self.find_fun(src, called.start, called.length);
+    let target: Int = self.find_function(src, called.start, called.length);
     if target < 0 {
         let complained: Int = self.complain_at(src, n.token,
             "`tail` calls a Burxt function, and this is not one");
         return 0;
     }
-    let callee: DeclaredFunction = self.funs[target];
+    let callee: DeclaredFunction = self.functions[target];
     if flag_external(callee.flags) == 1 {
         let complained: Int = self.complain_at(src, n.token,
             "`tail` into C is not a tail call: the C side has its own calling "
@@ -2092,14 +2092,14 @@ function (mutable self: Unit) check_tail(src: String, n: Node, return_type: Type
     if self.current_function < 0 {
         return 0;
     }
-    let here: DeclaredFunction = self.funs[self.current_function];
+    let here: DeclaredFunction = self.functions[self.current_function];
     if !self.same_type(src, callee.return_type, here.return_type) {
         let complained: Int = self.complain_at(src, n.token,
             "a `tail` call must answer what this function answers: " + self.show_type(src, here.return_type)
             + ", not " + self.show_type(src, callee.return_type));
     }
-    let mine: Node = self.nodes[here.params];
-    let theirs: Node = self.nodes[callee.params];
+    let mine: Node = self.nodes[here.parameters];
+    let theirs: Node = self.nodes[callee.parameters];
     if mine.b != theirs.b {
         let complained: Int = self.complain_at(src, n.token,
             "a `tail` call replaces this frame, so the signatures must match: this "
@@ -2323,7 +2323,7 @@ function (self: Unit) unsettled_generic(src: String, t: Type) -> Bool {
     if t.contract > 0 {                               // arguments were given
         return false;
     }
-    let named: Int = self.generic_named(src, t.name_start, t.name_len);
+    let named: Int = self.generic_named(src, t.name_start, t.name_length);
     if named < 0 {
         return false;
     }
@@ -2341,7 +2341,7 @@ function (self: Unit) unsettled_generic(src: String, t: Type) -> Bool {
 // two must draw it in the same place or a program compiles with one compiler and not the other.
 function (mutable self: Unit) check_payloads(src: String, application: Int) -> Int allocates {
     let applied: Type = self.declared_type(src, application);
-    let found: Int = self.find_type(src, applied.name_start, applied.name_len);
+    let found: Int = self.find_type(src, applied.name_start, applied.name_length);
     if found < 0 {
         return 0;
     }
@@ -2368,7 +2368,7 @@ function (mutable self: Unit) check_payloads(src: String, application: Int) -> I
             // variant's payload area does not own.
             let mutable refused: Bool = carried.kind == 49;
             if carried.kind == 46 {
-                let named: Int = self.find_type(src, carried.name_start, carried.name_len);
+                let named: Int = self.find_type(src, carried.name_start, carried.name_length);
                 if named >= 0 {
                     refused = self.types[named].kind == 83;      // an enum
                 }
@@ -2377,7 +2377,7 @@ function (mutable self: Unit) check_payloads(src: String, application: Int) -> I
                 let variant_name: Token = self.tokens[variant.token];
                 let complained: Int = self.complain_at(src, self.nodes[application].token,
                     "`" + self.show_type(src, applied) + "` cannot be made: `"
-                    + substring(src, applied.name_start, applied.name_len) + "."
+                    + substring(src, applied.name_start, applied.name_length) + "."
                     + substring(src, variant_name.start, variant_name.length)
                     + "` would carry " + self.show_type(src, carried)
                     + ", which has no layout here. A variant carries a scalar, a String, a "

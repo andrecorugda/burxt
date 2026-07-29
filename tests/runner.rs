@@ -2919,6 +2919,124 @@ fn the_burxt_compiler_reads_and_emits_every_generic_form() {
     let _ = fs::remove_dir_all(&scratch);
 }
 
+/// **One word per concept.** A lookup is `find_<thing>`, the array it searches is `<thing>s`, the
+/// record it holds is `<Thing>`, and its counter is `find_<thing>_calls`.
+///
+/// This convention already existed and was already followed by `method`, `slot`, `instance` and
+/// `type` — nobody had written it down, so two families drifted and stayed drifted:
+///
+///   `find_sym` searched `self.syms`, which held `Binding` records, and incremented
+///   `find_binding_calls`. FOUR names for one concept, in one function, three of them visible in a
+///   five-line body. And `find_fun` searched `self.funs` while its counter said `function`.
+///
+/// Both were fixed in v0.0.122. This test is why they cannot come back — the audit that found them
+/// was a one-off, and a one-off finds a thing once.
+///
+/// It also refuses clipped names on FIELDS, which cross files and so mislead furthest. Short-lived
+/// locals are left alone deliberately: inside one function the declaration is on screen with the
+/// use, and a rule that reaches that far would be a rule people route around.
+#[test]
+fn one_word_per_concept_in_the_burxt_compiler() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut sources: Vec<PathBuf> = Vec::new();
+    collect_bx(&root.join("examples/burxt"), &mut sources);
+    sources.push(root.join("examples/stage1.bx"));
+    let mut text = String::new();
+    for p in &sources {
+        text.push_str(&fs::read_to_string(p).unwrap());
+        text.push('\n');
+    }
+    // Comments and string literals are prose and emitted IR, not identifiers.
+    let mut code = String::new();
+    for line in text.lines() {
+        let line = match line.find("//") {
+            Some(at) => &line[..at],
+            None => line,
+        };
+        let mut in_string = false;
+        let mut prev = ' ';
+        for c in line.chars() {
+            if c == '"' && prev != '\\' {
+                in_string = !in_string;
+                prev = c;
+                continue;
+            }
+            if !in_string {
+                code.push(c);
+            }
+            prev = c;
+        }
+        code.push('\n');
+    }
+
+    // Every `find_<thing>` must have a `self.<thing>s` array, and the singular must not also
+    // appear as a different spelling of the same word.
+    let mut problems: Vec<String> = Vec::new();
+    for family in ["binding", "function", "type", "method", "slot", "instance"] {
+        let lookup = format!("find_{}(", family);
+        if !code.contains(&lookup) {
+            problems.push(format!(
+                "no `find_{}` — the lookup for `{}` was renamed away from the convention",
+                family, family
+            ));
+        }
+    }
+    // The clipped spellings these families drifted into. Each one is a name that used to exist.
+    for banned in ["find_sym", "self.syms", "self.funs", "find_fun(", "fun_buckets", "fun_chain"] {
+        if code.contains(banned) {
+            problems.push(format!(
+                "`{}` is back. One word per concept: a lookup is find_<thing>, its array is \
+                 <thing>s, its record is <Thing>",
+                banned
+            ));
+        }
+    }
+
+    // Clipped FIELD names. Fields cross files, so an abbreviation in one costs every reader.
+    let clipped = [
+        "sym", "syms", "ty", "tys", "decl", "decls", "expr", "stmt", "arg", "args", "param",
+        "params", "idx", "val", "var", "tmp", "buf", "cnt", "num", "msg", "err", "ret", "elem",
+        "attr", "ctx", "cfg", "sig", "dest", "pos", "prev", "curr", "iter", "acc", "tok", "toks",
+        "fn", "fns", "mut", "recv", "len",
+    ];
+    let types_bx = fs::read_to_string(root.join("examples/burxt/types.bx")).unwrap();
+    for line in types_bx.lines() {
+        let line = match line.find("//") {
+            Some(at) => &line[..at],
+            None => line,
+        };
+        // A function SIGNATURE also has `name: Type` pairs, and its parameters are locals — the
+        // very thing this rule deliberately does not reach. `spans_equal(src, a, a_len, b, b_len)`
+        // was reported as four clipped fields before this line existed.
+        if line.trim_start().starts_with("function ") {
+            continue;
+        }
+        for piece in line.split(',') {
+            let Some((name, _)) = piece.split_once(':') else { continue };
+            let name = name.trim().trim_start_matches("record ");
+            if !name.chars().all(|c| c.is_ascii_lowercase() || c == '_') || name.is_empty() {
+                continue;
+            }
+            // `receiver_length` ends in a real word; `receiver_len` does not.
+            let last = name.rsplit('_').next().unwrap_or(name);
+            if clipped.contains(&name) || (name.contains('_') && clipped.contains(&last)) {
+                problems.push(format!(
+                    "field `{}` in examples/burxt/types.bx is clipped. A field crosses files, so \
+                     write the word: `length` not `len`, `parameters` not `params`, `position` \
+                     not `pos`",
+                    name
+                ));
+            }
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "naming drifted — see spec/A7.0-NAMING.md:\n{}",
+        problems.join("\n")
+    );
+}
+
 /// Every source and documentation file must be IN version control.
 ///
 /// `.gitignore` uses a whitelist — `/*` then re-admit — which is the right shape for keeping

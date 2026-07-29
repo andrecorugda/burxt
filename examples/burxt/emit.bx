@@ -195,7 +195,7 @@ function (mutable self: Unit) cells_of(src: String, written: Type) -> Int alloca
     // The same laziness the checker found, applied to size.
     let bound_type: Type = self.resolve_shallow(src, written);
     if bound_type.kind == 46 {
-        let found: Int = self.find_type(src, bound_type.name_start, bound_type.name_len);
+        let found: Int = self.find_type(src, bound_type.name_start, bound_type.name_length);
         if found < 0 {
             return 1;
         }
@@ -253,7 +253,7 @@ function (mutable self: Unit) cells_of(src: String, written: Type) -> Int alloca
 // Where a field starts, in cells, and -1 when the holder has no such field. The walk is
 // the same one `cells_of` does, which is why the two cannot disagree about a layout.
 function (mutable self: Unit) offset_of(src: String, holder: Type, name: Token) -> Int allocates {
-    let found: Int = self.find_type(src, holder.name_start, holder.name_len);
+    let found: Int = self.find_type(src, holder.name_start, holder.name_length);
     if found < 0 {
         return -1;
     }
@@ -549,7 +549,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
                 if self.types[declared].kind == 83 {
                     let holder: Type = Type { kind: 46, scale: 0, contract: 0,
                                           name_start: base_name.start,
-                                          name_len: base_name.length };
+                                          name_length: base_name.length };
                     return self.emit_construction(src, holder, n, n.kind == 14);
                 }
             }
@@ -753,7 +753,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
     if n.kind == 10 {                                // && and ||
         // These SHORT-CIRCUIT: the right side is evaluated only when the left has not
         // already decided the answer. That is not an optimisation, it is what makes
-        // `while keep > 0 && self.syms[keep - 1].depth >= self.depth` safe to write —
+        // `while keep > 0 && self.bindings[keep - 1].depth >= self.depth` safe to write —
         // and this compiler's own symbol table is written exactly that way, which is how
         // a backend that evaluated both sides was caught: by indexing at -1.
         //
@@ -841,10 +841,10 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
             args += "i64 " + value;
             i += 1;
         }
-        let found_fn: Int = self.find_fun(src, t.start, t.length);
+        let found_fn: Int = self.find_function(src, t.start, t.length);
         if found_fn >= 0 {
-            if flag_external(self.funs[found_fn].flags) == 1 {
-                return self.emit_c_call(src, n, self.funs[found_fn]);
+            if flag_external(self.functions[found_fn].flags) == 1 {
+                return self.emit_c_call(src, n, self.functions[found_fn]);
             }
         }
         let answers: Type = self.type_at(node);
@@ -898,7 +898,7 @@ function (mutable self: Unit) extern_return(src: String, signature: DeclaredFunc
 // in the emitter where a value changes representation rather than meaning.
 function (mutable self: Unit) emit_c_call(src: String, n: Node, signature: DeclaredFunction) -> String allocates {
     let list: Node = self.nodes[n.a];
-    let params: Node = self.nodes[signature.params];
+    let params: Node = self.nodes[signature.parameters];
     let mutable args: String = "";
     let mutable i: Int = 0;
     while i < list.b {
@@ -1034,7 +1034,7 @@ function (mutable self: Unit) place_of(src: String, node: Int) -> String allocat
 // compilers agree on it without recording anything: the declaration is the shared fact.
 // -1 when the name is not a variant of this enum.
 function (mutable self: Unit) variant_index(src: String, holder: Type, name: Token) -> Int allocates {
-    let found: Int = self.find_type(src, holder.name_start, holder.name_len);
+    let found: Int = self.find_type(src, holder.name_start, holder.name_length);
     if found < 0 {
         return -1;
     }
@@ -1090,7 +1090,7 @@ function (mutable self: Unit) emit_construction(src: String, holder: Type, call:
 // A method's symbol: the receiver's type, a dot, the method's name. Two types may both
 // have a `label`, and the linker needs to tell them apart.
 function method_symbol(src: String, holder: Type, name: Token) -> String allocates {
-    return substring(src, holder.name_start, holder.name_len) + "."
+    return substring(src, holder.name_start, holder.name_length) + "."
         + substring(src, name.start, name.length);
 }
 
@@ -1647,7 +1647,7 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int allocates
 // aggregate is.
 function (mutable self: Unit) bind_payload(src: String, holder: Type, arm: Node,
                                  base: String) -> Int allocates {
-    let found: Int = self.find_type(src, holder.name_start, holder.name_len);
+    let found: Int = self.find_type(src, holder.name_start, holder.name_length);
     if found < 0 {
         return 0;
     }
@@ -1763,8 +1763,8 @@ function (mutable self: Unit) emit_dynamic(src: String, want: Type, node: Int) -
                               + ", i64 1\n");
     // The table is chosen by the CONCRETE type, here, at the one place the concrete type
     // is still known. After this the value has forgotten what it was.
-    let table: String = "@burxt.vt." + substring(src, want.name_start, want.name_len) + "."
-        + substring(src, concrete.name_start, concrete.name_len);
+    let table: String = "@burxt.vt." + substring(src, want.name_start, want.name_length) + "."
+        + substring(src, concrete.name_start, concrete.name_length);
     let put_table: Int = self.write_body("  store i64 ptrtoint (ptr " + table + " to i64), ptr "
                                 + table_cell + "\n");
     let reg: String = self.fresh();
@@ -1811,7 +1811,7 @@ function (mutable self: Unit) emit_dynamic_call(src: String, holder: Type, call:
 
 // Which slot a trait gives a method — its position in the trait's declaration.
 function (mutable self: Unit) trait_slot(src: String, holder: Type, name: Token) -> Int allocates {
-    let found: Int = self.find_type(src, holder.name_start, holder.name_len);
+    let found: Int = self.find_type(src, holder.name_start, holder.name_length);
     if found < 0 {
         return 0;
     }
@@ -1931,7 +1931,7 @@ function (self: Unit) mangle_type(src: String, written: Type) -> String allocate
     if t.kind == 43 { return "Unit"; }
     if t.kind == 45 { return "Decimal" + to_string(t.scale) + "r" + to_string(t.contract); }
     if t.kind == 46 || t.kind == 49 || t.kind == 50 {
-        let mutable base: String = substring(src, t.name_start, t.name_len);
+        let mutable base: String = substring(src, t.name_start, t.name_length);
         if t.kind == 49 {
             base = "dyn." + base;
         }
@@ -1961,7 +1961,7 @@ function (self: Unit) instance_symbol(src: String, instance: Int) -> String allo
     let mutable symbol: String = substring(src, declaration.start, declaration.length);
     let mutable i: Int = 0;
     while i < it.args_count {
-        symbol += "$" + self.mangle_type(src, self.instance_args[it.args_start + i]);
+        symbol += "$" + self.mangle_type(src, self.instance_arguments[it.args_start + i]);
         i += 1;
     }
     return symbol;
@@ -1975,7 +1975,7 @@ function (self: Unit) instance_suffix(src: String, instance: Int) -> String allo
     let mutable suffix: String = "";
     let mutable i: Int = 0;
     while i < it.args_count {
-        suffix += "$" + self.mangle_type(src, self.instance_args[it.args_start + i]);
+        suffix += "$" + self.mangle_type(src, self.instance_arguments[it.args_start + i]);
         i += 1;
     }
     return suffix;
@@ -1992,14 +1992,14 @@ function (mutable self: Unit) find_instance(src: String, generic: Int, args_star
             let mutable same: Bool = true;
             let mutable k: Int = 0;
             while k < args_count {
-                if !type_identical(self.instance_args[it.args_start + k],
-                                   self.instance_args[args_start + k]) {
+                if !type_identical(self.instance_arguments[it.args_start + k],
+                                   self.instance_arguments[args_start + k]) {
                     same = false;
                 }
                 k += 1;
             }
             if same {
-                let dropped: Int = truncate(self.instance_args, args_start);
+                let dropped: Int = truncate(self.instance_arguments, args_start);
                 return i;                            // already wanted: reuse it
             }
         }
@@ -2011,12 +2011,12 @@ function (mutable self: Unit) find_instance(src: String, generic: Int, args_star
 }
 
 // The declared function a generic index names. `Generic` holds a name span rather than an index
-// into `funs`, because a generic may be a record or an enum too, so the crossing is by bytes.
-function (self: Unit) find_fun_by_index(generic: Int) -> Int {
+// into `functions`, because a generic may be a record or an enum too, so the crossing is by bytes.
+function (self: Unit) find_function_by_index(generic: Int) -> Int {
     let declaration: Generic = self.generics[generic];
     let mutable i: Int = 0;
-    while i < len(self.funs) {
-        let f: DeclaredFunction = self.funs[i];
+    while i < len(self.functions) {
+        let f: DeclaredFunction = self.functions[i];
         if f.start == declaration.start && f.length == declaration.length {
             return i;
         }
@@ -2040,9 +2040,9 @@ function (mutable self: Unit) instance_of_call(src: String, generic: Int, params
     // constructor is everything, since `-> Map<K, V>` mentions its parameters only in the return.
     // The checker already worked this out and cached it, so the emitter reads the answer rather
     // than deriving it a second time and risking a different one.
-    let found: Int = self.find_fun_by_index(generic);
+    let found: Int = self.find_function_by_index(generic);
     if found >= 0 {
-        let matched: Bool = self.unify(src, self.funs[found].return_type, self.type_at(call));
+        let matched: Bool = self.unify(src, self.functions[found].return_type, self.type_at(call));
     }
     let wanted: Node = self.nodes[params];
     let given: Node = self.nodes[args];
@@ -2058,23 +2058,23 @@ function (mutable self: Unit) instance_of_call(src: String, generic: Int, params
         i += 1;
     }
     let declaration: Generic = self.generics[generic];
-    let args_start: Int = len(self.instance_args);
+    let args_start: Int = len(self.instance_arguments);
     let mutable settled: Bool = true;
     let mutable p: Int = 0;
     while p < declaration.type_param_count {
-        let named: Token = self.tokens[self.type_params[declaration.type_param_start + p]];
+        let named: Token = self.tokens[self.type_parameters[declaration.type_param_start + p]];
         let stands_for: Type = self.resolve_shallow(src,
             Type { kind: 50, scale: 0, contract: 0,
-                   name_start: named.start, name_len: named.length });
+                   name_start: named.start, name_length: named.length });
         if stands_for.kind == 50 {
             settled = false;
         }
-        let noted: Int = push(self.instance_args, stands_for);
+        let noted: Int = push(self.instance_arguments, stands_for);
         p += 1;
     }
     let dropped: Int = truncate(self.type_bindings, base);
     if !settled {
-        let unwound: Int = truncate(self.instance_args, args_start);
+        let unwound: Int = truncate(self.instance_arguments, args_start);
         return 0 - 1;
     }
     return self.find_instance(src, generic, args_start, declaration.type_param_count);
@@ -2089,11 +2089,11 @@ function (mutable self: Unit) call_suffix(src: String, name: Token, args: Int,
     if generic < 0 {
         return "";
     }
-    let found: Int = self.find_fun(src, name.start, name.length);
+    let found: Int = self.find_function(src, name.start, name.length);
     if found < 0 {
         return "";
     }
-    let instance: Int = self.instance_of_call(src, generic, self.funs[found].params, args, call);
+    let instance: Int = self.instance_of_call(src, generic, self.functions[found].parameters, args, call);
     if instance < 0 {
         return "";                                   // still abstract: nothing to name yet
     }
@@ -2101,7 +2101,7 @@ function (mutable self: Unit) call_suffix(src: String, name: Token, args: Int,
     let mutable suffix: String = "";
     let mutable i: Int = 0;
     while i < it.args_count {
-        suffix += "$" + self.mangle_type(src, self.instance_args[it.args_start + i]);
+        suffix += "$" + self.mangle_type(src, self.instance_arguments[it.args_start + i]);
         i += 1;
     }
     return suffix;
@@ -2133,7 +2133,7 @@ function (self: Unit) holder_suffix(src: String, holder: Type) -> String allocat
     // Without this, `probe` called from `set` inside `Map$String$Int` emitted a call to the
     // unmangled `@Map.probe`, which nothing defines. A link error rather than a wrong answer,
     // which is the failure mode a mangled name is supposed to have.
-    let generic: Int = self.generic_named(src, holder.name_start, holder.name_len);
+    let generic: Int = self.generic_named(src, holder.name_start, holder.name_length);
     if generic < 0 {
         return "";
     }
@@ -2141,10 +2141,10 @@ function (self: Unit) holder_suffix(src: String, holder: Type) -> String allocat
     let mutable suffix: String = "";
     let mutable p: Int = 0;
     while p < declaration.type_param_count {
-        let named: Token = self.tokens[self.type_params[declaration.type_param_start + p]];
+        let named: Token = self.tokens[self.type_parameters[declaration.type_param_start + p]];
         let stands_for: Type = self.resolve_shallow(src,
             Type { kind: 50, scale: 0, contract: 0,
-                   name_start: named.start, name_len: named.length });
+                   name_start: named.start, name_length: named.length });
         if stands_for.kind == 50 {
             return "";                               // still abstract: nothing to name yet
         }
@@ -2164,11 +2164,11 @@ function (mutable self: Unit) note_holder(src: String, holder: Type) -> Int allo
     if holder.kind != 46 || holder.contract <= 0 {
         return 0;
     }
-    let generic: Int = self.generic_named(src, holder.name_start, holder.name_len);
+    let generic: Int = self.generic_named(src, holder.name_start, holder.name_length);
     if generic < 0 {
         return 0;
     }
-    let args_start: Int = len(self.instance_args);
+    let args_start: Int = len(self.instance_arguments);
     let mutable settled: Bool = true;
     let mutable i: Int = 0;
     while i < holder.contract {
@@ -2177,11 +2177,11 @@ function (mutable self: Unit) note_holder(src: String, holder: Type) -> Int allo
         if argument.kind == 50 {
             settled = false;
         }
-        let noted: Int = push(self.instance_args, argument);
+        let noted: Int = push(self.instance_arguments, argument);
         i += 1;
     }
     if !settled {
-        let unwound: Int = truncate(self.instance_args, args_start);
+        let unwound: Int = truncate(self.instance_arguments, args_start);
         return 0;
     }
     let instance: Int = self.find_instance(src, generic, args_start, holder.contract);
@@ -2196,9 +2196,9 @@ function (mutable self: Unit) install_instance(src: String, instance: Int) -> In
     let declaration: Generic = self.generics[it.generic];
     let mutable i: Int = 0;
     while i < it.args_count {
-        let named: Token = self.tokens[self.type_params[declaration.type_param_start + i]];
-        push(self.type_bindings, TypeBinding { name_start: named.start, name_len: named.length,
-                                               bound: self.instance_args[it.args_start + i] });
+        let named: Token = self.tokens[self.type_parameters[declaration.type_param_start + i]];
+        push(self.type_bindings, TypeBinding { name_start: named.start, name_length: named.length,
+                                               bound: self.instance_arguments[it.args_start + i] });
         i += 1;
     }
     return base;
@@ -2232,7 +2232,7 @@ function (mutable self: Unit) emit_function(src: String, index: Int, suffix: Str
     if is_method {
         let receiver: Token = self.tokens[signature_node.value];
         let holder: Type = Type { kind: 46, scale: 0, contract: 0,
-                              name_start: receiver.start, name_len: receiver.length };
+                              name_start: receiver.start, name_length: receiver.length };
         symbol = method_symbol(src, holder, name) + suffix;
         if first > 0 {
             signature += ", ";
@@ -2271,7 +2271,7 @@ function (mutable self: Unit) emit_function(src: String, index: Int, suffix: Str
                                      + to_string(slot) + "\n");
         } else {
             let holder: Type = Type { kind: 46, scale: 0, contract: 0,
-                                  name_start: receiver.start, name_len: receiver.length };
+                                  name_start: receiver.start, name_length: receiver.length };
             let cells: Int = self.cells_of(src, holder);
             let slot: Int = self.declare_slot(src, word.start, word.length, cells, 1);
             let copied: Int = self.copy_cells(src, "%v" + to_string(slot), receiver_arg,

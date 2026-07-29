@@ -13,7 +13,7 @@
 // ============================================================================
 
 function (self: Unit) kind_at(offset: Int) -> Int {
-    let i: Int = self.pos + offset;
+    let i: Int = self.position + offset;
     if i < 0 || i >= len(self.tokens) {
         return 0;                                    // past the end
     }
@@ -30,17 +30,17 @@ function (self: Unit) at_word(src: String, word: String) -> Bool {
     if self.kind_at(0) != 1 {
         return false;
     }
-    let t: Token = self.tokens[self.pos];
+    let t: Token = self.tokens[self.position];
     return span_equal(src, t.start, t.length, word);
 }
 
 function (self: Unit) done() -> Bool {
-    return self.pos >= self.token_end;
+    return self.position >= self.token_end;
 }
 
 function (mutable self: Unit) advance() -> Int {
-    self.pos += 1;
-    return self.pos;
+    self.position += 1;
+    return self.position;
 }
 
 // Is there another element in this comma-separated list?
@@ -58,7 +58,7 @@ function (mutable self: Unit) more_in_list(closer: Int) -> Bool {
 }
 
 function (mutable self: Unit) complain(src: String, what: String) -> Int allocates {
-    let where: Int = self.pos;
+    let where: Int = self.position;
     if where < len(self.tokens) {
         let t: Token = self.tokens[where];
         print("parse error: expected " + what + ", found `"
@@ -114,7 +114,7 @@ function (mutable self: Unit) parse_type_params(src: String) -> Int allocates {
             let complained: Int = self.complain(src, "a type parameter name");
             return 0 - 1;
         }
-        let name_tok: Int = self.pos;
+        let name_tok: Int = self.position;
         if self.names_a_parameter(src, name_tok) {
             let complained: Int = self.complain(src, "a type parameter name used only once here");
             return 0 - 1;
@@ -131,7 +131,7 @@ function (mutable self: Unit) parse_type_params(src: String) -> Int allocates {
                 let complained: Int = self.complain(src, "a trait name after the parameter's `:`");
                 return 0 - 1;
             }
-            bound_tok = self.pos;
+            bound_tok = self.position;
             let b: Int = self.advance();
         }
         push(self.pending_bounds, bound_tok);
@@ -151,11 +151,11 @@ function (mutable self: Unit) note_generic(name_tok: Int, count: Int) -> Int all
         return 0;
     }
     let name: Token = self.tokens[name_tok];
-    let type_param_start: Int = len(self.type_params);
+    let type_param_start: Int = len(self.type_parameters);
     let mutable i: Int = len(self.params_in_scope) - count;
     let mutable b: Int = len(self.pending_bounds) - count;
     while i < len(self.params_in_scope) {
-        let noted: Int = push(self.type_params, self.params_in_scope[i]);
+        let noted: Int = push(self.type_parameters, self.params_in_scope[i]);
         let bounded: Int = push(self.type_param_bounds, self.pending_bounds[b]);
         i += 1;
         b += 1;
@@ -167,7 +167,7 @@ function (mutable self: Unit) note_generic(name_tok: Int, count: Int) -> Int all
 }
 
 function (mutable self: Unit) parse_type(src: String) -> Int allocates {
-    let here: Int = self.pos;
+    let here: Int = self.position;
     let k: Int = self.kind_at(0);
     if k == 140 { let n: Int = self.advance(); return self.add(40, 0, 0, 0, 0, here); }
     if k == 141 { let n: Int = self.advance(); return self.add(41, 0, 0, 0, 0, here); }
@@ -180,7 +180,7 @@ function (mutable self: Unit) parse_type(src: String) -> Int allocates {
         let n: Int = self.advance();
         if !self.eat(src, 35, "`<` after `Decimal`") { return -1; }
         if !self.at(2) { return self.complain(src, "a scale, e.g. `Decimal<2>`"); }
-        let scale: Int = self.tokens[self.pos].value;
+        let scale: Int = self.tokens[self.position].value;
         let m: Int = self.advance();
         let mutable contract: Int = 0;
         if self.at(22) {                             // ','
@@ -198,7 +198,7 @@ function (mutable self: Unit) parse_type(src: String) -> Int allocates {
     if k == 115 {                                    // dynamic
         let n: Int = self.advance();
         if !self.at(1) { return self.complain(src, "a trait name after `dynamic`"); }
-        let name_tok: Int = self.pos;
+        let name_tok: Int = self.position;
         let m: Int = self.advance();
         return self.add(49, 0, 0, 0, 0, name_tok);
     }
@@ -209,7 +209,7 @@ function (mutable self: Unit) parse_type(src: String) -> Int allocates {
         if self.at(21) {                             // ';' — a fixed length follows
             let semi: Int = self.advance();
             if !self.at(2) { return self.complain(src, "an array length"); }
-            let count: Int = self.tokens[self.pos].value;
+            let count: Int = self.tokens[self.position].value;
             let m: Int = self.advance();
             if !self.eat(src, 34, "`]` closing the array type") { return -1; }
             return self.add(48, elem, count, 0, 0, here);
@@ -218,7 +218,7 @@ function (mutable self: Unit) parse_type(src: String) -> Int allocates {
         return self.add(47, elem, 0, 0, 0, here);
     }
     if k == 1 {                                      // a named record, enum or trait
-        let name_tok: Int = self.pos;
+        let name_tok: Int = self.position;
         let n: Int = self.advance();
         // A type PARAMETER, if the declaration being parsed put this name in scope. Kind 50
         // rather than 46, so nothing mistakes `T` for a record called `T`.
@@ -266,7 +266,7 @@ function (self: Unit) field_type(src: String, holder: Type, name_tok: Int) -> Ty
     if holder.kind != 46 {
         return unknown_type();
     }
-    let found: Int = self.find_type(src, holder.name_start, holder.name_len);
+    let found: Int = self.find_type(src, holder.name_start, holder.name_length);
     if found < 0 {
         return unknown_type();
     }
@@ -346,7 +346,7 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
         // justified is wrong whether or not anyone instantiates it — and stage-0 cannot see this,
         // since it only ever checks copies where `K` is already a concrete type.
         if first.kind == 50 {
-            let bound: Int = self.bound_of(src, first.name_start, first.name_len);
+            let bound: Int = self.bound_of(src, first.name_start, first.name_length);
             let mutable ok: Bool = false;
             if bound >= 0 {
                 let named: Token = self.tokens[bound];
@@ -355,9 +355,9 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
             if !ok {
                 let complained: Int = self.complain_at(src, at,
                     "`hash` needs an Equatable value, and `"
-                    + substring(src, first.name_start, first.name_len)
+                    + substring(src, first.name_start, first.name_length)
                     + "` has no such bound: write `"
-                    + substring(src, first.name_start, first.name_len)
+                    + substring(src, first.name_start, first.name_length)
                     + ": Equatable` in the declaration, which is what lets a key be hashed and "
                     + "compared");
             }
@@ -453,9 +453,9 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
             let base: Node = self.nodes[first_node];
             if base.kind == 5 {
                 let t: Token = self.tokens[base.token];
-                let found: Int = self.find_sym(src, t.start, t.length);
+                let found: Int = self.find_binding(src, t.start, t.length);
                 if found >= 0 {
-                    if self.syms[found].writable == 0 {
+                    if self.bindings[found].writable == 0 {
                         let complained: Int = self.complain_at(src, at,
                             "`" + called + "` changes the array in place, so `"
                             + substring(src, t.start, t.length)
@@ -562,7 +562,7 @@ function (mutable self: Unit) builtin_type(src: String, name: Token, at: Int, ar
 // whole point of the indirection.
 function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: Node) -> Type allocates {
     let wanted: Token = self.tokens[call.token];
-    let found: Int = self.find_type(src, holder.name_start, holder.name_len);
+    let found: Int = self.find_type(src, holder.name_start, holder.name_length);
     if found < 0 {
         let complained: Int = self.complain_at(src, call.token, "no trait of this name is declared");
         return unknown_type();
@@ -604,12 +604,12 @@ function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: No
 }
 
 function (self: Unit) find_method_named(src: String, holder_start: Int, holder_len: Int,
-                                  name_start: Int, name_len: Int) -> Int {
+                                  name_start: Int, name_length: Int) -> Int {
     let mutable i: Int = 0;
     while i < len(self.methods) {
         let m: Method = self.methods[i];
-        if spans_equal(src, m.receiver_start, m.receiver_len, holder_start, holder_len) {
-            if spans_equal(src, m.start, m.length, name_start, name_len) {
+        if spans_equal(src, m.receiver_start, m.receiver_length, holder_start, holder_len) {
+            if spans_equal(src, m.start, m.length, name_start, name_length) {
                 return i;
             }
         }
@@ -623,7 +623,7 @@ function (self: Unit) find_method(src: String, holder: Type, name_tok: Int) -> I
         return -1;
     }
     let wanted: Token = self.tokens[name_tok];
-    return self.find_method_named(src, holder.name_start, holder.name_len,
+    return self.find_method_named(src, holder.name_start, holder.name_length,
                                   wanted.start, wanted.length);
 }
 
@@ -634,7 +634,7 @@ function (mutable self: Unit) check_construction(src: String, holder: Type, call
     // parameters, so `Some`'s payload reads as Int rather than T.
     let bound_base: Int = self.bind_from_application(src, holder);
     let variant_name: Token = self.tokens[call.token];
-    let found: Int = self.find_type(src, holder.name_start, holder.name_len);
+    let found: Int = self.find_type(src, holder.name_start, holder.name_length);
     let item: Node = self.nodes[self.types[found].node];
     let mutable i: Int = 0;
     while i < item.b {
@@ -698,7 +698,7 @@ function (mutable self: Unit) bind_arm(src: String, holder: Type, arm: Node) -> 
     if holder.kind != 46 {
         return 0;
     }
-    let found: Int = self.find_type(src, holder.name_start, holder.name_len);
+    let found: Int = self.find_type(src, holder.name_start, holder.name_length);
     if found < 0 {
         return 0;
     }
@@ -727,7 +727,7 @@ function (mutable self: Unit) bind_arm(src: String, holder: Type, arm: Node) -> 
                 let name: Token = self.tokens[self.nested_children[arm.b + p]];
                 let stated: Type = self.declared_type(src, self.nested_children[variant.b + p]);
                 let payload_type: Type = self.resolve_deep(src, stated, arm.token);
-                push(self.syms, Binding { start: name.start, length: name.length,
+                push(self.bindings, Binding { start: name.start, length: name.length,
                                       bound_type: payload_type, writable: 0, depth: self.depth + 1 });
                 p += 1;
             }
@@ -763,9 +763,9 @@ function (mutable self: Unit) fits(src: String, got: Type, want: Type) -> Bool {
     while i < len(self.impls) {
         let candidate: Implementation = self.impls[i];
         if spans_equal(src, candidate.trait_start, candidate.trait_len,
-                    want.name_start, want.name_len) {
+                    want.name_start, want.name_length) {
             if spans_equal(src, candidate.type_start, candidate.type_len,
-                        got.name_start, got.name_len) {
+                        got.name_start, got.name_length) {
                 return true;
             }
         }
@@ -822,9 +822,9 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
             }
             return true;
         }
-        let found: Int = self.find_fun(src, name.start, name.length);
+        let found: Int = self.find_function(src, name.start, name.length);
         if found >= 0 {
-            return flag_allocates(self.funs[found].flags) == 1;
+            return flag_allocates(self.functions[found].flags) == 1;
         }
         // An enum constructor carries its payload, so it is built if the payload is.
         let list: Node = self.nodes[n.a];
@@ -944,7 +944,7 @@ function (mutable self: Unit) parse_expr(src: String) -> Int allocates {
 function (mutable self: Unit) parse_or(src: String) -> Int allocates {
     let mutable left: Int = self.parse_and(src);
     while left >= 0 && self.at(17) {                 // ||
-        let here: Int = self.pos;
+        let here: Int = self.position;
         let n: Int = self.advance();
         let right: Int = self.parse_and(src);
         if right < 0 { return -1; }
@@ -956,7 +956,7 @@ function (mutable self: Unit) parse_or(src: String) -> Int allocates {
 function (mutable self: Unit) parse_and(src: String) -> Int allocates {
     let mutable left: Int = self.parse_comparison(src);
     while left >= 0 && self.at(16) {                 // &&
-        let here: Int = self.pos;
+        let here: Int = self.position;
         let n: Int = self.advance();
         let right: Int = self.parse_comparison(src);
         if right < 0 { return -1; }
@@ -970,7 +970,7 @@ function (mutable self: Unit) parse_comparison(src: String) -> Int allocates {
     if left < 0 { return -1; }
     let k: Int = self.kind_at(0);
     if k == 12 || k == 13 || k == 14 || k == 15 || k == 35 || k == 36 {
-        let here: Int = self.pos;
+        let here: Int = self.position;
         let n: Int = self.advance();
         let right: Int = self.parse_additive(src);
         if right < 0 { return -1; }
@@ -988,7 +988,7 @@ function (mutable self: Unit) parse_comparison(src: String) -> Int allocates {
 function (mutable self: Unit) parse_additive(src: String) -> Int allocates {
     let mutable left: Int = self.parse_term(src);
     while left >= 0 && (self.at(25) || self.at(26)) {  // + -
-        let here: Int = self.pos;
+        let here: Int = self.position;
         let op: Int = self.kind_at(0);
         let n: Int = self.advance();
         let right: Int = self.parse_term(src);
@@ -1001,7 +1001,7 @@ function (mutable self: Unit) parse_additive(src: String) -> Int allocates {
 function (mutable self: Unit) parse_term(src: String) -> Int allocates {
     let mutable left: Int = self.parse_unary(src);
     while left >= 0 && (self.at(27) || self.at(28)) {  // * /
-        let here: Int = self.pos;
+        let here: Int = self.position;
         let op: Int = self.kind_at(0);
         let n: Int = self.advance();
         let right: Int = self.parse_unary(src);
@@ -1012,7 +1012,7 @@ function (mutable self: Unit) parse_term(src: String) -> Int allocates {
 }
 
 function (mutable self: Unit) parse_unary(src: String) -> Int allocates {
-    let here: Int = self.pos;
+    let here: Int = self.position;
     if self.at(26) {                                 // -
         let n: Int = self.advance();
         let inner: Int = self.parse_unary(src);
@@ -1033,12 +1033,12 @@ function (mutable self: Unit) parse_postfix(src: String) -> Int allocates {
     let mutable node: Int = self.parse_primary(src);
     while node >= 0 {
         if self.at(23) {                             // '.'
-            let here: Int = self.pos;
+            let here: Int = self.position;
             let n: Int = self.advance();
             if !self.at(1) {
                 return self.complain(src, "a field or method name after `.`");
             }
-            let name_tok: Int = self.pos;
+            let name_tok: Int = self.position;
             let m: Int = self.advance();
             if self.at(29) {                         // '(' — a method call
                 let args: Int = self.parse_args(src);
@@ -1050,7 +1050,7 @@ function (mutable self: Unit) parse_postfix(src: String) -> Int allocates {
             continue;
         }
         if self.at(33) {                             // '['
-            let here: Int = self.pos;
+            let here: Int = self.position;
             let n: Int = self.advance();
             let index: Int = self.parse_expr(src);
             if index < 0 { return -1; }
@@ -1065,7 +1065,7 @@ function (mutable self: Unit) parse_postfix(src: String) -> Int allocates {
 
 // An argument list. Returns a node holding (start, count) into `children`.
 function (mutable self: Unit) parse_args(src: String) -> Int allocates {
-    let here: Int = self.pos;
+    let here: Int = self.position;
     if !self.eat(src, 29, "`(`") { return -1; }
     // Collect the argument node indices locally first: parsing one appends its whole
     // subtree to `nodes`, but nothing to `children`, so the indices stay contiguous.
@@ -1120,13 +1120,13 @@ function (mutable self: Unit) parse_interpolation(src: String, here: Int, t: Tok
             }
             // Lex and parse the bytes between the braces, then put the cursor back: the
             // fragment's tokens live at the END of the stream, so nothing else moves.
-            let resume: Int = self.pos;
+            let resume: Int = self.position;
             let first: Int = len(self.tokens);
             let lexed: Int = self.run_range(src, i + 1, close);
             if len(self.tokens) > first {
-                self.pos = first;
+                self.position = first;
                 let piece: Int = self.parse_expr(src);
-                self.pos = resume;
+                self.position = resume;
                 if piece < 0 {
                     return -1;
                 }
@@ -1149,21 +1149,21 @@ function (mutable self: Unit) parse_interpolation(src: String, here: Int, t: Tok
 }
 
 function (mutable self: Unit) parse_primary(src: String) -> Int allocates {
-    let here: Int = self.pos;
+    let here: Int = self.position;
     let k: Int = self.kind_at(0);
     if k == 2 {
-        let value: Int = self.tokens[self.pos].value;
+        let value: Int = self.tokens[self.position].value;
         let n: Int = self.advance();
         return self.add(1, 0, 0, 0, value, here);
     }
     if k == 3 {
-        let t: Token = self.tokens[self.pos];
+        let t: Token = self.tokens[self.position];
         let n: Int = self.advance();
         // The unscaled integer and the scale, carried exactly as the lexer read them.
         return self.add(2, t.scale, 0, 0, t.value, here);
     }
     if k == 4 {
-        let t: Token = self.tokens[self.pos];
+        let t: Token = self.tokens[self.position];
         let n: Int = self.advance();
         if t.interpolated {
             return self.parse_interpolation(src, here, t);
@@ -1202,7 +1202,7 @@ function (mutable self: Unit) parse_primary(src: String) -> Int allocates {
         return self.add(17, start, count, 0, 0, here);
     }
     if k == 1 || k == 119 || (k >= 140 && k <= 145) {  // a name, `self`, or a type name
-        let name_tok: Int = self.pos;
+        let name_tok: Int = self.position;
         let n: Int = self.advance();
         if self.at(29) {                             // a call
             let args: Int = self.parse_args(src);
@@ -1217,7 +1217,7 @@ function (mutable self: Unit) parse_primary(src: String) -> Int allocates {
                 if !self.at(1) {
                     return self.complain(src, "a field name");
                 }
-                let field_tok: Int = self.pos;
+                let field_tok: Int = self.position;
                 let f: Int = self.advance();
                 // `P { x, y }` is shorthand for `P { x: x, y: y }`: a field taking its value
                 // from a variable of the same name. `Order { subtotal: subtotal, country:
@@ -1270,7 +1270,7 @@ function (mutable self: Unit) commit(base: Int) -> Int allocates {
 }
 
 function (mutable self: Unit) parse_block(src: String) -> Int allocates {
-    let here: Int = self.pos;
+    let here: Int = self.position;
     if !self.eat(src, 31, "`\{` opening a block") { return -1; }
     let base: Int = len(self.stack);
     let mutable count: Int = 0;
@@ -1285,7 +1285,7 @@ function (mutable self: Unit) parse_block(src: String) -> Int allocates {
     return self.add(16, start, count, 0, 0, here);
 }
 function (mutable self: Unit) parse_stmt(src: String) -> Int allocates {
-    let here: Int = self.pos;
+    let here: Int = self.position;
     let k: Int = self.kind_at(0);
 
     if k == 100 {                                    // let
@@ -1296,7 +1296,7 @@ function (mutable self: Unit) parse_stmt(src: String) -> Int allocates {
             let m: Int = self.advance();
         }
         if !self.at(1) { return self.complain(src, "a name after `let`"); }
-        let name_tok: Int = self.pos;
+        let name_tok: Int = self.position;
         let m2: Int = self.advance();
         // The annotation is optional: without it the type comes from the value, and -1
         // is how a `let` node says "there was none" — the emitter already read it that
@@ -1372,7 +1372,7 @@ function (mutable self: Unit) parse_stmt(src: String) -> Int allocates {
     if k == 114 {                                    // for
         let n: Int = self.advance();
         if !self.at(1) { return self.complain(src, "a name after `for`"); }
-        let name_tok: Int = self.pos;
+        let name_tok: Int = self.position;
         let m: Int = self.advance();
         if !self.eat(src, 131, "`in` and the array to walk") { return -1; }
         self.no_record_literal += 1;
@@ -1417,7 +1417,7 @@ function (mutable self: Unit) parse_stmt(src: String) -> Int allocates {
             if !self.at(1) {
                 return self.complain(src, "a variant name — Burxt has no `_` arm");
             }
-            let variant_tok: Int = self.pos;
+            let variant_tok: Int = self.position;
             let v: Int = self.advance();
             let bind_start: Int = len(self.nested_children);
             let mutable binds: Int = 0;
@@ -1427,7 +1427,7 @@ function (mutable self: Unit) parse_stmt(src: String) -> Int allocates {
                     if !self.at(1) {
                         return self.complain(src, "a name to bind the payload to");
                     }
-                    push(self.nested_children, self.pos);
+                    push(self.nested_children, self.position);
                     binds += 1;
                     let b: Int = self.advance();
                     if self.more_in_list(30) {
@@ -1451,7 +1451,7 @@ function (mutable self: Unit) parse_stmt(src: String) -> Int allocates {
     if k == 117 {                                    // region
         let n: Int = self.advance();
         if !self.at(1) { return self.complain(src, "a name for the region"); }
-        let name_tok: Int = self.pos;
+        let name_tok: Int = self.position;
         let m: Int = self.advance();
         let body: Int = self.parse_block(src);
         if body < 0 { return -1; }
@@ -1499,7 +1499,7 @@ function (mutable self: Unit) parse_stmt(src: String) -> Int allocates {
 
 // A parameter list: `(name: Type, name: Type as scaled)`. Returns (start, count).
 function (mutable self: Unit) parse_params(src: String) -> Int allocates {
-    let here: Int = self.pos;
+    let here: Int = self.position;
     if !self.eat(src, 29, "`(` opening the parameters") { return -1; }
     let base: Int = len(self.stack);
     let mutable count: Int = 0;
@@ -1507,7 +1507,7 @@ function (mutable self: Unit) parse_params(src: String) -> Int allocates {
         if !self.at(1) {
             return self.complain(src, "a parameter name");
         }
-        let name_tok: Int = self.pos;
+        let name_tok: Int = self.position;
         let n: Int = self.advance();
         if !self.eat(src, 20, "`:` and the parameter's type") { return -1; }
         let type_node: Int = self.parse_type(src);
@@ -1540,7 +1540,7 @@ function (mutable self: Unit) parse_params(src: String) -> Int allocates {
 // has five slots and six things to say, and this is the one that costs nothing: the
 // clause node exists for every function whether it has clauses or not.
 function (mutable self: Unit) parse_clauses(src: String, return_type: Int, receiver_tok: Int) -> Int allocates {
-    let here: Int = self.pos;
+    let here: Int = self.position;
     let base: Int = len(self.stack);
     let mutable count: Int = 0;
     while self.at_word(src, "requires") || self.at_word(src, "ensures")
@@ -1566,7 +1566,7 @@ function (mutable self: Unit) parse_clauses(src: String, return_type: Int, recei
 // `function name(params) -> Type [allocates] [clauses] { body }`, or a method when a
 // receiver clause follows `function`. `pure` precedes the whole thing.
 function (mutable self: Unit) parse_function(src: String, is_pure: Int, owner: Int) -> Int allocates {
-    let here: Int = self.pos;
+    let here: Int = self.position;
     if !self.eat(src, 102, "`function`") { return -1; }
 
     // `function (self: T) name(...)` and `function (mutable self: T) name(...)` are methods: the
@@ -1596,7 +1596,7 @@ function (mutable self: Unit) parse_function(src: String, is_pure: Int, owner: I
             if !self.at(1) {
                 return self.complain(src, "a record name after `self:`");
             }
-            receiver_tok = self.pos;
+            receiver_tok = self.position;
             let r: Int = self.advance();
             // `self: Stack<T>` — the receiver names the record's parameters, which are
             // then in scope for the rest of the signature and the body.
@@ -1609,7 +1609,7 @@ function (mutable self: Unit) parse_function(src: String, is_pure: Int, owner: I
     if !self.at(1) {
         return self.complain(src, "a function name");
     }
-    let name_tok: Int = self.pos;
+    let name_tok: Int = self.position;
     let n2: Int = self.advance();
     // `function largest<T: Ordered>(...)`. A method declares none of its own — its
     // receiver already named the record's — so this adds nothing there.
@@ -1652,7 +1652,7 @@ function (mutable self: Unit) parse_function(src: String, is_pure: Int, owner: I
 function (mutable self: Unit) parse_record(src: String) -> Int allocates {
     if !self.eat(src, 109, "`record`") { return -1; }
     if !self.at(1) { return self.complain(src, "a record name"); }
-    let name_tok: Int = self.pos;
+    let name_tok: Int = self.position;
     let n: Int = self.advance();
     // `record Name<T> { ... }` — the parameters are in scope for the fields or variants.
     let declared_params: Int = self.parse_type_params(src);
@@ -1663,7 +1663,7 @@ function (mutable self: Unit) parse_record(src: String) -> Int allocates {
     let mutable count: Int = 0;
     while !self.at(32) && !self.done() {
         if !self.at(1) { return self.complain(src, "a field name"); }
-        let field_tok: Int = self.pos;
+        let field_tok: Int = self.position;
         let f: Int = self.advance();
         if !self.eat(src, 20, "`:` and the field's type") { return -1; }
         let type_node: Int = self.parse_type(src);
@@ -1685,7 +1685,7 @@ function (mutable self: Unit) parse_record(src: String) -> Int allocates {
 function (mutable self: Unit) parse_enum(src: String) -> Int allocates {
     if !self.eat(src, 110, "`enum`") { return -1; }
     if !self.at(1) { return self.complain(src, "an enum name"); }
-    let name_tok: Int = self.pos;
+    let name_tok: Int = self.position;
     let n: Int = self.advance();
     // `enum Name<T> { ... }` — the parameters are in scope for the fields or variants.
     let declared_params: Int = self.parse_type_params(src);
@@ -1696,7 +1696,7 @@ function (mutable self: Unit) parse_enum(src: String) -> Int allocates {
     let mutable count: Int = 0;
     while !self.at(32) && !self.done() {
         if !self.at(1) { return self.complain(src, "a variant name"); }
-        let variant_tok: Int = self.pos;
+        let variant_tok: Int = self.position;
         let v: Int = self.advance();
         let payload_start: Int = len(self.nested_children);
         let mutable payload: Int = 0;
@@ -1731,7 +1731,7 @@ function (mutable self: Unit) parse_enum(src: String) -> Int allocates {
 function (mutable self: Unit) parse_trait(src: String) -> Int allocates {
     if !self.eat(src, 112, "`trait`") { return -1; }
     if !self.at(1) { return self.complain(src, "a trait name"); }
-    let name_tok: Int = self.pos;
+    let name_tok: Int = self.position;
     let n: Int = self.advance();
     if !self.eat(src, 31, "`\{` opening the trait") { return -1; }
     let base: Int = len(self.stack);
@@ -1739,7 +1739,7 @@ function (mutable self: Unit) parse_trait(src: String) -> Int allocates {
     while !self.at(32) && !self.done() {
         if !self.eat(src, 102, "`function` — a trait holds signatures") { return -1; }
         if !self.at(1) { return self.complain(src, "a method name"); }
-        let method_tok: Int = self.pos;
+        let method_tok: Int = self.position;
         let m: Int = self.advance();
         if !self.eat(src, 29, "`(` and a receiver") { return -1; }
         let mutable receiver_mut: Int = 0;
@@ -1754,7 +1754,7 @@ function (mutable self: Unit) parse_trait(src: String) -> Int allocates {
         while self.at(22) {                          // ',' more parameters
             let c: Int = self.advance();
             if !self.at(1) { return self.complain(src, "a parameter name"); }
-            let pname: Int = self.pos;
+            let pname: Int = self.position;
             let pn: Int = self.advance();
             if !self.eat(src, 20, "`:` and the parameter's type") { return -1; }
             let type_node: Int = self.parse_type(src);
@@ -1780,11 +1780,11 @@ function (mutable self: Unit) parse_trait(src: String) -> Int allocates {
 function (mutable self: Unit) parse_impl(src: String) -> Int allocates {
     if !self.eat(src, 113, "`implement`") { return -1; }
     if !self.at(1) { return self.complain(src, "a trait name"); }
-    let trait_tok: Int = self.pos;
+    let trait_tok: Int = self.position;
     let t: Int = self.advance();
     if !self.eat(src, 114, "`for`") { return -1; }
     if !self.at(1) { return self.complain(src, "the type implementing the trait"); }
-    let type_tok: Int = self.pos;
+    let type_tok: Int = self.position;
     let type_node: Int = self.advance();
     if !self.eat(src, 31, "`\{` opening the implementation") { return -1; }
     let base: Int = len(self.stack);
@@ -1805,7 +1805,7 @@ function (mutable self: Unit) parse_extern(src: String) -> Int allocates {
     if !self.eat(src, 116, "`external`") { return -1; }
     if !self.eat(src, 102, "`function` after `external`") { return -1; }
     if !self.at(1) { return self.complain(src, "a function name"); }
-    let name_tok: Int = self.pos;
+    let name_tok: Int = self.position;
     let n: Int = self.advance();
     if self.at(35) {                                 // '<'
         let complained: Int = self.complain_at(src, name_tok,
@@ -1869,5 +1869,5 @@ function (mutable self: Unit) skip_item() -> Int {
             break;
         }
     }
-    return self.pos;
+    return self.position;
 }

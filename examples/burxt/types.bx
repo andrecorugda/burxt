@@ -105,7 +105,7 @@ record Type {
     // name is a real span — `T` is written down — which is the whole reason stage-1 can
     // hold generics at all without inventing names it cannot point at.
     name_start: Int,
-    name_len: Int,
+    name_length: Int,
 }
 
 // A binding in scope: its name as a SPAN, so the checker allocates nothing to
@@ -118,11 +118,11 @@ record Binding { start: Int, length: Int, bound_type: Type, writable: Int, depth
 // holds its element as a node index and there would be no node to point at. Instead every
 // recursive walk over types — comparison, rendering, layout — resolves each level as it
 // reaches it. That is what lets stage-1 hold generics with no new arena entries at all.
-record TypeBinding { name_start: Int, name_len: Int, bound: Type }
+record TypeBinding { name_start: Int, name_length: Int, bound: Type }
 
 // Which declaration is generic over which parameters. A side table, looked up by name span
 // like every other declaration here, because every field of a node is already spoken for.
-// `type_param_start`/`type_param_count` index `type_params`, which holds the TOKEN of each parameter's name —
+// `type_param_start`/`type_param_count` index `type_parameters`, which holds the TOKEN of each parameter's name —
 // so a parameter is a span, exactly as a record name or a variable is.
 // One instantiation of a generic function: which declaration, and what its parameters stand
 // for. Two calls with the same arguments are the same instance and share one machine function,
@@ -133,14 +133,14 @@ record Instance { generic: Int, args_start: Int, args_count: Int }
 record Generic { start: Int, length: Int, type_param_start: Int, type_param_count: Int }
 
 // A declared function: its name span, its return type, and its parameter list node.
-record DeclaredFunction { start: Int, length: Int, return_type: Type, params: Int, flags: Int }
+record DeclaredFunction { start: Int, length: Int, return_type: Type, parameters: Int, flags: Int }
 // A declared record or enum: its name span and the item node that declared it.
 record TypeDeclaration { start: Int, length: Int, kind: Int, node: Int }
 // A declared method, keyed by the receiver's name and its own.
 record Method {
-    receiver_start: Int, receiver_len: Int,
+    receiver_start: Int, receiver_length: Int,
     start: Int, length: Int,
-    return_type: Type, params: Int, mutating: Int, flags: Int,
+    return_type: Type, parameters: Int, mutating: Int, flags: Int,
 }
 
 record Unit {
@@ -158,8 +158,8 @@ record Unit {
     nested_children: [Int],
     // Top-level items, in source order, for the checker to walk.
     items: [Int],
-    syms: [Binding],
-    funs: [DeclaredFunction],
+    bindings: [Binding],
+    functions: [DeclaredFunction],
     stack: [Int],
     methods: [Method],
     types: [TypeDeclaration],
@@ -167,7 +167,7 @@ record Unit {
     depth: Int,
     problems: Int,
     // Where the parser is in the token array.
-    pos: Int,
+    position: Int,
     // Nonzero while parsing an `if`/`while` condition, where a `{` opens the BODY
     // rather than a record literal. The Rust parser carries the same flag.
     impls: [Implementation],
@@ -198,23 +198,23 @@ record Unit {
     // Also the work list. Emitting `echo$Int` discovers that `identity$Int` is wanted, so the
     // list grows while it is being drained — which is what makes a generic calling a generic
     // work, and why draining is a `while` over a growing array rather than a `for`.
-    // An index over `funs`, so declaring N functions is not N scans of a growing array.
+    // An index over `functions`, so declaring N functions is not N scans of a growing array.
     //
-    //   fun_buckets — 1024 slots, each the head of a chain, or -1 for empty
-    //   fun_chain   — parallel to `funs`: the next entry in the same bucket, or -1
+    //   function_buckets — 1024 slots, each the head of a chain, or -1 for empty
+    //   function_chain   — parallel to `functions`: the next entry in the same bucket, or -1
     //
     // A chain and not open addressing, because entries are only ever added and the chain costs one
     // Int per function rather than a table that has to be grown and re-placed. Buckets are a power
     // of two so the fold is a `remainder` of a positive number, which is all `span_hash` promises.
-    fun_buckets: [Int],
-    fun_chain: [Int],
+    function_buckets: [Int],
+    function_chain: [Int],
     instances: [Instance],
     // The type arguments of every instance, laid end to end. `Instance` carries a start and a
-    // count into this, the same shape `nested_children` and `type_params` use.
-    instance_args: [Type],
-    type_params: [Int],
+    // count into this, the same shape `nested_children` and `type_parameters` use.
+    instance_arguments: [Type],
+    type_parameters: [Int],
     // Each parameter's bound, as the token of the trait's name, or -1 for none. Parallel to
-    // `type_params`, because a parameter has exactly one bound and two arrays are cheaper
+    // `type_parameters`, because a parameter has exactly one bound and two arrays are cheaper
     // than a record that is copied at every lookup.
     type_param_bounds: [Int],
     // Bounds seen while a parameter list is being parsed, before the declaration is noted.

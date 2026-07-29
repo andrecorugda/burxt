@@ -37,7 +37,7 @@ region compile {
     // the same reason: a Span stays a byte range, and only a renderer needs to know which
     // file an offset fell in. See spec/M6-MODULES.md §1.5.
     let src: String = load_program(path);
-    let mutable unit: Unit = Unit { tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_params: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, type_bindings: [], fun_buckets: [], fun_chain: [], instances: [], instance_args: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], in_function: 0, depth: 0, problems: 0, pos: 0, token_end: 0, no_record_literal: 0, in_multiply: 0, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
+    let mutable unit: Unit = Unit { tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, type_bindings: [], function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], in_function: 0, depth: 0, problems: 0, position: 0, token_end: 0, no_record_literal: 0, in_multiply: 0, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
     let installed: Int = unit.install_keywords();
     let total: Int = unit.run(src);
 
@@ -68,15 +68,16 @@ region compile {
     // ---- phase 4: check what the parser read ----
     if unit.errors == 0 {
         let problems: Int = unit.check(src);
-        print("checked " + to_string(len(unit.funs)) + " functions and "
+        print("checked " + to_string(len(unit.functions)) + " functions and "
               + to_string(len(unit.types)) + " types");
         print("  type errors: " + to_string(problems));
         // M9: what the checker actually did, per run. A number beside a phase is the only
         // thing that turns "the checker is slow" into a place to look.
         print("  work: " + to_string(len(unit.nodes)) + " nodes, type_of "
-              + to_string(unit.type_of_calls) + ", find_sym " + to_string(unit.find_binding_calls)
-              + " over " + to_string(len(unit.syms)) + " syms, find_fun "
-              + to_string(unit.find_function_calls) + " over " + to_string(len(unit.funs)) + " funs");
+              + to_string(unit.type_of_calls) + ", find_binding " + to_string(unit.find_binding_calls)
+              + " over " + to_string(len(unit.bindings)) + " bindings, find_function "
+              + to_string(unit.find_function_calls) + " over " + to_string(len(unit.functions))
+              + " functions");
 
         // ---- phase 5: emit LLVM IR, when a second argument says where ----
         if problems == 0 && argument_count() > 2 {
