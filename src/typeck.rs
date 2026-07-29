@@ -74,6 +74,13 @@ pub enum TypedExprKind {
     ToString(Box<TypedExpr>),
     /// `byte_at(s, i)`: the i-th byte as an Int, bounds-checked at runtime.
     ByteAt { s: Box<TypedExpr>, index: Box<TypedExpr> },
+    /// `hash(x)`: a deterministic, unseeded hash of an Equatable value.
+    ///
+    /// Unseeded on purpose. The same input hashes the same in every run on every machine, which
+    /// is what lets a map iterate in a defined order and a program that contains one stay
+    /// reproducible. The trade — no HashDoS protection — and the trigger that would change it are
+    /// in spec/M11-MAPS.md Decision 4.
+    Hash(Box<TypedExpr>),
     /// `len(s)` on a String: a runtime byte scan (an array's length folds to a
     /// constant instead, so it never reaches codegen).
     StrLen(Box<TypedExpr>),
@@ -1488,7 +1495,7 @@ impl TypeChecker {
             if self.fns.contains_key(&f.name) {
                 return Err(format!("function `{}` is defined twice", f.name));
             }
-            if f.name == "len" || f.name == "byte_at" || f.name == "push" || f.name == "read_file" || f.name == "to_string" || f.name == "old" || f.name == "substring" || f.name == "truncate" || f.name == "write_file" || f.name == "argument" || f.name == "argument_count" || f.name == "divide_floor" || f.name == "divide_toward_zero" || f.name == "remainder" || f.name == "write_bytes" {
+            if f.name == "len" || f.name == "byte_at" || f.name == "push" || f.name == "read_file" || f.name == "to_string" || f.name == "old" || f.name == "substring" || f.name == "truncate" || f.name == "write_file" || f.name == "argument" || f.name == "argument_count" || f.name == "divide_floor" || f.name == "divide_toward_zero" || f.name == "remainder" || f.name == "write_bytes" || f.name == "hash" {
                 return Err(format!(
                     "the name `{}` is reserved for a built-in",
                     f.name
@@ -2143,7 +2150,7 @@ impl TypeChecker {
     /// function returns.
     fn check_extern(&self, e: &ExternFn) -> Result<(), String> {
         const RESERVED: [&str; 6] = ["printf", "fprintf", "fputs", "exit", "stderr", "main"];
-        if e.name == "len" || e.name == "byte_at" || e.name == "push" || e.name == "read_file" || e.name == "to_string" || e.name == "old" || e.name == "substring" || e.name == "truncate" || e.name == "write_file" || e.name == "argument" || e.name == "argument_count" || e.name == "divide_floor" || e.name == "divide_toward_zero" || e.name == "remainder" || e.name == "write_bytes" {
+        if e.name == "len" || e.name == "byte_at" || e.name == "push" || e.name == "read_file" || e.name == "to_string" || e.name == "old" || e.name == "substring" || e.name == "truncate" || e.name == "write_file" || e.name == "argument" || e.name == "argument_count" || e.name == "divide_floor" || e.name == "divide_toward_zero" || e.name == "remainder" || e.name == "write_bytes" || e.name == "hash" {
             return Err(format!("the name `{}` is reserved for a built-in", e.name));
         }
         if RESERVED.contains(&e.name.as_str()) {
@@ -3930,6 +3937,31 @@ impl TypeChecker {
                     return Ok(TypedExpr {
                         ty: Type::String,
                         kind: TypedExprKind::ToString(Box::new(v)),
+                    });
+                }
+                if name == "hash" {
+                    if args.len() != 1 {
+                        return Err("hash(...) takes one value: hash(key)".to_string());
+                    }
+                    let v = self.check_expr(&args[0], None)?;
+                    // Exactly the Equatable set — the types `==` works on. A key needs equality
+                    // and a hash, and the set of types that have equality is the set that can
+                    // have one, which is why there is no separate `Hashable`.
+                    match &v.ty {
+                        Type::Int | Type::Bool | Type::String | Type::Decimal { .. } => {}
+                        other => {
+                            return Err(format!(
+                                "hash(...) needs an Equatable value, and {} {} is not one. \
+                                 Equatable is Int, Bool, String and Decimal — the types `==` \
+                                 works on. For a compound key, build a String from the parts.",
+                                other.article(),
+                                other
+                            ))
+                        }
+                    }
+                    return Ok(TypedExpr {
+                        ty: Type::Int,
+                        kind: TypedExprKind::Hash(Box::new(v)),
                     });
                 }
                 if name == "byte_at" {

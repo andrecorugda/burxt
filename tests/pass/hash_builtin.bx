@@ -1,0 +1,35 @@
+// `hash(x)` — the one primitive a map needs, and the only compiler change M11 asks for.
+//
+// The numbers below are recorded, not just compared: a map that hashed differently in the two
+// compilers would put the same key in two places, so this fixture is really a differential test
+// with the answers written down. FNV-1a for a String, two rounds of xor-shift-multiply for a
+// scalar, and the same result in every run on every machine — unseeded on purpose, because a
+// seeded hash cannot iterate in a defined order. See spec/M11-MAPS.md Decision 4.
+
+region r {
+    // Stable, and different keys differ.
+    print(hash("alpha"));
+    print(hash("beta"));
+    print(hash("alpha"));
+
+    // The empty String hashes to the FNV offset basis with the sign bit cleared, which is the
+    // one input where "did the loop run at all" is visible in the answer.
+    print(hash(""));
+    print(hash("a longer key with spaces and 1234567890"));
+
+    // Scalars. `hash(0)` is 0 because zero times anything is zero — worth knowing rather than
+    // worth hiding, and harmless: a slot index of 0 is as good as any other.
+    print(hash(0));
+    print(hash(1));
+    print(hash(0 - 7));
+
+    // A Bool is an Int at run time, so `true` and `1` agree. Not a bug: they are the same bit
+    // pattern, and no map can hold both as distinct keys because no map can hold two key types.
+    print(hash(true) == hash(1));
+
+    // Never negative, which is what makes this safe as an index source. `remainder` keeps the sign
+    // of its left operand, so a negative hash would mean a negative index and a bounds failure.
+    print(hash("alpha") >= 0);
+    print(hash(0 - 7) >= 0);
+    print(remainder(hash("alpha"), 8));
+}

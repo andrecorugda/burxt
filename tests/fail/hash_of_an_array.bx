@@ -1,0 +1,6 @@
+// Nor an array, for the same reason plus one more: two arrays with equal elements would have to
+// hash the same, and that is a walk whose cost is not visible at the call site.
+region r {
+    let xs: [Int] = [1, 2, 3];
+    print(hash(xs));
+}

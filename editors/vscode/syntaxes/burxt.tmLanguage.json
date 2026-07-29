@@ -411,7 +411,7 @@
         {
           "comment": "Built-in functions. `print` is a statement keyword; the rest are calls.",
           "name": "support.function.builtin.burxt",
-          "match": "\\b(print|len|byte_at|push|read_file|to_string|old|divide_floor|divide_toward_zero|remainder|substring|write_file|write_bytes|argument|argument_count|truncate)\\b"
+          "match": "\\b(print|len|byte_at|push|read_file|to_string|old|divide_floor|divide_toward_zero|remainder|substring|write_file|write_bytes|argument|argument_count|truncate|hash)\\b"
         }
       ]
     },

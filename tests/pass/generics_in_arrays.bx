@@ -1,0 +1,31 @@
+// A growable array of a GENERIC RECORD — which is what any table is made of, and the shape a map
+// needs before a map can exist.
+//
+// The defect this caught lived in stage-1: every builtin argument was typed with NO expectation,
+// so `push(table, Entry { ... })` never told the literal what it was. Its fields stayed `K` and
+// `V` and the checker rejected a program stage-0 accepts. Invisible for a scalar argument, wrong
+// for anything that infers from its context — and `push` is the one builtin whose second argument
+// always has a context to infer from.
+
+record Entry<K, V> { key: K, value: V, used: Bool }
+record Point { x: Int, y: Int }
+
+region r {
+    let mutable table: [Entry<String, Int>] = [];
+    let added: Int = push(table, Entry { key: "alpha", value: 1, used: true });
+    let more: Int = push(table, Entry { key: "beta", value: 2, used: true });
+    print(len(table));
+    print(table[1].key);
+    print(table[1].value);
+
+    // Writing an element back, which is a whole-record copy and not a pointer store.
+    table[0] = Entry { key: "alpha", value: 9, used: true };
+    print(table[0].value);
+
+    // And an argument whose own layout is more than one cell, so the element stride is
+    // four rather than three.
+    let mutable places: [Entry<String, Point>] = [];
+    let put: Int = push(places, Entry { key: "origin", value: Point { x: 3, y: 4 },
+                                        used: true });
+    print(places[0].value.x + places[0].value.y);
+}

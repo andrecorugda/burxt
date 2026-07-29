@@ -1408,6 +1408,24 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_load(self.llvm_type(&ty), slot, name)
                     .map_err(|e| e.to_string())
             }
+            TypedExprKind::Hash(inner) => {
+                // FNV-1a over the bytes for a String; a multiplicative mix for the scalars.
+                // Both are emitted as calls to one runtime helper rather than inline, so the two
+                // compilers can be checked against each other by comparing numbers.
+                //
+                // Deterministic and unseeded: see spec/M11-MAPS.md Decision 4 for the trade and
+                // the trigger that would add a seeded constructor.
+                let value = self.gen_expr(inner)?;
+                let helper = self.hash_fn(matches!(inner.ty, Type::String))?;
+                let call = self
+                    .builder
+                    .build_call(helper, &[value.into()], "hashed")
+                    .map_err(|e| e.to_string())?;
+                match call.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(v) => Ok(v),
+                    _ => Err("hash helper returned void".to_string()),
+                }
+            }
             TypedExprKind::ByteAt { s, index } => {
                 let sp = self.gen_expr(s)?.into_pointer_value();
                 let i = self.gen_expr(index)?.into_int_value();
@@ -2771,6 +2789,118 @@ impl<'ctx> CodeGen<'ctx> {
             inkwell::values::ValueKind::Basic(v) => Ok(v.into_int_value()),
             _ => Err("checked-arithmetic helper returned void".to_string()),
         }
+    }
+
+    /// Get (or lazily define) the two hash helpers.
+    ///
+    /// **FNV-1a** for a String: offset basis 0xcbf29ce484222325, prime 0x100000001b3, one xor and
+    /// one multiply per byte. Chosen over anything cleverer because it is four lines, has no
+    /// tables, and — the reason that matters here — is easy to write a second time and get the
+    /// same numbers, which is exactly what the differential test demands of it.
+    ///
+    /// A multiplicative mix for the scalars, so that small consecutive Ints do not land in
+    /// consecutive slots. An identity hash would make `Map<Int, V>` degenerate into the linear
+    /// probe chain this milestone exists to remove.
+    ///
+    /// Wrapping arithmetic throughout, and that is deliberate in a language where `+` panics on
+    /// overflow: a hash is not a quantity, it is a bit pattern, and there is nothing to conserve.
+    /// The helper is the ONLY place in a Burxt program where that is true, which is a good reason
+    /// for it to be a helper rather than something a program could write with `*`.
+    fn hash_fn(&mut self, of_string: bool) -> Result<FunctionValue<'ctx>, String> {
+        let name = if of_string { "burxt.hash_str" } else { "burxt.hash_int" };
+        if let Some(f) = self.module.get_function(name) {
+            if f.count_basic_blocks() > 0 {
+                return Ok(f);
+            }
+        }
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let saved_block = self.builder.get_insert_block();
+        let i64t = self.ctx.i64_type();
+        let i8t = self.ctx.i8_type();
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+        let basis = i64t.const_int(0xcbf2_9ce4_8422_2325, false);
+        let prime = i64t.const_int(0x0000_0100_0000_01b3, false);
+        // The sign bit cleared, so a hash is never negative. Every caller turns a hash into an
+        // index with `remainder(h, capacity)`, and in Burxt `remainder` keeps the sign of its left
+        // operand — so a negative hash would produce a negative index and a bounds failure at run
+        // time. One instruction here removes that from every caller forever, which is the trade
+        // this language is supposed to make. Documented as part of what `hash` promises.
+        let positive = i64t.const_int(0x7fff_ffff_ffff_ffff, false);
+
+        let fn_ty = if of_string {
+            i64t.fn_type(&[ptr.into()], false)
+        } else {
+            i64t.fn_type(&[i64t.into()], false)
+        };
+        let f = match self.module.get_function(name) {
+            Some(existing) => existing,
+            None => self.module.add_function(name, fn_ty, None),
+        };
+        let entry = self.ctx.append_basic_block(f, "entry");
+        self.builder.position_at_end(entry);
+
+        if !of_string {
+            // Two rounds of xor-shift and multiply. Enough to spread the low bits of a small
+            // integer across the word, which is all a slot index reads.
+            let x = f.get_nth_param(0).unwrap().into_int_value();
+            let mixed = self.builder.build_int_mul(x, prime, "mix1").map_err(err)?;
+            let shifted = self
+                .builder
+                .build_right_shift(mixed, i64t.const_int(29, false), false, "shift1")
+                .map_err(err)?;
+            let folded = self.builder.build_xor(mixed, shifted, "fold1").map_err(err)?;
+            let again = self.builder.build_int_mul(folded, prime, "mix2").map_err(err)?;
+            let shifted2 = self
+                .builder
+                .build_right_shift(again, i64t.const_int(32, false), false, "shift2")
+                .map_err(err)?;
+            let folded2 = self.builder.build_xor(again, shifted2, "fold2").map_err(err)?;
+            let out = self.builder.build_and(folded2, positive, "positive").map_err(err)?;
+            self.builder.build_return(Some(&out)).map_err(err)?;
+        } else {
+            let sp = f.get_nth_param(0).unwrap().into_pointer_value();
+            let acc = self.builder.build_alloca(i64t, "acc").map_err(err)?;
+            let idx = self.builder.build_alloca(i64t, "i").map_err(err)?;
+            self.builder.build_store(acc, basis).map_err(err)?;
+            self.builder.build_store(idx, i64t.const_zero()).map_err(err)?;
+            let head = self.ctx.append_basic_block(f, "head");
+            let body = self.ctx.append_basic_block(f, "body");
+            let done = self.ctx.append_basic_block(f, "done");
+            self.builder.build_unconditional_branch(head).map_err(err)?;
+
+            self.builder.position_at_end(head);
+            let i = self.builder.build_load(i64t, idx, "i_now").map_err(err)?.into_int_value();
+            let at = unsafe { self.builder.build_gep(i8t, sp, &[i], "at") }.map_err(err)?;
+            let byte = self.builder.build_load(i8t, at, "byte").map_err(err)?.into_int_value();
+            let more = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::NE, byte, i8t.const_zero(), "more")
+                .map_err(err)?;
+            self.builder.build_conditional_branch(more, body, done).map_err(err)?;
+
+            self.builder.position_at_end(body);
+            let wide = self.builder.build_int_z_extend(byte, i64t, "wide").map_err(err)?;
+            let current = self.builder.build_load(i64t, acc, "h").map_err(err)?.into_int_value();
+            let xored = self.builder.build_xor(current, wide, "h_xor").map_err(err)?;
+            let scaled = self.builder.build_int_mul(xored, prime, "h_mul").map_err(err)?;
+            self.builder.build_store(acc, scaled).map_err(err)?;
+            let next = self
+                .builder
+                .build_int_add(i, i64t.const_int(1, false), "i_next")
+                .map_err(err)?;
+            self.builder.build_store(idx, next).map_err(err)?;
+            self.builder.build_unconditional_branch(head).map_err(err)?;
+
+            self.builder.position_at_end(done);
+            let raw = self.builder.build_load(i64t, acc, "h_out").map_err(err)?.into_int_value();
+            let out = self.builder.build_and(raw, positive, "positive").map_err(err)?;
+            self.builder.build_return(Some(&out)).map_err(err)?;
+        }
+
+        if let Some(b) = saved_block {
+            self.builder.position_at_end(b);
+        }
+        Ok(f)
     }
 
     /// Get (or lazily define) `i64 @burxt.checked.<op>(i64, i64)`: performs the

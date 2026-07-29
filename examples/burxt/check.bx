@@ -583,6 +583,7 @@ function is_reserved_name(src: String, start: Int, length: Int) -> Bool {
         || span_equal(src, start, length, "divide_floor")
         || span_equal(src, start, length, "divide_toward_zero")
         || span_equal(src, start, length, "remainder")
+        || span_equal(src, start, length, "hash")
         || span_equal(src, start, length, "old")
         || span_equal(src, start, length, "result")
         || span_equal(src, start, length, "main")

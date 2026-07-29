@@ -1288,6 +1288,19 @@ function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String)
                                   + ")\n");
         return reg;
     }
+    if called == "hash" {
+        // Which helper depends on the ARGUMENT's type, not the result's: a String hashes its
+        // bytes and a scalar hashes its value, and they are two functions rather than one with a
+        // branch because the argument arrives as a different kind of thing.
+        let of_what: Type = self.type_at(self.children[self.nodes[n.a].a]);
+        let mutable which: String = "burxt.hash_int";
+        if of_what.kind == 42 {
+            which = "burxt.hash_str";
+        }
+        let visited: Int = self.write_body("  " + reg + " = call i64 @" + which + "(i64 "
+                                  + first + ")\n");
+        return reg;
+    }
     if called == "write_bytes" {
         let visited: Int = self.write_body("  " + reg + " = call i64 @burxt.write_bytes(i64 "
                                   + first + ", i64 " + second + ")\n");
@@ -2683,6 +2696,57 @@ function runtime_ir() -> String allocates {
         // One narrow pass into region memory, then a SINGLE fwrite. Writing byte by byte through
         // the C library would be a million calls for a megabyte, which is the whole reason this
         // builtin exists — see the fixture, which is about not building a String in a loop.
+        // The two hash helpers, and they must answer EXACTLY what stage-0's answer. FNV-1a for a
+        // String — offset basis 0xcbf29ce484222325, prime 0x100000001b3, one xor and one multiply
+        // per byte — and two rounds of xor-shift-multiply for a scalar, so small consecutive Ints
+        // do not land in consecutive slots.
+        //
+        // The sign bit is cleared, so a hash is never negative: every caller turns one into an
+        // index with `remainder(h, capacity)`, and `remainder` keeps the sign of its left operand,
+        // so a negative hash would mean a negative index and a bounds failure at run time. One
+        // instruction here removes that from every caller.
+        //
+        // Wrapping arithmetic, which is deliberate in a language where `+` panics on overflow: a
+        // hash is a bit pattern and not a quantity, so there is nothing to conserve. This is the
+        // only place in a Burxt program where that is true, and it is a good reason for hashing to
+        // be a builtin rather than something a program writes with `*`.
+        + "define i64 @burxt.hash_int(i64 %x) \{\n"
+        + "entry:\n"
+        + "  %m1 = mul i64 %x, 1099511628211\n"
+        + "  %s1 = lshr i64 %m1, 29\n"
+        + "  %f1 = xor i64 %m1, %s1\n"
+        + "  %m2 = mul i64 %f1, 1099511628211\n"
+        + "  %s2 = lshr i64 %m2, 32\n"
+        + "  %f2 = xor i64 %m2, %s2\n"
+        + "  %out = and i64 %f2, 9223372036854775807\n"
+        + "  ret i64 %out\n\}\n\n"
+        + "define i64 @burxt.hash_str(i64 %s) \{\n"
+        + "entry:\n"
+        + "  %sp = inttoptr i64 %s to ptr\n"
+        + "  %acc = alloca i64\n"
+        + "  %ip = alloca i64\n"
+        + "  store i64 -3750763034362895579, ptr %acc\n"
+        + "  store i64 0, ptr %ip\n"
+        + "  br label %head\n"
+        + "head:\n"
+        + "  %i = load i64, ptr %ip\n"
+        + "  %at = getelementptr i8, ptr %sp, i64 %i\n"
+        + "  %byte = load i8, ptr %at\n"
+        + "  %more = icmp ne i8 %byte, 0\n"
+        + "  br i1 %more, label %body, label %done\n"
+        + "body:\n"
+        + "  %wide = zext i8 %byte to i64\n"
+        + "  %h = load i64, ptr %acc\n"
+        + "  %x = xor i64 %h, %wide\n"
+        + "  %scaled = mul i64 %x, 1099511628211\n"
+        + "  store i64 %scaled, ptr %acc\n"
+        + "  %next = add i64 %i, 1\n"
+        + "  store i64 %next, ptr %ip\n"
+        + "  br label %head\n"
+        + "done:\n"
+        + "  %raw = load i64, ptr %acc\n"
+        + "  %out = and i64 %raw, 9223372036854775807\n"
+        + "  ret i64 %out\n\}\n\n"
         + "define i64 @burxt.write_bytes(i64 %path, i64 %xs) \{\n"
         + "entry:\n"
         + "  %h = inttoptr i64 %xs to ptr\n"

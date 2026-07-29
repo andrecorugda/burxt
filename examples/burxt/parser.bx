@@ -290,6 +290,7 @@ function builtin_arity(name: String) -> Int {
     if name == "to_string" { return 1; }
     if name == "read_file" { return 1; }
     if name == "argument" { return 1; }
+    if name == "hash" { return 1; }
     if name == "byte_at" { return 2; }
     if name == "push" { return 2; }
     if name == "truncate" { return 2; }
@@ -317,6 +318,7 @@ function builtin_result(name: String) -> Type {
     if name == "divide_floor" { return simple_type(40); }
     if name == "divide_toward_zero" { return simple_type(40); }
     if name == "remainder" { return simple_type(40); }
+    if name == "hash" { return simple_type(40); }
     return unknown_type();
 }
 
@@ -324,6 +326,19 @@ function builtin_result(name: String) -> Type {
 // also need a MUTABLE binding, because they change the array in place.
 function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: String, first: Type,
                                        second: Type, first_node: Int) -> Int allocates {
+    // Exactly the Equatable set — the types `==` works on. A key needs equality and a hash, and
+    // the set of types that have equality is the set that can have one, which is why there is no
+    // separate `Hashable` bound naming the same four types again.
+    if called == "hash" {
+        if !is_unknown(first) && first.kind != 40 && first.kind != 41 && first.kind != 42
+           && first.kind != 45 {
+            let complained: Int = self.complain_at(src, at,
+                "`hash` needs an Equatable value, and " + self.show_type(src, first)
+                + " is not one. Equatable is Int, Bool, String and Decimal — the types `==` "
+                + "works on. For a compound key, build a String from the parts");
+        }
+        return 1;
+    }
     if called == "len" {
         if !is_unknown(first) && first.kind != 47 && first.kind != 48 && first.kind != 42 {
             let complained: Int = self.complain_at(src, at,
@@ -439,12 +454,26 @@ function (mutable self: Unit) builtin_type(src: String, name: Token, at: Int, ar
     let mutable second: Type = unknown_type();
     let mutable count: Int = 0;
     let mutable first_node: Int = -1;
+    let called_is_push: Bool = span_equal(src, name.start, name.length, "push");
     if args >= 0 {
         let list: Node = self.nodes[args];
         count = list.b;
         let mutable i: Int = 0;
         while i < list.b {
-            let t: Type = self.type_of(src, self.children[list.a + i], unknown_type());
+            // `push(xs, value)` types the VALUE against the array's element, because a record
+            // literal cannot know what it is without being told: `push(table, Entry { ... })`
+            // needs `Entry<String, Int>` to reach the literal or its fields stay `K` and `V`.
+            //
+            // Every builtin argument used to be typed with no expectation at all, which is
+            // invisible for a scalar and wrong for anything that infers from context. Stage-0
+            // passed the element type from the day `push` existed; this is stage-1 catching up,
+            // and the differential test is what it was going to be caught by.
+            let mutable want: Type = unknown_type();
+            if i == 1 && called_is_push && (first.kind == 47 || first.kind == 48) {
+                let written: Type = self.declared_type(src, first.scale);
+                want = self.resolve_deep(src, written, self.children[list.a + i]);
+            }
+            let t: Type = self.type_of(src, self.children[list.a + i], want);
             if i == 0 {
                 first = t;
                 first_node = self.children[list.a];
@@ -487,21 +516,12 @@ function (mutable self: Unit) builtin_type(src: String, name: Token, at: Int, ar
             let complained: Int = self.not_pure(src, at, "write a file");
         }
     }
-    if span_equal(src, name.start, name.length, "len") { return simple_type(40); }
-    if span_equal(src, name.start, name.length, "byte_at") { return simple_type(40); }
-    if span_equal(src, name.start, name.length, "push") { return simple_type(40); }
-    if span_equal(src, name.start, name.length, "truncate") { return simple_type(40); }
-    if span_equal(src, name.start, name.length, "argument_count") { return simple_type(40); }
-    if span_equal(src, name.start, name.length, "write_file") { return simple_type(40); }
-    if span_equal(src, name.start, name.length, "write_bytes") { return simple_type(40); }
-    if span_equal(src, name.start, name.length, "divide_floor") { return simple_type(40); }
-    if span_equal(src, name.start, name.length, "divide_toward_zero") { return simple_type(40); }
-    if span_equal(src, name.start, name.length, "remainder") { return simple_type(40); }
-    if span_equal(src, name.start, name.length, "to_string") { return simple_type(42); }
-    if span_equal(src, name.start, name.length, "read_file") { return simple_type(42); }
-    if span_equal(src, name.start, name.length, "substring") { return simple_type(42); }
-    if span_equal(src, name.start, name.length, "argument") { return simple_type(42); }
-    return unknown_type();
+    // One list, not two. This function used to repeat `builtin_result` name for name, and adding
+    // `hash` to the other one left this one behind — so `hash(...)` typechecked as "unknown
+    // function" while every table said it existed. A fact stored twice is a fact that disagrees
+    // with itself eventually; the arity check above already answers from `builtin_result`, so this
+    // is the same answer from the same place.
+    return builtin_result(called);
 }
 
 // A `dynamic Trait` value can do exactly what the trait says, so the trait's signature
