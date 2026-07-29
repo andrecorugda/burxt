@@ -1,0 +1,74 @@
+// ============================================================================
+// lib/result.bx — failure, made explicit.
+//
+//     use "lib/result.bx";
+//
+// A function that can fail says so in its type. There is no exception to catch
+// and no error code to forget, because the compiler will not let a `Result` be
+// read without saying what happens when it is an error.
+//
+// A LIBRARY file, like lib/option.bx: `Result<T, E>` is three lines of Burxt.
+// ============================================================================
+
+// Either an answer or a reason there is none. `E` is usually a String while a
+// program is young and an enum once its failures are worth naming.
+enum Result<T, E> {
+    Ok(T),
+    Error(E)
+}
+
+// ---- Writing one -----------------------------------------------------------
+//
+//     function divide(a: Int, b: Int) -> Result<Int, String> {
+//         if b == 0 {
+//             return Result.Error("division by zero");
+//         }
+//         return Result.Ok(divide_toward_zero(a, b));
+//     }
+//
+// ---- Reading one -----------------------------------------------------------
+//
+//     match divide(10, 2) {
+//         Ok(answer) => { print(answer); }
+//         Error(why) => { print(why); }
+//     }
+//
+// Both arms are required. That is the whole feature.
+
+// The answer, or the fallback. For when a failure has an obvious substitute.
+function result_or<T, E>(r: Result<T, E>, fallback: T) -> T {
+    match r {
+        Ok(value) => { return value; }
+        Error(why) => { return fallback; }
+    }
+}
+
+function result_is_ok<T, E>(r: Result<T, E>) -> Bool {
+    match r {
+        Ok(value) => { return true; }
+        Error(why) => { return false; }
+    }
+}
+
+// ---- What is deliberately absent -------------------------------------------
+//
+// There is no `unwrap`, for the reason lib/option.bx gives.
+//
+// ---- `?` ---------------------------------------------------------------------
+//
+//     function read_total(path: String) -> Result<Int, String> {
+//         let text = read_file(path);
+//         let n = parse_int(text)?;        // the value, or return the error
+//         return Result.Ok(n * 2);
+//     }
+//
+// `?` yields the success value, or returns the failure from the enclosing function
+// immediately. It recognises a failure by the VARIANT name — `Error` here, `None` in
+// lib/option.bx — never by the enum's own name, which is what lets these two be
+// library types rather than built-ins.
+//
+// It does NOT convert between error types. If the callee fails with a String and you
+// fail with something else, write the `match`: somebody has to decide what the
+// caller's failure means, and that decision does not belong to an operator. See
+// spec/M8-ERRORS.md §1a for the reasoning, and the trigger that would add a
+// conversion trait.

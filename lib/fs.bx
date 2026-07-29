@@ -1,0 +1,106 @@
+// ============================================================================
+// lib/fs.bx — files, without writing `external function fopen` yourself.
+//
+//     use "lib/fs.bx";
+//
+// The language gives `read_file` and `write_file`, which read and replace a whole
+// file. Everything else a program needs from a filesystem — appending, existence,
+// listing a directory, deleting — is here, and each one is written ONCE so that
+// nobody has to promise the compiler something it cannot check.
+//
+// That promise is the reason this file exists. `opendir` returns a pointer, and
+// Burxt refuses a C return whose ownership it cannot describe (see the guide's
+// chapter on the C boundary), so listing a directory is not directly expressible.
+// The honest way through is the shell, and it belongs behind one function rather
+// than in every program.
+// ============================================================================
+
+external function system(command: String) -> CInt;
+external function remove(path: String) -> CInt;
+external function rename(from: String, to: String) -> CInt;
+external function mkdir(path: String, mode: Int) -> CInt;
+
+// Everything a path holds, as one String. Empty when the file cannot be read —
+// which is indistinguishable from an empty file, and the honest fix is
+// `Option<String>`, which the language does not have yet. Said plainly rather
+// than papered over.
+function fs_read(path: String) -> String allocates {
+    return read_file(path);
+}
+
+// Replaces the file. Answers the number of bytes written.
+function fs_write(path: String, text: String) -> Int {
+    return write_file(path, text);
+}
+
+// Adds to the end, leaving what was there. Read-modify-write, because the
+// builtin replaces rather than appends — fine for a log line, wrong for a
+// gigabyte, and that is worth knowing before you use it.
+function fs_append(path: String, text: String) -> Int allocates {
+    let existing: String = read_file(path);
+    return write_file(path, existing + text);
+}
+
+function fs_exists(path: String) -> Bool allocates {
+    // `test -e` rather than a read: a file may exist and be unreadable, and it may
+    // be a directory, and both are still "it exists".
+    return system("test -e " + fs_quote(path)) == 0;
+}
+
+function fs_delete(path: String) -> Bool {
+    return remove(path) == 0;
+}
+
+function fs_move(from: String, to: String) -> Bool {
+    return rename(from, to) == 0;
+}
+
+// 0755: readable and executable by everyone, writable by its owner.
+function fs_make_dir(path: String) -> Bool allocates {
+    return system("mkdir -p " + fs_quote(path)) == 0;
+}
+
+// Every name in a directory. The shell does the reading because `opendir` returns
+// a pointer Burxt will not accept, and the answer comes back through a file —
+// visible here, so no program has to know it.
+function fs_list(directory: String) -> [String] allocates {
+    let scratch: String = "/tmp/burxt-fs-list";
+    let status: Int = system("ls -1 " + fs_quote(directory) + " > " + scratch + " 2>/dev/null");
+    let text: String = read_file(scratch);
+    let dropped: Bool = fs_delete(scratch);
+    return fs_split_lines(text);
+}
+
+// A path made safe for the shell. Single quotes stop every expansion there is, and
+// a single quote inside a path is the one case they cannot hold — so it is refused
+// rather than mishandled.
+function fs_quote(path: String) -> String allocates {
+    let mutable i: Int = 0;
+    while i < len(path) {
+        if byte_at(path, i) == 39 {
+            print("fs: a path containing a single quote cannot be passed to the shell safely");
+            return "''";
+        }
+        i += 1;
+    }
+    return "'" + path + "'";
+}
+
+// Split on newlines, dropping the empty piece a trailing newline leaves. Local
+// rather than borrowed from lib/str.bx, so `use "lib/fs.bx"` pulls in files and
+// nothing else.
+function fs_split_lines(text: String) -> [String] allocates {
+    let mutable lines: [String] = [];
+    let mutable from: Int = 0;
+    let mutable i: Int = 0;
+    while i <= len(text) {
+        if i == len(text) || byte_at(text, i) == 10 {
+            if i > from {
+                let added: Int = push(lines, substring(text, from, i - from));
+            }
+            from = i + 1;
+        }
+        i += 1;
+    }
+    return lines;
+}

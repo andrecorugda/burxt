@@ -18,7 +18,7 @@ enum Option<T> {
 
 enum Result<T, E> {
     Ok(T),
-    Err(E)
+    Error(E)
 }
 
 // A function that might not find anything says so in its type. There is no
@@ -38,7 +38,7 @@ function position_of(xs: [Int], want: Int) -> Option<Int> {
 // error code to check-or-not.
 function divide(a: Int, b: Int) -> Result<Int, String> {
     if b == 0 {
-        return Result.Err("division by zero");
+        return Result.Error("division by zero");
     }
     return Result.Ok(divide_toward_zero(a, b));
 }
@@ -93,21 +93,21 @@ region r {
 
     match divide(10, 2) {
         Ok(answer) => { print(answer); }
-        Err(why) => { print(why); }
+        Error(why) => { print(why); }
     }
     match divide(1, 0) {
         Ok(answer) => { print(answer); }
-        Err(why) => { print(why); }
+        Error(why) => { print(why); }
     }
 
     // `?` in action: the second call fails, and the failure travels out untouched.
     match average(10, 6, 2) {
         Ok(mean) => { print(mean); }
-        Err(why) => { print(why); }
+        Error(why) => { print(why); }
     }
     match average(10, 6, 0) {
         Ok(mean) => { print(mean); }
-        Err(why) => { print(why); }
+        Error(why) => { print(why); }
     }
     match doubled_first(xs) {
         None => { print("no 5"); }
@@ -141,7 +141,7 @@ region r {
 // the failure from here, immediately.
 //
 //     function average(a: Int, b: Int, n: Int) -> Result<Int, String> {
-//         let mean = divide(a + b, n)?;      // the value, or return the Err
+//         let mean = divide(a + b, n)?;      // the value, or return the Error
 //         return Result.Ok(mean);
 //     }
 //
@@ -152,14 +152,14 @@ region r {
 //         return Option.Some(head * 2);
 //     }
 //
-// `?` recognises a failure by the VARIANT name — `Err` or `None` — never by the
+// `?` recognises a failure by the VARIANT name — `Error` or `None` — never by the
 // enum's own name. That is what lets these be library types: an enum you write
-// yourself gets `?` too, as long as its failing case is called `Err` or `None`.
+// yourself gets `?` too, as long as its failing case is called `Error` or `None`.
 //
 // And it does NOT convert between error types:
 //
 //     error: `?` does not convert between failures: this one carries String, and the
-//            enclosing function's `Err` carries Int. Write the `match`, or make the
+//            enclosing function's `Error` carries Int. Write the `match`, or make the
 //            two agree.
 //
 // Two libraries with different failures means two `match`es. That is more typing and

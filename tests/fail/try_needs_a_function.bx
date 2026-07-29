@@ -1,8 +1,8 @@
 // `?` returns the failure from the enclosing function. A top-level statement has none.
-enum Result<T, E> { Ok(T), Err(E) }
+enum Result<T, E> { Ok(T), Error(E) }
 
 function checked(a: Int, b: Int) -> Result<Int, String> {
-    if b == 0 { return Result.Err("division by zero"); }
+    if b == 0 { return Result.Error("division by zero"); }
     return Result.Ok(divide_toward_zero(a, b));
 }
 

@@ -23,7 +23,7 @@ function parse_amount(text: String) -> Result<Decimal<2>, String> { ... }
 
 match parse_amount(input) {
     Ok(amount) => { print(amount); }
-    Err(why) => { print("bad amount: {why}"); }
+    Error(why) => { print("bad amount: {why}"); }
 }
 ```
 
@@ -61,20 +61,20 @@ has to decide what the caller's failure means.
 
 ### Decision B — `?` is spelled by VARIANT name, not by type name.
 
-`?` works on any enum with **exactly two variants**, one of which is named `Err` or `None`. The
+`?` works on any enum with **exactly two variants**, one of which is named `Error` or `None`. The
 other variant carries the value, and its name is irrelevant. The enum's own name is irrelevant
 too.
 
 **Why not bless `Result` and `Option` by name.** They are library types. A compiler that knows
 the *type* names cannot be told that `lib/` wrote them — it has hardcoded a specific library,
 and a second library with the same shape is a second-class citizen. Blessing two *variant*
-names is a much smaller commitment: it says "an enum whose failure case is called `Err` behaves
+names is a much smaller commitment: it says "an enum whose failure case is called `Error` behaves
 like a failure", which is a convention a reader already holds, and any library may follow it.
 
 So `?` on a value of
 
 ```text
-enum Fetched<T> { Err(String), Got(T) }
+enum Fetched<T> { Error(String), Got(T) }
 ```
 
 works, and reads correctly, without `Fetched` being known to the compiler.
@@ -94,7 +94,7 @@ error: `?` returns the error from the enclosing function, and `read_invoice` ret
 
 ```text
 enum Option<T> { None, Some(T) }
-enum Result<T, E> { Ok(T), Err(E) }
+enum Result<T, E> { Ok(T), Error(E) }
 ```
 
 Four lines. Burxt already has enums with payloads and **exhaustive `match` with no
@@ -108,7 +108,7 @@ library type its behaviour is written in Burxt and can be read.
 ### Decision 2 — no `?`, no exceptions, no unwrap-by-default
 
 Handling is a `match`. There is no operator that propagates a failure invisibly and no
-function that turns an `Err` into a crash without saying so.
+function that turns an `Error` into a crash without saying so.
 
 **Why no `?`.** It is genuinely convenient and it hides a control-flow edge at every call
 site. Burxt's position on hidden control flow is already settled — no exceptions, `dynamic` only

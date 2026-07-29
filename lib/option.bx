@@ -1,0 +1,76 @@
+// ============================================================================
+// lib/option.bx — absence, made explicit.
+//
+//     use "lib/option.bx";
+//
+// Burxt has no null. Nothing is implicitly absent, no value silently means
+// "missing", and no dereference can fail — because absence is a type, and the
+// compiler makes you say what happens when there is nothing there.
+//
+// This is a LIBRARY file. `Option<T>` is four lines of Burxt with no compiler
+// support beyond generics, which is the test M7 set for whether the generics are
+// real: if `Option` had needed a keyword, they were not.
+// ============================================================================
+
+// One of two things: nothing, or a value. `match` forces both cases to be
+// written, so "I forgot to handle missing" is a compile error rather than a
+// crash at three in the morning.
+enum Option<T> {
+    None,
+    Some(T)
+}
+
+// ---- Reading one -----------------------------------------------------------
+//
+// `match` is the whole interface, and it is deliberately not hidden:
+//
+//     match found {
+//         None => { print("nothing"); }
+//         Some(value) => { print(value); }
+//     }
+//
+// What the helpers below add is the two shapes worth naming. They take the
+// fallback by value, so nothing is computed that might not be needed — Burxt has
+// no closures yet, and a lazy default would need one.
+
+// The value, or the fallback. The one everybody writes first.
+function option_or<T>(o: Option<T>, fallback: T) -> T {
+    match o {
+        None => { return fallback; }
+        Some(value) => { return value; }
+    }
+}
+
+// Whether there is anything there. Useful in a condition; useless for getting at
+// the value, which is the point — asking is not the same as having.
+function option_is_some<T>(o: Option<T>) -> Bool {
+    match o {
+        None => { return false; }
+        Some(value) => { return true; }
+    }
+}
+
+function option_is_none<T>(o: Option<T>) -> Bool {
+    match o {
+        None => { return true; }
+        Some(value) => { return false; }
+    }
+}
+
+// ---- What is deliberately absent -------------------------------------------
+//
+// There is no `unwrap`. A function that says "give me the value and abort if
+// there is none" is null with extra steps, and the crash it causes is exactly
+// the one this type exists to prevent. `option_or` covers the case where a
+// default is right, and `match` covers the case where it is not.
+//
+// There is no `map`. It needs a function as a value, and a closure needs an
+// owner for its captured state — see spec/M10-ERGONOMICS.md §3.
+//
+// `?` does work here: in a function that itself answers with an `Option`,
+// `let v = find(xs, 9)?;` yields the value or returns `None` immediately. It
+// recognises absence by the variant name `None`, so nothing in the compiler needs
+// to know this file exists.
+//
+// A payload must be Int, Bool, String or Decimal for now: an aggregate payload
+// reopens the recursive-size question. `Option<Point>` is refused, and says so.

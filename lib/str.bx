@@ -1,0 +1,159 @@
+// ============================================================================
+// lib/str.bx — Strings, beyond the four builtins.
+//
+//     use "lib/str.bx";
+//
+// A Burxt String is bytes, and the language gives you `len`, `byte_at`,
+// `substring` and `+`. Everything here is written from those four, so nothing in
+// this file can do something a program could not have done itself — which is the
+// point of a standard library rather than a privileged one.
+// ============================================================================
+
+// Where `needle` first appears in `text`, or -1. The naive scan, deliberately:
+// a compiler's lexer does not search, and a program that needs Boyer-Moore knows
+// it does. Simple until measured.
+function str_find(text: String, needle: String) -> Int {
+    let n: Int = len(needle);
+    if n == 0 {
+        return 0;
+    }
+    let mutable i: Int = 0;
+    while i + n <= len(text) {
+        let mutable k: Int = 0;
+        let mutable same: Bool = true;
+        while k < n {
+            if byte_at(text, i + k) != byte_at(needle, k) {
+                same = false;
+                k = n;
+            } else {
+                k += 1;
+            }
+        }
+        if same {
+            return i;
+        }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+function str_contains(text: String, needle: String) -> Bool {
+    return str_find(text, needle) >= 0;
+}
+
+function str_starts_with(text: String, prefix: String) -> Bool {
+    if len(prefix) > len(text) {
+        return false;
+    }
+    let mutable i: Int = 0;
+    while i < len(prefix) {
+        if byte_at(text, i) != byte_at(prefix, i) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+function str_ends_with(text: String, suffix: String) -> Bool {
+    let n: Int = len(suffix);
+    if n > len(text) {
+        return false;
+    }
+    let base: Int = len(text) - n;
+    let mutable i: Int = 0;
+    while i < n {
+        if byte_at(text, base + i) != byte_at(suffix, i) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+// Whitespace removed from both ends: space, tab, newline, carriage return.
+function str_trim(text: String) -> String allocates {
+    let mutable from: Int = 0;
+    while from < len(text) && str_is_space(byte_at(text, from)) {
+        from += 1;
+    }
+    let mutable to: Int = len(text);
+    while to > from && str_is_space(byte_at(text, to - 1)) {
+        to -= 1;
+    }
+    return substring(text, from, to - from);
+}
+
+function str_is_space(byte: Int) -> Bool {
+    return byte == 32 || byte == 9 || byte == 10 || byte == 13;
+}
+
+// Split on a single byte. Answers a growable array, so it needs a region — the
+// pieces are new Strings and they have to live somewhere.
+function str_split(text: String, separator: Int) -> [String] allocates {
+    let mutable pieces: [String] = [];
+    let mutable from: Int = 0;
+    let mutable i: Int = 0;
+    while i <= len(text) {
+        if i == len(text) || byte_at(text, i) == separator {
+            let added: Int = push(pieces, substring(text, from, i - from));
+            from = i + 1;
+        }
+        i += 1;
+    }
+    return pieces;
+}
+
+function str_lines(text: String) -> [String] allocates {
+    return str_split(text, 10);
+}
+
+// An Int parsed from decimal digits, with a leading `-` allowed. Answers 0 for
+// anything it cannot read — which is a real limitation, and the honest fix is
+// `Option<Int>`, which the language does not have yet. Named in the guide rather
+// than hidden here.
+function str_to_int(text: String) -> Int {
+    let mutable i: Int = 0;
+    let mutable negative: Bool = false;
+    if len(text) > 0 && byte_at(text, 0) == 45 {
+        negative = true;
+        i = 1;
+    }
+    let mutable value: Int = 0;
+    while i < len(text) {
+        let b: Int = byte_at(text, i);
+        if b < 48 || b > 57 {
+            return 0;
+        }
+        value = value * 10 + (b - 48);
+        i += 1;
+    }
+    if negative {
+        return 0 - value;
+    }
+    return value;
+}
+
+// The separator between each piece. The join a program would write, written once.
+function str_join(pieces: [String], separator: String) -> String allocates {
+    if len(pieces) == 0 {
+        return "";
+    }
+    let mutable out: String = pieces[0];
+    let mutable i: Int = 1;
+    while i < len(pieces) {
+        out += separator + pieces[i];
+        i += 1;
+    }
+    return out;
+}
+
+function str_repeat(text: String, times: Int) -> String allocates {
+    let mutable out: String = "";
+    let mutable i: Int = 0;
+    while i < times {
+        out += text;
+        i += 1;
+    }
+    return out;
+}

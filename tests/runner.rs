@@ -2058,16 +2058,16 @@ fn the_standard_library_compiles_and_works() {
              for x in xs {{\n    if x == want {{ return Option.Some(i); }}\n    \
              i += 1;\n  }}\n  return Option.None;\n}}\n\
              function divide(a: Int, b: Int) -> Result<Int, String> {{\n  \
-             if b == 0 {{ return Result.Err(\"division by zero\"); }}\n  \
+             if b == 0 {{ return Result.Error(\"division by zero\"); }}\n  \
              return Result.Ok(divide_toward_zero(a, b));\n}}\n\
              region r {{\n  let mutable xs: [Int] = [];\n  let a = push(xs, 5);\n  \
              let b = push(xs, 9);\n  print(option_or(find(xs, 9), 0 - 1));\n  \
              print(option_or(find(xs, 7), 0 - 1));\n  \
              print(option_is_none(find(xs, 7)));\n  \
              match divide(10, 2) {{\n    Ok(n) => {{ print(n); }}\n    \
-             Err(why) => {{ print(why); }}\n  }}\n  \
+             Error(why) => {{ print(why); }}\n  }}\n  \
              match divide(1, 0) {{\n    Ok(n) => {{ print(n); }}\n    \
-             Err(why) => {{ print(why); }}\n  }}\n  \
+             Error(why) => {{ print(why); }}\n  }}\n  \
              let words: Option<String> = Option.Some(\"here\");\n  \
              print(option_or(words, \"absent\"));\n}}\n",
             lib.display()
@@ -2319,13 +2319,13 @@ fn generics_monomorphise_and_run() {
         ),
         (
             "result",
-            "enum Result<T, E> { Ok(T), Err(E) }\n\
+            "enum Result<T, E> { Ok(T), Error(E) }\n\
              function divide(a: Int, b: Int) -> Result<Int, String> {\n  \
-             if b == 0 { return Result.Err(\"division by zero\"); }\n  \
+             if b == 0 { return Result.Error(\"division by zero\"); }\n  \
              return Result.Ok(divide_toward_zero(a, b));\n}\n\
              region r {\n  match divide(10, 2) {\n    Ok(n) => { print(n); }\n    \
-             Err(why) => { print(why); }\n  }\n  match divide(1, 0) {\n    \
-             Ok(n) => { print(n); }\n    Err(why) => { print(why); }\n  }\n}\n",
+             Error(why) => { print(why); }\n  }\n  match divide(1, 0) {\n    \
+             Ok(n) => { print(n); }\n    Error(why) => { print(why); }\n  }\n}\n",
             "5\ndivision by zero\n",
         ),
         (
@@ -2413,9 +2413,9 @@ fn generics_monomorphise_and_run() {
             // VARIANT name, so it works on `Result` and `Option` from lib/ without either
             // being known to the compiler. See spec/M8-ERRORS.md §1a.
             "question_mark",
-            "enum Result<T, E> { Ok(T), Err(E) }\nenum Option<T> { None, Some(T) }\n\
+            "enum Result<T, E> { Ok(T), Error(E) }\nenum Option<T> { None, Some(T) }\n\
              function checked(a: Int, b: Int) -> Result<Int, String> {\n  \
-             if b == 0 { return Result.Err(\"division by zero\"); }\n  \
+             if b == 0 { return Result.Error(\"division by zero\"); }\n  \
              return Result.Ok(divide_toward_zero(a, b));\n}\n\
              function average(a: Int, b: Int, n: Int) -> Result<Int, String> {\n  \
              let mean = checked(a + b, n)?;\n  return Result.Ok(mean);\n}\n\
@@ -2424,8 +2424,8 @@ fn generics_monomorphise_and_run() {
              function doubled_first(xs: [Int]) -> Option<Int> {\n  \
              let head = first_of(xs)?;\n  return Option.Some(head * 2);\n}\n\
              region r {\n  \
-             match average(10, 6, 2) { Ok(m) => { print(m); } Err(w) => { print(w); } }\n  \
-             match average(10, 6, 0) { Ok(m) => { print(m); } Err(w) => { print(w); } }\n  \
+             match average(10, 6, 2) { Ok(m) => { print(m); } Error(w) => { print(w); } }\n  \
+             match average(10, 6, 0) { Ok(m) => { print(m); } Error(w) => { print(w); } }\n  \
              let mutable xs: [Int] = [];\n  let a = push(xs, 21);\n  \
              match doubled_first(xs) { None => { print(\"empty\"); } Some(v) => { print(v); } }\n  \
              let mutable none: [Int] = [];\n  \
@@ -2924,5 +2924,71 @@ fn the_burxt_compiler_reads_generics_and_says_it_cannot_check_them() {
         "stage-1 did not say it cannot check generics — if it now can, move the generics \
          tests from this file into tests/pass/ so BOTH compilers are held to them:\n{}",
         said
+    );
+}
+
+/// Every source and documentation file must be IN version control.
+///
+/// `.gitignore` uses a whitelist — `/*` then re-admit — which is the right shape for keeping
+/// stray build artifacts out of the root, and strictly more dangerous for new directories: the
+/// failure is silent. `lib/`, `docs/` and `scripts/` were never re-admitted, so from v0.0.31
+/// the standard library, the entire guide and the whole milestone log lived only on one disk.
+/// `git status` stayed clean the whole time.
+///
+/// Three tests in this file READ those directories, so the suite would have failed on a fresh
+/// clone while passing here — the worst shape a test failure can have. Found by a `git mv` of
+/// a library file refusing, not by anything looking.
+#[test]
+fn every_source_and_document_is_in_version_control() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let tracked = Command::new("git")
+        .args(["ls-files"])
+        .current_dir(root)
+        .output()
+        .expect("git ls-files");
+    assert!(tracked.status.success(), "git ls-files failed — is this a git checkout?");
+    let tracked: std::collections::HashSet<String> = String::from_utf8_lossy(&tracked.stdout)
+        .lines()
+        .map(|l| l.to_string())
+        .collect();
+    assert!(tracked.len() > 100, "expected a populated index, got {}", tracked.len());
+
+    // Everything that IS source or documentation. Build outputs and packages are excluded on
+    // purpose: those are reproducible, and a binary in a repository is a binary nobody can
+    // rebuild.
+    let mut untracked: Vec<String> = Vec::new();
+    let mut walk = vec![root.to_path_buf()];
+    while let Some(dir) = walk.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || matches!(name.as_str(), "target" | "dist" | "node_modules")
+            {
+                continue;
+            }
+            if path.is_dir() {
+                walk.push(path);
+                continue;
+            }
+            let interesting = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| matches!(e, "bx" | "md" | "rs" | "toml" | "json" | "sh" | "py"));
+            if !interesting {
+                continue;
+            }
+            let relative = path.strip_prefix(root).unwrap().to_string_lossy().to_string();
+            if !tracked.contains(&relative) {
+                untracked.push(relative);
+            }
+        }
+    }
+    untracked.sort();
+    assert!(
+        untracked.is_empty(),
+        "these source or documentation files are not in version control — `.gitignore` is a \
+         whitelist, so a new directory is ignored until it is re-admitted:\n{}",
+        untracked.join("\n")
     );
 }

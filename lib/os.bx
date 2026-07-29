@@ -1,0 +1,96 @@
+// ============================================================================
+// lib/os.bx — the machine the program is running on.
+//
+//     use "lib/os.bx";
+//
+// Arguments, the clock, running a command, and exiting with a code. Each one wraps
+// a C function whose signature Burxt can actually describe — ints and strings in,
+// an int out. Anything returning a pointer is absent, and the guide's chapter on
+// the C boundary says why.
+// ============================================================================
+
+external function system(command: String) -> CInt;
+external function time(unused: Int) -> Int;
+external function getchar() -> CInt;
+
+// The arguments the program was started with. Index 0 is the program's own path,
+// as it is everywhere else.
+function os_arg_count() -> Int {
+    return argument_count();
+}
+
+function os_arg(index: Int) -> String allocates {
+    return argument(index);
+}
+
+// Every argument after the program's own name.
+function os_args() -> [String] allocates {
+    let mutable all: [String] = [];
+    let mutable i: Int = 1;
+    while i < argument_count() {
+        let added: Int = push(all, argument(i));
+        i += 1;
+    }
+    return all;
+}
+
+// Seconds since 1970. Whole seconds, because that is what `time` answers — a
+// finer clock needs `clock_gettime`, which fills a record through a pointer, and
+// that is exactly what Burxt will not let C do yet.
+function os_now() -> Int {
+    return time(0);
+}
+
+// Run a command through the shell and answer its exit code. `system` reports a
+// wait status; the exit code is its high byte.
+function os_run(command: String) -> Int {
+    return divide_floor(system(command), 256);
+}
+
+// Run a command and answer what it printed. The output travels through a file
+// because a pipe would mean `popen`, which answers a pointer.
+function os_capture(command: String) -> String allocates {
+    let scratch: String = "/tmp/burxt-os-capture";
+    let status: Int = system(command + " > " + scratch + " 2>&1");
+    return read_file(scratch);
+}
+
+// One byte of standard input, or -1 at the end. The whole of the input, a byte at
+// a time, is what a program can do today — `fgets` needs a buffer it does not own.
+function os_read_byte() -> Int {
+    return getchar();
+}
+
+function os_read_all() -> String allocates {
+    let mutable text: String = "";
+    let mutable chunk: String = "";
+    let mutable b: Int = getchar();
+    while b >= 0 {
+        chunk += os_byte_as_string(b);
+        // Appended in chunks, because `text += one_byte` copies the whole
+        // String for every byte — the mistake this project has now paid for three
+        // times, written down in the guide as a rule.
+        if len(chunk) >= 4096 {
+            text = text + chunk;
+            chunk = "";
+        }
+        b = getchar();
+    }
+    return text + chunk;
+}
+
+// A single byte as a one-character String. Burxt has no character type and
+// `to_string` of an Int gives digits, so the only way through is a table.
+function os_byte_as_string(byte: Int) -> String allocates {
+    let printable: String = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz\{|\}~";
+    if byte == 10 {
+        return "\n";
+    }
+    if byte == 9 {
+        return "\t";
+    }
+    if byte >= 32 && byte < 127 {
+        return substring(printable, byte - 32, 1);
+    }
+    return "?";
+}

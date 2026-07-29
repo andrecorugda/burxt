@@ -3246,7 +3246,7 @@ impl TypeChecker {
         match &e.kind {
             // `e?` — the value, or an immediate return of the failure. Two decisions live
             // here, both from spec/M8-ERRORS.md §1a: the failure variant is recognised by
-            // NAME (`Err` or `None`), never by the enum's type name, so a library type gets
+            // NAME (`Error` or `None`), never by the enum's type name, so a library type gets
             // it and a hardcoded one is not needed; and there is NO conversion, so the
             // enclosing function must fail the same way with the same payload.
             ExprKind::Try(inner) => {
@@ -3256,7 +3256,7 @@ impl TypeChecker {
                     return Err(format!(
                         "`?` needs a value that is either a success or a failure, and this \
                          is {} {}. It works on an enum with two variants, one of them \
-                         `Err` or `None`.",
+                         `Error` or `None`.",
                         value.ty.article(),
                         show(&value.ty, &instances)
                     ));
@@ -3278,10 +3278,10 @@ impl TypeChecker {
                 }
                 let Some(fail_at) = variants
                     .iter()
-                    .position(|(n, _)| n == "Err" || n == "None")
+                    .position(|(n, _)| n == "Error" || n == "None")
                 else {
                     return Err(format!(
-                        "`?` recognises a failure by the variant's NAME — `Err` or `None` — \
+                        "`?` recognises a failure by the variant's NAME — `Error` or `None` — \
                          and {} has neither. Rename the failing variant, or use `match`.",
                         shown
                     ));

@@ -19,6 +19,14 @@
 !/spec/
 !/src/
 !/tests/
+# Three directories the whitelist forgot. `lib/` is the standard library, `docs/` holds the
+# guide AND the entire milestone log, and `scripts/` builds the release — all of them read by
+# tests, none of them committed, from v0.0.31 until v0.0.105 found it. A whitelist is safer
+# than a blacklist for stray binaries and strictly more dangerous for new directories: the
+# failure is silent, and `git status` stays clean while the work is not saved.
+!/docs/
+!/lib/
+!/scripts/
 
 # release tarballs: built by scripts/release.sh, published as GitHub release assets,
 # never committed — a binary in a repository is a binary nobody can reproduce

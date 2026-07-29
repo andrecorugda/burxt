@@ -685,6 +685,17 @@ impl<'a> Lexer<'a> {
             "false" => Token::False,
             "record" => Token::Struct,
             "region" => Token::Region,
+            // `enum` stays clipped, and this is the reason rather than an oversight.
+            //
+            // It is short for "enumeration", so by the v0.0.98 rule it should be spelled out —
+            // and the full word is WORSE on both counts: longer, and inaccurate, because a
+            // Burxt enum is a sum type whose variants carry values, not an enumeration of
+            // integers. `choice` would be accurate and is the honest alternative; `enum` wins
+            // only because every language spells it this way and no reader expands it mentally.
+            //
+            // That is a weaker defence than `record` had over `struct`, where a better word
+            // existed. Recorded so the next person weighs it rather than assuming it was
+            // considered.
             "enum" => Token::Enum,
             "match" => Token::Match,
             "interface" => Token::Interface,
