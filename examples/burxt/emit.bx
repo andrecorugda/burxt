@@ -1352,7 +1352,10 @@ function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String)
         return reg;
     }
     if called == "remainder" {
-        let visited: Int = self.write_body("  " + reg + " = srem i64 " + first + ", " + second + "\n");
+        // Through a helper, because `srem` by zero is undefined behaviour in LLVM — it traps on
+        // x86 and the program dies with SIGFPE and no message. A named error beats a signal.
+        let visited: Int = self.write_body("  " + reg + " = call i64 @burxt.remainder(i64 " + first
+                                  + ", i64 " + second + ")\n");
         return reg;
     }
     if called == "divide_floor" {
@@ -2862,6 +2865,24 @@ function runtime_ir() -> String allocates {
         + "  ret i64 %out\n\}\n\n"
         + "define i64 @burxt.substring(i64 %s, i64 %from, i64 %count) \{\n"
         + "entry:\n"
+        + "  %n = call i64 @burxt.len_str(i64 %s)\n"
+        // `%stop`, not `%end`: the body below already uses `%end` for the NUL it writes, and LLVM
+        // refuses a name defined twice in one function. A collision in emitted IR is caught by llc
+        // rather than by anything here, so the names have to be picked with the whole function in view.
+        + "  %stop = add i64 %from, %count\n"
+        + "  %neg_from = icmp slt i64 %from, 0\n"
+        + "  %neg_count = icmp slt i64 %count, 0\n"
+        + "  %past = icmp sgt i64 %stop, %n\n"
+        + "  %either = or i1 %neg_from, %neg_count\n"
+        + "  %bad = or i1 %either, %past\n"
+        + "  br i1 %bad, label %oops, label %fits\n"
+        + "oops:\n"
+        + "  %err = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.substring_msg, i64 %from, "
+        + "i64 %count, i64 %n)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n"
+        + "fits:\n"
         + "  %out = call i64 @burxt.alloc_string(i64 %count)\n"
         + "  %pout = inttoptr i64 %out to ptr\n"
         + "  %ps = inttoptr i64 %s to ptr\n"
@@ -2885,8 +2906,36 @@ function runtime_ir() -> String allocates {
         + "  %hp = inttoptr i64 %hdr to ptr\n"
         + "  store i64 %wrote, ptr %hp\n"
         + "  ret i64 %out\n\}\n\n"
+        // Bounds-checked, and the check costs one load now that a String carries its length — which
+        // is the whole argument M12 made. Reading past the end would hand back whatever byte follows,
+        // and silent garbage is the failure this language exists to refuse.
+        + "define i64 @burxt.remainder(i64 %a, i64 %b) \{\n"
+        + "entry:\n"
+        + "  %zero = icmp eq i64 %b, 0\n"
+        + "  br i1 %zero, label %oops, label %ok\n"
+        + "oops:\n"
+        + "  %err = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.remainder_msg)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n"
+        + "ok:\n"
+        + "  %r = srem i64 %a, %b\n"
+        + "  ret i64 %r\n\}\n\n"
         + "define i64 @burxt.byte_at(i64 %s, i64 %i) \{\n"
         + "entry:\n"
+        + "  %n = call i64 @burxt.len_str(i64 %s)\n"
+        + "  %low = icmp slt i64 %i, 0\n"
+        + "  %high = icmp sge i64 %i, %n\n"
+        + "  %bad = or i1 %low, %high\n"
+        + "  br i1 %bad, label %oops, label %ok\n"
+        + "oops:\n"
+        + "  %err = load ptr, ptr @stderr\n"
+        + "  %last = sub i64 %n, 1\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.byte_msg, i64 %i, i64 %n, "
+        + "i64 %last)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n"
+        + "ok:\n"
         + "  %p = inttoptr i64 %s to ptr\n"
         + "  %q = getelementptr i8, ptr %p, i64 %i\n"
         + "  %b = load i8, ptr %q\n"
@@ -3001,12 +3050,25 @@ function runtime_ir() -> String allocates {
         + "  %next = add i64 %len, 1\n"
         + "  store i64 %next, ptr %p\n"
         + "  ret i64 %next\n\}\n\n"
+        // REFUSES to grow rather than clamping. Clamping silently gave a program the length it had
+        // instead of the one it asked for, which is a wrong answer where stage-0 gives an error —
+        // and `truncate` is named for the one thing it does.
         + "define i64 @burxt.truncate(i64 %xs, i64 %n) \{\n"
         + "entry:\n"
         + "  %p = inttoptr i64 %xs to ptr\n"
         + "  %len = load i64, ptr %p\n"
-        + "  %shorter = icmp slt i64 %n, %len\n"
-        + "  %answer = select i1 %shorter, i64 %n, i64 %len\n"
+        + "  %grows = icmp sgt i64 %n, %len\n"
+        + "  %below = icmp slt i64 %n, 0\n"
+        + "  %bad = or i1 %grows, %below\n"
+        + "  br i1 %bad, label %oops, label %ok\n"
+        + "oops:\n"
+        + "  %err = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.truncate_msg, i64 %n, "
+        + "i64 %len)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n"
+        + "ok:\n"
+        + "  %answer = select i1 %grows, i64 %len, i64 %n\n"
         + "  store i64 %answer, ptr %p\n"
         + "  ret i64 %answer\n\}\n\n"
         + "define i64 @burxt.array_len(i64 %xs) \{\n"
@@ -3041,6 +3103,27 @@ function runtime_ir() -> String allocates {
         + "declare i32 @fclose(ptr)\n"
         + "declare i32 @fseek(ptr, i64, i32)\n"
         + "declare i64 @ftell(ptr)\n"
+        // The runtime-check messages. The array sizes count BYTES, not characters — the em-dash is
+        // three of them in UTF-8, and guessing these wrong is a build failure at llc rather than a
+        // compile error here. Counted, not estimated.
+        //
+        // Built here as printf formats rather than interned strings,
+        // because each one names the values that broke it — "byte index 5 is out of bounds" tells a
+        // reader where to look and "index out of bounds" sends them hunting.
+        //
+        // The wording matches stage-0's byte for byte. What a program prints is what the
+        // differential test compares, and a failure is output like any other.
+        + "@burxt.byte_msg = private unnamed_addr constant [112 x i8] "
+        + "c\"burxt runtime error: byte index %lld is out of bounds \\E2\\80\\94 this string has "
+        + "%lld bytes (valid indexes 0 to %lld)\\0A\\00\"\n"
+        + "@burxt.substring_msg = private unnamed_addr constant [91 x i8] "
+        + "c\"burxt runtime error: substring(s, %lld, %lld) does not fit \\E2\\80\\94 this string "
+        + "has %lld bytes\\0A\\00\"\n"
+        + "@burxt.truncate_msg = private unnamed_addr constant [116 x i8] "
+        + "c\"burxt runtime error: truncate(xs, %lld) \\E2\\80\\94 this array has %lld elements, "
+        + "and truncate only ever makes one shorter\\0A\\00\"\n"
+        + "@burxt.remainder_msg = private unnamed_addr constant [45 x i8] "
+        + "c\"burxt runtime error: remainder(...) by zero\\0A\\00\"\n"
         + "@burxt.mode_read = private unnamed_addr constant [2 x i8] c\"r\\00\"\n"
         + "@burxt.mode_write = private unnamed_addr constant [2 x i8] c\"w\\00\"\n"
         // "wb" and not "w" for a byte buffer. Identical on Linux; the distinction is real on
