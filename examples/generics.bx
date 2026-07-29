@@ -143,10 +143,10 @@ region containers {
     print(ints.count());
     print(ints.first());
 
-    let mutable words: Stack<String> = Stack { items: [] };
-    let three = words.push_one("first");
-    print(words.count());
-    print(words.first());
+    let mutable keywords: Stack<String> = Stack { items: [] };
+    let three = keywords.push_one("first");
+    print(keywords.count());
+    print(keywords.first());
 
     // The arguments can also be inferred from the field values, when they say enough:
     // `Holder { one: 1 }` needs no annotation. An empty array says nothing, which is

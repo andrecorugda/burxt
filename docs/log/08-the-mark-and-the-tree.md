@@ -1850,3 +1850,56 @@ half-completed again. Nothing was lost, and the right way to verify was availabl
 already the proof. Writing a lesson down is not the same as having learned it.
 
 34 invariants now.
+
+### v0.0.106: the compiler's own names, and three ways to break a rename
+
+The clip audit's recommendations, carried out. Roughly 900 replacements across the compiler's five
+Burxt files, plus the standard library's prefixes and `Err` → `Error`.
+
+**`enum` stays, and the lexer now says why** rather than leaving it as an apparent oversight. The
+full word is longer *and* wrong: a Burxt enum is a sum type whose variants carry values, not an
+enumeration of integers. `choice` would be accurate, and the comment names it as the honest
+alternative — because this is a weaker defence than `record` had over `struct`, where a better
+word existed, and the next person should weigh it rather than assume it was considered.
+
+**`Err` → `Error`, in Burxt only.** In Rust `Err` is `std::Result`'s own variant, so the sweep had
+to stop at the language boundary. The compiler blesses the failing variant *by name* for `?`, so
+that string moved with it.
+
+**`str_` → `string_`, `fs_` → `file_`**, file names included. `os_` stays — an initialism read as
+itself, which Python, Go and Node all establish. That distinction is the audit's real product:
+*a clipping of one word is bad; an initialism read as itself is not.*
+
+**The compiler's names.** `Tok`→`Token`, `Kw`→`Keyword`, `Sym`→`Binding`, `Fun`→`DeclaredFunction`,
+`Impl`→`Implementation`; `toks`→`tokens`, `kids`→`children`, `subs`→`nested_children`,
+`tok`→`token`, `ret`→`return_type`; `no_struct`→`no_record_literal` and `parse_struct`→`parse_record`,
+because "struct" is not a word this language has; `spans_eq`→`spans_equal`; `w`→`write_body`; and
+136 copies of `let e: Int = self.complain(...)` → `let complained`. One dead record, `Typed`,
+deleted — it had exactly one occurrence, its own definition.
+
+`DeclaredFunction` rather than `Function`, deliberately: a record differing from the `function`
+keyword only in case is a trap, not a name.
+
+#### Three self-inflicted bugs, and the rule they share
+
+1. **`\barg\b` matched Rust's `Command::arg(...)`** — 129 sites, 54 build errors, in v0.0.104.
+2. **`Result.Err` matched inside the already-renamed `Result.Error`**, giving `Result.Erroror`.
+3. **`\bret\b` matched the LLVM `ret` instruction** inside emitted-IR string literals. The
+   compiler dutifully emitted `return_type i64 0` and the fixpoint broke.
+
+I wrote the lesson down twice before and it was too narrow both times. Here it is generally:
+
+> **A word-boundary rename is safe only when the word cannot occur in any OTHER language the file
+> contains.** These files hold three at once — Burxt, Rust, and LLVM IR carried as string data —
+> and a replacement can also collide with its own output.
+
+The third one is the interesting member of the set: the pattern was correct Burxt, the target was
+correct Burxt, and the damage was to a *string literal* that happens to be a different language.
+No amount of care about Burxt identifiers would have caught it. What caught it was running the
+tests.
+
+All three were found by the suite within a minute of being introduced. Six batches, six full runs,
+every failure localised to the batch that caused it — which is the argument for testing between
+batches rather than sweeping once and hoping.
+
+34 invariants green, fixpoint intact, self-compile 1.2 s.

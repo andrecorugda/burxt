@@ -37,7 +37,7 @@ region compile {
     // the same reason: a Span stays a byte range, and only a renderer needs to know which
     // file an offset fell in. See spec/M6-MODULES.md §1.5.
     let src: String = load_program(path);
-    let mutable unit: Unit = Unit { toks: [], words: [], nodes: [], kids: [], subs: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_params: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_fn: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, fn_entry: "", body_chunks: [], body_pending: "", next_tmp: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_conds: [], loop_ends: [], in_function: 0, depth: 0, problems: 0, pos: 0, token_end: 0, no_struct: 0, in_mul: 0, errors: 0, n_type_of: 0, n_find_sym: 0, n_find_fun: 0, n_show_type: 0, n_expr_allocates: 0, n_type_at: 0 };
+    let mutable unit: Unit = Unit { tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], syms: [], funs: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_params: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], in_function: 0, depth: 0, problems: 0, pos: 0, token_end: 0, no_record_literal: 0, in_multiply: 0, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
     let installed: Int = unit.install_keywords();
     let total: Int = unit.run(src);
 
@@ -62,7 +62,7 @@ region compile {
     }
     print("parsed " + to_string(items) + " items and statements into "
           + to_string(len(unit.nodes)) + " nodes, "
-          + to_string(len(unit.kids)) + " child slots");
+          + to_string(len(unit.children)) + " child slots");
     print("  parse errors: " + to_string(unit.errors));
 
     // ---- phase 4: check what the parser read ----
@@ -74,9 +74,9 @@ region compile {
         // M9: what the checker actually did, per run. A number beside a phase is the only
         // thing that turns "the checker is slow" into a place to look.
         print("  work: " + to_string(len(unit.nodes)) + " nodes, type_of "
-              + to_string(unit.n_type_of) + ", find_sym " + to_string(unit.n_find_sym)
+              + to_string(unit.type_of_calls) + ", find_sym " + to_string(unit.find_binding_calls)
               + " over " + to_string(len(unit.syms)) + " syms, find_fun "
-              + to_string(unit.n_find_fun) + " over " + to_string(len(unit.funs)) + " funs");
+              + to_string(unit.find_function_calls) + " over " + to_string(len(unit.funs)) + " funs");
 
         // ---- phase 5: emit LLVM IR, when a second argument says where ----
         if problems == 0 && argument_count() > 2 {
@@ -86,10 +86,10 @@ region compile {
                     + "@burxt.fmt_int = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n"
                     + "@burxt.fmt_str = private unnamed_addr constant [3 x i8] c\"%s\\00\"\n"
                     + "@burxt.fmt_nl = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n"
-                    + "@burxt.str_true = private unnamed_addr constant [5 x i8] c\"true\\00\"\n"
-                    + "@burxt.str_false = private unnamed_addr constant [6 x i8] c\"false\\00\"\n"
-                    + "@burxt.str_minus = private unnamed_addr constant [2 x i8] c\"-\\00\"\n"
-                    + "@burxt.str_empty = private unnamed_addr constant [1 x i8] c\"\\00\"\n"
+                    + "@burxt.string_true = private unnamed_addr constant [5 x i8] c\"true\\00\"\n"
+                    + "@burxt.string_false = private unnamed_addr constant [6 x i8] c\"false\\00\"\n"
+                    + "@burxt.string_minus = private unnamed_addr constant [2 x i8] c\"-\\00\"\n"
+                    + "@burxt.string_empty = private unnamed_addr constant [1 x i8] c\"\\00\"\n"
                     + "@burxt.overflow_msg = private unnamed_addr constant [42 x i8] "
                     + "c\"burxt runtime error: arithmetic overflow\\0A\\00\"\n"
                     + "@burxt.region_msg = private unnamed_addr constant [87 x i8] "

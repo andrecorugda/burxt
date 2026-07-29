@@ -18,8 +18,8 @@ enum Type {
     Dec(Int, Bool),
 }
 
-record Sym { name: String, ty: Type }
-record Table { rows: [Sym] }
+record Binding { name: String, ty: Type }
+record Table { rows: [Binding] }
 
 // A scan result: what was read, and where to continue from.
 record Scan { ty: Type, next: Int }
@@ -367,7 +367,7 @@ function (mutable self: Table) check_let(src: String, from: Int) -> Int allocate
         print("  type mismatch: declared " + ty_name(declared.ty)
               + ", but the expression has type " + ty_name(found));
     }
-    push(self.rows, Sym { name: name, ty: declared.ty });
+    push(self.rows, Binding { name: name, ty: declared.ty });
     return cursor;
 }
 

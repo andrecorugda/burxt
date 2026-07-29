@@ -100,19 +100,19 @@ What you cannot do yet: run Burxt in a browser (the WebAssembly target is design
 ## The standard library
 
 ```burxt
-use "lib/str.bx";
-use "lib/fs.bx";
+use "lib/string.bx";
+use "lib/files.bx";
 use "lib/os.bx";
 
 region r {
-    let names: [String] = fs_list("/etc");
-    print(str_join(names, ", "));
+    let names: [String] = file_list_directory("/etc");
+    print(string_join(names, ", "));
 }
 ```
 
 Written in Burxt, from the same builtins any program has — nothing in it is privileged.
-[`lib/`](lib/) holds strings (`str_find`, `str_split`, `str_trim`, `str_join`, `str_to_int`),
-files (`fs_read`, `fs_append`, `fs_exists`, `fs_list`, `fs_delete`) and the machine
+[`lib/`](lib/) holds strings (`string_find`, `string_split`, `string_trim`, `string_join`, `string_to_int`),
+files (`file_read`, `file_append`, `file_exists`, `file_list_directory`, `file_delete`) and the machine
 (`os_args`, `os_run`, `os_capture`, `os_now`).
 
 The real reason it exists: Burxt refuses a C return whose ownership it cannot describe, so

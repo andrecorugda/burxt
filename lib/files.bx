@@ -1,7 +1,7 @@
 // ============================================================================
-// lib/fs.bx — files, without writing `external function fopen` yourself.
+// lib/files.bx — files, without writing `external function fopen` yourself.
 //
-//     use "lib/fs.bx";
+//     use "lib/files.bx";
 //
 // The language gives `read_file` and `write_file`, which read and replace a whole
 // file. Everything else a program needs from a filesystem — appending, existence,
@@ -24,57 +24,57 @@ external function mkdir(path: String, mode: Int) -> CInt;
 // which is indistinguishable from an empty file, and the honest fix is
 // `Option<String>`, which the language does not have yet. Said plainly rather
 // than papered over.
-function fs_read(path: String) -> String allocates {
+function file_read(path: String) -> String allocates {
     return read_file(path);
 }
 
 // Replaces the file. Answers the number of bytes written.
-function fs_write(path: String, text: String) -> Int {
+function file_write(path: String, text: String) -> Int {
     return write_file(path, text);
 }
 
 // Adds to the end, leaving what was there. Read-modify-write, because the
 // builtin replaces rather than appends — fine for a log line, wrong for a
 // gigabyte, and that is worth knowing before you use it.
-function fs_append(path: String, text: String) -> Int allocates {
+function file_append(path: String, text: String) -> Int allocates {
     let existing: String = read_file(path);
     return write_file(path, existing + text);
 }
 
-function fs_exists(path: String) -> Bool allocates {
+function file_exists(path: String) -> Bool allocates {
     // `test -e` rather than a read: a file may exist and be unreadable, and it may
     // be a directory, and both are still "it exists".
-    return system("test -e " + fs_quote(path)) == 0;
+    return system("test -e " + file_quote(path)) == 0;
 }
 
-function fs_delete(path: String) -> Bool {
+function file_delete(path: String) -> Bool {
     return remove(path) == 0;
 }
 
-function fs_move(from: String, to: String) -> Bool {
+function file_move(from: String, to: String) -> Bool {
     return rename(from, to) == 0;
 }
 
 // 0755: readable and executable by everyone, writable by its owner.
-function fs_make_dir(path: String) -> Bool allocates {
-    return system("mkdir -p " + fs_quote(path)) == 0;
+function file_make_directory(path: String) -> Bool allocates {
+    return system("mkdir -p " + file_quote(path)) == 0;
 }
 
 // Every name in a directory. The shell does the reading because `opendir` returns
 // a pointer Burxt will not accept, and the answer comes back through a file —
 // visible here, so no program has to know it.
-function fs_list(directory: String) -> [String] allocates {
+function file_list_directory(directory: String) -> [String] allocates {
     let scratch: String = "/tmp/burxt-fs-list";
-    let status: Int = system("ls -1 " + fs_quote(directory) + " > " + scratch + " 2>/dev/null");
+    let status: Int = system("ls -1 " + file_quote(directory) + " > " + scratch + " 2>/dev/null");
     let text: String = read_file(scratch);
-    let dropped: Bool = fs_delete(scratch);
-    return fs_split_lines(text);
+    let dropped: Bool = file_delete(scratch);
+    return file_split_lines(text);
 }
 
 // A path made safe for the shell. Single quotes stop every expansion there is, and
 // a single quote inside a path is the one case they cannot hold — so it is refused
 // rather than mishandled.
-function fs_quote(path: String) -> String allocates {
+function file_quote(path: String) -> String allocates {
     let mutable i: Int = 0;
     while i < len(path) {
         if byte_at(path, i) == 39 {
@@ -87,9 +87,9 @@ function fs_quote(path: String) -> String allocates {
 }
 
 // Split on newlines, dropping the empty piece a trailing newline leaves. Local
-// rather than borrowed from lib/str.bx, so `use "lib/fs.bx"` pulls in files and
+// rather than borrowed from lib/string.bx, so `use "lib/files.bx"` pulls in files and
 // nothing else.
-function fs_split_lines(text: String) -> [String] allocates {
+function file_split_lines(text: String) -> [String] allocates {
     let mutable lines: [String] = [];
     let mutable from: Int = 0;
     let mutable i: Int = 0;

@@ -2003,7 +2003,7 @@ fn the_standard_library_compiles_and_works() {
     let scratch = scratch_dir("stdlib");
     fs::create_dir_all(&scratch).unwrap();
 
-    for module in ["str.bx", "fs.bx", "os.bx"] {
+    for module in ["string.bx", "files.bx", "os.bx"] {
         let out = burxt("check", &root.join("lib").join(module), &scratch);
         assert!(
             out.status.success(),
@@ -2020,8 +2020,8 @@ fn the_standard_library_compiles_and_works() {
     fs::write(
         &program,
         format!(
-            "use \"{0}/str.bx\";\nuse \"{0}/fs.bx\";\nuse \"{0}/os.bx\";\n\
-             region r {{\n  print(str_find(\"hello, modules\", \"modules\"));\n               print(str_trim(\"   padded   \"));\n  print(str_to_int(\"-42\"));\n               print(str_join(str_split(\"a,b,c\", 44), \" | \"));\n               let wrote: Int = fs_write(\"{1}/demo.txt\", \"first\\n\");\n               let more: Int = fs_append(\"{1}/demo.txt\", \"second\\n\");\n               print(len(fs_read(\"{1}/demo.txt\")));\n               print(fs_exists(\"{1}/demo.txt\"));\n               print(len(fs_list(\"{0}\")) >= 3);\n               print(os_run(\"true\"));\n  print(str_trim(os_capture(\"echo captured\")));\n}}\n",
+            "use \"{0}/string.bx\";\nuse \"{0}/files.bx\";\nuse \"{0}/os.bx\";\n\
+             region r {{\n  print(string_find(\"hello, modules\", \"modules\"));\n               print(string_trim(\"   padded   \"));\n  print(string_to_int(\"-42\"));\n               print(string_join(string_split(\"a,b,c\", 44), \" | \"));\n               let wrote: Int = file_write(\"{1}/demo.txt\", \"first\\n\");\n               let more: Int = file_append(\"{1}/demo.txt\", \"second\\n\");\n               print(len(file_read(\"{1}/demo.txt\")));\n               print(file_exists(\"{1}/demo.txt\"));\n               print(len(file_list_directory(\"{0}\")) >= 3);\n               print(os_run(\"true\"));\n  print(string_trim(os_capture(\"echo captured\")));\n}}\n",
             lib.display(),
             scratch.display()
         ),
@@ -2145,7 +2145,7 @@ fn the_release_tarball_works_without_rust_or_llvm() {
     fs::write(
         &program,
         format!(
-            "use \"{}/lib/str.bx\";\nregion r {{\n  print(str_trim(\"  packaged  \"));\n               let price: Decimal<2> = 19.99;\n  print(price * 3);\n}}\n",
+            "use \"{}/lib/string.bx\";\nregion r {{\n  print(string_trim(\"  packaged  \"));\n               let price: Decimal<2> = 19.99;\n  print(price * 3);\n}}\n",
             unpacked.display()
         ),
     )

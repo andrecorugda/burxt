@@ -27,7 +27,7 @@ enum Token {
 
 // One step of the scan: the token found, and where to continue from.
 record Scan {
-    tok: Token,
+    token: Token,
     next: Int,
 }
 
@@ -67,7 +67,7 @@ function skip_trivia(src: String, from: Int) -> Int {
 function next_token(src: String, from: Int) -> Scan {
     let start: Int = skip_trivia(src, from);
     if start >= len(src) {
-        return Scan { tok: Token.End, next: start };
+        return Scan { token: Token.End, next: start };
     }
 
     let b: Int = byte_at(src, start);
@@ -80,7 +80,7 @@ function next_token(src: String, from: Int) -> Scan {
             value = value * 10 + (byte_at(src, i) - 48);
             i = i + 1;
         }
-        return Scan { tok: Token.Number(value), next: i };
+        return Scan { token: Token.Number(value), next: i };
     }
 
     if is_alpha(b) {
@@ -88,19 +88,19 @@ function next_token(src: String, from: Int) -> Scan {
         while i < len(src) && (is_alpha(byte_at(src, i)) || is_digit(byte_at(src, i))) {
             i = i + 1;
         }
-        return Scan { tok: Token.Name(start, i - start), next: i };
+        return Scan { token: Token.Name(start, i - start), next: i };
     }
 
     let after: Int = start + 1;
-    if b == 43 { return Scan { tok: Token.Plus,   next: after }; }
-    if b == 45 { return Scan { tok: Token.Minus,  next: after }; }
-    if b == 42 { return Scan { tok: Token.Star,   next: after }; }
-    if b == 47 { return Scan { tok: Token.Slash,  next: after }; }
-    if b == 40 { return Scan { tok: Token.LParen, next: after }; }
-    if b == 41 { return Scan { tok: Token.RParen, next: after }; }
-    if b == 59 { return Scan { tok: Token.Semi,   next: after }; }
-    if b == 61 { return Scan { tok: Token.Assign, next: after }; }
-    return Scan { tok: Token.Unknown(b), next: after };
+    if b == 43 { return Scan { token: Token.Plus,   next: after }; }
+    if b == 45 { return Scan { token: Token.Minus,  next: after }; }
+    if b == 42 { return Scan { token: Token.Star,   next: after }; }
+    if b == 47 { return Scan { token: Token.Slash,  next: after }; }
+    if b == 40 { return Scan { token: Token.LParen, next: after }; }
+    if b == 41 { return Scan { token: Token.RParen, next: after }; }
+    if b == 59 { return Scan { token: Token.Semi,   next: after }; }
+    if b == 61 { return Scan { token: Token.Assign, next: after }; }
+    return Scan { token: Token.Unknown(b), next: after };
 }
 
 // A real lexer reports problems, and reporting means BUILDING a message. These
@@ -139,7 +139,7 @@ function tokenize(src: String) -> Int allocates {
     while true {
         let s: Scan = next_token(src, pos);
         pos = s.next;
-        if show(s.tok, s.next - 1) == 0 {
+        if show(s.token, s.next - 1) == 0 {
             break;
         }
         count = count + 1;

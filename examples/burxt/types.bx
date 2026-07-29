@@ -27,7 +27,7 @@
 // every use, and the payloads differ per kind. The names live in `kind_name`.
 //   1 identifier      2 Int literal      3 Decimal literal     4 String literal
 //   10..49 punctuation                   100.. keywords
-record Tok {
+record Token {
     kind: Int,
     start: Int,
     length: Int,
@@ -39,7 +39,7 @@ record Tok {
     interpolated: Bool,
 }
 
-record Kw { word: String, code: Int }
+record Keyword { word: String, code: Int }
 // ---- the AST -----------------------------------------------------------------
 // Children by INDEX, not by pointer: v0.0.22 proved an arena needs no recursive
 // types, and an index is a number a record field can hold.
@@ -55,13 +55,13 @@ record Kw { word: String, code: Int }
 //  45 Decimal (scale in `a`, contract in `b`)   46 named   47 slice   48 array
 //  49 dynamic   50 type parameter
 //  A named type may be a generic APPLICATION: `a` is the start of its type-argument
-//  nodes in `subs` and `b` is how many.
+//  nodes in `nested_children` and `b` is how many.
 // Statement kinds:
-//  60 let (name tok in `tok`, type in `a`, value in `b`, writable in `value`)
+//  60 let (name token in `token`, type in `a`, value in `b`, writable in `value`)
 //  61 assign            62 print               63 return            64 tail return
 //  65 if                66 while               67 break             68 continue
 //  69 region            70 expression statement
-//  71 match             72 for (name tok in `tok`, iterable in `a`, body in `b`)
+//  71 match             72 for (name token in `token`, iterable in `a`, body in `b`)
 record Node {
     kind: Int,
     // Child indices, or payload. Meaning depends on `kind`, documented above.
@@ -71,12 +71,12 @@ record Node {
     // The operator byte, a flag, or a literal's value — whatever the kind needs.
     value: Int,
     // The token this node started at, so a message can point at the source.
-    tok: Int,
+    token: Int,
 }
 
 // One compilation unit: its tokens, its keyword table, and its AST.
 //
-// `kids` is where child LISTS live — the arguments of a call, the statements of a
+// `children` is where child LISTS live — the arguments of a call, the statements of a
 // block. A node stores a start offset and a count into it, rather than a linked list
 // through the nodes themselves.
 //
@@ -96,7 +96,7 @@ record Type {
     kind: Int,
     // Decimal: the scale. Slice or array: the ELEMENT type's node. A named type that
     // is a generic APPLICATION — `Option<Int>` — holds the start of its type arguments
-    // in `subs`, and how many in `contract`; both are 0 for a plain named type, which
+    // in `nested_children`, and how many in `contract`; both are 0 for a plain named type, which
     // is why no field had to be added. Type arguments are node indices, exactly as a
     // slice's element already is.
     scale: Int,
@@ -110,29 +110,29 @@ record Type {
 
 // A binding in scope: its name as a SPAN, so the checker allocates nothing to
 // remember a variable.
-record Sym { start: Int, length: Int, ty: Type, writable: Int, depth: Int }
+record Binding { start: Int, length: Int, bound_type: Type, writable: Int, depth: Int }
 // Which declaration is generic over which parameters. A side table, looked up by name span
 // like every other declaration here, because every field of a node is already spoken for.
-// `tp_start`/`tp_count` index `type_params`, which holds the TOKEN of each parameter's name —
+// `type_param_start`/`type_param_count` index `type_params`, which holds the TOKEN of each parameter's name —
 // so a parameter is a span, exactly as a record name or a variable is.
-record Generic { start: Int, length: Int, tp_start: Int, tp_count: Int }
+record Generic { start: Int, length: Int, type_param_start: Int, type_param_count: Int }
 
 // A declared function: its name span, its return type, and its parameter list node.
-record Fun { start: Int, length: Int, ret: Type, params: Int, flags: Int }
+record DeclaredFunction { start: Int, length: Int, return_type: Type, params: Int, flags: Int }
 // A declared record or enum: its name span and the item node that declared it.
-record TypeDecl { start: Int, length: Int, kind: Int, node: Int }
+record TypeDeclaration { start: Int, length: Int, kind: Int, node: Int }
 // A declared method, keyed by the receiver's name and its own.
 record Method {
     receiver_start: Int, receiver_len: Int,
     start: Int, length: Int,
-    ret: Type, params: Int, mutating: Int, flags: Int,
+    return_type: Type, params: Int, mutating: Int, flags: Int,
 }
 
 record Unit {
-    toks: [Tok],
-    words: [Kw],
+    tokens: [Token],
+    keywords: [Keyword],
     nodes: [Node],
-    kids: [Int],
+    children: [Int],
     // A SECOND child array, for lists nested inside another list: a match arm's
     // bindings, an enum variant's payload types, a trait signature's parameters.
     //
@@ -140,14 +140,14 @@ record Unit {
     // interleaves them, and the design's whole premise is that a list is contiguous.
     // The first version did exactly that and indexed past the end; the cross-check
     // test caught it on tests/pass/enum_match_flow.bx.
-    subs: [Int],
+    nested_children: [Int],
     // Top-level items, in source order, for the checker to walk.
     items: [Int],
-    syms: [Sym],
-    funs: [Fun],
+    syms: [Binding],
+    funs: [DeclaredFunction],
     stack: [Int],
     methods: [Method],
-    types: [TypeDecl],
+    types: [TypeDeclaration],
     // Block depth, so a binding leaves scope at the closing brace.
     depth: Int,
     problems: Int,
@@ -155,7 +155,7 @@ record Unit {
     pos: Int,
     // Nonzero while parsing an `if`/`while` condition, where a `{` opens the BODY
     // rather than a record literal. The Rust parser carries the same flag.
-    impls: [Impl],
+    impls: [Implementation],
     // Every expression's type, indexed by node. See check.bx's type_at for why it is
     // indexed rather than searched.
     typed: [Type],
@@ -178,7 +178,7 @@ record Unit {
     type_params: [Int],
     // Which function is being checked, so a `tail` call can be compared with the
     // signature it must replace. -1 at top level and inside a method.
-    current_fn: Int,
+    current_function: Int,
     // The backend's state: the IR text, the constants it referred to, a counter for
     // registers and one for labels, the locals' allocas, and the enclosing loops'
     // labels so `break` and `continue` know where to jump.
@@ -189,10 +189,10 @@ record Unit {
     // being emitted, and how many cells it holds.
     sret: String,
     sret_cells: Int,
-    fn_entry: String,
+    function_entry: String,
     body_chunks: [String],
     body_pending: String,
-    next_tmp: Int,
+    next_register: Int,
     next_slot: Int,
     next_label: Int,
     slots: [Slot],
@@ -200,28 +200,28 @@ record Unit {
     // Extern symbols already declared in the emitted module, so a symbol two modules
     // both wrap is declared once.
     declared: [String],
-    loop_conds: [String],
-    loop_ends: [String],
+    loop_condition_labels: [String],
+    loop_end_labels: [String],
     in_function: Int,
     // Where the program's tokens end, which is not where the token ARRAY ends: an
     // interpolation fragment appends its own, and the parser must not walk into them.
     token_end: Int,
-    no_struct: Int,
+    no_record_literal: Int,
     // Set while typing the operands of `*`. Multiplication combines a quantity with a
     // rate, so its operand scales differ by nature: a literal that cannot narrow to
     // the result's scale keeps its own instead of being refused. Stage-0 reaches the
     // same answer by re-checking both operands with no expected type.
-    in_mul: Int,
+    in_multiply: Int,
     errors: Int,
     // M9: counters, so the hot path is measured rather than guessed at. The first attempt
     // at this milestone fixed the obvious quadratic and bought 1.5%, which is what a
     // hypothesis is worth here.
-    n_type_of: Int,
-    n_find_sym: Int,
-    n_find_fun: Int,
-    n_show_type: Int,
-    n_expr_allocates: Int,
-    n_type_at: Int,
+    type_of_calls: Int,
+    find_binding_calls: Int,
+    find_function_calls: Int,
+    show_type_calls: Int,
+    expr_allocates_calls: Int,
+    type_at_calls: Int,
 }
 
 function is_alpha(b: Int) -> Bool {
@@ -257,10 +257,10 @@ function at_byte(src: String, i: Int, stop: Int) -> Int {
 }
 
 // Compare two spans of the source directly. The obvious way to write this is
-// `span_eq(src, a, alen, substring(src, b, blen))` — and the compiler refused it,
+// `span_equal(src, a, alen, substring(src, b, blen))` — and the compiler refused it,
 // because `substring` allocates and a comparison has no business needing a region.
 // Comparing in place is both cheaper and what the checker wanted anyway.
-function spans_eq(src: String, a: Int, a_len: Int, b: Int, b_len: Int) -> Bool {
+function spans_equal(src: String, a: Int, a_len: Int, b: Int, b_len: Int) -> Bool {
     if a_len != b_len {
         return false;
     }
@@ -275,7 +275,7 @@ function spans_eq(src: String, a: Int, a_len: Int, b: Int, b_len: Int) -> Bool {
 }
 
 // Compare a span of the source against a whole word, without allocating.
-function span_eq(src: String, start: Int, length: Int, word: String) -> Bool {
+function span_equal(src: String, start: Int, length: Int, word: String) -> Bool {
     if length != len(word) {
         return false;
     }
@@ -292,8 +292,8 @@ function span_eq(src: String, start: Int, length: Int, word: String) -> Bool {
 // ---- the keyword table -----------------------------------------------------
 // Codes from 100. Order does not matter; the lookup is a scan.
 function (mutable self: Unit) add_word(word: String, code: Int) -> Int {
-    push(self.words, Kw { word: word, code: code });
-    return len(self.words);
+    push(self.keywords, Keyword { word: word, code: code });
+    return len(self.keywords);
 }
 
 function (mutable self: Unit) install_keywords() -> Int {
@@ -348,9 +348,9 @@ function (mutable self: Unit) install_keywords() -> Int {
 // An identifier's span, or a keyword code if the table has it.
 function (self: Unit) keyword_code(src: String, start: Int, length: Int) -> Int {
     let mutable i: Int = 0;
-    while i < len(self.words) {
-        if span_eq(src, start, length, self.words[i].word) {
-            return self.words[i].code;
+    while i < len(self.keywords) {
+        if span_equal(src, start, length, self.keywords[i].word) {
+            return self.keywords[i].code;
         }
         i += 1;
     }
@@ -358,27 +358,27 @@ function (self: Unit) keyword_code(src: String, start: Int, length: Int) -> Int 
 }
 
 function (mutable self: Unit) emit(kind: Int, start: Int, length: Int) -> Int {
-    push(self.toks, Tok {
+    push(self.tokens, Token {
         kind: kind, start: start, length: length,
         value: 0, scale: 0, interpolated: false,
     });
-    return len(self.toks);
+    return len(self.tokens);
 }
 
 function (mutable self: Unit) emit_number(kind: Int, start: Int, length: Int, value: Int, scale: Int) -> Int {
-    push(self.toks, Tok {
+    push(self.tokens, Token {
         kind: kind, start: start, length: length,
         value: value, scale: scale, interpolated: false,
     });
-    return len(self.toks);
+    return len(self.tokens);
 }
 
 function (mutable self: Unit) emit_string(start: Int, length: Int, interpolated: Bool) -> Int {
-    push(self.toks, Tok {
+    push(self.tokens, Token {
         kind: 4, start: start, length: length,
         value: 0, scale: 0, interpolated: interpolated,
     });
-    return len(self.toks);
+    return len(self.tokens);
 }
 
 // ---- whitespace and comments ----------------------------------------------
@@ -530,7 +530,7 @@ function (mutable self: Unit) run(src: String) -> Int allocates {
     // Where the PROGRAM's tokens end. An interpolation fragment is lexed later and its
     // tokens are appended, so without this the parser would walk off the end of the
     // program and try to read `n` from `"{n}"` as a top-level statement.
-    self.token_end = len(self.toks);
+    self.token_end = len(self.tokens);
     return count;
 }
 
@@ -565,5 +565,5 @@ function (mutable self: Unit) run_range(src: String, from: Int, until: Int) -> I
         }
         i = self.scan_punct(src, i, until);
     }
-    return len(self.toks);
+    return len(self.tokens);
 }

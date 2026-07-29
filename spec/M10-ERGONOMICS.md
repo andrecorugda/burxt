@@ -445,7 +445,7 @@ searching is embarrassingly parallel, and editing the same tree from four direct
 
 **The rule they applied, refined into two parts.** A *clipping* of one word is bad — `ty`, `rem`,
 `arg`, `str`, `fs`. An *initialism read as itself* is not — `OS`, `IR`, `LSP`, `JSON`, `argc`.
-That distinction settles most cases without argument: `os_` stays, `str_` does not.
+That distinction settles most cases without argument: `os_` stays, `string_` does not.
 
 ### Fixed in this version
 
@@ -471,7 +471,7 @@ their names: those exist to test the retired spellings.
 the one most likely to be read first.
 
 **Two real defects**, found by an agent while reading rather than by any test: a dead binding in
-`lib/str.bx` (`let trimmed: Int = 0;` — an `Int` named for a String operation, never read), and a
+`lib/string.bx` (`let trimmed: Int = 0;` — an `Int` named for a String operation, never read), and a
 doc comment that had drifted to `sep` while its parameter said `separator`.
 
 **Two test names** that described the language with words it no longer has.
@@ -487,6 +487,55 @@ The three test failures after the revert were all downstream and honest ones: th
 listed the old builtin names, and four `panic` fixtures quoted them in expected output. Both are
 the tooling rule from v0.0.99 doing its job.
 
+### Finished in v0.0.106
+
+All four decisions went the way §2f recommended.
+
+**`enum` stays, with its reason written into the lexer** rather than left as an oversight: the
+full word is longer *and* inaccurate, because a Burxt enum is a sum type whose variants carry
+values, not an enumeration of integers. `choice` would be accurate and is named as the honest
+alternative. That is a weaker defence than `record` had over `struct`, and the comment says so.
+
+**`Err` → `Error`**, in Burxt only — in Rust, `Err` is `std::Result`'s own variant. The compiler
+blesses the failing variant *by name* for `?`, so that string moved too.
+
+**`str_` → `string_`, `fs_` → `file_`**, including the file names (`lib/string.bx`,
+`lib/files.bx`) and `fs_make_dir` → `file_make_directory`. `os_` stays: an initialism read as
+itself, established by Python, Go and Node.
+
+**The compiler's own names**, roughly 900 replacements across five files:
+
+| | |
+|---|---|
+| Records | `Tok`→`Token`, `Kw`→`Keyword`, `Sym`→`Binding`, `Fun`→`DeclaredFunction`, `Impl`→`Implementation`, `TypeDecl`→`TypeDeclaration`; `Typed` **deleted** (one occurrence — its own definition) |
+| Foreign vocabulary | `no_struct`→`no_record_literal`, `parse_struct`→`parse_record`, `current_fn`, `fn_entry`, `open_fn`/`close_fn`, `parse_fn`, `dyn_method`, `emit_dyn` |
+| Opaque fields | `toks`→`tokens`, `kids`→`children`, `subs`→`nested_children`, `tok`→`token`, `ret`→`return_type`, `words`→`keywords`, `next_tmp`→`next_register`, `in_mul`→`in_multiply`, the `n_*` counters |
+| The exact failure mode | `spans_eq`→`spans_equal`, `span_eq`→`span_equal`, and the last `ty` fields → `bound_type` / `type_node` / `payload_type` |
+| One-letter methods | `w`→`write_body`, `w_out`→`write_module`, `w_entry`→`write_entry` |
+| 136 discarded results | `let e: Int = self.complain(...)` → `let complained: Int = ...` |
+
+`DeclaredFunction` rather than `Function`: a record differing from the `function` keyword only in
+case is a trap, not a name.
+
+### Three self-inflicted bugs, and the rule they share
+
+Every one was a word-boundary rename hitting a context the pattern could not see:
+
+1. **`\barg\b` matched Rust's `Command::arg(...)`** — 129 sites, 54 build errors (v0.0.104).
+2. **`Result.Err` matched inside the already-renamed `Result.Error`**, producing `Result.Erroror`.
+3. **`\bret\b` matched the LLVM `ret` instruction** inside emitted-IR string literals, so the
+   compiler produced invalid IR and the fixpoint broke.
+
+The rule, which the first two versions of it did not state generally enough:
+
+> **A word-boundary rename is only safe when the word cannot occur in any OTHER language the file
+> contains.** These files hold three: Burxt, Rust, and LLVM IR as string data. `arg` is Rust's,
+> `ret` is LLVM's, and a replacement can collide with its own output.
+
+All three were caught by the suite in under a minute. That is the argument for a fast full run
+between batches rather than one sweep at the end — six batches, six runs, and every failure
+localised to the batch that caused it.
+
 ### Left for a decision
 
 - **`enum`** is now the only clipped keyword, and the standing exception to v0.0.98's own rule —
@@ -495,7 +544,7 @@ the tooling rule from v0.0.99 doing its job.
 - **`Err` → `Error`.** Two agents disagreed: one called it the exact failure mode ("err" as a
   hesitation noise), the other called it ecosystem convention that `?` matches on. It is
   genuinely both.
-- **`str_` → `string_`, `fs_` → `file_`** in the standard library, including the file names.
+- **`string_` → `string_`, `file_` → `file_`** in the standard library, including the file names.
 - **The compiler's own internals** — `Tok`, `Kw`, `Sym`, `Fun`, `Impl`, `Node.tok` (207 uses),
   `w` (185), `spans_eq`, `no_struct`, the `n_*` counters — plus stage-0's `ty` (344) and its AST
   still spelling `StructDef`/`ImplBlock`/`ExternFn`. Large, mechanical, and best done one name per

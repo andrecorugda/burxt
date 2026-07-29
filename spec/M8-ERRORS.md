@@ -27,7 +27,7 @@ match parse_amount(input) {
 }
 ```
 
-Today `lib/str.bx`'s `str_to_int("abc")` answers `0`, and `fs_read` of a missing file answers
+Today `lib/string.bx`'s `string_to_int("abc")` answers `0`, and `file_read` of a missing file answers
 `""` — indistinguishable from success. Every such function is a lie the caller cannot detect.
 
 ## 1a. `?` — the two decisions it needed
@@ -126,7 +126,7 @@ a default is a decision the caller writes down. What does not exist is one that 
 
 ### Decision 4 — the standard library is rewritten to use them
 
-`str_to_int` answers `Option<Int>`. `fs_read` answers `Result<String, String>`. That is the
+`string_to_int` answers `Option<Int>`. `file_read` answers `Result<String, String>`. That is the
 acceptance test: the library's honest-limitation comments disappear because the limitation
 does.
 
@@ -146,9 +146,9 @@ does.
 1. `Option<T>` and `Result<T, E>` are declared in `lib/`, in Burxt, with no compiler change.
 2. A `match` that omits `None` is a compile error — the existing exhaustiveness rule, doing
    the work.
-3. `str_to_int` answers `Option<Int>`, and `str_to_int("abc")` is distinguishable from
-   `str_to_int("0")`.
-4. `fs_read` answers `Result<String, String>`, and a missing file is distinguishable from an
+3. `string_to_int` answers `Option<Int>`, and `string_to_int("abc")` is distinguishable from
+   `string_to_int("0")`.
+4. `file_read` answers `Result<String, String>`, and a missing file is distinguishable from an
    empty one.
 5. `examples/invoice.bx` reads its input through the new signatures and still prints the same
    numbers.

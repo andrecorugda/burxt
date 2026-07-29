@@ -88,8 +88,8 @@ region r {
 
     // One definition of `or_else`, two instantiations: `Option<Int>` and
     // `Option<String>` are separate types with separate layouts.
-    let words: Option<String> = Option.Some("found");
-    print(or_else(words, "missing"));
+    let keywords: Option<String> = Option.Some("found");
+    print(or_else(keywords, "missing"));
 
     match divide(10, 2) {
         Ok(answer) => { print(answer); }
