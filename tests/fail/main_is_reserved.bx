@@ -1,0 +1,13 @@
+// `main` is the first thing someone arriving from Rust or C types, and in Burxt it is not the entry
+// point — the top-level statements are, and the compiler emits `@main` from them. So a function
+// called `main` looks like an entry point and is not one.
+//
+// This fixture exists because the two compilers disagreed about it until v0.0.124: stage-0 accepted
+// it (emitting it safely as `bx.main`, so nothing collided — a trap rather than a crash) while
+// stage-1 refused it. No fixture declared any reserved runtime name, so the differential test never
+// saw the divergence. `exit` and `result` were the same story.
+function main() -> Int {
+    return 0;
+}
+
+print(1);

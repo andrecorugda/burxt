@@ -1,0 +1,7 @@
+// The runtime calls libc's `exit` to end a program on a failed contract or a bounds violation, so a
+// program that shadowed it would change what a panic does.
+function exit(code: Int) -> Int {
+    return code;
+}
+
+print(1);

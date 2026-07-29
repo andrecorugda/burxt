@@ -426,6 +426,32 @@ pub struct TypeChecker {
     current_region: Option<String>,
 }
 
+/// The names a program may not declare.
+///
+/// The builtins, and three the RUNTIME owns. Stage-1 has refused all three since it was written;
+/// stage-0 refused only the builtins, so `function main()` compiled with one compiler and not the
+/// other until v0.0.124. No fixture declared any of them, so the differential test never saw it —
+/// and the first thing a newcomer arriving from Rust or C types is `function main`.
+///
+/// Why each of the three, because the reasons are not the same:
+///
+/// - **`main`** — a Burxt program IS its top-level statements, and the compiler emits `@main` from
+///   them. A function called `main` therefore looks like an entry point and is not one. Stage-0
+///   emitted it safely as `bx.main`, so nothing collided; it was a trap rather than a crash, which
+///   is exactly the kind of thing this language refuses.
+/// - **`exit`** — the runtime calls libc's `exit` to end a program on a failed contract or a bounds
+///   violation. A program that shadowed it would change what a panic does.
+/// - **`result`** — reserved for `ensures` clauses, where it names the value being returned.
+fn is_reserved_name(name: &str) -> bool {
+    matches!(
+        name,
+        "len" | "byte_at" | "push" | "read_file" | "to_string" | "old" | "substring" | "truncate"
+            | "write_file" | "argument" | "argument_count" | "divide_floor"
+            | "divide_toward_zero" | "remainder" | "write_bytes" | "hash"
+            | "main" | "exit" | "result"
+    )
+}
+
 impl TypeChecker {
     pub fn new() -> Self {
         TypeChecker {
@@ -1553,9 +1579,9 @@ impl TypeChecker {
             if self.fns.contains_key(&f.name) {
                 return Err(format!("function `{}` is defined twice", f.name));
             }
-            if f.name == "len" || f.name == "byte_at" || f.name == "push" || f.name == "read_file" || f.name == "to_string" || f.name == "old" || f.name == "substring" || f.name == "truncate" || f.name == "write_file" || f.name == "argument" || f.name == "argument_count" || f.name == "divide_floor" || f.name == "divide_toward_zero" || f.name == "remainder" || f.name == "write_bytes" || f.name == "hash" {
+            if is_reserved_name(&f.name) {
                 return Err(format!(
-                    "the name `{}` is reserved for a built-in",
+                    "`{}` is a name the language owns, so a program may not declare it",
                     f.name
                 ));
             }
