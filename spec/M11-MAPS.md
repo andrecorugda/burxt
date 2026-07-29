@@ -14,12 +14,36 @@ M9 measured the compiler's own performance and wrote down what it would cost lat
 > compiler has 40 functions and 896 lookups over 40 entries is nothing. The fix is an index, and
 > Burxt has no map type, so that is a feature too.
 
-It bites now. Re-measured at v0.0.110: the compiler's source grew **1.29×** since v0.0.90 while
-its self-compile time grew **1.67×**. Memory grew 1.22× — linear, healthy — so the extra time is
-not allocation. It is the predicted O(n²), arriving exactly where the prediction put it.
+**The quadratic is real, and it is not what slowed the compiler down.** Both halves of that
+sentence are measured, and the second half is a correction to what this spec said when it was
+written on 2026-07-29 — which claimed the compiler's 1.67× time growth *was* this quadratic
+"arriving exactly where the prediction put it". It is not, and the number that settles it was
+already being printed by the compiler:
 
-So this milestone has a number attached to it before a line is written, which is the shape M9
-argued every performance change should have.
+```
+work: 34081 nodes, type_of 22352, find_sym 10644 over 0 syms, find_fun 907 over 39 funs
+```
+
+**907 lookups over 39 functions** is about 35,000 comparisons in a 1.96-second compile. Whatever
+costs that time, it is not this.
+
+The quadratic itself is easy to see once you look for it in the right place — a generated program
+with nothing in it but declarations, timed by stage-1 at v0.0.115:
+
+| Declarations | 400 | 800 | 1600 | 3200 |
+|---|---|---|---|---|
+| Time | 0.01 s | 0.11 s | 0.63 s | **5.52 s** |
+
+Between 1600 and 3200 the time goes up **8.8×** for 2× the input. That is worse than quadratic, and
+5.5 seconds for a program that does nothing is a wall any real codebase will hit. It is worth
+fixing. It is simply not the compiler's own problem, because the compiler has 39 top-level
+functions and not 3200.
+
+**What does cause the compiler's 1.67× is unattributed**, and saying so is the point. M9's own rule
+is that three of its four guesses were wrong and the numbers were the only reason that was cheap.
+Repeating a prediction as a finding is exactly the mistake it warns about, and this spec made it
+one commit after re-measuring. The honest next step for that question is a controlled experiment,
+not another guess.
 
 ## 1. The shape, and what it deliberately is not
 
@@ -206,9 +230,17 @@ The lowering is **one helper written once**, not a loop emitted per call site �
    a removal** — the case Decision 1 is about, and the one a hash-ordered map gets wrong.
 4. `Map<String, Point>` works. A record VALUE is the case Decision 5 exists to protect.
 5. A fail fixture per refusal: a record as a key, and `hash` of a record.
-6. **The compiler uses it.** `find_fun`, `find_sym`, `find_type` and `find_method` become lookups,
-   and the self-compile is re-measured. This is the acceptance test M9 wrote in advance, so the
-   milestone is not done until there is a before-and-after number.
+6. **A program with thousands of declarations gets dramatically faster** — and NOT, as this list
+   said first, "the compiler uses it". The compiler makes 907 lookups over 39 functions, so
+   converting its lookups would be optimising a path that is not hot, and the before-and-after
+   number would be noise dressed as progress. The measurable claim is the table in §0: **3200
+   declarations in 5.52 s today.** A map should make that roughly linear, and the acceptance is a
+   ratchet on that number, machine-independent as a ratio the way M9's is.
+   
+   The compiler may well use maps afterwards — for clarity, and because `find_sym` is called
+   10,644 times and scope lookup is the one that could plausibly matter — but that is a
+   readability change to be justified on its own terms, with its own measurement, not a
+   performance claim borrowed from this table.
 7. The fixpoint still holds, byte for byte, and the backend equality stays at all-of-them.
 8. A guide page, because a container people will reach for daily is not documented by a spec.
 
