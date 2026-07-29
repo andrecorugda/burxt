@@ -3099,6 +3099,48 @@ fn the_site_is_honest_and_complete() {
         );
     }
 
+    // Markdown inside a raw <div> needs `markdown="1"`, or kramdown passes it through untouched.
+    //
+    // This shipped to the live site: `## Money is not a float` and three other headings reached
+    // burxt-lang.org as literal hashes, because a `<div class="wrap">` around them made kramdown
+    // treat the whole block as raw HTML. The tables rendered — they had `markdown="1"` — which is
+    // what made the page look mostly right and the bug easy to miss.
+    //
+    // Only visible by loading the site, which is why it needs a test rather than care.
+    for page in ["index.md", "install/index.md", "examples/index.md", "guide/index.md"] {
+        let text = match fs::read_to_string(root.join("docs").join(page)) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let mut open_div: Option<(usize, String)> = None;
+        for (n, line) in text.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("<div") {
+                // Only a div that does NOT already say markdown="1" can trap anything.
+                open_div = if trimmed.contains("markdown=") {
+                    None
+                } else {
+                    Some((n + 1, trimmed.chars().take(48).collect()))
+                };
+                continue;
+            }
+            if trimmed.starts_with("</div>") {
+                open_div = None;
+                continue;
+            }
+            if let Some((at, which)) = &open_div {
+                // A heading or a table row is markdown that will not survive.
+                let is_markdown = trimmed.starts_with("#") || trimmed.starts_with("|");
+                assert!(
+                    !is_markdown,
+                    "docs/{}:{} — `{}` has no markdown=\"1\", so the markdown on line {} reaches \
+                     the live page as literal text. kramdown treats a raw <div> as raw HTML.",
+                    page, at, which, n + 1
+                );
+            }
+        }
+    }
+
     // Every link in the site's NAVIGATION has a page behind it.
     //
     // This is the check that was missing when the site first went live: `/examples/` and `/install/`

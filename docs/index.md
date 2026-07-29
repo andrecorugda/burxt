@@ -5,7 +5,7 @@ description: A typed, compiled, native language where exact decimals are the def
 width: wide
 ---
 
-<div class="hero">
+<div class="hero" markdown="1">
 
 <img class="lockup" src="{{ site.baseurl }}/assets/burxt-lockup-light.png" alt="Burxt">
 
@@ -24,7 +24,7 @@ There is no entry point to declare.</p>
 
 </div>
 
-<div class="wrap">
+<div class="wrap" markdown="1">
 
 ## Money is not a float
 
