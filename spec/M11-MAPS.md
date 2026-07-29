@@ -50,8 +50,14 @@ slot table. That is a constant factor. Determinism is worth a constant factor.
 ### Decision 2 — the key bound is `Equatable`, which already exists
 
 ```burxt
-record Map<K, V> { ... }        // used as Map<String, Int>
+record Map<K: Equatable, V> { ... }        // used as Map<String, Int>
 ```
+
+The bound is not decoration. It is what justifies `entry.key == key` inside `probe` and `hash(key)`
+beside it — and it has to be checked in the DECLARATION, because a declaration that cannot be
+justified is wrong whether or not anyone instantiates it. Stage-1 checks it there and stage-0 does
+not, since stage-0 only ever checks instantiated copies where `K` is already a concrete type. Two
+compilers, and the stricter one was right.
 
 `Equatable` means `Int`, `Decimal`, `Bool`, `String` — **exactly the types `==` works on**, which
 is the rule §"Bounds" in the guide already states: a bound cannot promise more than the language
@@ -67,13 +73,13 @@ method.
 
 ### Decision 3 — the layout is a compact ordered table
 
-```
-record Entry<K, V> { key: K, value: V, live: Bool }
+```burxt
+record MapEntry<K: Equatable, V> { key: K, value: V, live: Bool }
 
-record Map<K, V> {
-    entries: [Entry<K, V>],   // insertion order, the iteration order, holes tombstoned
-    slots:   [Int],           // open-addressed: index-into-entries PLUS ONE, 0 means empty
-    live:    Int              // how many entries are not tombstones
+record Map<K: Equatable, V> {
+    entries: [MapEntry<K, V>],   // insertion order, the iteration order, holes tombstoned
+    slots:   [Int],              // open addressed: index-into-entries PLUS ONE, 0 means empty
+    live:    Int                 // how many entries are not tombstones
 }
 ```
 
@@ -114,25 +120,30 @@ anyway: a security property should be visible in the code that needs it.
 
 ### Decision 5 — lookup takes a fallback; there is no `unwrap`
 
+Methods, not free functions, and that was forced rather than chosen: **Burxt has no writable
+parameters**, so a container that changes has to change through `mutable self`. The API is better
+for it — `counts.set("k", 1)` reads better than `map_set(counts, "k", 1)` — which is the usual way
+a real constraint turns out to have been pointing at the nicer design.
+
 ```burxt
-function map_set(...)  -> Int          // insert or overwrite
-function map_get(...)  -> V            // the value, or the fallback given
-function map_has(...)  -> Bool         // whether the key is there
-function map_remove(...) -> Bool       // whether it was there to remove
-function map_count(...) -> Int
-function map_keys(...) -> [K]          // in insertion order
+function (mutable self: Map<K, V>) set(key: K, value: V) -> Int     // 1 if new, 0 if it overwrote
+function (self: Map<K, V>) get(key: K, fallback: V) -> V            // the value, or the fallback
+function (self: Map<K, V>) has(key: K) -> Bool
+function (mutable self: Map<K, V>) remove(key: K) -> Bool           // whether it was there
+function (self: Map<K, V>) count() -> Int
+function (self: Map<K, V>) keys() -> [K]                            // in insertion order
 ```
 
-`map_get(m, k, fallback)` and not `map_get(m, k) -> Option<V>`, for one concrete reason: a generic
-enum payload must currently be a scalar, so `Option<Point>` is refused, so an `Option<V>` return
-would restrict values to scalars — a worse limitation than the one it removes.
+`get(k, fallback)` and not `get(k) -> Option<V>`, for one concrete reason: a generic enum payload
+must currently be a scalar, so `Option<Point>` is refused, so an `Option<V>` return would restrict
+map VALUES to scalars — a worse limitation than the one it removes.
 
-The pair `map_has` then `map_get` is two lookups, and the cost is documented rather than hidden.
-It is also the same shape `lib/option.bx` chose (`option_or`, `option_is_some`, and deliberately no
-`unwrap`), so a reader learns one idiom and not two.
+`has` then `get` is two lookups, and the cost is documented rather than hidden. It is also the same
+shape `lib/option.bx` chose (`option_or`, `option_is_some`, and deliberately no `unwrap`), so a
+reader learns one idiom and not two.
 
-**Trigger for `Option<V>`:** lifting the scalar-payload restriction on generic enums. Then
-`map_find` can be added alongside, and `map_get` stays for the common case.
+**Trigger for `Option<V>`:** lifting the scalar-payload restriction on generic enums. Then `find`
+can be added alongside, and `get` stays for the common case.
 
 ### Decision 6 — no `map`, `filter` or `each`
 
