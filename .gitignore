@@ -28,6 +28,24 @@
 !/lib/
 !/scripts/
 
+# The DOT-directories, admitted explicitly. All four were already tracked — but only by accident:
+# `!/*.*` was written to re-admit root FILES like `README.md`, and `.github` happens to satisfy
+# `*.*` because of its leading dot.
+#
+# What that accident risks, stated precisely rather than dramatically: already-tracked files stay
+# tracked whatever this file says, so nothing would vanish. The danger is a NEW file. Tighten
+# `!/*.*` to something more careful — `!/*.md`, say, which is a tempting improvement — and the next
+# workflow, devcontainer feature or vscode setting added here is silently unversioned while
+# `git status` stays clean. Verified by doing it: a new `.github/workflows/` file matched `/*` and
+# disappeared.
+#
+# That is the shape, if not the scale, of what hid docs/, lib/ and scripts/ from v0.0.31 to
+# v0.0.105. Naming these four means the whitelist says what it means rather than working by luck.
+!/.cargo/
+!/.devcontainer/
+!/.github/
+!/.vscode/
+
 # release tarballs: built by scripts/release.sh, published as GitHub release assets,
 # never committed — a binary in a repository is a binary nobody can reproduce
 /dist/

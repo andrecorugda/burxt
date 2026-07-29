@@ -3223,7 +3223,17 @@ fn every_source_and_document_is_in_version_control() {
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') || matches!(name.as_str(), "target" | "dist" | "node_modules")
+            // Dot-directories are skipped EXCEPT the four that carry real configuration. Skipping
+            // all of them left this test blind to exactly what it exists to protect: CI, the
+            // Codespace config, the LLVM prefix the build reads, and the editor settings are each a
+            // file whose loss would be silent, and each was tracked only because `!/*.*` in
+            // .gitignore happens to match a leading dot.
+            let carries_configuration = matches!(
+                name.as_str(),
+                ".cargo" | ".devcontainer" | ".github" | ".vscode"
+            );
+            if (name.starts_with('.') && !carries_configuration)
+                || matches!(name.as_str(), "target" | "dist" | "node_modules")
             {
                 continue;
             }
