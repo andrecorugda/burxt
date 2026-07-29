@@ -1136,10 +1136,13 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     //
     // v0.0.108 raised it to 190 and earned the three back for the right reason: the arity and
     // not-generic rules over every type application, the generic-`external function` refusal,
-    // and the message for a generic named with nothing to infer from. ONE fixture is still
-    // knowingly out of scope — `generic_enum_payload_must_be_scalar` — because it is a rule
-    // about an instantiated enum's LAYOUT, and layout is exactly the half stage-1's emitter
-    // does not do yet. Named here so it is a pending item and not a silent gap.
+    // and the message for a generic named with nothing to infer from. One fixture was still
+    // knowingly out of scope, `generic_enum_payload_must_be_scalar`, because it is a rule about
+    // an instantiated enum's LAYOUT.
+    //
+    // v0.0.109 raised it to 191 by closing that one: layout now resolves through the arguments
+    // in scope, so stage-1 can ask what an instantiated payload actually is. The list of
+    // knowingly-pending fixtures is empty, which is the first time that has been true.
     let mut caught = 0;
     let mut total = 0;
     for entry in fs::read_dir(root.join("tests/fail")).unwrap() {
@@ -1155,8 +1158,8 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
 
     let _ = fs::remove_dir_all(&scratch);
     assert!(
-        caught >= 190,
-        "stage-1 rejected only {} of {} fail programs, down from 190",
+        caught >= 191,
+        "stage-1 rejected only {} of {} fail programs, down from 191",
         caught,
         total
     );
@@ -1778,9 +1781,14 @@ fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
         "the Burxt backend compiles {} of {} pass programs correctly ({} refused outright)",
         correct, total, refused
     );
+    // 98 of 101 in v0.0.109. The three it does not do are named, so the gap is a list and not
+    // a number: `generics_functions.bx` and `generics_types.bx` need one machine function per
+    // instantiation, and `write_bytes_buffer.bx` needs `write_bytes`. Generic records and enums
+    // ARE emitted — their layout is a cell count read under the arguments in scope, so it needs
+    // no copy of the declaration at all.
     assert!(
-        correct >= 88,
-        "the Burxt backend went backwards: {} of {} correct, was 88 — every program",
+        correct >= 98,
+        "the Burxt backend went backwards: {} of {} correct, was 98 of 101",
         correct,
         total
     );

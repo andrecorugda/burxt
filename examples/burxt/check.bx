@@ -275,8 +275,49 @@ function (self: Unit) token_starting_at(start: Int) -> Int {
 // whoever receives it no longer has the bindings.
 //
 // Nothing is rebuilt unless it changed, so an ordinary type costs no arena entry.
+// The same Type, field for field. NOT `same_type`, which resolves both sides before comparing
+// and would therefore call a `T` and the Point it stands for equal — exactly the question being
+// asked here, so the answer has to be about what is WRITTEN and not what it means.
+function type_identical(a: Type, b: Type) -> Bool {
+    return a.kind == b.kind && a.scale == b.scale && a.contract == b.contract
+        && a.name_start == b.name_start && a.name_len == b.name_len;
+}
+
 function (mutable self: Unit) resolve_deep(src: String, t: Type, at: Int) -> Type allocates {
     let here: Type = self.resolve_shallow(src, t);
+    // A generic inside a generic: `Nested<Point>.inner` is written `Pair<T>`, and whoever
+    // receives it has no bindings left, so the argument has to travel down into the
+    // application. Its arguments are node indices, so a changed one means a fresh argument
+    // list — the one place laziness runs out, and it costs entries only when it fires.
+    if here.kind == 46 && here.contract > 0 {
+        let mutable changed: Bool = false;
+        let mutable i: Int = 0;
+        while i < here.contract {
+            let written: Type = self.declared_type(src, self.nested_children[here.scale + i]);
+            let settled: Type = self.resolve_deep(src, written, at);
+            if !type_identical(settled, written) {
+                changed = true;
+            }
+            i += 1;
+        }
+        if !changed {
+            return here;
+        }
+        let start: Int = len(self.nested_children);
+        i = 0;
+        while i < here.contract {
+            let written: Type = self.declared_type(src, self.nested_children[here.scale + i]);
+            let settled: Type = self.resolve_deep(src, written, at);
+            let node: Int = self.node_for(settled, at);
+            if node < 0 {
+                return here;                         // no token to point at: leave it written
+            }
+            let noted: Int = push(self.nested_children, node);
+            i += 1;
+        }
+        return Type { kind: 46, scale: start, contract: here.contract,
+                      name_start: here.name_start, name_len: here.name_len };
+    }
     if here.kind != 47 && here.kind != 48 {
         return here;
     }
@@ -308,7 +349,13 @@ function (mutable self: Unit) bind_from_application(src: String, holder: Type) -
     let mutable i: Int = 0;
     while i < declaration.type_param_count && i < holder.contract {
         let named: Token = self.tokens[self.type_params[declaration.type_param_start + i]];
-        let argument: Type = self.declared_type(src, self.nested_children[holder.scale + i]);
+        let written: Type = self.declared_type(src, self.nested_children[holder.scale + i]);
+        // Resolved BEFORE it is pushed, under the bindings already in scope. `Nested<Point>`
+        // holds a `Pair<T>`, and binding Pair's `T` to the literal `T` would shadow the
+        // Nested binding that says what `T` is — resolve_shallow searches backwards and stops
+        // at the first match, so the innermost binding must already be the answer.
+        // `Pair<Point>` was 2 cells instead of 4 for exactly this reason.
+        let argument: Type = self.resolve_shallow(src, written);
         push(self.type_bindings, TypeBinding { name_start: named.start,
                                               name_len: named.length, bound: argument });
         i += 1;
@@ -2120,16 +2167,22 @@ function (mutable self: Unit) check_type_shape(src: String, node: Int, at: Int) 
 // looked its name up as a record, got -1, and indexed an array with it. Saying "not yet" is
 // the honest answer and the cheap one. See spec/M7-GENERICS.md §5 for the design that
 // replaces it.
-function (self: Unit) uses_generics() -> Int {
+// The one thing left that needs a COPY rather than a resolution: a function whose body is sized
+// by a type parameter. `identity<T>` compiles to different code for `T = Int` (one cell) and
+// `T = Point` (two), so there must be one machine function per instantiation — mangling, a work
+// list, and a call site that names the copy. Records and enums need none of that, because their
+// layout is a count read under the arguments in scope.
+//
+// Answers the declaration node so the message can point at it, or -1 when there is none.
+function (self: Unit) generic_function(src: String) -> Int {
     let mutable at: Int = 0;
     while at < len(self.nodes) {
         let n: Node = self.nodes[at];
-        if n.kind == 46 && n.b > 0 {
-            // A generic APPLICATION — `Option<Int>`. Instantiating a record or enum needs one
-            // layout per argument list, which is the slice after this one. Generic FUNCTIONS
-            // are checked now: their type parameters are bound at the call site and resolved
-            // as comparison recurses, needing no new layout at all.
-            return at;
+        if n.kind == 80 || n.kind == 81 {
+            let name: Token = self.tokens[n.token];
+            if self.generic_named(src, name.start, name.length) >= 0 {
+                return at;
+            }
         }
         at += 1;
     }
@@ -2157,6 +2210,51 @@ function (self: Unit) unsettled_generic(src: String, t: Type) -> Bool {
     return declaration.type_param_count > 0;
 }
 
+// A variant payload must be a scalar, and for a generic enum that is a rule about the
+// INSTANTIATION rather than the declaration: `Option<T>`'s payload is a parameter, which is
+// neither scalar nor aggregate until an argument says. So the rule is checked where the
+// argument is written, once per application, with the arguments in scope.
+//
+// The rule itself is a cut, not a principle — an aggregate payload reopens the question of how
+// wide a variant is when the widest one holds a record. Stage-0 draws the same line, and the
+// two must draw it in the same place or a program compiles with one compiler and not the other.
+function (mutable self: Unit) check_payloads(src: String, application: Int) -> Int allocates {
+    let applied: Type = self.declared_type(src, application);
+    let found: Int = self.find_type(src, applied.name_start, applied.name_len);
+    if found < 0 {
+        return 0;
+    }
+    let decl: TypeDeclaration = self.types[found];
+    if decl.kind != 83 {                              // records may hold anything
+        return 0;
+    }
+    let item: Node = self.nodes[decl.node];
+    let base: Int = self.bind_from_application(src, applied);
+    let mutable v: Int = 0;
+    while v < item.b {
+        let variant: Node = self.nodes[self.children[item.a + v]];
+        let mutable p: Int = 0;
+        while p < variant.c {
+            let written: Type = self.declared_type(src, self.nested_children[variant.b + p]);
+            let carried: Type = self.resolve_shallow(src, written);
+            if carried.kind == 46 || carried.kind == 47 || carried.kind == 48
+               || carried.kind == 49 {
+                let variant_name: Token = self.tokens[variant.token];
+                let complained: Int = self.complain_at(src, self.nodes[application].token,
+                    "`" + self.show_type(src, applied) + "` cannot be made: `"
+                    + substring(src, applied.name_start, applied.name_len) + "."
+                    + substring(src, variant_name.start, variant_name.length)
+                    + "` would carry " + self.show_type(src, carried)
+                    + ", and a variant payload must be Int, Bool, String or Decimal for now");
+            }
+            p += 1;
+        }
+        v += 1;
+    }
+    let dropped: Int = truncate(self.type_bindings, base);
+    return 1;
+}
+
 function (mutable self: Unit) check_applications(src: String) -> Int allocates {
     let mutable at: Int = 0;
     while at < len(self.nodes) {
@@ -2175,6 +2273,8 @@ function (mutable self: Unit) check_applications(src: String) -> Int allocates {
                         "`" + substring(src, named.start, named.length) + "` takes "
                         + to_string(declaration.type_param_count) + " type argument(s), and "
                         + to_string(n.b) + " were given");
+                } else {
+                    let checked: Int = self.check_payloads(src, at);
                 }
             }
         }

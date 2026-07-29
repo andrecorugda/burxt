@@ -187,7 +187,13 @@ function (self: Unit) slot_is_aggregate(src: String, start: Int, length: Int) ->
 // eight bytes wide or an aggregate of things that are — a String and a growable array
 // are pointers, a Decimal is a scaled i64 — so a layout is a COUNT, and nothing here
 // needs an alignment rule.
-function (mutable self: Unit) cells_of(src: String, bound_type: Type) -> Int allocates {
+function (mutable self: Unit) cells_of(src: String, written: Type) -> Int allocates {
+    // A type parameter is whatever it was bound to, and a generic's fields are sized with its
+    // ARGUMENTS in scope. Because a layout is a count and not a named LLVM type, nothing is
+    // rewritten and no copy of the declaration is made: `Pair<Int>` is 2 cells and
+    // `Pair<Point>` is 4 from the same declaration, read twice under different bindings.
+    // The same laziness the checker found, applied to size.
+    let bound_type: Type = self.resolve_shallow(src, written);
     if bound_type.kind == 46 {
         let found: Int = self.find_type(src, bound_type.name_start, bound_type.name_len);
         if found < 0 {
@@ -195,6 +201,9 @@ function (mutable self: Unit) cells_of(src: String, bound_type: Type) -> Int all
         }
         let decl: TypeDeclaration = self.types[found];
         let item: Node = self.nodes[decl.node];
+        // Installed AFTER the two refusals above, so the only paths that bind are the two
+        // that walk, and each of them restores before it answers.
+        let restore: Int = self.bind_from_application(src, bound_type);
         if decl.kind == 83 {
             // An enum is a TAG plus room for the widest variant's payload. Every value of
             // the type is the same size, so one may be assigned where another was — which
@@ -212,9 +221,11 @@ function (mutable self: Unit) cells_of(src: String, bound_type: Type) -> Int all
                 if carried > widest { widest = carried; }
                 v += 1;
             }
+            let dropped: Int = truncate(self.type_bindings, restore);
             return 1 + widest;
         }
         if decl.kind != 82 {
+            let dropped: Int = truncate(self.type_bindings, restore);
             return 1;
         }
         let mutable total: Int = 0;
@@ -224,6 +235,7 @@ function (mutable self: Unit) cells_of(src: String, bound_type: Type) -> Int all
             total += self.cells_of(src, self.declared_type(src, field.a));
             f += 1;
         }
+        let dropped: Int = truncate(self.type_bindings, restore);
         return total;
     }
     if bound_type.kind == 48 {                               // [T; N]
@@ -246,18 +258,35 @@ function (mutable self: Unit) offset_of(src: String, holder: Type, name: Token) 
         return -1;
     }
     let item: Node = self.nodes[self.types[found].node];
+    let restore: Int = self.bind_from_application(src, holder);
     let mutable offset: Int = 0;
     let mutable f: Int = 0;
-    while f < item.b {
+    let mutable answer: Int = 0 - 1;
+    while f < item.b && answer < 0 {
         let field: Node = self.nodes[self.children[item.a + f]];
         let field_name: Token = self.tokens[field.token];
         if spans_equal(src, field_name.start, field_name.length, name.start, name.length) {
-            return offset;
+            answer = offset;
+        } else {
+            offset += self.cells_of(src, self.declared_type(src, field.a));
         }
-        offset += self.cells_of(src, self.declared_type(src, field.a));
         f += 1;
     }
-    return -1;
+    let dropped: Int = truncate(self.type_bindings, restore);
+    return answer;
+}
+
+// A field's type with the holder's type ARGUMENTS in scope, so `Pair<Point>.first` is a Point
+// and not a `T`. Without this the emitter asked whether a `T` was an aggregate, was told no,
+// and stored the value's ADDRESS in the field instead of copying its cells — a record that
+// looked the right size and held a pointer where a Point belonged. check.bx's record-literal
+// rule does exactly this, which is the argument for it living in one named function.
+function (mutable self: Unit) field_type_here(src: String, holder: Type, at: Int) -> Type allocates {
+    let base: Int = self.bind_from_application(src, holder);
+    let stated: Type = self.field_type(src, holder, at);
+    let settled: Type = self.resolve_deep(src, stated, at);
+    let dropped: Int = truncate(self.type_bindings, base);
+    return settled;
 }
 
 function (self: Unit) is_aggregate(bound_type: Type) -> Bool {
@@ -544,7 +573,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String alloca
             let pair: Node = self.nodes[self.children[n.a + i]];
             let field: Token = self.tokens[pair.token];
             let offset: Int = self.offset_of(src, mine, field);
-            let field_ty: Type = self.field_type(src, mine, pair.token);
+            let field_ty: Type = self.field_type_here(src, mine, pair.token);
             let value: String = self.emit_value_for(src, field_ty, pair.a);
             let at: String = self.fresh();
             let stepped: Int = self.write_body("  " + at + " = getelementptr i64, ptr " + storage
@@ -1926,12 +1955,13 @@ function (mutable self: Unit) emit_module(src: String) -> Int allocates {
     // that cannot be lazy — `Option<Int>` needs its own tag-and-payload sizing, one copy per
     // argument list — so the refusal lives here rather than in the checker, which no longer
     // needs it. See spec/M7-GENERICS.md §5.
-    let generic: Int = self.uses_generics();
+    let generic: Int = self.generic_function(src);
     if generic >= 0 {
         let complained: Int = self.complain_at(src, self.nodes[generic].token,
-            "the Burxt backend does not lay out generic records and enums yet: giving "
-            + "`Option<Int>` its own size is one copy per argument list, which is the next "
-            + "slice. Its front end checks them, and the Rust compiler emits them");
+            "the Burxt backend does not emit generic FUNCTIONS yet: a body whose parameter "
+            + "may be one cell or four needs one copy per instantiation, which is the next "
+            + "slice. Generic records and enums do work — their layout is a count, so it is "
+            + "read under the arguments rather than copied. The Rust compiler emits both");
         return 0;
     }
     let mutable preamble: Int = self.write_module("declare i32 @printf(ptr, ...)\n");

@@ -263,7 +263,47 @@ So the design has to differ, and the shape that fits stage-1's representation is
 - **Mangling moves to the emitter**, which already builds strings freely, so the LLVM symbol name
   is computed where symbol names belong and nowhere else.
 
-### Where it actually stands (v0.0.108)
+### Where it actually stands (v0.0.109)
+
+**Generic records and enums are EMITTED**, by both compilers, and they needed no
+monomorphisation at all — which was the surprise. In Burxt a layout is a **count of eight-byte
+cells**, not a named machine type: everything a value can be is eight bytes wide or an aggregate
+of things that are. So `cells_of` and `offset_of` read the one declaration under the arguments in
+scope and answer 2 for `Pair<Int>` and 4 for `Pair<Point>`. No copy, no mangled type, no arena
+entry. The prediction in §5 — that layout "cannot be lazy" — was wrong, and wrong in the same
+direction as the substitution prediction before it. Twice now the design assumed a rewrite and
+the answer was a resolution.
+
+Four defects, each of which the previous one hid:
+
+1. **Size right, field type wrong.** The emitter asked whether a `T` was an aggregate, was told
+   no, and stored a Point's *address* where its two cells belonged: a record of exactly the
+   right size holding a pointer in the wrong place. Field types are now resolved under the
+   holder's arguments in one named function, `field_type_here`, because check.bx's record-literal
+   rule already did exactly this and two copies of a rule is one too many.
+2. **A generic inside a generic.** `Nested<Point>.inner` is written `Pair<T>`, and whoever
+   receives that type has no bindings left. `resolve_deep` now descends into an application's
+   arguments and lays down a fresh argument list when one changed — the single place laziness
+   runs out, and it costs entries only when it fires.
+3. **An inner binding shadowed an outer one.** Binding `Pair`'s `T` to the literal `T` hid
+   `Nested`'s `T = Point`, because `resolve_shallow` searches backwards and stops at the first
+   match. A binding is now **resolved before it is pushed**, so the innermost is already the
+   answer. `Pair<Point>` was 2 cells instead of 4 for exactly this reason.
+4. **The payload rule is about the instantiation, not the declaration.** `Option<T>`'s payload is
+   a parameter, which is neither scalar nor aggregate until an argument says. Checked once per
+   application, with the arguments in scope, and it now reads the same sentence stage-0 reads.
+
+`tests/pass/generics_layout.bx` pins all of it, and pins it the right way: it reads the fields
+back out and adds them rather than only building the value, because three of the four defects
+above produced a value of exactly the right size.
+
+**What is left is generic FUNCTIONS in the emitter.** That one genuinely needs a copy: a body
+whose parameter may be one cell or four compiles to different code, so it wants a mangled symbol
+per instantiation, a work list, and call sites that name the copy. `emit_module` refuses exactly
+that and says so; stage-0 emits them. Two pass fixtures wait on it, both named in the backend
+ratchet's comment.
+
+### Where it stood (v0.0.108)
 
 **The whole front end checks generics — functions, records and enums — in both compilers**, and
 the generics tests now live in `tests/pass/`, which is the bar that matters: a fixture in
