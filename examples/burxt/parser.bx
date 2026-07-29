@@ -966,8 +966,7 @@ function (mutable self: Unit) has_region() -> Bool {
 function (mutable self: Unit) needs_region(src: String, at: Int, what: String) -> Int {
     let complained: Int = self.complain_at(src, at,
         what + " allocates, so it needs a region: there is none open here. Open one "
-        + "with `region r \{ ... \}`, or declare the function `allocates` to build in "
-        + "the caller's region");
+        + "with `region r \{ ... \}`");
     return 0;
 }
 

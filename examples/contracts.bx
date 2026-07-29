@@ -58,16 +58,14 @@ function (mutable self: Ledger) transfer(amount: Decimal<2>) -> Int
     return 0;
 }
 
-region r {
-    print(withdraw($100.00, $30.00));      // 70.00
-    print(fee_for($150.00));               // 2.50
-    print(countdown(5, 0));                // 15
+print(withdraw($100.00, $30.00));      // 70.00
+print(fee_for($150.00));               // 2.50
+print(countdown(5, 0));                // 15
 
-    let mutable book: Ledger = Ledger { from_side: $500.00, to_side: $0.00 };
-    let moved: Int = book.transfer($120.00);
-    print(book.from_side);                 // 380.00
-    print(book.to_side);                   // 120.00
-}
+let mutable book: Ledger = Ledger { from_side: $500.00, to_side: $0.00 };
+let moved: Int = book.transfer($120.00);
+print(book.from_side);                 // 380.00
+print(book.to_side);                   // 120.00
 
 // ---- What happens when a claim is false ------------------------------------
 //

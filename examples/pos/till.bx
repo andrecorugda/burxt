@@ -62,22 +62,20 @@ function ring_up(rule: dynamic Tax, sale: [Line]) -> Int {
 }
 
 // ---- The program -----------------------------------------------------------
-region sale {
-    let shelf: [Item] = catalogue();
+let shelf: [Item] = catalogue();
 
-    let mutable basket: [Line] = [];
-    let one: Int = push(basket, Line { item: find_item(shelf, "RICE"), quantity: 3 });
-    let two: Int = push(basket, Line { item: find_item(shelf, "MILK"), quantity: 2 });
-    let three: Int = push(basket, Line { item: find_item(shelf, "NEWS"), quantity: 1 });
+let mutable basket: [Line] = [];
+let one: Int = push(basket, Line { item: find_item(shelf, "RICE"), quantity: 3 });
+let two: Int = push(basket, Line { item: find_item(shelf, "MILK"), quantity: 2 });
+let three: Int = push(basket, Line { item: find_item(shelf, "NEWS"), quantity: 1 });
 
-    // The same basket, priced two ways. Neither `ring_up` nor `receipt.bx` knows
-    // which rule it is running — that is what the trait is for.
-    let flat: FlatTax = FlatTax { rate: 0.1200 };
-    let split: SplitTax = SplitTax { staples: 0.0200, rest: 0.1200 };
+// The same basket, priced two ways. Neither `ring_up` nor `receipt.bx` knows
+// which rule it is running — that is what the trait is for.
+let flat: FlatTax = FlatTax { rate: 0.1200 };
+let split: SplitTax = SplitTax { staples: 0.0200, rest: 0.1200 };
 
-    let a: Int = ring_up(flat, basket);
+let a: Int = ring_up(flat, basket);
 
-    print("");
-    // The same lines again, under `split`: staples at 2%, everything else at 12%.
-    let b: Int = ring_up(split, basket);
-}
+print("");
+// The same lines again, under `split`: staples at 2%, everything else at 12%.
+let b: Int = ring_up(split, basket);

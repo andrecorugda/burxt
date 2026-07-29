@@ -371,15 +371,13 @@ function (mutable self: Table) check_let(src: String, from: Int) -> Int {
     return cursor;
 }
 
-region pass {
-    let src: String = read_file("examples/negative/money.bx");
-    let mutable table: Table = Table { rows: [] };
-    let mutable cursor: Int = 0;
-    while true {
-        if cursor >= len(src) {
-            break;
-        }
-        cursor = table.check_let(src, cursor);
+let src: String = read_file("examples/negative/money.bx");
+let mutable table: Table = Table { rows: [] };
+let mutable cursor: Int = 0;
+while true {
+    if cursor >= len(src) {
+        break;
     }
-    print("--- checked " + to_string(len(table.rows)) + " declarations");
+    cursor = table.check_let(src, cursor);
 }
+print("--- checked " + to_string(len(table.rows)) + " declarations");

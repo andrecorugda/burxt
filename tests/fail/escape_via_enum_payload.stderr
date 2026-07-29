@@ -1,1 +1,1 @@
-cannot return this Wrapped: it was built in a region
+cannot return this Wrapped: it was built inside a `region` block

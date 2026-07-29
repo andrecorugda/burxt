@@ -34,22 +34,20 @@ function describe(s: Status) -> String {
     }
 }
 
-region r {
-    let invoices: [Status; 3] = [
-        Status.Paid,
-        Status.Owing($42.50),
-        Status.Void
-    ];
+let invoices: [Status; 3] = [
+    Status.Paid,
+    Status.Owing($42.50),
+    Status.Void
+];
 
-    let mutable i: Int = 0;
-    let mutable total: Decimal<2> = $0.00;
-    while i < 3 {
-        print(describe(invoices[i]));
-        total = total + owed(invoices[i]);
-        i = i + 1;
-    }
-    print("outstanding: " + to_string(total));
+let mutable i: Int = 0;
+let mutable total: Decimal<2> = $0.00;
+while i < 3 {
+    print(describe(invoices[i]));
+    total = total + owed(invoices[i]);
+    i = i + 1;
 }
+print("outstanding: " + to_string(total));
 
 // ---- What the compiler refuses, and why ------------------------------------
 //

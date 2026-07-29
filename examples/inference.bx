@@ -19,65 +19,63 @@ function distance_squared(a: Point, b: Point) -> Int {
     return dx * dx + dy * dy;
 }
 
-region r {
-    // ---- every type infers -------------------------------------------------
-    let count = 0;                       // Int
-    let ready = true;                     // Bool
-    let name = "burxt";                   // String
-    let price = $19.99;                   // Decimal<2>
-    let rate = 8.25%;                     // Decimal<4>
-    let here = Point { x: 3, y: 4 };      // Point
-    let state = Status.Owing($42.50);     // Status
-    let far = distance_squared(here, Point { x: 0, y: 0 });   // Int, from the signature
-    let greeting = "hello, " + name;      // String, built in this region
+// ---- every type infers -------------------------------------------------
+let count = 0;                       // Int
+let ready = true;                     // Bool
+let name = "burxt";                   // String
+let price = $19.99;                   // Decimal<2>
+let rate = 8.25%;                     // Decimal<4>
+let here = Point { x: 3, y: 4 };      // Point
+let state = Status.Owing($42.50);     // Status
+let far = distance_squared(here, Point { x: 0, y: 0 });   // Int, from the signature
+let greeting = "hello, " + name;      // String, built in this region
 
-    // `let mutable` infers the same way. Mutation is still opt-in and still visible.
-    let mutable running = 0;
-    running += far;
+// `let mutable` infers the same way. Mutation is still opt-in and still visible.
+let mutable running = 0;
+running += far;
 
-    print(count);
-    print(ready);
-    print(greeting);
-    print(price);
-    print(rate);
-    print(here.x + here.y);
-    print(running);
+print(count);
+print(ready);
+print(greeting);
+print(price);
+print(rate);
+print(here.x + here.y);
+print(running);
 
-    // ---- an array names its type, and this is not about the element type ----
-    // `[10, 20, 30]` obviously holds Ints. What it does not say is FIXED or
-    // GROWABLE — two different types, with different storage and different
-    // rules — so the binding says which.
-    let sizes: [Int; 3] = [10, 20, 30];   // fixed: exactly three
-    let mutable log: [String] = [];           // growable: lives in the region
-    let n = push(log, "started");
-    print(sizes[1]);
-    print(log[0]);
+// ---- an array names its type, and this is not about the element type ----
+// `[10, 20, 30]` obviously holds Ints. What it does not say is FIXED or
+// GROWABLE — two different types, with different storage and different
+// rules — so the binding says which.
+let sizes: [Int; 3] = [10, 20, 30];   // fixed: exactly three
+let mutable log: [String] = [];           // growable: lives in the region
+let n = push(log, "started");
+print(sizes[1]);
+print(log[0]);
 
-    // ---- and walking one needs no index ------------------------------------
-    // The element is a copy, immutable, and scoped to the body. `for` takes a name
-    // or a field path, never a call: it reads the array once per element.
-    let mutable sum = 0;
-    for s in sizes {
-        sum += s;
-    }
-    print(sum);
+// ---- and walking one needs no index ------------------------------------
+// The element is a copy, immutable, and scoped to the body. `for` takes a name
+// or a field path, never a call: it reads the array once per element.
+let mutable sum = 0;
+for s in sizes {
+    sum += s;
+}
+print(sum);
 
-    // ---- inference removes typing, not checking ----------------------------
-    // The exact product of a 2-place price and a 4-place rate has six places, and
-    // that is what this is. Nothing rounded, so nothing had to be declared.
-    let exact = price * rate;
-    print(exact);                         // 1.649175
+// ---- inference removes typing, not checking ----------------------------
+// The exact product of a 2-place price and a 4-place rate has six places, and
+// that is what this is. Nothing rounded, so nothing had to be declared.
+let exact = price * rate;
+print(exact);                         // 1.649175
 
-    // Turning it into money is a decision, so it is still written down. Inference
-    // cannot introduce rounding, because a contract only exists if someone typed it.
-    let tax: Decimal<2, RoundHalfEven> = price * rate;
-    print(tax);                           // 1.65
+// Turning it into money is a decision, so it is still written down. Inference
+// cannot introduce rounding, because a contract only exists if someone typed it.
+let tax: Decimal<2, RoundHalfEven> = price * rate;
+print(tax);                           // 1.65
 
-    match state {
-        Paid => { print("settled"); }
-        Owing(amount) => { print(amount); }     // Decimal<2>, from the variant
-        Void => { print("cancelled"); }
-    }
+match state {
+    Paid => { print("settled"); }
+    Owing(amount) => { print(amount); }     // Decimal<2>, from the variant
+    Void => { print("cancelled"); }
 }
 
 // ---- What the compiler refuses, and why ------------------------------------

@@ -66,53 +66,51 @@ function doubled_first(xs: [Int]) -> Option<Int> {
     return Option.Some(head * 2);
 }
 
-region r {
-    let mutable xs: [Int] = [];
-    let a = push(xs, 5);
-    let b = push(xs, 9);
-    let c = push(xs, 14);
+let mutable xs: [Int] = [];
+let a = push(xs, 5);
+let b = push(xs, 9);
+let c = push(xs, 14);
 
-    // Both cases, every time. That is the whole feature.
-    match position_of(xs, 9) {
-        None => { print("not there"); }
-        Some(at) => { print(at); }
-    }
-    match position_of(xs, 7) {
-        None => { print("not there"); }
-        Some(at) => { print(at); }
-    }
+// Both cases, every time. That is the whole feature.
+match position_of(xs, 9) {
+    None => { print("not there"); }
+    Some(at) => { print(at); }
+}
+match position_of(xs, 7) {
+    None => { print("not there"); }
+    Some(at) => { print(at); }
+}
 
-    // Or a fallback, when a default is the right answer.
-    print(or_else(position_of(xs, 14), 0 - 1));
-    print(or_else(position_of(xs, 99), 0 - 1));
+// Or a fallback, when a default is the right answer.
+print(or_else(position_of(xs, 14), 0 - 1));
+print(or_else(position_of(xs, 99), 0 - 1));
 
-    // One definition of `or_else`, two instantiations: `Option<Int>` and
-    // `Option<String>` are separate types with separate layouts.
-    let keywords: Option<String> = Option.Some("found");
-    print(or_else(keywords, "missing"));
+// One definition of `or_else`, two instantiations: `Option<Int>` and
+// `Option<String>` are separate types with separate layouts.
+let keywords: Option<String> = Option.Some("found");
+print(or_else(keywords, "missing"));
 
-    match divide(10, 2) {
-        Ok(answer) => { print(answer); }
-        Error(why) => { print(why); }
-    }
-    match divide(1, 0) {
-        Ok(answer) => { print(answer); }
-        Error(why) => { print(why); }
-    }
+match divide(10, 2) {
+    Ok(answer) => { print(answer); }
+    Error(why) => { print(why); }
+}
+match divide(1, 0) {
+    Ok(answer) => { print(answer); }
+    Error(why) => { print(why); }
+}
 
-    // `?` in action: the second call fails, and the failure travels out untouched.
-    match average(10, 6, 2) {
-        Ok(mean) => { print(mean); }
-        Error(why) => { print(why); }
-    }
-    match average(10, 6, 0) {
-        Ok(mean) => { print(mean); }
-        Error(why) => { print(why); }
-    }
-    match doubled_first(xs) {
-        None => { print("no 5"); }
-        Some(v) => { print(v); }
-    }
+// `?` in action: the second call fails, and the failure travels out untouched.
+match average(10, 6, 2) {
+    Ok(mean) => { print(mean); }
+    Error(why) => { print(why); }
+}
+match average(10, 6, 0) {
+    Ok(mean) => { print(mean); }
+    Error(why) => { print(why); }
+}
+match doubled_first(xs) {
+    None => { print("no 5"); }
+    Some(v) => { print(v); }
 }
 
 // ---- What the compiler refuses, and why ------------------------------------

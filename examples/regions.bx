@@ -1,24 +1,57 @@
 // ============================================================================
-// Regions — the unit of ownership. No garbage collector, no reference counts,
+// Regions — how Burxt frees memory. No garbage collector, no reference counts,
 // no borrow checker: a bump pointer, and a mark that says where it stood.
 // ============================================================================
 //
-// Anything that BUILDS a value at run time — joining Strings, `to_string`,
-// `substring`, `read_file`, a growable array — needs somewhere to build it.
-// That somewhere is a region, and it is written down:
+// THINK OF A TRAY.
+//
+// When your program builds something at run time — joining Strings, `to_string`,
+// `substring`, `read_file`, a growable array — the bytes have to go somewhere. They
+// go on a tray. When you are done with everything on it, you tip the whole tray
+// into the bin in one motion:
 //
 //     region name { ... }
 //
-// Opening one remembers where the bump pointer stood. Closing it puts the
-// pointer back, which releases everything built inside, all at once, in O(1)
-// regardless of how many allocations happened.
+// Opening one remembers where the bump pointer stood. Closing it puts the pointer
+// back, which releases everything built inside, all at once, in O(1) — however
+// many allocations happened, and with no traversal, no finalizers and nothing to
+// schedule.
+//
+// YOU NEVER HAVE TO WRITE ONE.
+//
+// Until v0.0.146 you did: building anything outside a region was a compile error,
+// and every program began with a `region` wrapper it never referred to again. That
+// requirement is gone. Your program has a tray from the moment it starts, and this
+// file has no wrapper around its top level — look at the left margin.
+//
+// So what is a region FOR now? Releasing early. That is the whole answer, and the
+// numbers at the bottom of this file say when you should care.
 
-// ---- Building inside a region ----------------------------------------------
+// ---- You can build anything, anywhere ---------------------------------------
+// No region open. All of this used to be a compile error.
+let greeting: String = "hello" + ", " + "world";
+print(greeting);
+
+let mutable names: [String] = [];
+let a: Int = push(names, "ada");
+let b: Int = push(names, "grace");
+print(len(names));
+
+// A function that builds its answer needs no annotation either. It used to have to
+// say `allocates`, meaning "I build in my caller's region" — the compiler works
+// that out now, and both compilers agree on it.
+function describe(line: Int, byte: Int) -> String {
+    return "line " + to_string(line) + ": unexpected byte " + to_string(byte);
+}
+print(describe(3, 108));
+
+// ---- What a region is for: releasing early ----------------------------------
+// Everything built inside is gone at the closing brace. One store to a pointer.
 region report {
-    let mutable lines: [String] = [];        // a growable array lives in the region
+    let mutable lines: [String] = [];
     let mutable i: Int = 1;
     while i <= 3 {
-        let entry: String = "line " + to_string(i);   // a join: allocates
+        let entry: String = "line " + to_string(i);
         let n: Int = push(lines, entry);
         i = i + 1;
     }
@@ -26,49 +59,55 @@ region report {
     print(lines[0]);
     print(lines[2]);
 }
-// Everything above is gone here — one store to a pointer, no traversal, no
-// finalizers, nothing to schedule.
+// The three Strings and the array are released here. Without the region they would
+// live until the program ended — which for three Strings costs nothing, and for a
+// loop over a million rows costs everything.
 
-// ---- Functions that build for their caller ---------------------------------
-// A function body has no region of its own. Without `allocates` it cannot build
-// anything, which would make a helper that formats a message impossible to
-// write. `allocates` says: I build in MY CALLER'S region.
-function describe(line: Int, byte: Int) -> String {
-    return "line " + to_string(line) + ": unexpected byte " + to_string(byte);
-}
+// ---- The number that tells you when to reach for one ------------------------
+// A loop building 100,000 Strings, peak resident memory:
+//
+//     no region                                    5,280 KB
+//     region each { ... } around the loop body     1,408 KB
+//
+// Memory grows LINEARLY without a region, because nothing is released until the
+// program exits. The arena is a 1 GB reservation and running out is a named error
+// rather than a crash — but a server loop or a batch over a large input will get
+// there. Wrap the work each iteration does in a region and the loop becomes
+// constant-memory:
+//
+//     while more_rows() {
+//         region row { handle(next_row()); }
+//     }
+//
+// The rule of thumb: a region per unit of work whose results you do not keep.
 
-region parse {
-    // The bytes belong to `parse`, and live exactly as long as it does.
-    print(describe(3, 108));
-}
-
-// ---- `to_string` of a Bool needs no region ---------------------------------
-// It renders to one of two literals, so nothing is built. The rule is about
-// allocation, not about types.
+// ---- `to_string` of a Bool builds nothing -----------------------------------
+// It renders to one of two literals, so there is nothing to release. Worth knowing
+// only because it shows the rule is about allocation, not about types.
 print(to_string(true));
 
-// ---- What the compiler refuses, and why ------------------------------------
+// ---- What the compiler still refuses, and why -------------------------------
 //
-// Building with no region open:
-//     let s: String = "a" + "b";
-//     error: joining two Strings allocates, so it needs a region: there is none
-//            open here. Open one with `region r { ... }`, or declare the
-//            function `allocates` to build in the caller's region.
+// One rule survives, and it is the one that matters: a value built inside a region
+// cannot leave it, because the region releases at its closing brace.
 //
-// Returning something built inside a region the function itself opened — the
-// region ends at the closing brace, so the storage would not outlive it:
 //     function bad() -> String { region r { return "a" + "b"; } }
-//     error: cannot return this: it was built inside a `region` block
+//     error: cannot return this String: it was built inside a `region` block, which
+//            releases at its closing brace, so its storage would not outlive the
+//            call. Move the allocation out of the `region` block, or return a
+//            scalar summary.
 //
-// Returning built data without saying `allocates`:
-//     error: cannot return this: it allocates, and a function that returns
-//            built data must say `allocates`
+// It applies through a NAME as well as directly, which is a distinction that cost a
+// use-after-free to learn: `let s = "a" + "b"; return s;` inside a region was
+// accepted until v0.0.142 and printed an empty string, because the check asked
+// about the expression and a name is not one.
 //
-// The escape check looks INSIDE aggregates, too — a record holding a built
-// String is itself built. That arm was missing for four versions and let a
-// use-after-free through; it is why the check walks fields and elements now.
+// The check also looks INSIDE aggregates — a record holding a built String is
+// itself built. That arm was missing for four versions and let a use-after-free
+// through, which is why it walks fields and elements now.
 //
 // Regions do not nest:
 //     region a { region b { } }
-//     error: regions do not nest: the inner one would end while the outer is
-//            still open, and one bump pointer cannot serve two marks
+//     error: `region b` cannot open inside `region a` — nested regions are not
+//            available yet. Close the outer one first, or use a single region for
+//            both.

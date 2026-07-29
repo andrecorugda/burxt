@@ -72,25 +72,23 @@ function (self: Checkout) describe() -> String {
     return "checkout using " + self.rates.name() + " rates";
 }
 
-region app {
-    let order: Order = new_order($100.00, "PH");
+let order: Order = new_order($100.00, "PH");
 
-    // Inject one implementation. The dependency is bound to a variable first,
-    // because a `dynamic` borrows the storage of the value it refers to and a
-    // temporary has none — the compiler says exactly that if you forget.
-    let live_rates: TableRates = TableRates { home: 12.00%, abroad: 0.00% };
-    let live: Checkout = Checkout { rates: live_rates };
-    print(live.describe());
-    print(live.total_for(order));
+// Inject one implementation. The dependency is bound to a variable first,
+// because a `dynamic` borrows the storage of the value it refers to and a
+// temporary has none — the compiler says exactly that if you forget.
+let live_rates: TableRates = TableRates { home: 12.00%, abroad: 0.00% };
+let live: Checkout = Checkout { rates: live_rates };
+print(live.describe());
+print(live.total_for(order));
 
-    // Inject another. Nothing about `Checkout` changes — this is the seam a test
-    // uses, and it needs no framework, no annotation and no container.
-    let stub_rates: FlatRates = FlatRates { everywhere: 5.00% };
-    let stubbed: Checkout = Checkout { rates: stub_rates };
-    print(stubbed.describe());
-    print(stubbed.total_for(order));
-    print(stubbed.total_for(new_order($100.00, "US")));
-}
+// Inject another. Nothing about `Checkout` changes — this is the seam a test
+// uses, and it needs no framework, no annotation and no container.
+let stub_rates: FlatRates = FlatRates { everywhere: 5.00% };
+let stubbed: Checkout = Checkout { rates: stub_rates };
+print(stubbed.describe());
+print(stubbed.total_for(order));
+print(stubbed.total_for(new_order($100.00, "US")));
 
 // ---- What the compiler refuses, and why ------------------------------------
 //

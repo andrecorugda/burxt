@@ -716,6 +716,24 @@ impl TypeChecker {
 
     /// Which functions and methods allocate — worked out rather than declared.
     ///
+    /// **Still load-bearing after slice 2, for a different reason than it was built for.**
+    /// Worth reading before deleting anything that looks dead here.
+    ///
+    /// It was built to answer "does this need a region?", and slice 2 deleted that question —
+    /// `has_region` now returns true unconditionally, so every `if !self.has_region()` guard
+    /// below is unreachable and looks like debris. Removing them would break the escape rule
+    /// SILENTLY, in two ways:
+    ///
+    ///   * `expr_allocates` asks `alloc_fns` whether a CALL produces region storage. Without
+    ///     it, `function bad() -> String { region r { return build(); } }` would be accepted
+    ///     and hand back freed bytes.
+    ///   * the probe records through `has_region`, so the guards are where the answer comes
+    ///     from. Delete the callers and the set empties.
+    ///
+    /// So the question the machinery answers changed — from "where may this be built?" to
+    /// "does this expression produce region storage?" — and only the second one was ever
+    /// about safety.
+    ///
     /// A THROWAWAY checker per round, never this one. Sharing would be a real bug and not
     /// merely untidy: checking a body creates generic instantiations and records them in
     /// `seen_instantiations` so each is emitted once, so a probe pass on the live checker
@@ -3499,10 +3517,10 @@ impl TypeChecker {
                         return Ok(TypedStmt::Return(typed));
                     }
                     return Err(format!(
-                        "cannot return this {}: it was built in a region, so its \
-                         storage would not outlive it. Return a scalar summary, fill \
-                         storage the caller owns, or move the allocation out of the \
-                         `region` block and declare the function `allocates`.",
+                        "cannot return this {}: it was built inside a `region` block, which \
+                         releases at its closing brace, so its storage would not outlive the \
+                         call. Move the allocation out of the `region` block, or return a \
+                         scalar summary.",
                         typed.ty
                     ));
                 }

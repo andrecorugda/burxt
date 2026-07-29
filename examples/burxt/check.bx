@@ -1759,9 +1759,10 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
             // with the word that fed it.
             if self.region_depth > 0 {
                 let complained: Int = self.complain_at(src, n.token,
-                    "cannot return this: it was built inside a `region` block, "
-                    + "which ends at its closing brace, so its storage would not "
-                    + "outlive it");
+                    "cannot return this: it was built inside a `region` block, which "
+                    + "releases at its closing brace, so its storage would not outlive "
+                    + "the call. Move the allocation out of the `region` block, or return "
+                    + "a scalar summary.");
             }
         }
         return 1;

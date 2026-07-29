@@ -78,36 +78,34 @@ function twice_the_price<T: Priced>(item: T) -> Decimal<2> {
     return item.price() * 2;
 }
 
-region r {
-    // Four instantiations of one definition. Each is its own symbol.
-    print(identity(3));
-    print(identity("text"));
-    print(identity(true));
-    print(identity($1.50));
+// Four instantiations of one definition. Each is its own symbol.
+print(identity(3));
+print(identity("text"));
+print(identity(true));
+print(identity($1.50));
 
-    let mutable ns: [Int] = [];
-    let a = push(ns, 10);
-    let b = push(ns, 20);
-    print(first(ns));
-    print(second(ns));
+let mutable ns: [Int] = [];
+let a = push(ns, 10);
+let b = push(ns, 20);
+print(first(ns));
+print(second(ns));
 
-    let mutable ws: [String] = [];
-    let c = push(ws, "one");
-    let d = push(ws, "two");
-    print(first(ws));
+let mutable ws: [String] = [];
+let c = push(ws, "one");
+let d = push(ws, "two");
+print(first(ws));
 
-    print(echo(7));
-    print(keep(9, "ignored"));
+print(echo(7));
+print(keep(9, "ignored"));
 
-    // A record travels by value through a generic, like everywhere else.
-    let p = identity(Point { x: 4, y: 5 });
-    print(p.x + p.y);
+// A record travels by value through a generic, like everywhere else.
+let p = identity(Point { x: 4, y: 5 });
+print(p.x + p.y);
 
-    print(largest(3, 9));
-    print(largest($1.50, $1.25));
-    print(same("a", "a"));
-    print(twice_the_price(p));
-}
+print(largest(3, 9));
+print(largest($1.50, $1.25));
+print(same("a", "a"));
+print(twice_the_price(p));
 
 // ---- Records are generic too, and that is what containers are for -----------
 //
@@ -136,24 +134,22 @@ function (self: Stack<T>) first() -> T {
     return self.items[0];
 }
 
-region containers {
-    let mutable ints: Stack<Int> = Stack { items: [] };
-    let one = ints.push_one(5);
-    let two = ints.push_one(9);
-    print(ints.count());
-    print(ints.first());
+let mutable ints: Stack<Int> = Stack { items: [] };
+let one = ints.push_one(5);
+let two = ints.push_one(9);
+print(ints.count());
+print(ints.first());
 
-    let mutable keywords: Stack<String> = Stack { items: [] };
-    let three = keywords.push_one("first");
-    print(keywords.count());
-    print(keywords.first());
+let mutable keywords: Stack<String> = Stack { items: [] };
+let three = keywords.push_one("first");
+print(keywords.count());
+print(keywords.first());
 
-    // The arguments can also be inferred from the field values, when they say enough:
-    // `Holder { one: 1 }` needs no annotation. An empty array says nothing, which is
-    // why `Stack` above names its type.
-    let held = Holder { one: 42 };
-    print(held.one);
-}
+// The arguments can also be inferred from the field values, when they say enough:
+// `Holder { one: 1 }` needs no annotation. An empty array says nothing, which is
+// why `Stack` above names its type.
+let held = Holder { one: 42 };
+print(held.one);
 
 record Holder<T> {
     one: T

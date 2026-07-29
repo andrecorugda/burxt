@@ -15,30 +15,64 @@ Others are *built* while it runs: joining two Strings, `to_string`, `substring`,
 that storage goes away.
 
 C says "you decide, and good luck". Java and Go say "a collector will notice eventually".
-Rust says "prove it with lifetimes". Burxt says: **write down where it lives.**
+Rust says "prove it with lifetimes". Burxt says: **release a whole batch at once, and let the
+compiler work out which batch.**
 
-## Regions
+## Think of a tray
+
+Your program has a tray. Everything it builds goes on the tray. When you are finished with
+everything on it, you tip the whole tray into the bin in one motion — you never pick items
+off it one at a time.
+
+```burxt
+let message: String = "line " + to_string(42);
+print(message);
+```
+
+That works with nothing else around it. **You do not have to write anything down.** A program
+has a tray from the moment it starts, and the code above is a complete program.
+
+## `region` — a second tray, for work you want off your hands early
 
 ```burxt
 region r {
     let message: String = "line " + to_string(42);
     print(message);
 }
-// the storage is gone here
+// everything built inside is gone here
 ```
 
-A region is a bump pointer and a mark. Opening one remembers where the pointer stood;
-closing it puts the pointer back. That is the whole of release: **O(1), regardless of how
-many allocations happened inside**, with no traversal, no finalizers and nothing to
-schedule.
+A region is a bump pointer and a mark. Opening one remembers where the pointer stood; closing
+it puts the pointer back. That is the whole of release: **O(1), however many allocations
+happened inside**, with no traversal, no finalizers and nothing to schedule.
 
-Outside a region, building anything is a compile error:
+### When you actually need one
 
+Until v0.0.146 you needed one for everything: building anything outside a region was a compile
+error, and every program opened with a `region` wrapper it never mentioned again. That
+requirement is gone, and here is the number that tells you when to reach for one anyway —
+a loop building 100,000 Strings, peak memory:
+
+| | |
+|---|---|
+| no region | **5,280 KB** |
+| `region each { ... }` around the loop body | **1,408 KB** |
+
+Nothing is released until the program exits, so memory grows **in a straight line**. For three
+Strings that costs nothing. For a loop over a million rows it costs everything — the arena is a
+1 GB reservation, and running out is a named error rather than a crash, but a server loop will
+get there.
+
+So the rule of thumb is one sentence: **a region per unit of work whose results you do not
+keep.**
+
+```burxt
+while more_rows() {
+    region row { handle(next_row()); }
+}
 ```
-error: joining two Strings allocates, so it needs a region: there is none open here.
-       Open one with `region r { ... }`, or declare the function `allocates` to build
-       in the caller's region.
-```
+
+That loop uses the same memory on its first row and its millionth.
 
 ## Building for your caller — and why you no longer say so
 
@@ -88,8 +122,8 @@ the same way.
 
 ## What escapes, and what the compiler refuses
 
-A built value may leave a function **only** when it was built in the caller's region — that
-means `allocates`, and no region of the function's own open around the return.
+One rule survives, and it is the one that matters: **a value built inside a `region` block
+cannot leave it**, because that block releases at its closing brace.
 
 ```burxt
 function bad() -> String {
@@ -98,14 +132,30 @@ function bad() -> String {
 ```
 
 ```
-error: cannot return this: it was built inside a `region` block, which ends at its
-       closing brace, so its storage would not outlive it
+error: cannot return this String: it was built inside a `region` block, which releases at
+       its closing brace, so its storage would not outlive the call. Move the allocation
+       out of the `region` block, or return a scalar summary.
 ```
 
-The escape check looks **inside aggregates**: a record holding a built String is itself
-built, and an array of them likewise. That arm was missing for four versions and let a
-use-after-free through — which is why it walks fields and elements now, and why the example
-in [`examples/regions.bx`](../../examples/regions.bx) spells out every refusal.
+It applies through a **name** as well as directly, and that distinction cost a use-after-free
+to learn. This was accepted until v0.0.142 and printed an *empty string*:
+
+```burxt
+region inner {
+    let s: String = "secret-" + to_string(tag);
+    return s;                    // the region releases before the return
+}
+```
+
+The check asked whether the returned *expression* allocated — and a name is not an
+expression that allocates, it is a name that happens to hold one.
+
+It also looks **inside aggregates**: a record holding a built String is itself built, and an
+array of them likewise. That arm was missing for four versions and let a use-after-free
+through, which is why it walks fields and elements now.
+
+Both refusals, with the compiler's exact words, are spelled out in
+[`examples/regions.bx`](../../examples/regions.bx).
 
 ## Regions do not nest
 

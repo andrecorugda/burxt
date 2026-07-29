@@ -137,17 +137,15 @@ function (mutable self: Table) collect(src: String, from: Int) -> Int {
     return after + type_len;
 }
 
-region pass {
-    let src: String = read_file("examples/negative/declarations.bx");
-    let mutable table: Table = Table { entries: [] };
+let src: String = read_file("examples/negative/declarations.bx");
+let mutable table: Table = Table { entries: [] };
 
-    let mutable cursor: Int = 0;
-    while true {
-        if cursor >= len(src) {
-            break;
-        }
-        cursor = table.collect(src, cursor);
+let mutable cursor: Int = 0;
+while true {
+    if cursor >= len(src) {
+        break;
     }
-
-    print("--- " + to_string(len(table.entries)) + " names in scope");
+    cursor = table.collect(src, cursor);
 }
+
+print("--- " + to_string(len(table.entries)) + " names in scope");

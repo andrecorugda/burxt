@@ -21,14 +21,12 @@ external function shout(text: String) -> CInt;
 // can undo it.
 external function cents_doubled(amount: Decimal<2> as scaled) -> Int;
 
-region r {
-    let greeting: String = "hello from Burxt";
-    print(strlen(greeting));
-    let printed: Int = shout(greeting);
+let greeting: String = "hello from Burxt";
+print(strlen(greeting));
+let printed: Int = shout(greeting);
 
-    let price: Decimal<2> = $19.99;
-    print(cents_doubled(price));      // 3998 — the scaled integer, doubled
-}
+let price: Decimal<2> = $19.99;
+print(cents_doubled(price));      // 3998 — the scaled integer, doubled
 
 // ---- What the compiler refuses, and why ------------------------------------
 //

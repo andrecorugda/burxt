@@ -44,23 +44,21 @@ function show(item: dynamic Priced) -> Decimal<2> {
     return item.price();
 }
 
-region r {
-    let novel: Book = Book { title: "Sea", cost: $14.50 };
-    let dinner: Meal = Meal { dish: "Stew", cost: $12.25, covers: 2 };
+let novel: Book = Book { title: "Sea", cost: $14.50 };
+let dinner: Meal = Meal { dish: "Stew", cost: $12.25, covers: 2 };
 
-    // static: the type is known here
-    print(describe_book(novel));
+// static: the type is known here
+print(describe_book(novel));
 
-    // dynamic: the same function serves both types
-    print(show(novel));
-    print(show(dinner));
+// dynamic: the same function serves both types
+print(show(novel));
+print(show(dinner));
 
-    // A `dynamic` value is storable — it is a value like any other, so it can live
-    // in a binding, a record field, or an array.
-    let anything: dynamic Priced = dinner;
-    print(anything.label());
-    print(anything.price());
-}
+// A `dynamic` value is storable — it is a value like any other, so it can live
+// in a binding, a record field, or an array.
+let anything: dynamic Priced = dinner;
+print(anything.label());
+print(anything.price());
 
 // ---- What the compiler refuses, and why ------------------------------------
 //

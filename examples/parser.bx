@@ -129,10 +129,8 @@ function (self: Arena) eval(at: Int) -> Decimal<2, RoundHalfEven> {
 }
 
 let src: String = "1.00 + 2.00 * 3.00";
-region parse {
-    let mutable a: Arena = Arena { nodes: [], count: 0, pos: 0, last: -1 };
-    let root: Int = a.expr(src);
-    print("{src} = {a.eval(root)}");
-    print("nodes used: {a.count}");
-    print("capacity was never declared");
-}
+let mutable a: Arena = Arena { nodes: [], count: 0, pos: 0, last: -1 };
+let root: Int = a.expr(src);
+print("{src} = {a.eval(root)}");
+print("nodes used: {a.count}");
+print("capacity was never declared");
