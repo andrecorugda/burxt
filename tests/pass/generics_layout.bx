@@ -5,13 +5,13 @@
 //
 // The bug this fixture exists to catch, found the day it was written: sizing was right and the
 // FIELD TYPE was not, so the emitter asked whether a `T` was an aggregate, was told no, and
-// stored a Point's ADDRESS where its two cells belonged. A record of exactly the right size
+// stored a Point's ADDRESS where its two cells belonged. A class of exactly the right size
 // holding a pointer in the wrong place — which is why the test reads the fields back out and
 // adds them, rather than only building the value.
 
-record Point { x: Int, y: Int }
-record Pair<T> { first: T, second: T }
-record Nested<T> { inner: Pair<T>, tag: Int }
+class Point { x: Int, y: Int }
+class Pair<T> { first: T, second: T }
+class Nested<T> { inner: Pair<T>, tag: Int }
 
 region r {
     let small: Pair<Int> = Pair { first: 3, second: 4 };

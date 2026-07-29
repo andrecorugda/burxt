@@ -7,8 +7,8 @@
 // for anything that infers from its context — and `push` is the one builtin whose second argument
 // always has a context to infer from.
 
-record Entry<K, V> { key: K, value: V, used: Bool }
-record Point { x: Int, y: Int }
+class Entry<K, V> { key: K, value: V, used: Bool }
+class Point { x: Int, y: Int }
 
 region r {
     let mutable table: [Entry<String, Int>] = [];

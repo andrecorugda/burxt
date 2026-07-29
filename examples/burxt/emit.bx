@@ -25,11 +25,11 @@
 // storage and the value is its address.
 //
 // `aggregate` means "the alloca IS the storage", recorded rather than inferred from
-// `cells`. A record with ONE field occupies one cell and is still a record — inferring it
+// `cells`. A class with ONE field occupies one cell and is still a class — inferring it
 // from the count loaded the field instead of passing the address, and a one-field record
 // passed to a method segfaulted. A `mutable self` slot is the mirror case: one cell, holding
 // someone else's address, so it reads by LOADING and is marked not-aggregate.
-record Slot { start: Int, length: Int, index: Int, cells: Int, aggregate: Int }
+class Slot { start: Int, length: Int, index: Int, cells: Int, aggregate: Int }
 
 // Two buffers per function, joined when it closes. Allocas MUST land in the entry
 // block: an `alloca` inside a loop allocates again on every iteration, so a `let` in a
@@ -161,7 +161,7 @@ function (mutable self: Unit) declare_slot(src: String, start: Int, length: Int,
     return index;
 }
 
-// Scratch storage for a value that has no name — a record literal, an array literal.
+// Scratch storage for a value that has no name — a class literal, an array literal.
 // In the entry block for the same reason every other alloca is.
 function (mutable self: Unit) scratch(cells: Int) -> String {
     self.next_register += 1;
@@ -278,7 +278,7 @@ function (mutable self: Unit) offset_of(src: String, holder: Type, name: Token) 
 
 // A field's type with the holder's type ARGUMENTS in scope, so `Pair<Point>.first` is a Point
 // and not a `T`. Without this the emitter asked whether a `T` was an aggregate, was told no,
-// and stored the value's ADDRESS in the field instead of copying its cells — a record that
+// and stored the value's ADDRESS in the field instead of copying its cells — a class that
 // looked the right size and held a pointer where a Point belonged. check.bx's record-literal
 // rule does exactly this, which is the argument for it living in one named function.
 function (mutable self: Unit) field_type_here(src: String, holder: Type, at: Int) -> Type {
@@ -591,7 +591,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
         return self.emit_element(src, holder, base, index, n.token);
     }
 
-    if n.kind == 19 {                                // a record literal
+    if n.kind == 19 {                                // a class literal
         let mine: Type = self.type_at(node);
         let cells: Int = self.cells_of(src, mine);
         let storage: String = self.scratch(cells);
@@ -761,7 +761,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
         // the right side runs. For `&&` a false left IS the answer; for `||` a true left
         // is; and when the right side runs, it is the answer for both.
         //
-        // The parser records the OPERATOR'S BYTE — 124 for `|`, 38 for `&` — not the
+        // The parser classes the OPERATOR'S BYTE — 124 for `|`, 38 for `&` — not the
         // token kind. Reading it as a token kind made every `||` an `and`, and the first
         // test to notice agreed with stage-0 by accident: `5 != 5 || false` is false
         // either way.
@@ -1860,7 +1860,7 @@ function (mutable self: Unit) emit_dynamic(src: String, want: Type, node: Int) -
 // than looked up, because the caller holds the node index and this holds only the node.
 //
 // The aggregate return below was MISSING, and the program segfaulted: the call passed the
-// receiver where the callee expected its `%sret` pointer, so a method returning a record
+// receiver where the callee expected its `%sret` pointer, so a method returning a class
 // wrote the answer through whatever the receiver happened to be. Stage-0 had the identical
 // omission at the identical place — a vtable call that never learned what the direct call
 // already knew — which is worth recording, because two independent implementations failing
@@ -2116,7 +2116,7 @@ function (mutable self: Unit) find_instance(src: String, generic: Int, args_star
 }
 
 // The declared function a generic index names. `Generic` holds a name span rather than an index
-// into `functions`, because a generic may be a record or an enum too, so the crossing is by bytes.
+// into `functions`, because a generic may be a class or an enum too, so the crossing is by bytes.
 function (self: Unit) find_function_by_index(generic: Int) -> Int {
     let declaration: Generic = self.generics[generic];
     let mutable i: Int = 0;
@@ -2566,7 +2566,7 @@ function (mutable self: Unit) emit_function(src: String, index: Int, suffix: Str
             // a by-value parameter IS its storage, so reading the name takes the alloca's
             // address. `mutable self` HOLDS the caller's address, so reading it must LOAD —
             // the loaded i64 is already the address. Marked not-aggregate for that
-            // reason: the flag means "the alloca is the storage", not "this is a record".
+            // reason: the flag means "the alloca is the storage", not "this is a class".
             let slot: Int = self.declare_slot(src, word.start, word.length, 1, 0);
             let stored: Int = self.write_body("  store i64 " + receiver_arg + ", ptr %v"
                                      + to_string(slot) + "\n");
@@ -2818,7 +2818,7 @@ function (mutable self: Unit) emit_methods_of(src: String, declaration: Generic,
 }
 
 // The declaration node for a function of this name. The generics list holds a name span, not a
-// node, because a generic may be a record or an enum too — so the node is found where every
+// node, because a generic may be a class or an enum too — so the node is found where every
 // other name in stage-1 is found: by comparing bytes.
 function (self: Unit) declaration_node(src: String, start: Int, length: Int) -> Int {
     let mutable i: Int = 0;
@@ -2837,7 +2837,7 @@ function (self: Unit) declaration_node(src: String, start: Int, length: Int) -> 
 }
 
 // Every symbol here lives under `burxt.` — a program that defines `function bump()` must not
-// collide with the allocator's pointer, and one that names a record `Line` must not
+// collide with the allocator's pointer, and one that names a class `Line` must not
 // collide with anything either. Stage-0 solves the same problem by refusing the name; the
 // prefix solves it without taking a word away from the programmer.
 //

@@ -8,8 +8,8 @@
 // reading `T` unresolved, did not take one. Two halves of one call disagreeing about the shape of
 // a function segfaults rather than printing something wrong, which is the better failure.
 
-record Point { x: Int, y: Int }
-record Pair<T> { first: T, second: T }
+class Point { x: Int, y: Int }
+class Pair<T> { first: T, second: T }
 
 function (self: Pair<T>) left() -> T {
     return self.first;

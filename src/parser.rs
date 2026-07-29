@@ -2,7 +2,7 @@
 //!
 //! Grammar:
 //!   program := (struct | extern | fn | stmt)*
-//!   struct  := "record" IDENT "{" (param ",")* param? "}"
+//!   class   := "class" IDENT "{" (field ",")* field? method* "}"
 //!   extern  := "external" "function" IDENT "(" (param ("," param)*)? ")" "->" type ";"
 //!   fn      := "function" IDENT "(" (param ("," param)*)? ")" "->" type block
 //!   param   := IDENT ":" type
@@ -129,7 +129,7 @@ impl Parser {
         let mut methods = Vec::new();
         let mut stmts = Vec::new();
         while !self.at(&Token::Eof) {
-            if self.at(&Token::Struct) {
+            if self.at(&Token::Class) {
                 structs.push(self.parse_struct()?);
             } else if self.at(&Token::Enum) {
                 enums.push(self.parse_enum()?);
@@ -209,10 +209,10 @@ impl Parser {
 
     fn parse_struct(&mut self) -> Result<StructDef, String> {
         let start = self.span().start;
-        self.expect(&Token::Struct)?;
+        self.expect(&Token::Class)?;
         let name = match self.bump() {
             Token::Ident(s) => s,
-            other => return Err(format!("expected a record name after 'record', found {}", other.describe())),
+            other => return Err(format!("expected a class name after 'class', found {}", other.describe())),
         };
         let type_parameters = self.parse_type_params(&name)?;
         self.type_parameters = type_parameters.iter().map(|p| p.name.clone()).collect();
@@ -221,7 +221,7 @@ impl Parser {
         while !self.at(&Token::RBrace) {
             let fname = match self.bump() {
                 Token::Ident(s) => s,
-                other => return Err(format!("expected a field name in record {}, found {}", name, other.describe())),
+                other => return Err(format!("expected a field name in class {}, found {}", name, other.describe())),
             };
             self.expect(&Token::Colon)?;
             let ty = self.parse_type()?;
@@ -519,7 +519,7 @@ impl Parser {
                 self.parse_cond()?
             };
             let span = Span { start, end: self.prev_end().max(start + 1) };
-            // The text records the clause as a reader would WRITE it, subject included — so an
+            // The text classes the clause as a reader would WRITE it, subject included — so an
             // elided `[<= balance]` on `amount` reports `amount <= balance` rather than a fragment
             // that does not say which value broke.
             //
@@ -654,13 +654,13 @@ impl Parser {
                 Token::Ident(s) => s,
                 other => {
                     return Err(format!(
-                        "expected a record name after `self:`, found {}",
+                        "expected a class name after `self:`, found {}",
                         other.describe()
                     ))
                 }
             }
         };
-        // `self: Stack<T>` — the receiver names the record's own type parameters, which are
+        // `self: Stack<T>` — the receiver names the class's own type parameters, which are
         // then in scope for the rest of the signature and the body.
         let mut receiver_arguments: Vec<String> = Vec::new();
         if self.at(&Token::Lt) {
@@ -670,7 +670,7 @@ impl Parser {
                     Token::Ident(a) => receiver_arguments.push(a),
                     other => {
                         return Err(format!(
-                            "`self: {}<...>` names the record's type parameters, so each one \
+                            "`self: {}<...>` names the class's type parameters, so each one \
                              must be a name; found {}",
                             receiver,
                             other.describe()
@@ -828,7 +828,7 @@ impl Parser {
         // parameter from a struct name — which is the only place that distinction is
         // visible, since both are spelled as a bare identifier.
         let type_parameters = self.parse_type_params(&name)?;
-        // EXTEND, not replace: a method's receiver has already put the record's parameters
+        // EXTEND, not replace: a method's receiver has already put the class's parameters
         // in scope (`self: Stack<T>`), and replacing them turned `item: T` into an ordinary
         // NAMED type — which then looked identical when printed and silently failed to
         // substitute at instantiation. Cleared after each declaration, so nothing leaks.

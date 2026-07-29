@@ -1,13 +1,13 @@
-// A record field may hold a trait object. Previously refused outright; now
-// allowed, because the record and the value it borrows are both scoped to the
-// same block, so the record cannot outlive what it points at.
+// A class field may hold a trait object. Previously refused outright; now
+// allowed, because the class and the value it borrows are both scoped to the
+// same block, so the class cannot outlive what it points at.
 trait Priced { function price(self) -> Decimal<2> }
-record Book { cost: Decimal<2> }
-record Meal { cost: Decimal<2>, tip: Decimal<2> }
+class Book { cost: Decimal<2> }
+class Meal { cost: Decimal<2>, tip: Decimal<2> }
 implement Priced for Book { function (self: Book) price() -> Decimal<2> { return self.cost; } }
 implement Priced for Meal { function (self: Meal) price() -> Decimal<2> { return self.cost + self.tip; } }
 
-record Holder { item: dynamic Priced, label: Int }
+class Holder { item: dynamic Priced, label: Int }
 
 let b: Book = Book { cost: $12.99 };
 let m: Meal = Meal { cost: $30.00, tip: $4.50 };

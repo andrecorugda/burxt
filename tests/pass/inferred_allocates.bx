@@ -13,7 +13,7 @@
 // v0.0.144 gave stage-1 the same inference, so it belongs here now, and both compilers are
 // held to it. `tests/stage0-only/` is gone rather than left empty.
 
-record Item { sku: String, name: String, price: Decimal<2> }
+class Item { sku: String, name: String, price: Decimal<2> }
 
 // Builds a String. The old error: "joining strings with `+` allocates, so it needs a
 // region: there is none open here."
@@ -41,7 +41,7 @@ function twice(item: Item) -> String {
 }
 
 // A method, inferred the same way. `alloc_methods` is a separate set because a method is
-// keyed by (receiver, name) — two records may both have a `describe`.
+// keyed by (receiver, name) — two classes may both have a `describe`.
 function (self: Item) describe() -> String {
     return self.sku + " " + self.name;
 }

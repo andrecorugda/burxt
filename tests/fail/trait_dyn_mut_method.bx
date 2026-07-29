@@ -3,7 +3,7 @@
 trait Bumpable {
     function bump(mutable self) -> Int
 }
-record Counter { n: Int }
+class Counter { n: Int }
 implement Bumpable for Counter {
     function (mutable self: Counter) bump() -> Int {
         self.n = self.n + 1;

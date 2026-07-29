@@ -1,7 +1,7 @@
-// Generic records and enums, and `Option`/`Result` as ordinary Burxt. BOTH compilers check
+// Generic classes and enums, and `Option`/`Result` as ordinary Burxt. BOTH compilers check
 // this: stage-1 binds a type argument from the annotation, resolves a field's or payload's
 // type deeply where it is read, and needs no instantiated layout to do it.
-record Holder<T> { one: T }
+class Holder<T> { one: T }
 
 enum Option<T> { None, Some(T) }
 

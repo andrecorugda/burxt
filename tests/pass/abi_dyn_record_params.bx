@@ -1,8 +1,8 @@
-// A record passed to a method THROUGH A TRAIT OBJECT — the intersection of two
+// A class passed to a method THROUGH A TRAIT OBJECT — the intersection of two
 // well-tested families that nobody had written a program in.
 //
-// `tests/pass/abi_*` covers records across call boundaries. `tests/pass/trait_dyn_*`
-// covers dispatch through a trait object. Seven fixtures pass a record to a method and
+// `tests/pass/abi_*` covers classes across call boundaries. `tests/pass/trait_dyn_*`
+// covers dispatch through a trait object. Seven fixtures pass a class to a method and
 // not one of them does it dynamically, so this path had no test at all — and it was
 // WRONG. A vtable target declares its record parameter `byval(T)`, meaning the aggregate
 // travels in the stack argument area; the indirect call passed a bare pointer, which
@@ -18,10 +18,10 @@
 // depended on layout, so a fixture with one shape would have proven nothing.
 
 // ---- 32 bytes: two pointers and two words. The shape that was wrong. --------
-record Item { sku: String, name: String, price: Decimal<2>, taxable: Bool }
+class Item { sku: String, name: String, price: Decimal<2>, taxable: Bool }
 
 // ---- 16 bytes: two words. The shape that was accidentally right. -----------
-record Pair { lo: Int, hi: Int }
+class Pair { lo: Int, hi: Int }
 
 trait Rule {
     function rate_for(self, item: Item) -> Decimal<4>
@@ -29,7 +29,7 @@ trait Rule {
     function shift(self, p: Pair) -> Pair
 }
 
-record Flat { rate: Decimal<4>, bias: Int }
+class Flat { rate: Decimal<4>, bias: Int }
 
 implement Rule for Flat {
     // Reads the Bool FIRST. That is the field that read as garbage, and a Bool is the

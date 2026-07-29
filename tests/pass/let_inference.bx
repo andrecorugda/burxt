@@ -1,7 +1,7 @@
 // `let x = e;` takes its type from `e`. The annotation is optional, not gone: it is
 // still legal everywhere and still required where a value cannot say its own type.
 // See spec/M10-ERGONOMICS.md §1.
-record Point { x: Int, y: Int }
+class Point { x: Int, y: Int }
 enum Status { Paid, Void }
 
 function double(n: Int) -> Int { return n * 2; }

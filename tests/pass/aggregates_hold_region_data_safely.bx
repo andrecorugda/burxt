@@ -1,7 +1,7 @@
 // The other half of the rule: inside a region, aggregates may hold region storage
 // freely — that is what a symbol table IS. Only carrying it OUT is refused.
-record Symbol { name: String, kind: Int }
-record Table { rows: [Symbol] }
+class Symbol { name: String, kind: Int }
+class Table { rows: [Symbol] }
 
 region pass {
     let src: String = "let price: Decimal<2> = $19.99;";

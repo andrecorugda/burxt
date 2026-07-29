@@ -1,6 +1,6 @@
 // A cent goes missing on the way. The law catches it, and the message quotes the
 // law itself — which is the point: the reader sees the invariant that was broken.
-record Ledger { checking: Decimal<2>, savings: Decimal<2> }
+class Ledger { checking: Decimal<2>, savings: Decimal<2> }
 
 function (mutable self: Ledger) leaky_move(amount: Decimal<2>) -> Int
     ensures self.checking + self.savings == old(self.checking + self.savings)

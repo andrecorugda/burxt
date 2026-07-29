@@ -76,7 +76,7 @@ slot table. That is a constant factor. Determinism is worth a constant factor.
 ### Decision 2 — the key bound is `Equatable`, which already exists
 
 ```burxt
-record Map<K: Equatable, V> { ... }        // used as Map<String, Int>
+class Map<K: Equatable, V> { ... }        // used as Map<String, Int>
 ```
 
 The bound is not decoration. It is what justifies `entry.key == key` inside `probe` and `hash(key)`
@@ -100,9 +100,9 @@ method.
 ### Decision 3 — the layout is a compact ordered table
 
 ```burxt
-record MapEntry<K: Equatable, V> { key: K, value: V, live: Bool }
+class MapEntry<K: Equatable, V> { key: K, value: V, live: Bool }
 
-record Map<K: Equatable, V> {
+class Map<K: Equatable, V> {
     entries: [MapEntry<K, V>],   // insertion order, the iteration order, holes tombstoned
     slots:   [Int],              // open addressed: index-into-entries PLUS ONE, 0 means empty
     live:    Int                 // how many entries are not tombstones

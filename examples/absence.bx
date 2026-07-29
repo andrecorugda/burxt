@@ -127,7 +127,7 @@ match doubled_first(xs) {
 //     error: `Option.None` does not say what `T` is, and nothing here does.
 //            Write the type where the value lands — `let x: Option<...> = ...`
 //
-// A record payload works since v0.0.118 — `Option<Point>` is an ordinary thing to want, and it
+// A class payload works since v0.0.118 — `Option<Point>` is an ordinary thing to want, and it
 // used to be refused by name. What is still refused is an ENUM inside an enum, and the message
 // says why in terms of the argument that caused it:
 //     let held: Option<Shape> = Option.None;     // Shape is itself an enum

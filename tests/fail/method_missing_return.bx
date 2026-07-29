@@ -1,4 +1,4 @@
-record LineItem { price: Decimal<2>, quantity: Int }
+class LineItem { price: Decimal<2>, quantity: Int }
 function (self: LineItem) total() -> Decimal<2> {
     if self.quantity > 0 {
         return self.price;

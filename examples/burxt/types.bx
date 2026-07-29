@@ -27,7 +27,7 @@
 // every use, and the payloads differ per kind. The names live in `kind_name`.
 //   1 identifier      2 Int literal      3 Decimal literal     4 String literal
 //   10..49 punctuation                   100.. keywords
-record Token {
+class Token {
     kind: Int,
     start: Int,
     length: Int,
@@ -35,14 +35,14 @@ record Token {
     value: Int,
     scale: Int,
     // A string literal containing `{` opens an interpolation; splitting the pieces
-    // is the parser's job, so the lexer only records that there is one.
+    // is the parser's job, so the lexer only classes that there is one.
     interpolated: Bool,
 }
 
-record Keyword { word: String, code: Int }
+class Keyword { word: String, code: Int }
 // ---- the AST -----------------------------------------------------------------
 // Children by INDEX, not by pointer: v0.0.22 proved an arena needs no recursive
-// types, and an index is a number a record field can hold.
+// types, and an index is a number a class field can hold.
 //
 // Expression kinds:
 //   1 Int literal        2 Decimal literal      3 String literal    4 Bool literal
@@ -62,7 +62,7 @@ record Keyword { word: String, code: Int }
 //  65 if                66 while               67 break             68 continue
 //  69 region            70 expression statement
 //  71 match             72 for (name token in `token`, iterable in `a`, body in `b`)
-record Node {
+class Node {
     kind: Int,
     // Child indices, or payload. Meaning depends on `kind`, documented above.
     a: Int,
@@ -85,10 +85,10 @@ record Node {
 // is the better design regardless. Children pushed into a side array land
 // CONTIGUOUSLY even though their subtrees interleave in `nodes`, so nothing needs
 // back-patching, and a list is two integers instead of a chain of cells.
-// A declared type: `Int`, `Decimal<2, RoundHalfEven>`, `[Int]`, a record name.
-// A record rather than an enum, because it is compared and copied constantly and a
+// A declared type: `Int`, `Decimal<2, RoundHalfEven>`, `[Int]`, a class name.
+// A class rather than an enum, because it is compared and copied constantly and a
 // payload enum would need a match at every use.
-record Type {
+class Type {
     // The node kinds the parser produces: 40 Int, 41 Bool, 42 String, 43 CInt,
     // 44 CDouble, 45 Decimal, 46 named, 47 slice, 48 array, 49 dynamic,
     // 50 type PARAMETER. 0 is unknown, which never equals anything — including
@@ -110,7 +110,7 @@ record Type {
 
 // A binding in scope: its name as a SPAN, so the checker allocates nothing to
 // remember a variable.
-record Binding { start: Int, length: Int, bound_type: Type, writable: Int, depth: Int }
+class Binding { start: Int, length: Int, bound_type: Type, writable: Int, depth: Int }
 // What a type parameter stands for, while a generic's call is being checked. Its name is a
 // SPAN, like every other name here, so a binding needs no synthesized identifier.
 //
@@ -118,32 +118,32 @@ record Binding { start: Int, length: Int, bound_type: Type, writable: Int, depth
 // holds its element as a node index and there would be no node to point at. Instead every
 // recursive walk over types — comparison, rendering, layout — resolves each level as it
 // reaches it. That is what lets stage-1 hold generics with no new arena entries at all.
-record TypeBinding { name_start: Int, name_length: Int, bound: Type }
+class TypeBinding { name_start: Int, name_length: Int, bound: Type }
 
 // Which declaration is generic over which parameters. A side table, looked up by name span
 // like every other declaration here, because every field of a node is already spoken for.
 // `type_param_start`/`type_param_count` index `type_parameters`, which holds the TOKEN of each parameter's name —
-// so a parameter is a span, exactly as a record name or a variable is.
+// so a parameter is a span, exactly as a class name or a variable is.
 // One instantiation of a generic function: which declaration, and what its parameters stand
 // for. Two calls with the same arguments are the same instance and share one machine function,
 // which is what `find_instance` is for — otherwise a generic called twice would be defined
 // twice and the linker would refuse the module.
-record Instance { generic: Int, args_start: Int, args_count: Int }
+class Instance { generic: Int, args_start: Int, args_count: Int }
 
-record Generic { start: Int, length: Int, type_param_start: Int, type_param_count: Int }
+class Generic { start: Int, length: Int, type_param_start: Int, type_param_count: Int }
 
 // A declared function: its name span, its return type, and its parameter list node.
-record DeclaredFunction { start: Int, length: Int, return_type: Type, parameters: Int, flags: Int }
+class DeclaredFunction { start: Int, length: Int, return_type: Type, parameters: Int, flags: Int }
 // A declared record or enum: its name span and the item node that declared it.
-record TypeDeclaration { start: Int, length: Int, kind: Int, node: Int }
+class TypeDeclaration { start: Int, length: Int, kind: Int, node: Int }
 // A declared method, keyed by the receiver's name and its own.
-record Method {
+class Method {
     receiver_start: Int, receiver_length: Int,
     start: Int, length: Int,
     return_type: Type, parameters: Int, mutating: Int, flags: Int,
 }
 
-record Unit {
+class Unit {
     tokens: [Token],
     keywords: [Keyword],
     nodes: [Node],
@@ -169,7 +169,7 @@ record Unit {
     // Where the parser is in the token array.
     position: Int,
     // Nonzero while parsing an `if`/`while` condition, where a `{` opens the BODY
-    // rather than a record literal. The Rust parser carries the same flag.
+    // rather than a class literal. The Rust parser carries the same flag.
     impls: [Implementation],
     // Every expression's type, indexed by node. See check.bx's type_at for why it is
     // indexed rather than searched.
@@ -184,7 +184,7 @@ record Unit {
     in_contract: Int,
     in_ensures: Int,
     // The type parameters of the declaration being parsed, as TOKEN indices, so
-    // `parse_type` can tell `T` from a record called `T`. Truncated when the
+    // `parse_type` can tell `T` from a class called `T`. Truncated when the
     // declaration ends. Token indices rather than spans because that is what the
     // parser has in hand, and one comparison away from the bytes either way.
     params_in_scope: [Int],
@@ -215,7 +215,7 @@ record Unit {
     // `old(expr)` inside an `ensures`: the expression is evaluated at function ENTRY and read at the
     // return, so a conservation law can compare after against before. These two arrays are the
     // mapping from the `old` CALL NODE to the slot holding its entry value — parallel, because a
-    // pair of Ints is cheaper than a record copied at every lookup.
+    // pair of Ints is cheaper than a class copied at every lookup.
     // The `decreases` measure of the function being emitted. A measure is checked in TWO places —
     // at entry it must not be negative, and at every recursive call the new measure must be
     // strictly smaller — so the call site needs to know about a clause written in the signature.
@@ -238,7 +238,7 @@ record Unit {
     type_parameters: [Int],
     // Each parameter's bound, as the token of the trait's name, or -1 for none. Parallel to
     // `type_parameters`, because a parameter has exactly one bound and two arrays are cheaper
-    // than a record that is copied at every lookup.
+    // than a class that is copied at every lookup.
     type_param_bounds: [Int],
     // Bounds seen while a parameter list is being parsed, before the declaration is noted.
     pending_bounds: [Int],
@@ -256,7 +256,7 @@ record Unit {
     current_method: Int,
     // ---- working out `allocates` instead of asking for it (M14) --------------
     //
-    // 1 during the probe rounds, which refuse nothing. While set, `has_region` records
+    // 1 during the probe rounds, which refuse nothing. While set, `has_region` classes
     // that something wanted a region and answers yes, so a round reaches the end of every
     // body instead of stopping at the first allocation — and `complain_at` says nothing,
     // because a probe's complaints are about a question it has not finished answering yet.
@@ -392,7 +392,7 @@ function (mutable self: Unit) install_keywords() -> Int {
     n = self.add_word("while", 106);
     n = self.add_word("break", 107);
     n = self.add_word("continue", 108);
-    n = self.add_word("record", 109);
+    n = self.add_word("class", 109);
     n = self.add_word("enum", 110);
     n = self.add_word("match", 111);
     n = self.add_word("trait", 112);

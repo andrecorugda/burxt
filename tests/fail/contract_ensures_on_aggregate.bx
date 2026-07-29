@@ -1,4 +1,4 @@
-record P { a: Int }
+class P { a: Int }
 function f(n: Int) -> P
     ensures result.a > 0
 {

@@ -1,7 +1,7 @@
 // `for x in xs` — the loop everyone writes, without the index. A real statement in both
 // compilers, not a parser desugar: see spec/M10-ERGONOMICS.md §1b for why.
-record Line { label: String, quantity: Int }
-record Doc { lines: [Line] }
+class Line { label: String, quantity: Int }
+class Doc { lines: [Line] }
 
 region r {
     // A fixed array: the bound is a constant.
@@ -20,7 +20,7 @@ region r {
         print(n);
     }
 
-    // A record element is copied into the binding, like every other binding.
+    // A class element is copied into the binding, like every other binding.
     let mutable doc: Doc = Doc { lines: [] };
     let c = push(doc.lines, Line { label: "first", quantity: 2 });
     let d = push(doc.lines, Line { label: "second", quantity: 3 });

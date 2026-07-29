@@ -8,7 +8,7 @@ One file is a module. `use` names a path.
 
 ```burxt
 // lexer.bx — declarations only
-record Tok { kind: Int, start: Int }
+class Tok { kind: Int, start: Int }
 function scan(text: String) -> Int { return len(text); }
 ```
 

@@ -3,7 +3,7 @@ trait HasBalance {
     function balance_of(self) -> Decimal<2>
     function label(self) -> Int
 }
-record Account { balance: Decimal<2> }
+class Account { balance: Decimal<2> }
 implement HasBalance for Account {
     function (self: Account) balance_of() -> Decimal<2> { return self.balance; }
 }

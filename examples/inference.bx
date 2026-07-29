@@ -7,7 +7,7 @@
 // reading unfamiliar code needs types most are exactly the places that keep them.
 // ============================================================================
 
-record Point { x: Int, y: Int }
+class Point { x: Int, y: Int }
 
 enum Status { Paid, Owing(Decimal<2>), Void }
 

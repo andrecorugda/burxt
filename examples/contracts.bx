@@ -47,7 +47,7 @@ function countdown(n: Int, acc: Int) -> Int
 // ---- old(...): conservation laws -------------------------------------------
 // `old(e)` is the value on ENTRY, evaluated once before the body runs. It makes
 // the claim that a transfer moves money without creating or destroying any.
-record Ledger { from_side: Decimal<2>, to_side: Decimal<2> }
+class Ledger { from_side: Decimal<2>, to_side: Decimal<2> }
 
 function (mutable self: Ledger) transfer(amount: Decimal<2>) -> Int
     requires amount > $0.00

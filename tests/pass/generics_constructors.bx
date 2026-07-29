@@ -3,7 +3,7 @@
 // Two holes had to close for this, and both were the same shape — the compiler asking a question
 // it could already answer:
 //
-//   1. A generic record literal INSIDE the generic that declares it. `Box { held: x }` within
+//   1. A generic class literal INSIDE the generic that declares it. `Box { held: x }` within
 //      `make_box<T>` is not an instantiation of anything yet; it becomes one when `make_box` does.
 //      Stage-0 called that a codegen bug.
 //   2. A type parameter with no argument to infer from. `let b: Box<Int> = fresh();` already says
@@ -12,10 +12,10 @@
 //      answer it is already holding.
 //
 // A bound travels through too: `K: Equatable` declared on the constructor satisfies the same bound
-// on the record it builds, because that is the only thing a bound is for.
+// on the class it builds, because that is the only thing a bound is for.
 
-record Box<T> { held: T }
-record Pair<K: Equatable, V> { key: K, value: V }
+class Box<T> { held: T }
+class Pair<K: Equatable, V> { key: K, value: V }
 
 function make_box<T>(x: T) -> Box<T> {
     return Box { held: x };
@@ -30,7 +30,7 @@ function empty_pair<K: Equatable, V>(k: K, v: V) -> Pair<K, V> {
 // is exactly what `map_new` needs. It works because every field can be built without a `T` in hand:
 // an empty `[T]` needs no element. A `Box<T>` cannot be built this way and should not be — there is
 // no `T` to hold — and asking for one says so by name.
-record Bag<T> { items: [T], count: Int }
+class Bag<T> { items: [T], count: Int }
 
 function empty_bag<T>() -> Bag<T> {
     return Bag { items: [], count: 0 };
@@ -42,7 +42,7 @@ region r {
     let s: Box<String> = make_box("text");
     print(s.held);
 
-    // A record holding a record, built through a generic constructor.
+    // A class holding a class, built through a generic constructor.
     let inner: Box<Int> = make_box(41);
     let nested: Box<Box<Int>> = make_box(inner);
     print(nested.held.held + 1);

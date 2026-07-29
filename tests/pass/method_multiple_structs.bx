@@ -1,7 +1,7 @@
 // Methods are namespaced by receiver: two structs may each declare a method
 // with the same name, and calls resolve by the base value's type.
-record Money { amount: Decimal<2> }
-record Count { n: Int }
+class Money { amount: Decimal<2> }
+class Count { n: Int }
 
 function (self: Money) describe() -> Decimal<2> {
     return self.amount;

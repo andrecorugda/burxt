@@ -1,9 +1,9 @@
 // ============================================================================
 // Coming from classes: everything a class gives you, and where it lives here.
 //
-//   Constructor              a function returning the record
+//   Constructor              a function returning the class
 //   Validation on construct  `requires` on that function — checked every call
-//   Initialization           a record literal must set EVERY field
+//   Initialization           a class literal must set EVERY field
 //   Interface                `trait`
 //   Polymorphism             `implement Trait for Type`, and `dynamic Trait` at runtime
 //   Dependency injection     a `dynamic Trait` FIELD, chosen by whoever builds it
@@ -22,8 +22,8 @@ trait Rates {
 }
 
 // ---- Two implementations ---------------------------------------------------
-record FlatRates { everywhere: Decimal<4> }
-record TableRates { home: Decimal<4>, abroad: Decimal<4> }
+class FlatRates { everywhere: Decimal<4> }
+class TableRates { home: Decimal<4>, abroad: Decimal<4> }
 
 implement Rates for FlatRates {
     function (self) rate_for(country: String) -> Decimal<4> {
@@ -44,7 +44,7 @@ implement Rates for TableRates {
 // A constructor exists to refuse an invalid object. Burxt puts that refusal in the
 // signature, where a reader meets it before the body — and `requires` is checked on
 // every call, with no build mode that removes it and no factory that bypasses it.
-record Order { subtotal: Decimal<2, RoundHalfEven>, country: String }
+class Order { subtotal: Decimal<2, RoundHalfEven>, country: String }
 
 function new_order(subtotal: Decimal<2, RoundHalfEven>, country: String) -> Order
     requires subtotal >= $0.00
@@ -59,8 +59,8 @@ function new_order(subtotal: Decimal<2, RoundHalfEven>, country: String) -> Orde
 // ---- Dependency injection --------------------------------------------------
 // `Checkout` holds its dependency as a field. It never names FlatRates or
 // TableRates, and it cannot: all it knows is that something answers `Rates`.
-// That is constructor injection, with the container replaced by a record literal.
-record Checkout { rates: dynamic Rates }
+// That is constructor injection, with the container replaced by a class literal.
+class Checkout { rates: dynamic Rates }
 
 function (self: Checkout) total_for(order: Order) -> Decimal<2, RoundHalfEven> {
     let rate: Decimal<4> = self.rates.rate_for(order.country);
@@ -96,7 +96,7 @@ print(stubbed.total_for(new_order($100.00, "US")));
 //     new_order($10.00, "PHILIPPINES")
 //     burxt runtime error: `requires len(country) == 2` failed in `new_order`
 //
-// A record literal missing a field:
+// A class literal missing a field:
 //     Order { subtotal: $10.00 }
 //     error: this literal leaves out `country`
 //
@@ -112,7 +112,7 @@ print(stubbed.total_for(new_order($100.00, "US")));
 //
 // There is no inheritance. No `extends`, no base class, no `super`, no abstract
 // class. If the instinct is "I would put the shared behaviour in an AbstractRates
-// base", the answer here is: put it in a function both impls call, or in a record
+// base", the answer here is: put it in a function both impls call, or in a class
 // field both hold, and let each type implement the trait.
 //
 // That was decided in v0.0.46 after thirty versions in which nothing needed it —

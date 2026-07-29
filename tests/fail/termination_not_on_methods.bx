@@ -1,4 +1,4 @@
-record C { n: Int }
+class C { n: Int }
 function (self: C) go(n: Int) -> Int
     decreases n
 {

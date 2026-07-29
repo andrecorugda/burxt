@@ -1,4 +1,4 @@
-record Pair { a: Int, b: Int }
+class Pair { a: Int, b: Int }
 function again(p: Pair) -> Pair {
     return tail again(p);
 }

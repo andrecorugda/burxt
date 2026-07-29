@@ -67,7 +67,7 @@ fn compile_main() {
         eprintln!("  burxt build   <file.bx> [link args...]   compile to a native executable");
         eprintln!("  burxt run     <file.bx> [link args...]   compile then run");
         eprintln!("  burxt emit-ir <file.bx>                  print LLVM IR");
-        eprintln!("  burxt layout  <file.bx>                  print record layouts");
+        eprintln!("  burxt layout  <file.bx>                  print class layouts");
         eprintln!();
         eprintln!("  -o <path>     where to write the executable (default ./<name>)");
         eprintln!();

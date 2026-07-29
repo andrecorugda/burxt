@@ -25,7 +25,7 @@ enum Token {
 }
 
 // One step of the scan: the token found, and where to continue from.
-record Scan {
+class Scan {
     tok: Token,
     next: Int,
 }

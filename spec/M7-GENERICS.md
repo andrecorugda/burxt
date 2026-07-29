@@ -21,7 +21,7 @@
 ## 0. What has to become possible
 
 ```text
-record List<T> { items: [T] }
+class List<T> { items: [T] }
 
 function (mutable self: List<T>) add(item: T) -> Int { push(self.items, item); return len(self.items); }
 
@@ -76,7 +76,7 @@ and `Bool` implement them where the language already allows those operators.
 
 ### Decision 3 — one parameter list, on the declaration
 
-`function name<T, U>(...)`, `record Name<T> { ... }`, `enum Name<T> { ... }`, and a method's
+`function name<T, U>(...)`, `class Name<T> { ... }`, `enum Name<T> { ... }`, and a method's
 receiver names the type's parameters (`function (self: List<T>) first() -> T`). No generic
 methods with their own extra parameters in this slice — a method may use its type's
 parameters and nothing more.
@@ -219,7 +219,7 @@ error: `describe` needs `T: Priced`, and `Book` does not implement it. Write
 
 ### Slice 4 — generic records, and a bug that hid behind `Display`
 
-`record Stack<T> { items: [T] }` with methods, which is what generics were for. The record half
+`class Stack<T> { items: [T] }` with methods, which is what generics were for. The record half
 is the enum mechanism unchanged: a concrete application is rewritten into the nominal type of
 its instantiation, and after that nothing knows generics exist.
 
@@ -457,7 +457,7 @@ ratchet stays honest rather than widened.
 ## 4. Acceptance
 
 1. `function identity<T>(x: T) -> T` compiles, and `identity(3)` and `identity("s")` both work.
-2. `record List<T>` with a `push`/`len` pair works for `Int` and for a record element.
+2. `class List<T>` with a `push`/`len` pair works for `Int` and for a record element.
 3. ✅ `function largest<T: Ordered>(a: T, b: T) -> T` compiles; calling it with a type that does not
    implement `Ordered` is refused, naming the bound. A declared trait works as a bound too,
    with static dispatch.

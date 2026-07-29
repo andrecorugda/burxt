@@ -187,7 +187,7 @@ and that decision does not belong to an operator.
 Records are generic too, which is what containers are for:
 
 ```burxt
-record Stack<T> { items: [T] }
+class Stack<T> { items: [T] }
 
 function (mutable self: Stack<T>) push_one(item: T) -> Int {
     return push(self.items, item);

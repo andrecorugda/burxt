@@ -102,7 +102,7 @@ print(to_string(true));
 // accepted until v0.0.142 and printed an empty string, because the check asked
 // about the expression and a name is not one.
 //
-// The check also looks INSIDE aggregates — a record holding a built String is
+// The check also looks INSIDE aggregates — a class holding a built String is
 // itself built. That arm was missing for four versions and let a use-after-free
 // through, which is why it walks fields and elements now.
 //

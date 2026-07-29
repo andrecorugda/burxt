@@ -144,8 +144,8 @@ function blank_imports(text: String) -> String {
 
 // Every file a program uses, in dependency order, each one once — which is also what
 // makes a cycle harmless. Burxt has no writable parameters, so the accumulating buffer
-// and the seen-list live on a record and the walk is a method on it.
-record Loader { seen: [String], buffer: String }
+// and the seen-list live on a class and the walk is a method on it.
+class Loader { seen: [String], buffer: String }
 
 function (mutable self: Loader) load(path: String) -> Int {
     for seen in self.seen {

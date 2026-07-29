@@ -1,5 +1,5 @@
 // The OOP substrate: nominal structs with money fields.
-record LineItem {
+class LineItem {
     price: Decimal<2>,
     quantity: Int,
 }

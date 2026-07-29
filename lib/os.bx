@@ -35,7 +35,7 @@ function os_args() -> [String] {
 }
 
 // Seconds since 1970. Whole seconds, because that is what `time` answers — a
-// finer clock needs `clock_gettime`, which fills a record through a pointer, and
+// finer clock needs `clock_gettime`, which fills a class through a pointer, and
 // that is exactly what Burxt will not let C do yet.
 function os_now() -> Int {
     return time(0);

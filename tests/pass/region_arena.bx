@@ -1,6 +1,6 @@
-// The pattern self-hosting needs: a record holding growable storage, mutated
+// The pattern self-hosting needs: a class holding growable storage, mutated
 // through a `mutable self` method, all inside one region that releases at the end.
-record Arena { nodes: [Int], count: Int }
+class Arena { nodes: [Int], count: Int }
 
 function (mutable self: Arena) add(v: Int) -> Int {
     push(self.nodes, v);

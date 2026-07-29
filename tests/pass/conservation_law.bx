@@ -1,6 +1,6 @@
 // The invariant that actually defines correctness for a ledger: money moves, and
 // nothing is created or destroyed. Written in the signature, checked on every call.
-record Ledger { checking: Decimal<2>, savings: Decimal<2> }
+class Ledger { checking: Decimal<2>, savings: Decimal<2> }
 
 function (mutable self: Ledger) move_to_savings(amount: Decimal<2>) -> Int
     requires amount > $0.00

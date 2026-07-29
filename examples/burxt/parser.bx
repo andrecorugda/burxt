@@ -221,7 +221,7 @@ function (mutable self: Unit) parse_type(src: String) -> Int {
         let name_tok: Int = self.position;
         let n: Int = self.advance();
         // A type PARAMETER, if the declaration being parsed put this name in scope. Kind 50
-        // rather than 46, so nothing mistakes `T` for a record called `T`.
+        // rather than 46, so nothing mistakes `T` for a class called `T`.
         if self.names_a_parameter(src, name_tok) {
             return self.add(50, 0, 0, 0, 0, name_tok);
         }
@@ -259,8 +259,8 @@ function (mutable self: Unit) parse_type(src: String) -> Int {
     return self.complain(src, "a type");
 }
 
-// The type of `Name.field`, found by walking the record's declaration. Linear, like
-// every other lookup here: a record has a handful of fields, and a map would be a
+// The type of `Name.field`, found by walking the class's declaration. Linear, like
+// every other lookup here: a class has a handful of fields, and a map would be a
 // dependency on machinery the language does not have.
 function (self: Unit) field_type(src: String, holder: Type, name_tok: Int) -> Type {
     if holder.kind != 46 {
@@ -493,7 +493,7 @@ function (mutable self: Unit) builtin_type(src: String, name: Token, at: Int, ar
         count = list.b;
         let mutable i: Int = 0;
         while i < list.b {
-            // `push(xs, value)` types the VALUE against the array's element, because a record
+            // `push(xs, value)` types the VALUE against the array's element, because a class
             // literal cannot know what it is without being told: `push(table, Entry { ... })`
             // needs `Entry<String, Int>` to reach the literal or its fields stay `K` and `V`.
             //
@@ -775,7 +775,7 @@ function (mutable self: Unit) fits(src: String, got: Type, want: Type) -> Bool {
 }
 
 // Whether evaluating this expression allocates. The aggregate cases are here for the
-// reason v0.0.48 recorded: a record or array holding a built String is itself built,
+// reason v0.0.48 recorded: a class or array holding a built String is itself built,
 // and missing that arm let a use-after-free through for four versions.
 function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
     if node < 0 {
@@ -794,7 +794,7 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
     if n.kind == 6 || n.kind == 7 {
         return self.expr_allocates(src, n.a);
     }
-    if n.kind == 17 || n.kind == 19 {                // an array or record literal
+    if n.kind == 17 || n.kind == 19 {                // an array or class literal
         if self.type_at(node).kind == 47 {
             return true;                             // a growable array lives in a region
         }
@@ -1661,11 +1661,11 @@ function (mutable self: Unit) parse_function(src: String, is_pure: Int, owner: I
         } else {
             if !self.eat(src, 20, "`:` and the receiver's type") { return -1; }
             if !self.at(1) {
-                return self.complain(src, "a record name after `self:`");
+                return self.complain(src, "a class name after `self:`");
             }
             receiver_tok = self.position;
             let r: Int = self.advance();
-            // `self: Stack<T>` — the receiver names the record's parameters, which are
+            // `self: Stack<T>` — the receiver names the class's parameters, which are
             // then in scope for the rest of the signature and the body.
             let receiver_params: Int = self.parse_type_params(src);
             if receiver_params < 0 { return -1; }
@@ -1679,7 +1679,7 @@ function (mutable self: Unit) parse_function(src: String, is_pure: Int, owner: I
     let name_tok: Int = self.position;
     let n2: Int = self.advance();
     // `function largest<T: Ordered>(...)`. A method declares none of its own — its
-    // receiver already named the record's — so this adds nothing there.
+    // receiver already named the class's — so this adds nothing there.
     let declared_params: Int = self.parse_type_params(src);
     if declared_params < 0 { return -1; }
     let noted: Int = self.note_generic(name_tok, declared_params);
@@ -1717,8 +1717,8 @@ function (mutable self: Unit) parse_function(src: String, is_pure: Int, owner: I
 
 // `record Name { field: Type, ... }`
 function (mutable self: Unit) parse_record(src: String) -> Int {
-    if !self.eat(src, 109, "`record`") { return -1; }
-    if !self.at(1) { return self.complain(src, "a record name"); }
+    if !self.eat(src, 109, "`class`") { return -1; }
+    if !self.at(1) { return self.complain(src, "a class name"); }
     let name_tok: Int = self.position;
     let n: Int = self.advance();
     // `record Name<T> { ... }` — the parameters are in scope for the fields or variants.

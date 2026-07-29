@@ -3,7 +3,7 @@
 trait Named { function name_id(self) -> Int }
 trait Valued { function value(self) -> Decimal<2> }
 
-record Item { id: Int, cost: Decimal<2> }
+class Item { id: Int, cost: Decimal<2> }
 
 implement Named for Item {
     function (self: Item) name_id() -> Int { return self.id; }

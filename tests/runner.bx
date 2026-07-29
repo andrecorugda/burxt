@@ -21,7 +21,7 @@
 
 external function system(command: String) -> CInt;
 
-record Outcome { ran: Int, passed: Int, failed: Int }
+class Outcome { ran: Int, passed: Int, failed: Int }
 
 // ---- talking to the machine -------------------------------------------------
 
@@ -65,7 +65,7 @@ function without_extension(name: String) -> String {
 
 // ---- comparing ---------------------------------------------------------------
 
-// Whether `haystack` contains `needle`. A fail fixture records the text the error
+// Whether `haystack` contains `needle`. A fail fixture classes the text the error
 // must CONTAIN rather than the whole message, so a reworded diagnostic does not
 // break a test that is really about the rule.
 function contains(haystack: String, needle: String) -> Bool {

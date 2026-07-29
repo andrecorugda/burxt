@@ -8,7 +8,7 @@
 // where the value was.
 // ============================================================================
 
-record Point { x: Int, y: Int }
+class Point { x: Int, y: Int }
 
 // One type parameter, named where the function is declared. No turbofish at the call
 // site: `identity(3)` infers `T = Int` from the argument.
@@ -98,7 +98,7 @@ print(first(ws));
 print(echo(7));
 print(keep(9, "ignored"));
 
-// A record travels by value through a generic, like everywhere else.
+// A class travels by value through a generic, like everywhere else.
 let p = identity(Point { x: 4, y: 5 });
 print(p.x + p.y);
 
@@ -107,16 +107,16 @@ print(largest($1.50, $1.25));
 print(same("a", "a"));
 print(twice_the_price(p));
 
-// ---- Records are generic too, and that is what containers are for -----------
+// ---- Classes are generic too, and that is what containers are for -----------
 //
 // A generic record's instantiations are separate types with separate layouts, and
 // each one gets its OWN copy of every method — `Stack<Int>.push_one` and
 // `Stack<String>.push_one` are two functions in the object file.
-record Stack<T> {
+class Stack<T> {
     items: [T]
 }
 
-// The receiver names the record's parameters: `self: Stack<T>` puts `T` in scope for
+// The receiver names the class's parameters: `self: Stack<T>` puts `T` in scope for
 // the rest of the signature and the body. A method may use its type's parameters and
 // declares none of its own.
 //
@@ -151,7 +151,7 @@ print(keywords.first());
 let held = Holder { one: 42 };
 print(held.one);
 
-record Holder<T> {
+class Holder<T> {
     one: T
 }
 

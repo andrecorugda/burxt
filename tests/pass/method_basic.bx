@@ -1,6 +1,6 @@
 // A method is a plain function in the receiver's namespace: no hidden
 // `this`, and `self` obeys the same exact typing rules as any parameter.
-record LineItem { price: Decimal<2>, quantity: Int }
+class LineItem { price: Decimal<2>, quantity: Int }
 
 function (self: LineItem) total() -> Decimal<2> {
     return self.price * self.quantity;
@@ -8,5 +8,5 @@ function (self: LineItem) total() -> Decimal<2> {
 
 let item: LineItem = LineItem { price: 19.99, quantity: 3 };
 print(item.total());
-// a record literal argument needs no binding of its own
+// a class literal argument needs no binding of its own
 print(LineItem { price: 2.50, quantity: 4 }.total());

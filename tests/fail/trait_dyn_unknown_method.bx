@@ -1,7 +1,7 @@
 // A trait object exposes ONLY its trait methods — no downcasting, no asking
 // what concrete type it really is.
 trait Priced { function price(self) -> Decimal<2> }
-record Book { cost: Decimal<2>, pages: Int }
+class Book { cost: Decimal<2>, pages: Int }
 implement Priced for Book {
     function (self: Book) price() -> Decimal<2> { return self.cost; }
 }

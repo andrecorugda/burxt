@@ -23,9 +23,9 @@ let pushed: Int = push(xs, 1);
 let again: Int = push(xs, 2);
 print(len(xs));
 
-// ---- 2. A record holding one. Was: the same refusal, reached through a field's type —
+// ---- 2. A class holding one. Was: the same refusal, reached through a field's type —
 //         a struct is only as region-bound as what it holds.
-record Holder { xs: [Int] }
+class Holder { xs: [Int] }
 let h: Holder = Holder { xs: [] };
 print(len(h.xs));
 
@@ -51,7 +51,7 @@ function label(k: Int) -> String {
 print(label(1));
 
 // ---- 7. The same through a METHOD.
-record Log { n: Int }
+class Log { n: Int }
 function (self: Log) describe() -> String {
     return "n=" + to_string(self.n);
 }
@@ -65,7 +65,7 @@ print(log.describe());
 trait Describable {
     function describe(self) -> String
 }
-record Tag { id: Int }
+class Tag { id: Int }
 implement Describable for Tag {
     function (self) describe() -> String {
         return "tag " + to_string(self.id);

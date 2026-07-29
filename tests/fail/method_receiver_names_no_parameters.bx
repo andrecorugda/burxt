@@ -1,4 +1,4 @@
-// `self: Point<T>` says the record is generic, and this one is not.
-record Point { x: Int }
+// `self: Point<T>` says the class is generic, and this one is not.
+class Point { x: Int }
 function (self: Point<T>) get() -> Int { return self.x; }
 print(1);

@@ -1,6 +1,6 @@
 // Structs nest; the copy is naturally deep because the layout is flat.
-record Money { amount: Decimal<2> }
-record Order { total: Money, items: Int }
+class Money { amount: Decimal<2> }
+class Order { total: Money, items: Int }
 let mutable o: Order = Order { total: Money { amount: 10.00 }, items: 1 };
 print(o.total.amount);
 o.total.amount = 25.50;

@@ -46,7 +46,7 @@ pub enum Token {
     While,
     True,
     False,
-    Struct,
+    Class,
     Enum,
     Region,
     Match,
@@ -144,7 +144,7 @@ impl Token {
             Token::While => "`while`".to_string(),
             Token::True => "`true`".to_string(),
             Token::False => "`false`".to_string(),
-            Token::Struct => "`record`".to_string(),
+            Token::Class => "`class`".to_string(),
             Token::Region => "`region`".to_string(),
             Token::Enum => "`enum`".to_string(),
             Token::Match => "`match`".to_string(),
@@ -683,7 +683,7 @@ impl<'a> Lexer<'a> {
             "else" => Token::Else,
             "true" => Token::True,
             "false" => Token::False,
-            "record" => Token::Struct,
+            "class" => Token::Class,
             "region" => Token::Region,
             // `enum` stays clipped, and this is the reason rather than an oversight.
             //
@@ -735,9 +735,23 @@ fn renamed_keyword(word: &str) -> Option<String> {
         "dyn" => ("dynamic", "the decision it names is made dynamically, at run time"),
         "extern" => ("external", "the function it names is external to this program"),
         "struct" => (
-            "record",
-            "named fields, copied by value, with no inheritance and no hidden header — \
-             which is what a record is, and what a class is not",
+            "class",
+            "one block holding a type's fields AND what you do with them, which is the thing \
+             a struct declaration leaves you to assemble yourself",
+        ),
+        // `record` was the word until v0.0.148, and it was renamed for a reason a reader
+        // deserves: a class held only fields, so everything you could DO with one lived
+        // somewhere else. Writing the same point-of-sale in four languages made the cost
+        // obvious — Python, PHP and Rust all put the two together, and Burxt could not.
+        //
+        // The name is honest about what this is and is not. A Burxt class has value semantics,
+        // no inheritance, no hidden header and no constructor order to remember; it is nearer a
+        // Swift struct or a Kotlin data class than a Java class. What it borrows from the word
+        // is the part people actually want: fields, behaviour and privacy in one place.
+        "record" => (
+            "class",
+            "a class holds its fields and its methods together, which is what `record` could \
+             not do — and privacy needs a boundary to be private FROM",
         ),
         _ => return None,
     };

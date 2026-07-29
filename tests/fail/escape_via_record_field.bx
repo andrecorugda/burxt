@@ -1,4 +1,4 @@
-record Named { word: String }
+class Named { word: String }
 function take(src: String) -> Named {
     region inner {
         return Named { word: substring(src, 0, 3) };

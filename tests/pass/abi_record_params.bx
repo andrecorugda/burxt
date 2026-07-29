@@ -1,6 +1,6 @@
 // Structs cross function boundaries by value: the callee gets its own copy
 // and cannot observe (or corrupt) the caller's storage.
-record LineItem { price: Decimal<2>, quantity: Int }
+class LineItem { price: Decimal<2>, quantity: Int }
 
 function total(item: LineItem) -> Decimal<2> {
     return item.price * item.quantity;

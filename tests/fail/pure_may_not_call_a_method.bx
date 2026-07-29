@@ -1,4 +1,4 @@
-record M { v: Int }
+class M { v: Int }
 function (self: M) get() -> Int { return self.v; }
 pure function f(m: M) -> Int {
     return m.get();

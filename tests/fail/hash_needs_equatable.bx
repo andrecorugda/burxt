@@ -1,7 +1,7 @@
-// A record cannot be hashed. It would need structural hashing, which needs a per-type walk,
+// A class cannot be hashed. It would need structural hashing, which needs a per-type walk,
 // which needs a derive mechanism or a trait with a method — all larger than the milestone that
 // added `hash`. The honest answer for a compound key is a String built from the parts.
-record Point { x: Int, y: Int }
+class Point { x: Int, y: Int }
 
 region r {
     let p: Point = Point { x: 1, y: 2 };

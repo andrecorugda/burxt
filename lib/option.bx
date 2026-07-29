@@ -72,6 +72,6 @@ function option_is_none<T>(o: Option<T>) -> Bool {
 // recognises absence by the variant name `None`, so nothing in the compiler needs
 // to know this file exists.
 //
-// A payload may be a scalar, a String, a record or an array. `Option<Point>` works since
+// A payload may be a scalar, a String, a class or an array. `Option<Point>` works since
 // v0.0.118 — the layout was one tag cell plus the widest variant all along. Another ENUM is
 // still refused, because an enum inside an enum has no finite size without indirection.

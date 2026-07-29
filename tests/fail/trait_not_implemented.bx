@@ -3,7 +3,7 @@
 trait Priced {
     function price(self) -> Decimal<2>
 }
-record Book { cost: Decimal<2> }
+class Book { cost: Decimal<2> }
 // Book has a price() method but never declares `implement Priced for Book`.
 function (self: Book) price() -> Decimal<2> { return self.cost; }
 

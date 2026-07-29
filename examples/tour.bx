@@ -14,7 +14,7 @@ let tax: Decimal<2, RoundHalfEven> = subtotal * rate;   // mixed scales need a c
 print("tax {tax}");
 
 // ---- Aggregates with value semantics, and behaviour attached to them ----
-record LineItem { label: String, price: Decimal<2>, quantity: Int }
+class LineItem { label: String, price: Decimal<2>, quantity: Int }
 
 trait Priced { function total(self) -> Decimal<2> }
 

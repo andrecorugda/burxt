@@ -1,2 +1,2 @@
-record S { xs: [[Int; 2]; 2] }
+class S { xs: [[Int; 2]; 2] }
 print(1);

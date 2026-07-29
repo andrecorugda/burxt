@@ -1,7 +1,7 @@
-// A record holding storage, mutated through a `mutable self` method — the
+// A class holding storage, mutated through a `mutable self` method — the
 // by-reference receiver Burxt already had. This is what makes an arena work
 // without adding mutable parameters or any new semantics.
-record Bag { items: [Int; 4], count: Int }
+class Bag { items: [Int; 4], count: Int }
 
 function (mutable self: Bag) push(v: Int) -> Int {
     let at: Int = self.count;

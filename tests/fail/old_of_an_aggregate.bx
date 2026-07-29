@@ -1,4 +1,4 @@
-record L { a: Int }
+class L { a: Int }
 function (mutable self: L) go(n: Int) -> Int
     ensures old(self) == old(self)
 {

@@ -1,7 +1,7 @@
 // Arrays may hold aggregates, and structs may hold arrays. Both were
 // conservative restrictions, not necessary ones — a fixed-size array of structs
 // is stack-allocatable, which is exactly what an arena AST needs.
-record Node { kind: Int, lhs: Int, rhs: Int }
+class Node { kind: Int, lhs: Int, rhs: Int }
 enum Tag { Num, Add }
 
 let mutable nodes: [Node; 4] = [

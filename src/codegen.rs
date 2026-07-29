@@ -194,11 +194,11 @@ impl<'ctx> CodeGen<'ctx> {
         // widest variant measured in CELLS.
         //
         // It used to be the payload COUNT, on the stated assumption that every payload is 8 bytes
-        // because payloads are scalars. Once a record could be a payload that assumption became a
+        // because payloads are scalars. Once a class could be a payload that assumption became a
         // bug with a precise shape: `Line(Point, Point)` gave each Point one cell, so the second
         // overlapped the first's second field and the area was half the size it needed.
         //
-        // Two passes, because a payload may be a record or another enum whose own width has to be
+        // Two passes, because a payload may be a class or another enum whose own width has to be
         // known first — `payload_cells` reads `struct_fields` and `enum_types`, so every shell must
         // exist before any body is sized.
         for en in &prog.enums {
@@ -455,7 +455,7 @@ impl<'ctx> CodeGen<'ctx> {
                         Type::Named(n) => n.clone(),
                         other => {
                             return Err(format!(
-                                "codegen bug: field assignment through non-record {}",
+                                "codegen bug: field assignment through non-class {}",
                                 other
                             ))
                         }
@@ -485,7 +485,7 @@ impl<'ctx> CodeGen<'ctx> {
                         Type::Named(n) => n.clone(),
                         other => {
                             return Err(format!(
-                                "codegen bug: field path through non-record {}",
+                                "codegen bug: field path through non-class {}",
                                 other
                             ))
                         }
@@ -709,7 +709,7 @@ impl<'ctx> CodeGen<'ctx> {
                             }
                             .map_err(err)?;
                             // Loaded at the binding's own type, so a String comes back as a
-                            // pointer and a record comes back as a whole record.
+                            // pointer and a class comes back as a whole record.
                             let v = self
                                 .builder
                                 .build_load(self.llvm_type(ty), p, name)
@@ -739,7 +739,7 @@ impl<'ctx> CodeGen<'ctx> {
             // If a `region` was opened INSIDE the loop, leaving it by either jump has
             // to release it, exactly as `return` does — but a region that ENCLOSES the
             // loop must not be touched, because the jump stays inside it. The loop
-            // records what was open when it started, so the two cases are
+            // classes what was open when it started, so the two cases are
             // distinguishable rather than guessed.
             TypedStmt::Break | TypedStmt::Continue => {
                 let (cond_bb, end_bb, mark_at_entry) = *self
@@ -2022,7 +2022,7 @@ impl<'ctx> CodeGen<'ctx> {
                     let variants = self.enum_types[enum_name.as_str()].1.clone();
                     let arr_ty = i64t.array_type(self.payload_area(&variants));
                     // Cell offsets, so a payload wider than one cell does not overlap the next.
-                    // `store` places a whole LLVM aggregate as happily as an i64, so a record
+                    // `store` places a whole LLVM aggregate as happily as an i64, so a class
                     // payload needs no memcpy here — only the right address.
                     let (offsets, _) = self.payload_offsets(&variants[*tag as usize]);
                     for (i, a) in arguments.iter().enumerate() {
@@ -2479,7 +2479,7 @@ impl<'ctx> CodeGen<'ctx> {
                 let sname = match &base.ty {
                     Type::Named(n) => n.clone(),
                     other => {
-                        return Err(format!("codegen bug: field of non-record {}", other))
+                        return Err(format!("codegen bug: field of non-class {}", other))
                     }
                 };
                 let st = self.struct_types[&sname];

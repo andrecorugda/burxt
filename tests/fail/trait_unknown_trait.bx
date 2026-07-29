@@ -1,4 +1,4 @@
-record Book { cost: Decimal<2> }
+class Book { cost: Decimal<2> }
 let b: Book = Book { cost: 1.00 };
 let d: dynamic Nonexistent = b;
 print(1);

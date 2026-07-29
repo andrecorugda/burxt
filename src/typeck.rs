@@ -319,7 +319,7 @@ pub struct TypeChecker {
     /// Methods whose receiver is a generic record. Held back until an instantiation exists,
     /// then one copy is made per instantiation with the parameters substituted.
     generic_methods: Vec<MethodDef>,
-    /// Instantiations of generic records, in the order they were first needed, so the
+    /// Instantiations of generic classes, in the order they were first needed, so the
     /// methods for each can be made once their record is.
     wanted_records: RefCell<Vec<(String, Vec<Type>)>>,
     made_records: RefCell<HashMap<String, Vec<(String, Type)>>>,
@@ -384,7 +384,7 @@ pub struct TypeChecker {
     /// answers "what is the type here?" — hover, in the language server.
     expr_types: RefCell<Vec<(Span, Type)>>,
     /// Errors found so far. Checking a statement that fails does not stop the
-    /// checker: it records the problem and moves to the next statement, so one
+    /// checker: it classes the problem and moves to the next statement, so one
     /// mistake does not hide the other five.
     errors: Vec<Diagnostic>,
     current_ret: Option<Type>,
@@ -468,7 +468,7 @@ pub struct TypeChecker {
     // fixpoint over the call graph instead of one pass — `a` allocates because it calls
     // `b`, which allocates because it calls `c`.
     /// True in a THROWAWAY checker whose only job is to answer "which functions
-    /// allocate?". While set, `has_region` never refuses — it records what wanted a
+    /// allocate?". While set, `has_region` never refuses — it classes what wanted a
     /// region and answers yes, so the pass reaches the end of every body instead of
     /// stopping at the first allocation.
     probing: bool,
@@ -727,7 +727,7 @@ impl TypeChecker {
     ///   * `expr_allocates` asks `alloc_fns` whether a CALL produces region storage. Without
     ///     it, `function bad() -> String { region r { return build(); } }` would be accepted
     ///     and hand back freed bytes.
-    ///   * the probe records through `has_region`, so the guards are where the answer comes
+    ///   * the probe classes through `has_region`, so the guards are where the answer comes
     ///     from. Delete the callers and the set empties.
     ///
     /// So the question the machinery answers changed — from "where may this be built?" to
@@ -735,7 +735,7 @@ impl TypeChecker {
     /// about safety.
     ///
     /// A THROWAWAY checker per round, never this one. Sharing would be a real bug and not
-    /// merely untidy: checking a body creates generic instantiations and records them in
+    /// merely untidy: checking a body creates generic instantiations and classes them in
     /// `seen_instantiations` so each is emitted once, so a probe pass on the live checker
     /// would mark them seen and the real pass would emit none of them.
     ///
@@ -921,7 +921,7 @@ impl TypeChecker {
         Ok(())
     }
 
-    /// Is this a record? Declared concretely, or made on demand as an instantiation of a
+    /// Is this a class? Declared concretely, or made on demand as an instantiation of a
     /// generic one — a caller has no reason to care which.
     fn is_record(&self, name: &str) -> bool {
         self.structs.contains_key(name) || self.made_records.borrow().contains_key(name)
@@ -980,7 +980,7 @@ impl TypeChecker {
                 }
                 let symbol = mangle(name, &arguments);
                 if !self.is_record(&symbol) {
-                    // Reserved before it is filled in, so a record whose field mentions
+                    // Reserved before it is filled in, so a class whose field mentions
                     // itself cannot make this recurse forever.
                     self.made_records.borrow_mut().insert(symbol.clone(), Vec::new());
                     let map: HashMap<String, Type> = parameters
@@ -997,7 +997,7 @@ impl TypeChecker {
                             self.made_records.borrow_mut().remove(&symbol);
                             return Err(format!(
                                 "`{}` cannot contain itself: `{}.{}` would have to be the \
-                                 same size as the whole record.",
+                                 same size as the whole class.",
                                 symbol, name, fname
                             ));
                         }
@@ -1068,7 +1068,7 @@ impl TypeChecker {
                                 | Type::Bool
                                 | Type::String
                                 | Type::Decimal { .. } => {}
-                                // A record or an array payload is allowed since v0.0.118, so
+                                // A class or an array payload is allowed since v0.0.118, so
                                 // `Option<Point>` can be made. An ENUM payload still cannot: an
                                 // enum inside an enum has no finite size without indirection, and
                                 // that is a memory-model question rather than a layout one.
@@ -1079,7 +1079,7 @@ impl TypeChecker {
                                     return Err(format!(
                                         "`{}` cannot be made: `{}.{}` would carry {} {}, \
                                          which has no layout here. A variant carries a \
-                                         scalar, a String, a record or an array.",
+                                         scalar, a String, a class or an array.",
                                         Type::Generic {
                                             name: name.clone(),
                                             arguments: arguments.clone()
@@ -1270,7 +1270,7 @@ impl TypeChecker {
                     _ => {
                         return Err(format!(
                             "`{}` needs `{}: {}`, and {} is not a type that can implement \
-                             a trait — only a record or an enum can.",
+                             a trait — only a class or an enum can.",
                             callee, param, trait_name, shown
                         ))
                     }
@@ -1288,7 +1288,7 @@ impl TypeChecker {
         }
     }
 
-    /// Which instantiation a record literal means. For a non-generic record: itself. For a
+    /// Which instantiation a class literal means. For a non-generic record: itself. For a
     /// generic one: the arguments come from the context when it names them, and otherwise are
     /// inferred from the field values — the same two sources, in the same order, that a
     /// generic enum's variant uses. See spec/M7-GENERICS.md.
@@ -1424,11 +1424,11 @@ impl TypeChecker {
         &mut self,
         methods: &mut Vec<TypedMethod>,
     ) -> Result<(), String> {
-    // Records first: a generic function's body may call a method on one, so the
+    // Classes first: a generic function's body may call a method on one, so the
     // method has to exist before the function that calls it is checked.
-    let records: Vec<(String, Vec<Type>)> =
+    let classes: Vec<(String, Vec<Type>)> =
         std::mem::take(&mut *self.wanted_records.borrow_mut());
-    for (record, arguments) in records {
+    for (record, arguments) in classes {
         let Some((parameters, _)) = self.generic_records.get(&record).cloned() else {
             continue;
         };
@@ -1445,7 +1445,7 @@ impl TypeChecker {
             .cloned()
             .collect();
         for m in mine {
-            // The receiver's own parameter names are what the record's arguments
+            // The receiver's own parameter names are what the class's arguments
             // bind to, in order — `self: Stack<T>` against `Stack<Int>` binds T.
             let mut local: HashMap<String, Type> = HashMap::new();
             for (named, p) in m.receiver_arguments.iter().zip(&parameters) {
@@ -1548,7 +1548,7 @@ impl TypeChecker {
             self.current_span.set(s.span);
             // A GENERIC record has no layout until a use says what its arguments are, so it
             // was collected in pass -1 rather than registered here. Its instantiations become
-            // ordinary records, made on demand.
+            // ordinary classes, made on demand.
             if !s.type_parameters.is_empty() {
                 continue;
             }
@@ -1619,7 +1619,7 @@ impl TypeChecker {
             }
             if self.structs.contains_key(&t.name) {
                 return Err(format!(
-                    "`{}` is already a record — a trait cannot reuse the name",
+                    "`{}` is already a class — a trait cannot reuse the name",
                     t.name
                 ));
             }
@@ -1684,7 +1684,7 @@ impl TypeChecker {
                         other => {
                             return Err(format!(
                                 "`{}.{}` payload {} is {} {}, which has no layout here. A \
-                                 variant carries a scalar, a String, a record or an array.",
+                                 variant carries a scalar, a String, a class or an array.",
                                 e.name,
                                 v.name,
                                 i + 1,
@@ -1713,7 +1713,7 @@ impl TypeChecker {
             }
             self.check_struct_finite(&s.name, &mut Vec::new())?;
         }
-        // The generic declarations are skipped: a record whose field is a type parameter has
+        // The generic declarations are skipped: a class whose field is a type parameter has
         // no layout, and codegen only ever sees the instantiations, appended further down.
         let structs: Vec<TypedStruct> = prog
             .structs
@@ -1775,7 +1775,7 @@ impl TypeChecker {
                 return Err(format!(
                     "function `{}` cannot return an array yet — returning one needs \
                      whole-array binding, which arrives with collections. Return \
-                     a record, or fill an array the caller owns.",
+                     a class, or fill an array the caller owns.",
                     f.name
                 ));
             }
@@ -1868,7 +1868,7 @@ impl TypeChecker {
             if !self.structs.contains_key(&m.receiver) {
                 return Err(format!(
                     "method `{}` is declared for unknown type `{}` — declare it \
-                     with `record {} {{ ... }}`",
+                     with `class {} {{ ... }}`",
                     m.name, m.receiver, m.receiver
                 ));
             }
@@ -2063,7 +2063,7 @@ impl TypeChecker {
         if !self.structs.contains_key(&im.type_name) {
             return Err(format!(
                 "`implement {} for {}`: unknown type `{}` — declare it with \
-                 `record {} {{ ... }}`",
+                 `class {} {{ ... }}`",
                 im.trait_name, im.type_name, im.type_name, im.type_name
             ));
         }
@@ -2185,7 +2185,7 @@ impl TypeChecker {
             }
             other => {
                 return Err(format!(
-                    "`{}` has type {}, which cannot be a `dynamic {}` — only a record \
+                    "`{}` has type {}, which cannot be a `dynamic {}` — only a class \
                      that implements the trait can.",
                     var, other, trait_name
                 ))
@@ -2310,7 +2310,7 @@ impl TypeChecker {
 
     /// A Named type must refer to a declared struct; CInt never leaves the
     /// C boundary. `dyn Trait` must name a declared trait — and using one
-    /// records that the trait needs vtables.
+    /// classes that the trait needs vtables.
     fn validate_type(&mut self, ty: &Type) -> Result<(), String> {
         if let Type::Dyn(name) = ty {
             if !self.traits.contains_key(name) {
@@ -2327,7 +2327,7 @@ impl TypeChecker {
                 if !self.is_record(name) && !self.is_enum(name) =>
             {
                 Err(format!(
-                    "unknown type `{}` — declare it with `record {} {{ ... }}` or \
+                    "unknown type `{}` — declare it with `class {} {{ ... }}` or \
                      `enum {} {{ ... }}`",
                     name, name, name
                 ))
@@ -2347,7 +2347,7 @@ impl TypeChecker {
             Type::Slice(elem) => match elem.as_ref() {
                 Type::Slice(_) | Type::Array { .. } => Err(
                     "a growable array cannot hold another array yet — its element \
-                     would need its own region reasoning. Use a record element."
+                     would need its own region reasoning. Use a class element."
                         .to_string(),
                 ),
                 Type::Dyn(t) => Err(format!(
@@ -2365,7 +2365,7 @@ impl TypeChecker {
                 Type::Array { .. } => Err(
                     "arrays of arrays are not available yet — `a[i][j]` cannot be \
                      written, since indexing applies to a binding rather than an \
-                     expression. Use one array of a record instead."
+                     expression. Use one array of a class instead."
                         .to_string(),
                 ),
                 Type::Dyn(t) => Err(format!(
@@ -3509,7 +3509,7 @@ impl TypeChecker {
                     // only worked because it happens to bind `let mutable shelf: [Item] = []`
                     // first — which is luck, not a rule.
                     //
-                    // Asking `has_region` here records it, and records it in the one place that
+                    // Asking `has_region` here classes it, and classes it in the one place that
                     // knows how: it credits the owner only when no local region is open, which
                     // is the same condition this rule is testing.
                     if self.probing {
@@ -4541,7 +4541,7 @@ impl TypeChecker {
             }
 
             ExprKind::StructLit { name, fields } => {
-                // A generic record's literal names the record, not the instantiation:
+                // A generic record's literal names the class, not the instantiation:
                 // `Pair { left: 7, right: "seven" }`. Which instantiation it is comes from
                 // the context if there is one, and otherwise from the field values — the
                 // same two sources, in the same order, that a generic enum's variant uses.
@@ -4558,7 +4558,7 @@ impl TypeChecker {
                     .fields_of(name)
                     .ok_or_else(|| {
                         format!(
-                            "unknown type `{}` — declare it with `record {} {{ ... }}`",
+                            "unknown type `{}` — declare it with `class {} {{ ... }}`",
                             name, name
                         )
                     })?;
@@ -4822,7 +4822,7 @@ impl TypeChecker {
                     Type::Named(n) => n.clone(),
                     other => {
                         return Err(format!(
-                            "`.{}(...)` needs a record value, but this has type {}.",
+                            "`.{}(...)` needs a class value, but this has type {}.",
                             method, other
                         ))
                     }
@@ -5158,7 +5158,7 @@ impl TypeChecker {
             Type::Named(n) => n,
             other => {
                 return Err(format!(
-                    "`.{}` needs a record value, but the value has type {}.",
+                    "`.{}` needs a class value, but the value has type {}.",
                     field, other
                 ))
             }

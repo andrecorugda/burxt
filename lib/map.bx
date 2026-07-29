@@ -18,7 +18,7 @@ use "option.bx";
 
 // One key and its value. `live` is false for a tombstone: a removed entry keeps its place in the
 // entry array so that everything after it keeps its insertion position, which is the whole point.
-record MapEntry<K: Equatable, V> { key: K, value: V, live: Bool }
+class MapEntry<K: Equatable, V> { key: K, value: V, live: Bool }
 
 // Two arrays rather than buckets of lists.
 //
@@ -35,7 +35,7 @@ record MapEntry<K: Equatable, V> { key: K, value: V, live: Bool }
 // `hash(key)` alongside it, and Equatable is exactly the set `==` works on — Int, Bool, String and
 // Decimal. A key needs equality and a hash, and the types that have equality are the types that
 // can have one, which is why there is no separate `Hashable` naming the same four.
-record Map<K: Equatable, V> { entries: [MapEntry<K, V>], slots: [Int], live: Int }
+class Map<K: Equatable, V> { entries: [MapEntry<K, V>], slots: [Int], live: Int }
 
 // ---- Building one ----------------------------------------------------------
 
@@ -196,7 +196,7 @@ function (self: Map<K, V>) has(key: K) -> Bool {
 // A fallback rather than an `Option<V>`, and the reason is a current limitation rather than a
 // preference: a generic enum payload must be a scalar, so `Option<Point>` is refused, so an
 // `Option<V>` return would restrict values to scalars — a worse limitation than the one it
-// removes. spec/M11-MAPS.md Decision 5 records the trigger that would add `find`.
+// removes. spec/M11-MAPS.md Decision 5 classes the trigger that would add `find`.
 //
 // Asking then reading is two lookups. That cost is documented rather than hidden, and it is the
 // same shape lib/option.bx chose: `option_or` and `option_is_some`, and deliberately no `unwrap`.

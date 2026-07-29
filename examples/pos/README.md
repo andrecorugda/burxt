@@ -98,14 +98,16 @@ the attributes its callee declares. Three sites do; two of them always did.
 Not speed. Three things about how the code is shaped:
 
 1. **The other three put data and behaviour in one block.** `class Item` / `impl Line` — the fields
-   and the thing you do with them, in one place, findable by one jump. In `items.bx`, `record Item`
-   and `line_subtotal(line)` are adjacent by *convention*; nothing connects them, and nothing stops
-   the next function about Items landing in another file. This is the cost of having records and no
-   grouping construct, and it is the largest readability gap of the four.
-2. **`region sale { ... }` is bookkeeping no other version has.** `till.bx` wraps the entire program
-   in it, and the name `sale` is never mentioned again. Python needs `if __name__ == "__main__"` and
-   Rust needs `fn main`, so Burxt is not alone in having ceremony — but those two names *do* something,
-   and `sale` does not.
+   and the thing you do with them, in one place, findable by one jump. In `items.bx` at the time,
+   `record Item` and `line_subtotal(line)` were adjacent by *convention*; nothing connected them, and
+   nothing stopped the next function about Items landing in another file. **This was the largest
+   readability gap of the four, and it is what got `record` renamed to `class` in v0.0.148** — a class
+   holds its fields and its methods together, which is the whole point of the word.
+2. ~~**`region sale { ... }` is bookkeeping no other version has.**~~ `till.bx` used to wrap the
+   entire program in a region whose name was never mentioned again. **Gone in v0.0.146**: nothing
+   needs a region in order to allocate, so the program sits at the left margin. A `region` is now
+   what it should always have been — optional, and about releasing memory early. Python still needs
+   `if __name__ == "__main__"` and Rust still needs `fn main`.
 3. **Modules: Burxt's `use` is one idea where Rust has two.** Every `.bx` file that needs `items.bx`
    says so. Rust declares `mod items;` once in the crate root and then every file writes
    `use crate::items::…` — declaring a module and importing from it are separate. Burxt's is simpler

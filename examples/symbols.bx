@@ -10,10 +10,10 @@
 // it refuses shadowing.
 // ============================================================================
 
-record Symbol { name: String, type_name: String, at: Int }
+class Symbol { name: String, type_name: String, at: Int }
 
 // A table is a growable array plus the operations that keep it honest.
-record Table { entries: [Symbol] }
+class Table { entries: [Symbol] }
 
 function is_alpha(b: Int) -> Bool {
     return (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95;

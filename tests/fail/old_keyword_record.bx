@@ -1,0 +1,6 @@
+// `record` was the word until v0.0.148. It redirects rather than simply failing, because a
+// rename a reader cannot see the reason for is a rename they will resent — and this one has a
+// reason worth reading: a record held only fields, so everything you could DO with one lived
+// somewhere else. Writing the same point-of-sale in Burxt, Python, PHP and Rust made the cost
+// plain, and this was the largest readability gap of the four.
+record Book { title: String }

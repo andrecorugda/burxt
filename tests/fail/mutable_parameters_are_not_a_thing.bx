@@ -1,4 +1,4 @@
-record T { n: Int }
+class T { n: Int }
 function fill(mutable t: T, v: Int) -> Int {
     return v;
 }

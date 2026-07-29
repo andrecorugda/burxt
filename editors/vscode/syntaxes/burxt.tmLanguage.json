@@ -169,7 +169,7 @@
     "reserved": {
       "patterns": [
         {
-          "comment": "The six spellings Burxt used to have. They are still RESERVED WORDS in the compiler, but only so it can name the replacement: `fn` -> `function`, `mut` -> `mutable`, `impl` -> `implement`, `dyn` -> `dynamic`, `extern` -> `external`, `struct` -> `record`. A program using one of them does not compile, so the editor must not colour it like a keyword — it is an error, and this says so before the compiler does. (`enum` was NOT renamed.)",
+          "comment": "The six spellings Burxt used to have. They are still RESERVED WORDS in the compiler, but only so it can name the replacement: `fn` -> `function`, `mut` -> `mutable`, `impl` -> `implement`, `dyn` -> `dynamic`, `extern` -> `external`, `struct` -> `class`. A program using one of them does not compile, so the editor must not colour it like a keyword — it is an error, and this says so before the compiler does. (`enum` was NOT renamed.)",
           "name": "invalid.deprecated.burxt",
           "match": "\\b(fn|mut|impl|dyn|extern|struct)\\b"
         }
@@ -178,7 +178,7 @@
     "declarations": {
       "patterns": [
         {
-          "comment": "Method declaration: function (self: Type) name(...), with the receiver's type arguments when the record is generic — function (mutable self: Stack<T>) push_one(...)",
+          "comment": "Method declaration: function (self: Type) name(...), with the receiver's type arguments when the class is generic — function (mutable self: Stack<T>) push_one(...)",
           "match": "\\b(function)\\s*\\(\\s*(mutable\\s+)?(self)\\s*:\\s*([A-Z][A-Za-z0-9_]*)(<[A-Za-z0-9_,\\s]*>)?\\s*\\)\\s*([a-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": {
@@ -239,7 +239,7 @@
         },
         {
           "comment": "Nominal type declarations.",
-          "match": "\\b(record|enum|trait|interface)\\s+([A-Za-z_][A-Za-z0-9_]*)(<[A-Za-z0-9_,:\\s]*>)?",
+          "match": "\\b(class|enum|trait|interface)\\s+([A-Za-z_][A-Za-z0-9_]*)(<[A-Za-z0-9_,:\\s]*>)?",
           "captures": {
             "1": {
               "name": "keyword.declaration.type.burxt"
@@ -394,7 +394,7 @@
         },
         {
           "name": "keyword.declaration.burxt",
-          "match": "\\b(let|mutable|function|external|record|enum|trait|interface|implement|is|region|dynamic)\\b"
+          "match": "\\b(let|mutable|function|external|class|enum|trait|interface|implement|is|region|dynamic)\\b"
         },
         {
           "name": "keyword.operator.expression.as.burxt",

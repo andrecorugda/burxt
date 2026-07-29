@@ -6,7 +6,7 @@ trait Peek {
     function copy_and_clobber(self) -> Int
 }
 
-record Box2 { a: Int, b: Int }
+class Box2 { a: Int, b: Int }
 
 implement Peek for Box2 {
     function (self: Box2) peek() -> Int { return self.a; }

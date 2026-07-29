@@ -1,5 +1,5 @@
 // The number of type arguments is part of naming the type.
-record Pair<A, B> { left: A, right: B }
+class Pair<A, B> { left: A, right: B }
 region r {
     let p: Pair<Int> = Pair { left: 1, right: 2 };
     print(1);

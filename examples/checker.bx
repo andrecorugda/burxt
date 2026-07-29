@@ -18,11 +18,11 @@ enum Type {
     Dec(Int, Bool),
 }
 
-record Binding { name: String, ty: Type }
-record Table { rows: [Binding] }
+class Binding { name: String, ty: Type }
+class Table { rows: [Binding] }
 
 // A scan result: what was read, and where to continue from.
-record Scan { ty: Type, next: Int }
+class Scan { ty: Type, next: Int }
 
 function is_alpha(b: Int) -> Bool {
     return (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95;

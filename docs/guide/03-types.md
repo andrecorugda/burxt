@@ -45,7 +45,7 @@ lives**. That is the honest trade: the type did not disappear, it moved.
 ## Records
 
 ```burxt
-record Line { label: String, unit: Decimal<2>, quantity: Int }
+class Line { label: String, unit: Decimal<2>, quantity: Int }
 
 let widget: Line = Line { label: "widget", unit: $19.99, quantity: 3 };
 ```
@@ -220,7 +220,7 @@ checkout service with an injected tax-rate provider.
 | **Initialization** | A record literal must set **every field**. There is no half-built object and no `null` to leave in one |
 | **Interface** | `trait` |
 | **Reuse / polymorphism** | `implement Trait for Type`, and `dynamic Trait` where the choice is made at runtime |
-| **Dependency injection** | A `dynamic Trait` **field**: `record Checkout { rates: dynamic Rates }`. The dependency is chosen by whoever builds the service — a record literal instead of a container |
+| **Dependency injection** | A `dynamic Trait` **field**: `class Checkout { rates: dynamic Rates }`. The dependency is chosen by whoever builds the service — a record literal instead of a container |
 | **Destructor / cleanup** | The [region](04-memory.md). You do not write one |
 | **Static / class methods** | A free function. There is no class to hang them on |
 | **Private fields** | Not yet — there is no `pub`, deferred with a trigger in [`spec/M6-MODULES.md`](../../spec/M6-MODULES.md) §1.2 |
@@ -229,7 +229,7 @@ checkout service with an injected tax-rate provider.
 ### Dependency injection, concretely
 
 ```burxt
-record Checkout { rates: dynamic Rates }          // the dependency is a field
+class Checkout { rates: dynamic Rates }          // the dependency is a field
 
 let live_rates: TableRates = TableRates { home: 12.00%, abroad: 0.00% };
 let live: Checkout = Checkout { rates: live_rates };

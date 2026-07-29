@@ -441,7 +441,7 @@ pub struct FnDef {
 pub struct MethodDef {
     pub receiver: String,
     /// `function (mutable self: Stack<T>) push_one(...)` — the receiver's type arguments,
-    /// which for a method are always the record's own parameter NAMES. A method may use the
+    /// which for a method are always the class's own parameter NAMES. A method may use the
     /// parameters of the type it is on and declare none of its own, per
     /// spec/M7-GENERICS.md Decision 3 — so these are names, not types.
     pub receiver_arguments: Vec<String>,
@@ -535,7 +535,7 @@ pub struct MatchArm {
     pub body: Vec<Stmt>,
 }
 
-/// `struct Name { field: Type, ... }` — the nominal record type and the
+/// `struct Name { field: Type, ... }` — the nominal class type and the
 /// substrate for Burxt's OOP layers (methods, then interfaces).
 #[derive(Debug, Clone)]
 pub struct StructDef {

@@ -13,8 +13,8 @@ trait Priced {
 // (In a trait the receiver is just `self`; inside an `implement` block it may be just
 //  `function (self)` too, because the header already said which type.)
 
-record Book { title: String, cost: Decimal<2> }
-record Meal { dish: String, cost: Decimal<2>, covers: Int }
+class Book { title: String, cost: Decimal<2> }
+class Meal { dish: String, cost: Decimal<2>, covers: Int }
 
 // `implement Trait for Type` is explicit. A type does not accidentally satisfy a
 // trait by having the right method names — conformance is declared, and the
@@ -55,7 +55,7 @@ print(show(novel));
 print(show(dinner));
 
 // A `dynamic` value is storable — it is a value like any other, so it can live
-// in a binding, a record field, or an array.
+// in a binding, a class field, or an array.
 let anything: dynamic Priced = dinner;
 print(anything.label());
 print(anything.price());
@@ -75,6 +75,6 @@ print(anything.price());
 //     error: the trait returns Decimal<2>, and this returns Int
 //
 // And there is no inheritance to reach for instead. A `Book` is not a kind of
-// anything; it is a record that satisfies a trait. Composition and traits do
+// anything; it is a class that satisfies a trait. Composition and traits do
 // the work a base class would, without the fragile-base-class problem or the
 // question of which parent a method came from.

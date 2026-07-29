@@ -1,3 +1,3 @@
-record LineItem { price: Decimal<2>, quantity: Int }
+class LineItem { price: Decimal<2>, quantity: Int }
 let x: LineItem = LineItem { price: 1.00, qyt: 2 };
 print(x.price);

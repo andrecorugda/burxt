@@ -20,7 +20,7 @@ trait Tax {
 }
 
 // ---- One rule: the same rate on everything taxable -------------------------
-record FlatTax { rate: Decimal<4> }
+class FlatTax { rate: Decimal<4> }
 
 implement Tax for FlatTax {
     function (self) rate_for(item: Item) -> Decimal<4> {
@@ -31,7 +31,7 @@ implement Tax for FlatTax {
 }
 
 // ---- Another: staples cheaper than the rest --------------------------------
-record SplitTax { staples: Decimal<4>, rest: Decimal<4> }
+class SplitTax { staples: Decimal<4>, rest: Decimal<4> }
 
 implement Tax for SplitTax {
     function (self) rate_for(item: Item) -> Decimal<4> {

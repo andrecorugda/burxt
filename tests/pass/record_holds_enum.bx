@@ -1,9 +1,9 @@
-// A record field may hold an enum — which is what lets a lexer return "the
+// A class field may hold an enum — which is what lets a lexer return "the
 // token, and where to continue" as one value. Enum types are therefore created
 // before record bodies; the reverse cannot happen, since enum payloads are
 // scalars only.
 enum Token { End, Number(Int) }
-record Scan { tok: Token, next: Int }
+class Scan { tok: Token, next: Int }
 
 function step(v: Int) -> Scan {
     return Scan { tok: Token.Number(v), next: v + 1 };

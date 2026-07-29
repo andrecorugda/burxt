@@ -6,14 +6,14 @@ trait Priced {
     function label(self) -> String
 }
 
-record Book { title: String, cost: Decimal<2> }
+class Book { title: String, cost: Decimal<2> }
 
 implement Priced for Book {
     function (self) price() -> Decimal<2> { return self.cost; }
     function (self) label() -> String { return "book: " + self.title; }
 }
 
-record Counter { n: Int }
+class Counter { n: Int }
 
 implement Priced for Counter {
     // The long form still works, and is still required outside an `implement`.

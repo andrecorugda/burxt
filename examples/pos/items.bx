@@ -9,7 +9,7 @@
 
 // One thing on the shelf. `price` is a Decimal<2> because it is money, and money
 // in this language is an integer and a scale — never a float.
-record Item {
+class Item {
     sku: String,
     name: String,
     price: Decimal<2, RoundHalfUp>,
@@ -17,7 +17,7 @@ record Item {
 }
 
 // One line on a receipt: a thing, and how many of it.
-record Line {
+class Line {
     item: Item,
     quantity: Int,
 }

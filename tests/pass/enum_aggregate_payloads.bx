@@ -12,8 +12,8 @@
 // An enum inside an enum is still refused — see tests/fail/enum_cannot_carry_an_enum.bx — and that
 // is a memory question, not a layout one.
 
-record Point { x: Int, y: Int }
-record Span { from: Point, to: Point }
+class Point { x: Int, y: Int }
+class Span { from: Point, to: Point }
 
 enum Shape { Nothing, Dot(Point), Line(Point, Point), Tagged(Int, Point) }
 enum Option<T> { None, Some(T) }
@@ -46,7 +46,7 @@ region r {
         Tagged(n, p) => { print(n + p.x + p.y); }
     }
 
-    // A record whose fields are records, so the payload is four cells deep.
+    // A class whose fields are classes, so the payload is four cells deep.
     let nested: Shape = Shape.Dot(Point { x: 5, y: 6 });
     let s: Span = Span { from: Point { x: 1, y: 1 }, to: Point { x: 2, y: 3 } };
     print(s.from.x + s.to.y);

@@ -1,7 +1,7 @@
 // The sugar, and what it desugars to. Neither shorthand adds a rule: `x += 1` becomes
 // `x = x + 1` in the parser, and `P { x }` becomes `P { x: x }` — so every scale,
 // contract, mutability and region rule applies exactly as it did to the long form.
-record Acc { total: Decimal<2>, hits: [Int], label: String }
+class Acc { total: Decimal<2>, hits: [Int], label: String }
 
 region r {
     let mutable sum: Int = 0;

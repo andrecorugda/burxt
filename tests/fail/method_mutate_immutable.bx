@@ -1,4 +1,4 @@
-record Account { balance: Decimal<2> }
+class Account { balance: Decimal<2> }
 function (mutable self: Account) deposit(amount: Decimal<2>) -> Decimal<2> {
     self.balance = self.balance + amount;
     return self.balance;

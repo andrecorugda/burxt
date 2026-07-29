@@ -5,8 +5,8 @@ trait HasBalance {
     function label(self) -> Int
 }
 
-record Account { balance: Decimal<2>, id: Int }
-record Escrow  { held: Decimal<2>, fee: Decimal<2> }
+class Account { balance: Decimal<2>, id: Int }
+class Escrow  { held: Decimal<2>, fee: Decimal<2> }
 
 implement HasBalance for Account {
     function (self: Account) balance_of() -> Decimal<2> { return self.balance; }

@@ -4,7 +4,7 @@
 // pipeline, and every place a value could round says how.
 // ============================================================================
 
-record Line {
+class Line {
     label: String,
     unit: Decimal<2>,
     quantity: Int

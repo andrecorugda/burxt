@@ -3,8 +3,8 @@
 // program needs an allocating method" — a symbol table written in Burxt was it,
 // because Burxt has no mutable parameters and a pass that fills a table must
 // therefore be a method on it.
-record Row { id: Int }
-record Log { rows: [Row] }
+class Row { id: Int }
+class Log { rows: [Row] }
 
 function (mutable self: Log) note(id: Int) -> String allocates
     ensures len(self.rows) >= old(len(self.rows))

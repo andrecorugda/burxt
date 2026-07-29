@@ -2,8 +2,8 @@
 // to pass in registers, an eight-field one is not. Both must behave
 // IDENTICALLY — value-copy semantics, callee cannot touch the caller. If
 // switching the mechanism ever changes observable behavior, that is the bug.
-record Small { a: Int }
-record Big {
+class Small { a: Int }
+class Big {
     a: Int, b: Int, c: Int, d: Int,
     e: Int, f: Int, g: Int, h: Int,
 }

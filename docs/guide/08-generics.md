@@ -58,7 +58,7 @@ A parameter can be nested inside another type — `[T]`, `[T; 4]` — and infere
 ## Records and enums
 
 ```burxt
-record Pair<T> { first: T, second: T }
+class Pair<T> { first: T, second: T }
 enum Holder<T> { Empty, Full(T) }
 ```
 
@@ -81,7 +81,7 @@ A function may build a generic and answer it, with the type arguments coming fro
 lands** rather than from an argument:
 
 ```burxt
-record Bag<T> { items: [T], count: Int }
+class Bag<T> { items: [T], count: Int }
 
 function empty_bag<T>() -> Bag<T> {
     return Bag { items: [], count: 0 };

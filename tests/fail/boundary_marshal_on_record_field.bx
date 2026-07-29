@@ -1,2 +1,2 @@
-record Line { cents: Int as scaled }
+class Line { cents: Int as scaled }
 print(1);

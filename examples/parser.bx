@@ -6,7 +6,7 @@
 // by INDEX. That is how Zig and Carbon build their ASTs — and it means the
 // parser was never blocked on the memory model, only on believing it was.
 //
-// The arena is a record holding GROWABLE storage (`[Node]`), mutated through a
+// The arena is a class holding GROWABLE storage (`[Node]`), mutated through a
 // `mutable self` method and allocated in a region — so there is no fixed node
 // budget at all. Before M1 this was capped at [Node; 64].
 //
@@ -15,14 +15,14 @@
 //   factor := NUMBER | '(' expr ')'
 // ============================================================================
 
-record Node {
+class Node {
     kind: Int,                          // 1 num, 2 add, 3 sub, 4 mul
     value: Decimal<2, RoundHalfEven>,   // meaningful when kind == 1
     lhs: Int,                           // arena indices, -1 when absent
     rhs: Int,
 }
 
-record Arena {
+class Arena {
     nodes: [Node],
     count: Int,
     pos: Int,       // scan position, carried here so it survives calls

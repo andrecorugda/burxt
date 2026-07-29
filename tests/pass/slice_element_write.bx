@@ -1,7 +1,7 @@
-// Writing to an element of a GROWABLE array, including one held in a record field.
+// Writing to an element of a GROWABLE array, including one held in a class field.
 // Stage-1 has allowed this since it had arrays; stage-0 refused it until v0.0.87, and
 // the refusal is what forced an indexed cache to be a linear search instead.
-record Table { rows: [Int], name: String }
+class Table { rows: [Int], name: String }
 
 region r {
     let mutable xs: [Int] = [];

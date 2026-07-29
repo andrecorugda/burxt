@@ -132,9 +132,9 @@ fn record_layout_has_no_hidden_header() {
     let program = scratch.join("layout_probe.bx");
     fs::write(
         &program,
-        "record Money { amount: Decimal<2> }\n\
-         record LineItem { price: Decimal<2>, qty: Int }\n\
-         record Order { total: Money, items: Int, label: String }\n\
+        "class Money { amount: Decimal<2> }\n\
+         class LineItem { price: Decimal<2>, qty: Int }\n\
+         class Order { total: Money, items: Int, label: String }\n\
          print(1);\n",
     )
     .unwrap();
@@ -170,7 +170,7 @@ fn dynamic_does_not_change_layout_and_costs_nothing_unused() {
     fs::create_dir_all(&scratch).unwrap();
 
     let common = "trait Priced { function price(self) -> Decimal<2> }\n\
-                  record Book { cost: Decimal<2>, pages: Int }\n\
+                  class Book { cost: Decimal<2>, pages: Int }\n\
                   implement Priced for Book {\n\
                   function (self: Book) price() -> Decimal<2> { return self.cost; }\n\
                   }\n\
@@ -1254,7 +1254,7 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
         // leave `a.x` alone, which is the whole of by-value semantics.
         (
             "aggregates.bx",
-            "record Point { x: Int, y: Int }\n             record Line { from: Point, to: Point, label: String }\n             function total_of(p: Point) -> Int { return p.x + p.y; }\n             let a: Point = Point { x: 3, y: 4 };\n             let mutable b: Point = a;\n             b.x = 100;\n             print(total_of(a));\nprint(a.x);\nprint(b.x);\n             let l: Line = Line { from: a, to: b, label: \"diagonal\" };\n             print(l.from.x);\nprint(l.to.x);\nprint(l.label);\n             let mutable xs: [Int; 4] = [10, 20, 30, 40];\n             xs[1] = 99;\n             let mutable i: Int = 0;\nlet mutable total: Int = 0;\n             while i < 4 { total = total + xs[i]; i = i + 1; }\n             print(total);\n",
+            "class Point { x: Int, y: Int }\n             class Line { from: Point, to: Point, label: String }\n             function total_of(p: Point) -> Int { return p.x + p.y; }\n             let a: Point = Point { x: 3, y: 4 };\n             let mutable b: Point = a;\n             b.x = 100;\n             print(total_of(a));\nprint(a.x);\nprint(b.x);\n             let l: Line = Line { from: a, to: b, label: \"diagonal\" };\n             print(l.from.x);\nprint(l.to.x);\nprint(l.label);\n             let mutable xs: [Int; 4] = [10, 20, 30, 40];\n             xs[1] = 99;\n             let mutable i: Int = 0;\nlet mutable total: Int = 0;\n             while i < 4 { total = total + xs[i]; i = i + 1; }\n             print(total);\n",
         ),
         (
             "division.bx",
@@ -1701,7 +1701,8 @@ fn the_guide_and_examples_are_linked_and_compile() {
     // every page points at one.
     let stale: &[(&str, &str)] = &[
         ("fn ", "function"),
-        ("struct ", "record"),
+        ("struct ", "class"),
+        ("record ", "class"),
         ("impl ", "implement"),
         ("mut ", "mutable"),
         ("extern ", "external function"),
@@ -2006,7 +2007,7 @@ fn modules_compile_as_one_program_and_report_per_file() {
     // 1 + 2: a struct and a function declared in one file, used in another.
     write(
         "lexer.bx",
-        "record Tok { kind: Int, start: Int }\nfunction scan(text: String) -> Int { return len(text); }\n",
+        "class Tok { kind: Int, start: Int }\nfunction scan(text: String) -> Int { return len(text); }\n",
     );
     let main = write(
         "main.bx",
@@ -2889,7 +2890,7 @@ fn the_burxt_compiler_reads_and_emits_every_generic_form() {
     fs::write(
         &program,
         "enum Option<T> { None, Some(T) }\n\
-         record Stack<T> { items: [T] }\n\
+         class Stack<T> { items: [T] }\n\
          function identity<T>(x: T) -> T { return x; }\n\
          function largest<T: Ordered>(a: T, b: T) -> T { if a > b { return a; } return b; }\n\
          function (self: Stack<T>) count() -> Int { return len(self.items); }\n\

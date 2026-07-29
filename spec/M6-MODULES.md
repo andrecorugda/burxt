@@ -12,7 +12,7 @@
 
 ```text
 // lexer.bx
-record Tok { kind: Int, start: Int, length: Int }
+class Tok { kind: Int, start: Int, length: Int }
 function scan(src: String) -> Int { ... }
 
 // main.bx
