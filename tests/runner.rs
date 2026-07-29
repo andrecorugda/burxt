@@ -1096,10 +1096,35 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     .unwrap();
     let shape_errors = errors_reported(&shapes);
 
+    // Direction 4: a container's ELEMENT type is part of its type. Stage-1 compared two
+    // slices by falling through to "the same" — its `ty_same` is a free function and a
+    // slice holds its element as a node index, which needs the arena to read — so
+    // `[Int]` and `[String]` were interchangeable for eleven versions and it accepted
+    // `takes_ints(words)` where stage-0 refused. The rejection ratchet below is a FLOOR,
+    // so rejecting less than stage-0 kept it green. Found by trying to build generic
+    // unification on top of it, which needed element comparison to mean something.
+    let elements = scratch.join("elements.bx");
+    fs::write(
+        &elements,
+        "function takes_ints(xs: [Int]) -> Int { return len(xs); }\n\
+         region r {\n\
+         let mutable words: [String] = [];\n\
+         let a = push(words, \"one\");\n\
+         print(takes_ints(words));\n\
+         }\n",
+    )
+    .unwrap();
+    let element_errors = errors_reported(&elements);
+
     // Direction 2b, a ratchet: how much of the fail suite stage-1 rejects on its own.
     // It is not all of it — regions, purity, exhaustiveness and the reserved names are
     // still partly stage-0's alone — so the number is a floor that may only go up. A floor
     // rather than an exact count, because catching MORE is the goal, not a regression.
+    //
+    // The floor being a floor is also how the element-type bug above hid for eleven
+    // versions: stage-1 rejecting LESS than stage-0 never trips it. Worth knowing about the
+    // instrument — a ratchet measures progress, and cannot notice a regression that stays
+    // above the line. Direction 4 is the kind of test that can.
     let mut caught = 0;
     let mut total = 0;
     for entry in fs::read_dir(root.join("tests/fail")).unwrap() {
@@ -1115,10 +1140,15 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
 
     let _ = fs::remove_dir_all(&scratch);
     assert!(
-        caught >= 154,
-        "stage-1 rejected only {} of {} fail programs, down from 154",
+        caught >= 192,
+        "stage-1 rejected only {} of {} fail programs, down from 192",
         caught,
         total
+    );
+    assert_eq!(
+        element_errors, 1,
+        "stage-1 must reject a [String] where a [Int] is wanted — an element type is part \
+         of the type, and comparing two slices as equal made them interchangeable"
     );
     assert_eq!(
         shape_errors, 4,

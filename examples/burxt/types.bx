@@ -111,6 +111,12 @@ record Ty {
 // A binding in scope: its name as a SPAN, so the checker allocates nothing to
 // remember a variable.
 record Sym { start: Int, length: Int, ty: Ty, writable: Int, depth: Int }
+// Which declaration is generic over which parameters. A side table, looked up by name span
+// like every other declaration here, because every field of a node is already spoken for.
+// `tp_start`/`tp_count` index `type_params`, which holds the TOKEN of each parameter's name —
+// so a parameter is a span, exactly as a record name or a variable is.
+record Generic { start: Int, length: Int, tp_start: Int, tp_count: Int }
+
 // A declared function: its name span, its return type, and its parameter list node.
 record Fun { start: Int, length: Int, ret: Ty, params: Int, flags: Int }
 // A declared record or enum: its name span and the item node that declared it.
@@ -167,6 +173,9 @@ record Unit {
     // declaration ends. Token indices rather than spans because that is what the
     // parser has in hand, and one comparison away from the bytes either way.
     params_in_scope: [Int],
+    // Every generic declaration, and the parameter-name tokens they index into.
+    generics: [Generic],
+    type_params: [Int],
     // Which function is being checked, so a `tail` call can be compared with the
     // signature it must replace. -1 at top level and inside a method.
     current_fn: Int,
