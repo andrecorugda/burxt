@@ -1752,18 +1752,16 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
                 let asked: Bool = self.has_region();
                 return 1;
             }
-            if self.in_caller_region == 0 {
+            // The escape rule, and after slice 2 it is the ONLY one left: a value built
+            // inside a `region` block cannot leave it, because that block releases at its
+            // closing brace. Outside one there is nothing to escape from — the bytes live in
+            // the program's arena and outlive every call. The `in_caller_region` half is gone
+            // with the word that fed it.
+            if self.region_depth > 0 {
                 let complained: Int = self.complain_at(src, n.token,
-                    "cannot return this: it allocates, and a function that returns "
-                    + "built data must say `allocates` so the bytes belong to the "
-                    + "caller's region");
-            } else {
-                if self.region_depth > 0 {
-                    let complained: Int = self.complain_at(src, n.token,
-                        "cannot return this: it was built inside a `region` block, "
-                        + "which ends at its closing brace, so its storage would not "
-                        + "outlive it");
-                }
+                    "cannot return this: it was built inside a `region` block, "
+                    + "which ends at its closing brace, so its storage would not "
+                    + "outlive it");
             }
         }
         return 1;

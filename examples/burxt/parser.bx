@@ -946,7 +946,19 @@ function (mutable self: Unit) has_region() -> Bool {
         }
         return true;
     }
-    return self.region_depth > 0 || self.in_caller_region == 1;
+    // M14 slice 2: there is ALWAYS somewhere to build.
+    //
+    // This was `region_depth > 0 || in_caller_region == 1`, and the whole "there is no region
+    // open here" family of refusals hung off it. The backend settles it: `burxt.alloc` is a
+    // global bump pointer with no region state at all, so nothing ever needed a region in
+    // order to allocate. A `region` block is purely a RELEASE mechanism — a saved mark and one
+    // store to put the cursor back.
+    //
+    // Sound because nothing new is released. Only a `region` block releases, and its rule is
+    // untouched: a value built inside one still cannot leave it. The cost is memory held for
+    // the program's lifetime unless a region is opened, which is the bias M14 chose — a wrong
+    // guess must cost memory, never correctness.
+    return true;
 }
 
 // One sentence, and it offers both ways out — the region at the use, or `allocates`

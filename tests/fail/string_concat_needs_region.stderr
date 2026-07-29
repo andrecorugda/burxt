@@ -1,1 +1,0 @@
-joining strings with `+` allocates, so it needs a region

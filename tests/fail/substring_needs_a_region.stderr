@@ -1,1 +1,0 @@
-substring(...) copies bytes, so it needs a region

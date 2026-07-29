@@ -1,4 +1,0 @@
-function label(n: Int) -> String allocates {
-    return "n=" + to_string(n);
-}
-print(label(1));

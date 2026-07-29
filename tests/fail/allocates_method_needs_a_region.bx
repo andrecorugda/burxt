@@ -1,6 +1,0 @@
-record Log { n: Int }
-function (self: Log) describe() -> String allocates {
-    return "n=" + to_string(self.n);
-}
-let log: Log = Log { n: 1 };
-print(log.describe());

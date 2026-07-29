@@ -1143,6 +1143,25 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     // v0.0.109 raised it to 191 by closing that one: layout now resolves through the arguments
     // in scope, so stage-1 can ask what an instantiated payload actually is. The list of
     // knowingly-pending fixtures is empty, which is the first time that has been true.
+    //
+    // The floor moved DOWN a SECOND time in v0.0.146, from 191 to 189, and this one is not a
+    // shortfall — it is nine fixtures becoming invalid because the rule they tested no longer
+    // exists. M14 slice 2 removed the requirement that allocation happen inside a region, so
+    // `slice_needs_region`, `string_concat_needs_region`, `substring_needs_a_region`,
+    // `interp_value_needs_region`, `read_file_needs_region`, `slice_taints_struct`,
+    // `allocates_call_needs_a_region`, `allocates_method_needs_a_region` and
+    // `allocates_through_a_trait_object_needs_a_region` all describe programs that are now
+    // correct. They were retired, and `tests/pass/no_region_needed.bx` demonstrates every one
+    // of the nine cases instead — so the coverage moved rather than vanishing.
+    //
+    // Two of the nine were among the 191 stage-1 caught, hence 191 - 2. The denominator fell
+    // by nine and the numerator by two, which is the arithmetic of retiring fixtures the
+    // second compiler had never learned to reject in the first place.
+    //
+    // The rule that REMAINS is the one worth keeping the fixtures for: a value built inside a
+    // `region` block still cannot leave it, because that block still releases.
+    // `allocates_cannot_escape_inner_region` and `allocates_cannot_escape_via_a_binding` cover
+    // the two spellings of it.
     let mut caught = 0;
     let mut total = 0;
     for entry in fs::read_dir(root.join("tests/fail")).unwrap() {
@@ -1158,8 +1177,8 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
 
     let _ = fs::remove_dir_all(&scratch);
     assert!(
-        caught >= 191,
-        "stage-1 rejected only {} of {} fail programs, down from 191",
+        caught >= 189,
+        "stage-1 rejected only {} of {} fail programs, down from 189",
         caught,
         total
     );
@@ -1169,9 +1188,11 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
          of the type, and comparing two slices as equal made them interchangeable"
     );
     assert_eq!(
-        shape_errors, 4,
-        "stage-1 should have caught the arity, the element type, the indexed String, \
-         and the to_string with no region open"
+        shape_errors, 3,
+        "stage-1 should have caught the arity, the element type and the indexed String. \
+         There were FOUR until v0.0.146: the fourth was `to_string(...)` with no region open, \
+         and M14 slice 2 deleted that rule rather than stage-1 forgetting it — nothing needs a \
+         region in order to allocate. Lowered deliberately, like the 191 -> 189 ratchet above"
     );
     assert_eq!(
         found, 7,

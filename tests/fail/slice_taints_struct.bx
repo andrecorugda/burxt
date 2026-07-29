@@ -1,2 +1,0 @@
-record Holder { xs: [Int] }
-let h: Holder = Holder { xs: [] };

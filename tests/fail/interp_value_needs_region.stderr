@@ -1,1 +1,0 @@
-building a String from interpolation allocates (printing one directly does not), so it needs a region

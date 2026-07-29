@@ -690,7 +690,28 @@ impl TypeChecker {
             }
             return true;
         }
-        self.current_region.is_some() || self.in_caller_region
+        // M14 slice 2: there is ALWAYS somewhere to build.
+        //
+        // This used to be `current_region.is_some() || in_caller_region`, and the whole
+        // "there is no region open here" family of refusals hung off it. Codegen settles the
+        // question: `burxt.alloc` is a **global bump pointer** and has no region state at all,
+        // so nothing ever needed a region in order to allocate. A `region` block is purely a
+        // RELEASE mechanism — a mark, and one store to put the cursor back.
+        //
+        // So the requirement was never protecting memory. It was asking the programmer to
+        // name a scope so the compiler could decide where to release, and the answer to
+        // "where does this live?" is now the enclosing block, ultimately the program.
+        //
+        // Sound by construction, and this is the part worth being careful about: **nothing
+        // new is released.** Only a `region` block releases, and its rules are untouched —
+        // `region_locals` still refuses letting a value built inside one escape it. The cost
+        // is memory held for the program's lifetime unless you opt into a region, which is
+        // the bias §2 Decision 2 chose deliberately: a wrong guess must cost memory, never
+        // correctness.
+        //
+        // Releasing per block — the constant-memory win for `ring_up`'s loop — is a separate
+        // slice, because it is the half that CAN dangle if the escape analysis is wrong.
+        true
     }
 
     /// Which functions and methods allocate — worked out rather than declared.
@@ -3444,8 +3465,15 @@ impl TypeChecker {
                 //   - inside an `allocates` function with no local region: the bytes
                 //     are the CALLER's, and the caller's region is still open when it
                 //     receives them. Fine — this is the whole point of `allocates`.
-                if self.expr_allocates(&typed) && !(self.in_caller_region && self.current_region.is_none())
-                {
+                // The escape rule, and after slice 2 it is the ONLY one left: a value built
+                // inside a `region` block cannot leave it, because that block releases at its
+                // closing brace. Outside one there is nothing to escape from — the bytes live
+                // in the program's arena and outlive every call.
+                //
+                // This used to also demand `in_caller_region`, i.e. the `allocates` word. That
+                // half is gone: it asked whether the programmer had declared where the bytes
+                // belong, and nothing releases them now except a region the programmer opened.
+                if self.expr_allocates(&typed) && self.current_region.is_some() {
                     // Probing: this is the SECOND way a function turns out to allocate, and
                     // missing it made the inference silently incomplete rather than wrong.
                     //

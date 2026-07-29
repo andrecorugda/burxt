@@ -1,2 +1,0 @@
-let mutable xs: [Int] = [];
-push(xs, 1);

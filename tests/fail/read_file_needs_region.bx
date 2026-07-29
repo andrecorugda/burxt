@@ -1,1 +1,0 @@
-let text: String = read_file("input.bx");

@@ -74,7 +74,59 @@
 >   do exactly that.
 > - ~~**§5's hole is still open.**~~ **CLOSED in v0.0.143**, and without the syntax §5 proposed —
 >   see the note added to §5 below. `tests/fail/allocates_through_a_trait_object_needs_a_region.bx`.
-> - Slices 2 and 3: implicit block regions, `allocates nothing`, `burxt explain memory`.
+> - ~~Slice 2~~ **DONE in both compilers (v0.0.146): a region is no longer REQUIRED.** See below.
+> - Slice 3 — per-block RELEASE, `allocates nothing`, `burxt explain memory`. Slice 2 delivered
+>   half of §1: nothing needs a region in order to allocate. It did **not** deliver §3's
+>   constant-memory loop, and the numbers below say why that matters.
+>
+> ### Slice 2, and what codegen settled
+>
+> `examples/pos/` now compiles with **no `allocates` and no `region`** — the program at the left
+> margin — and prints the same receipt. A top-level `let mutable xs: [Int] = [];` works.
+>
+> The design in §1–§2 assumed this needed escape analysis and destination-passing. It did not,
+> because **`burxt.alloc` is a global bump pointer with no region state at all**. Allocation never
+> needed a region; a `region` block is purely a RELEASE mechanism — a saved mark and one store to
+> put the cursor back. `src/codegen.rs` has **zero** references to `allocates`. So the whole "there
+> is no region open here" family of refusals was never protecting memory: it was asking the
+> programmer to name a scope so the compiler could decide where to release.
+>
+> Slice 2 is therefore a **checker-only** change of about twenty lines per compiler, and it is
+> sound by construction for a reason worth stating plainly: **nothing new is released.** Only a
+> `region` block releases, and its rule is untouched — a value built inside one still cannot leave
+> it (`tests/fail/allocates_cannot_escape_inner_region.bx` and its sibling). Nothing can dangle
+> because nothing new is freed.
+>
+> ### The cost, measured, and it is not small
+>
+> A loop building 100,000 Strings, peak RSS:
+>
+> | | |
+> |---|---|
+> | no region | **5,280 KB** |
+> | `region each { ... }` around the loop body | **1,408 KB** |
+>
+> Memory grows **linearly** without a region. The arena is a 1 GB reservation and exhaustion is a
+> named runtime error rather than a crash — but a long-running program that allocates in a loop
+> and never opens a region **will** reach it.
+>
+> So slice 3 is not an optimisation. For a server loop or a batch over a large input it is a
+> requirement, and until it lands `region` remains the answer for exactly the case §3 described.
+> The keyword is now what it should always have been: **optional, and about release.**
+>
+> ### Nine fixtures retired, and two ratchets lowered on purpose
+>
+> Nine `tests/fail` fixtures tested a rule that no longer exists — `slice_needs_region`,
+> `string_concat_needs_region`, `substring_needs_a_region`, `interp_value_needs_region`,
+> `read_file_needs_region`, `slice_taints_struct`, `allocates_call_needs_a_region`,
+> `allocates_method_needs_a_region` and `allocates_through_a_trait_object_needs_a_region` (three
+> versions old). `tests/pass/no_region_needed.bx` demonstrates all nine cases instead, so the
+> coverage moved rather than vanishing.
+>
+> Two of the nine were among the 191 stage-1 caught, so the rejection ratchet went 191 → 189, and
+> `shape_errors` went 4 → 3 because its fourth error was a `to_string` with no region open. Both
+> lowerings are written into `tests/runner.rs` beside the numbers, with the reason — the second
+> and third times that floor has ever moved down.
 
 ## 0. Where this came from
 

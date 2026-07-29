@@ -1,0 +1,80 @@
+// Everything that used to need a `region`, at the top level of a file, with none open.
+//
+// Nine fixtures used to live in `tests/fail/` for exactly these nine lines. Each one was a
+// refusal saying some version of *"this allocates, so it needs a region: there is none open
+// here"*, and together they were the reason a Burxt program had to be wrapped in
+// `region name { ... }` before it could do anything.
+//
+// v0.0.146 removed the requirement, and codegen is what settled it: `burxt.alloc` is a
+// **global bump pointer** with no region state at all, so nothing ever needed a region in
+// order to allocate. A `region` block is purely a RELEASE mechanism — a saved mark, and one
+// store to put the cursor back. The requirement was never protecting memory; it was asking
+// the programmer to name a scope so the compiler could decide where to release.
+//
+// This file replaces all nine, because nine near-empty files saying the same thing is worse
+// than one that names each rule as it goes. The rule that REMAINS is in
+// `tests/fail/allocates_cannot_escape_inner_region.bx` and its sibling: a value built inside
+// a `region` block still cannot leave it, because that block still releases.
+
+// ---- 1. A growable array. Was: `let xs: [Int]` holds a growable array, which lives in a
+//         region, so it needs a region.
+let mutable xs: [Int] = [];
+let pushed: Int = push(xs, 1);
+let again: Int = push(xs, 2);
+print(len(xs));
+
+// ---- 2. A record holding one. Was: the same refusal, reached through a field's type —
+//         a struct is only as region-bound as what it holds.
+record Holder { xs: [Int] }
+let h: Holder = Holder { xs: [] };
+print(len(h.xs));
+
+// ---- 3. Joining Strings. Was: joining strings with `+` allocates.
+print("a" + "b");
+
+// ---- 4. An interpolation as a VALUE. Printing one directly never allocated; binding the
+//         result did, which is the distinction that made this its own fixture.
+let n: Int = 1;
+let s: String = "value {n}";
+print(s);
+
+// ---- 5. `substring`, which copies bytes. Was: substring(...) copies bytes.
+let abc: String = "abc";
+print(substring(abc, 0, 2));
+
+// ---- 6. Calling a function that builds its answer. Was: `label` is declared `allocates`,
+//         so it builds its result in the caller's region — and there is none open here.
+//         It no longer says `allocates` either: both compilers work that out (v0.0.144).
+function label(k: Int) -> String {
+    return "n=" + to_string(k);
+}
+print(label(1));
+
+// ---- 7. The same through a METHOD.
+record Log { n: Int }
+function (self: Log) describe() -> String {
+    return "n=" + to_string(self.n);
+}
+let log: Log = Log { n: 7 };
+print(log.describe());
+
+// ---- 8. And through a TRAIT OBJECT, where the call site cannot know which implementation
+//         runs. This one was only refused correctly for three versions: the check was
+//         missing entirely until v0.0.143, enforced for a direct call and silently skipped
+//         here. It found nothing to refuse then, and there is nothing to refuse now.
+trait Describable {
+    function describe(self) -> String
+}
+record Tag { id: Int }
+implement Describable for Tag {
+    function (self) describe() -> String {
+        return "tag " + to_string(self.id);
+    }
+}
+let t: Tag = Tag { id: 9 };
+let d: dynamic Describable = t;
+print(d.describe());
+
+// ---- 9. `read_file` is the ninth, and it is NOT here: it wants a file beside it, and this
+//         fixture is about the rule rather than about the filesystem.
+//         `tests/pass/read_file.bx` already covers it.

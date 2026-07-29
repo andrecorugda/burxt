@@ -1,1 +1,0 @@
-read_file(...) allocates the file's bytes, so it needs a region
