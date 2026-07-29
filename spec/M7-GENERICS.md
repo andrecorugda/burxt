@@ -211,6 +211,61 @@ error: `describe` needs `T: Priced`, and `Book` does not implement it. Write
        having the right method names.
 ```
 
+### Slice 4 — generic records, and a bug that hid behind `Display`
+
+`record Stack<T> { items: [T] }` with methods, which is what generics were for. The record half
+is the enum mechanism unchanged: a concrete application is rewritten into the nominal type of
+its instantiation, and after that nothing knows generics exist.
+
+**Methods are the new part.** A method on a generic record is *held back* at registration — its
+receiver has no layout until a use names the arguments — and one copy is made per instantiation,
+so `Stack<Int>` and `Stack<String>` get their own `push_one`. The instantiation runs **twice**,
+idempotently: once before any body is checked, because a body may call such a method; and again
+in the drain loop, because a body can be what discovers a new instantiation. Missing the first
+call costs `Stack$Int has no method named push_one`, which is precisely what it cost.
+
+**Two things worth recording.**
+
+`parse_fn_signature` *replaced* the type parameters in scope rather than extending them. A method's
+receiver has already put the record's parameters in scope — `self: Stack<T>` — so replacing them
+turned `item: T` from `Param("T")` into `Named("T")`. Both print as `T`, so a debug dump of the
+specialised method looked *correct* while the substitution silently did nothing. The lesson is
+about `Display`: two types that render identically are two types that a print statement cannot
+tell apart, and the instrumentation has to name the variant, not the value.
+
+Inferring a record's arguments from its field values is better than expected — `Holder { one: 1 }`
+needs no annotation. But probing *every* field is wrong: `Stack { items: [] }` cannot type `[]`
+alone, and asking it to try produced an error about array literals in the middle of an unrelated
+rule. The probe now stops once every parameter is bound, and a field that cannot type itself is
+skipped rather than propagated.
+
+## 5. What stage-1 needs, and why it is not a transcription
+
+Stage-1 cannot copy stage-0's design, for the reason `for x in xs` already ran into: **stage-1
+names every type and binding by its SPAN in the source.** `Ty` is five integers — kind, scale,
+contract, and the name's start and length. Stage-0 monomorphises by rewriting `Option<Int>` into
+a nominal type called `Option$Int`, and **that name has no span**. There is no byte sequence to
+point at.
+
+So the design has to differ, and the shape that fits stage-1's representation is:
+
+- **`Ty` gains `args_start` and `args_count`**, indexing a new `Unit.type_args: [Ty]` side array
+  — the same trick `kids` and `subs` already use for child lists. A generic application is then a
+  named type (real span, pointing at `Option` in the source) plus its arguments, held
+  structurally rather than as a mangled name.
+- **Comparison becomes structural** for applications: `ty_same` recurses through the arguments
+  instead of comparing one span.
+- **Mangling moves to the emitter**, which already builds strings freely, so the LLVM symbol name
+  is computed where symbol names belong and nowhere else.
+
+That is a genuinely different implementation of one language, which is what the differential test
+exists to police: the two must agree on what they accept and what they answer, never on how.
+
+**Acceptance for that half, stated so it can fail:** the positive generics tests move out of
+`tests/runner.rs` and into `tests/pass/`, where both compilers are held to them — and the
+compiler's own source uses a generic, with the byte-identical fixpoint intact. Until then the
+ratchet stays honest rather than widened.
+
 ## 4. Acceptance
 
 1. `function identity<T>(x: T) -> T` compiles, and `identity(3)` and `identity("s")` both work.
@@ -220,8 +275,8 @@ error: `describe` needs `T: Priced`, and `Book` does not implement it. Write
    with static dispatch.
 4. A generic used from inside another generic is instantiated correctly (`largest<T>` called
    from `summarise<T: Ordered>`).
-5. Two instantiations of one generic have **separate layouts**: `List<Int>` and
-   `List<Decimal<4>>` differ where the element does, and `burxt layout` shows both.
+5. ✅ Two instantiations have **separate layouts**: `Pair<Int, String>` and
+   `Pair<Decimal<2>, Bool>` differ where their fields do.
 6. An unused generic emits no code — checked by looking for the symbol in the IR.
 7. Both compilers implement it and the differential test passes.
 8. ✅ `Option<T>` and `Result<T, E>` (M8) are written **in Burxt, as library types**, with no

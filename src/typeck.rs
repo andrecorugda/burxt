@@ -305,6 +305,18 @@ pub struct TypeChecker {
     /// still standing for nothing. Kept out of `enums` because a generic enum has no
     /// layout until a use says what its arguments are.
     generic_enums: HashMap<String, (Vec<TypeParam>, Vec<(String, Vec<Type>)>)>,
+    /// Generic RECORD declarations: their parameters and their fields, parameters still
+    /// standing for nothing. Kept out of `structs` for the reason generic enums are kept
+    /// out of `enums` — a generic has no layout until a use says what its arguments are.
+    generic_records: HashMap<String, (Vec<TypeParam>, Vec<(String, Type)>)>,
+    /// Methods whose receiver is a generic record. Held back until an instantiation exists,
+    /// then one copy is made per instantiation with the parameters substituted.
+    generic_methods: Vec<MethodDef>,
+    /// Instantiations of generic records, in the order they were first needed, so the
+    /// methods for each can be made once their record is.
+    wanted_records: RefCell<Vec<(String, Vec<Type>)>>,
+    made_records: RefCell<HashMap<String, Vec<(String, Type)>>>,
+    made_record_order: RefCell<Vec<TypedStruct>>,
     /// The bound on each type parameter of the generic being checked, by parameter name.
     /// Empty except while a generic's own body is being checked — an instantiation has no
     /// parameters left, so it needs none of this.
@@ -414,6 +426,11 @@ impl TypeChecker {
             fns: HashMap::new(),
             generics: HashMap::new(),
             generic_enums: HashMap::new(),
+            generic_records: HashMap::new(),
+            generic_methods: Vec::new(),
+            wanted_records: RefCell::new(Vec::new()),
+            made_records: RefCell::new(HashMap::new()),
+            made_record_order: RefCell::new(Vec::new()),
             param_bounds: HashMap::new(),
             declared_type_names: HashSet::new(),
             made_enums: RefCell::new(HashMap::new()),
@@ -606,6 +623,9 @@ impl TypeChecker {
         // the declaration that caused it rather than at the top of the file.
         for st in &mut prog.structs {
             self.current_span.set(st.span);
+            if !st.type_params.is_empty() {
+                continue;             // the generic itself: its parameters stay parameters
+            }
             for f in &mut st.fields {
                 f.ty = self.expand(&f.ty)?;
             }
@@ -689,6 +709,19 @@ impl TypeChecker {
         Ok(())
     }
 
+    /// Is this a record? Declared concretely, or made on demand as an instantiation of a
+    /// generic one — a caller has no reason to care which.
+    fn is_record(&self, name: &str) -> bool {
+        self.structs.contains_key(name) || self.made_records.borrow().contains_key(name)
+    }
+
+    fn fields_of(&self, name: &str) -> Option<Vec<(String, Type)>> {
+        if let Some(f) = self.structs.get(name) {
+            return Some(f.clone());
+        }
+        self.made_records.borrow().get(name).cloned()
+    }
+
     fn is_enum(&self, name: &str) -> bool {
         self.enums.contains_key(name) || self.made_enums.borrow().contains_key(name)
     }
@@ -708,6 +741,62 @@ impl TypeChecker {
     /// generic is instantiated. See spec/M7-GENERICS.md Decision 4.
     fn expand(&self, ty: &Type) -> Result<Type, String> {
         match ty {
+            // A generic RECORD application. Same shape as the enum case below: the concrete
+            // instantiation becomes an ordinary nominal record, made once, and after that no
+            // rule in this file knows generics exist.
+            Type::Generic { name, args } if self.generic_records.contains_key(name) => {
+                let (params, fields) = self.generic_records[name].clone();
+                let args: Vec<Type> =
+                    args.iter().map(|a| self.expand(a)).collect::<Result<_, _>>()?;
+                if args.len() != params.len() {
+                    return Err(format!(
+                        "`{}` takes {} type argument(s), but {} were given",
+                        name,
+                        params.len(),
+                        args.len()
+                    ));
+                }
+                if args.iter().any(mentions_param) {
+                    return Ok(Type::Generic { name: name.clone(), args });
+                }
+                let symbol = mangle(name, &args);
+                if !self.is_record(&symbol) {
+                    // Reserved before it is filled in, so a record whose field mentions
+                    // itself cannot make this recurse forever.
+                    self.made_records.borrow_mut().insert(symbol.clone(), Vec::new());
+                    let map: HashMap<String, Type> = params
+                        .iter()
+                        .map(|p| p.name.clone())
+                        .zip(args.iter().cloned())
+                        .collect();
+                    let mut made: Vec<(String, Type)> = Vec::new();
+                    for (fname, ty) in &fields {
+                        made.push((fname.clone(), self.expand(&substitute(ty, &map))?));
+                    }
+                    for (fname, ty) in &made {
+                        if ty == &Type::Named(symbol.clone()) {
+                            self.made_records.borrow_mut().remove(&symbol);
+                            return Err(format!(
+                                "`{}` cannot contain itself: `{}.{}` would have to be the \
+                                 same size as the whole record.",
+                                symbol, name, fname
+                            ));
+                        }
+                    }
+                    self.made_records.borrow_mut().insert(symbol.clone(), made.clone());
+                    self.instance_of
+                        .borrow_mut()
+                        .insert(symbol.clone(), (name.clone(), args.clone()));
+                    self.made_record_order.borrow_mut().push(TypedStruct {
+                        name: symbol.clone(),
+                        fields: made.iter().map(|(_, t)| t.clone()).collect(),
+                    });
+                    self.wanted_records
+                        .borrow_mut()
+                        .push((name.clone(), args.clone()));
+                }
+                Ok(Type::Named(symbol))
+            }
             Type::Generic { name, args } => {
                 let (params, variants) = self.generic_enums.get(name).cloned().ok_or_else(|| {
                     if self.declared_type_names.contains(name) {
@@ -960,6 +1049,73 @@ impl TypeChecker {
         }
     }
 
+    /// Which instantiation a record literal means. For a non-generic record: itself. For a
+    /// generic one: the arguments come from the context when it names them, and otherwise are
+    /// inferred from the field values — the same two sources, in the same order, that a
+    /// generic enum's variant uses. See spec/M7-GENERICS.md.
+    fn instantiate_record(
+        &self,
+        name: &str,
+        given: &[(String, Expr)],
+        expected: Option<&Type>,
+    ) -> Result<String, String> {
+        let Some((params, fields)) = self.generic_records.get(name).cloned() else {
+            return Ok(name.to_string());
+        };
+        let mut map: HashMap<String, Type> = HashMap::new();
+        if let Some(Type::Named(want)) = expected {
+            if let Some((of, args)) = self.instance_of.borrow().get(want).cloned() {
+                if of == name {
+                    for (p, a) in params.iter().zip(args) {
+                        map.insert(p.name.clone(), a);
+                    }
+                }
+            }
+        }
+        let instances = self.instance_of.borrow().clone();
+        for (fname, declared) in &fields {
+            if !mentions_param(declared) {
+                continue;
+            }
+            // Only fields that could still settle something. `Stack<Int>` in the annotation
+            // has already said what T is, and asking `items: []` to say it too would fail —
+            // an empty array literal cannot name its own type, which is a rule of its own.
+            if params.iter().all(|p| map.contains_key(&p.name)) {
+                break;
+            }
+            let Some((_, value)) = given.iter().find(|(n, _)| n == fname) else {
+                continue;             // a missing field is reported below, not here
+            };
+            // A field whose value cannot be typed on its own says nothing here. The real
+            // error, if there is one, comes from checking the field against its type below.
+            let Ok(typed) = self.check_expr(value, None) else { continue };
+            unify(declared, &typed.ty, &mut map, &instances)
+                .map_err(|why| format!("in `{}.{}`: {}", name, fname, why))?;
+        }
+        let mut type_args = Vec::with_capacity(params.len());
+        for p in &params {
+            match map.get(&p.name) {
+                Some(t) => type_args.push(t.clone()),
+                None => {
+                    return Err(format!(
+                        "`{}` does not say what `{}` is, and nothing here does. Write the \
+                         type where the value lands — `let x: {}<...> = {} {{ ... }};`",
+                        name, p.name, name, name
+                    ))
+                }
+            }
+        }
+        for (p, arg) in params.iter().zip(&type_args) {
+            if let Some(bound) = &p.bound {
+                self.satisfies(arg, bound, name, &p.name)?;
+            }
+        }
+        match self.expand(&Type::Generic { name: name.to_string(), args: type_args })? {
+            Type::Named(symbol) => Ok(symbol),
+            other => Err(format!("codegen bug: `{}` instantiated to {}", name, other)),
+        }
+    }
+
     fn want(&self, name: &str, type_args: &[Type]) -> String {
         let symbol = mangle(name, type_args);
         if self.seen_instantiations.borrow_mut().insert(symbol.clone()) {
@@ -994,10 +1150,100 @@ impl TypeChecker {
         self.expr_types.borrow().clone()
     }
 
+    /// One copy of every method on a generic record, per instantiation of that record.
+    ///
+    /// Called twice, and idempotently: once before the bodies are checked, because a body may
+    /// call a method on a generic record; and again in the instantiation drain, because a body
+    /// can be what discovers a NEW instantiation. Registering a method that already exists is
+    /// a no-op, so calling it more often than needed costs nothing and missing a call costs
+    /// `Stack$Int has no method named push_one` — which is exactly what it cost me.
+    fn instantiate_record_methods(
+        &mut self,
+        methods: &mut Vec<TypedMethod>,
+    ) -> Result<(), String> {
+    // Records first: a generic function's body may call a method on one, so the
+    // method has to exist before the function that calls it is checked.
+    let records: Vec<(String, Vec<Type>)> =
+        std::mem::take(&mut *self.wanted_records.borrow_mut());
+    for (record, args) in records {
+        let Some((params, _)) = self.generic_records.get(&record).cloned() else {
+            continue;
+        };
+        let symbol = mangle(&record, &args);
+        let map: HashMap<String, Type> = params
+            .iter()
+            .map(|p| p.name.clone())
+            .zip(args.iter().cloned())
+            .collect();
+        let mine: Vec<MethodDef> = self
+            .generic_methods
+            .iter()
+            .filter(|m| m.receiver == record)
+            .cloned()
+            .collect();
+        for m in mine {
+            // The receiver's own parameter names are what the record's arguments
+            // bind to, in order — `self: Stack<T>` against `Stack<Int>` binds T.
+            let mut local: HashMap<String, Type> = HashMap::new();
+            for (named, p) in m.receiver_args.iter().zip(&params) {
+                if let Some(t) = map.get(&p.name) {
+                    local.insert(named.clone(), t.clone());
+                }
+            }
+            let mut concrete = specialise_method(&m, &local, &symbol);
+            self.expand_fn_types(
+                &mut concrete.params,
+                &mut concrete.ret,
+                &mut concrete.body,
+            )?;
+            self.current_span.set(concrete.span);
+            let key = (symbol.clone(), concrete.name.clone());
+            if self.methods.contains_key(&key) {
+                continue;      // made already, for an earlier use of the same type
+            }
+            let param_tys: Vec<Type> =
+                concrete.params.iter().map(|p| p.ty.clone()).collect();
+            self.methods.insert(
+                key,
+                (concrete.receiver_mut, param_tys, concrete.ret.clone()),
+            );
+            if concrete.allocates {
+                self.alloc_methods.insert((symbol.clone(), concrete.name.clone()));
+            }
+            let checked = self.check_method(&concrete)?;
+            methods.push(checked);
+        }
+    }
+        Ok(())
+    }
+
     fn check_program_inner(&mut self, prog: &Program) -> Result<TypedProgram, String> {
         // Pass -1: collect the generic ENUM declarations, then rewrite every concrete
         // application of one — `Option<Int>` — into the nominal type of its instantiation.
         // After this pass no rule below has to know that generics exist.
+        for st in &prog.structs {
+            if st.type_params.is_empty() {
+                continue;
+            }
+            self.current_span.set(st.span);
+            let mut seen: Vec<&str> = Vec::new();
+            for p in &st.type_params {
+                if seen.contains(&p.name.as_str()) {
+                    return Err(format!(
+                        "`{}` declares the type parameter `{}` twice",
+                        st.name, p.name
+                    ));
+                }
+                seen.push(&p.name);
+            }
+            self.generic_records.insert(
+                st.name.clone(),
+                (
+                    st.type_params.clone(),
+                    st.fields.iter().map(|f| (f.name.clone(), f.ty.clone())).collect(),
+                ),
+            );
+        }
         for e in &prog.enums {
             if e.type_params.is_empty() {
                 continue;
@@ -1037,6 +1283,12 @@ impl TypeChecker {
         // must exist; no struct may contain itself, directly or transitively).
         for s in &prog.structs {
             self.current_span.set(s.span);
+            // A GENERIC record has no layout until a use says what its arguments are, so it
+            // was collected in pass -1 rather than registered here. Its instantiations become
+            // ordinary records, made on demand.
+            if !s.type_params.is_empty() {
+                continue;
+            }
             if self.structs.contains_key(&s.name) {
                 return Err(format!("record `{}` is defined twice", s.name));
             }
@@ -1191,9 +1443,12 @@ impl TypeChecker {
             }
             self.check_struct_finite(&s.name, &mut Vec::new())?;
         }
-        let structs = prog
+        // The generic declarations are skipped: a record whose field is a type parameter has
+        // no layout, and codegen only ever sees the instantiations, appended further down.
+        let structs: Vec<TypedStruct> = prog
             .structs
             .iter()
+            .filter(|s| s.type_params.is_empty())
             .map(|s| TypedStruct {
                 name: s.name.clone(),
                 fields: s.fields.iter().map(|f| f.ty.clone()).collect(),
@@ -1309,6 +1564,28 @@ impl TypeChecker {
         // Methods are namespaced by (receiver, name), so they never collide
         // with free functions and may be declared in any order.
         for m in all_methods.iter().copied() {
+            // A method on a GENERIC record is held back: its receiver has no layout until a
+            // use says what the arguments are. One copy is registered per instantiation, in
+            // the drain loop below, so `Stack<Int>` and `Stack<String>` get their own.
+            if !m.receiver_args.is_empty() {
+                self.current_span.set(m.span);
+                let Some((params, _)) = self.generic_records.get(&m.receiver) else {
+                    return Err(format!(
+                        "`self: {}<...>` names type parameters, and `{}` is not generic.",
+                        m.receiver, m.receiver
+                    ));
+                };
+                if params.len() != m.receiver_args.len() {
+                    return Err(format!(
+                        "`{}` is generic over {} parameter(s), and this receiver names {}.",
+                        m.receiver,
+                        params.len(),
+                        m.receiver_args.len()
+                    ));
+                }
+                self.generic_methods.push((*m).clone());
+                continue;
+            }
             if !self.structs.contains_key(&m.receiver) {
                 return Err(format!(
                     "method `{}` is declared for unknown type `{}` — declare it \
@@ -1350,6 +1627,11 @@ impl TypeChecker {
             self.impls.insert((im.trait_name.clone(), im.type_name.clone()));
         }
 
+        // Every method on a generic record whose instantiation the DECLARED types already
+        // named — before any body is checked, because a body may call one.
+        let mut methods: Vec<TypedMethod> = Vec::new();
+        self.instantiate_record_methods(&mut methods)?;
+
         // Pass 2: check each function body.
         //
         // A GENERIC's body is checked here too, with its type parameters standing for
@@ -1375,8 +1657,10 @@ impl TypeChecker {
                 fns.push(checked);
             }
         }
-        let mut methods = Vec::new();
         for m in all_methods.iter().copied() {
+            if !m.receiver_args.is_empty() {
+                continue;             // held back; checked per instantiation below
+            }
             methods.push(self.check_method(m)?);
         }
 
@@ -1406,8 +1690,9 @@ impl TypeChecker {
             prog.fns.iter().map(|f| (f.name.as_str(), f)).collect();
         let mut guard = 0usize;
         loop {
+            self.instantiate_record_methods(&mut methods)?;
             let batch: Vec<(String, Vec<Type>)> = std::mem::take(&mut *self.wanted.borrow_mut());
-            if batch.is_empty() {
+            if batch.is_empty() && self.wanted_records.borrow().is_empty() {
                 break;
             }
             guard += 1;
@@ -1477,6 +1762,8 @@ impl TypeChecker {
         // codegen has a layout for each one.
         let mut enums = enums;
         enums.extend(self.made_order.borrow().iter().cloned());
+        let mut structs = structs;
+        structs.extend(self.made_record_order.borrow().iter().cloned());
         Ok(TypedProgram { structs, enums, externs, fns, methods, vtables, stmts })
     }
 
@@ -1604,7 +1891,7 @@ impl TypeChecker {
             .ok_or_else(|| self.unknown_name(var))?
             .clone();
         let concrete = match &src_ty {
-            Type::Named(c) if self.structs.contains_key(c) => c.clone(),
+            Type::Named(c) if self.is_record(c) => c.clone(),
             Type::Dyn(_) => {
                 return Err(format!(
                     "`{}` is already a trait object; re-borrowing one is deferred \
@@ -1750,7 +2037,7 @@ impl TypeChecker {
         }
         match ty {
             Type::Named(name)
-                if !self.structs.contains_key(name) && !self.is_enum(name) =>
+                if !self.is_record(name) && !self.is_enum(name) =>
             {
                 Err(format!(
                     "unknown type `{}` — declare it with `record {} {{ ... }}` or \
@@ -1824,10 +2111,10 @@ impl TypeChecker {
             ));
         }
         trail.push(name.to_string());
-        if let Some(fields) = self.structs.get(name) {
+        if let Some(fields) = self.fields_of(name) {
             for (_, ty) in fields {
                 if let Type::Named(inner) = ty {
-                    self.check_struct_finite(inner, trail)?;
+                    self.check_struct_finite(&inner, trail)?;
                 }
             }
         }
@@ -3866,16 +4153,19 @@ impl TypeChecker {
             }
 
             ExprKind::StructLit { name, fields } => {
+                // A generic record's literal names the record, not the instantiation:
+                // `Pair { left: 7, right: "seven" }`. Which instantiation it is comes from
+                // the context if there is one, and otherwise from the field values — the
+                // same two sources, in the same order, that a generic enum's variant uses.
+                let name = &self.instantiate_record(name, fields, expected)?;
                 let declared = self
-                    .structs
-                    .get(name)
+                    .fields_of(name)
                     .ok_or_else(|| {
                         format!(
                             "unknown type `{}` — declare it with `record {} {{ ... }}`",
                             name, name
                         )
-                    })?
-                    .clone();
+                    })?;
                 // Every field exactly once; unknown names get the full list
                 // (which doubles as typo help).
                 for (given, _) in fields {
@@ -4426,8 +4716,7 @@ impl TypeChecker {
             }
         };
         let fields = self
-            .structs
-            .get(name)
+            .fields_of(name)
             .ok_or_else(|| format!("unknown type `{}`", name))?;
         fields
             .iter()
@@ -5146,4 +5435,21 @@ fn unbounded_compare(param: &str, op: CmpOp) -> String {
          so, which is what makes the body's rules the same for every caller.",
         param, op, param, needed
     )
+}
+
+/// One instantiation of a method on a generic record: every type parameter replaced, the
+/// receiver renamed to the instantiation's symbol, and its own parameter list emptied.
+///
+/// Same argument `specialise` makes for functions — the result is checked by exactly the code
+/// that checks every other method, so there is no second path to disagree with the first.
+fn specialise_method(m: &MethodDef, map: &HashMap<String, Type>, receiver: &str) -> MethodDef {
+    let mut out = m.clone();
+    out.receiver = receiver.to_string();
+    out.receiver_args.clear();
+    for p in &mut out.params {
+        p.ty = substitute(&p.ty, map);
+    }
+    out.ret = substitute(&out.ret, map);
+    substitute_in_block(&mut out.body, map);
+    out
 }

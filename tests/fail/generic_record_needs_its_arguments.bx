@@ -1,0 +1,7 @@
+// A field whose value cannot say its own type says nothing about `T` either, and no
+// annotation names it. Refused with the place to write it.
+record Bag<T> { items: [T] }
+region r {
+    let mutable b = Bag { items: [] };
+    print(1);
+}

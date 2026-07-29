@@ -2346,6 +2346,37 @@ fn generics_monomorphise_and_run() {
         ),
     ];
 
+    let record_cases: &[(&str, &str, &str)] = &[
+        (
+            // A generic record: `Pair<Int, String>` and `Pair<Decimal<2>, Bool>` are separate
+            // types with separate layouts, and a field holds its type by value.
+            "generic_record",
+            "record Pair<A, B> { left: A, right: B }\n\
+             region r {\n  let p: Pair<Int, String> = Pair { left: 7, right: \"seven\" };\n  \
+             print(p.left);\n  print(p.right);\n  \
+             let q: Pair<Decimal<2>, Bool> = Pair { left: $1.50, right: true };\n  \
+             print(q.left);\n  print(q.right);\n}\n",
+            "7\nseven\n1.50\ntrue\n",
+        ),
+        (
+            // A container, which is what generics were for: one definition, and each
+            // instantiation gets its OWN copy of every method.
+            "generic_container",
+            "record Stack<T> { items: [T] }\n\
+             function (mutable self: Stack<T>) push_one(item: T) -> Int allocates {\n  \
+             return push(self.items, item);\n}\n\
+             function (self: Stack<T>) count() -> Int { return len(self.items); }\n\
+             function (self: Stack<T>) first() -> T { return self.items[0]; }\n\
+             region r {\n  let mutable ints: Stack<Int> = Stack { items: [] };\n  \
+             let a = ints.push_one(5);\n  let b = ints.push_one(9);\n  \
+             print(ints.count());\n  print(ints.first());\n  \
+             let mutable words: Stack<String> = Stack { items: [] };\n  \
+             let c = words.push_one(\"one\");\n  print(words.count());\n  \
+             print(words.first());\n}\n",
+            "2\n5\n1\none\n",
+        ),
+    ];
+
     let try_cases: &[(&str, &str, &str)] = &[
         (
             // `?`: the value, or an immediate return of the failure. Recognised by the
@@ -2375,7 +2406,7 @@ fn generics_monomorphise_and_run() {
 
     let mut failures = Vec::new();
     for (name, program, expected) in
-        cases.iter().chain(enum_cases).chain(bound_cases).chain(try_cases)
+        cases.iter().chain(enum_cases).chain(record_cases).chain(bound_cases).chain(try_cases)
     {
         let source = scratch.join(format!("{}.bx", name));
         fs::write(&source, program).unwrap();

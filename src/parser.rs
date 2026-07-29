@@ -214,6 +214,8 @@ impl Parser {
             Token::Ident(s) => s,
             other => return Err(format!("expected a record name after 'record', found {}", other.describe())),
         };
+        let type_params = self.parse_type_params(&name)?;
+        self.type_params = type_params.iter().map(|p| p.name.clone()).collect();
         self.expect(&Token::LBrace)?;
         let mut fields = Vec::new();
         while !self.at(&Token::RBrace) {
@@ -234,7 +236,8 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace)?;
-        Ok(StructDef { name, fields, span: Span { start, end: self.prev_end().max(start + 1) } })
+        self.type_params.clear();
+        Ok(StructDef { name, type_params, fields, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `enum Name { Unit, WithPayload(Int, String), }`
@@ -560,6 +563,30 @@ impl Parser {
                 }
             }
         };
+        // `self: Stack<T>` — the receiver names the record's own type parameters, which are
+        // then in scope for the rest of the signature and the body.
+        let mut receiver_args: Vec<String> = Vec::new();
+        if self.at(&Token::Lt) {
+            self.bump();
+            loop {
+                match self.bump() {
+                    Token::Ident(a) => receiver_args.push(a),
+                    other => {
+                        return Err(format!(
+                            "`self: {}<...>` names the record's type parameters, so each one \
+                             must be a name; found {}",
+                            receiver,
+                            other.describe()
+                        ))
+                    }
+                }
+                if !self.more_in_list(&Token::Gt) {
+                    break;
+                }
+            }
+            self.expect(&Token::Gt)?;
+        }
+        self.type_params = receiver_args.clone();
         self.expect(&Token::RParen)?;
         let (name, type_params, params, ret) = self.parse_fn_signature()?;
         if !type_params.is_empty() {
@@ -586,7 +613,8 @@ impl Parser {
             );
         }
         let body = self.parse_block()?;
-        Ok(MethodDef { receiver, receiver_mut, name, params, ret, allocates, requires, ensures, body, span: Span { start, end: self.prev_end().max(start + 1) } })
+        self.type_params.clear();
+        Ok(MethodDef { receiver, receiver_args, receiver_mut, name, params, ret, allocates, requires, ensures, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `as <marshaller>` declares how a value crosses a foreign boundary.
@@ -689,7 +717,11 @@ impl Parser {
         // parameter from a struct name — which is the only place that distinction is
         // visible, since both are spelled as a bare identifier.
         let type_params = self.parse_type_params(&name)?;
-        self.type_params = type_params.iter().map(|p| p.name.clone()).collect();
+        // EXTEND, not replace: a method's receiver has already put the record's parameters
+        // in scope (`self: Stack<T>`), and replacing them turned `item: T` into an ordinary
+        // NAMED type — which then looked identical when printed and silently failed to
+        // substitute at instantiation. Cleared after each declaration, so nothing leaks.
+        self.type_params.extend(type_params.iter().map(|p| p.name.clone()));
         self.expect(&Token::LParen)?;
         let mut params = Vec::new();
         if !self.at(&Token::RParen) {

@@ -109,6 +109,56 @@ region r {
     print(twice_the_price(p));
 }
 
+// ---- Records are generic too, and that is what containers are for -----------
+//
+// A generic record's instantiations are separate types with separate layouts, and
+// each one gets its OWN copy of every method — `Stack<Int>.push_one` and
+// `Stack<String>.push_one` are two functions in the object file.
+record Stack<T> {
+    items: [T]
+}
+
+// The receiver names the record's parameters: `self: Stack<T>` puts `T` in scope for
+// the rest of the signature and the body. A method may use its type's parameters and
+// declares none of its own.
+//
+// `allocates` for the ordinary reason: the array lives in the CALLER's region, so
+// growing it builds there. Being generic changes what is allowed, never what it means.
+function (mutable self: Stack<T>) push_one(item: T) -> Int allocates {
+    return push(self.items, item);
+}
+
+function (self: Stack<T>) count() -> Int {
+    return len(self.items);
+}
+
+function (self: Stack<T>) first() -> T {
+    return self.items[0];
+}
+
+region containers {
+    let mutable ints: Stack<Int> = Stack { items: [] };
+    let one = ints.push_one(5);
+    let two = ints.push_one(9);
+    print(ints.count());
+    print(ints.first());
+
+    let mutable words: Stack<String> = Stack { items: [] };
+    let three = words.push_one("first");
+    print(words.count());
+    print(words.first());
+
+    // The arguments can also be inferred from the field values, when they say enough:
+    // `Holder { one: 1 }` needs no annotation. An empty array says nothing, which is
+    // why `Stack` above names its type.
+    let held = Holder { one: 42 };
+    print(held.one);
+}
+
+record Holder<T> {
+    one: T
+}
+
 // ---- What an unbounded parameter can do, and what it cannot -----------------
 //
 // `T` with no bound can be stored, copied, passed and returned. Nothing else,

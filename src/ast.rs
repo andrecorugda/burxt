@@ -440,6 +440,11 @@ pub struct FnDef {
 #[derive(Debug, Clone)]
 pub struct MethodDef {
     pub receiver: String,
+    /// `function (mutable self: Stack<T>) push_one(...)` — the receiver's type arguments,
+    /// which for a method are always the record's own parameter NAMES. A method may use the
+    /// parameters of the type it is on and declare none of its own, per
+    /// spec/M7-GENERICS.md Decision 3 — so these are names, not types.
+    pub receiver_args: Vec<String>,
     pub receiver_mut: bool,
     pub name: String,
     pub params: Vec<Param>,
@@ -535,6 +540,9 @@ pub struct MatchArm {
 #[derive(Debug, Clone)]
 pub struct StructDef {
     pub name: String,
+    /// `record List<T> { items: [T] }` — what this record is generic over. Empty for the
+    /// overwhelming majority. See spec/M7-GENERICS.md.
+    pub type_params: Vec<TypeParam>,
     pub fields: Vec<Param>,
     /// Where this item was written, for errors about the item itself.
     pub span: Span,
