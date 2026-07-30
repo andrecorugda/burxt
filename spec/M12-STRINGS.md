@@ -149,7 +149,7 @@ copy needs one `strlen`, at the boundary, once. The strlen does not disappear â€
 foreign string instead of one per byte read, and it becomes visible at the boundary rather than
 hidden inside `len`.
 
-It also does not widen the pointer wall that `docs/guide/06-ffi.md` documents. Burxt still refuses
+It also does not widen the pointer wall that `docs/guide/07-ffi.md` documents. Burxt still refuses
 to receive a bare pointer as a `String` without going through the marshaller. If that page's rules
 change, it changes in the same commit.
 

@@ -197,6 +197,6 @@ at every point that asks, and almost nothing has to be substituted.
 
 ## Next
 
-[Absence and failure](09-absence-and-failure.md) — `Option`, `Result`, and why there is no null.
+[Absence and failure](10-absence-and-failure.md) — `Option`, `Result`, and why there is no null.
 Both of them are ordinary Burxt written with what this page describes, which was the test for
 whether these generics are real.

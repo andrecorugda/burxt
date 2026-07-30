@@ -48,6 +48,11 @@ class Account {
 
 From outside:
 
+```burxt
+let a: Account = Account.open("ada", $10.00);
+print(a.balance);
+```
+
 ```
 error: `Account.balance` is private: it is reachable only from `Account`'s own methods.
        Read it through a method that `Account` provides, or drop `private` from the field
@@ -225,38 +230,55 @@ in exchange for a few seconds now.
 ## Interfaces — the abstraction mechanism
 
 ```burxt
+class Book { title: String, cost: Decimal<2> }
+
 interface Priced {
     function price(self) -> Decimal<2>
     function label(self) -> String
 }
 
-implement Priced for Book {
-    function (self: Book) price() -> Decimal<2> { return self.cost; }
-    function (self: Book) label() -> String { return "book: " + self.title; }
+class Meal implements Priced {
+    dish: String,
+    cost: Decimal<2>,
+
+    function (self) price() -> Decimal<2> { return self.cost; }
+    function (self) label() -> String { return "meal: " + self.dish; }
 }
-```
 
-Conformance is **declared, not inferred**: a type does not accidentally satisfy an interface by
-having methods with the right names. The compiler checks the implementation answers every signature,
-adds none, and matches each one exactly — parameter count, parameter types, return type,
-and the receiver form.
-
-### Inside an `implement`, the type is written once
-
-```burxt
+// The standalone form, for a class declared somewhere you cannot edit — in another file, or in
+// `lib/`. Both spellings produce the same thing.
 implement Priced for Book {
     function (self) price() -> Decimal<2> { return self.cost; }
     function (self) label() -> String { return "book: " + self.title; }
 }
 ```
 
-The header said `Book`, so the methods need not repeat it. Outside an `implement` a method names
-its type — `function (mutable self: Counter) bump() -> Int` — because there nothing else does.
+`class Meal implements Priced` is the form to reach for: the fields, the methods and the promise in
+one block, which is what every reader coming from Java, C#, TypeScript or PHP already expects.
 
-## `dynamic` — runtime dispatch, only where you write it
+Conformance is **declared, not inferred**: a type does not accidentally satisfy an interface by
+having methods with the right names. The compiler checks the implementation answers every signature,
+adds none, and matches each one exactly — parameter count, parameter types, return type,
+and the receiver form.
+
+### The receiver's type is written once
+
+Inside a class body or an `implement` block, `function (self) price()` needs no type: the header
+already said which one. Outside either — `function (mutable self: Counter) bump() -> Int` — the
+method names its type, because there nothing else does.
+
+## Runtime dispatch, and where you pay for it
+
+An interface name as a type means "any type that implements this", decided at run time:
 
 ```burxt
-function show(item: dynamic Priced) -> Decimal<2> { return item.price(); }
+class Book { title: String, cost: Decimal<2> }
+interface Priced { function price(self) -> Decimal<2> }
+implement Priced for Book {
+    function (self) price() -> Decimal<2> { return self.cost; }
+}
+
+function show(item: Priced) -> Decimal<2> { return item.price(); }
 ```
 
 Static dispatch is the default and costs nothing. `dynamic Priced` is a fat pointer — a value
@@ -342,7 +364,7 @@ checkout service with an injected tax-rate provider.
 | **Initialization** | A record literal must set **every field**. There is no half-built object and no `null` to leave in one |
 | **Interface** | `interface` |
 | **Reuse / polymorphism** | `implement Trait for Type`, and `dynamic Trait` where the choice is made at runtime |
-| **Dependency injection** | A `dynamic Trait` **field**: `class Checkout { rates: dynamic Rates }`. The dependency is chosen by whoever builds the service — a record literal instead of a container |
+| **Dependency injection** | An **interface-typed field**: `class Checkout { rates: Rates }`. The dependency is chosen by whoever builds the service — a record literal instead of a container |
 | **Destructor / cleanup** | The [region](04-memory.md). You do not write one |
 | **Static / class methods** | A free function. There is no class to hang them on |
 | **Private fields** | Not yet — there is no `pub`, deferred with a trigger in [`spec/M6-MODULES.md`](../../spec/M6-MODULES.md) §1.2 |
@@ -351,7 +373,25 @@ checkout service with an injected tax-rate provider.
 ### Dependency injection, concretely
 
 ```burxt
-class Checkout { rates: dynamic Rates }          // the dependency is a field
+interface Rates {
+    function rate_for(self, abroad: Bool) -> Decimal<4>
+}
+
+class TableRates implements Rates {
+    home: Decimal<4>,
+    abroad: Decimal<4>,
+    function (self) rate_for(abroad: Bool) -> Decimal<4> {
+        if abroad { return self.abroad; }
+        return self.home;
+    }
+}
+
+class FlatRates implements Rates {
+    everywhere: Decimal<4>,
+    function (self) rate_for(abroad: Bool) -> Decimal<4> { return self.everywhere; }
+}
+
+class Checkout { rates: Rates }                  // the dependency is a field
 
 let live_rates: TableRates = TableRates { home: 12.00%, abroad: 0.00% };
 let live: Checkout = Checkout { rates: live_rates };

@@ -103,5 +103,5 @@ The full reasoning, including what was deferred and why, is in
 
 ## Next
 
-[Generics](08-generics.md) — one definition, one copy per type that uses it. Which is also what
+[Generics](09-generics.md) — one definition, one copy per type that uses it. Which is also what
 makes `lib/option.bx` and `lib/result.bx` possible as libraries rather than keywords.

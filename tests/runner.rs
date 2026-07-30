@@ -3746,3 +3746,194 @@ fn the_landing_page_code_compiles() {
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
     assert!(checked >= 3, "expected at least three code blocks on the landing page, found {}", checked);
 }
+
+/// Every whole-declaration `burxt` block in the guide compiles.
+///
+/// The guide has lied twice. It quoted two error messages the compiler never produced, and it
+/// referred to a `parse_int` that did not exist — both caught by running the examples, neither by
+/// proofreading. Prose does not fail to compile, so a page can go on teaching something false
+/// indefinitely while every other test stays green.
+///
+/// Fragments are skipped on purpose, and the distinction matters: a three-line excerpt with no
+/// declaration in sight is *partial*, not wrong, and wrapping it in a guessed context would fail
+/// for reasons the guide is not at fault for. A block earns checking when it contains a
+/// `function`, a `class`, an `interface` or an `enum` — that is, when it is a thing the compiler
+/// can be asked about on its own.
+#[test]
+fn the_guide_code_compiles() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("guide-code");
+    fs::create_dir_all(&scratch).unwrap();
+    // `use "lib/..."` resolves relative to the file, so the library travels with the snippets.
+    let _ = std::os::unix::fs::symlink(root.join("lib"), scratch.join("lib"));
+
+    let mut checked = 0;
+    let mut failures = Vec::new();
+    let mut pages: Vec<PathBuf> = fs::read_dir(root.join("docs/guide"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("md"))
+        .collect();
+    pages.sort();
+
+    for page in &pages {
+        let text = fs::read_to_string(page).unwrap();
+        let name = page.file_stem().unwrap().to_string_lossy().into_owned();
+        // `reference.md` is a table of FORMS, not a narrative: its snippets name types that exist
+        // nowhere on the page because their job is to show a shape — `function largest<T: Ordered>`
+        // illustrates a bound, not a program. The numbered pages are the ones that teach with code
+        // a reader can run, and those are what this test is for.
+        if name == "reference" || name == "index" || name == "README" {
+            continue;
+        }
+        let mut declarations: Vec<String> = Vec::new();
+        let mut every_block: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (i, block) in text.split("```burxt").skip(1).enumerate() {
+            let Some((source, after)) = block.split_once("```") else { continue };
+            let source = source.trim_start_matches('\n');
+            // A block the page shows as REFUSED — its error quoted immediately after — is expected
+            // to fail, and checked for failing. That is stronger than skipping it: the guide's
+            // refusal examples are the ones most likely to rot, because a rule can be relaxed
+            // years after the page was written.
+            //
+            // "Immediately" is load-bearing. Without a distance limit this matched page 3, where a
+            // perfectly good `class Account` is followed by prose and THEN an error about a
+            // different snippet — so the test declared a compiling example broken. The gap must be
+            // short: a lead-in like "From outside:" and nothing more.
+            let refusal = after
+                .split_once("```")
+                .map(|(gap, rest)| {
+                    gap.trim().len() < 60 && rest.trim_start().starts_with("error:")
+                })
+                .unwrap_or(false);
+            let whole = ["function ", "class ", "interface ", "enum "]
+                .iter()
+                .any(|k| source.contains(k));
+            if !whole {
+                continue;
+            }
+            // `{ ... }` and `-> ...` are elisions a reader understands and a compiler cannot.
+            if source.contains("...") {
+                continue;
+            }
+            // Unbalanced braces mean an EXCERPT — page 4 shows a single signature line ending in
+            // `{` to make a point about one word in it. A reader completes that mentally; a
+            // compiler cannot, and demanding they be whole would push the guide toward padding
+            // every illustration into a runnable program.
+            if source.matches('{').count() != source.matches('}').count() {
+                continue;
+            }
+            // A signature LISTING — `function` lines with no body at all — is a reference table.
+            // Page 11 lists the entire Map API that way, which brace-balancing cannot spot because
+            // there are no braces to balance.
+            if source.contains("function ") && !source.contains('{') {
+                continue;
+            }
+            // A block showing SEVERAL files — `// a.bx` then `// b.bx` — cannot be one program by
+            // nature. Page 8 is about modules, so most of its examples are this shape.
+            if source.contains(".bx\n") && source.trim_start().starts_with("//") {
+                continue;
+            }
+            // Compiled with every earlier whole block on the same page in front of it, because
+            // that is how a reader meets it: page 3 declares `class Book` in one block and
+            // implements an interface for it three blocks later. Checking each block alone
+            // reported three failures that were not the guide being wrong — they were the guide
+            // being a page rather than a list of programs.
+            // Accepted if it compiles EITHER on its own or with the page's earlier blocks in
+            // front of it. Both readings are legitimate and a page uses both: page 3 declares
+            // `class Book` once and implements an interface for it three blocks later (needs the
+            // prefix), and also shows `class Account` twice as it builds the idea up (needs to be
+            // read alone, or the second one is a redeclaration).
+            // Three readings, and the block passes if ANY of them compiles: alone, with the
+            // page's earlier type declarations, or with every earlier block. A guide page is a
+            // narrative — it declares a class in one block and adds methods four blocks later, and
+            // it also shows the same class twice as it builds an idea up. Insisting on one
+            // assembly produced failures that were artifacts of the assembly rather than defects
+            // in the page, which is a test lying about its subject.
+            let readings = [
+                source.to_string(),
+                format!("{}\n{}", declarations.join("\n"), source),
+                format!("{}\n{}", every_block.join("\n"), source),
+            ];
+            let mut out = None;
+            for reading in &readings {
+                // Imports must come first in a Burxt file, so every `use` is hoisted above the
+                // declarations — otherwise assembling two blocks puts one in the middle.
+                let mut program = String::new();
+                let mut body = String::new();
+                if !reading.contains("use \"") {
+                    if reading.contains("Option<") || reading.contains("Option.") {
+                        program.push_str("use \"lib/option.bx\";\n");
+                    }
+                    if reading.contains("Result<") || reading.contains("Result.") {
+                        program.push_str("use \"lib/result.bx\";\n");
+                    }
+                }
+                for line in reading.lines() {
+                    if line.trim_start().starts_with("use \"") {
+                        if !program.contains(line.trim()) {
+                            program.push_str(line.trim());
+                            program.push('\n');
+                        }
+                    } else {
+                        body.push_str(line);
+                        body.push('\n');
+                    }
+                }
+                program.push_str(&body);
+                let path = scratch.join(format!("{}-{}.bx", name, i));
+                fs::write(&path, &program).unwrap();
+                let attempt = burxt("check", &path, &scratch);
+                let ok = attempt.status.success();
+                if out.is_none() || ok {
+                    out = Some(attempt);
+                }
+                if ok {
+                    break;
+                }
+            }
+            let out = out.unwrap();
+
+            every_block.push(source.to_string());
+            for line in source.lines() {
+                for keyword in ["class ", "interface ", "enum "] {
+                    if let Some(rest) = line.trim_start().strip_prefix(keyword) {
+                        let named = rest
+                            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                            .next()
+                            .unwrap_or("");
+                        if !named.is_empty() && seen.insert(named.to_string()) {
+                            declarations.push(source.to_string());
+                        }
+                    }
+                }
+            }
+            if refusal {
+                if out.status.success() {
+                    failures.push(format!(
+                        "docs/guide/{}.md block {} is shown as REFUSED but now compiles. Either \
+                         the rule was relaxed, or the example needs rewriting to still \
+                         demonstrate one:\n{}",
+                        name,
+                        i + 1,
+                        source
+                    ));
+                }
+            } else if !out.status.success() {
+                failures.push(format!(
+                    "docs/guide/{}.md block {} does not compile:\n{}\n{}",
+                    name,
+                    i + 1,
+                    source,
+                    String::from_utf8_lossy(&out.stdout)
+                ));
+            }
+            checked += 1;
+        }
+    }
+
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+    assert!(checked >= 15, "expected the guide to hold at least fifteen whole examples, found {}", checked);
+}

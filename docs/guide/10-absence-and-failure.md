@@ -151,7 +151,7 @@ here — `?` exists because writing `match` twenty times is friction with no dec
 
 ## Next
 
-[Maps](10-maps.md) — a key-value table in insertion order, which is where `Option` earns its keep:
+[Maps](11-maps.md) — a key-value table in insertion order, which is where `Option` earns its keep:
 a lookup that might find nothing is the commonest reason to reach for one.
 
 Or the running code: [`examples/absence.bx`](../../examples/absence.bx) for this page and

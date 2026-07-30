@@ -268,7 +268,7 @@ The lowering is **one helper written once**, not a loop emitted per call site �
    which quadratic it still tolerates and what the bar should become when that one goes.
 7. The fixpoint still holds, byte for byte, and the backend equality stays at all-of-them.
 8. A guide page, because a container people will reach for daily is not documented by a spec.
-   ✅ `docs/guide/10-maps.md` (v0.0.119). Every example in it was RUN before it was written down —
+   ✅ `docs/guide/11-maps.md` (v0.0.119). Every example in it was RUN before it was written down —
    the practice that caught four fabrications the last time a guide page was written, including two
    error messages quoted from memory and a builtin that does not exist.
 

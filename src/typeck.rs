@@ -1646,19 +1646,19 @@ impl TypeChecker {
                 continue;
             }
             if self.structs.contains_key(&s.name) {
-                return Err(format!("record `{}` is defined twice", s.name));
+                return Err(format!("class `{}` is defined twice", s.name));
             }
             let mut fields = Vec::new();
             for f in &s.fields {
                 if fields.iter().any(|(n, _)| n == &f.name) {
                     return Err(format!(
-                        "record `{}` declares the field `{}` twice",
+                        "class `{}` declares the field `{}` twice",
                         s.name, f.name
                     ));
                 }
                 if let Some(m) = f.marshal {
                     return Err(format!(
-                        "record `{}`: field `{}` is marked `as {}`, but marshalling \
+                        "class `{}`: field `{}` is marked `as {}`, but marshalling \
                          describes how a value crosses a FOREIGN boundary, not how \
                          it is stored. Drop the `as {}`.",
                         s.name, f.name, m, m

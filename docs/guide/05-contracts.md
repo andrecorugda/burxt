@@ -47,6 +47,8 @@ than silent shadowing.
 conservation law expressible:
 
 ```burxt
+class Ledger { from_side: Decimal<2>, to_side: Decimal<2> }
+
 function (mutable self: Ledger) transfer(amount: Decimal<2>) -> Int
     requires amount > $0.00
     ensures self.from_side + self.to_side == old(self.from_side + self.to_side)
@@ -100,4 +102,4 @@ Static proof is the eventual goal; the runtime form is what is reachable and tru
 
 ## Next
 
-[The C boundary](06-ffi.md).
+[Effects](06-effects.md) — what a function can reach, and why that belongs in the signature too.
