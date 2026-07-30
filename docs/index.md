@@ -67,10 +67,12 @@ language exists to catch. Because the rule lives in the signature, a tool can se
 
 ```
 $ burxt review before.bx after.bx
-WEAKENED  Account.withdraw   lost `requires amount <= self.balance`
-WEAKENED  invoice_total      now touches network — it could not before
-WEAKENED  Account.balance    no longer `private` — anything may now read it
-STRICTER  line_tax           gained `requires quantity > 0`
+WEAKENED  Account.balance                    no longer `private` — anything may now read it
+WEAKENED  Account.withdrawn                  lost `requires amount <= self.balance`
+WEAKENED  invoice_total                      now touches network — it could not before
+STRICTER  line_tax                           gained `requires quantity > 0`
+
+3 weakened promise(s). A weakened contract is the one change that passes every test — the tests were failing BECAUSE of it.
 ```
 
 **It exits non-zero when a promise gets weaker**, so it is a gate and not a report. Put it in CI and
@@ -144,6 +146,43 @@ reach you.
 
 </div>
 
+## The tool an agent calls, and its schema, are one thing
+
+An MCP tool ships a **JSON Schema** saying what may be passed to it. The function behind it also
+checks what it was passed. Those are one fact written twice, and everywhere else they drift — the
+schema keeps a bound the code relaxed a year ago, the client sends something valid *by the schema*,
+the tool refuses it, and the failure arrives as a 500 instead of as a validation message.
+
+Here the precondition is in the signature, so there is nothing to keep in step:
+
+```burxt
+function line_total(unit: Decimal<2> [> $0.00], quantity: Int [> 0, <= 100000]) -> Decimal<2> {
+    return unit * quantity;
+}
+```
+
+`burxt mcp-schema` reads that declaration and answers:
+
+```json
+{"name":"line_total","inputSchema":{"type":"object","properties":{
+  "unit":     {"type":"string","description":"Decimal<2>","exclusiveMinimum":"0.00"},
+  "quantity": {"type":"integer","description":"Int","exclusiveMinimum":"0","maximum":"100000"}},
+  "required":["unit","quantity"]}}
+```
+
+**The schema cannot drift from the implementation, because there is only one of it.** No other
+language can do this, and the reason is not tooling — it is that no other language puts the contract
+in the signature. In Python or TypeScript it is a decorator or a separate object, and keeping the two
+in step is a code review, which is precisely the review this language exists to remove.
+
+The money half matters as much. A tool that returns an amount sends it as a **quoted string**, because
+a JSON number reaches a JavaScript consumer as a double and loses the cent. And `19.999` asked for as
+a `Decimal<2>` is **refused, never rounded** — the caller sent a third decimal place for a reason.
+
+[**How it works, and what it cannot express**]({{ site.baseurl }}/guide/12-tools-and-agents.html) —
+including the honest part: a clause relating two parameters has no key in JSON Schema, so it is
+skipped and *reported on stderr* rather than approximated.
+
 ## Familiar on purpose — which is a safety property, not a preference
 
 `class`, `interface`, `implements`, `private`, a constructor, `match` on a value. Nothing here needs
@@ -202,7 +241,7 @@ The work you stop doing is checking for the mistakes on this page.
   <a class="btn ghost" href="https://codespaces.new/andrecorugda/burxt?quickstart=1">Try it in a browser</a>
 </div>
 
-<p style="color:var(--ink-soft); font-size:14px; margin-top:2.5rem;">
+<p style="font-size:14px; margin-top:2.5rem;">
 Burxt is early. It is not ready for production — it is ready to try, read and shape.
 </p>
 

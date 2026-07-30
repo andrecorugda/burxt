@@ -1,10 +1,12 @@
 ---
 title: Generics
+description: A type parameter is a cookie cutter, not a box — one definition, one real machine function per type, nothing erased.
 ---
 
 # 9. Generics
 
-## The problem, as it actually arrives
+## What this is for
+{: #what-this-is-for}
 
 You write a function returning the larger of two `Int`s. A week later you need it for `Decimal<2>`.
 Every language answers this, and the answer says what the language actually values:
@@ -26,69 +28,81 @@ about. Everything Burxt promises is about what a value *is* — an exact decimal
 scale, a class is its fields laid out in order, a region is a bump pointer. Hand that to a generic
 and get a pointer back and you have handed away the whole design.
 
-## Think of a stencil, not a box
+## Think of a cookie cutter
+{: #think-of-a-cookie-cutter}
 
-A generic is a **stencil**. You cut it once, then stamp it into whatever material you like, and each
-stamp comes out in that material — steel stays steel, paper stays paper. Erasure is the opposite: it
-puts everything in the same cardboard box first so one stamp fits all of them.
+A cookie cutter is not a container. You do not put dough *in* it and get a generic cookie out. You press
+it into whatever dough you have, and what comes out is a real cookie made of that dough — gingerbread if
+the dough was gingerbread, shortbread if it was shortbread.
 
-<svg viewBox="0 0 640 254" role="img" aria-label="One generic source becomes a separate fully typed machine function per type" style="max-width:100%;height:auto;margin:1.5rem 0;">
+One cutter, three doughs, three real cookies. Not three references to a cookie-shaped idea.
+
+<figure>
+<svg viewBox="0 0 680 254" role="img" aria-label="One cookie cutter pressed into three different doughs gives three real cookies: a generic definition is compiled once per type that uses it, and nothing is erased or boxed" style="max-width:100%;height:auto;">
   <style>
-    .b { fill: #fff; stroke: #111; stroke-width: 1.5; }
-    .t { font: 12px ui-monospace, monospace; fill: #111; }
-    .g { font: 11px ui-monospace, monospace; fill: #888; }
-    .s { font: 11px ui-monospace, monospace; fill: #b00; }
-    .a { stroke: #111; stroke-width: 1.5; fill: none; marker-end: url(#a9); }
-    @media (prefers-color-scheme: dark) {
-      .b { fill: #1b1b1b; stroke: #ddd; } .t { fill: #eee; } .s { fill: #ff8080; }
-      .a { stroke: #ddd; } .g { fill: #999; }
-    }
+    .cut  { fill: none; stroke: #1d1d1f; stroke-width: 2.4; }
+    .dough{ fill: #0f6f3c; opacity: .10; }
+    .edge { fill: none; stroke: #1d1d1f; stroke-width: 1.6; }
+    .press{ fill: none; stroke: #0071e3; stroke-width: 2; marker-end: url(#mk); }
+    .hair { fill: none; stroke: #d2d2d7; stroke-width: 1; }
+    .h    { font: 600 13.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1d1d1f; }
+    .t    { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #1d1d1f; }
+    .blue { font: 600 11.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0071e3; }
+    .cap  { font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1d1d1f; }
   </style>
   <defs>
-    <marker id="a9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-      <path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/>
+    <marker id="mk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0071e3"/>
     </marker>
   </defs>
 
-  <text class="g" x="20" y="24">one source</text>
-  <rect class="b" x="20" y="92" width="164" height="52" rx="4"/>
-  <text class="t" x="32" y="114">identity&lt;T&gt;(x: T)</text>
-  <text class="g" x="32" y="132">-&gt; T</text>
+  <text class="h" x="8" y="18">One cutter</text>
+  <path class="cut" d="M30 44 h96 v70 h-96 z M30 60 h96 M46 44 v70"/>
+  <text class="t" x="14" y="136">Stack&lt;T&gt;</text>
+  <text class="cap" x="14" y="158">written once</text>
 
-  <text class="g" x="330" y="24">one machine function each</text>
+  <path class="press" d="M154 96 h48"/>
+  <text class="blue" x="150" y="70">pressed</text>
+  <text class="blue" x="150" y="86">into</text>
 
-  <rect class="b" x="330" y="36" width="290" height="52" rx="4"/>
-  <text class="t" x="342" y="58">bx.identity$Int</text>
-  <text class="g" x="342" y="76">i64 in, i64 out — one cell</text>
+  <text class="h" x="226" y="18">Three doughs</text>
+  <rect class="dough" x="226" y="36" width="120" height="34" rx="6"/>
+  <rect class="edge"  x="226" y="36" width="120" height="34" rx="6"/>
+  <text class="t" x="238" y="58">Int</text>
+  <rect class="dough" x="226" y="82" width="120" height="34" rx="6"/>
+  <rect class="edge"  x="226" y="82" width="120" height="34" rx="6"/>
+  <text class="t" x="238" y="104">Decimal&lt;2&gt;</text>
+  <rect class="dough" x="226" y="128" width="120" height="34" rx="6"/>
+  <rect class="edge"  x="226" y="128" width="120" height="34" rx="6"/>
+  <text class="t" x="238" y="150">Item</text>
 
-  <rect class="b" x="330" y="102" width="290" height="52" rx="4"/>
-  <text class="t" x="342" y="124">bx.identity$Decimal_2_</text>
-  <text class="s" x="342" y="142">i64 in, i64 out — STILL a scaled integer</text>
+  <path class="press" d="M362 53 h44"/>
+  <path class="press" d="M362 99 h44"/>
+  <path class="press" d="M362 145 h44"/>
 
-  <rect class="b" x="330" y="168" width="290" height="52" rx="4"/>
-  <text class="t" x="342" y="190">bx.identity$Point</text>
-  <text class="g" x="342" y="208">sret / byval — two cells, by value</text>
+  <text class="h" x="430" y="18">Three real functions</text>
+  <rect class="edge" x="430" y="36" width="226" height="34" rx="6"/>
+  <text class="t" x="440" y="58">Stack$Int.push</text>
+  <rect class="edge" x="430" y="82" width="226" height="34" rx="6"/>
+  <text class="t" x="440" y="104">Stack$Decimal2.push</text>
+  <rect class="edge" x="430" y="128" width="226" height="34" rx="6"/>
+  <text class="t" x="440" y="150">Stack$Item.push</text>
 
-  <path class="a" d="M184 108 L326 62"/>
-  <path class="a" d="M184 118 L326 128"/>
-  <path class="a" d="M184 128 L326 194"/>
-
-  <text class="g" x="20" y="240">erasure would give one function and a pointer in all three rows</text>
+  <line class="hair" x1="8" y1="188" x2="672" y2="188"/>
+  <text class="cap" x="8" y="212">Nothing is erased and nothing is boxed. Each one is a separate machine function over the real</text>
+  <text class="cap" x="8" y="230">layout of its type — so a <tspan font-family="ui-monospace, monospace">Stack&lt;Int&gt;</tspan> holds integers, not pointers to integers.</text>
 </svg>
+<figcaption>A type parameter is a shape you press into a type, not a box you put a type into. That is why
+<code>Option&lt;T&gt;</code> and <code>Map&lt;K, V&gt;</code> are ordinary library files rather than keywords.</figcaption>
+</figure>
 
-Those are not an illustration — they are the symbol names, and you can go and look:
+## A step closer
+{: #a-step-closer}
 
-```sh
-$ burxt emit-ir app.bx | grep define
-define i64 @"bx.identity$Int"(i64 %0)
-define i64 @"bx.identity$Decimal_2_"(i64 %0)
-define void @"bx.identity$Point"(ptr sret(%bx.Point) %0, ptr byval(%bx.Point) %1)
-```
+## In code
+{: #in-code}
 
-The middle line is the one that matters. A `Decimal<2>` inside a generic is an `i64` — the same
-scaled integer it is everywhere else, with the same exactness and the same refusals.
-
-## Writing one
+### Writing one
 
 ```burxt
 function identity<T>(x: T) -> T {
@@ -116,7 +130,7 @@ let n: Int = push(names, "ada");
 print(first(names));        // T = String, from one level down
 ```
 
-## Classes and enums
+### Classes and enums
 
 ```burxt
 class Point { x: Int, y: Int }
@@ -133,7 +147,7 @@ print(wide.second.y);
 Those two are genuinely different shapes in memory. `Pair<Int>` is two cells; `Pair<Point>` is four.
 Nothing is boxed to make them the same size — which is exactly what one-copy-per-type buys.
 
-## Building one out of nothing
+### Building one out of nothing
 
 Type arguments can also come from **where the value lands** rather than from an argument:
 
@@ -170,7 +184,7 @@ error: `Holder.Empty` does not say what `T` is, and nothing here does. Write the
        somewhere that names it.
 ```
 
-## Methods
+### Methods
 
 A method on a generic type names the parameter in the receiver:
 
@@ -192,7 +206,7 @@ function (mutable self: Pair<T>) swap() -> Int {
 `Pair<Int>.swap` and `Pair<Point>.swap` are separately compiled, because for `Point` each of those
 three assignments moves two cells instead of one. Same source, different instructions.
 
-## Bounds
+### Bounds
 
 A bare `T` can be moved, stored and returned. It cannot be compared, added or printed, because
 nothing said it could be. To ask for more, name a bound:
@@ -234,7 +248,7 @@ error: `largest` needs `T: Ordered`, and String has no order. Ordered is Int and
 Bounds are checked **where the type argument is chosen** — at the call site — so the error points at
 the call that made the choice, not at the body that needed it.
 
-## What is refused
+### What is refused
 
 - **`print(x)` on a bare `T`.** Printing has to know how wide the value is and how to format it. Add
   a bound, or take a `String`.
@@ -247,7 +261,7 @@ the call that made the choice, not at the body that needed it.
   argument says which.
 - **Type arguments on a plain type**, and the wrong number of them. Both say so by name.
 
-## Under the hood, if you are reading the compiler
+### Under the hood, if you are reading the compiler
 
 Monomorphisation usually means *substitution*: copy the declaration and rewrite the types inside it.
 Burxt mostly does not.
@@ -259,9 +273,103 @@ because `identity<T>` compiles to a load for `Int` and a memory copy for `Point`
 
 The rule the compiler follows: **a type parameter is a question, not a placeholder.** Answer it at
 every point that asks, and almost nothing has to be substituted.
-([The design record.](../../spec/M7-GENERICS.md))
+([The design record.](https://github.com/andrecorugda/burxt/blob/main/spec/M7-GENERICS.md))
+
+## Why it is built this way
+{: #why-it-is-built-this-way}
+
+**Because erasure would put a pointer where a value belongs.** A `Stack<Decimal<2>>` holds scaled
+integers laid out end to end. If generics were erased it would hold pointers to boxed integers, and every
+read would be a chase — which would make the exact-money story slower than the float story it replaces.
+
+**Because it is the test of whether the generics are real.** `Option<T>` is four lines of Burxt with no
+compiler support beyond generics. `Map<K, V>` is one file. If either had needed a keyword, the generics
+were decoration — that was the bar set in `spec/M7-GENERICS.md`, and it is why the standard library looks
+the way it does.
+
+**Because a bound is a promise a reviewer can read.** `T: Ordered` in a signature says exactly which
+types may arrive, in the place people already look.
+
+## What it costs
+{: #what-it-costs}
+
+**One machine function per type that uses it.** Three instantiations are three copies in the binary. For
+the sizes real programs reach this is the right trade; for a generic used at forty types it is forty
+copies.
+
+**Bounds are a short list.** `Ordered` is `Int` and `Decimal` — the types `<` works on. `Equatable` is
+those plus `Bool` and `String`. You cannot define a bound of your own.
+
+**No specialisation, no variance, no associated types, no higher-kinded anything.** A type parameter is a
+type, and that is all it is.
+
+**Type arguments come from the annotation when the arguments cannot settle them** — `let m: Map<String,
+Int> = map_new();`. That reads well and it means a call whose result you do not bind sometimes has nothing
+to infer from.
+
+## When you reach for it
+{: #when-you-reach-for-it}
+
+<div class="tablewrap" markdown="1">
+
+| You want | Write |
+|---|---|
+| a function over any type | `function f<T>(x: T) -> T` |
+| a function that compares | `function f<T: Ordered>(a: T, b: T)` — `Int` and `Decimal` only |
+| a function that uses `==` or a map key | `<K: Equatable>` |
+| a container | a generic `class`, and methods on it |
+| one value of several shapes, over any type | a generic `enum` — that is all `Option<T>` is |
+| an empty container with nothing to infer from | annotate the binding: `let m: Map<String, Int> = map_new();` |
+
+</div>
+
+## Examples
+{: #examples}
+
+**One definition, two types, two real functions.**
+
+```burxt
+function largest<T: Ordered>(a: T, b: T) -> T {
+    if a > b { return a; }
+    return b;
+}
+
+print(largest(3, 9));
+print(largest($19.99, $4.50));
+```
+
+```
+9
+19.99
+```
+
+Those are two separate machine functions — one over `Int`, one over `Decimal<2>` — and the second one
+compares scaled integers directly rather than unboxing anything.
+
+**And the bound doing its job.** `String` has no order, so it cannot arrive:
+
+```burxt
+function largest<T: Ordered>(a: T, b: T) -> T {
+    if a > b { return a; }
+    return b;
+}
+
+print(largest("apple", "pear"));
+```
+
+```
+error: `largest` needs `T: Ordered`, and String has no order. Ordered is Int and Decimal — the types `<` works on.
+ --> largest.bx:6:7
+  |
+6 | print(largest("apple", "pear"));
+  |       ^^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+The message names the bound, names the type that failed it, **and lists what the bound contains** — so
+you do not have to go and look it up.
 
 ## Next
+{: #next}
 
 [Absence and failure](10-absence-and-failure.md) — `Option`, `Result`, and why there is no null.
 Both are ordinary Burxt written with exactly what this page describes, which was the test for whether

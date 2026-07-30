@@ -1,6 +1,6 @@
 # The Burxt guide
 
-Eleven pages, in reading order. Each one explains a decision and the reasoning behind it —
+Twelve pages, in reading order. Each one explains a decision and the reasoning behind it —
 what the language refuses is usually the interesting part.
 
 | | Page | |
@@ -16,7 +16,13 @@ what the language refuses is usually the interesting part.
 | 9 | [Generics](09-generics.md) | Type parameters, bounds, why nothing is erased |
 | 10 | [Absence and failure](10-absence-and-failure.md) | `Option`, `Result`, `?`, and no null |
 | 11 | [Maps and strings](11-maps.md) | Insertion order, `Equatable` keys, bytes |
-| — | [Reference](reference.md) | Every keyword, builtin, operator and error |
+| 12 | [Tools and agents](12-tools-and-agents.md) | `burxt mcp-schema`, `burxt review` — the contract IS the tool schema |
+
+The reference moved out of this directory and is now **generated**: `scripts/site-reference.py`
+reads the keyword table out of `src/lexer.rs`, the reserved names out of `src/typeck.rs`, the
+commands out of `src/main.rs` and every standard-library entry out of the `//` prose in `lib/*.bx`.
+It lives in [`docs/reference/`](../reference/index.md). The hand-written page it replaces had gone
+stale — it still listed `record`, renamed to `class` eleven versions earlier.
 
 Running code beats prose: [`../../examples/`](../../examples) has one program per idea, and
 every one of them compiles.

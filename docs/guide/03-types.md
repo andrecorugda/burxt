@@ -1,10 +1,12 @@
 ---
 title: Types
+description: A class is a vending machine — you see what is inside, and there is exactly one way in.
 ---
 
 # 3. Types
 
-## The problem, as it actually arrives
+## What this is for
+{: #what-this-is-for}
 
 Someone writes a careful class. The balance may not go negative, and they say so:
 
@@ -35,73 +37,109 @@ line in a test file.
 **Privacy without a constructor is a locked door in an open wall.** This page is about building the
 wall.
 
-## Think of a sealed box with exactly one door
+## Think of a vending machine
+{: #think-of-a-vending-machine}
 
-<svg viewBox="0 0 640 292" role="img" aria-label="A class with a private field: a literal and a field read bounce off the wall, the constructor is the only way in" style="max-width:100%;height:auto;margin:1.5rem 0;">
+A vending machine shows you everything it holds. You can read every price, count every packet, and see
+exactly which shelf is nearly empty. What you cannot do is reach in.
+
+There is one way to get something out, and it is the coin slot. The slot checks the coin. Nobody has to
+trust you, and nobody has to guard the machine, because the glass is not a rule — it is a wall.
+
+<figure>
+<svg viewBox="0 0 680 300" role="img" aria-label="A class as a vending machine: the fields are visible behind glass, a literal that tries to reach in is refused, and the constructor is the only way in — where the requires clause checks what you passed" style="max-width:100%;height:auto;">
   <style>
-    .b { fill: #fff; stroke: #111; stroke-width: 1.5; }
-    .w { fill: none; stroke: #111; stroke-width: 2.5; }
-    .p { fill: none; stroke: #b00; stroke-width: 1.5; stroke-dasharray: 5 4; }
-    .door { fill: #fff; }
-    .t { font: 12px ui-monospace, monospace; fill: #111; }
-    .g { font: 11px ui-monospace, monospace; fill: #888; }
-    .s { font: 11px ui-monospace, monospace; fill: #b00; }
-    .a { stroke: #111; stroke-width: 1.5; fill: none; marker-end: url(#a3); }
-    .x { stroke: #b00; stroke-width: 2; }
-    @media (prefers-color-scheme: dark) {
-      .b { fill: #1b1b1b; stroke: #ddd; } .w { stroke: #ddd; } .door { fill: #1b1b1b; }
-      .t { fill: #eee; } .s { fill: #ff8080; } .p { stroke: #ff8080; }
-      .a { stroke: #ddd; } .g { fill: #999; } .x { stroke: #ff8080; }
-    }
+    .case  { fill: #ffffff; stroke: #1d1d1f; stroke-width: 2.4; }
+    .glass { fill: #0071e3; opacity: .06; }
+    .shelf { fill: none; stroke: #d2d2d7; stroke-width: 1.4; }
+    .pack  { fill: #ffffff; stroke: #1d1d1f; stroke-width: 1.4; }
+    .lock  { fill: #ffffff; stroke: #c8102e; stroke-width: 1.6; }
+    .slot  { fill: #1d1d1f; }
+    .no    { fill: none; stroke: #c8102e; stroke-width: 2; }
+    .in    { fill: none; stroke: #0f6f3c; stroke-width: 2; marker-end: url(#mi); }
+    .bounce{ fill: none; stroke: #c8102e; stroke-width: 2; marker-end: url(#mx); }
+    .hair  { fill: none; stroke: #d2d2d7; stroke-width: 1; }
+    .h     { font: 600 13.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1d1d1f; }
+    .t     { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #1d1d1f; }
+    .red   { font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #c8102e; }
+    .grn   { font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f6f3c; }
+    .cap   { font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1d1d1f; }
   </style>
   <defs>
-    <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-      <path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/>
+    <marker id="mi" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0f6f3c"/>
+    </marker>
+    <marker id="mx" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c8102e"/>
     </marker>
   </defs>
 
-  <rect class="b" x="8" y="30" width="212" height="46" rx="4"/>
-  <text class="t" x="20" y="50">Account { owner: "eve",</text>
-  <text class="t" x="20" y="66">          balance: -999.00 }</text>
+  <!-- the machine -->
+  <rect class="case"  x="212" y="26" width="212" height="242" rx="14"/>
+  <rect class="glass" x="224" y="38" width="140" height="176" rx="6"/>
+  <rect class="shelf" x="224" y="38" width="140" height="176" rx="6"/>
+  <line class="shelf" x1="224" y1="96"  x2="364" y2="96"/>
+  <line class="shelf" x1="224" y1="156" x2="364" y2="156"/>
 
-  <rect class="b" x="8" y="126" width="212" height="46" rx="4"/>
-  <text class="t" x="20" y="146">Account.open("ada",</text>
-  <text class="t" x="20" y="162">             $100.00)</text>
+  <rect class="pack" x="234" y="56" width="52" height="30" rx="4"/>
+  <text class="t" x="240" y="76">owner</text>
+  <rect class="lock" x="234" y="114" width="86" height="30" rx="4"/>
+  <text class="t" x="240" y="134">balance</text>
+  <text class="red" x="326" y="134">private</text>
+  <text class="cap" x="234" y="190">visible, and</text>
+  <text class="cap" x="234" y="206">out of reach</text>
 
-  <rect class="b" x="8" y="222" width="212" height="30" rx="4"/>
-  <text class="t" x="20" y="242">print(a.balance)</text>
+  <!-- the coin slot: the constructor -->
+  <rect class="slot" x="378" y="70" width="10" height="46" rx="5"/>
+  <text class="t" x="234" y="240">Account.open(...)</text>
+  <text class="grn" x="234" y="258">requires opening &gt;= $0.00</text>
 
-  <rect class="w" x="348" y="22" width="284" height="256" rx="4"/>
-  <rect class="door" x="342" y="140" width="13" height="38"/>
+  <!-- a literal bouncing off -->
+  <text class="h" x="8" y="18">Reaching in</text>
+  <text class="t" x="8" y="66">Account {</text>
+  <text class="t" x="8" y="84">  balance: -999.00</text>
+  <text class="t" x="8" y="102">}</text>
+  <path class="bounce" d="M132 84 h58"/>
+  <text class="red" x="8" y="130">refused: a literal may set</text>
+  <text class="red" x="8" y="148">a private field only inside</text>
+  <text class="red" x="8" y="166">the class</text>
 
-  <text class="g" x="362" y="44">class Account {</text>
-  <rect class="b" x="362" y="54" width="252" height="26" rx="3"/>
-  <text class="t" x="372" y="72">owner: String</text>
-  <rect class="p" x="362" y="88" width="252" height="26" rx="3"/>
-  <text class="t" x="372" y="106">private balance: Decimal&lt;2&gt;</text>
-
-  <text class="t" x="362" y="152">function open(owner, opening)</text>
-  <text class="s" x="362" y="168">    requires opening &gt;= $0.00</text>
-
-  <text class="t" x="362" y="212">function (self) withdraw(amount)</text>
-  <text class="s" x="362" y="228">    requires amount &lt;= self.balance</text>
-  <text class="g" x="362" y="266">the only two ways in or out</text>
-
-  <path class="a" d="M220 52 L330 58"/>
-  <path class="x" d="M336 52 L350 66"/><path class="x" d="M350 52 L336 66"/>
-  <text class="s" x="230" y="40">refused</text>
-
-  <path class="a" d="M220 149 L344 156"/>
-  <text class="g" x="240" y="134">allowed</text>
-
-  <path class="a" d="M220 238 L330 232"/>
-  <path class="x" d="M336 226 L350 240"/><path class="x" d="M350 226 L336 240"/>
-  <text class="s" x="230" y="262">refused</text>
+  <!-- the way in -->
+  <text class="h" x="470" y="18">The one way in</text>
+  <path class="in" d="M552 60 h-96" />
+  <text class="t"   x="470" y="56">$100.00</text>
+  <text class="grn" x="470" y="112">checked on every call,</text>
+  <text class="grn" x="470" y="130">and it names the clause</text>
+  <text class="grn" x="470" y="148">it broke</text>
+  <text class="cap" x="470" y="180">There is no second</text>
+  <text class="cap" x="470" y="198">way in, so the check</text>
+  <text class="cap" x="470" y="216">cannot be skipped.</text>
 </svg>
+<figcaption>Privacy without a constructor is a locked door in an open wall. <code>private</code> is the
+glass; the constructor is the slot; <code>requires</code> is the slot checking the coin.</figcaption>
+</figure>
 
-Three pieces make that wall, and each is one word or one line.
+A Burxt class is three pieces, and they only work together.
 
-## Piece one: fields and methods in the same block
+## A step closer
+{: #a-step-closer}
+
+The three pieces are:
+
+1. **Fields and methods in the same block.** A type's data and what you may do with it are declared
+   together, so the wall and the door are in one place.
+2. **`private`.** A field nobody outside the class may name — which also stops a *literal* from
+   setting it, and that second half is what makes it a wall rather than a convention.
+3. **A constructor is just a function with no `self`.** No special syntax, no `new`, no initialiser
+   list, no order to remember. It returns the type, and it may carry `requires`.
+
+Miss any one and the other two stop meaning anything. That is the whole content of this page; the rest
+is spelling.
+
+## In code
+{: #in-code}
+
+### Piece one: fields and methods in the same block
 
 ```burxt
 class Item {
@@ -125,7 +163,7 @@ A method may also be written outside the block — `function (self: Item) label(
 — and that is what you need for a type someone else declared, in another file or in `lib/`. For
 your own, the block is where they belong.
 
-## Piece two: `private`
+### Piece two: `private`
 
 ```burxt
 class Account {
@@ -168,7 +206,7 @@ There is no file boundary to appeal to, and that is not an oversight: `use` is a
 concatenates files ([page 8](08-modules.md)), so by the time anything is checked there are no files
 left, only one long program. A class needs no such knowledge to be a boundary.
 
-## Piece three: a constructor is a function with no `self`
+### Piece three: a constructor is a function with no `self`
 
 ```burxt
 class Account {
@@ -203,7 +241,7 @@ error: `Account.balance` is private, so `Account` cannot be built here: a litera
 A literal may name a private field **only inside its own class**. That single rule is what turns
 the other two into a wall.
 
-## Put together: a class that cannot lie about itself
+### Put together: a class that cannot lie about itself
 
 ```burxt
 class Account {
@@ -234,9 +272,9 @@ burxt runtime error: `requires amount <= self.balance` failed in `Account.withdr
 ```
 
 There is no build mode that removes that check and no factory that skips it.
-([Why this shipped after `private` rather than with it](../../spec/A5-CONTRACTS.md).)
+([Why this shipped after `private` rather than with it](https://github.com/andrecorugda/burxt/blob/main/spec/A5-CONTRACTS.md).)
 
-## Values, not references
+### Values, not references
 
 **Everything copies.** Assigning copies, passing to a function copies, storing in a field copies.
 There is no hidden sharing to reason about and no aliasing bug to find:
@@ -267,7 +305,7 @@ class Counter {
 
 Two spellings, two different promises, and the compiler holds you to whichever you wrote.
 
-## Bindings, and where a type may be left out
+### Bindings, and where a type may be left out
 
 ```burxt
 let count = 0;                       // Int
@@ -308,7 +346,7 @@ And inference can never introduce rounding, because a rounding contract exists o
 wrote one. An inferred binding has no annotation to read, so **hover in the editor is where its
 type lives** — the honest trade is that the type did not disappear, it moved.
 
-## Enums: one value, several shapes
+### Enums: one value, several shapes
 
 ```burxt
 enum Status { Paid, Owing(Decimal<2>), Void }
@@ -350,7 +388,7 @@ catch-all would throw away the error you want next year. `Int` cannot be enumera
 without a catch-all would be a hole with nothing to mark it. Same keyword, two rules, and each
 message says which rule it is and why.
 
-## Interfaces: the one abstraction mechanism
+### Interfaces: the one abstraction mechanism
 
 ```burxt
 interface Priced {
@@ -391,7 +429,7 @@ type and the receiver form.
 Inside a class body or an `implement` block, `function (self) price()` needs no type: the header
 already said which. Outside either, the method names its type, because there nothing else does.
 
-### Using an interface as a type
+#### Using an interface as a type
 
 ```burxt
 interface Priced { function price(self) -> Decimal<2> }
@@ -408,7 +446,7 @@ plus a table of the interface's methods. Static dispatch is the default everywhe
 nothing; you pay for the indirection exactly where you asked for it. These are storable: bindings,
 fields, arrays.
 
-## Dependency injection is a field
+### Dependency injection is a field
 
 No framework, no container, no annotation, no reflection:
 
@@ -468,7 +506,7 @@ error: a `dynamic Rates` must come from a variable — an interface object borro
        of the value it refers to, and an expression has none.
 ```
 
-## Arrays
+### Arrays
 
 ```burxt
 let fixed: [Int; 3] = [1, 2, 3];      // length is part of the type
@@ -514,33 +552,31 @@ while i < len(lines) {
 }
 ```
 
-## Strings
+### Strings
 
 A `String` is bytes. `len` counts bytes, `byte_at` reads one, `substring` takes a slice, `+` joins.
 Interpolation is a join written differently: `"total: {amount}"`. More in
 [Maps and strings](11-maps.md).
 
-## If you come from PHP, C# or Java
+## Why it is built this way
+{: #why-it-is-built-this-way}
 
-<div class="tablewrap" markdown="1">
+**A rule that can be bypassed is not a rule.** That is the whole argument for making `private` block a
+literal as well as a field read. A class whose invariant holds "as long as everybody goes through the
+constructor" has an invariant that holds until somebody is in a hurry, and the person in a hurry is
+increasingly not a person.
 
-| What you would reach for | Where it is |
-|---|---|
-| Constructor | `function open(...) -> Account` in the class, called `Account.open(...)` |
-| Validation while constructing | `requires` on it — checked on **every** call, quoting the clause when it fails |
-| Static / class method | The same thing: a function in the class with no `self` |
-| Private field, private method | `private` |
-| Interface | `interface`, and `class X implements Y` |
-| Dependency injection | An interface-typed field. The caller chooses, with a literal instead of a container |
-| Destructor / `IDisposable` | Nothing to write — see [Memory](04-memory.md) |
-| `null` | Does not exist. Absence is a type: [`Option<T>`](10-absence-and-failure.md) |
-| Inheritance | Deliberately absent — below |
+**Everything a reviewer needs is in the declarations.** You can read `class Account`'s header — its
+fields, which are private, its constructor and its `requires` — and know what the type guarantees
+without opening a single body. That is the same property [`burxt review`](12-tools-and-agents.md)
+depends on, and it is why the pieces are declarations rather than conventions.
 
-</div>
+**Value semantics remove a whole category of bug.** A class is a value: assigning copies, and passing
+copies. There is no aliasing, so there is no "who else is holding this object" question, no defensive
+copying, and no `IDisposable`. The cost is real — see below — and the thing it buys is that a function
+cannot change something you did not hand it.
 
-[`examples/services.bx`](../../examples/services.bx) is that table as one running program.
-
-## No inheritance, and why
+### No inheritance, and why
 
 No base type, no `extends`, no `super`, no abstract class. This was **decided and closed** in
 v0.0.46, not deferred: across thirty versions nothing needed it, and composition plus interfaces
@@ -560,7 +596,131 @@ did the job every time — the same conclusion Go and Rust reached.
 What that buys is the absence of the fragile base class problem, of *which parent did this method
 come from*, and of constructors running in an order nobody remembers.
 
+## What it costs
+{: #what-it-costs}
+
+**Copies are copies.** Value semantics mean passing a large class copies its bytes. For the sizes real
+programs use this is faster than a pointer chase; for a genuinely large aggregate in a hot loop it is
+something to know about. `burxt layout x.bx` prints the sizes.
+
+**No inheritance means some duplication.** Two types that share behaviour share a function or an
+interface, not a base class. Occasionally that is one more line than `extends` would have been.
+
+**A constructor is a convention, not a keyword.** `Account.open` is a function with no `self` that
+happens to return `Account`. Nothing forces you to write one — and if you do not, and the field is
+`private`, the type simply cannot be built outside its own file. That is a good failure, but it is a
+failure at the point of use rather than at the point of declaration.
+
+**There is no `to_string` you can implement.** A class of yours has no display form: `to_string`
+handles `Int`, `Bool` and `Decimal` only. A `shown()` method is the idiom, and it is a gap rather than
+a decision.
+
+**Interfaces are the only abstraction.** No generics-over-traits beyond bounds, no operator
+overloading, no `Deref`. If an interface will not express it, the answer today is a function.
+
+## When you reach for it
+{: #when-you-reach-for-it}
+
+<div class="tablewrap" markdown="1">
+
+| You want | Reach for |
+|---|---|
+| a value with an invariant that must hold | a `class` with `private` fields **and** a constructor carrying `requires` |
+| a value with nothing to protect | a `class` with plain fields. No constructor needed |
+| one value that is one of several shapes | an `enum`, and `match` will force every case |
+| several types that answer the same question | an `interface`, and `implements` on each |
+| to choose an implementation at a call site | an interface-typed **field** — that is dependency injection here |
+| to swap an implementation at run time | `dynamic Named` as the field type |
+| a fixed number of things | `[T; N]` — the length is part of the type |
+| a growing number of things | `[T]`, which lives in a [region](04-memory.md) |
+| something that might not be there | not `null`, which does not exist: [`Option<T>`](10-absence-and-failure.md) |
+
+</div>
+
+**If you come from PHP, C# or Java**, this is the translation table:
+
+<div class="tablewrap" markdown="1">
+
+| What you would reach for | Where it is |
+|---|---|
+| Constructor | `function open(...) -> Account` in the class, called `Account.open(...)` |
+| Validation while constructing | `requires` on it — checked on **every** call, quoting the clause when it fails |
+| Static / class method | The same thing: a function in the class with no `self` |
+| Private field, private method | `private` |
+| Interface | `interface`, and `class X implements Y` |
+| Dependency injection | An interface-typed field. The caller chooses, with a literal instead of a container |
+| Destructor / `IDisposable` | Nothing to write — see [Memory](04-memory.md) |
+| `null` | Does not exist. Absence is a type: [`Option<T>`](10-absence-and-failure.md) |
+| Inheritance | Deliberately absent — below |
+
+</div>
+
+[`examples/services.bx`](https://github.com/andrecorugda/burxt/blob/main/examples/services.bx) is that table as one running program.
+
+## Examples
+{: #examples}
+
+**A class that cannot lie about itself**, all the way through. `balance` is private, `open` is the only
+way to make one, `withdraw` is the only way to change one, and every rule is checked on every call:
+
+```burxt
+class Account {
+    owner: String,
+    private balance: Decimal<2>,
+
+    function open(owner: String, opening: Decimal<2>) -> Account
+        requires opening >= $0.00
+    { return Account { owner: owner, balance: opening }; }
+
+    function (self) withdraw(amount: Decimal<2>) -> Account
+        requires amount > $0.00
+        requires amount <= self.balance
+    { return Account { owner: self.owner, balance: self.balance - amount }; }
+
+    function (self) shown() -> String { return self.owner + ": " + to_string(self.balance); }
+}
+
+let ada: Account = Account.open("ada", $100.00);
+print(ada.shown());
+print(ada.withdraw($30.00).shown());
+```
+
+```
+ada: 100.00
+ada: 70.00
+```
+
+`withdraw` returns a **new** `Account` rather than changing one, because a class is a value. `ada` is
+still `100.00` after that last line.
+
+**And the wall, doing its job.** This is the test file from the top of the page, refused:
+
+```burxt
+class Account {
+    owner: String,
+    private balance: Decimal<2>,
+
+    function open(owner: String, opening: Decimal<2>) -> Account
+        requires opening >= $0.00
+    { return Account { owner: owner, balance: opening }; }
+}
+
+let eve: Account = Account { owner: "eve", balance: $0.00 - $999.00 };
+```
+
+```
+error: `Account.balance` is private, so `Account` cannot be built here: a literal may set a private field only inside `Account`. Give the class a constructor — `function open(...) -> Account` in its body, called as `Account.open(...)` — which is the point of making the field private.
+  --> account.bx:10:20
+   |
+10 | let eve: Account = Account { owner: "eve", balance: $0.00 - $999.00 };
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+Read the message: it does not merely refuse, it names the constructor you should have written and how
+to call it. That is the shape every refusal in this language aims for.
+
 ## Next
+{: #next}
 
 [Memory](04-memory.md) — where built values live, and the one idea here with no equivalent
 elsewhere.

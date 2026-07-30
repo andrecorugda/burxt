@@ -1,23 +1,99 @@
 ---
 title: Getting started
+description: One file is a program. Install it, run it, and meet the one command no other language has.
 ---
 
 # 1. Getting started
 
-## What you are about to get
+## What this is for
+{: #what-this-is-for}
 
-One file is a program. There is no manifest, no project layout, no entry point to declare and
-nothing to configure. `burxt run hello.bx` produces a native executable of about 16 KB that links
+Most of what anybody writes to *check* something is small — five lines to confirm a total, ten to see
+what a parser does with one input. And in most languages you cannot run five lines. You need a
+manifest, a build file, a dependency install, an entry point, and a runtime on the machine that will
+run it. So people stop checking, which is the actual cost.
+
+One file is a program here. There is no manifest, no project layout, no entry point to declare and
+nothing to configure. `burxt run hello.bx` produces a native executable of about **16 KB** that links
 nothing but libc — no runtime to ship, no VM to start.
 
-And one command you have probably never had before: `burxt review`, which reads two versions of a
-file and tells you whether the newer one **promises less** than the older one. That is further down
-this page, because it is the reason the rest of the language looks the way it does.
+And one command you have probably never had before: `burxt review`, which reads two versions of a file
+and tells you whether the newer one **promises less** than the older one. That is further down this
+page, because it is the reason the rest of the language looks the way it does.
 
-## Install
+## Think of one button, not an assembly line
+{: #think-of-one-button-not-an-assembly-line}
 
-The compiler is written in Rust and emits native code through LLVM 18. You need both to build it;
-you need neither to *run* what it produces.
+A microwave has one button. You do not configure a microwave.
+
+<figure>
+<svg viewBox="0 0 680 264" role="img" aria-label="Most toolchains need a manifest, a build file, dependencies, an entry point and a runtime before anything runs; Burxt needs a file and one command, and produces a 16 KB native binary" style="max-width:100%;height:auto;">
+  <style>
+    .step { fill: #ffffff; stroke: #c8102e; stroke-width: 1.6; }
+    .good { fill: #ffffff; stroke: #1d1d1f; stroke-width: 1.8; }
+    .out  { fill: #0f6f3c; opacity: .10; }
+    .arrow{ fill: none; stroke: #1d1d1f; stroke-width: 1.8; marker-end: url(#g1); }
+    .hair { fill: none; stroke: #d2d2d7; stroke-width: 1; }
+    .h    { font: 600 13.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1d1d1f; }
+    .t    { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #1d1d1f; }
+    .r    { font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #c8102e; }
+    .grn  { font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f6f3c; }
+    .cap  { font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1d1d1f; }
+  </style>
+  <defs>
+    <marker id="g1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1d1d1f"/>
+    </marker>
+  </defs>
+
+  <text class="h" x="8" y="18">Before five lines can run</text>
+
+  <rect class="step" x="14" y="32" width="150" height="26" rx="13"/>
+  <text class="r" x="26" y="50">a manifest</text>
+  <rect class="step" x="14" y="66" width="150" height="26" rx="13"/>
+  <text class="r" x="26" y="84">a build file</text>
+  <rect class="step" x="14" y="100" width="150" height="26" rx="13"/>
+  <text class="r" x="26" y="118">a package install</text>
+  <rect class="step" x="14" y="134" width="150" height="26" rx="13"/>
+  <text class="r" x="26" y="152">an entry point</text>
+  <rect class="step" x="14" y="168" width="150" height="26" rx="13"/>
+  <text class="r" x="26" y="186">a runtime to ship</text>
+
+  <text class="cap" x="14" y="220">So people stop checking,</text>
+  <text class="cap" x="14" y="238">which is the real cost.</text>
+
+  <line class="hair" x1="216" y1="8" x2="216" y2="252"/>
+
+  <text class="h" x="252" y="18">Burxt</text>
+
+  <rect class="good" x="256" y="60" width="120" height="44" rx="8"/>
+  <text class="t" x="270" y="87">hello.bx</text>
+
+  <path class="arrow" d="M382 82 h34"/>
+
+  <rect class="good" x="422" y="60" width="122" height="44" rx="8"/>
+  <text class="t" x="434" y="87">burxt run</text>
+
+  <path class="arrow" d="M550 82 h34"/>
+
+  <rect class="good" x="590" y="52" width="80" height="60" rx="8"/>
+  <rect class="out"  x="594" y="56" width="72" height="52" rx="6"/>
+  <text class="t"   x="606" y="80">16 KB</text>
+  <text class="grn" x="600" y="99">native</text>
+
+  <text class="cap" x="256" y="150">Nothing to configure. No entry point to declare.</text>
+  <text class="cap" x="256" y="168">Links nothing but libc, so there is no runtime</text>
+  <text class="cap" x="256" y="186">to install on the machine that runs it.</text>
+</svg>
+<figcaption>The file <em>is</em> the program, top to bottom — which matters more than it sounds, because a
+language that demands a wrapper around five lines discourages the checking those five lines were for.</figcaption>
+</figure>
+
+## A step closer
+{: #a-step-closer}
+
+The compiler is written in Rust and emits native code through LLVM 18. You need both to build it; you
+need **neither** to run what it produces.
 
 ```sh
 sudo apt install llvm-18-dev libpolly-18-dev libzstd-dev clang-18   # Debian/Ubuntu
@@ -28,9 +104,10 @@ cargo install --path .        # puts `burxt` on your PATH
 ```
 
 No LLVM to hand? [Open the repository in a Codespace](https://codespaces.new/andrecorugda/burxt?quickstart=1)
-— it builds itself on first start.
+— it builds itself on first start, extension included.
 
-## Your first program
+## In code
+{: #in-code}
 
 ```burxt
 let name: String = "world";
@@ -45,16 +122,17 @@ hello, world!
 That is the whole file. Two things in it are worth naming now, because they are the two things
 everybody notices in the first minute.
 
-**Types are written down.** `let name: String`, not `let name`. A binding says what it is, so the
-type a reader sees is the type you meant — and a mistake in it is a compile error here rather than
-a surprise three functions away. Inside a function body Burxt will infer from an obvious right-hand
+**Types are written down.** `let name: String`, not `let name`. A binding says what it is, so the type
+a reader sees is the type you meant — and a mistake in it is a compile error here rather than a
+surprise three functions away. Inside a function body Burxt will infer from an obvious right-hand
 side; at a boundary anyone reads, it will not.
 
-**There is no `main`.** The file is the program, top to bottom. A five-line calculation is five
-lines, which matters more than it sounds: most of what anyone writes to *check* something is
-small, and a language that demands a wrapper around it discourages checking.
+**There is no `main`.** The file is the program, top to bottom. A five-line calculation is five lines.
+`main` is in fact a name the language reserves, precisely so that a function called `main` cannot
+*look* like an entry point without being one.
 
-## The command that is not like other languages
+### The command that is not like other languages
+{: #the-command-that-is-not-like-other-languages}
 
 Here is a function that will not let you overdraw an account:
 
@@ -67,10 +145,10 @@ function withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>
 }
 ```
 
-Now suppose something — a colleague in a hurry, an agent that could not satisfy the rule — removes
-the second line. The body still compiles. Every test still passes; in fact the tests pass *more*,
-because whatever was failing was failing on purpose. In any other language you catch that by
-noticing one deleted line in a diff at 5pm on a Friday.
+Now suppose something — a colleague in a hurry, an agent that could not satisfy the rule — removes the
+second `requires`. The body still compiles. Every test still passes; in fact the tests pass *more*,
+because whatever was failing was failing on purpose. In any other language you catch that by noticing
+one deleted line in a diff at 5pm on a Friday.
 
 ```sh
 $ burxt review before.bx after.bx
@@ -81,27 +159,19 @@ $ echo $?
 1
 ```
 
-**It exits non-zero**, so it is a gate and not a report. Put it in CI and a promise cannot get
-quietly smaller.
+**It exits non-zero**, so it is a gate and not a report. Put it in CI and a promise cannot get quietly
+smaller.
 
-This works for one reason, and the reason is the design of the whole language: everything that
-matters is in the **signature**. The scale of the money, the rounding rule, the preconditions,
-what is private, what the function is allowed to reach. Nothing important hides in a body — so a
-tool that reads only declarations can still tell you whether the program's promises changed.
-
-## The loop
+### The loop
+{: #the-loop}
 
 <svg viewBox="0 0 640 168" role="img" aria-label="write, check, run, review — and review gates the merge" style="max-width:100%;height:auto;margin:1.5rem 0;">
   <style>
-    .b { fill: #fff; stroke: #111; stroke-width: 1.5; }
-    .t { font: 13px ui-monospace, monospace; fill: #111; }
-    .g { font: 11px ui-monospace, monospace; fill: #888; }
-    .s { font: 11px ui-monospace, monospace; fill: #b00; }
-    .a { stroke: #111; stroke-width: 1.5; fill: none; marker-end: url(#a1); }
-    @media (prefers-color-scheme: dark) {
-      .b { fill: #1b1b1b; stroke: #ddd; } .t { fill: #eee; } .s { fill: #ff8080; }
-      .a { stroke: #ddd; } .g { fill: #999; }
-    }
+    .b { fill: #fff; stroke: #1d1d1f; stroke-width: 1.5; }
+    .t { font: 13px ui-monospace, monospace; fill: #1d1d1f; }
+    .g { font: 11px ui-monospace, monospace; fill: #3a3a3e; }
+    .s { font: 11px ui-monospace, monospace; fill: #c8102e; }
+    .a { stroke: #1d1d1f; stroke-width: 1.5; fill: none; marker-end: url(#a1); }
   </style>
   <defs>
     <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
@@ -133,6 +203,42 @@ tool that reads only declarations can still tell you whether the program's promi
   <text class="g" x="196" y="148">a weakened promise sends you back here</text>
 </svg>
 
+## Why it is built this way
+{: #why-it-is-built-this-way}
+
+`burxt review` works for one reason, and that reason is the design of the whole language: **everything
+that matters is in the signature.** The scale of the money, the rounding rule, the preconditions, what
+is private, what the function is allowed to reach. Nothing important hides in a body — so a tool that
+reads only declarations can still tell you whether the program's promises changed.
+
+Every other decision in this guide is downstream of that one. Money carries its scale in the type
+because a reviewer scans types. Effects are written rather than inferred because a written effect is a
+promise and an inferred one is a fact nobody stated. Contracts sit on the signature rather than as
+`assert` in the body because a body is not what anybody reads.
+
+The 16 KB binary follows from the same discipline in a different direction: there is no runtime because
+there is nothing that needs one — no collector, no reflection, no boxing.
+
+## What it costs
+{: #what-it-costs}
+
+**Building the compiler needs LLVM 18**, which is the largest single thing you have to install. Running
+what it produces needs nothing.
+
+**You write types at boundaries.** `let name: String`, and every parameter and return. Inside a body
+`let x = 0;` infers.
+
+**It is early.** Not ready for production — ready to try, read and shape. There is no package manager,
+no `wasm` target yet, and the standard library is seven files.
+
+**The editor extension has one trap**, and it cost a full afternoon: it runs whichever `burxt` binary
+it finds, and if you have both a `--release` and a `debug` build it prefers the newer. After
+rebuilding, run **Burxt: Restart Server** from the command palette. An editor reporting an error the
+terminal does not is almost always this.
+
+## When you reach for it
+{: #when-you-reach-for-it}
+
 <div class="tablewrap" markdown="1">
 
 | Command | What it does |
@@ -142,31 +248,76 @@ tool that reads only declarations can still tell you whether the program's promi
 | `burxt check x.bx` | Parse and typecheck only — no LLVM, no linker, fast |
 | `burxt check x.bx --json` | The same, as JSON, for an editor or a script |
 | `burxt review old.bx new.bx` | What changed about what it *promises*. Non-zero if anything got weaker |
+| `burxt mcp-schema x.bx` | The MCP tool manifest, derived from the preconditions |
+| `burxt lsp` | The language server, over stdio |
 | `burxt emit-ir x.bx` | Print the LLVM IR |
 | `burxt layout x.bx` | Print class sizes, alignments and field offsets |
 
 </div>
 
-Use `-o` unless you want the executable in your current directory. Arguments after the source file
-go to the linker unchanged: `burxt run pay.bx cside.o -lm`.
+Use `-o` unless you want the executable in your current directory. Arguments after the source file go
+to the linker unchanged: `burxt run pay.bx cside.o -lm`. Every command is documented in the
+[reference]({{ site.baseurl }}/reference/cli.html).
 
-## In an editor
+**In an editor:**
 
 ```sh
 python3 editors/vscode/pack.py
-code --install-extension editors/vscode/burxt-0.1.2.vsix
+code --install-extension editors/vscode/burxt-0.1.4.vsix
 ```
 
 Syntax highlighting, diagnostics as you type, hover, and a ▶ button (`Ctrl+F5`). It talks to
 `burxt lsp` — the same compiler you run from the terminal, so the editor cannot disagree with the
 build.
 
-One trap worth knowing about, because it cost a full afternoon: the extension runs whichever
-`burxt` binary it finds, and if you have both a `--release` and a `debug` build it prefers the
-newer. After rebuilding, run **Burxt: Restart Server** from the command palette. An editor
-reporting an error the terminal does not is almost always this.
+## Examples
+{: #examples}
 
-## What to read next
+**The whole program, and what it prints.**
+
+```burxt
+let name: String = "world";
+print("hello, " + name + "!");
+```
+
+```
+hello, world!
+```
+
+**Five lines that check something**, which is the case this language is shaped around. No wrapper, no
+entry point, no build file:
+
+```burxt
+let price:    Decimal<2> = $19.99;
+let quantity: Int        = 3;
+print(price * quantity);
+```
+
+```
+59.97
+```
+
+**And the refusal you will meet first**, because it is the one an agent trips over. Adding a rate to a
+price:
+
+```burxt
+let price: Decimal<2> = $19.99;
+let rate:  Decimal<4> = 8.25%;
+print(price + rate);
+```
+
+```
+error: cannot + Decimal<2> and Decimal<4>: scales must match. Burxt does not silently rescale money.
+ --> hello.bx:3:7
+  |
+3 | print(price + rate);
+  |       ^^^^^^^^^^^^
+```
+
+That message is the subject of the next page.
+
+## Next
+{: #next}
 
 [Numbers and money](02-numbers-and-money.md) — where being wrong costs, and the first thing the
 compiler will refuse to let you do.

@@ -408,12 +408,38 @@ fn editor_grammar_knows_every_keyword_the_compiler_does() {
         words
     );
 
-    // Built-in functions, from the reserved-name check in the typechecker.
-    for chunk in typeck.split("f.name == \"").skip(1) {
-        if let Some((name, _)) = chunk.split_once('"') {
-            words.push(name.to_string());
-        }
-    }
+    // Built-in functions, from `is_reserved_name` in the typechecker.
+    //
+    // This used to read `f.name == "` — a shape the typechecker had when the test was written and
+    // does not have now, because those comparisons were collected into one `matches!`. So the scrape
+    // found NOTHING and quietly contributed an empty list, for however many versions that refactor
+    // is old. The test went on passing on its keywords alone, and `exit` was missing from the
+    // grammar the whole time.
+    //
+    // Hence the floor below. A scrape that finds nothing must fail rather than check less: this file
+    // already learned that lesson once, in the generator that skipped silently in CI for thirteen
+    // versions, and it is the same failure — a check that has never run looks exactly like one that
+    // passes.
+    let reserved = typeck
+        .split_once("fn is_reserved_name")
+        .and_then(|(_, rest)| rest.split_once('}'))
+        .map(|(body, _)| body)
+        .expect("`fn is_reserved_name` in src/typeck.rs — the built-in name list");
+    let builtins: Vec<String> = reserved
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .filter(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
+        .map(|w| w.to_string())
+        .collect();
+    assert!(
+        builtins.len() > 10,
+        "failed to read the built-in names out of src/typeck.rs (found {:?}). They moved — find \
+         them and fix this scrape rather than deleting it: an empty list makes this test pass by \
+         checking nothing, which is how `exit` stayed missing from the grammar.",
+        builtins
+    );
+    words.extend(builtins);
 
     // Search only the grammar's PATTERNS, never its prose: a keyword mentioned in
     // a comment is not a keyword that highlights. (Verified by mutation — the
@@ -1185,6 +1211,15 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     // is the point of having written the note: without it, a floor that held would have looked like
     // nothing happening rather than five fixtures changing hands.
     //
+    // v0.0.183 raised it to 210, and that one is five fixtures earned in a single change: stage-1
+    // enforces `touches` now, so `effect_not_declared`, `effect_not_declared_transitively`,
+    // `pure_cannot_touch`, `unknown_effect` and the new `effect_not_declared_through_a_method` are all
+    // caught by its checker rather than slipping past a rule it did not have.
+    //
+    // The last of those five is a bug stage-1 found IN STAGE-0, which is the direction that matters:
+    // `method_effects` was enforced inward and never outward, so an effect could vanish from a
+    // signature chain by being called through a method.
+    //
     // v0.0.170 did the same for `match` on a scalar: four `match_scalar_*` fixtures that stage-1 had
     // been rejecting as PARSE errors (it refused a literal pattern outright) are now rejected by its
     // checker, each naming the rule it broke. Again the count is unchanged, and again that is only
@@ -1214,8 +1249,8 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
 
     let _ = fs::remove_dir_all(&scratch);
     assert!(
-        caught >= 205,
-        "stage-1 rejected only {} of {} fail programs, down from 205",
+        caught >= 210,
+        "stage-1 rejected only {} of {} fail programs, down from 210",
         caught,
         total
     );
@@ -3266,7 +3301,7 @@ fn the_site_is_honest_and_complete() {
     // A 404 on a launched site is the cheapest possible bug to prevent and one of the most
     // embarrassing to ship.
     let layout = fs::read_to_string(root.join("docs/_layouts/default.html")).expect("the layout");
-    for target in ["guide", "examples", "install"] {
+    for target in ["guide", "reference", "examples", "install"] {
         let link = format!("{{{{ site.baseurl }}}}/{}/", target);
         if !layout.contains(&link) {
             continue;                       // not in the nav, so nothing to serve
@@ -3299,6 +3334,786 @@ fn the_site_is_honest_and_complete() {
         String::from_utf8_lossy(&checked.stdout),
         String::from_utf8_lossy(&checked.stderr)
     );
+}
+
+/// Every guide page teaches the same way, in the same order.
+///
+/// The guide used to be twelve pages of ad-hoc headings. Each was individually fine and collectively
+/// unnavigable: no page told you where its limitations were, seven of them never said what the feature
+/// costs, and none of them had a worked example you could run. A reader who wanted "what does this cost
+/// me" had to read the prose and hope.
+///
+/// So every page now walks one ladder — what the problem is, an analogy, a step closer, the mechanics,
+/// the design reason, the costs, the use cases, examples — and the ladder is enforced rather than
+/// remembered, because the eighth page written six months from now is the one that would quietly skip
+/// three steps.
+///
+/// The `Examples` step is the one worth being strictest about. It is the step that turns a page from an
+/// explanation into something a reader can check, and it is the easiest to leave out.
+#[test]
+fn every_guide_page_teaches_in_eight_steps() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    // In order. The analogy step is matched by prefix, because it keeps its own wording — "Think of a
+    // tray", "Think of a cloakroom" — and that voice is worth more than a uniform heading.
+    const LADDER: [&str; 8] = [
+        "What this is for",
+        "Think of ",
+        "A step closer",
+        "In code",
+        "Why it is built this way",
+        "What it costs",
+        "When you reach for it",
+        "Examples",
+    ];
+
+    let mut pages: Vec<PathBuf> = fs::read_dir(root.join("docs/guide"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.len() > 3 && n.starts_with(|c: char| c.is_ascii_digit()) && n.ends_with(".md"))
+        })
+        .collect();
+    pages.sort();
+    assert!(pages.len() >= 12, "expected at least twelve numbered guide pages, found {}", pages.len());
+
+    let mut problems = Vec::new();
+    for page in &pages {
+        let name = page.file_name().unwrap().to_string_lossy().into_owned();
+        let text = fs::read_to_string(page).unwrap();
+
+        // Headings only, and never one inside a fence — `## ` at the start of a line is ordinary
+        // shell output in a code block.
+        let mut headings: Vec<String> = Vec::new();
+        let mut fenced = false;
+        for line in text.lines() {
+            if line.starts_with("```") {
+                fenced = !fenced;
+                continue;
+            }
+            if !fenced && line.starts_with("## ") {
+                headings.push(line[3..].trim().to_string());
+            }
+        }
+
+        let mut at = 0usize;
+        for step in LADDER {
+            let found = headings[at..].iter().position(|h| {
+                if step.ends_with(' ') { h.starts_with(step) } else { h == step }
+            });
+            match found {
+                Some(offset) => at += offset + 1,
+                None => problems.push(format!(
+                    "docs/guide/{} has no `## {}` after the steps before it. The ladder is: {}",
+                    name,
+                    step.trim_end(),
+                    LADDER.join(" → ")
+                )),
+            }
+        }
+
+        // `Next` closes every page, and `the_guide_reads_in_order` already checks it links forward.
+        if !headings.iter().any(|h| h == "Next") {
+            problems.push(format!("docs/guide/{} does not end with a `## Next`", name));
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// Every guide page draws its analogy rather than only describing it.
+///
+/// The report that started this was "I don't see any analogy here" — on pages that *had* one, in prose.
+/// Eight of the twelve already said "think of a tray" or "think of a cloakroom" and then showed a
+/// schematic of a bump pointer, which is the mechanism rather than the metaphor. So the analogy step now
+/// carries a picture of the everyday object, and this is what keeps it there.
+///
+/// Two things are checked beyond its existence, and both were mistakes made while drawing these. A
+/// `viewBox` with no `max-width` overflows a phone. And an SVG is invisible to a screen reader without a
+/// real label — `role="img"` with an `aria-label` that says what the picture shows, not "diagram".
+#[test]
+fn every_guide_page_shows_an_analogy_picture() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut problems = Vec::new();
+    let mut drawn = 0;
+
+    for entry in fs::read_dir(root.join("docs/guide")).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if !(name.ends_with(".md") && name.starts_with(|c: char| c.is_ascii_digit())) {
+            continue;
+        }
+        let text = fs::read_to_string(&path).unwrap();
+
+        // The analogy step runs from its own heading to the next `## `.
+        let Some(start) = text.find("\n## Think of ") else {
+            problems.push(format!("docs/guide/{} has no `## Think of …` step", name));
+            continue;
+        };
+        let rest = &text[start + 1..];
+        let section = match rest[3..].find("\n## ") {
+            Some(end) => &rest[..end + 3],
+            None => rest,
+        };
+
+        let Some(svg) = section.find("<svg") else {
+            problems.push(format!(
+                "docs/guide/{}'s analogy step has no picture. The prose says what to think of; the \
+                 report was that there was nothing to look at.",
+                name
+            ));
+            continue;
+        };
+        let svg = &section[svg..];
+        drawn += 1;
+
+        if !svg.contains("viewBox") || !svg.contains("max-width") {
+            problems.push(format!(
+                "docs/guide/{}'s analogy picture needs both a `viewBox` and `max-width:100%` — \
+                 without them it does not scale on a phone",
+                name
+            ));
+        }
+        if !svg.contains("role=\"img\"") {
+            problems.push(format!("docs/guide/{}'s analogy picture has no `role=\"img\"`", name));
+        }
+        // A label, and a real one. "diagram" and "illustration" describe the medium, not the picture.
+        match svg.split_once("aria-label=\"") {
+            Some((_, tail)) => {
+                let label = tail.split('"').next().unwrap_or("");
+                if label.len() < 40 {
+                    problems.push(format!(
+                        "docs/guide/{}'s analogy picture is labelled {:?} — a screen reader gets only \
+                         this, so it has to say what the picture SHOWS",
+                        name, label
+                    ));
+                }
+            }
+            None => problems.push(format!(
+                "docs/guide/{}'s analogy picture has no `aria-label`",
+                name
+            )),
+        }
+    }
+
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    assert!(drawn >= 12, "only {} guide pages draw their analogy", drawn);
+}
+
+/// The PHP, Python and Rust ports of the till print exactly what the Burxt one prints.
+///
+/// The examples page shows the same point-of-sale program four times and says the ports agree. That
+/// is the whole comparison — if they printed different totals, the page would be comparing four
+/// programs rather than one program written four ways, and the argument about where the rounding rule
+/// lives would be worthless.
+///
+/// The claim lives here rather than on the page on purpose. Running `php`, `python3` and `rustc`
+/// while GENERATING would make the page's bytes depend on which runtimes were installed, so CI and a
+/// laptop would produce different files and the staleness check would fail for a reason that has
+/// nothing to do with the site.
+///
+/// A missing runtime SKIPS, and says which — the alternative is a test that only ever runs on one
+/// machine, and this file already records what that costs.
+#[test]
+fn the_ports_agree_with_the_original() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("pos-ports");
+    fs::create_dir_all(&scratch).unwrap();
+
+    // The Burxt program is the reference, so it is not optional.
+    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("run")
+        .arg("till.bx")
+        .arg("-o")
+        .arg(scratch.join("till"))
+        .current_dir(root.join("examples/pos"))
+        .output()
+        .expect("burxt run");
+    assert!(
+        built.status.success(),
+        "examples/pos/till.bx no longer runs:\n{}{}",
+        String::from_utf8_lossy(&built.stdout),
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let expected: String = String::from_utf8_lossy(&built.stdout)
+        .lines()
+        .filter(|l| !l.starts_with("compiled "))
+        .map(|l| format!("{}\n", l.trim_end()))
+        .collect();
+    assert!(
+        expected.contains("230.46"),
+        "the till's own output changed — check this test's reference before the ports:\n{}",
+        expected
+    );
+
+    let mut skipped = Vec::new();
+    let mut wrong = Vec::new();
+
+    let mut compare = |what: &str, got: std::process::Output| {
+        let shown: String = String::from_utf8_lossy(&got.stdout)
+            .lines()
+            .map(|l| format!("{}\n", l.trim_end()))
+            .collect();
+        if !got.status.success() {
+            wrong.push(format!(
+                "the {} port did not run:\n{}",
+                what,
+                String::from_utf8_lossy(&got.stderr)
+            ));
+        } else if shown != expected {
+            wrong.push(format!(
+                "the {} port prints something different from the Burxt one.\nBurxt:\n{}\n{}:\n{}",
+                what, expected, what, shown
+            ));
+        }
+    };
+
+    // PHP and Python are interpreters: point them at the entry file in its own directory, because
+    // each port requires or imports its siblings by relative name.
+    match Command::new("php").arg("till.php").current_dir(root.join("examples/pos-php")).output() {
+        Ok(out) => compare("PHP", out),
+        Err(_) => skipped.push("php"),
+    }
+    match Command::new("python3")
+        .arg("till.py")
+        .current_dir(root.join("examples/pos-python"))
+        .output()
+    {
+        Ok(out) => compare("Python", out),
+        Err(_) => skipped.push("python3"),
+    }
+
+    // Rust has to be compiled. `till.rs` declares its siblings as modules, so one rustc invocation
+    // over the entry file is the whole build.
+    match Command::new("rustc")
+        .arg("--edition=2021")
+        .arg("-O")
+        .arg("till.rs")
+        .arg("-o")
+        .arg(scratch.join("till-rust"))
+        .current_dir(root.join("examples/pos-rust"))
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            match Command::new(scratch.join("till-rust")).output() {
+                Ok(ran) => compare("Rust", ran),
+                Err(e) => wrong.push(format!("the Rust port built and would not run: {}", e)),
+            }
+        }
+        Ok(out) => wrong.push(format!(
+            "the Rust port does not compile:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        )),
+        Err(_) => skipped.push("rustc"),
+    }
+
+    let _ = fs::remove_dir_all(&scratch);
+    if !skipped.is_empty() {
+        eprintln!("skipped the {} port(s): not installed", skipped.join(", "));
+    }
+    assert!(
+        wrong.is_empty(),
+        "the examples page says these print the same thing:\n\n{}",
+        wrong.join("\n\n")
+    );
+}
+
+/// The site does not quote a tool saying something the tool does not say.
+///
+/// The landing page and guide page 12 both show output from `burxt review` and `burxt mcp-schema`,
+/// and those blocks are the argument — not decoration around it. The landing page's `burxt review`
+/// block was INVENTED: close enough to pass a read, wrong in three ways. It named a method
+/// `Account.withdraw` that was called `withdrawn`, it used column widths the tool does not use, and
+/// it omitted the summary line the tool always prints. Nobody would have caught that by proofreading,
+/// because it looked exactly like real output.
+///
+/// The guide has already lied twice this way — two error messages the compiler never produced — and
+/// both times running the example is what caught it. So: run the tools, and check the page against
+/// what came back.
+#[test]
+fn the_site_quotes_the_tools_honestly() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("site-tools");
+    fs::create_dir_all(&scratch).unwrap();
+
+    // ---- `burxt review` -----------------------------------------------------------------------
+    //
+    // The page shows four verdict lines. This builds the before/after pair that produces exactly
+    // those four, so a changed output FORMAT — a column width, a wording, the summary — fails here
+    // rather than sitting on the front page looking plausible.
+    let before = "class Account {\n    owner: String,\n    private balance: Decimal<2>,\n\n\
+         \x20   function (self) withdrawn(amount: Decimal<2>) -> Decimal<2>\n\
+         \x20       requires amount > $0.00\n\
+         \x20       requires amount <= self.balance\n\
+         \x20   { return self.balance - amount; }\n}\n\n\
+         function invoice_total(net: Decimal<2>) -> Decimal<2> {\n    return net;\n}\n\n\
+         function line_tax(quantity: Int, unit: Decimal<2>) -> Decimal<2> {\n\
+         \x20   return unit * quantity;\n}\n";
+    let after = "class Account {\n    owner: String,\n    balance: Decimal<2>,\n\n\
+         \x20   function (self) withdrawn(amount: Decimal<2>) -> Decimal<2>\n\
+         \x20       requires amount > $0.00\n\
+         \x20   { return self.balance - amount; }\n}\n\n\
+         function invoice_total(net: Decimal<2>) -> Decimal<2> touches network {\n    return net;\n}\n\n\
+         function line_tax(quantity: Int [> 0], unit: Decimal<2>) -> Decimal<2> {\n\
+         \x20   return unit * quantity;\n}\n";
+    fs::write(scratch.join("before.bx"), before).unwrap();
+    fs::write(scratch.join("after.bx"), after).unwrap();
+
+    let reviewed = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("review")
+        .arg("before.bx")
+        .arg("after.bx")
+        .current_dir(&scratch)
+        .output()
+        .expect("burxt review");
+    let said = String::from_utf8_lossy(&reviewed.stdout).to_string();
+    assert_eq!(
+        reviewed.status.code(),
+        Some(1),
+        "`burxt review` must exit 1 when a promise got weaker — the landing page calls it a gate \
+         rather than a report, and a gate that exits 0 is a report"
+    );
+
+    let landing = fs::read_to_string(root.join("docs/index.md")).expect("the landing page");
+    let mut wrong = Vec::new();
+    for line in said.lines().filter(|l| !l.trim().is_empty()) {
+        if !landing.contains(line) {
+            wrong.push(format!("`burxt review` printed this and docs/index.md does not:\n    {}", line));
+        }
+    }
+
+    // ---- `burxt mcp-schema` -------------------------------------------------------------------
+    //
+    // The pages pretty-print the manifest across several lines for reading, which is presentation
+    // rather than invention — so what is held here is every FACT in it: each key and value must
+    // appear in what the compiler actually emitted.
+    let schema = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("mcp-schema")
+        .arg(root.join("examples/mcp/tools.bx"))
+        .current_dir(root)
+        .output()
+        .expect("burxt mcp-schema");
+    let manifest = String::from_utf8_lossy(&schema.stdout).to_string();
+    assert!(
+        manifest.contains("\"name\":\"line_total\""),
+        "`burxt mcp-schema` no longer describes `line_total`:\n{}",
+        manifest
+    );
+
+    let page12 = fs::read_to_string(root.join("docs/guide/12-tools-and-agents.md"))
+        .expect("guide page 12");
+    for claim in [
+        "\"exclusiveMinimum\":\"0.00\"",
+        "\"maximum\":\"100000\"",
+        "\"type\":\"integer\"",
+        "\"description\":\"Decimal<2>\"",
+    ] {
+        if !manifest.contains(claim) {
+            wrong.push(format!(
+                "the site shows `{}` in the derived schema and the compiler does not emit it",
+                claim
+            ));
+        }
+        if !landing.contains(claim) && !page12.contains(claim) {
+            wrong.push(format!("neither page shows `{}`, which the schema turns on", claim));
+        }
+    }
+
+    // The skipped-clause note, which is the honest half of page 12 and the easiest thing to quietly
+    // stop printing.
+    fs::write(
+        scratch.join("relational.bx"),
+        "function withdraw(balance: Decimal<2>, amount: Decimal<2> [<= balance]) -> Decimal<2>\n\
+         { return balance - amount; }\n",
+    )
+    .unwrap();
+    let relational = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("mcp-schema")
+        .arg("relational.bx")
+        .current_dir(&scratch)
+        .output()
+        .expect("burxt mcp-schema");
+    let note = String::from_utf8_lossy(&relational.stderr).to_string();
+    let note = note.trim();
+    if !note.is_empty() && !page12.contains(note) {
+        wrong.push(format!(
+            "`burxt mcp-schema` reports this on stderr and page 12 quotes something else:\n    \
+             {}\nThat note IS the page's claim about what the tool cannot express.",
+            note
+        ));
+    }
+
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(
+        wrong.is_empty(),
+        "the site quotes these tools inaccurately:\n\n{}",
+        wrong.join("\n\n")
+    );
+}
+
+/// The reference is what the compiler says it is, and the sidebar is what the pages say it is.
+///
+/// The page these replaced was hand-written, and its own header claimed it had been "generated by
+/// reading the compiler, not by memory". That was true of the afternoon somebody wrote it. By the
+/// time anyone looked it listed `record` as a keyword — renamed to `class` eleven versions earlier —
+/// and called `for` and `is` "reserved but not yet used" ninety versions after `for x in xs`
+/// shipped. A reference is the one page a reader trusts literally, so it is the worst page to let
+/// rot, and prose does not fail to compile.
+///
+/// So both are generated and both are diffed, exactly like `the_refusals_page_is_not_stale` and the
+/// examples page. The generator does more than substitute text: it compiles a use of every builtin
+/// signature it prints, and it holds its own list against `is_reserved_name`, so adding a builtin to
+/// the language fails HERE until the reference knows about it.
+#[test]
+fn the_reference_is_not_stale() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    for (script, what) in [
+        ("scripts/site-reference.py", "docs/reference/ and docs/assets/search.json"),
+        ("scripts/site-nav.py", "docs/_data/nav.yml"),
+    ] {
+        let checked = Command::new("python3")
+            .arg(script)
+            .arg("--check")
+            .env("BURXT", env!("CARGO_BIN_EXE_burxt"))
+            .current_dir(root)
+            .output()
+            .unwrap_or_else(|e| panic!("running {}: {}", script, e));
+        assert!(
+            checked.status.success(),
+            "{} no longer matches the compiler. Regenerate it:\n    python3 {}\n{}{}",
+            what,
+            script,
+            String::from_utf8_lossy(&checked.stdout),
+            String::from_utf8_lossy(&checked.stderr)
+        );
+    }
+
+    let nav = fs::read_to_string(root.join("docs/_data/nav.yml")).expect("the sidebar data");
+    assert!(
+        nav.contains("- title: The guide") && nav.contains("- title: Reference"),
+        "docs/_data/nav.yml lost one of its two groups"
+    );
+    let steps = nav.matches("          id: ").count();
+    assert!(steps > 80, "the sidebar lists only {} steps, which cannot be right", steps);
+
+    // Every anchor the SEARCH box points at is one the SIDEBAR also lists.
+    //
+    // This is the invariant worth holding, because the failure it prevents is invisible: an anchor
+    // that does not exist still loads the page, just at the top of it, so a wrong link and a right
+    // link look identical unless you know which section you expected. Two generators computing the
+    // same id two ways is how that happens — and it nearly did. kramdown DELETES underscores rather
+    // than hyphenating them, so `to_string` is `#tostring`, and the first version of the reference
+    // pointed every link at `#to-string`, which exists nowhere.
+    //
+    // Two things now make it safe, and this checks both: the generated pages state their ids
+    // outright with `{: #…}` rather than predicting them, and both generators get every id from one
+    // function.
+    let search = fs::read_to_string(root.join("docs/assets/search.json")).expect("the search index");
+    let listed: std::collections::HashSet<&str> = nav
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("id: "))
+        .collect();
+    let mut orphans = Vec::new();
+    for row in search.split("\"url\": \"").skip(1) {
+        let Some((url, _)) = row.split_once('"') else { continue };
+        // Only the anchors into a guide page: a reference anchor is checked by the `{: #…}` sweep
+        // below, and `/reference/#keywords` points at a heading this data file does not enumerate.
+        if !url.starts_with("/guide/") {
+            continue;
+        }
+        let Some((_, fragment)) = url.split_once('#') else { continue };
+        if !listed.contains(fragment) {
+            orphans.push(url.to_string());
+        }
+    }
+    orphans.sort();
+    orphans.dedup();
+    assert!(
+        orphans.is_empty(),
+        "the search index points at {} anchor(s) the sidebar does not list, so one of the two is \
+         wrong and both will look like they work: {:?}\nBoth ids must come from `headings` in \
+         scripts/site-nav.py.",
+        orphans.len(),
+        orphans
+    );
+
+    // And the generated pages really do state their ids, rather than leaving them to be guessed.
+    let builtins = fs::read_to_string(root.join("docs/reference/builtins.md")).expect("builtins");
+    let stated = builtins.matches("\n{: #").count();
+    let headings = builtins.matches("\n## ").count();
+    assert_eq!(
+        stated, headings,
+        "docs/reference/builtins.md has {} headings but states {} ids. Every generated heading must \
+         carry `{{: #…}}`, because kramdown's own slug rule is not what anyone would guess — it \
+         turns `to_string` into `tostring`.",
+        headings, stated
+    );
+}
+
+/// The website's highlighter and the compiler must not drift either.
+///
+/// `docs/assets/burxt-editor.js` colours all 92 Burxt blocks on the site, and it is a second
+/// implementation of the same word lists the lexer holds — which is exactly the arrangement that
+/// rots. A keyword the compiler knows and the site does not is a word that compiles and renders as
+/// a plain identifier, which is how documentation starts looking unfinished.
+///
+/// The editor grammar already has this test (`editor_grammar_knows_every_keyword_the_compiler_does`)
+/// and this is deliberately its twin, including the part that matters most: it reads the compiler's
+/// own tables out of the source rather than restating them here, because a restated list is the
+/// thing that drifts.
+///
+/// It searches only the WORD LISTS, never the prose. The grammar's version learned that by
+/// mutation — the looser "anywhere in the file" form passed after a rule was deleted, because the
+/// word survived in a comment — and this file is even more comment than that one.
+#[test]
+fn the_web_highlighter_knows_every_keyword_the_compiler_does() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let lexer = fs::read_to_string(root.join("src/lexer.rs")).unwrap();
+    let typeck = fs::read_to_string(root.join("src/typeck.rs")).unwrap();
+    let js = fs::read_to_string(root.join("docs/assets/burxt-editor.js"))
+        .expect("docs/assets/burxt-editor.js — the site's highlighter");
+
+    // Keywords, from the lexer's `"word" => Token::Variant` table.
+    let mut want: Vec<String> = lexer
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            let rest = l.strip_prefix('"')?;
+            let (word, tail) = rest.split_once('"')?;
+            tail.trim_start().starts_with("=> Token::").then(|| word.to_string())
+        })
+        .collect();
+    assert!(
+        want.len() > 20,
+        "failed to read the keyword table out of src/lexer.rs (found {:?})",
+        want
+    );
+
+    // Built-in names, from `is_reserved_name` in the typechecker. Same scrape as the grammar test,
+    // and same reason for the floor: an empty list would make this pass by checking nothing.
+    let reserved = typeck
+        .split_once("fn is_reserved_name")
+        .and_then(|(_, rest)| rest.split_once('}'))
+        .map(|(body, _)| body)
+        .expect("`fn is_reserved_name` in src/typeck.rs");
+    let builtins: Vec<String> = reserved
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .filter(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
+        .map(|w| w.to_string())
+        .collect();
+    assert!(builtins.len() > 10, "failed to read the built-in names (found {:?})", builtins);
+    want.extend(builtins);
+
+    // The spellings the language RENAMED, from `renamed_keyword`. These do not compile, so the site
+    // must colour them as the errors they are rather than as identifiers — and they are not in the
+    // keyword table, which is precisely why the grammar had gone years without `trait` and `record`.
+    let renamed = lexer
+        .split_once("fn renamed_keyword")
+        .and_then(|(_, rest)| rest.split_once("_ => return None"))
+        .map(|(body, _)| body)
+        .expect("`fn renamed_keyword` in src/lexer.rs");
+    let old: Vec<String> = renamed
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            let rest = l.strip_prefix('"')?;
+            let (word, tail) = rest.split_once('"')?;
+            tail.trim_start().starts_with("=>").then(|| word.to_string())
+        })
+        .collect();
+    assert!(
+        old.len() >= 6,
+        "failed to read the renamed spellings out of src/lexer.rs (found {:?})",
+        old
+    );
+    want.extend(old);
+
+    // Only what is inside a `words('...')` call. A word in a comment is not a word that highlights.
+    let lists: String = js
+        .split("words(")
+        .skip(1)
+        .filter_map(|chunk| chunk.split_once(')').map(|(args, _)| args.to_string()))
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        lists.len() > 500,
+        "failed to read the word lists out of docs/assets/burxt-editor.js (got {} bytes). They are \
+         the strings passed to `words(...)`; if that shape changed, fix this scrape rather than \
+         loosening it to search the whole file — most of that file is comment.",
+        lists.len()
+    );
+
+    let known = |w: &str| {
+        // A word, not a substring: `as` must not be satisfied by `class`, and `push` must not be
+        // satisfied by nothing at all.
+        lists.match_indices(w).any(|(i, _)| {
+            let before = lists[..i].chars().next_back();
+            let after = lists[i + w.len()..].chars().next();
+            let boundary = |c: Option<char>| !c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+            boundary(before) && boundary(after)
+        })
+    };
+
+    let missing: Vec<&String> = want.iter().filter(|w| !known(w)).collect();
+    assert!(
+        missing.is_empty(),
+        "these words are known to the compiler but absent from the website's highlighter: {:?}\n\
+         Add them to a word list in docs/assets/burxt-editor.js — a keyword the compiler knows and \
+         the site does not renders as a plain identifier on all {} Burxt blocks.",
+        missing,
+        92
+    );
+}
+
+/// No text on the site is too faint to read, and the grey that was cannot come back.
+///
+/// The site shipped with `--ink-soft: #6e6e73` carrying the navigation, the hero subtitle, every
+/// table header, every caption and the whole footer. At 5.1:1 that passes a checker and still reads
+/// as washed out at the 13px most of it was used at, so the page looked faint in exactly the places
+/// where it was explaining itself. The report was "there are no colours and the grey is not visible".
+///
+/// Contrast is arithmetic, so it does not need an eye — but nothing was doing the arithmetic, and a
+/// pale colour is the kind of regression that reaches the live site because every test stays green
+/// and the page merely looks a bit tired. So: read the palette out of the stylesheet, and hold each
+/// text colour to WCAG AA against the surface it is actually used on.
+///
+/// The syntax palette is included deliberately. A theme is text — a pretty pale keyword is still
+/// unreadable text, and a code block is the thing on this site people came to read.
+#[test]
+fn the_site_text_is_readable() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let css = fs::read_to_string(root.join("docs/assets/site.css")).expect("the stylesheet");
+
+    // WCAG 2.1's relative luminance and contrast ratio, straight from the specification.
+    fn channel(eight_bit: u8) -> f64 {
+        let c = eight_bit as f64 / 255.0;
+        if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    }
+    fn luminance(hex: &str) -> f64 {
+        let n = u32::from_str_radix(hex, 16).unwrap();
+        let (r, g, b) = ((n >> 16) as u8, ((n >> 8) & 0xff) as u8, (n & 0xff) as u8);
+        0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+    }
+    fn ratio(a: &str, b: &str) -> f64 {
+        let (x, y) = (luminance(a), luminance(b));
+        let (hi, lo) = if x > y { (x, y) } else { (y, x) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    // `--name: #rrggbb;` from the `:root` block, and `.t-x { color: #rrggbb; }` for the syntax
+    // classes. Read out of the file rather than listed here, because a list here is what drifts.
+    let six = |value: &str| -> Option<String> {
+        let hex = value.trim().trim_start_matches('#');
+        let hex = hex.split(|c: char| !c.is_ascii_hexdigit()).next().unwrap_or("");
+        (hex.len() == 6).then(|| hex.to_ascii_lowercase())
+    };
+    let mut vars: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut tokens: Vec<(String, String)> = Vec::new();
+    for line in css.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("--") {
+            if let Some((name, value)) = rest.split_once(':') {
+                if let Some(hex) = six(value) {
+                    vars.insert(format!("--{}", name.trim()), hex);
+                }
+            }
+        }
+        // `.t-kw       { color: #9b2393; }` — one class, one declaration, one line.
+        if line.starts_with(".t-") {
+            if let Some((selector, body)) = line.split_once('{') {
+                if let Some((_, value)) = body.split_once("color:") {
+                    if let Some(hex) = six(value) {
+                        tokens.push((selector.trim().to_string(), hex));
+                    }
+                }
+            }
+        }
+    }
+    let of = |name: &str| -> String {
+        vars.get(name).cloned().unwrap_or_else(|| panic!("docs/assets/site.css lost {}", name))
+    };
+    let paper = of("--paper");
+    let wash = of("--wash");
+
+    let mut faint = Vec::new();
+    let mut check = |what: &str, ink: &str, on: &str, floor: f64| {
+        let got = ratio(ink, on);
+        if got < floor {
+            faint.push(format!(
+                "{} is #{} on #{} — {:.2}:1, and text needs {:.1}:1",
+                what, ink, on, got, floor
+            ));
+        }
+    };
+
+    // Prose, links, and the one secondary tier that chrome is allowed to use.
+    check("--ink", &of("--ink"), &paper, 4.5);
+    check("--ink-2", &of("--ink-2"), &paper, 4.5);
+    check("--accent", &of("--accent"), &paper, 4.5);
+    check("--refuse", &of("--refuse"), &paper, 4.5);
+    // White on the accent pill, which is the site's one filled control.
+    check("white on --accent", "ffffff", &of("--accent"), 4.5);
+    // Anything sitting on a panel rather than on the page.
+    check("--ink-2 on --wash", &of("--ink-2"), &wash, 4.5);
+    check("--refuse on --wash", &of("--refuse"), &wash, 4.5);
+
+    assert!(!tokens.is_empty(), "failed to read the syntax palette out of docs/assets/site.css");
+    for (class, hex) in &tokens {
+        check(class, hex, &wash, 4.5);
+    }
+
+    assert!(faint.is_empty(), "text on the site is too faint to read:\n  {}", faint.join("\n  "));
+
+    // And the grey itself is gone. The variable is DELETED rather than darkened, so nothing can
+    // quietly keep reaching for it — a darkened `--ink-soft` would have been re-used for prose
+    // within a version. Its name is allowed to appear in the comment that records why, which is
+    // why this looks for a declaration and a use rather than for the string anywhere.
+    let mut ghosts = Vec::new();
+    for entry in walk(&root.join("docs")) {
+        let text = match fs::read_to_string(&entry) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        for (n, line) in text.lines().enumerate() {
+            let trimmed = line.trim();
+            let declares = trimmed.starts_with("--ink-soft:");
+            let uses = line.contains("var(--ink-soft");
+            if declares || uses {
+                ghosts.push(format!(
+                    "{}:{} — {}",
+                    entry.strip_prefix(root).unwrap_or(&entry).display(),
+                    n + 1,
+                    trimmed.chars().take(72).collect::<String>()
+                ));
+            }
+        }
+    }
+    assert!(
+        ghosts.is_empty(),
+        "`--ink-soft` is the #6e6e73 grey that made the site look faint, and it was deleted rather \
+         than darkened so it could not be reused. Use `--ink` for anything a reader reads, or \
+         `--ink-2` for chrome:\n  {}",
+        ghosts.join("\n  ")
+    );
+}
+
+/// Every file under a directory, so a test can sweep the site without listing it.
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else { return found };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(walk(&path));
+        } else {
+            found.push(path);
+        }
+    }
+    found.sort();
+    found
 }
 
 /// **Every runtime guarantee, held against the Burxt backend too.**
@@ -3478,10 +4293,18 @@ fn every_source_and_document_is_in_version_control() {
                 walk.push(path);
                 continue;
             }
-            let interesting = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| matches!(e, "bx" | "md" | "rs" | "toml" | "json" | "sh" | "py"));
+            // `css`, `js`, `html` and `yml` are here because the website is now made of them. The
+            // list used to stop at `py`, which covered the generators and not one line of what they
+            // generate into — so `docs/assets/site.js`, the layouts, and the sidebar's data file
+            // could each have gone missing with `git status` clean, which is the precise failure
+            // this test exists to prevent and the reason docs/ was invisible until v0.0.105.
+            let interesting = path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                matches!(
+                    e,
+                    "bx" | "md" | "rs" | "toml" | "json" | "sh" | "py" | "css" | "js" | "html"
+                        | "yml"
+                )
+            });
             if !interesting {
                 continue;
             }

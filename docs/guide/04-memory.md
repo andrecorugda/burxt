@@ -1,10 +1,12 @@
 ---
 title: Memory
+description: A region is a cafeteria tray. You pile work onto it and tip the whole thing at the door — no collector, no reference counts, no lifetimes.
 ---
 
 # 4. Memory
 
-## The problem, as it actually arrives
+## What this is for
+{: #what-this-is-for}
 
 Every language answers *"when does this storage go away?"*, and there are only two ways to get it
 wrong.
@@ -34,35 +36,117 @@ an **empty string**: plausible, harmless-looking, and wrong. Every test around i
 nothing asserted on a value nobody suspected.
 
 A use-after-free that segfaults is a bad afternoon. A use-after-free that returns *believable bytes*
-is a bug that ships. Burxt refuses that code now, and the rest of this page is the one idea that
-makes refusing it cheap.
+is a bug that ships.
 
-## Think of a tray
+## Think of a cafeteria tray
+{: #think-of-a-cafeteria-tray}
 
-Your program has a tray. Everything it builds — a joined String, a `to_string`, a `substring`, a
-file it read, a growable array — goes on the tray. When you are done with a batch of work, you tip
-the **whole tray** into the bin in one motion. You never pick items off it one at a time.
+You take a tray. You pile things on it — a bowl, a cup, a plate — and you do not think about any of
+them individually, because you are not going to. When you are finished you carry the whole tray to
+the door and tip it in one motion.
+
+Nobody walks around the room deciding which fork is still needed. That is a garbage collector, and it
+is why a cafeteria does not have one.
+
+<figure>
+<svg viewBox="0 0 680 316" role="img" aria-label="A region is a cafeteria tray: everything a batch of work builds goes on it, and the whole tray is tipped in one motion when the batch is done. A value built on the tray cannot leave with you." style="max-width:100%;height:auto;">
+  <style>
+    .tray { fill: #f5f5f7; stroke: #1d1d1f; stroke-width: 2; }
+    .dish { fill: #ffffff; stroke: #1d1d1f; stroke-width: 1.6; }
+    .bin  { fill: #ffffff; stroke: #1d1d1f; stroke-width: 2; }
+    .lid  { fill: none; stroke: #1d1d1f; stroke-width: 2; stroke-linecap: round; }
+    .move { fill: none; stroke: #0071e3; stroke-width: 2; marker-end: url(#mb); }
+    .stop { fill: none; stroke: #c8102e; stroke-width: 2; marker-end: url(#mr); }
+    .no   { fill: none; stroke: #c8102e; stroke-width: 2; }
+    .hair { fill: none; stroke: #d2d2d7; stroke-width: 1; }
+    .h    { font: 600 13.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1d1d1f; }
+    .t    { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #1d1d1f; }
+    .cap  { font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1d1d1f; }
+    .red  { font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #c8102e; }
+    .blue { font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0071e3; }
+  </style>
+  <defs>
+    <marker id="mb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0071e3"/>
+    </marker>
+    <marker id="mr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c8102e"/>
+    </marker>
+  </defs>
+
+  <text class="h" x="8" y="18">One tray holds everything this batch builds</text>
+
+  <rect class="tray" x="20" y="36" width="256" height="106" rx="12"/>
+  <rect class="hair" x="30" y="46" width="236" height="86" rx="8"/>
+
+  <path class="dish" d="M56 82 h52 a26 26 0 0 1 -52 0 z"/>
+  <path class="lid"  d="M52 82 h60"/>
+  <text class="t" x="52" y="124">a String</text>
+
+  <rect class="dish" x="142" y="64" width="34" height="38" rx="5"/>
+  <path class="lid" d="M176 73 q11 9 0 18"/>
+  <text class="t" x="132" y="124">to_string</text>
+
+  <ellipse class="dish" cx="228" cy="84" rx="24" ry="11"/>
+  <text class="t" x="210" y="124">[Line]</text>
+
+  <text class="blue" x="290" y="82">done</text>
+  <path class="move" d="M288 92 h48"/>
+
+  <path class="bin" d="M356 58 h84 l-9 84 a10 10 0 0 1 -10 9 h-46 a10 10 0 0 1 -10 -9 z"/>
+  <path class="lid" d="M349 52 h98"/>
+  <path class="lid" d="M382 46 h32"/>
+  <text class="cap"  x="346" y="170">one motion</text>
+  <text class="blue" x="346" y="187">release is O(1)</text>
+
+  <text class="cap" x="480" y="72">No collector:</text>
+  <text class="cap" x="480" y="89">nothing needs</text>
+  <text class="cap" x="480" y="106">finding.</text>
+  <text class="cap" x="480" y="132">No counts:</text>
+  <text class="cap" x="480" y="149">nothing is</text>
+  <text class="cap" x="480" y="166">counted.</text>
+
+  <line class="hair" x1="8" y1="208" x2="672" y2="208"/>
+
+  <text class="h" x="8" y="234">You cannot take the fork home</text>
+
+  <rect class="tray" x="20" y="248" width="150" height="54" rx="10"/>
+  <path class="dish" d="M50 260 v32 M60 260 v32 M70 260 v32"/>
+  <path class="dish" d="M50 260 h20 v12 a10 10 0 0 1 -20 0 z"/>
+  <text class="t" x="92" y="270">a String</text>
+  <text class="t" x="92" y="287">built here</text>
+
+  <path class="stop" d="M186 275 h44"/>
+  <g class="no">
+    <circle cx="256" cy="275" r="14"/>
+    <line x1="246" y1="265" x2="266" y2="285"/>
+  </g>
+
+  <text class="red" x="284" y="270">A value built on the tray</text>
+  <text class="red" x="284" y="287">cannot outlive it.</text>
+</svg>
+<figcaption>The tray <em>is</em> the lifetime, so there is nothing else to prove — and the compiler says so
+before the program runs rather than after it has returned believable bytes.</figcaption>
+</figure>
 
 No collector, because nothing needs finding. No reference counts, because nothing is counted. No
 lifetimes to prove, because the tray is the lifetime.
 
-## What the tray is, in memory
+## A step closer
+{: #a-step-closer}
+
+The tray is an arena, and it has exactly two moving parts: a pointer to the top, and a mark.
 
 <svg viewBox="0 0 640 222" role="img" aria-label="A region is a bump pointer and a mark; closing it puts the pointer back" style="max-width:100%;height:auto;margin:1.5rem 0;">
   <style>
-    .arena { fill: none; stroke: #111; stroke-width: 1.5; }
-    .b { fill: #fff; stroke: #111; stroke-width: 1.2; }
-    .r { fill: #fff; stroke: #b00; stroke-width: 1.5; stroke-dasharray: 4 3; }
-    .tick { stroke: #111; stroke-width: 2.5; }
-    .t { font: 11px ui-monospace, monospace; fill: #111; }
-    .g { font: 11px ui-monospace, monospace; fill: #888; }
-    .s { font: 12px ui-monospace, monospace; fill: #b00; }
-    .a { stroke: #b00; stroke-width: 1.8; fill: none; marker-end: url(#a4); }
-    @media (prefers-color-scheme: dark) {
-      .arena { stroke: #ddd; } .b { fill: #1b1b1b; stroke: #ddd; } .r { fill: #1b1b1b; stroke: #ff8080; }
-      .tick { stroke: #ddd; } .t { fill: #eee; } .s { fill: #ff8080; }
-      .a { stroke: #ff8080; } .g { fill: #999; }
-    }
+    .arena { fill: none; stroke: #1d1d1f; stroke-width: 1.5; }
+    .b { fill: #fff; stroke: #1d1d1f; stroke-width: 1.2; }
+    .r { fill: #fff; stroke: #c8102e; stroke-width: 1.5; stroke-dasharray: 4 3; }
+    .tick { stroke: #1d1d1f; stroke-width: 2.5; }
+    .t { font: 11px ui-monospace, monospace; fill: #1d1d1f; }
+    .g { font: 11px ui-monospace, monospace; fill: #3a3a3e; }
+    .s { font: 12px ui-monospace, monospace; fill: #c8102e; }
+    .a { stroke: #c8102e; stroke-width: 1.8; fill: none; marker-end: url(#a4); }
   </style>
   <defs>
     <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
@@ -99,19 +183,22 @@ writes down where `top` stood; closing it puts `top` back. **Release is O(1) how
 above the mark**: no traversal, no finalizers, nothing to schedule, and no pause anyone will ever
 measure.
 
-## You do not have to write any of it down
+## In code
+{: #in-code}
+
+You do not have to write any of it down. This is a complete program:
 
 ```burxt
 let message: String = "line " + to_string(42);
 print(message);
 ```
 
-That is a complete program. A program has a tray from the moment it starts, and until v0.0.146 you
-had to say so — building anything outside a `region` was a compile error, so every file opened with
-a wrapper it never mentioned again. That is gone.
-([Why, and what it cost to find out](../../spec/M14-IMPLICIT-REGIONS.md).)
+A program has a tray from the moment it starts. Until v0.0.146 you had to say so — building anything
+outside a `region` was a compile error, so every file opened with a wrapper it never mentioned again.
+That is gone.
+([Why, and what it cost to find out](https://github.com/andrecorugda/burxt/blob/main/spec/M14-IMPLICIT-REGIONS.md).)
 
-## `region` — a second tray, for work you want off your hands early
+**`region` is a second tray, for work you want off your hands early:**
 
 ```burxt
 region r {
@@ -121,41 +208,8 @@ region r {
 // everything built inside is gone here
 ```
 
-Since you no longer *have* to, the question is when you should. Here is the number that answers it —
-a loop building 100,000 Strings, peak memory:
-
-<div class="tablewrap" markdown="1">
-
-| | |
-|---|---|
-| no region | **5,280 KB** |
-| `region each { ... }` around the loop body | **1,408 KB** |
-
-</div>
-
-Nothing is released until the program exits, so memory grows in a **straight line**. For three
-Strings that costs nothing at all. For a loop over a million rows it costs everything: the arena is
-a 1 GB reservation, and a server loop will get there.
-
-So the rule of thumb is one sentence — **a region per unit of work whose results you do not keep:**
-
-```burxt
-function more_rows() -> Bool { return false; }
-function next_row() -> Int { return 0; }
-function handle(row: Int) -> Int { return row; }
-
-while more_rows() {
-    region row { let ignored: Int = handle(next_row()); }
-}
-```
-
-That loop uses the same memory on its first row and its millionth.
-
-## Building something for your caller
-
-A function body has no tray of its own — which sounds like it would make a helper that formats a
-message impossible to write. It does not: a function that builds a value builds it **in its
-caller's region**.
+**A function that builds a value builds it in its caller's region.** A body has no tray of its own,
+which sounds like it would make a helper that formats a message impossible to write. It does not:
 
 ```burxt
 function describe(line: Int) -> String {
@@ -167,24 +221,25 @@ region parse {
 }
 ```
 
-The value never outlives the region it was built in, so the rule holds by construction rather than
-by anybody checking.
+The value never outlives the region it was built in, so the rule holds by construction rather than by
+anybody checking.
 
-Until v0.0.142 `describe` had to be written `-> String allocates`, declaring that it built
-something. Writing it still works and is still verified, and it is still **required** on
-`external function`, where there is no body to look at. But it is no longer required of you, for a
-reason worth knowing: the compiler always derived the answer anyway, and in
-[`examples/pos/receipt.bx`](../../examples/pos/receipt.bx) the word landed on **three functions out
-of three**. An annotation that appears on everything tells a reader nothing, and a reader who learns
-to skip one annotation has learned to skip annotations.
+Until v0.0.142 `describe` had to be written `-> String allocates`, declaring that it built something.
+Writing it still works and is still verified, and it is still **required** on `external function`,
+where there is no body to look at. But it is no longer required of you, for a reason worth knowing:
+the compiler always derived the answer anyway, and in
+[`examples/pos/receipt.bx`](https://github.com/andrecorugda/burxt/blob/main/examples/pos/receipt.bx)
+the word landed on **three functions out of three**. An annotation that appears on everything tells a
+reader nothing, and a reader who learns to skip one annotation has learned to skip annotations.
 
 That is the opposite call from the one made for [`touches`](06-effects.md), and deliberately so:
 `allocates` carried no promise anyone needed, and `touches network` *is* the promise.
 
-## What cannot leave
+### What cannot leave
+{: #what-cannot-leave}
 
-One rule, and it is the one from the top of this page: **a value built inside a `region` block
-cannot leave it**, because that block releases at its closing brace.
+One rule, and it is the one from the top of this page: **a value built inside a `region` block cannot
+leave it**, because that block releases at its closing brace.
 
 ```burxt
 function bad() -> String {
@@ -200,31 +255,49 @@ error: cannot return this String: it was built inside a `region` block, which re
 
 It applies **through a name** as well as directly, and that distinction is exactly the empty string
 from the top of the page. The check used to ask whether the returned *expression* allocated — and a
-name is not an expression that allocates, it is a name that happens to hold one:
-
-```burxt
-function bad(tag: Int) -> String {
-    region inner {
-        let s: String = "secret-" + to_string(tag);
-        return s;
-    }
-}
-```
-
-Same words:
-
-```
-error: cannot return this String: it was built inside a `region` block, which releases at
-       its closing brace, so its storage would not outlive the call. Move the allocation
-       out of the `region` block, or return a scalar summary.
-```
+name is not an expression that allocates, it is a name that happens to hold one.
 
 It also looks **inside aggregates**: a class holding a built String is itself built, and an array of
 them likewise. That arm was missing for four versions and let a second use-after-free through, which
 is why it walks fields and elements now. Both refusals with the compiler's exact words are in
-[`examples/regions.bx`](../../examples/regions.bx).
+[`examples/regions.bx`](https://github.com/andrecorugda/burxt/blob/main/examples/regions.bx).
 
-## Two limits to know about
+## Why it is built this way
+{: #why-it-is-built-this-way}
+
+**It is the only memory model that needs no annotation and has no pause.** Those are usually a
+trade-off: a collector costs you the pause, and proving lifetimes costs you the annotations. A region
+costs neither, because it answers a smaller question. Not *"when is this value dead?"* — which needs
+tracking — but *"when is this batch of work over?"*, which you already know, because you wrote the
+loop.
+
+**Release is O(1), and that is a guarantee rather than a measurement.** One assignment puts `top`
+back. It does not matter whether the block built three values or three million.
+
+**A reviewer needs to know nothing.** This is the part that matters for the language's purpose. There
+is no annotation to read, no lifetime to follow across a signature, and nothing an agent can get
+subtly wrong — because the one rule it could break is a compile error that names the line.
+
+**Failure is named, not silent.** The reservation is 1 GB per process and the allocator checks its own
+limit. An allocator that does not check does not fail — it corrupts, and then you are debugging the
+wrong thing. That distinction cost a session in v0.0.73, and is why the check is in both compilers.
+
+## What it costs
+{: #what-it-costs}
+
+**Nothing is released until the program exits unless you ask.** Memory grows in a **straight line**.
+For three Strings that costs nothing at all. For a loop over a million rows it costs everything.
+
+Measured, on a loop building 100,000 Strings — peak memory:
+
+<div class="tablewrap" markdown="1">
+
+| | |
+|---|---|
+| no region | **5,280 KB** |
+| `region each { ... }` around the loop body | **1,408 KB** |
+
+</div>
 
 **Regions do not nest yet.**
 
@@ -233,18 +306,88 @@ error: `region b` cannot open inside `region a` — nested regions are not avail
        Close the outer one first, or use a single region for both.
 ```
 
-**Running out is a named failure, not a crash.** The reservation is 1 GB per process, lazily mapped,
-so the cost is virtual until used:
+**A value cannot escape, which occasionally means restructuring.** If a helper wants to return
+something it built inside a `region`, the region has to move out or the helper has to return a scalar
+summary. That is a real constraint and not a large one — but it is the one thing about this model you
+will meet.
+
+**Running out is a failure you can hit.**
 
 ```
 burxt runtime error: region memory exhausted — this build reserves 1 GB per process
 ```
 
-An allocator that does not check its own limit does not fail — it corrupts, and then you are
-debugging the wrong thing. That distinction cost a session in v0.0.73, and is why the check is in
-both compilers.
+## When you reach for it
+{: #when-you-reach-for-it}
+
+The rule of thumb is one sentence: **a region per unit of work whose results you do not keep.**
+
+<div class="tablewrap" markdown="1">
+
+| You are writing | Do this |
+|---|---|
+| a short program, a script, a few dozen values | nothing. A program has a tray already |
+| a loop over rows, requests, files, lines | `region` around the **body** — this is the one that matters |
+| a long-running server | `region request { ... }` around each request. That is the whole of keeping its memory flat |
+| a helper that formats or joins something | nothing. It builds in its caller's region |
+| an `external function` that allocates | `allocates` — required there, because there is no body to look at |
+| something you need to return from inside a region | move the region out, or return a scalar |
+
+</div>
+
+## Examples
+{: #examples}
+
+**A loop whose memory does not grow.** The region closes on every pass, so this program uses the same
+memory on its first row and its millionth:
+
+```burxt
+function describe(row: Int) -> String {
+    return "row " + to_string(row) + " handled";
+}
+
+let mutable i: Int = 1;
+while i <= 3 {
+    region each {
+        print(describe(i));
+    }
+    i = i + 1;
+}
+print("peak memory did not grow with the loop");
+```
+
+```
+row 1 handled
+row 2 handled
+row 3 handled
+peak memory did not grow with the loop
+```
+
+**And the refusal that makes it safe.** This is the use-after-free from the top of the page, caught:
+
+```burxt
+function leaked(tag: Int) -> String {
+    region inner {
+        let s: String = "secret-" + to_string(tag);
+        return s;
+    }
+}
+```
+
+```
+error: cannot return this String: it was built inside a `region` block, which releases at its closing brace, so its storage would not outlive the call. Move the allocation out of the `region` block, or return a scalar summary.
+ --> leaked.bx:4:9
+  |
+4 |         return s;
+  |         ^^^^^^^^^
+```
+
+Note where the caret is: on `return s`, not on the line that built the String. The value escapes
+**through a name**, and for four versions the check missed exactly that — it asked whether the
+returned *expression* allocated, and a name is not an expression that allocates.
 
 ## Next
+{: #next}
 
 [Contracts](05-contracts.md) — claims about a function that the compiler checks, and the reason
 `burxt review` has anything to read.

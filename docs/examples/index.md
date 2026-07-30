@@ -2,177 +2,390 @@
 layout: default
 title: Examples
 section: examples
-description: Burxt programs and exactly what the compiler does with them.
+description: Complete Burxt programs, and exactly what the compiler does with them — including the same till written in PHP, Python and Rust.
 width: wide
 ---
 
 # Examples
 
-Every result below came from **running the program through the compiler**, not from typing what it
-ought to say. A test regenerates this page and fails if any of it has drifted.
+**Whole programs, not fragments.** Every result below came from compiling and running the program on
+this page, and a test regenerates this file and fails if any of it has drifted — so nothing here can
+claim something the compiler does not do.
 
-Some of these do not succeed, on purpose — what Burxt refuses is the most interesting thing about
-it. Those panels say which kind of refusal it is, because the difference matters: a scale mismatch
-is caught at **compile time**, while an overflow is a well-typed program that **stops** rather than
-wrapping around quietly.
+Single rules are explained in [the guide]({{ site.baseurl }}/guide/), which now carries its own
+`Examples` section on every page. This is for reading real code.
+
+Start with the till. It is the same program four times, and the comparison is the argument.
 
 <div class="picker" role="tablist">
-  <button role="tab" data-panel="hello" aria-selected="true">Hello</button>
-  <button role="tab" data-panel="money" aria-selected="false">Money</button>
-  <button role="tab" data-panel="scales" aria-selected="false">Scales</button>
-  <button role="tab" data-panel="overflow" aria-selected="false">Overflow</button>
-  <button role="tab" data-panel="absence" aria-selected="false">No null</button>
-  <button role="tab" data-panel="generics" aria-selected="false">Generics</button>
-  <button role="tab" data-panel="maps" aria-selected="false">Maps</button>
-  <button role="tab" data-panel="regions" aria-selected="false">Memory</button>
+  <button role="tab" data-panel="till" aria-selected="true">A till</button>
+  <button role="tab" data-panel="mcp" aria-selected="false">An MCP server</button>
+  <button role="tab" data-panel="invoice" aria-selected="false">An invoice</button>
   <button role="tab" data-panel="contracts" aria-selected="false">Contracts</button>
+  <button role="tab" data-panel="generics" aria-selected="false">Generics</button>
+  <button role="tab" data-panel="absence" aria-selected="false">No null</button>
 </div>
 
-<p id="point" style="color:var(--ink-soft); margin:0 0 1rem;"></p>
+<h2 data-title></h2>
+<p id="point"></p>
 
-<div class="pane">
-  <div class="source">
-    <textarea id="src" spellcheck="false" aria-label="Burxt source"></textarea>
-  </div>
-  <div>
-    <div class="out">
-      <h4 id="outhead">Output</h4>
-      <pre><code id="out"></code></pre>
-      <p class="note" id="note"></p>
-    </div>
-    <div class="cta" style="margin-top:1rem; justify-content:flex-start;">
-      <a class="btn ghost" id="copy" href="#" style="font-size:14px;">Copy</a>
-    </div>
-  </div>
+<div class="picker" id="langs" role="tablist" aria-label="Language"></div>
+<div class="picker" id="files" role="tablist" aria-label="File"></div>
+
+<div id="code"></div>
+
+<div class="out">
+  <h4 id="outhead">Output</h4>
+  <pre><code id="out"></code></pre>
+  <p class="note" id="note"></p>
 </div>
 
-<p style="color:var(--ink-soft); font-size:14px; margin-top:2rem;">
-Editing the source here will not change the output — running a compiler needs a machine, and this
-page is a static file. Copy it and run it locally, or
-<a href="https://codespaces.new/andrecorugda/burxt?quickstart=1">open a Codespace</a> where the real
-compiler is a click away.
+<p id="read" style="margin-top:1.5rem;"></p>
+
+<p style="font-size:14px; margin-top:2rem;">
+Every file above is in the repository — follow the filename to read it in context. To run any of them,
+<a href="{{ site.baseurl }}/install/">install the compiler</a> or
+<a href="https://codespaces.new/andrecorugda/burxt?quickstart=1">open a Codespace</a>, where it is a
+click away.
 </p>
 
 <script>
 const PANELS = [
  {
-  "id": "hello",
-  "label": "Hello",
-  "point": "A whole program. No entry point to declare.",
-  "source": "print(\"Hello, world!\");",
-  "output": "Hello, world!",
-  "kind": "ok"
+  "id": "till",
+  "label": "A till",
+  "title": "A point-of-sale till, four ways",
+  "point": "The same program in Burxt, PHP, Python and Rust. Only one of them puts the rounding rule where a reviewer cannot miss it.",
+  "langs": {
+   "Burxt": [
+    {
+     "name": "items.bx",
+     "path": "examples/pos/items.bx",
+     "lang": "burxt",
+     "source": "// ============================================================================\n// pos/items.bx \u2014 what a shop sells, and what a customer is buying.\n//\n//     use \"items.bx\";\n//\n// Data only. Every other file in this app depends on this one and it depends on\n// nothing, which is the only reason `use` can have no cycles to worry about.\n// ============================================================================\n\n// One thing on the shelf. `price` is a Decimal<2> because it is money, and money\n// in this language is an integer and a scale \u2014 never a float.\nclass Item {\n    sku: String,\n    name: String,\n    price: Decimal<2, RoundHalfUp>,\n    taxable: Bool,\n}\n\n// One line on a receipt: a thing, and how many of it \u2014 and what it costs, which now lives\n// with it rather than beside it.\n//\n// Until v0.0.149 this was `class Line { ... }` followed by a free function\n// `line_subtotal(line)`. The two were adjacent by convention: nothing connected them, and\n// nothing stopped the next function about a Line landing in another file. That was the largest\n// readability gap the four-language comparison found, and it is what the word `class` is for.\nclass Line {\n    item: Item,\n    quantity: Int,\n\n    // What this line costs before tax. `quantity` is an Int and `price` is a Decimal<2>, so\n    // the product is a Decimal<2> exactly \u2014 no rounding happens here, and none is allowed to\n    // happen silently.\n    function (self) subtotal() -> Decimal<2, RoundHalfUp> {\n        return self.item.price * self.quantity;\n    }\n}"
+    },
+    {
+     "name": "tax.bx",
+     "path": "examples/pos/tax.bx",
+     "lang": "burxt",
+     "source": "// ============================================================================\n// pos/tax.bx \u2014 how much tax a line attracts.\n//\n//     use \"tax.bx\";\n//\n// An interface with two implementations, which is the shape any configurable service\n// takes here: the till does not know which rule it is running.\n// ============================================================================\n\nuse \"items.bx\";\n\n// A rate is written `0.1200`, not `$0.1200`. `$` means MONEY, which is Decimal<2> \u2014 and a\n// twelve-percent rate is not an amount of money, it is a multiplier with four digits of\n// precision. The language refuses `$0.1200` by name rather than rounding it to `$0.12`.\n\n// ---- The interface ---------------------------------------------------------\ninterface Tax {\n    function rate_for(self, item: Item) -> Decimal<4>\n    function label(self) -> String\n}\n\n// ---- One rule: the same rate on everything taxable -------------------------\n//\n// `class FlatTax implements Tax` \u2014 the fields, the methods and the promise in one block. Until\n// v0.0.154 this was `class FlatTax { ... }` followed by a separate `implement Tax for FlatTax\n// { ... }`, which is Rust's shape; this is what Java, C#, TypeScript and PHP all write. The\n// standalone form is still legal and is the only way to add an interface to a class declared\n// somewhere else.\nclass FlatTax implements Tax {\n    rate: Decimal<4>,\n\n    function (self) rate_for(item: Item) -> Decimal<4> {\n        if !item.taxable { return 0.0000; }\n        return self.rate;\n    }\n    function (self) label() -> String { return \"flat\"; }\n}\n\n// ---- Another: staples cheaper than the rest --------------------------------\nclass SplitTax implements Tax {\n    staples: Decimal<4>,\n    rest: Decimal<4>,\n\n    function (self) rate_for(item: Item) -> Decimal<4> {\n        if !item.taxable { return 0.0000; }\n        if item.sku == \"RICE\" { return self.staples; }\n        if item.sku == \"MILK\" { return self.staples; }\n        return self.rest;\n    }\n    function (self) label() -> String { return \"split\"; }\n}\n\n// ---- The tax on one line ---------------------------------------------------\n// The rate is a Decimal<4> and the money is a Decimal<2>, so the exact product has SIX decimal\n// places, and landing it on two is a rounding. A rounding needs a named rule, and the rule goes\n// on the RETURN TYPE \u2014 that is the one place a reader looking for \"what does this promise\" will\n// find it. `RoundHalfUp` is what a till does.\nfunction line_tax(rule: dynamic Tax, line: Line) -> Decimal<2, RoundHalfUp> {\n    let rate: Decimal<4> = rule.rate_for(line.item);\n    let base: Decimal<2, RoundHalfUp> = line.subtotal();\n    return base * rate;\n}"
+    },
+    {
+     "name": "receipt.bx",
+     "path": "examples/pos/receipt.bx",
+     "lang": "burxt",
+     "source": "// ============================================================================\n// pos/receipt.bx \u2014 turning a sale into something a customer can read.\n//\n//     use \"receipt.bx\";\n//\n// This is the file where the memory model USED to become visible. Every function here\n// builds a String, and a built value needs somewhere to live \u2014 so each one used to be\n// declared `allocates`, meaning \"I build in my caller's region\".\n//\n// Not one of them says it now: the compiler works it out. The rule is unchanged and so is\n// the machine code; what went is the obligation to write down a fact the compiler had\n// already derived. This file is where that became obvious \u2014 the word was on 3 functions\n// out of 3, which is an annotation carrying no information at all.\n// ============================================================================\n\nuse \"items.bx\";\nuse \"tax.bx\";\n\n// A width-padded amount, so the column lines up. Every `+` on Strings builds a new one,\n// which is why this function allocates in its caller's region \u2014 and why one doing only Int\n// arithmetic would not.\nfunction money_column(amount: Decimal<2, RoundHalfUp>) -> String {\n    let shown: String = to_string(amount);\n    let mutable padded: String = \"\";\n    let mutable pad: Int = 10 - len(shown);\n    while pad > 0 {\n        padded += \" \";\n        pad -= 1;\n    }\n    return padded + shown;\n}\n\nfunction line_text(rule: dynamic Tax, line: Line) -> String {\n    let subtotal: Decimal<2, RoundHalfUp> = line.subtotal();\n    return line.item.name + \"  x\" + to_string(line.quantity)\n        + money_column(subtotal);\n}\n\n// The totals block. Three amounts, and the one that matters is the last.\n//\n// Note the second parameter: `Decimal<2, RoundHalfUp>`, not `Decimal<2>`. This file does not round\n// anything and does not care how the tax was rounded \u2014 but a rounding contract is part of the type\n// and cannot be dropped, so the fact travels here from `tax.bx` and has to be written down. It also\n// forces `due` to carry it, because adding the two produces the contracted type.\n//\n// That is a real cost of the current design, met by writing a real program rather than predicted.\nfunction totals_text(subtotal: Decimal<2, RoundHalfUp>,\n                     tax: Decimal<2, RoundHalfUp>) -> String {\n    let due: Decimal<2, RoundHalfUp> = subtotal + tax;\n    return \"subtotal\" + money_column(subtotal) + \"\\n\"\n        + \"tax     \" + money_column(tax) + \"\\n\"\n        + \"due     \" + money_column(due);\n}"
+    },
+    {
+     "name": "till.bx",
+     "path": "examples/pos/till.bx",
+     "lang": "burxt",
+     "source": "// ============================================================================\n// pos/till.bx \u2014 the app. Run this one:\n//\n//     burxt run examples/pos/till.bx\n//\n// A static point-of-sale: a fixed catalogue, one sale, two tax rules, one\n// receipt. Four files, and this is the only one that knows they exist.\n// ============================================================================\n\nuse \"items.bx\";\nuse \"tax.bx\";\nuse \"receipt.bx\";\n\n// ---- The catalogue ---------------------------------------------------------\n// A function rather than a constant, because a growable array lives in a region\n// and a top-level constant has no region to live in.\nfunction catalogue() -> [Item] {\n    let mutable shelf: [Item] = [];\n    let a: Int = push(shelf, Item { sku: \"RICE\", name: \"Rice 5kg\",\n                                    price: $52.75, taxable: true });\n    let b: Int = push(shelf, Item { sku: \"MILK\", name: \"Milk 1L\",\n                                    price: $18.40, taxable: true });\n    let c: Int = push(shelf, Item { sku: \"NEWS\", name: \"Newspaper\",\n                                    price: $12.00, taxable: false });\n    return shelf;\n}\n\nfunction find_item(shelf: [Item], sku: String) -> Item\n    requires len(shelf) > 0\n{\n    let mutable i: Int = 0;\n    while i < len(shelf) {\n        if shelf[i].sku == sku {\n            return shelf[i];\n        }\n        i += 1;\n    }\n    return shelf[0];\n}\n\n// ---- Ringing up a sale -----------------------------------------------------\n// Two accumulators, because the receipt wants both and recomputing would be a\n// second pass over the same lines.\nfunction ring_up(rule: dynamic Tax, sale: [Line]) -> Int {\n    let mutable subtotal: Decimal<2, RoundHalfUp> = $0.00;\n    // `Decimal<2, RoundHalfUp>`, not `Decimal<2>`, because that is what `line_tax` answers and a\n    // rounding contract is part of the TYPE. Adding two of these needs no rounding at all, so the\n    // contract is doing nothing here except recording where the value came from \u2014 which is honest,\n    // and is also the kind of thing you only notice by writing a real program.\n    let mutable tax: Decimal<2, RoundHalfUp> = $0.00;\n    print(\"--- \" + rule.label() + \" tax ---\");\n    let mutable i: Int = 0;\n    while i < len(sale) {\n        let line: Line = sale[i];\n        print(line_text(rule, line));\n        subtotal += line.subtotal();\n        tax += line_tax(rule, line);\n        i += 1;\n    }\n    print(totals_text(subtotal, tax));\n    return 0;\n}\n\n// ---- The program -----------------------------------------------------------\nlet shelf: [Item] = catalogue();\n\nlet mutable basket: [Line] = [];\nlet one: Int = push(basket, Line { item: find_item(shelf, \"RICE\"), quantity: 3 });\nlet two: Int = push(basket, Line { item: find_item(shelf, \"MILK\"), quantity: 2 });\nlet three: Int = push(basket, Line { item: find_item(shelf, \"NEWS\"), quantity: 1 });\n\n// The same basket, priced two ways. Neither `ring_up` nor `receipt.bx` knows\n// which rule it is running \u2014 that is what the interface is for.\nlet flat: FlatTax = FlatTax { rate: 0.1200 };\nlet split: SplitTax = SplitTax { staples: 0.0200, rest: 0.1200 };\n\nlet a: Int = ring_up(flat, basket);\n\nprint(\"\");\n// The same lines again, under `split`: staples at 2%, everything else at 12%.\nlet b: Int = ring_up(split, basket);"
+    }
+   ],
+   "PHP": [
+    {
+     "name": "items.php",
+     "path": "examples/pos-php/items.php",
+     "lang": "php",
+     "source": "<?php\n// ============================================================================\n// pos-php/items.php \u2014 what a shop sells, and what a customer is buying.\n//\n//     require_once __DIR__ . '/items.php';\n//\n// Data only. Every other file in this app depends on this one and it depends on\n// nothing \u2014 the same layering as pos/items.bx.\n// ============================================================================\n\ndeclare(strict_types=1);\n\n// Money is a bcmath STRING, at scale 2. PHP's own numbers are floats, where\n// `0.1 + 0.2 !== 0.3`, so an amount that stays correct cannot be a number at\n// all. `'52.75'` looks like text because to PHP it IS text.\nconst SCALE = 2;\n\n/**\n * Half-up at 2 dp.\n *\n * bcmath TRUNCATES, so this adds half of the last place before letting bcadd\n * cut it. Correct for positive amounts only \u2014 a refund needs the sign handled,\n * and forgetting that is the classic PHP money bug. In tax.bx `RoundHalfUp` is\n * a name in the type and the compiler emits the rounding.\n */\nfunction round_half_up(string $value): string\n{\n    return bcadd($value, '0.005', SCALE);\n}\n\n/**\n * One thing on the shelf.\n *\n * Fields and behaviour in one block, which is the difference worth noticing\n * against items.bx: there, `line_subtotal` is a free function beside\n * `record Item` rather than something Item knows how to do.\n */\nfinal class Item\n{\n    public function __construct(\n        public readonly string $sku,\n        public readonly string $name,\n        public readonly string $price,     // a decimal string, not a float\n        public readonly bool $taxable,\n    ) {\n    }\n}\n\n/** One line on a receipt: a thing, and how many of it. */\nfinal class Line\n{\n    public function __construct(\n        public readonly Item $item,\n        public readonly int $quantity,\n    ) {\n    }\n\n    public function subtotal(): string\n    {\n        // Not `$price * $quantity`. That would coerce the string to a float and\n        // the receipt would be wrong in the fourth decimal place, invisibly.\n        return bcmul($this->item->price, (string) $this->quantity, SCALE);\n    }\n}\n\n/** The Burxt spelling, kept so the two programs read the same. */\nfunction line_subtotal(Line $line): string\n{\n    return $line->subtotal();\n}"
+    },
+    {
+     "name": "tax.php",
+     "path": "examples/pos-php/tax.php",
+     "lang": "php",
+     "source": "<?php\n// ============================================================================\n// pos-php/tax.php \u2014 how much tax a line attracts.\n//\n//     require_once __DIR__ . '/tax.php';\n//\n// An interface with two implementations, which is the shape any configurable\n// service takes: the till does not know which rule it is running.\n// ============================================================================\n\ndeclare(strict_types=1);\n\nrequire_once __DIR__ . '/items.php';\n\n// A rate is `'0.1200'` \u2014 four decimal places, because a twelve-percent rate is not an\n// amount of money. PHP cannot say that: a rate and a price are both `string`, and the\n// type declaration on every function below says `string` too. tax.bx refuses `$0.1200`\n// by name, because `$` means Decimal<2>.\n\n// ---- The interface ---------------------------------------------------------\ninterface Tax\n{\n    public function rateFor(Item $item): string;\n\n    public function label(): string;\n}\n\n// ---- One rule: the same rate on everything taxable -------------------------\nfinal class FlatTax implements Tax\n{\n    public function __construct(private readonly string $rate)\n    {\n    }\n\n    public function rateFor(Item $item): string\n    {\n        return $item->taxable ? $this->rate : '0.0000';\n    }\n\n    public function label(): string\n    {\n        return 'flat';\n    }\n}\n\n// ---- Another: staples cheaper than the rest --------------------------------\nfinal class SplitTax implements Tax\n{\n    public function __construct(\n        private readonly string $staples,\n        private readonly string $rest,\n    ) {\n    }\n\n    public function rateFor(Item $item): string\n    {\n        if (!$item->taxable) {\n            return '0.0000';\n        }\n        return in_array($item->sku, ['RICE', 'MILK'], true) ? $this->staples : $this->rest;\n    }\n\n    public function label(): string\n    {\n        return 'split';\n    }\n}\n\n// ---- The tax on one line ---------------------------------------------------\n/**\n * The rate has four decimal places and the money has two, so the exact product\n * has SIX, and landing it on two is a rounding.\n *\n * Both steps are visible and both are on you: scale 6 first so nothing is lost\n * before the rounding decides, then the half-up. Write `bcmul(..., 2)` instead\n * and the product is truncated before rounding \u2014 4.416 becomes 4.41 instead of\n * 4.42, and the receipt is a cent light with no error anywhere.\n */\nfunction line_tax(Tax $rule, Line $line): string\n{\n    $rate = $rule->rateFor($line->item);\n    $base = line_subtotal($line);\n    return round_half_up(bcmul($base, $rate, 6));\n}"
+    },
+    {
+     "name": "receipt.php",
+     "path": "examples/pos-php/receipt.php",
+     "lang": "php",
+     "source": "<?php\n// ============================================================================\n// pos-php/receipt.php \u2014 turning a sale into something a customer can read.\n//\n//     require_once __DIR__ . '/receipt.php';\n//\n// Compare receipt.bx, which is where the memory model becomes visible: every\n// function there says `allocates`, because a built String needs somewhere to\n// live. Here strings are refcounted and freed whenever the count hits zero, and\n// there is nothing in the signature to say so.\n// ============================================================================\n\ndeclare(strict_types=1);\n\nrequire_once __DIR__ . '/items.php';\nrequire_once __DIR__ . '/tax.php';\n\n/**\n * A width-padded amount, so the column lines up.\n *\n * The amount is already a scale-2 string, which is the one advantage of money\n * as text: '36.80' keeps its trailing zero for free. A float would print '36.8'\n * and break the column.\n */\nfunction money_column(string $amount): string\n{\n    return str_pad($amount, 10, ' ', STR_PAD_LEFT);\n}\n\nfunction line_text(Line $line): string\n{\n    return $line->item->name . '  x' . $line->quantity . money_column(line_subtotal($line));\n}\n\n/**\n * The totals block. Three amounts, and the one that matters is the last.\n *\n * Note what is NOT here: totals_text in receipt.bx has to take\n * `Decimal<2, RoundHalfUp>` rather than `Decimal<2>`, because a rounding\n * contract is part of the type and travels here from tax.bx even though this\n * file rounds nothing. PHP has no such cost \u2014 and no such record. Both\n * parameters are `string`, so this function cannot tell money from a name.\n */\nfunction totals_text(string $subtotal, string $tax): string\n{\n    $due = bcadd($subtotal, $tax, SCALE);\n    return 'subtotal' . money_column($subtotal) . \"\\n\"\n        . 'tax     ' . money_column($tax) . \"\\n\"\n        . 'due     ' . money_column($due);\n}"
+    },
+    {
+     "name": "till.php",
+     "path": "examples/pos-php/till.php",
+     "lang": "php",
+     "source": "<?php\n// ============================================================================\n// pos-php/till.php \u2014 the app. Run this one:\n//\n//     php examples/pos-php/till.php\n//\n// A static point-of-sale: a fixed catalogue, one sale, two tax rules, one\n// receipt. Four files, and this is the only one that knows they exist.\n// ============================================================================\n\ndeclare(strict_types=1);\n\nrequire_once __DIR__ . '/items.php';\nrequire_once __DIR__ . '/tax.php';\nrequire_once __DIR__ . '/receipt.php';\n\n// ---- The catalogue ---------------------------------------------------------\n// A function rather than a constant, which here is only a habit \u2014 there is no\n// region to be outside of. catalogue() in till.bx is a function because a\n// growable array needs a region to live in, and a top-level constant has none.\n/** @return Item[] */\nfunction catalogue(): array\n{\n    return [\n        new Item('RICE', 'Rice 5kg', '52.75', true),\n        new Item('MILK', 'Milk 1L', '18.40', true),\n        new Item('NEWS', 'Newspaper', '12.00', false),\n    ];\n}\n\n/** @param Item[] $shelf */\nfunction find_item(array $shelf, string $sku): Item\n{\n    // `requires len(shelf) > 0` in till.bx is a checked precondition that names\n    // itself when it fails. This is the closest honest equivalent, and it is a\n    // library call rather than part of the signature.\n    assert(count($shelf) > 0, 'the catalogue is empty');\n    foreach ($shelf as $item) {\n        if ($item->sku === $sku) {\n            return $item;\n        }\n    }\n    return $shelf[0];\n}\n\n// ---- Ringing up a sale -----------------------------------------------------\n/**\n * Two accumulators, because the receipt wants both and recomputing would be a\n * second pass over the same lines.\n *\n * @param Line[] $sale\n */\nfunction ring_up(Tax $rule, array $sale): void\n{\n    echo '--- ', $rule->label(), \" tax ---\\n\";\n    $subtotal = '0.00';\n    $tax = '0.00';\n    foreach ($sale as $line) {\n        echo line_text($line), \"\\n\";\n        // `+=` would be a float addition. Every accumulation has to be a call.\n        $subtotal = bcadd($subtotal, line_subtotal($line), SCALE);\n        $tax = bcadd($tax, line_tax($rule, $line), SCALE);\n    }\n    echo totals_text($subtotal, $tax), \"\\n\";\n}\n\n// ---- The program -----------------------------------------------------------\n// No guard needed: this file is the entry point and nothing requires it. Closer\n// to Burxt's `region sale { ... }` than Python's __main__ dance \u2014 though PHP\n// will happily run this file as a web request too.\n$shelf = catalogue();\n$basket = [\n    new Line(find_item($shelf, 'RICE'), 3),\n    new Line(find_item($shelf, 'MILK'), 2),\n    new Line(find_item($shelf, 'NEWS'), 1),\n];\n\n// The same basket, priced two ways. Neither ring_up nor receipt.php knows which\n// rule it is running \u2014 that is what the interface is for.\n$flat = new FlatTax('0.1200');\n$split = new SplitTax('0.0200', '0.1200');\n\nring_up($flat, $basket);\n\necho \"\\n\";\n// The same lines again, under `split`: staples at 2%, everything else at 12%.\nring_up($split, $basket);"
+    }
+   ],
+   "Python": [
+    {
+     "name": "items.py",
+     "path": "examples/pos-python/items.py",
+     "lang": "python",
+     "source": "# ============================================================================\n# pos-python/items.py \u2014 what a shop sells, and what a customer is buying.\n#\n#     from items import Item, Line, line_subtotal\n#\n# Data only. Every other file in this app depends on this one and it depends on\n# nothing \u2014 the same layering as pos/items.bx.\n# ============================================================================\n\nfrom dataclasses import dataclass\nfrom decimal import Decimal\n\n# Money is `decimal.Decimal`, and the exponent carries the scale. It is exact,\n# but it is exact by CHOICE: `52.75` in this file would be a float and would be\n# wrong by a fraction of a cent, silently. Nothing in the language stops you.\nCENTS = Decimal(\"0.01\")\n\n\n@dataclass(frozen=True)\nclass Item:\n    \"\"\"One thing on the shelf.\n\n    Fields and behaviour live in the same block, which is the difference worth\n    noticing against items.bx: there, `line_subtotal` is a free function beside\n    `record Item` rather than something Item knows how to do.\n    \"\"\"\n\n    sku: str\n    name: str\n    price: Decimal\n    taxable: bool\n\n\n@dataclass(frozen=True)\nclass Line:\n    \"\"\"One line on a receipt: a thing, and how many of it.\"\"\"\n\n    item: Item\n    quantity: int\n\n    def subtotal(self) -> Decimal:\n        # Decimal * int is exact and keeps the scale, so no rounding happens\n        # here. If `price` were a float this would be the first place it drifted.\n        return self.item.price * self.quantity\n\n\ndef line_subtotal(line: Line) -> Decimal:\n    \"\"\"The Burxt spelling, kept so the two programs read the same.\"\"\"\n    return line.subtotal()"
+    },
+    {
+     "name": "tax.py",
+     "path": "examples/pos-python/tax.py",
+     "lang": "python",
+     "source": "# ============================================================================\n# pos-python/tax.py \u2014 how much tax a line attracts.\n#\n#     from tax import Tax, FlatTax, SplitTax, line_tax\n#\n# An interface with two implementations, which is the shape any configurable\n# service takes: the till does not know which rule it is running.\n# ============================================================================\n\nfrom decimal import Decimal, ROUND_HALF_UP\nfrom typing import Protocol\n\nfrom items import CENTS, Item, Line, line_subtotal\n\n# A rate is `Decimal(\"0.1200\")` \u2014 four decimal places, because a twelve-percent rate is not\n# an amount of money. Python has no way to say that: this Decimal and a price are the same\n# type, and adding them is legal. tax.bx refuses `$0.1200` by name.\n\n\nclass Tax(Protocol):\n    \"\"\"The interface.\n\n    `Protocol` is structural, so a class does not declare that it implements\n    this \u2014 it either has the methods or it fails at the call site, at run time.\n    `implement Tax for FlatTax` is checked when the file is compiled.\n    \"\"\"\n\n    def rate_for(self, item: Item) -> Decimal: ...\n    def label(self) -> str: ...\n\n\n# ---- One rule: the same rate on everything taxable -------------------------\nclass FlatTax:\n    def __init__(self, rate: Decimal) -> None:\n        self.rate = rate\n\n    def rate_for(self, item: Item) -> Decimal:\n        if not item.taxable:\n            return Decimal(\"0.0000\")\n        return self.rate\n\n    def label(self) -> str:\n        return \"flat\"\n\n\n# ---- Another: staples cheaper than the rest --------------------------------\nclass SplitTax:\n    def __init__(self, staples: Decimal, rest: Decimal) -> None:\n        self.staples = staples\n        self.rest = rest\n\n    def rate_for(self, item: Item) -> Decimal:\n        if not item.taxable:\n            return Decimal(\"0.0000\")\n        if item.sku in (\"RICE\", \"MILK\"):\n            return self.staples\n        return self.rest\n\n    def label(self) -> str:\n        return \"split\"\n\n\n# ---- The tax on one line ---------------------------------------------------\ndef line_tax(rule: Tax, line: Line) -> Decimal:\n    \"\"\"The rate has four decimal places and the money has two, so the exact\n    product has SIX, and landing it on two is a rounding.\n\n    The rounding rule is written HERE, at the operation. Drop the `.quantize`\n    and this silently returns a six-place number that then propagates into the\n    total \u2014 no error, just a wrong receipt. In tax.bx the rule is part of the\n    return type, so the compiler is the thing that remembers.\n    \"\"\"\n    rate = rule.rate_for(line.item)\n    base = line_subtotal(line)\n    return (base * rate).quantize(CENTS, ROUND_HALF_UP)"
+    },
+    {
+     "name": "receipt.py",
+     "path": "examples/pos-python/receipt.py",
+     "lang": "python",
+     "source": "# ============================================================================\n# pos-python/receipt.py \u2014 turning a sale into something a customer can read.\n#\n#     from receipt import line_text, totals_text\n#\n# Compare receipt.bx, which is where the memory model becomes visible: every\n# function there says `allocates`, because a built String needs somewhere to\n# live. Here every string is heap-allocated and collected whenever the GC feels\n# like it, and there is nothing in the signature to say so.\n# ============================================================================\n\nfrom decimal import Decimal\n\nfrom items import Line, line_subtotal\n\n\ndef money_column(amount: Decimal) -> str:\n    \"\"\"A width-padded amount, so the column lines up.\n\n    `str(Decimal(\"36.80\"))` keeps the trailing zero, because a Decimal carries\n    its exponent. `str(36.80)` \u2014 a float \u2014 would give \"36.8\" and break the\n    column.\n    \"\"\"\n    return f\"{amount:>10}\"\n\n\ndef line_text(line: Line) -> str:\n    return f\"{line.item.name}  x{line.quantity}{money_column(line_subtotal(line))}\"\n\n\ndef totals_text(subtotal: Decimal, tax: Decimal) -> str:\n    \"\"\"The totals block. Three amounts, and the one that matters is the last.\n\n    Note what is NOT here: totals_text in receipt.bx has to take\n    `Decimal<2, RoundHalfUp>` rather than `Decimal<2>`, because a rounding\n    contract is part of the type and travels here from tax.bx even though this\n    file rounds nothing. Python has no such cost \u2014 and no such record. Nothing\n    in this signature says the tax was rounded half-up, so nothing checks it.\n    \"\"\"\n    due = subtotal + tax\n    return (\n        f\"subtotal{money_column(subtotal)}\\n\"\n        f\"tax     {money_column(tax)}\\n\"\n        f\"due     {money_column(due)}\"\n    )"
+    },
+    {
+     "name": "till.py",
+     "path": "examples/pos-python/till.py",
+     "lang": "python",
+     "source": "# ============================================================================\n# pos-python/till.py \u2014 the app. Run this one:\n#\n#     python3 examples/pos-python/till.py\n#\n# A static point-of-sale: a fixed catalogue, one sale, two tax rules, one\n# receipt. Four files, and this is the only one that knows they exist.\n# ============================================================================\n\nfrom decimal import Decimal\n\nfrom items import Item, Line, line_subtotal\nfrom receipt import line_text, totals_text\nfrom tax import FlatTax, SplitTax, Tax, line_tax\n\n\n# ---- The catalogue ---------------------------------------------------------\n# A function rather than a module constant, which here is only a habit \u2014 there\n# is no region to be outside of. catalogue() in till.bx is a function because a\n# growable array needs a region to live in, and a top-level constant has none.\ndef catalogue() -> list[Item]:\n    return [\n        Item(\"RICE\", \"Rice 5kg\", Decimal(\"52.75\"), True),\n        Item(\"MILK\", \"Milk 1L\", Decimal(\"18.40\"), True),\n        Item(\"NEWS\", \"Newspaper\", Decimal(\"12.00\"), False),\n    ]\n\n\ndef find_item(shelf: list[Item], sku: str) -> Item:\n    # `requires len(shelf) > 0` in till.bx is a checked precondition. The\n    # closest honest equivalent is an assert, which runs unless someone passes\n    # -O, and which nobody writes.\n    assert shelf, \"the catalogue is empty\"\n    for item in shelf:\n        if item.sku == sku:\n            return item\n    return shelf[0]\n\n\n# ---- Ringing up a sale -----------------------------------------------------\ndef ring_up(rule: Tax, sale: list[Line]) -> None:\n    \"\"\"Two accumulators, because the receipt wants both and recomputing would\n    be a second pass over the same lines.\"\"\"\n    print(f\"--- {rule.label()} tax ---\")\n    subtotal = Decimal(\"0.00\")\n    tax = Decimal(\"0.00\")\n    for line in sale:\n        print(line_text(line))\n        subtotal += line_subtotal(line)\n        tax += line_tax(rule, line)\n    print(totals_text(subtotal, tax))\n\n\n# ---- The program -----------------------------------------------------------\ndef main() -> None:\n    shelf = catalogue()\n    basket = [\n        Line(find_item(shelf, \"RICE\"), 3),\n        Line(find_item(shelf, \"MILK\"), 2),\n        Line(find_item(shelf, \"NEWS\"), 1),\n    ]\n\n    # The same basket, priced two ways. Neither ring_up nor receipt.py knows\n    # which rule it is running \u2014 that is what the interface is for.\n    flat = FlatTax(Decimal(\"0.1200\"))\n    split = SplitTax(Decimal(\"0.0200\"), Decimal(\"0.1200\"))\n\n    ring_up(flat, basket)\n\n    print(\"\")\n    # The same lines again, under `split`: staples at 2%, everything else at 12%.\n    ring_up(split, basket)\n\n\n# Burxt has no entry point to declare: `region sale { ... }` at the top level IS\n# the program. Python needs this guard, because importing a module runs it.\nif __name__ == \"__main__\":\n    main()"
+    }
+   ],
+   "Rust": [
+    {
+     "name": "items.rs",
+     "path": "examples/pos-rust/items.rs",
+     "lang": "rust",
+     "source": "// ============================================================================\n// pos-rust/items.rs \u2014 what a shop sells, and what a customer is buying.\n//\n//     mod items;   // declared in till.rs, the crate root\n//\n// Data only. Every other file in this app depends on this one and it depends on\n// nothing \u2014 the same layering as pos/items.bx.\n// ============================================================================\n\n/// Money, as whole cents.\n///\n/// Rust has no decimal type in its standard library. The real-world answer is a\n/// crate \u2014 `rust_decimal` \u2014 and that is the fact worth noticing: exact money is\n/// a DEPENDENCY DECISION in Rust and a default in Burxt. This file pays for it\n/// by hand so the program needs nothing but rustc.\n///\n/// The newtype is the only thing stopping you adding a quantity to a price. It\n/// exists because a bare `i64` would let you, and `Decimal<2>` would not.\n#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]\npub struct Money(pub i64);\n\nimpl Money {\n    pub const ZERO: Money = Money(0);\n\n    /// Parse `\"52.75\"`. Written out because there is nothing to call.\n    pub fn from_str(s: &str) -> Money {\n        let (whole, frac) = s.split_once('.').expect(\"money needs a decimal point\");\n        Money(whole.parse::<i64>().unwrap() * 100 + frac.parse::<i64>().unwrap())\n    }\n\n    pub fn times(self, n: i64) -> Money {\n        // `*` on i64 panics on overflow in debug and WRAPS in release, which is\n        // the opposite of what money wants. Burxt traps in both.\n        Money(self.0 * n)\n    }\n\n    pub fn plus(self, other: Money) -> Money {\n        Money(self.0 + other.0)\n    }\n}\n\nimpl std::fmt::Display for Money {\n    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n        // The trailing zero has to be forced: 3680 cents must print \"36.80\",\n        // and `{}` on the remainder alone would give \"36.8\".\n        write!(f, \"{}.{:02}\", self.0 / 100, (self.0 % 100).abs())\n    }\n}\n\n/// One thing on the shelf.\n///\n/// Fields and behaviour in one block \u2014 `struct` plus its `impl` \u2014 which is the\n/// difference worth noticing against items.bx: there, `line_subtotal` is a free\n/// function beside `record Item` rather than something Item knows how to do.\n#[derive(Clone)]\npub struct Item {\n    pub sku: String,\n    pub name: String,\n    pub price: Money,\n    pub taxable: bool,\n}\n\n/// One line on a receipt: a thing, and how many of it.\n///\n/// The Item is OWNED, not borrowed, because a Burxt record is a value and\n/// `Line { item: Item }` copies it. Borrowing here would be the more idiomatic\n/// Rust and would need a lifetime parameter on Line, on the basket, and on\n/// every function that touches one \u2014 a whole vocabulary this program does not\n/// otherwise need.\n#[derive(Clone)]\npub struct Line {\n    pub item: Item,\n    pub quantity: i64,\n}\n\nimpl Line {\n    pub fn subtotal(&self) -> Money {\n        self.item.price.times(self.quantity)\n    }\n}\n\n/// The Burxt spelling, kept so the two programs read the same.\npub fn line_subtotal(line: &Line) -> Money {\n    line.subtotal()\n}"
+    },
+    {
+     "name": "tax.rs",
+     "path": "examples/pos-rust/tax.rs",
+     "lang": "rust",
+     "source": "// ============================================================================\n// pos-rust/tax.rs \u2014 how much tax a line attracts.\n//\n//     mod tax;   // declared in till.rs, the crate root\n//\n// An interface with two implementations, which is the shape any configurable service\n// takes here too: the till does not know which rule it is running.\n// ============================================================================\n\nuse crate::items::{line_subtotal, Item, Line, Money};\n\n/// A rate, in ten-thousandths \u2014 1200 is twelve percent.\n///\n/// This is where the absence of a decimal type hurts most. `Decimal<4>` says\n/// \"four decimal places\" in the type; `i64` says nothing, so the unit lives in\n/// this comment and in the name, and a caller who passes 12 instead of 1200\n/// gets a hundredfold tax with no error anywhere.\npub type Rate = i64;\n\n// ---- The interface ---------------------------------------------------------\npub trait Tax {\n    fn rate_for(&self, item: &Item) -> Rate;\n    fn label(&self) -> &'static str;\n}\n\n// ---- One rule: the same rate on everything taxable -------------------------\npub struct FlatTax {\n    pub rate: Rate,\n}\n\nimpl Tax for FlatTax {\n    fn rate_for(&self, item: &Item) -> Rate {\n        if !item.taxable {\n            return 0;\n        }\n        self.rate\n    }\n\n    fn label(&self) -> &'static str {\n        \"flat\"\n    }\n}\n\n// ---- Another: staples cheaper than the rest --------------------------------\npub struct SplitTax {\n    pub staples: Rate,\n    pub rest: Rate,\n}\n\nimpl Tax for SplitTax {\n    fn rate_for(&self, item: &Item) -> Rate {\n        if !item.taxable {\n            return 0;\n        }\n        if item.sku == \"RICE\" || item.sku == \"MILK\" {\n            return self.staples;\n        }\n        self.rest\n    }\n\n    fn label(&self) -> &'static str {\n        \"split\"\n    }\n}\n\n// ---- The tax on one line ---------------------------------------------------\n/// `&dyn Tax` is Burxt's `dynamic Tax`: one machine function, the rule behind a\n/// vtable, chosen at run time.\n///\n/// The rounding is the arithmetic below and nothing else. `+ 5_000` before\n/// `/ 10_000` is half-up, it is only correct for positive amounts, and every\n/// place in a program that multiplies money has to get it right. That is the\n/// cost `Decimal<2, RoundHalfUp>` is paying for you \u2014 the rule is a name in the\n/// return type, and the compiler emits this.\npub fn line_tax(rule: &dyn Tax, line: &Line) -> Money {\n    let rate = rule.rate_for(&line.item);\n    let base = line_subtotal(line);\n    let exact = base.0 * rate; // cents \u00d7 1e-4: six decimal places, as an integer\n    Money((exact + 5_000) / 10_000)\n}"
+    },
+    {
+     "name": "receipt.rs",
+     "path": "examples/pos-rust/receipt.rs",
+     "lang": "rust",
+     "source": "// ============================================================================\n// pos-rust/receipt.rs \u2014 turning a sale into something a customer can read.\n//\n//     mod receipt;   // declared in till.rs, the crate root\n//\n// This is the file where the memory model becomes visible in BOTH languages,\n// and the comparison is the interesting part of this directory.\n//\n// receipt.bx says `allocates` on every function: \"I build in my caller's\n// region\", and release is one pointer reset for the whole sale. Here every\n// String is its own heap allocation with its own free, tracked by ownership at\n// compile time \u2014 no `allocates` needed, because the type system already knows\n// who owns the result and when it drops.\n//\n// Two answers to the same question. Neither has a collector.\n// ============================================================================\n\nuse crate::items::{line_subtotal, Line, Money};\n\n/// A width-padded amount, so the column lines up.\n///\n/// `{:>10}` needs the value as a string first, because padding a Display impl\n/// pads the OUTER format and Money's own `write!` ignores the width.\npub fn money_column(amount: Money) -> String {\n    format!(\"{:>10}\", amount.to_string())\n}\n\npub fn line_text(line: &Line) -> String {\n    format!(\n        \"{}  x{}{}\",\n        line.item.name,\n        line.quantity,\n        money_column(line_subtotal(line))\n    )\n}\n\n/// The totals block. Three amounts, and the one that matters is the last.\n///\n/// Note what is NOT here: totals_text in receipt.bx has to take\n/// `Decimal<2, RoundHalfUp>` rather than `Decimal<2>`, because a rounding\n/// contract is part of the type and travels here from tax.bx even though this\n/// file rounds nothing. Money carries no such record, so nothing in this\n/// signature says the tax was rounded half-up and nothing checks it.\npub fn totals_text(subtotal: Money, tax: Money) -> String {\n    let due = subtotal.plus(tax);\n    format!(\n        \"subtotal{}\\ntax     {}\\ndue     {}\",\n        money_column(subtotal),\n        money_column(tax),\n        money_column(due)\n    )\n}"
+    },
+    {
+     "name": "till.rs",
+     "path": "examples/pos-rust/till.rs",
+     "lang": "rust",
+     "source": "// ============================================================================\n// pos-rust/till.rs \u2014 the app. Run this one:\n//\n//     rustc -O examples/pos-rust/till.rs -o /tmp/till && /tmp/till\n//\n// A static point-of-sale: a fixed catalogue, one sale, two tax rules, one\n// receipt. Four files, and this is the only one that knows they exist.\n//\n// The three `mod` lines below are what `use \"items.bx\";` is. The difference:\n// Burxt's `use` appears in every file that needs the module, and Rust's `mod`\n// appears ONCE, here in the crate root \u2014 the other files reach each other with\n// `use crate::items`. Declaring a module and importing from it are two separate\n// ideas in Rust, and one idea in Burxt.\n// ============================================================================\n\nmod items;\nmod receipt;\nmod tax;\n\nuse items::{line_subtotal, Item, Line, Money};\nuse receipt::{line_text, totals_text};\nuse tax::{FlatTax, SplitTax, Tax};\n\n// ---- The catalogue ---------------------------------------------------------\n// A function rather than a constant, and here the reason is real: a `Vec` and a\n// `String` are heap-allocated, and a `const` cannot allocate. catalogue() in\n// till.bx is a function for the same shape of reason \u2014 a growable array needs a\n// region to live in, and a top-level constant has none.\nfn catalogue() -> Vec<Item> {\n    vec![\n        Item {\n            sku: \"RICE\".to_string(),\n            name: \"Rice 5kg\".to_string(),\n            price: Money::from_str(\"52.75\"),\n            taxable: true,\n        },\n        Item {\n            sku: \"MILK\".to_string(),\n            name: \"Milk 1L\".to_string(),\n            price: Money::from_str(\"18.40\"),\n            taxable: true,\n        },\n        Item {\n            sku: \"NEWS\".to_string(),\n            name: \"Newspaper\".to_string(),\n            price: Money::from_str(\"12.00\"),\n            taxable: false,\n        },\n    ]\n}\n\nfn find_item(shelf: &[Item], sku: &str) -> Item {\n    // `requires len(shelf) > 0` in till.bx is a checked precondition that names\n    // itself when it fails. `assert!` is the closest thing, and it is a\n    // statement in the body rather than part of the signature \u2014 so a caller\n    // reading the declaration cannot see it.\n    assert!(!shelf.is_empty(), \"the catalogue is empty\");\n    for item in shelf {\n        if item.sku == sku {\n            return item.clone();\n        }\n    }\n    shelf[0].clone()\n}\n\n// ---- Ringing up a sale -----------------------------------------------------\n/// Two accumulators, because the receipt wants both and recomputing would be a\n/// second pass over the same lines.\nfn ring_up(rule: &dyn Tax, sale: &[Line]) {\n    println!(\"--- {} tax ---\", rule.label());\n    let mut subtotal = Money::ZERO;\n    let mut tax = Money::ZERO;\n    for line in sale {\n        println!(\"{}\", line_text(line));\n        subtotal = subtotal.plus(line_subtotal(line));\n        tax = tax.plus(tax::line_tax(rule, line));\n    }\n    println!(\"{}\", totals_text(subtotal, tax));\n}\n\n// ---- The program -----------------------------------------------------------\n// Burxt has no entry point to declare: `region sale { ... }` at the top level IS\n// the program. Rust needs `fn main`, and the name is load-bearing.\nfn main() {\n    let shelf = catalogue();\n    let basket = vec![\n        Line { item: find_item(&shelf, \"RICE\"), quantity: 3 },\n        Line { item: find_item(&shelf, \"MILK\"), quantity: 2 },\n        Line { item: find_item(&shelf, \"NEWS\"), quantity: 1 },\n    ];\n\n    // The same basket, priced two ways. Neither ring_up nor receipt.rs knows\n    // which rule it is running \u2014 that is what the interface is for.\n    let flat = FlatTax { rate: 1200 };\n    let split = SplitTax { staples: 200, rest: 1200 };\n\n    ring_up(&flat, &basket);\n\n    println!();\n    // The same lines again, under `split`: staples at 2%, everything else at 12%.\n    ring_up(&split, &basket);\n}"
+    }
+   ]
+  },
+  "order": [
+   "Burxt",
+   "PHP",
+   "Python",
+   "Rust"
+  ],
+  "read": "Look at `tax` in each. In Burxt the rounding is `Decimal<2, RoundHalfEven>` in the **return type**, so every caller sees it. In the other three it is a rounding mode passed as an argument, or a default nobody wrote down \u2014 and a reviewer reading the call site cannot tell which.",
+  "output": "--- flat tax ---\nRice 5kg  x3    158.25\nMilk 1L  x2     36.80\nNewspaper  x1     12.00\nsubtotal    207.05\ntax          23.41\ndue         230.46\n\n--- split tax ---\nRice 5kg  x3    158.25\nMilk 1L  x2     36.80\nNewspaper  x1     12.00\nsubtotal    207.05\ntax           3.91\ndue         210.96",
+  "kind": "ok",
+  "outputLabel": "Output, recorded by running it"
  },
  {
-  "id": "money",
-  "label": "Money",
-  "point": "Exact decimals are the default, computed as scaled integers.",
-  "source": "let price: Decimal<2> = 19.99;\nlet qty:   Int        = 3;\nlet total: Decimal<2> = price * qty;\nprint(total);",
-  "output": "59.97",
-  "kind": "ok"
+  "id": "mcp",
+  "label": "An MCP server",
+  "title": "An MCP server whose schema cannot drift",
+  "point": "The tool schema is derived from the preconditions, so there is no second artifact to keep in step.",
+  "langs": {
+   "Burxt": [
+    {
+     "name": "tools.bx",
+     "path": "examples/mcp/tools.bx",
+     "lang": "burxt",
+     "source": "// ============================================================================\n// examples/mcp/tools.bx \u2014 the money tools, and their promises.\n//\n// Every tool is an ordinary Burxt function whose **preconditions are written on the values they\n// constrain**. That is not decoration: `burxt mcp-schema` reads these declarations and emits the JSON\n// Schema an MCP client validates against, so the schema and the check are the same sentence.\n//\n// Everywhere else those are two artifacts. A hand-written schema says `minimum: 1` and the function\n// says `if quantity < 1 { ... }`, and nothing keeps them equal \u2014 the schema drifts, the client sends\n// something the tool refuses, and the error surfaces as a 500 rather than as a validation message.\n// Here there is one place to change, and forgetting to change the other is not a thing you can do.\n// ============================================================================\n\nuse \"../../lib/json.bx\";\n\n// One line of an invoice.\n//\n// `[> $0.00]` and `[> 0]` are the schema. A quantity of zero is not a free line, it is a mistake in\n// whatever produced the request, and answering `$0.00` would hide it.\nfunction line_total(unit: Decimal<2> [> $0.00], quantity: Int [> 0, <= 100000])\n    -> Decimal<2>\n{\n    return unit * quantity;\n}\n\n// Tax on a subtotal, at a rate.\n//\n// The return type names the rounding, which is what makes this safe to expose: a caller reading the\n// signature knows how the half-cent goes, and `Decimal<2, RoundHalfEven>` travels through every\n// signature the value reaches afterwards.\n//\n// `[<= 1.0000]` is a real constraint and not a formality \u2014 a rate above 100% is how a misplaced\n// decimal point in a config file becomes a bill nobody can pay.\nfunction tax_on(subtotal: Decimal<2> [>= $0.00], rate: Decimal<4> [>= 0.0000, <= 1.0000])\n    -> Decimal<2, RoundHalfEven>\n{\n    return subtotal * rate;\n}\n\n// A whole invoice line: the total and the tax, as one answer.\nfunction line_with_tax(unit: Decimal<2> [> $0.00], quantity: Int [> 0, <= 100000],\n                       rate: Decimal<4> [>= 0.0000, <= 1.0000]) -> Json\n{\n    let subtotal: Decimal<2> = unit * quantity;\n    let tax: Decimal<2, RoundHalfEven> = subtotal * rate;\n    let mutable fields: [Field] = [];\n    let a: Int = push(fields, json_field(\"subtotal\", json_money(subtotal)));\n    // `json_text(to_string(tax))` rather than `json_money(tax)`, and the refusal behind that is\n    // CORRECT rather than a papercut \u2014 which is worth writing down, because the first note here said\n    // the opposite.\n    //\n    // `tax` is `Decimal<2, RoundHalfEven>` and `json_money` takes `Decimal<2>`. Passing it would DROP\n    // the contract, and dropping one loses a stated intention. The widening goes the other way: a\n    // value with no contract may go where one is wanted, because that is strictly more information.\n    //\n    // `to_string` is exactly where the intention stops mattering. Nothing downstream can round text,\n    // so the contract has done its whole job by the time the digits are rendered \u2014 which is why this\n    // spelling is the honest one and not a workaround.\n    let b: Int = push(fields, json_field(\"tax\", json_text(to_string(tax))));\n    let c: Int = push(fields, json_field(\"total\", json_text(to_string(subtotal + tax))));\n    return json_object(fields);\n}"
+    },
+    {
+     "name": "server.bx",
+     "path": "examples/mcp/server.bx",
+     "lang": "burxt",
+     "source": "// ============================================================================\n// examples/mcp/server.bx \u2014 an MCP server, over stdio, in Burxt.\n//\n//     burxt build examples/mcp/server.bx -o /tmp/mcp\n//     echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}' | /tmp/mcp\n//\n// JSON-RPC 2.0, one message per line, which is what MCP over stdio is. `os_read_line` rather than\n// `os_read_all`, because a server has to answer the first request before the client sends the second\n// \u2014 reading to EOF is not a slow version of that, it is a deadlock.\n//\n// ---- Why this example exists ------------------------------------------------------------\n//\n// Not to show that Burxt can speak a protocol. It is to show the one thing nothing else here can do:\n// **the tool schema is derived from the preconditions, so it cannot drift from the implementation.**\n//\n//     burxt mcp-schema examples/mcp/tools.bx\n//\n// reads `line_total(unit: Decimal<2> [> $0.00], quantity: Int [> 0, <= 100000])` and emits the JSON\n// Schema for it \u2014 `exclusiveMinimum: 0`, `minimum: 1`, `maximum: 100000` \u2014 because those numbers are\n// already written down in the only place that also enforces them.\n//\n// Everywhere else that is two artifacts maintained by hand, and the schema is the one that rots: it\n// says a field is optional after the code started requiring it, the client sends a valid-by-schema\n// request, and the failure arrives as a 500 instead of a validation message.\n//\n// ---- The validation is deliberately doubled, and that is the point ----------------------\n//\n// This server checks each argument and answers `-32602 Invalid params` before calling the tool. The\n// tool ALSO carries the contract, which aborts the process if it is ever violated.\n//\n// That looks redundant and is not. A server must not die on a bad request, so the polite check has to\n// exist \u2014 and if the polite check and the contract ever disagreed, the contract would take the process\n// down LOUDLY rather than letting a bad value through quietly. The redundancy is a tripwire on the\n// thing that would otherwise be a silent divergence, and both are generated from one declaration.\n// ============================================================================\n\nuse \"../../lib/json.bx\";\nuse \"../../lib/os.bx\";\nuse \"tools.bx\";\n\n// ---- JSON-RPC plumbing -------------------------------------------------------\n\nfunction rpc_result(id: Json, result: Json) -> String {\n    let mutable fields: [Field] = [];\n    let a: Int = push(fields, json_field(\"jsonrpc\", json_text(\"2.0\")));\n    let b: Int = push(fields, json_field(\"id\", id));\n    let c: Int = push(fields, json_field(\"result\", result));\n    return json_render(json_object(fields));\n}\n\nfunction rpc_error(id: Json, code: Int, message: String) -> String {\n    let mutable inner: [Field] = [];\n    let a: Int = push(inner, json_field(\"code\", json_int(code)));\n    let b: Int = push(inner, json_field(\"message\", json_text(message)));\n    let mutable fields: [Field] = [];\n    let c: Int = push(fields, json_field(\"jsonrpc\", json_text(\"2.0\")));\n    let d: Int = push(fields, json_field(\"id\", id));\n    let e: Int = push(fields, json_field(\"error\", json_object(inner)));\n    return json_render(json_object(fields));\n}\n\n// An MCP tool answers with a `content` array. Text, because a model reads text \u2014 and because money as\n// text is the only way all its digits arrive (see lib/json.bx's header).\nfunction tool_text(body: String) -> Json {\n    let mutable one: [Field] = [];\n    let a: Int = push(one, json_field(\"type\", json_text(\"text\")));\n    let b: Int = push(one, json_field(\"text\", json_text(body)));\n    let mutable items: [Json] = [];\n    let c: Int = push(items, json_object(one));\n    let mutable fields: [Field] = [];\n    let d: Int = push(fields, json_field(\"content\", json_list(items)));\n    return json_object(fields);\n}\n\n// ---- the manifest ------------------------------------------------------------\n// Written out here so the server can answer `tools/list` with no compiler present. `burxt mcp-schema`\n// generates exactly this from tools.bx, and `the_mcp_schema_follows_the_contracts` in tests/runner.rs\n// checks that the generated form still matches \u2014 so a contract changing without this changing is a\n// failing test rather than a lie told to a client.\n\nfunction schema_number(description: String, minimum: String, maximum: String) -> Json {\n    let mutable f: [Field] = [];\n    let a: Int = push(f, json_field(\"type\", json_text(\"string\")));\n    let b: Int = push(f, json_field(\"description\", json_text(description)));\n    if len(minimum) > 0 {\n        let c: Int = push(f, json_field(\"minimum\", json_text(minimum)));\n    }\n    if len(maximum) > 0 {\n        let d: Int = push(f, json_field(\"maximum\", json_text(maximum)));\n    }\n    return json_object(f);\n}\n\nfunction tool_entry(name: String, description: String, properties: [Field],\n                   required: [Json]) -> Json {\n    let mutable schema: [Field] = [];\n    let a: Int = push(schema, json_field(\"type\", json_text(\"object\")));\n    let b: Int = push(schema, json_field(\"properties\", json_object(properties)));\n    let c: Int = push(schema, json_field(\"required\", json_list(required)));\n    let mutable entry: [Field] = [];\n    let d: Int = push(entry, json_field(\"name\", json_text(name)));\n    let e: Int = push(entry, json_field(\"description\", json_text(description)));\n    let f: Int = push(entry, json_field(\"inputSchema\", json_object(schema)));\n    return json_object(entry);\n}\n\nfunction manifest() -> Json {\n    let mutable tools: [Json] = [];\n\n    let mutable p1: [Field] = [];\n    let a1: Int = push(p1, json_field(\"unit\",\n                       schema_number(\"the unit price, exact, as digits\", \"0.01\", \"\")));\n    let a2: Int = push(p1, json_field(\"quantity\", schema_number(\"how many\", \"1\", \"100000\")));\n    let mutable r1: [Json] = [];\n    let a3: Int = push(r1, json_text(\"unit\"));\n    let a4: Int = push(r1, json_text(\"quantity\"));\n    let t1: Int = push(tools, tool_entry(\"line_total\",\n                       \"unit price times quantity, exactly\", p1, r1));\n\n    let mutable p2: [Field] = [];\n    let b1: Int = push(p2, json_field(\"subtotal\",\n                       schema_number(\"the amount to tax, as digits\", \"0.00\", \"\")));\n    let b2: Int = push(p2, json_field(\"rate\",\n                       schema_number(\"the rate, 0.0825 for 8.25%\", \"0.0000\", \"1.0000\")));\n    let mutable r2: [Json] = [];\n    let b3: Int = push(r2, json_text(\"subtotal\"));\n    let b4: Int = push(r2, json_text(\"rate\"));\n    let t2: Int = push(tools, tool_entry(\"tax_on\",\n                       \"tax on a subtotal, rounded half to even\", p2, r2));\n\n    let mutable fields: [Field] = [];\n    let c: Int = push(fields, json_field(\"tools\", json_list(tools)));\n    return json_object(fields);\n}\n\n// ---- dispatch ----------------------------------------------------------------\n\nfunction initialize_result() -> Json {\n    let mutable info: [Field] = [];\n    let a: Int = push(info, json_field(\"name\", json_text(\"burxt-money\")));\n    let b: Int = push(info, json_field(\"version\", json_text(\"0.1.0\")));\n    let mutable caps: [Field] = [];\n    let c: Int = push(caps, json_field(\"tools\", json_object([])));\n    let mutable fields: [Field] = [];\n    let d: Int = push(fields, json_field(\"protocolVersion\", json_text(\"2024-11-05\")));\n    let e: Int = push(fields, json_field(\"capabilities\", json_object(caps)));\n    let f: Int = push(fields, json_field(\"serverInfo\", json_object(info)));\n    return json_object(fields);\n}\n\n// A named argument as money, or None. The digits arrive as a string or a number and either is read \u2014\n// see `json_digits`, which takes both because an exact producer sends a string and a careless one\n// sends a number, and the difference carries no information.\nfunction money_arg(arguments: Json, name: String) -> Option<Decimal<2>> {\n    match json_at(arguments, name) {\n        None => { return Option.None; }\n        Some(v) => { return json_as_money(v); }\n    }\n}\n\nfunction int_arg(arguments: Json, name: String) -> Option<Int> {\n    match json_at(arguments, name) {\n        None => { return Option.None; }\n        Some(v) => { return json_as_int(v); }\n    }\n}\n\n// A rate at four places. `json_as_money` reads two, so the digits are read as an Int of\n// ten-thousandths and multiplied by one \u2014 the same penny-times-a-count trick, one scale down.\nfunction rate_arg(arguments: Json, name: String) -> Option<Decimal<4>> {\n    let mutable digits: String = \"\";\n    match json_at(arguments, name) {\n        None => { return Option.None; }\n        Some(v) => { digits = option_or(json_digits(v), \"\"); }\n    }\n    if len(digits) == 0 {\n        return Option.None;\n    }\n    let dot: Int = string_find(digits, \".\");\n    let mutable whole: String = digits;\n    let mutable fraction: String = \"\";\n    if dot >= 0 {\n        whole = substring(digits, 0, dot);\n        fraction = substring(digits, dot + 1, len(digits) - dot - 1);\n    }\n    if len(fraction) > 4 {\n        return Option.None;                          // finer than Decimal<4>: a question, not a round\n    }\n    while len(fraction) < 4 {\n        fraction = fraction + \"0\";\n    }\n    if len(whole) == 0 {\n        whole = \"0\";\n    }\n    match string_parse_int(whole) {\n        None => { return Option.None; }\n        Some(units) => {\n            match string_parse_int(fraction) {\n                None => { return Option.None; }\n                Some(part) => {\n                    let tick: Decimal<4> = 0.0001;\n                    return Option.Some(tick * (units * 10000 + part));\n                }\n            }\n        }\n    }\n}\n\nfunction call_line_total(arguments: Json) -> Result<Json, String> {\n    match money_arg(arguments, \"unit\") {\n        None => { return Result.Error(\"`unit` must be an exact amount, as digits\"); }\n        Some(unit) => {\n            match int_arg(arguments, \"quantity\") {\n                None => { return Result.Error(\"`quantity` must be a whole number\"); }\n                Some(quantity) => {\n                    // The SAME conditions the contract carries. If these two ever disagree, the\n                    // contract aborts the process rather than letting a bad value through.\n                    if unit <= $0.00 {\n                        return Result.Error(\"`unit` must be greater than 0.00\");\n                    }\n                    if quantity <= 0 || quantity > 100000 {\n                        return Result.Error(\"`quantity` must be between 1 and 100000\");\n                    }\n                    return Result.Ok(tool_text(to_string(line_total(unit, quantity))));\n                }\n            }\n        }\n    }\n}\n\nfunction call_tax_on(arguments: Json) -> Result<Json, String> {\n    match money_arg(arguments, \"subtotal\") {\n        None => { return Result.Error(\"`subtotal` must be an exact amount, as digits\"); }\n        Some(subtotal) => {\n            match rate_arg(arguments, \"rate\") {\n                None => { return Result.Error(\"`rate` must be a rate at four places or fewer\"); }\n                Some(rate) => {\n                    if subtotal < $0.00 {\n                        return Result.Error(\"`subtotal` must not be negative\");\n                    }\n                    if rate < 0.0000 || rate > 1.0000 {\n                        return Result.Error(\"`rate` must be between 0.0000 and 1.0000\");\n                    }\n                    return Result.Ok(tool_text(to_string(tax_on(subtotal, rate))));\n                }\n            }\n        }\n    }\n}\n\nfunction handle(request: Json) -> String {\n    let id: Json = option_or(json_at(request, \"id\"), json_null());\n    let method: String = option_or(json_as_text(option_or(json_at(request, \"method\"),\n                             json_null())), \"\");\n    if method == \"initialize\" {\n        return rpc_result(id, initialize_result());\n    }\n    if method == \"tools/list\" {\n        return rpc_result(id, manifest());\n    }\n    if method == \"tools/call\" {\n        let params: Json = option_or(json_at(request, \"params\"), json_null());\n        let name: String = option_or(json_as_text(option_or(json_at(params, \"name\"),\n                                 json_null())), \"\");\n        let arguments: Json = option_or(json_at(params, \"arguments\"), json_null());\n        if name == \"line_total\" {\n            match call_line_total(arguments) {\n                Error(why) => { return rpc_error(id, 0 - 32602, why); }\n                Ok(answer) => { return rpc_result(id, answer); }\n            }\n        }\n        if name == \"tax_on\" {\n            match call_tax_on(arguments) {\n                Error(why) => { return rpc_error(id, 0 - 32602, why); }\n                Ok(answer) => { return rpc_result(id, answer); }\n            }\n        }\n        return rpc_error(id, 0 - 32601, \"no tool named `\" + name + \"`\");\n    }\n    if method == \"\" {\n        return rpc_error(id, 0 - 32600, \"a request needs a `method`\");\n    }\n    return rpc_error(id, 0 - 32601, \"no method named `\" + method + \"`\");\n}\n\n// ---- the loop ----------------------------------------------------------------\n// One region per request, which is the documented pattern and the whole of what keeps a long-running\n// server's memory flat: everything a request builds is released at the closing brace. Without it the\n// arena grows in a straight line and a busy server eventually reaches its 1 GB reservation.\n\nlet mutable running: Bool = true;\nwhile running {\n    match os_read_line() {\n        None => { running = false; }\n        Some(line) => {\n            region request {\n                if len(string_trim(line)) > 0 {\n                    match json_parse(line) {\n                        Error(why) => {\n                            print(rpc_error(json_null(), 0 - 32700, \"parse error: \" + why));\n                        }\n                        Ok(message) => {\n                            print(handle(message));\n                        }\n                    }\n                }\n            }\n        }\n    }\n}"
+    }
+   ]
+  },
+  "order": [
+   "Burxt"
+  ],
+  "read": "`line_total` carries `[> $0.00]` and `[> 0, <= 100000]`. Those brackets ARE the JSON Schema \u2014 `burxt mcp-schema` reads the declaration and emits it. Nothing else in this repository, and nothing in any other language, can do that: it needs the contract to be in the signature.",
+  "kind": "ok",
+  "output": "$ burxt mcp-schema examples/mcp/tools.bx\n{\n \"tools\": [\n  {\n   \"name\": \"line_total\",\n   \"description\": \"line_total -> Decimal<2>\",\n   \"inputSchema\": {\n    \"type\": \"object\",\n    \"properties\": {\n     \"unit\": {\n      \"type\": \"string\",\n      \"description\": \"Decimal<2>\",\n      \"exclusiveMinimum\": \"0.00\"\n     },\n     \"quantity\": {\n      \"type\": \"integer\",\n      \"description\": \"Int\",\n      \"exclusiveMinimum\": \"0\",\n      \"maximum\": \"100000\"\n     }\n    },\n    \"required\": [\n     \"unit\",\n     \"quantity\"\n    ]\n   }\n  },\n  {\n   \"name\": \"tax_on\",\n   \"description\": \"tax_on -> Decimal<2, RoundHalfEven>\",\n   \"inputSchema\": {\n    \"type\": \"object\",\n    \"properties\": {\n     \"subtotal\": {\n      \"type\": \"string\",\n      \"description\": \"Decimal<2>\",\n      \"minimum\": \"0.00\"\n     },\n     \"rate\": {\n      \"type\": \"string\",\n      \"description\": \"Decimal<4>\",\n      \"minimum\": \"0.0000\",\n      \"maximum\": \"1.0000\"\n     }\n    },\n    \"required\": [\n     \"subtotal\",\n     \"rate\"\n    ]\n   }\n  },\n  {\n   \"name\": \"line_with_tax\",\n   \"description\": \"line_with_tax -> Json\",\n   \"inputSchema\": {\n    \"type\": \"object\",\n    \"properties\": {\n     \"unit\": {\n      \"type\": \"string\",\n      \"description\": \"Decimal<2>\",\n      \"exclusiveMinimum\": \"0.00\"\n     },\n     \"quantity\": {\n      \"type\": \"integer\",\n      \"description\": \"Int\",\n      \"exclusiveMinimum\": \"0\",\n      \"maximum\": \"100000\"\n     },\n     \"rate\": {\n      \"type\": \"string\",\n      \"description\": \"Decimal<4>\",\n      \"minimum\": \"0.0000\",\n      \"maximum\": \"1.0000\"\n     }\n    },\n    \"required\": [\n     \"unit\",\n     \"quantity\",\n     \"rate\"\n    ]\n   }\n  }\n ]\n}\n\n$ server  < requests.jsonl\n{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"59.97\"}]}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"4.95\"}]}}\n{\"jsonrpc\":\"2.0\",\"id\":3,\"error\":{\"code\":-32602,\"message\":\"`unit` must be greater than 0.00\"}}\n{\"jsonrpc\":\"2.0\",\"id\":4,\"error\":{\"code\":-32602,\"message\":\"`unit` must be an exact amount, as digits\"}}",
+  "outputLabel": "Derived, and answered, by the real thing"
  },
  {
-  "id": "scales",
-  "label": "Scales",
-  "point": "Adding decimals of different scales is a compile error, not a rounding.",
-  "source": "let dollars: Decimal<2> = 19.99;\nlet precise: Decimal<4> = 0.0825;\nprint(dollars + precise);",
-  "output": "error: cannot + Decimal<2> and Decimal<4>: scales must match. Burxt does not silently rescale money.\n --> snippet.bx:3:7\n  |\n3 | print(dollars + precise);\n  |       ^^^^^^^^^^^^^^^^^",
-  "kind": "compile"
- },
- {
-  "id": "overflow",
-  "label": "Overflow",
-  "point": "Arithmetic traps rather than wrapping around quietly.",
-  "source": "let big: Int = 9223372036854775807;\nprint(big + 1);",
-  "output": "burxt runtime error: arithmetic overflow \u2014 the exact result no longer fits in the value range",
-  "kind": "runtime"
- },
- {
-  "id": "absence",
-  "label": "No null",
-  "point": "Absence is a type, and both cases must be written.",
-  "source": "use \"lib/option.bx\";\n\nfunction first_even(xs: [Int]) -> Option<Int> {\n    for x in xs {\n        if remainder(x, 2) == 0 {\n            return Option.Some(x);\n        }\n    }\n    return Option.None;\n}\n\nregion r {\n    let xs: [Int] = [3, 7, 8, 9];\n    match first_even(xs) {\n        None => { print(\"none\"); }\n        Some(n) => { print(n); }\n    }\n}",
-  "output": "8",
-  "kind": "ok"
- },
- {
-  "id": "generics",
-  "label": "Generics",
-  "point": "One definition, one machine function per type. Nothing is erased.",
-  "source": "function largest<T: Ordered>(a: T, b: T) -> T {\n    if a > b {\n        return a;\n    }\n    return b;\n}\n\nregion r {\n    print(largest(3, 9));\n    print(largest($2.50, $17.25));\n}",
-  "output": "9\n17.25",
-  "kind": "ok"
- },
- {
-  "id": "maps",
-  "label": "Maps",
-  "point": "Iteration is insertion order, always. Never a hash order.",
-  "source": "use \"lib/map.bx\";\n\nregion r {\n    let mutable counts: Map<String, Int> = map_new();\n    let a: Int = counts.set(\"pears\", 7);\n    let b: Int = counts.set(\"apples\", 3);\n    let c: Int = counts.set(\"plums\", 1);\n    let gone: Bool = counts.remove(\"apples\");\n\n    let names: [String] = counts.keys();\n    for name in names {\n        print(name);\n    }\n}",
-  "output": "pears\nplums",
-  "kind": "ok"
- },
- {
-  "id": "regions",
-  "label": "Memory",
-  "point": "No collector. A region is a bump pointer and a mark.",
-  "source": "function label(n: Int) -> String {\n    return \"item \" + to_string(n);\n}\n\nregion r {\n    let mutable i: Int = 1;\n    while i <= 3 {\n        print(label(i));\n        i += 1;\n    }\n}\n// every String built above is released here, at once, in O(1)",
-  "output": "item 1\nitem 2\nitem 3",
-  "kind": "ok"
+  "id": "invoice",
+  "label": "An invoice",
+  "title": "An invoice, priced and taxed",
+  "point": "Money in, money out, and every rounding named at the line where it happens.",
+  "langs": {
+   "Burxt": [
+    {
+     "name": "invoice.bx",
+     "path": "examples/invoice.bx",
+     "lang": "burxt",
+     "source": "// ============================================================================\n// An invoice \u2014 the program someone would actually write, and the reason Burxt\n// exists. Every number here is exact: there is no binary float anywhere in the\n// pipeline, and every place a value could round says how.\n// ============================================================================\n\nclass Line {\n    label: String,\n    unit: Decimal<2>,\n    quantity: Int\n}\n\n// Money times a count is exact \u2014 no contract needed, because no rounding can happen.\n// Note what this signature does NOT have to say: `unit` is a plain Decimal<2>, and the\n// contract appears where rounding actually happens, further down. Until v0.0.86 it had\n// to be declared here, at the point money entered the program, which put an answer about\n// rounding three functions away from the rounding.\nfunction (self: Line) amount() -> Decimal<2> {\n    return self.unit * self.quantity;\n}\n\nfunction (self: Line) render() -> String {\n    return self.label + \" x\" + to_string(self.quantity)\n         + \" @ \" + to_string(self.unit)\n         + \" = \" + to_string(self.amount());\n}\n\n// A tax rate is finer than money \u2014 `8.25%` IS 0.0825, a Decimal<4> \u2014 so the\n// product's exact value has 6 decimal places and MUST be told how to land on 2.\n// That is the rounding contract, and it is checked at compile time.\nfunction tax_on(subtotal: Decimal<2>, rate: Decimal<4>)\n    -> Decimal<2, RoundHalfEven>\n    requires rate >= 0.0000\n    ensures result >= $0.00\n{\n    return subtotal * rate;\n}\n\n// The array names its type, because a literal cannot say fixed or growable \u2014\n// this one grows, and growing means it lives in the region.\nlet mutable lines: [Line] = [];\nlet a = push(lines, Line { label: \"widget\", unit: $19.99, quantity: 3 });\nlet b = push(lines, Line { label: \"gasket\", unit: $4.25,  quantity: 12 });\nlet c = push(lines, Line { label: \"manual\", unit: $12.00, quantity: 1 });\n\nprint(\"INVOICE 2026-0042\");\nprint(\"-------------------------------------------\");\n\n// `let mutable subtotal = $0.00;` would be a Decimal<2>, which is what this is. It\n// keeps its annotation because it is an accumulator: the type is the claim about\n// what may be added to it, and that claim is worth reading at the top of a loop.\nlet mutable subtotal: Decimal<2> = $0.00;\nfor line in lines {\n    print(line.render());\n    subtotal = subtotal + line.amount();\n}\n\nlet rate = 8.25%;                                  // Decimal<4>\n// These two keep their annotations for the reason the annotation exists: each one\n// carries a rounding contract, and a contract is a decision, not a type.\nlet tax: Decimal<2, RoundHalfEven> = tax_on(subtotal, rate);\nlet total: Decimal<2, RoundHalfEven> = subtotal + tax;\n\nprint(\"-------------------------------------------\");\nprint(\"subtotal: \" + to_string(subtotal));\nprint(\"tax 8.25%: \" + to_string(tax));\nprint(\"total:    \" + to_string(total));\n\n// ---- Why this is worth a language -------------------------------------------\n//\n// The same arithmetic in a language with binary floats:\n//\n//     19.99 * 3   = 59.96999999999999886313162278...\n//     + 4.25 * 12 = 51.0\n//     + 12.00     = 122.96999999999999886...\n//     * 0.0825    = 10.14452499999999990...\n//\n// and then someone rounds, somewhere, in a way nobody wrote down. The cent that\n// goes missing is not a rounding artifact \u2014 it is a decision nobody made.\n//\n// In Burxt every step above is a scaled integer. `59.97` is the integer 5997\n// with a scale of 2, and the only place a value can round is the one marked\n// with a contract, where the reader can see it."
+    }
+   ]
+  },
+  "order": [
+   "Burxt"
+  ],
+  "read": "",
+  "output": "INVOICE 2026-0042\n-------------------------------------------\nwidget x3 @ 19.99 = 59.97\ngasket x12 @ 4.25 = 51.00\nmanual x1 @ 12.00 = 12.00\n-------------------------------------------\nsubtotal: 122.97\ntax 8.25%: 10.15\ntotal:    133.12",
+  "kind": "ok",
+  "outputLabel": "Output, recorded by running it"
  },
  {
   "id": "contracts",
   "label": "Contracts",
-  "point": "A precondition is checked, and names itself when it fails.",
-  "source": "function withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>\n    requires amount > $0.00\n    requires amount <= balance\n    ensures result >= $0.00\n{\n    return balance - amount;\n}\n\nprint(withdraw($100.00, $30.00));\nprint(withdraw($100.00, $500.00));",
-  "output": "70.00\nburxt runtime error: `requires amount <= balance` failed in `withdraw`",
-  "kind": "runtime"
+  "title": "A program that states what it requires",
+  "point": "A precondition is checked, and it names itself when it fails.",
+  "langs": {
+   "Burxt": [
+    {
+     "name": "contracts.bx",
+     "path": "examples/contracts.bx",
+     "lang": "burxt",
+     "source": "// ============================================================================\n// Contracts \u2014 claims the compiler checks, written where a reader looks for\n// them: in the signature, not in a comment and not in the body.\n// ============================================================================\n//\n// A type says what SHAPE a value has. A contract says what must be TRUE about\n// it. Every one of these is checked at run time, on every call, and there is no\n// build mode that removes them \u2014 a program whose enforcement of its own rules\n// depends on how it was compiled is not enforcing anything.\n\n// ---- requires and ensures --------------------------------------------------\nfunction withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>\n    requires amount > $0.00\n    requires amount <= balance\n    ensures result >= $0.00\n{\n    return balance - amount;\n}\n\n// `result` is bound inside `ensures` and nowhere else. It is not a keyword \u2014 a\n// parameter may still be called `result`; it simply collides there, which is an\n// error about the collision rather than silent shadowing.\n\n// ---- pure: an answer that depends on its arguments alone -------------------\n// A `pure` function may not print, read or write a file, call into C, call a\n// function that is not pure, or call a method at all. It is a claim the\n// compiler checks, which is why a contract clause may call one.\npure function fee_for(amount: Decimal<2>) -> Decimal<2> {\n    if amount > $100.00 {\n        return $2.50;\n    }\n    return $1.00;\n}\n\n// ---- decreases: this recursion ends ----------------------------------------\n// The measure is evaluated with the NEW arguments at each recursive call and\n// compared with the current one. Strictly smaller, and never negative \u2014 checked\n// at the call site, which is why it works with `return tail`, where the frame\n// making the call is already gone.\nfunction countdown(n: Int, acc: Int) -> Int\n    decreases n\n{\n    if n <= 0 { return acc; }\n    return tail countdown(n - 1, acc + n);\n}\n\n// ---- old(...): conservation laws -------------------------------------------\n// `old(e)` is the value on ENTRY, evaluated once before the body runs. It makes\n// the claim that a transfer moves money without creating or destroying any.\nclass Ledger { from_side: Decimal<2>, to_side: Decimal<2> }\n\nfunction (mutable self: Ledger) transfer(amount: Decimal<2>) -> Int\n    requires amount > $0.00\n    ensures self.from_side + self.to_side == old(self.from_side + self.to_side)\n{\n    self.from_side = self.from_side - amount;\n    self.to_side = self.to_side + amount;\n    return 0;\n}\n\nprint(withdraw($100.00, $30.00));      // 70.00\nprint(fee_for($150.00));               // 2.50\nprint(countdown(5, 0));                // 15\n\nlet mutable book: Ledger = Ledger { from_side: $500.00, to_side: $0.00 };\nlet moved: Int = book.transfer($120.00);\nprint(book.from_side);                 // 380.00\nprint(book.to_side);                   // 120.00\n\n// ---- What happens when a claim is false ------------------------------------\n//\n// At run time the clause is quoted back, so the message is the answer rather\n// than a hint to go looking:\n//\n//     burxt runtime error: `requires amount <= balance` failed in `withdraw`\n//\n// Exit code 70, like every other named runtime failure \u2014 bounds, overflow,\n// division by zero, region exhaustion.\n//\n// And a transfer that loses a cent fails the conservation law by name:\n//\n//     burxt runtime error: `ensures self.from_side + self.to_side ==\n//     old(self.from_side + self.to_side)` failed in `transfer`\n//\n// ---- What the compiler refuses ---------------------------------------------\n//\n// A clause that is not a Bool, a measure that is not an Int, `result` in a\n// `requires` (there is no result yet), `old(...)` outside an `ensures`,\n// `old(result)` as a contradiction, `decreases` on a function that never calls\n// itself, more than one `decreases`, and any clause that is not pure \u2014 because\n// a contract that can change the program is not a check, it is a second program\n// that only runs when someone is looking."
+    }
+   ]
+  },
+  "order": [
+   "Burxt"
+  ],
+  "read": "",
+  "output": "70.00\n2.50\n15\n380.00\n120.00",
+  "kind": "ok",
+  "outputLabel": "Output, recorded by running it"
+ },
+ {
+  "id": "generics",
+  "label": "Generics",
+  "title": "One definition, one machine function per type",
+  "point": "Nothing is erased. A `Stack<Int>` and a `Stack<String>` are two real types.",
+  "langs": {
+   "Burxt": [
+    {
+     "name": "generics.bx",
+     "path": "examples/generics.bx",
+     "lang": "burxt",
+     "source": "// ============================================================================\n// Generics \u2014 one definition, one copy per type that uses it.\n//\n// Burxt monomorphises: `identity<Int>` and `identity<String>` are two functions in\n// the object file, and a `Decimal<2>` inside a generic is still a scaled i64 rather\n// than a pointer to one. That is the whole reason not to erase \u2014 every other promise\n// this language makes is about what a value IS, and erasure would put a pointer\n// where the value was.\n// ============================================================================\n\nclass Point { x: Int, y: Int }\n\n// One type parameter, named where the function is declared. No turbofish at the call\n// site: `identity(3)` infers `T = Int` from the argument.\nfunction identity<T>(x: T) -> T {\n    return x;\n}\n\n// A parameter can be nested inside another type. `[T]` is a growable array of T.\nfunction first<T>(xs: [T]) -> T {\n    return xs[0];\n}\n\n// A parameter is a real type inside the body: it can be bound, copied and returned.\nfunction second<T>(xs: [T]) -> T {\n    let picked: T = xs[1];\n    return picked;\n}\n\n// A generic may call a generic. `echo`'s body is checked ONCE, with `T` standing for\n// nothing \u2014 so a mistake here is an error at this line, not at every call site.\nfunction echo<T>(x: T) -> T {\n    return identity(x);\n}\n\n// Two parameters, and they are independent.\nfunction keep<A, B>(a: A, b: B) -> A {\n    return a;\n}\n\n// ---- Bounds: what a parameter is allowed to do -----------------------------\n//\n// A bound is written in the signature, and the BODY is checked against it \u2014 not\n// against whatever the instantiations happen to permit. So adding a `>` inside a\n// generic cannot silently narrow every caller: it is a compile error until the\n// signature says so. Same argument `allocates` and rounding contracts make.\n//\n// Two bounds ship with the language, and each mirrors exactly what it already\n// allows: `Ordered` is Int and Decimal (the types `<` works on), and `Equatable`\n// adds Bool and String (the types `==` works on). A bound cannot promise more than\n// the language delivers.\nfunction largest<T: Ordered>(a: T, b: T) -> T {\n    if a > b {\n        return a;\n    }\n    return b;\n}\n\nfunction same<T: Equatable>(a: T, b: T) -> Bool {\n    return a == b;\n}\n\n// Any declared trait is a bound too, and then the parameter has that trait's\n// methods. This is STATIC dispatch: one copy per type, no vtable, no runtime type\n// information. `dynamic Priced` is still there for when one implementation must serve\n// many types at run time \u2014 generics are for when many implementations should.\ninterface Priced {\n    function price(self) -> Decimal<2>\n}\n\nimplement Priced for Point {\n    function (self) price() -> Decimal<2> { return $1.00; }\n}\n\nfunction twice_the_price<T: Priced>(item: T) -> Decimal<2> {\n    // Money times a count is exact, so no rounding contract is needed \u2014 the same rule\n    // that applies outside a generic. A bound changes what is allowed, never what it means.\n    return item.price() * 2;\n}\n\n// Four instantiations of one definition. Each is its own symbol.\nprint(identity(3));\nprint(identity(\"text\"));\nprint(identity(true));\nprint(identity($1.50));\n\nlet mutable ns: [Int] = [];\nlet a = push(ns, 10);\nlet b = push(ns, 20);\nprint(first(ns));\nprint(second(ns));\n\nlet mutable ws: [String] = [];\nlet c = push(ws, \"one\");\nlet d = push(ws, \"two\");\nprint(first(ws));\n\nprint(echo(7));\nprint(keep(9, \"ignored\"));\n\n// A class travels by value through a generic, like everywhere else.\nlet p = identity(Point { x: 4, y: 5 });\nprint(p.x + p.y);\n\nprint(largest(3, 9));\nprint(largest($1.50, $1.25));\nprint(same(\"a\", \"a\"));\nprint(twice_the_price(p));\n\n// ---- Classes are generic too, and that is what containers are for -----------\n//\n// A generic record's instantiations are separate types with separate layouts, and\n// each one gets its OWN copy of every method \u2014 `Stack<Int>.push_one` and\n// `Stack<String>.push_one` are two functions in the object file.\nclass Stack<T> {\n    items: [T]\n}\n\n// The receiver names the class's parameters: `self: Stack<T>` puts `T` in scope for\n// the rest of the signature and the body. A method may use its type's parameters and\n// declares none of its own.\n//\n// This builds in the CALLER's region, for the ordinary reason: the array lives there, so\n// growing it builds there. Being generic changes what is allowed, never what it means.\nfunction (mutable self: Stack<T>) push_one(item: T) -> Int {\n    return push(self.items, item);\n}\n\nfunction (self: Stack<T>) count() -> Int {\n    return len(self.items);\n}\n\nfunction (self: Stack<T>) first() -> T {\n    return self.items[0];\n}\n\nlet mutable ints: Stack<Int> = Stack { items: [] };\nlet one = ints.push_one(5);\nlet two = ints.push_one(9);\nprint(ints.count());\nprint(ints.first());\n\nlet mutable keywords: Stack<String> = Stack { items: [] };\nlet three = keywords.push_one(\"first\");\nprint(keywords.count());\nprint(keywords.first());\n\n// The arguments can also be inferred from the field values, when they say enough:\n// `Holder { one: 1 }` needs no annotation. An empty array says nothing, which is\n// why `Stack` above names its type.\nlet held = Holder { one: 42 };\nprint(held.one);\n\nclass Holder<T> {\n    one: T\n}\n\n// ---- What an unbounded parameter can do, and what it cannot -----------------\n//\n// `T` with no bound can be stored, copied, passed and returned. Nothing else,\n// because nothing else is knowable without saying more \u2014 and every refusal names the\n// bound that would allow it:\n//\n//     function show<T>(x: T) -> Int { print(x); return 0; }\n//     error: `T` is a type parameter with no bound, so a value of it can be stored,\n//            copied, passed and returned \u2014 not printed, which needs to know what the\n//            value IS. Say so in the signature with a bound on `T`.\n//\n//     function bigger<T>(a: T, b: T) -> Bool { return a > b; }\n//     error: `T` is a type parameter with no bound, so two values of it cannot be\n//            compared \u2014 `>` needs to know what the values ARE. Write `<T: Ordered>`.\n//\n// And a bound is checked where the type argument is chosen, not where it is used:\n//     largest(true, false)\n//     error: `largest` needs `T: Ordered`, and Bool has no order. Ordered is Int and\n//            Decimal \u2014 the types `<` works on.\n//\n//     describe(Book { ... })      // with no `implement Priced for Book`\n//     error: `describe` needs `T: Priced`, and `Book` does not implement it. Write\n//            `implement Priced for Book { ... }` \u2014 conformance is declared, never inferred\n//            from having the right method names.\n//\n// ---- And what the compiler refuses ------------------------------------------\n//\n// One type per call \u2014 a parameter is not a union:\n//     print(keep(1, 2) + identity(\"x\"));   // fine, two separate calls\n//     function pair<T>(a: T, b: T) -> T { return a; }\n//     pair(1, \"two\")\n//     error: `T` would have to be both Int and String in this call\n//\n// A parameter that appears only in the return type has nothing to infer from:\n//     function make<T>(n: Int) -> T { ... }\n//     error: `make` cannot tell what `T` is from this call: no argument mentions it.\n//\n// And C has no notion of a type parameter:\n//     external function puts<T>(s: T) -> CInt;\n//     error: `external function puts` cannot be generic: C has no type parameters, and there\n//            would be no symbol to link against.\n//\n// A generic nobody instantiates emits nothing at all, so a library may declare as\n// many as it likes and cost a program only what it uses."
+    }
+   ]
+  },
+  "order": [
+   "Burxt"
+  ],
+  "read": "",
+  "output": "3\ntext\ntrue\n1.50\n10\n20\none\n7\n9\n9\n9\n1.50\ntrue\n2.00\n2\n5\n1\nfirst\n42",
+  "kind": "ok",
+  "outputLabel": "Output, recorded by running it"
+ },
+ {
+  "id": "absence",
+  "label": "No null",
+  "title": "Absence, as a type",
+  "point": "`Option<T>` is a library, not a keyword, and `match` forces both cases.",
+  "langs": {
+   "Burxt": [
+    {
+     "name": "absence.bx",
+     "path": "examples/absence.bx",
+     "lang": "burxt",
+     "source": "// ============================================================================\n// No null \u2014 absence and failure as types.\n//\n// Burxt has no null, no nil, no undefined and no \"\" standing in for missing.\n// Nothing is implicitly absent, so no dereference can fail. Absence is a TYPE,\n// and the compiler makes you say what happens when there is nothing there.\n//\n// `Option<T>` and `Result<T, E>` are not language features. They are four lines\n// of Burxt each, in lib/option.bx and lib/result.bx, with no compiler support\n// beyond generics \u2014 which was the test set for whether the generics are real: if\n// `Option` had needed a keyword, they were not.\n// ============================================================================\n\nenum Option<T> {\n    None,\n    Some(T)\n}\n\nenum Result<T, E> {\n    Ok(T),\n    Error(E)\n}\n\n// A function that might not find anything says so in its type. There is no\n// sentinel to document, no -1 to remember, and no way for a caller to forget.\nfunction position_of(xs: [Int], want: Int) -> Option<Int> {\n    let mutable i = 0;\n    for x in xs {\n        if x == want {\n            return Option.Some(i);\n        }\n        i += 1;\n    }\n    return Option.None;\n}\n\n// A function that can fail says THAT in its type. No exception to catch, no\n// error code to check-or-not.\nfunction divide(a: Int, b: Int) -> Result<Int, String> {\n    if b == 0 {\n        return Result.Error(\"division by zero\");\n    }\n    return Result.Ok(divide_toward_zero(a, b));\n}\n\n// The value or a fallback \u2014 generic over the element, so one definition serves\n// every type. `Option<T>` inside a generic body is checked once, with `T`\n// standing for nothing.\nfunction or_else<T>(o: Option<T>, fallback: T) -> T {\n    match o {\n        None => { return fallback; }\n        Some(value) => { return value; }\n    }\n}\n\n// `?` yields the value or returns the failure from here \u2014 so the happy path reads as\n// if nothing could go wrong, while the compiler still knows it can.\nfunction average(a: Int, b: Int, n: Int) -> Result<Int, String> {\n    let mean = divide(a + b, n)?;\n    return Result.Ok(mean);\n}\n\n// The same shortcut over absence, in a function that answers with an Option.\nfunction doubled_first(xs: [Int]) -> Option<Int> {\n    let head = position_of(xs, 5)?;\n    return Option.Some(head * 2);\n}\n\nlet mutable xs: [Int] = [];\nlet a = push(xs, 5);\nlet b = push(xs, 9);\nlet c = push(xs, 14);\n\n// Both cases, every time. That is the whole feature.\nmatch position_of(xs, 9) {\n    None => { print(\"not there\"); }\n    Some(at) => { print(at); }\n}\nmatch position_of(xs, 7) {\n    None => { print(\"not there\"); }\n    Some(at) => { print(at); }\n}\n\n// Or a fallback, when a default is the right answer.\nprint(or_else(position_of(xs, 14), 0 - 1));\nprint(or_else(position_of(xs, 99), 0 - 1));\n\n// One definition of `or_else`, two instantiations: `Option<Int>` and\n// `Option<String>` are separate types with separate layouts.\nlet keywords: Option<String> = Option.Some(\"found\");\nprint(or_else(keywords, \"missing\"));\n\nmatch divide(10, 2) {\n    Ok(answer) => { print(answer); }\n    Error(why) => { print(why); }\n}\nmatch divide(1, 0) {\n    Ok(answer) => { print(answer); }\n    Error(why) => { print(why); }\n}\n\n// `?` in action: the second call fails, and the failure travels out untouched.\nmatch average(10, 6, 2) {\n    Ok(mean) => { print(mean); }\n    Error(why) => { print(why); }\n}\nmatch average(10, 6, 0) {\n    Ok(mean) => { print(mean); }\n    Error(why) => { print(why); }\n}\nmatch doubled_first(xs) {\n    None => { print(\"no 5\"); }\n    Some(v) => { print(v); }\n}\n\n// ---- What the compiler refuses, and why ------------------------------------\n//\n// Forgetting a case \u2014 the reason this type exists:\n//     match found { Some(n) => { print(n); } }\n//     error: this `match` on `Option<Int>` does not handle `None`. Every variant\n//            must be handled \u2014 that is what makes adding a variant later a\n//            compile error instead of a silent fall-through.\n//\n// A value whose type nothing states. `None` carries nothing, so nothing in the\n// line says what `T` is:\n//     let nothing = Option.None;\n//     error: `Option.None` does not say what `T` is, and nothing here does.\n//            Write the type where the value lands \u2014 `let x: Option<...> = ...`\n//\n// A class payload works since v0.0.118 \u2014 `Option<Point>` is an ordinary thing to want, and it\n// used to be refused by name. What is still refused is an ENUM inside an enum, and the message\n// says why in terms of the argument that caused it:\n//     let held: Option<Shape> = Option.None;     // Shape is itself an enum\n//     error: `Option<Shape>` cannot be made: `Option.Some` would carry the enum `Shape`,\n//            which needs indirection to have a finite size.\n//\n// ---- `?` \u2014 the shortcut, and the one thing it will not do -------------------\n//\n// In a function that itself answers with a failure, `?` yields the value or returns\n// the failure from here, immediately.\n//\n//     function average(a: Int, b: Int, n: Int) -> Result<Int, String> {\n//         let mean = divide(a + b, n)?;      // the value, or return the Error\n//         return Result.Ok(mean);\n//     }\n//\n// It works on absence too, in a function answering with an `Option`:\n//\n//     function doubled_first(xs: [Int]) -> Option<Int> {\n//         let head = first_of(xs)?;          // the value, or return None\n//         return Option.Some(head * 2);\n//     }\n//\n// `?` recognises a failure by the VARIANT name \u2014 `Error` or `None` \u2014 never by the\n// enum's own name. That is what lets these be library types: an enum you write\n// yourself gets `?` too, as long as its failing case is called `Error` or `None`.\n//\n// And it does NOT convert between error types:\n//\n//     error: `?` does not convert between failures: this one carries String, and the\n//            enclosing function's `Error` carries Int. Write the `match`, or make the\n//            two agree.\n//\n// Two libraries with different failures means two `match`es. That is more typing and\n// it is also the honest amount of thinking \u2014 somebody has to decide what the caller's\n// failure means, and that decision does not belong to an operator.\n//\n// ---- What is deliberately absent -------------------------------------------\n//\n// There is no `unwrap`. \"Give me the value and abort if there is none\" is null\n// with extra steps, and the crash it causes is the one this type prevents."
+    }
+   ]
+  },
+  "order": [
+   "Burxt"
+  ],
+  "read": "",
+  "output": "1\nnot there\n2\n-1\nfound\n5\ndivision by zero\n8\ndivision by zero\n0",
+  "kind": "ok",
+  "outputLabel": "Output, recorded by running it"
  }
 ];
 
-const tabs = document.querySelectorAll('.picker button');
-const src = document.getElementById('src');
+const picker = document.querySelectorAll('.picker[role=tablist] > button[data-panel]');
+const langs = document.getElementById('langs');
+const files = document.getElementById('files');
+const code = document.getElementById('code');
 const out = document.getElementById('out');
 const head = document.getElementById('outhead');
 const note = document.getElementById('note');
 const point = document.getElementById('point');
-let current = PANELS[0];
+const title = document.querySelector('[data-title]');
+const read = document.getElementById('read');
 
-function show(panel) {
-  current = panel;
-  src.value = panel.source;
-  out.textContent = panel.output;
-  point.textContent = panel.point;
-  const HEAD = {
-    ok:      ['Output', ''],
-    compile: ['Refused at compile time', 'stale'],
-    runtime: ['Stopped at run time', 'stale'],
-  };
-  const NOTE = {
-    ok:      'Recorded by running this program.',
-    compile: 'The real message from the compiler, not a paraphrase.',
-    runtime: 'It typechecks. It stops when the value cannot be represented.',
-  };
-  head.textContent = HEAD[panel.kind][0];
-  head.className = HEAD[panel.kind][1];
-  note.textContent = NOTE[panel.kind];
-  const rows = panel.source.split('\n').length;
-  src.style.minHeight = Math.max(14, rows + 3) * 1.55 + 2.2 + 'rem';
-  tabs.forEach(t => t.setAttribute('aria-selected', String(t.dataset.panel === panel.id)));
+const HEAD = {
+  ok:      ['', ''],
+  compile: ['Refused at compile time', 'stale'],
+  runtime: ['Stopped at run time', 'stale'],
+};
+const NOTE = {
+  ok:      'Recorded by running this program.',
+  compile: 'The real message from the compiler, not a paraphrase.',
+  runtime: 'It typechecks. It stops when the value cannot be represented.',
+};
+
+let panel = PANELS[0];
+let lang = 'Burxt';
+let file = 0;
+
+function md(text) {
+  // The one-line prose fields carry `code` spans and **strong**, and nothing else.
+  return text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
 }
 
-tabs.forEach(t => t.addEventListener('click', () => {
-  show(PANELS.find(p => p.id === t.dataset.panel));
+function draw() {
+  const set = panel.langs[lang];
+  if (file >= set.length) file = 0;
+  const f = set[file];
+
+  title.textContent = panel.title;
+  point.innerHTML = md(panel.point);
+  read.innerHTML = panel.read ? md(panel.read) : '';
+
+  langs.hidden = panel.order.length < 2;
+  langs.innerHTML = panel.order.map(name =>
+    '<button role="tab" data-lang="' + name + '" aria-selected="' +
+    (name === lang) + '">' + name + '</button>').join('');
+
+  files.innerHTML = set.map((x, i) =>
+    '<button role="tab" data-file="' + i + '" aria-selected="' + (i === file) + '">' +
+    x.name + '</button>').join('');
+
+  const escaped = f.source
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  code.innerHTML = '<pre data-file="' + f.name + '"><code class="language-' + f.lang + '">' +
+    escaped + '</code></pre>';
+  // The panel was just replaced, so its code has to be enhanced again.
+  if (window.BurxtEditor) window.BurxtEditor.enhance(code);
+
+  out.textContent = panel.output || '';
+  head.textContent = HEAD[panel.kind][0] || panel.outputLabel || 'Output';
+  head.className = HEAD[panel.kind][1];
+  note.textContent = lang === 'Burxt'
+    ? NOTE[panel.kind]
+    : 'This port prints the same thing. A test runs it and compares, and skips if ' + lang +
+      ' is not installed.';
+
+  picker.forEach(t => t.setAttribute('aria-selected', String(t.dataset.panel === panel.id)));
+}
+
+picker.forEach(t => t.addEventListener('click', () => {
+  panel = PANELS.find(p => p.id === t.dataset.panel);
+  lang = 'Burxt';
+  file = 0;
+  draw();
 }));
 
-document.getElementById('copy').addEventListener('click', e => {
-  e.preventDefault();
-  navigator.clipboard.writeText(src.value).then(() => {
-    const b = e.target;
-    const was = b.textContent;
-    b.textContent = 'Copied';
-    setTimeout(() => { b.textContent = was; }, 1200);
-  });
+langs.addEventListener('click', e => {
+  const b = e.target.closest('button[data-lang]');
+  if (!b) return;
+  lang = b.dataset.lang;
+  draw();
 });
 
-show(PANELS[0]);
+files.addEventListener('click', e => {
+  const b = e.target.closest('button[data-file]');
+  if (!b) return;
+  file = Number(b.dataset.file);
+  draw();
+});
+
+draw();
 </script>

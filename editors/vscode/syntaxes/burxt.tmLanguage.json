@@ -93,9 +93,9 @@
     "string-escapes": {
       "patterns": [
         {
-          "comment": "The escapes Burxt actually accepts. Anything else is refused by the lexer.",
+          "comment": "The escapes Burxt actually accepts. Anything else is refused by the lexer. `\\r` and `\\0` were added in v0.0.176 and were missing here — the keyword parity test cannot see an escape, so this drifted silently.",
           "name": "constant.character.escape.burxt",
-          "match": "\\\\[nt\"\\\\{}]"
+          "match": "\\\\[nrt0\"\\\\{}]"
         },
         {
           "name": "invalid.illegal.unknown-escape.burxt",
@@ -169,9 +169,14 @@
     "reserved": {
       "patterns": [
         {
-          "comment": "The six spellings Burxt used to have. They are still RESERVED WORDS in the compiler, but only so it can name the replacement: `fn` -> `function`, `mut` -> `mutable`, `impl` -> `implement`, `dyn` -> `dynamic`, `extern` -> `external`, `struct` -> `class`, `trait` -> `interface`. A program using one of them does not compile, so the editor must not colour it like a keyword — it is an error, and this says so before the compiler does. (`enum` was NOT renamed.)",
+          "comment": "The eight spellings Burxt used to have. They are still RESERVED WORDS in the compiler, but only so it can name the replacement: `fn` -> `function`, `mut` -> `mutable`, `impl` -> `implement`, `dyn` -> `dynamic`, `extern` -> `external`, `struct` -> `class`, `trait` -> `interface`, `record` -> `class`. A program using one of them does not compile, so the editor must not colour it like a keyword — it is an error, and this says so before the compiler does. (`enum` was NOT renamed.) `trait` and `record` were missing here: they live in the lexer's `renamed_keyword`, not in its keyword TABLE, so the parity test never asked for them.",
           "name": "invalid.deprecated.burxt",
-          "match": "\\b(fn|mut|impl|dyn|extern|struct)\\b"
+          "match": "\\b(fn|mut|impl|dyn|extern|struct|trait|record)\\b"
+        },
+        {
+          "comment": "`main` is a name the language owns. Burxt has no entry point — the whole file is the program — so `function main()` looks like one and is not one, which the compiler calls out as a trap rather than a crash. It is refused, so it is coloured as refused.",
+          "name": "invalid.illegal.reserved-name.burxt",
+          "match": "\\bmain\\b"
         }
       ]
     },
@@ -388,9 +393,24 @@
           "match": "\\b(requires|ensures|decreases)\\b"
         },
         {
+          "comment": "`touches files, network` — what a function is allowed to reach. Contextual, so the keyword parity test never asked for it, which is why it went unhighlighted.",
+          "name": "keyword.other.effects.burxt",
+          "match": "\\btouches\\b"
+        },
+        {
+          "comment": "The six effects a signature may name. Only these; the compiler refuses any other word.",
+          "name": "support.constant.effect.burxt",
+          "match": "\\b(files|commands|clock|input|network|model)\\b(?=\\s*[,;)\\]{]|\\s*$)"
+        },
+        {
           "comment": "`result` — the returned value, in scope only inside an `ensures` clause.",
           "name": "variable.language.result.burxt",
           "match": "\\bresult\\b"
+        },
+        {
+          "comment": "`it` — the subject of a contract bracket, `Int [> 0, <= it * 2]`. Special only there, and an ordinary name everywhere else.",
+          "name": "variable.language.it.burxt",
+          "match": "\\bit\\b"
         },
         {
           "name": "keyword.declaration.burxt",
@@ -411,7 +431,7 @@
         {
           "comment": "Built-in functions. `print` is a statement keyword; the rest are calls.",
           "name": "support.function.builtin.burxt",
-          "match": "\\b(print|len|byte_at|push|read_file|to_string|old|divide_floor|divide_toward_zero|remainder|substring|write_file|write_bytes|argument|argument_count|truncate|hash)\\b"
+          "match": "\\b(print|len|byte_at|push|read_file|to_string|old|divide_floor|divide_toward_zero|remainder|substring|write_file|write_bytes|argument|argument_count|truncate|hash|exit)\\b"
         }
       ]
     },

@@ -1,0 +1,1885 @@
+[
+ {
+  "kind": "builtin",
+  "name": "print",
+  "text": "nothing",
+  "url": "/reference/builtins.html#print",
+  "where": "print(value)"
+ },
+ {
+  "kind": "builtin",
+  "name": "len",
+  "text": "how many elements, or how many BYTES of a `String`",
+  "url": "/reference/builtins.html#len",
+  "where": "len(xs) -> Int"
+ },
+ {
+  "kind": "builtin",
+  "name": "byte_at",
+  "text": "the byte at `i`",
+  "url": "/reference/builtins.html#byte-at",
+  "where": "byte_at(s, i) -> Int"
+ },
+ {
+  "kind": "builtin",
+  "name": "substring",
+  "text": "`count` bytes of `s`, starting at `from`",
+  "url": "/reference/builtins.html#substring",
+  "where": "substring(s, from, count) -> String"
+ },
+ {
+  "kind": "builtin",
+  "name": "to_string",
+  "text": "the value, written out",
+  "url": "/reference/builtins.html#to-string",
+  "where": "to_string(value) -> String"
+ },
+ {
+  "kind": "builtin",
+  "name": "push",
+  "text": "the new length",
+  "url": "/reference/builtins.html#push",
+  "where": "push(xs, value) -> Int"
+ },
+ {
+  "kind": "builtin",
+  "name": "truncate",
+  "text": "the new length",
+  "url": "/reference/builtins.html#truncate",
+  "where": "truncate(xs, n) -> Int"
+ },
+ {
+  "kind": "builtin",
+  "name": "read_file",
+  "text": "the whole file",
+  "url": "/reference/builtins.html#read-file",
+  "where": "read_file(path) -> String"
+ },
+ {
+  "kind": "builtin",
+  "name": "write_file",
+  "text": "how many bytes went out",
+  "url": "/reference/builtins.html#write-file",
+  "where": "write_file(path, contents) -> Int"
+ },
+ {
+  "kind": "builtin",
+  "name": "write_bytes",
+  "text": "how many bytes went out",
+  "url": "/reference/builtins.html#write-bytes",
+  "where": "write_bytes(path, buffer) -> Int"
+ },
+ {
+  "kind": "builtin",
+  "name": "argument",
+  "text": "the nth command-line argument",
+  "url": "/reference/builtins.html#argument",
+  "where": "argument(n) -> String"
+ },
+ {
+  "kind": "builtin",
+  "name": "argument_count",
+  "text": "how many arguments there are",
+  "url": "/reference/builtins.html#argument-count",
+  "where": "argument_count() -> Int"
+ },
+ {
+  "kind": "builtin",
+  "name": "divide_floor",
+  "text": "`a / b`, rounded toward negative infinity",
+  "url": "/reference/builtins.html#divide-floor",
+  "where": "divide_floor(a, b) -> Int"
+ },
+ {
+  "kind": "builtin",
+  "name": "divide_toward_zero",
+  "text": "`a / b`, rounded toward zero",
+  "url": "/reference/builtins.html#divide-toward-zero",
+  "where": "divide_toward_zero(a, b) -> Int"
+ },
+ {
+  "kind": "builtin",
+  "name": "remainder",
+  "text": "what is left over",
+  "url": "/reference/builtins.html#remainder",
+  "where": "remainder(a, b) -> Int"
+ },
+ {
+  "kind": "builtin",
+  "name": "hash",
+  "text": "a non-negative hash",
+  "url": "/reference/builtins.html#hash",
+  "where": "hash(key) -> Int"
+ },
+ {
+  "kind": "builtin",
+  "name": "old",
+  "text": "what the expression was BEFORE the body ran",
+  "url": "/reference/builtins.html#old",
+  "where": "old(expression)"
+ },
+ {
+  "kind": "builtin",
+  "name": "result",
+  "text": "the value being returned",
+  "url": "/reference/builtins.html#result",
+  "where": "result"
+ },
+ {
+  "kind": "builtin",
+  "name": "exit",
+  "text": "nothing \u2014 the program ends",
+  "url": "/reference/builtins.html#exit",
+  "where": "exit(code)"
+ },
+ {
+  "kind": "builtin",
+  "name": "main",
+  "text": "nothing \u2014 it is not an entry point",
+  "url": "/reference/builtins.html#main",
+  "where": "main"
+ },
+ {
+  "kind": "command",
+  "name": "burxt check",
+  "text": "<file.bx>",
+  "url": "/reference/cli.html",
+  "where": "parse and typecheck only"
+ },
+ {
+  "kind": "command",
+  "name": "burxt lsp",
+  "text": "",
+  "url": "/reference/cli.html",
+  "where": "language server over stdio"
+ },
+ {
+  "kind": "command",
+  "name": "burxt build",
+  "text": "<file.bx> [link args...]",
+  "url": "/reference/cli.html",
+  "where": "compile to a native executable"
+ },
+ {
+  "kind": "command",
+  "name": "burxt run",
+  "text": "<file.bx> [link args...]",
+  "url": "/reference/cli.html",
+  "where": "compile then run"
+ },
+ {
+  "kind": "command",
+  "name": "burxt emit-ir",
+  "text": "<file.bx>",
+  "url": "/reference/cli.html",
+  "where": "print LLVM IR"
+ },
+ {
+  "kind": "command",
+  "name": "burxt layout",
+  "text": "<file.bx>",
+  "url": "/reference/cli.html",
+  "where": "print class layouts"
+ },
+ {
+  "kind": "command",
+  "name": "burxt review",
+  "text": "<old.bx> <new.bx>          what changed about what it PROMISES",
+  "url": "/reference/cli.html",
+  "where": "burxt mcp-schema <file.bx>               the MCP tool manifest, from the preconditions"
+ },
+ {
+  "kind": "command",
+  "name": "burxt mcp-schema",
+  "text": "<file.bx>",
+  "url": "/reference/cli.html",
+  "where": "the MCP tool manifest, from the preconditions"
+ },
+ {
+  "kind": "enum",
+  "name": "Option",
+  "text": "lib/option.bx",
+  "url": "/reference/option.html#option",
+  "where": "enum Option<T>"
+ },
+ {
+  "kind": "function",
+  "name": "option_or",
+  "text": "lib/option.bx",
+  "url": "/reference/option.html#option-or",
+  "where": "function option_or<T>(o: Option<T>, fallback: T) -> T"
+ },
+ {
+  "kind": "function",
+  "name": "option_is_some",
+  "text": "lib/option.bx",
+  "url": "/reference/option.html#option-is-some",
+  "where": "function option_is_some<T>(o: Option<T>) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "option_is_none",
+  "text": "lib/option.bx",
+  "url": "/reference/option.html#option-is-none",
+  "where": "function option_is_none<T>(o: Option<T>) -> Bool"
+ },
+ {
+  "kind": "enum",
+  "name": "Result",
+  "text": "lib/result.bx",
+  "url": "/reference/result.html#result",
+  "where": "enum Result<T, E>"
+ },
+ {
+  "kind": "function",
+  "name": "result_or",
+  "text": "lib/result.bx",
+  "url": "/reference/result.html#result-or",
+  "where": "function result_or<T, E>(r: Result<T, E>, fallback: T) -> T"
+ },
+ {
+  "kind": "function",
+  "name": "result_is_ok",
+  "text": "lib/result.bx",
+  "url": "/reference/result.html#result-is-ok",
+  "where": "function result_is_ok<T, E>(r: Result<T, E>) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "string_find",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-find",
+  "where": "function string_find(text: String, needle: String) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "string_contains",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-contains",
+  "where": "function string_contains(text: String, needle: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "string_starts_with",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-starts-with",
+  "where": "function string_starts_with(text: String, prefix: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "string_ends_with",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-ends-with",
+  "where": "function string_ends_with(text: String, suffix: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "string_trim",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-trim",
+  "where": "function string_trim(text: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "string_is_space",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-is-space",
+  "where": "function string_is_space(byte: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "string_split",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-split",
+  "where": "function string_split(text: String, separator: Int) -> [String]"
+ },
+ {
+  "kind": "function",
+  "name": "string_lines",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-lines",
+  "where": "function string_lines(text: String) -> [String]"
+ },
+ {
+  "kind": "function",
+  "name": "string_to_int",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-to-int",
+  "where": "function string_to_int(text: String, fallback: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "string_parse_int",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-parse-int",
+  "where": "function string_parse_int(text: String) -> Option<Int>"
+ },
+ {
+  "kind": "function",
+  "name": "string_join",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-join",
+  "where": "function string_join(pieces: [String], separator: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "string_repeat",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-repeat",
+  "where": "function string_repeat(text: String, times: Int) -> String"
+ },
+ {
+  "kind": "class",
+  "name": "MapEntry",
+  "text": "lib/map.bx",
+  "url": "/reference/map.html#mapentry",
+  "where": "class MapEntry<K: Equatable, V> { key: K, value: V, live: Bool }"
+ },
+ {
+  "kind": "class",
+  "name": "Map",
+  "text": "lib/map.bx",
+  "url": "/reference/map.html#map",
+  "where": "class Map<K: Equatable, V> { entries: [MapEntry<K, V>], slots: [Int], live: Int }"
+ },
+ {
+  "kind": "function",
+  "name": "map_new",
+  "text": "lib/map.bx",
+  "url": "/reference/map.html#map-new",
+  "where": "function map_new<K: Equatable, V>() -> Map<K, V>"
+ },
+ {
+  "kind": "method",
+  "name": "slot_count",
+  "text": "lib/map.bx",
+  "url": "/reference/map.html#slot-count",
+  "where": "function (self: Map<K, V>) slot_count() -> Int"
+ },
+ {
+  "kind": "method",
+  "name": "probe",
+  "text": "lib/map.bx",
+  "url": "/reference/map.html#probe",
+  "where": "function (self: Map<K, V>) probe(key: K) -> Int"
+ },
+ {
+  "kind": "method",
+  "name": "rehash",
+  "text": "lib/map.bx",
+  "url": "/reference/map.html#rehash",
+  "where": "function (mutable self: Map<K, V>) rehash(wanted: Int) -> Int"
+ },
+ {
+  "kind": "method",
+  "name": "set",
+  "text": "lib/map.bx",
+  "url": "/reference/map.html#set",
+  "where": "function (mutable self: Map<K, V>) set(key: K, value: V) -> Int"
+ },
+ {
+  "kind": "method",
+  "name": "has",
+  "text": "lib/map.bx",
+  "url": "/reference/map.html#has",
+  "where": "function (self: Map<K, V>) has(key: K) -> Bool"
+ },
+ {
+  "kind": "method",
+  "name": "get",
+  "text": "lib/map.bx",
+  "url": "/reference/map.html#get",
+  "where": "function (self: Map<K, V>) get(key: K, fallback: V) -> V"
+ },
+ {
+  "kind": "method",
+  "name": "find",
+  "text": "lib/map.bx",
+  "url": "/reference/map.html#find",
+  "where": "function (self: Map<K, V>) find(key: K) -> Option<V>"
+ },
+ {
+  "kind": "method",
+  "name": "count",
+  "text": "lib/map.bx",
+  "url": "/reference/map.html#count",
+  "where": "function (self: Map<K, V>) count() -> Int"
+ },
+ {
+  "kind": "method",
+  "name": "keys",
+  "text": "lib/map.bx",
+  "url": "/reference/map.html#keys",
+  "where": "function (self: Map<K, V>) keys() -> [K]"
+ },
+ {
+  "kind": "method",
+  "name": "remove",
+  "text": "lib/map.bx",
+  "url": "/reference/map.html#remove",
+  "where": "function (mutable self: Map<K, V>) remove(key: K) -> Bool"
+ },
+ {
+  "kind": "enum",
+  "name": "Json",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#json",
+  "where": "enum Json"
+ },
+ {
+  "kind": "class",
+  "name": "Field",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#field",
+  "where": "class Field { name: String, value: Json }"
+ },
+ {
+  "kind": "function",
+  "name": "json_null",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#json-null",
+  "where": "function json_null() -> Json"
+ },
+ {
+  "kind": "function",
+  "name": "json_truth",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#json-truth",
+  "where": "function json_truth(value: Bool) -> Json"
+ },
+ {
+  "kind": "function",
+  "name": "json_int",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#json-int",
+  "where": "function json_int(value: Int) -> Json"
+ },
+ {
+  "kind": "function",
+  "name": "json_money",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#json-money",
+  "where": "function json_money(amount: Decimal<2>) -> Json"
+ },
+ {
+  "kind": "function",
+  "name": "json_text",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#json-text",
+  "where": "function json_text(value: String) -> Json"
+ },
+ {
+  "kind": "function",
+  "name": "json_list",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#json-list",
+  "where": "function json_list(values: [Json]) -> Json"
+ },
+ {
+  "kind": "function",
+  "name": "json_object",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#json-object",
+  "where": "function json_object(fields: [Field]) -> Json"
+ },
+ {
+  "kind": "function",
+  "name": "json_field",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#json-field",
+  "where": "function json_field(name: String, value: Json) -> Field"
+ },
+ {
+  "kind": "function",
+  "name": "json_escape",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#json-escape",
+  "where": "function json_escape(text: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "json_render",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#json-render",
+  "where": "function json_render(value: Json) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "json_at",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#json-at",
+  "where": "function json_at(value: Json, name: String) -> Option<Json>"
+ },
+ {
+  "kind": "function",
+  "name": "json_as_text",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#json-as-text",
+  "where": "function json_as_text(value: Json) -> Option<String>"
+ },
+ {
+  "kind": "function",
+  "name": "json_digits",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#json-digits",
+  "where": "function json_digits(value: Json) -> Option<String>"
+ },
+ {
+  "kind": "function",
+  "name": "json_as_int",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#json-as-int",
+  "where": "function json_as_int(value: Json) -> Option<Int>"
+ },
+ {
+  "kind": "function",
+  "name": "json_as_truth",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#json-as-truth",
+  "where": "function json_as_truth(value: Json) -> Option<Bool>"
+ },
+ {
+  "kind": "function",
+  "name": "json_as_money",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#json-as-money",
+  "where": "function json_as_money(value: Json) -> Option<Decimal<2>>"
+ },
+ {
+  "kind": "class",
+  "name": "Reader",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#reader",
+  "where": "class Reader { text: String, at: Int }"
+ },
+ {
+  "kind": "method",
+  "name": "skip_space",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#skip-space",
+  "where": "function (mutable self: Reader) skip_space() -> Int"
+ },
+ {
+  "kind": "method",
+  "name": "peek",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#peek",
+  "where": "function (self: Reader) peek() -> Int"
+ },
+ {
+  "kind": "method",
+  "name": "parse_value",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#parse-value",
+  "where": "function (mutable self: Reader) parse_value() -> Result<Json, String>"
+ },
+ {
+  "kind": "method",
+  "name": "word",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#word",
+  "where": "function (mutable self: Reader) word(word: String) -> Bool"
+ },
+ {
+  "kind": "method",
+  "name": "parse_number",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#parse-number",
+  "where": "function (mutable self: Reader) parse_number() -> Result<Json, String>"
+ },
+ {
+  "kind": "function",
+  "name": "is_json_digit",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#is-json-digit",
+  "where": "function is_json_digit(b: Int) -> Bool"
+ },
+ {
+  "kind": "method",
+  "name": "parse_text",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#parse-text",
+  "where": "function (mutable self: Reader) parse_text() -> Result<String, String>"
+ },
+ {
+  "kind": "method",
+  "name": "parse_list",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#parse-list",
+  "where": "function (mutable self: Reader) parse_list() -> Result<Json, String>"
+ },
+ {
+  "kind": "method",
+  "name": "parse_object",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#parse-object",
+  "where": "function (mutable self: Reader) parse_object() -> Result<Json, String>"
+ },
+ {
+  "kind": "function",
+  "name": "json_parse",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#json-parse",
+  "where": "function json_parse(text: String) -> Result<Json, String>"
+ },
+ {
+  "kind": "function",
+  "name": "file_read",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-read",
+  "where": "function file_read(path: String) -> String touches files"
+ },
+ {
+  "kind": "function",
+  "name": "file_write",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-write",
+  "where": "function file_write(path: String, text: String) -> Int touches files"
+ },
+ {
+  "kind": "function",
+  "name": "file_append",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-append",
+  "where": "function file_append(path: String, text: String) -> Int touches files"
+ },
+ {
+  "kind": "function",
+  "name": "file_exists",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-exists",
+  "where": "function file_exists(path: String) -> Bool touches commands"
+ },
+ {
+  "kind": "function",
+  "name": "file_delete",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-delete",
+  "where": "function file_delete(path: String) -> Bool touches files"
+ },
+ {
+  "kind": "function",
+  "name": "file_move",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-move",
+  "where": "function file_move(from: String, to: String) -> Bool touches files"
+ },
+ {
+  "kind": "function",
+  "name": "file_make_directory",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-make-directory",
+  "where": "function file_make_directory(path: String) -> Bool touches commands"
+ },
+ {
+  "kind": "function",
+  "name": "file_list_directory",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-list-directory",
+  "where": "function file_list_directory(directory: String) -> [String] touches commands, files"
+ },
+ {
+  "kind": "function",
+  "name": "file_quote",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-quote",
+  "where": "function file_quote(path: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "file_split_lines",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-split-lines",
+  "where": "function file_split_lines(text: String) -> [String]"
+ },
+ {
+  "kind": "function",
+  "name": "os_arg_count",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-arg-count",
+  "where": "function os_arg_count() -> Int touches input"
+ },
+ {
+  "kind": "function",
+  "name": "os_arg",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-arg",
+  "where": "function os_arg(index: Int) -> String touches input"
+ },
+ {
+  "kind": "function",
+  "name": "os_args",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-args",
+  "where": "function os_args() -> [String] touches input"
+ },
+ {
+  "kind": "function",
+  "name": "os_now",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-now",
+  "where": "function os_now() -> Int touches clock"
+ },
+ {
+  "kind": "function",
+  "name": "os_run",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-run",
+  "where": "function os_run(command: String) -> Int touches commands"
+ },
+ {
+  "kind": "function",
+  "name": "os_capture",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-capture",
+  "where": "function os_capture(command: String) -> String touches commands, files"
+ },
+ {
+  "kind": "function",
+  "name": "os_read_byte",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-read-byte",
+  "where": "function os_read_byte() -> Int touches input"
+ },
+ {
+  "kind": "function",
+  "name": "os_read_line",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-read-line",
+  "where": "function os_read_line() -> Option<String> touches input"
+ },
+ {
+  "kind": "function",
+  "name": "os_read_all",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-read-all",
+  "where": "function os_read_all() -> String touches input"
+ },
+ {
+  "kind": "function",
+  "name": "os_byte_as_string",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-byte-as-string",
+  "where": "function os_byte_as_string(byte: Int) -> String"
+ },
+ {
+  "kind": "keyword",
+  "name": "let",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "mutable",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "print",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "while",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "function",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "external",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "return",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "as",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "tail",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "pure",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "break",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "continue",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "if",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "else",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "true",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "false",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "class",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "private",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "region",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "enum",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "match",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "interface",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "is",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "self",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "implement",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "implements",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "for",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "in",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "dynamic",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "Int",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "Bool",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "String",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "CInt",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "CDouble",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "Decimal",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "RoundHalfEven",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "RoundHalfUp",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "refused",
+  "name": "fn",
+  "text": "",
+  "url": "/reference/#spellings-that-do-not-compile",
+  "where": "Burxt spells this `function`"
+ },
+ {
+  "kind": "refused",
+  "name": "mut",
+  "text": "",
+  "url": "/reference/#spellings-that-do-not-compile",
+  "where": "Burxt spells this `mutable`"
+ },
+ {
+  "kind": "refused",
+  "name": "impl",
+  "text": "",
+  "url": "/reference/#spellings-that-do-not-compile",
+  "where": "Burxt spells this `implement`"
+ },
+ {
+  "kind": "refused",
+  "name": "dyn",
+  "text": "",
+  "url": "/reference/#spellings-that-do-not-compile",
+  "where": "Burxt spells this `dynamic`"
+ },
+ {
+  "kind": "refused",
+  "name": "extern",
+  "text": "",
+  "url": "/reference/#spellings-that-do-not-compile",
+  "where": "Burxt spells this `external`"
+ },
+ {
+  "kind": "refused",
+  "name": "struct",
+  "text": "",
+  "url": "/reference/#spellings-that-do-not-compile",
+  "where": "Burxt spells this `class`"
+ },
+ {
+  "kind": "refused",
+  "name": "trait",
+  "text": "",
+  "url": "/reference/#spellings-that-do-not-compile",
+  "where": "Burxt spells this `interface`"
+ },
+ {
+  "kind": "refused",
+  "name": "record",
+  "text": "",
+  "url": "/reference/#spellings-that-do-not-compile",
+  "where": "Burxt spells this `class`"
+ },
+ {
+  "kind": "marker",
+  "name": "allocates",
+  "text": "",
+  "url": "/reference/#contextual-markers",
+  "where": "This function builds values in its CALLER's region. Optional and inferred since v0.0.142; "
+ },
+ {
+  "kind": "marker",
+  "name": "requires",
+  "text": "",
+  "url": "/reference/#contextual-markers",
+  "where": "A precondition. Checked, and it names itself when it fails."
+ },
+ {
+  "kind": "marker",
+  "name": "ensures",
+  "text": "",
+  "url": "/reference/#contextual-markers",
+  "where": "A postcondition. `result` and `old(...)` are in scope inside one."
+ },
+ {
+  "kind": "marker",
+  "name": "decreases",
+  "text": "",
+  "url": "/reference/#contextual-markers",
+  "where": "A measure that must fall on every recursive call, so the recursion ends."
+ },
+ {
+  "kind": "marker",
+  "name": "touches",
+  "text": "",
+  "url": "/reference/#contextual-markers",
+  "where": "What the function may reach: `files`, `commands`, `clock`, `input`, `network`, `model`. It"
+ },
+ {
+  "kind": "marker",
+  "name": "scaled",
+  "text": "",
+  "url": "/reference/#contextual-markers",
+  "where": "In `as scaled`, at the C boundary \u2014 the only conversion that moves a Decimal across it."
+ },
+ {
+  "kind": "marker",
+  "name": "it",
+  "text": "",
+  "url": "/reference/#contextual-markers",
+  "where": "The subject of a contract bracket: `Int [> 0, <= it * 2]`. Special ONLY inside a bracket."
+ },
+ {
+  "kind": "guide",
+  "name": "What this is for",
+  "text": "",
+  "url": "/guide/01-getting-started.html#what-this-is-for",
+  "where": "1. Getting started"
+ },
+ {
+  "kind": "guide",
+  "name": "Think of one button, not an assembly line",
+  "text": "",
+  "url": "/guide/01-getting-started.html#think-of-one-button-not-an-assembly-line",
+  "where": "1. Getting started"
+ },
+ {
+  "kind": "guide",
+  "name": "A step closer",
+  "text": "",
+  "url": "/guide/01-getting-started.html#a-step-closer",
+  "where": "1. Getting started"
+ },
+ {
+  "kind": "guide",
+  "name": "In code",
+  "text": "",
+  "url": "/guide/01-getting-started.html#in-code",
+  "where": "1. Getting started"
+ },
+ {
+  "kind": "guide",
+  "name": "Why it is built this way",
+  "text": "",
+  "url": "/guide/01-getting-started.html#why-it-is-built-this-way",
+  "where": "1. Getting started"
+ },
+ {
+  "kind": "guide",
+  "name": "What it costs",
+  "text": "",
+  "url": "/guide/01-getting-started.html#what-it-costs",
+  "where": "1. Getting started"
+ },
+ {
+  "kind": "guide",
+  "name": "When you reach for it",
+  "text": "",
+  "url": "/guide/01-getting-started.html#when-you-reach-for-it",
+  "where": "1. Getting started"
+ },
+ {
+  "kind": "guide",
+  "name": "Examples",
+  "text": "",
+  "url": "/guide/01-getting-started.html#examples",
+  "where": "1. Getting started"
+ },
+ {
+  "kind": "guide",
+  "name": "Next",
+  "text": "",
+  "url": "/guide/01-getting-started.html#next",
+  "where": "1. Getting started"
+ },
+ {
+  "kind": "guide",
+  "name": "What this is for",
+  "text": "",
+  "url": "/guide/02-numbers-and-money.html#what-this-is-for",
+  "where": "2. Numbers and money"
+ },
+ {
+  "kind": "guide",
+  "name": "Think of coins in a jar, not water in a jug",
+  "text": "",
+  "url": "/guide/02-numbers-and-money.html#think-of-coins-in-a-jar-not-water-in-a-jug",
+  "where": "2. Numbers and money"
+ },
+ {
+  "kind": "guide",
+  "name": "A step closer",
+  "text": "",
+  "url": "/guide/02-numbers-and-money.html#a-step-closer",
+  "where": "2. Numbers and money"
+ },
+ {
+  "kind": "guide",
+  "name": "In code",
+  "text": "",
+  "url": "/guide/02-numbers-and-money.html#in-code",
+  "where": "2. Numbers and money"
+ },
+ {
+  "kind": "guide",
+  "name": "Why it is built this way",
+  "text": "",
+  "url": "/guide/02-numbers-and-money.html#why-it-is-built-this-way",
+  "where": "2. Numbers and money"
+ },
+ {
+  "kind": "guide",
+  "name": "What it costs",
+  "text": "",
+  "url": "/guide/02-numbers-and-money.html#what-it-costs",
+  "where": "2. Numbers and money"
+ },
+ {
+  "kind": "guide",
+  "name": "When you reach for it",
+  "text": "",
+  "url": "/guide/02-numbers-and-money.html#when-you-reach-for-it",
+  "where": "2. Numbers and money"
+ },
+ {
+  "kind": "guide",
+  "name": "Examples",
+  "text": "",
+  "url": "/guide/02-numbers-and-money.html#examples",
+  "where": "2. Numbers and money"
+ },
+ {
+  "kind": "guide",
+  "name": "Next",
+  "text": "",
+  "url": "/guide/02-numbers-and-money.html#next",
+  "where": "2. Numbers and money"
+ },
+ {
+  "kind": "guide",
+  "name": "What this is for",
+  "text": "",
+  "url": "/guide/03-types.html#what-this-is-for",
+  "where": "3. Types"
+ },
+ {
+  "kind": "guide",
+  "name": "Think of a vending machine",
+  "text": "",
+  "url": "/guide/03-types.html#think-of-a-vending-machine",
+  "where": "3. Types"
+ },
+ {
+  "kind": "guide",
+  "name": "A step closer",
+  "text": "",
+  "url": "/guide/03-types.html#a-step-closer",
+  "where": "3. Types"
+ },
+ {
+  "kind": "guide",
+  "name": "In code",
+  "text": "",
+  "url": "/guide/03-types.html#in-code",
+  "where": "3. Types"
+ },
+ {
+  "kind": "guide",
+  "name": "Why it is built this way",
+  "text": "",
+  "url": "/guide/03-types.html#why-it-is-built-this-way",
+  "where": "3. Types"
+ },
+ {
+  "kind": "guide",
+  "name": "What it costs",
+  "text": "",
+  "url": "/guide/03-types.html#what-it-costs",
+  "where": "3. Types"
+ },
+ {
+  "kind": "guide",
+  "name": "When you reach for it",
+  "text": "",
+  "url": "/guide/03-types.html#when-you-reach-for-it",
+  "where": "3. Types"
+ },
+ {
+  "kind": "guide",
+  "name": "Examples",
+  "text": "",
+  "url": "/guide/03-types.html#examples",
+  "where": "3. Types"
+ },
+ {
+  "kind": "guide",
+  "name": "Next",
+  "text": "",
+  "url": "/guide/03-types.html#next",
+  "where": "3. Types"
+ },
+ {
+  "kind": "guide",
+  "name": "What this is for",
+  "text": "",
+  "url": "/guide/04-memory.html#what-this-is-for",
+  "where": "4. Memory"
+ },
+ {
+  "kind": "guide",
+  "name": "Think of a cafeteria tray",
+  "text": "",
+  "url": "/guide/04-memory.html#think-of-a-cafeteria-tray",
+  "where": "4. Memory"
+ },
+ {
+  "kind": "guide",
+  "name": "A step closer",
+  "text": "",
+  "url": "/guide/04-memory.html#a-step-closer",
+  "where": "4. Memory"
+ },
+ {
+  "kind": "guide",
+  "name": "In code",
+  "text": "",
+  "url": "/guide/04-memory.html#in-code",
+  "where": "4. Memory"
+ },
+ {
+  "kind": "guide",
+  "name": "Why it is built this way",
+  "text": "",
+  "url": "/guide/04-memory.html#why-it-is-built-this-way",
+  "where": "4. Memory"
+ },
+ {
+  "kind": "guide",
+  "name": "What it costs",
+  "text": "",
+  "url": "/guide/04-memory.html#what-it-costs",
+  "where": "4. Memory"
+ },
+ {
+  "kind": "guide",
+  "name": "When you reach for it",
+  "text": "",
+  "url": "/guide/04-memory.html#when-you-reach-for-it",
+  "where": "4. Memory"
+ },
+ {
+  "kind": "guide",
+  "name": "Examples",
+  "text": "",
+  "url": "/guide/04-memory.html#examples",
+  "where": "4. Memory"
+ },
+ {
+  "kind": "guide",
+  "name": "Next",
+  "text": "",
+  "url": "/guide/04-memory.html#next",
+  "where": "4. Memory"
+ },
+ {
+  "kind": "guide",
+  "name": "What this is for",
+  "text": "",
+  "url": "/guide/05-contracts.html#what-this-is-for",
+  "where": "5. Contracts"
+ },
+ {
+  "kind": "guide",
+  "name": "Think of a courier's receipt",
+  "text": "",
+  "url": "/guide/05-contracts.html#think-of-a-couriers-receipt",
+  "where": "5. Contracts"
+ },
+ {
+  "kind": "guide",
+  "name": "A step closer",
+  "text": "",
+  "url": "/guide/05-contracts.html#a-step-closer",
+  "where": "5. Contracts"
+ },
+ {
+  "kind": "guide",
+  "name": "In code",
+  "text": "",
+  "url": "/guide/05-contracts.html#in-code",
+  "where": "5. Contracts"
+ },
+ {
+  "kind": "guide",
+  "name": "Why it is built this way",
+  "text": "",
+  "url": "/guide/05-contracts.html#why-it-is-built-this-way",
+  "where": "5. Contracts"
+ },
+ {
+  "kind": "guide",
+  "name": "What it costs",
+  "text": "",
+  "url": "/guide/05-contracts.html#what-it-costs",
+  "where": "5. Contracts"
+ },
+ {
+  "kind": "guide",
+  "name": "When you reach for it",
+  "text": "",
+  "url": "/guide/05-contracts.html#when-you-reach-for-it",
+  "where": "5. Contracts"
+ },
+ {
+  "kind": "guide",
+  "name": "Examples",
+  "text": "",
+  "url": "/guide/05-contracts.html#examples",
+  "where": "5. Contracts"
+ },
+ {
+  "kind": "guide",
+  "name": "Next",
+  "text": "",
+  "url": "/guide/05-contracts.html#next",
+  "where": "5. Contracts"
+ },
+ {
+  "kind": "guide",
+  "name": "What this is for",
+  "text": "",
+  "url": "/guide/06-effects.html#what-this-is-for",
+  "where": "6. Effects \u2014 what a function can reach"
+ },
+ {
+  "kind": "guide",
+  "name": "Think of a passport",
+  "text": "",
+  "url": "/guide/06-effects.html#think-of-a-passport",
+  "where": "6. Effects \u2014 what a function can reach"
+ },
+ {
+  "kind": "guide",
+  "name": "A step closer",
+  "text": "",
+  "url": "/guide/06-effects.html#a-step-closer",
+  "where": "6. Effects \u2014 what a function can reach"
+ },
+ {
+  "kind": "guide",
+  "name": "In code",
+  "text": "",
+  "url": "/guide/06-effects.html#in-code",
+  "where": "6. Effects \u2014 what a function can reach"
+ },
+ {
+  "kind": "guide",
+  "name": "Why it is built this way",
+  "text": "",
+  "url": "/guide/06-effects.html#why-it-is-built-this-way",
+  "where": "6. Effects \u2014 what a function can reach"
+ },
+ {
+  "kind": "guide",
+  "name": "What it costs",
+  "text": "",
+  "url": "/guide/06-effects.html#what-it-costs",
+  "where": "6. Effects \u2014 what a function can reach"
+ },
+ {
+  "kind": "guide",
+  "name": "When you reach for it",
+  "text": "",
+  "url": "/guide/06-effects.html#when-you-reach-for-it",
+  "where": "6. Effects \u2014 what a function can reach"
+ },
+ {
+  "kind": "guide",
+  "name": "Examples",
+  "text": "",
+  "url": "/guide/06-effects.html#examples",
+  "where": "6. Effects \u2014 what a function can reach"
+ },
+ {
+  "kind": "guide",
+  "name": "Next",
+  "text": "",
+  "url": "/guide/06-effects.html#next",
+  "where": "6. Effects \u2014 what a function can reach"
+ },
+ {
+  "kind": "guide",
+  "name": "What this is for",
+  "text": "",
+  "url": "/guide/07-ffi.html#what-this-is-for",
+  "where": "7. The C boundary"
+ },
+ {
+  "kind": "guide",
+  "name": "Think of a customs desk",
+  "text": "",
+  "url": "/guide/07-ffi.html#think-of-a-customs-desk",
+  "where": "7. The C boundary"
+ },
+ {
+  "kind": "guide",
+  "name": "A step closer",
+  "text": "",
+  "url": "/guide/07-ffi.html#a-step-closer",
+  "where": "7. The C boundary"
+ },
+ {
+  "kind": "guide",
+  "name": "In code",
+  "text": "",
+  "url": "/guide/07-ffi.html#in-code",
+  "where": "7. The C boundary"
+ },
+ {
+  "kind": "guide",
+  "name": "Why it is built this way",
+  "text": "",
+  "url": "/guide/07-ffi.html#why-it-is-built-this-way",
+  "where": "7. The C boundary"
+ },
+ {
+  "kind": "guide",
+  "name": "What it costs",
+  "text": "",
+  "url": "/guide/07-ffi.html#what-it-costs",
+  "where": "7. The C boundary"
+ },
+ {
+  "kind": "guide",
+  "name": "When you reach for it",
+  "text": "",
+  "url": "/guide/07-ffi.html#when-you-reach-for-it",
+  "where": "7. The C boundary"
+ },
+ {
+  "kind": "guide",
+  "name": "Examples",
+  "text": "",
+  "url": "/guide/07-ffi.html#examples",
+  "where": "7. The C boundary"
+ },
+ {
+  "kind": "guide",
+  "name": "Next",
+  "text": "",
+  "url": "/guide/07-ffi.html#next",
+  "where": "7. The C boundary"
+ },
+ {
+  "kind": "guide",
+  "name": "What this is for",
+  "text": "",
+  "url": "/guide/08-modules.html#what-this-is-for",
+  "where": "8. Modules"
+ },
+ {
+  "kind": "guide",
+  "name": "Think of a photocopier",
+  "text": "",
+  "url": "/guide/08-modules.html#think-of-a-photocopier",
+  "where": "8. Modules"
+ },
+ {
+  "kind": "guide",
+  "name": "A step closer",
+  "text": "",
+  "url": "/guide/08-modules.html#a-step-closer",
+  "where": "8. Modules"
+ },
+ {
+  "kind": "guide",
+  "name": "In code",
+  "text": "",
+  "url": "/guide/08-modules.html#in-code",
+  "where": "8. Modules"
+ },
+ {
+  "kind": "guide",
+  "name": "Why it is built this way",
+  "text": "",
+  "url": "/guide/08-modules.html#why-it-is-built-this-way",
+  "where": "8. Modules"
+ },
+ {
+  "kind": "guide",
+  "name": "What it costs",
+  "text": "",
+  "url": "/guide/08-modules.html#what-it-costs",
+  "where": "8. Modules"
+ },
+ {
+  "kind": "guide",
+  "name": "When you reach for it",
+  "text": "",
+  "url": "/guide/08-modules.html#when-you-reach-for-it",
+  "where": "8. Modules"
+ },
+ {
+  "kind": "guide",
+  "name": "Examples",
+  "text": "",
+  "url": "/guide/08-modules.html#examples",
+  "where": "8. Modules"
+ },
+ {
+  "kind": "guide",
+  "name": "Next",
+  "text": "",
+  "url": "/guide/08-modules.html#next",
+  "where": "8. Modules"
+ },
+ {
+  "kind": "guide",
+  "name": "What this is for",
+  "text": "",
+  "url": "/guide/09-generics.html#what-this-is-for",
+  "where": "9. Generics"
+ },
+ {
+  "kind": "guide",
+  "name": "Think of a cookie cutter",
+  "text": "",
+  "url": "/guide/09-generics.html#think-of-a-cookie-cutter",
+  "where": "9. Generics"
+ },
+ {
+  "kind": "guide",
+  "name": "A step closer",
+  "text": "",
+  "url": "/guide/09-generics.html#a-step-closer",
+  "where": "9. Generics"
+ },
+ {
+  "kind": "guide",
+  "name": "In code",
+  "text": "",
+  "url": "/guide/09-generics.html#in-code",
+  "where": "9. Generics"
+ },
+ {
+  "kind": "guide",
+  "name": "Why it is built this way",
+  "text": "",
+  "url": "/guide/09-generics.html#why-it-is-built-this-way",
+  "where": "9. Generics"
+ },
+ {
+  "kind": "guide",
+  "name": "What it costs",
+  "text": "",
+  "url": "/guide/09-generics.html#what-it-costs",
+  "where": "9. Generics"
+ },
+ {
+  "kind": "guide",
+  "name": "When you reach for it",
+  "text": "",
+  "url": "/guide/09-generics.html#when-you-reach-for-it",
+  "where": "9. Generics"
+ },
+ {
+  "kind": "guide",
+  "name": "Examples",
+  "text": "",
+  "url": "/guide/09-generics.html#examples",
+  "where": "9. Generics"
+ },
+ {
+  "kind": "guide",
+  "name": "Next",
+  "text": "",
+  "url": "/guide/09-generics.html#next",
+  "where": "9. Generics"
+ },
+ {
+  "kind": "guide",
+  "name": "What this is for",
+  "text": "",
+  "url": "/guide/10-absence-and-failure.html#what-this-is-for",
+  "where": "10. Absence and failure"
+ },
+ {
+  "kind": "guide",
+  "name": "Think of a sealed envelope",
+  "text": "",
+  "url": "/guide/10-absence-and-failure.html#think-of-a-sealed-envelope",
+  "where": "10. Absence and failure"
+ },
+ {
+  "kind": "guide",
+  "name": "A step closer",
+  "text": "",
+  "url": "/guide/10-absence-and-failure.html#a-step-closer",
+  "where": "10. Absence and failure"
+ },
+ {
+  "kind": "guide",
+  "name": "In code",
+  "text": "",
+  "url": "/guide/10-absence-and-failure.html#in-code",
+  "where": "10. Absence and failure"
+ },
+ {
+  "kind": "guide",
+  "name": "Why it is built this way",
+  "text": "",
+  "url": "/guide/10-absence-and-failure.html#why-it-is-built-this-way",
+  "where": "10. Absence and failure"
+ },
+ {
+  "kind": "guide",
+  "name": "What it costs",
+  "text": "",
+  "url": "/guide/10-absence-and-failure.html#what-it-costs",
+  "where": "10. Absence and failure"
+ },
+ {
+  "kind": "guide",
+  "name": "When you reach for it",
+  "text": "",
+  "url": "/guide/10-absence-and-failure.html#when-you-reach-for-it",
+  "where": "10. Absence and failure"
+ },
+ {
+  "kind": "guide",
+  "name": "Examples",
+  "text": "",
+  "url": "/guide/10-absence-and-failure.html#examples",
+  "where": "10. Absence and failure"
+ },
+ {
+  "kind": "guide",
+  "name": "Next",
+  "text": "",
+  "url": "/guide/10-absence-and-failure.html#next",
+  "where": "10. Absence and failure"
+ },
+ {
+  "kind": "guide",
+  "name": "What this is for",
+  "text": "",
+  "url": "/guide/11-maps.html#what-this-is-for",
+  "where": "11. Maps and strings"
+ },
+ {
+  "kind": "guide",
+  "name": "Think of a cloakroom",
+  "text": "",
+  "url": "/guide/11-maps.html#think-of-a-cloakroom",
+  "where": "11. Maps and strings"
+ },
+ {
+  "kind": "guide",
+  "name": "A step closer",
+  "text": "",
+  "url": "/guide/11-maps.html#a-step-closer",
+  "where": "11. Maps and strings"
+ },
+ {
+  "kind": "guide",
+  "name": "In code",
+  "text": "",
+  "url": "/guide/11-maps.html#in-code",
+  "where": "11. Maps and strings"
+ },
+ {
+  "kind": "guide",
+  "name": "Why it is built this way",
+  "text": "",
+  "url": "/guide/11-maps.html#why-it-is-built-this-way",
+  "where": "11. Maps and strings"
+ },
+ {
+  "kind": "guide",
+  "name": "What it costs",
+  "text": "",
+  "url": "/guide/11-maps.html#what-it-costs",
+  "where": "11. Maps and strings"
+ },
+ {
+  "kind": "guide",
+  "name": "When you reach for it",
+  "text": "",
+  "url": "/guide/11-maps.html#when-you-reach-for-it",
+  "where": "11. Maps and strings"
+ },
+ {
+  "kind": "guide",
+  "name": "Examples",
+  "text": "",
+  "url": "/guide/11-maps.html#examples",
+  "where": "11. Maps and strings"
+ },
+ {
+  "kind": "guide",
+  "name": "Next",
+  "text": "",
+  "url": "/guide/11-maps.html#next",
+  "where": "11. Maps and strings"
+ },
+ {
+  "kind": "guide",
+  "name": "What this is for",
+  "text": "",
+  "url": "/guide/12-tools-and-agents.html#what-this-is-for",
+  "where": "12. Tools and agents"
+ },
+ {
+  "kind": "guide",
+  "name": "Think of a sign printed by the machine",
+  "text": "",
+  "url": "/guide/12-tools-and-agents.html#think-of-a-sign-printed-by-the-machine",
+  "where": "12. Tools and agents"
+ },
+ {
+  "kind": "guide",
+  "name": "A step closer",
+  "text": "",
+  "url": "/guide/12-tools-and-agents.html#a-step-closer",
+  "where": "12. Tools and agents"
+ },
+ {
+  "kind": "guide",
+  "name": "In code",
+  "text": "",
+  "url": "/guide/12-tools-and-agents.html#in-code",
+  "where": "12. Tools and agents"
+ },
+ {
+  "kind": "guide",
+  "name": "Why it is built this way",
+  "text": "",
+  "url": "/guide/12-tools-and-agents.html#why-it-is-built-this-way",
+  "where": "12. Tools and agents"
+ },
+ {
+  "kind": "guide",
+  "name": "What it costs",
+  "text": "",
+  "url": "/guide/12-tools-and-agents.html#what-it-costs",
+  "where": "12. Tools and agents"
+ },
+ {
+  "kind": "guide",
+  "name": "When you reach for it",
+  "text": "",
+  "url": "/guide/12-tools-and-agents.html#when-you-reach-for-it",
+  "where": "12. Tools and agents"
+ },
+ {
+  "kind": "guide",
+  "name": "Examples",
+  "text": "",
+  "url": "/guide/12-tools-and-agents.html#examples",
+  "where": "12. Tools and agents"
+ },
+ {
+  "kind": "guide",
+  "name": "Next",
+  "text": "",
+  "url": "/guide/12-tools-and-agents.html#next",
+  "where": "12. Tools and agents"
+ }
+]

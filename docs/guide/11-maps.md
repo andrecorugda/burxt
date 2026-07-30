@@ -1,10 +1,12 @@
 ---
 title: Maps and strings
+description: A map is a cloakroom — you get a ticket back, and the coats hang in the order they arrived, always.
 ---
 
 # 11. Maps and strings
 
-## The problem, as it actually arrives
+## What this is for
+{: #what-this-is-for}
 
 You print a map for a log line. The test asserts on the output. It passes on your machine, passes in
 review, and fails in CI — not always, just often enough that somebody adds a retry.
@@ -24,81 +26,109 @@ map, serialising one, or hashing a structure containing one would all become run
 of those should be.
 
 ## Think of a cloakroom
+{: #think-of-a-cloakroom}
 
-Coats hang on pegs **in the order they arrived**. That is the entries array, and it is what iteration
-walks.
+You hand over a coat and get a numbered ticket. Later you hand back the ticket and get the coat.
 
-The attendant also keeps a box of index cards so they do not have to check every peg to find your
-coat. That is the hash table, and the cards are in whatever order hashing put them — which is fine,
-because nobody ever reads the cards in order.
+And the coats hang on the rail **in the order they arrived**. Not in an order the cloakroom attendant
+finds convenient, and certainly not in a different order each evening — because when you walk past the
+rail looking for yours, an order you can predict is the entire point.
 
-<svg viewBox="0 0 640 244" role="img" aria-label="A map is entries in insertion order plus a hash table of positions into them" style="max-width:100%;height:auto;margin:1.5rem 0;">
+<figure>
+<svg viewBox="0 0 680 258" role="img" aria-label="A map as a cloakroom: a key is a ticket, and iteration walks the rail in the order the coats arrived — never in hash order, and a replaced coat keeps its original place" style="max-width:100%;height:auto;">
   <style>
-    .b { fill: #fff; stroke: #111; stroke-width: 1.5; }
-    .p { fill: none; stroke: #b00; stroke-width: 1.5; stroke-dasharray: 4 3; }
-    .t { font: 11px ui-monospace, monospace; fill: #111; }
-    .g { font: 11px ui-monospace, monospace; fill: #888; }
-    .s { font: 11px ui-monospace, monospace; fill: #b00; }
-    .a { stroke: #888; stroke-width: 1.2; fill: none; marker-end: url(#a11); }
-    @media (prefers-color-scheme: dark) {
-      .b { fill: #1b1b1b; stroke: #ddd; } .t { fill: #eee; } .s { fill: #ff8080; }
-      .p { stroke: #ff8080; } .a { stroke: #999; } .g { fill: #999; }
-    }
+    .rail  { fill: none; stroke: #1d1d1f; stroke-width: 3; stroke-linecap: round; }
+    .hook  { fill: none; stroke: #1d1d1f; stroke-width: 1.4; }
+    .coat  { fill: #ffffff; stroke: #1d1d1f; stroke-width: 1.6; }
+    .cfill { fill: #0071e3; opacity: .08; }
+    .swap  { fill: #0f6f3c; opacity: .12; }
+    .tick  { fill: #ffffff; stroke: #0f6f3c; stroke-width: 1.6; }
+    .hair  { fill: none; stroke: #d2d2d7; stroke-width: 1; }
+    .shuf  { fill: none; stroke: #c8102e; stroke-width: 2; stroke-dasharray: 5 4; }
+    .no    { fill: none; stroke: #c8102e; stroke-width: 2; }
+    .h     { font: 600 13.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1d1d1f; }
+    .t     { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #1d1d1f; }
+    .n     { font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #0f6f3c; }
+    .cap   { font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1d1d1f; }
+    .red   { font: 600 11.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #c8102e; }
   </style>
-  <defs>
-    <marker id="a11" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
-      <path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/>
-    </marker>
-  </defs>
 
-  <text class="g" x="20" y="20">the pegs — the order the coats arrived, and the order you iterate</text>
-  <text class="g" x="104" y="38">0</text>
-  <text class="g" x="222" y="38">1</text>
-  <text class="g" x="340" y="38">2</text>
-  <text class="g" x="458" y="38">3</text>
-  <rect class="b" x="60" y="44" width="110" height="44" rx="4"/>
-  <text class="t" x="70" y="62">"apples"</text>
-  <text class="t" x="70" y="78">3</text>
-  <rect class="b" x="178" y="44" width="110" height="44" rx="4"/>
-  <text class="t" x="188" y="62">"pears"</text>
-  <text class="t" x="188" y="78">7</text>
-  <rect class="p" x="296" y="44" width="110" height="44" rx="4"/>
-  <text class="s" x="306" y="70">removed</text>
-  <rect class="b" x="414" y="44" width="110" height="44" rx="4"/>
-  <text class="t" x="424" y="62">"plums"</text>
-  <text class="t" x="424" y="78">1</text>
+  <text class="h" x="8" y="18">The rail, in arrival order</text>
 
-  <text class="g" x="20" y="146">the index cards — hash to a position, in no order at all</text>
-  <rect class="b" x="60" y="160" width="48" height="36" rx="3"/>
-  <text class="g" x="80" y="183">–</text>
-  <rect class="b" x="114" y="160" width="48" height="36" rx="3"/>
-  <text class="t" x="134" y="183">0</text>
-  <rect class="b" x="168" y="160" width="48" height="36" rx="3"/>
-  <text class="g" x="188" y="183">–</text>
-  <rect class="b" x="222" y="160" width="48" height="36" rx="3"/>
-  <text class="t" x="242" y="183">3</text>
-  <rect class="b" x="276" y="160" width="48" height="36" rx="3"/>
-  <text class="g" x="296" y="183">–</text>
-  <rect class="b" x="330" y="160" width="48" height="36" rx="3"/>
-  <text class="g" x="350" y="183">–</text>
-  <rect class="b" x="384" y="160" width="48" height="36" rx="3"/>
-  <text class="t" x="404" y="183">1</text>
-  <rect class="b" x="438" y="160" width="48" height="36" rx="3"/>
-  <text class="g" x="458" y="183">–</text>
+  <path class="rail" d="M20 46 h420"/>
+  <g>
+    <path class="hook" d="M60 46 v12"/>
+    <rect class="cfill" x="34" y="58" width="52" height="56" rx="6"/>
+    <rect class="coat"  x="34" y="58" width="52" height="56" rx="6"/>
+    <text class="t" x="40" y="130">pear</text>
+    <text class="n" x="40" y="146">1st</text>
+  </g>
+  <g>
+    <path class="hook" d="M160 46 v12"/>
+    <rect class="swap" x="134" y="58" width="52" height="56" rx="6"/>
+    <rect class="coat" x="134" y="58" width="52" height="56" rx="6"/>
+    <text class="t" x="136" y="130">apple</text>
+    <text class="n" x="136" y="146">2nd</text>
+  </g>
+  <g>
+    <path class="hook" d="M260 46 v12"/>
+    <rect class="cfill" x="234" y="58" width="52" height="56" rx="6"/>
+    <rect class="coat"  x="234" y="58" width="52" height="56" rx="6"/>
+    <text class="t" x="242" y="130">fig</text>
+    <text class="n" x="242" y="146">3rd</text>
+  </g>
 
-  <path class="a" d="M138 158 L118 92"/>
-  <path class="a" d="M246 158 L462 92"/>
-  <path class="a" d="M408 158 L236 92"/>
+  <rect class="tick" x="330" y="66" width="96" height="40" rx="6"/>
+  <text class="t" x="340" y="84">ticket:</text>
+  <text class="t" x="340" y="100">"apple"</text>
 
-  <text class="g" x="20" y="230">so iteration is insertion order by construction, not by promise</text>
+  <text class="cap" x="20" y="176">A coat handed in twice keeps its</text>
+  <text class="cap" x="20" y="194">original hook — <tspan font-family="ui-monospace, monospace">apple</tspan> is still 2nd.</text>
+
+  <line class="hair" x1="470" y1="8" x2="470" y2="230"/>
+
+  <text class="h" x="500" y="18">Not this</text>
+  <path class="rail" d="M500 46 h160"/>
+  <path class="hook" d="M524 46 v12"/>
+  <rect class="coat" x="504" y="58" width="40" height="46" rx="5"/>
+  <path class="hook" d="M584 46 v12"/>
+  <rect class="coat" x="564" y="58" width="40" height="46" rx="5"/>
+  <path class="hook" d="M636 46 v12"/>
+  <rect class="coat" x="616" y="58" width="40" height="46" rx="5"/>
+  <path class="shuf" d="M508 122 q76 30 148 0"/>
+  <g class="no">
+    <circle cx="582" cy="150" r="13"/>
+    <line x1="573" y1="141" x2="591" y2="159"/>
+  </g>
+  <text class="red" x="486" y="188">hash order, reshuffled</text>
+  <text class="red" x="486" y="206">whenever the table grows</text>
+
+  <text class="cap" x="8" y="250">Go randomises iteration deliberately; Rust randomises its hash seed per process.</text>
 </svg>
+<figcaption>Iteration is <strong>insertion order, always</strong>. Not "unspecified", not "arbitrary" — a
+language whose thesis is reproducibility should not ship a container whose order depends on a hash
+function's internals. That Go and Rust both randomise theirs deliberately is an admission that hash order
+leaked into programs and then broke them.</figcaption>
+</figure>
 
-Notice peg 2. A removed entry is **tombstoned in place**, so every entry after it keeps its position.
-The cost is real and worth saying out loud: a tombstone is a hole rather than a slot to reuse freely,
-and iteration walks the pegs rather than the cards. That is a constant factor. **Determinism is worth
-a constant factor.**
+## A step closer
+{: #a-step-closer}
 
-## Using one
+The rail is two arrays rather than buckets of lists.
+
+`entries` holds the coats in arrival order, and that is what iteration walks. `slots` is the ticket
+table — open addressed, linear probing, holding an index into `entries` **plus one**, so that a zero can
+mean *empty* without a sentinel constant. A removed entry keeps its place as a tombstone so everything
+after it holds its position, and `count()` answers the ones that are still coats.
+
+That shape is right here for a reason particular to Burxt: **there is no per-entry allocation at all.**
+Every allocation lands in a [region](04-memory.md), and a region is a bump pointer — so a container that
+allocated once per insertion would make the region grow for no reason.
+
+## In code
+{: #in-code}
+
+### Using one
 
 ```burxt
 use "lib/map.bx";
@@ -125,7 +155,7 @@ print(removed);
 with the [generics](09-generics.md), and the only compiler support it needs is one builtin, `hash`. If
 a map had needed a keyword, those generics would not be real.
 
-## Reading: `get` or `find`
+### Reading: `get` or `find`
 
 Two ways, and the difference is whether a default is the right answer.
 
@@ -152,7 +182,7 @@ variant payload had to be a scalar, so `Option<Point>` was refused, so an `Optio
 restricted map **values** to scalars. `get` with a fallback was the honest answer while that was true.
 When the payload rule lifted, `find` was three lines.
 
-## Keys are `Equatable`
+### Keys are `Equatable`
 
 `Int`, `Bool`, `String`, `Decimal` — exactly the types `==` works on, which is the
 [bound](09-generics.md#bounds) the generics page already describes. A key needs equality and a hash,
@@ -184,7 +214,7 @@ let here: Point = places.get("origin", Point { x: 0, y: 0 });
 print(here.y);
 ```
 
-## Everything is a method except `map_new`
+### Everything is a method except `map_new`
 
 ```burxt
 function map_new<K: Equatable, V>() -> Map<K, V>                     // an empty map
@@ -205,7 +235,7 @@ constraint turns out to have been pointing at the nicer design all along.
 `set` answers `1` when the key is new and `0` when it replaced a value, so counting distinct keys needs
 no second lookup.
 
-## Strings
+### Strings
 
 A `String` is **bytes**. Not a rope, not a UTF-16 array, not an object with a hidden encoding field.
 
@@ -244,7 +274,39 @@ bug to notice. Now the fallback is either named by the caller or handed back as 
 Two honest gaps: **the split separator is a single byte**, so `", "` and `"\r\n"` cannot be split on
 yet, and there is no case conversion. Both are on the list.
 
-## What is deliberately absent
+## Why it is built this way
+{: #why-it-is-built-this-way}
+
+**Because a hash order that leaks into a program is a bug you find later.** Go randomises map iteration
+deliberately and Rust randomises its hash seed per process, and both are admissions that programs came to
+depend on an order nobody promised. A language whose whole argument is that a wrong answer must not be
+plausible cannot ship a container whose output order changes between runs.
+
+**Because it needs no keyword.** `Map<K, V>` is one file of ordinary Burxt, and the only compiler support
+it asks for is `hash(x)`. If a map had needed a keyword, the [generics](09-generics.md) were not real.
+
+### The shape, and why it is that shape
+
+There is **no per-entry allocation**: a map is the two arrays in the diagram and nothing else. That
+matters more here than in most languages, because every allocation lands in a region and a region is a
+[bump pointer](04-memory.md) — a container that allocated once per insertion would make the region grow
+for nothing.
+
+Growing the table re-places the cards and drops the tombstones. It never reorders the pegs.
+
+## What it costs
+{: #what-it-costs}
+
+**A tombstone stays.** Removing an entry keeps its place so everything after it holds its insertion
+position. `count()` answers the live entries; the storage does not shrink until the region goes.
+
+**Keys are `Equatable`** — `Int`, `Bool`, `String`, `Decimal`. Not a class of yours, because `==` does not
+work on one.
+
+**A String is bytes.** `len` counts bytes and `byte_at` reads one, so anything beyond ASCII is a
+byte-by-byte question you have to answer yourself. There is no `.chars()` yet.
+
+### What is deliberately absent
 
 **No `unwrap`.** Same reason as [`lib/option.bx`](10-absence-and-failure.md): it is a decision
 disguised as a convenience.
@@ -259,18 +321,90 @@ can force collisions and turn O(1) into O(n). If you need that guarded the answe
 constructor — `map_seeded(seed)` — so the program that needs it *says* it needs it, rather than every
 program paying for it. A security property should be visible in the code that has it.
 
-## One thing about the shape
+## When you reach for it
+{: #when-you-reach-for-it}
 
-There is **no per-entry allocation**: a map is the two arrays in the diagram and nothing else. That
-matters more here than in most languages, because every allocation lands in a region and a region is a
-[bump pointer](04-memory.md) — a container that allocated once per insertion would make the region grow
-for nothing.
+<div class="tablewrap" markdown="1">
 
-Growing the table re-places the cards and drops the tombstones. It never reorders the pegs.
+| You want | Write |
+|---|---|
+| a fresh map | `let mutable m: Map<String, Int> = map_new();` — the type comes from the annotation |
+| to insert or overwrite | `m.set(key, value)` — answers 1 if the key was new |
+| a value, with a default | `m.get(key, fallback)` |
+| a value, and to know whether it was there | `m.find(key)` — answers `Option<V>` |
+| just to ask | `m.has(key)` |
+| to walk everything, in order | `let names = m.keys();` then `for k in names` |
+| how many live entries | `m.count()` |
+
+</div>
+
+`for` iterates a **named** array, so bind `keys()` first: a method call in the `for` header would be
+recomputed on every pass, and the compiler refuses it rather than doing that quietly.
+
+## Examples
+{: #examples}
+
+**Insertion order, including an overwrite.** `apple` is set twice and keeps its original place:
+
+```burxt
+use "lib/map.bx";
+
+region r {
+    let mutable counts: Map<String, Int> = map_new();
+    let a: Int = counts.set("pear", 2);
+    let b: Int = counts.set("apple", 5);
+    let c: Int = counts.set("fig", 1);
+    let d: Int = counts.set("apple", 6);
+
+    print(counts.count());
+    let names: [String] = counts.keys();
+    for key in names {
+        print(key + " " + to_string(counts.get(key, 0)));
+    }
+}
+```
+
+```
+3
+pear 2
+apple 6
+fig 1
+```
+
+Three live entries, not four. `apple` holds its **second** position with its **new** value — which is the
+behaviour you would have assumed, and the one most languages do not give you.
+
+**And the refusal that keeps a loop honest**, if you skip the binding:
+
+```burxt
+use "lib/map.bx";
+
+region r {
+    let mutable counts: Map<String, Int> = map_new();
+    let a: Int = counts.set("pear", 2);
+    for key in counts.keys() {
+        print(key);
+    }
+}
+```
+
+```
+error: `for` iterates a named array, and this is a method call: its result would be recomputed on every pass. Bind it first — `let items = ...;` — and iterate that.
+  --> counts.bx:6:30
+   |
+6  |     for key in counts.keys() {
+   |                              ^
+```
 
 ## Next
+{: #next}
 
-[Reference](reference.md) — every keyword, builtin, operator and error, in tables.
+[Tools and agents](12-tools-and-agents.md) — `burxt mcp-schema`, which derives an agent's tool schema
+from the preconditions so the two cannot drift, and `burxt review`, which answers what a change did to
+what a program promises.
 
-Or the design record, which carries the reasoning behind every refusal above:
-[`spec/M11-MAPS.md`](../../spec/M11-MAPS.md).
+Or the [reference]({{ site.baseurl }}/reference/) for every keyword, builtin, command and
+standard-library function — generated by reading the compiler, with a search box.
+
+The design record carries the reasoning behind every refusal above:
+[`spec/M11-MAPS.md`](https://github.com/andrecorugda/burxt/blob/main/spec/M11-MAPS.md).

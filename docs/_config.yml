@@ -21,21 +21,37 @@ exclude:
   - log
   - README.md
 
-# Every page in guide/ gets the same layout without eleven copies of the same front matter.
+# Every page in guide/ gets the same layout without twelve copies of the same front matter.
+#
+# `doc` is the layout with the sidebar: a left rail of every topic and its steps, the page, and an
+# "on this page" list. Guide and reference pages use it; the landing page, the refusals gallery and
+# the install page do not, because a sidebar of somewhere else's contents is furniture.
 defaults:
   - scope:
       path: "guide"
     values:
-      layout: default
+      layout: doc
       section: guide
+  - scope:
+      path: "reference"
+    values:
+      layout: doc
+      section: reference
   - scope:
       path: ""
     values:
       layout: default
 
 # Ordinary code fences, highlighted by rouge. `burxt` is not a language rouge knows, so those blocks
-# come out unhighlighted rather than wrongly highlighted — which is the better failure, and the site
-# does its own colouring for them.
+# come out as a plain `<pre><code class="language-burxt">` rather than wrongly highlighted — which is
+# the better failure, and it is what `assets/burxt-editor.js` then enhances in the browser: gutter,
+# colour, and a squiggle wherever the page shows the compiler refusing something.
+#
+# This comment used to claim "the site does its own colouring for them" while no highlighter existed
+# anywhere in docs/. It described an intention as a feature for long enough that the first person to
+# look at the site said the code blocks had no colours at all. The colouring happens at RUNTIME and
+# the fences stay untouched, which is deliberate: `the_guide_code_compiles` compiles every one of
+# them, so a snippet on this site cannot drift from what the compiler does.
 markdown: kramdown
 highlighter: rouge
 kramdown:

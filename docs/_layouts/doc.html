@@ -10,12 +10,10 @@
 <link rel="icon" href="{{ site.baseurl }}/assets/favicon.ico">
 <link rel="apple-touch-icon" href="{{ site.baseurl }}/assets/burxt-b-favicon-180.png">
 <link rel="stylesheet" href="{{ site.baseurl }}/assets/site.css">
-<!-- The marks are copied into docs/assets/ rather than referenced from the repository's assets/,
-     because Pages serves ONE root and that root is /docs. A relative ../assets path would 404. -->
 
 <meta property="og:title" content="{{ page.title | default: 'Burxt' }}">
 <meta property="og:description" content="{{ page.description | default: site.description }}">
-<meta property="og:type" content="website">
+<meta property="og:type" content="article">
 </head>
 <body>
 
@@ -26,8 +24,6 @@
     <img src="{{ site.baseurl }}/assets/burxt-lockup-light.png" alt="Burxt">
   </a>
 
-  <!-- Below 768px these two replace the link row. The drawer button is only shown by site.js on a
-       page that HAS a sidebar, because a hamburger that opens nothing is worse than no hamburger. -->
   <button class="find" type="button" data-find aria-label="Search the documentation">
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
       <circle cx="8.5" cy="8.5" r="5.5"/><path d="M12.8 12.8L17 17"/>
@@ -49,10 +45,65 @@
   </span>
 </nav>
 
-<main id="top">
-  <div class="{{ page.width | default: 'wrap' }}">
+<main>
+<div class="docs">
+
+  <!-- The sidebar. Server-rendered from docs/_data/nav.yml, which scripts/site-nav.py builds by
+       reading the headings out of the pages themselves — so it works with scripting off, and a
+       renamed heading moves its own entry rather than leaving a dead anchor. -->
+  <nav class="side" aria-label="Documentation contents">
+    {% for group in site.data.nav %}
+    <div class="group">
+      <h2>{{ group.title }}</h2>
+      <ul>
+        {% for item in group.items %}
+        {% assign open = false %}
+        {% if page.url == item.url %}{% assign open = true %}{% endif %}
+        <li class="topic{% if open %} open{% endif %}">
+          <a href="{{ site.baseurl }}{{ item.url }}"{% if open %} class="here" aria-current="page"{% endif %}>
+            <span>{{ item.name }}</span>
+          </a>
+          {% if item.steps %}
+          <ul class="steps">
+            {% for step in item.steps %}
+            <li><a href="{{ site.baseurl }}{{ item.url }}#{{ step.id }}">{{ step.name }}</a></li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endfor %}
+  </nav>
+
+  <div class="doc-body" id="top">
     {{ content }}
+
+    {% if page.previous_page or page.next_page %}
+    <nav class="seq" aria-label="Reading order">
+      {% if page.previous_page %}
+      <a class="prev" href="{{ site.baseurl }}{{ page.previous_page_url }}">
+        <span class="rel">Previous</span>{{ page.previous_page }}
+      </a>
+      {% endif %}
+      {% if page.next_page %}
+      <a class="next" href="{{ site.baseurl }}{{ page.next_page_url }}">
+        <span class="rel">Next</span>{{ page.next_page }}
+      </a>
+      {% endif %}
+    </nav>
+    {% endif %}
   </div>
+
+  <!-- On this page. Built in the browser from the headings that are actually rendered, because a
+       second server-side copy of the same list is a second thing to keep in step. -->
+  <nav class="toc" aria-label="On this page" data-toc hidden>
+    <h2>On this page</h2>
+    <ul></ul>
+  </nav>
+
+</div>
 </main>
 
 <footer>
@@ -64,8 +115,6 @@
 
 <div class="scrim" data-close hidden></div>
 
-<!-- The search palette. Inert until docs/assets/search.json loads, which site.js does on the first
-     ⌘K rather than on every page view: it is a few tens of kilobytes that most visits never open. -->
 <div class="find-panel" role="dialog" aria-modal="true" aria-label="Search" hidden>
   <input type="search" placeholder="Search keywords, builtins, the standard library…"
          spellcheck="false" autocomplete="off" aria-label="Search" data-find-input>
