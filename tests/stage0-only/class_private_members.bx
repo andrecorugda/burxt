@@ -9,6 +9,17 @@
 // shortfall: `use` is a text pre-pass that concatenates files, so by the time anything is
 // checked there are no files, only one long program. A class needs no such knowledge, because
 // it is its own boundary. That is why `class` had to land before `private` could.
+//
+// ---- Why this is in tests/stage0-only/ ----------------------------------------------
+//
+// It needs a CONSTRUCTOR, and constructors are stage-0's alone for now. Stage-0 stores an
+// associated function under the qualified name `Account.open` and emits `bx.Account.open`,
+// exactly as it does for a method. Stage-1 cannot: it names every declaration by its SPAN in
+// the source, and `Account.open` is not contiguous — the class name and the function name are
+// far apart — so there is nothing to point at. The same wall that blocks M13's return bracket.
+//
+// tests/pass/ means both compilers accept a program byte for byte, so this cannot live there.
+// Staged the way M7 staged generics.
 class Account {
     owner: String,
     private balance: Decimal<2>,
@@ -21,6 +32,16 @@ class Account {
     // An implementation detail, and now sayable as one.
     private function (self) spendable() -> Decimal<2> {
         return self.balance;
+    }
+
+    // An ASSOCIATED function — no `self`, because it makes one. Called `Account.open(...)`,
+    // and it is the only way to build an Account, because nothing outside this class may name
+    // `balance` in a literal. That is what makes the `requires` below a real guarantee rather
+    // than a suggestion.
+    function open(owner: String, opening: Decimal<2>) -> Account
+        requires opening >= 0.00
+    {
+        return Account { owner: owner, balance: opening };
     }
 }
 
@@ -38,11 +59,11 @@ class Item {
     function (self) label() -> String { return self.sku; }
 }
 
-// A class literal may still set a private field, and that is a DECISION rather than an
-// oversight: Burxt has no constructor functions, so refusing it would make a class with any
-// private field unconstructible from outside. `private` restricts reading and writing through a
-// value; construction is exempt until there is a constructor to put the rule on.
-let a: Account = Account { owner: "ada", balance: 10.00 };
+// A literal may set a private field only INSIDE the class, so this needs the constructor —
+// which is the whole point. Until v0.0.151 construction was exempt, because with no
+// constructors the rule would have made such a class impossible to build at all, and
+// `private` therefore could not defend an invariant.
+let a: Account = Account.open("ada", 10.00);
 print(a.statement());
 print(a.shouted());
 

@@ -1,0 +1,38 @@
+// The thing `private` alone could not do: a class that GUARANTEES something about itself.
+//
+// This is what constructors were for. Until v0.0.151, `private` protected reading and writing
+// but not construction — with no constructor, refusing a literal would have made such a class
+// impossible to build at all. So `Account` could promise nothing: any file could write
+// `Account { owner: "eve", balance: $-999.00 }` and every `requires` in the class was a
+// suggestion.
+//
+// Now there is exactly one way in and one way to change it, and neither can be bypassed,
+// because no literal outside this class may name `balance`.
+class Account {
+    owner: String,
+    private balance: Decimal<2>,
+
+    // The only way to make one. No `self` — it makes one.
+    function open(owner: String, opening: Decimal<2>) -> Account
+        requires opening >= $0.00
+    {
+        return Account { owner: owner, balance: opening };
+    }
+
+    // The only way to change it, and it cannot go below zero.
+    function (self) withdraw(amount: Decimal<2>) -> Account
+        requires amount > $0.00
+        requires amount <= self.balance
+    {
+        return Account { owner: self.owner, balance: self.balance - amount };
+    }
+
+    function (self) shown() -> String {
+        return self.owner + ": " + to_string(self.balance);
+    }
+}
+
+let a: Account = Account.open("ada", $100.00);
+print(a.shown());
+let b: Account = a.withdraw($30.00);
+print(b.shown());

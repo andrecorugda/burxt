@@ -1754,6 +1754,17 @@ function (mutable self: Unit) parse_record(src: String) -> Int {
             let p: Int = self.advance();
             is_private = 1;
         }
+        // `function name(...)` with no receiver clause: an ASSOCIATED function, which is how a
+        // class gets a constructor. Stage-0 stores it under the qualified name `Account.open`
+        // and emits `bx.Account.open`, exactly as it already does for a method. Stage-1 parses
+        // it as an ordinary function for now — the qualified name and the privacy rule that
+        // makes it matter are stage-0's, staged the way M7 staged generics.
+        if self.at(102) && self.kind_at(1) != 29 {
+            let associated: Int = self.parse_function(src, 0, 0 - 1);
+            if associated < 0 { return -1; }
+            push(self.items, associated);
+            continue;
+        }
         if self.at(102) {
             let method: Int = self.parse_function(src, 0, name_tok);
             if method < 0 { return -1; }

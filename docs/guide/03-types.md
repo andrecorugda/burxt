@@ -60,23 +60,71 @@ still can, because the boundary is the type. There is no file boundary to appeal
 is a text pre-pass that concatenates files (page 7), so by the time anything is checked
 there are no files, only one long program. A class needs no such knowledge.
 
-### What `private` does not do yet, stated plainly
+## Constructors — a function in the class with no `self`
 
-A class literal may still set a private field:
+A private field you could still set from a literal would be half a boundary, so there is one
+way in:
 
 ```burxt
-let a: Account = Account { owner: "ada", balance: 10.00 };     // accepted
+class Account {
+    owner: String,
+    private balance: Decimal<2>,
+
+    // No `self`, because it MAKES one. Called `Account.open(...)`.
+    function open(owner: String, opening: Decimal<2>) -> Account
+        requires opening >= $0.00
+    {
+        return Account { owner: owner, balance: opening };
+    }
+}
+
+let a: Account = Account.open("ada", $100.00);
 ```
 
-That is a decision, not an oversight. Burxt has no constructor functions, so refusing this
-would make a class with any private field impossible to build from outside. `private`
-restricts **reading and writing through a value**; construction is exempt until there is a
-constructor to put the rule on.
+**A literal may name a private field only inside its own class.** From anywhere else:
 
-So `private` gives you an implementation detail nobody can read or call. It does not yet let
-a class *defend an invariant* — `Account` cannot promise `balance >= $0.00` while anyone can
-construct one directly. That needs a constructor mechanism, and it is the next thing this
-page will have to be rewritten for.
+```
+error: `Account.balance` is private, so `Account` cannot be built here: a literal may set a
+       private field only inside `Account`. Give the class a constructor —
+       `function open(...) -> Account` in its body, called as `Account.open(...)` — which is
+       the point of making the field private.
+```
+
+### This is what makes a contract a guarantee
+
+Put the two together and a class can promise something about itself:
+
+```burxt
+class Account {
+    owner: String,
+    private balance: Decimal<2>,
+
+    function open(owner: String, opening: Decimal<2>) -> Account
+        requires opening >= $0.00
+    { return Account { owner: owner, balance: opening }; }
+
+    function (self) withdraw(amount: Decimal<2>) -> Account
+        requires amount > $0.00
+        requires amount <= self.balance
+    { return Account { owner: self.owner, balance: self.balance - amount }; }
+}
+```
+
+`balance` cannot go negative. Not "should not" — *cannot*, and you can see why by reading the
+class: `open` is the only way to make one, `withdraw` is the only way to change it, and no
+literal outside the class can bypass either. Try it and the contract names itself:
+
+```
+burxt runtime error: `requires amount <= self.balance` failed in `Account.withdraw`
+```
+
+Before v0.0.151 every one of those `requires` was a suggestion, because any file could write
+`Account { owner: "eve", balance: $-999.00 }` and skip them all. Privacy without a
+constructor is a locked door in an open wall.
+
+An associated function is stored under its qualified name and emitted as `bx.Account.open`,
+which is exactly how a method is already emitted — so this cost a parser change and one rule,
+not a new mechanism.
 
 ## Bindings, and where the type goes
 

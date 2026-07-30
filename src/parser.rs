@@ -130,8 +130,9 @@ impl Parser {
         let mut stmts = Vec::new();
         while !self.at(&Token::Eof) {
             if self.at(&Token::Class) {
-                let (declared, its_methods) = self.parse_struct()?;
+                let (declared, its_methods, its_associated) = self.parse_struct()?;
                 structs.push(declared);
+                fns.extend(its_associated);
                 // A method declared inside a class is indistinguishable, from here on, from
                 // one written outside it. That is the point: nothing downstream changes.
                 methods.extend(its_methods);
@@ -211,7 +212,7 @@ impl Parser {
 
     // ---- structs ----
 
-    fn parse_struct(&mut self) -> Result<(StructDef, Vec<MethodDef>), String> {
+    fn parse_struct(&mut self) -> Result<(StructDef, Vec<MethodDef>, Vec<FnDef>), String> {
         let start = self.span().start;
         self.expect(&Token::Class)?;
         let name = match self.bump() {
@@ -224,6 +225,7 @@ impl Parser {
         let mut fields = Vec::new();
         let mut methods = Vec::new();
         let mut private_fields = Vec::new();
+        let mut associated = Vec::new();
         // Fields, then methods, in one block — which is the whole reason `record` became
         // `class` in v0.0.148. A method here is parsed by `parse_method` with the class as
         // its `owner`, so `function (self) price()` needs no repeated type: a class body is
@@ -237,6 +239,20 @@ impl Parser {
             let is_private = self.at(&Token::Private);
             if is_private {
                 self.bump();
+            }
+            if self.at(&Token::Fn) && self.peek_at(1) != &Token::LParen {
+                // No receiver clause: an ASSOCIATED function, which is how a class gets a
+                // constructor. `function open(owner: String) -> Account` inside `class Account`
+                // is called `Account.open(...)`, and it is the ONLY place a class literal may
+                // mention a private field — which is what lets a class defend an invariant.
+                //
+                // Stored as an ordinary function under the qualified name `Account.open`, so
+                // codegen emits `bx.Account.open` exactly as it already does for a method and
+                // learns nothing new.
+                let mut f = self.parse_fn()?;
+                f.name = format!("{}.{}", name, f.name);
+                associated.push(f);
+                continue;
             }
             if self.at(&Token::Fn) || self.at(&Token::Pure) {
                 let mut m = self.parse_method_in_class(&name)?;
@@ -272,6 +288,7 @@ impl Parser {
         Ok((
             StructDef { name, type_parameters, fields, private_fields, span: Span { start, end: self.prev_end().max(start + 1) } },
             methods,
+            associated,
         ))
     }
 

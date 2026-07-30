@@ -2556,8 +2556,10 @@ impl TypeChecker {
         self.current_span.set(f.span);
         // Who a probing pass should credit for an allocation found in this body.
         *self.probe_owner.borrow_mut() = (String::new(), f.name.clone());
-        // A free function is inside no class, so it may reach nothing private.
-        self.current_receiver = None;
+        // A free function is inside no class, so it may reach nothing private — UNLESS it is an
+        // associated function, whose qualified name `Account.open` says which class it belongs
+        // to. That is what lets a constructor build a value with private fields.
+        self.current_receiver = f.name.split_once('.').map(|(holder, _)| holder.to_string());
         self.env.clear();
         self.region_locals.clear();
         let mut parameters = Vec::new();
@@ -4594,6 +4596,28 @@ impl TypeChecker {
                             name, name
                         )
                     })?;
+                // A literal may name a PRIVATE field only inside the class itself. Until
+                // v0.0.151 this was exempt, because with no constructors the rule would have
+                // made such a class impossible to build from outside — so `private` protected
+                // reads and not construction, and a class could not defend an invariant.
+                //
+                // Associated functions are the mechanism that closes it: `Account.open(...)` is
+                // inside `Account`, so it may build one, and nothing else may.
+                if self.current_receiver.as_deref() != Some(name.as_str()) {
+                    if let Some(hidden) = self.private_fields.get(name) {
+                        if let Some((given, _)) =
+                            fields.iter().find(|(g, _)| hidden.iter().any(|h| h == g))
+                        {
+                            return Err(format!(
+                                "`{}.{}` is private, so `{}` cannot be built here: a literal may \
+                                 set a private field only inside `{}`. Give the class a \
+                                 constructor — `function open(...) -> {}` in its body, called as \
+                                 `{}.open(...)` — which is the point of making the field private.",
+                                name, given, name, name, name, name
+                            ));
+                        }
+                    }
+                }
                 // Every field exactly once; unknown names get the full list
                 // (which doubles as typo help).
                 for (given, _) in fields {
@@ -4667,6 +4691,31 @@ impl TypeChecker {
                          needs.",
                         name, method
                     ));
+                }
+                // `Account.open(...)` — an ASSOCIATED function, which reads exactly like an
+                // enum variant and is told apart the same way `check_variant_lit` tells a
+                // variant from a local binding: by what the name in front of the dot IS.
+                //
+                // The variant attempt comes first, so an enum keeps its meaning; a class name
+                // could never be an enum name, because a program may not declare both.
+                if let ExprKind::Var(holder) = &base.kind {
+                    if !self.env.contains_key(holder) && self.structs.contains_key(holder) {
+                        let qualified = format!("{}.{}", holder, method);
+                        if self.fns.contains_key(&qualified) {
+                            // Rewrite into an ordinary call and let the one call path handle
+                            // it — arity, argument types, generics, purity, the escape rules.
+                            // A second implementation of "checking a call" is how two of them
+                            // drift apart.
+                            let rewritten = Expr {
+                                kind: ExprKind::Call {
+                                    name: qualified,
+                                    arguments: arguments.to_vec(),
+                                },
+                                span: e.span,
+                            };
+                            return self.check_expr(&rewritten, expected);
+                        }
+                    }
                 }
                 if let Some(r) = self.check_variant_lit(base, method, arguments, expected) {
                     return r;
