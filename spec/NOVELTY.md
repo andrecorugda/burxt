@@ -355,6 +355,58 @@ The pieces are ordinary — a JSON library, a line reader, a subcommand. The *cl
 it is the first candidate here that follows from `DESIGN.md`'s stated purpose rather than from
 exact money. Money is how it is demonstrated; the agent boundary is what it is for.
 
+## 8. An LLM may decide what to DO; it may never decide what a NUMBER is
+
+**Novelty: nothing else says this.** **Buildable: the machinery already exists.**
+
+Andre, 2026-07-30: *"can burxt support local llm support as integration?"* It can, and the
+capability turns out to be the boring half.
+
+### Measured, so the tiers are honest
+
+| tier | needs | status |
+|---|---|---|
+| Shell out — `os_capture("ollama run ...")` | nothing | **works today**, proven: returned `{"response":"the total is 52.75"}` |
+| Real HTTP over sockets | ~40 lines of C shim, for `connect`'s `sockaddr*` only | reachable |
+| Direct `llama.cpp` FFI | `llama_model*` and `llama_context*` are opaque pointers | **blocked** by the pointer wall |
+
+**A socket clears the pointer wall**, which was the open question: `socket(2, 1, 0)` answered fd
+3 and `close` worked, because a file descriptor is an `int` and not a pointer. So tier 2 needs a
+shim only for `connect`; `socket`, `send`, `recv` and `close` all cross as ints. Tier 1 plus
+`lib/json.bx` is a working integration with no new language features.
+
+### The claim
+
+**An LLM's output is the least trustworthy data in any program, and Burxt is the language that
+will not let you pretend otherwise.** In Python, `float(reply["total"])` and money is now a
+float. Here that is a compile error: no implicit coercion, and a Decimal must come out of an
+explicit parse that can fail. That is exactly the costly mistake `DESIGN.md` exists to prevent —
+an agent trusting model output as a number.
+
+Two consequences, the second of which is the actual candidate:
+
+1. **A model call can never be `pure`.** The vocabulary is already there. A model call is the
+   most effectful thing a program can do — non-deterministic, non-reproducible,
+   network-dependent — so a reviewer scanning signatures gets "which parts of this are
+   reproducible" without reading a body.
+
+2. **A function that produces money must not be able to reach a model call.** Enforceable with
+   machinery that already exists: the same least-fixpoint over the call graph that infers
+   `allocates` (v0.0.142–144), applied to an effect rather than to allocation. The through-line
+   at the top of this file is *"the same inputs produce the same money, everywhere, provably"* —
+   and an LLM anywhere on a money path breaks that silently, which is the failure mode neither
+   an agent nor a scanning reviewer can see.
+
+No other language would attempt rule 2, because no other language has a reason to: it only makes
+sense once you assume the code was written by something that might genuinely let a model pick a
+price.
+
+### What is deliberately not claimed
+
+Not inference in Burxt, not a model format, not a tokeniser. The language's contribution is the
+**wall around what the model says** — the same contribution it makes at the C boundary
+(`as scaled`) and at the tool boundary (candidate 7). Three boundaries, one idea.
+
 ## What is NOT claimed here
 
 Kept explicit so the register stays honest:
