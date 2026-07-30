@@ -63,8 +63,16 @@ def run(path: str) -> tuple[str, str]:
             [BURXT, "run", path, "-o", os.path.join(work, "out")],
             capture_output=True, text=True, timeout=60, cwd=work,
         )
+    # The checkout's absolute path is stripped, so a quoted error reads
+    # `examples/refused/01-mixed-scales.bx:5:25` rather than someone's home directory.
+    #
+    # Two things were wrong with leaving it in. The page is PUBLISHED, so it showed the author's
+    # directory layout to every reader. And the generated file could then only match on the machine
+    # that wrote it — CI checks out to /home/runner/work, so `--check` was guaranteed to fail there,
+    # which is exactly what it did for thirteen versions while nobody read the badge.
+    strip_root = lambda t: t.replace(ROOT + os.sep, "").replace(ROOT, ".")
     keep = lambda t: "\n".join(
-        l for l in t.splitlines() if not l.startswith("compiled ")).strip()
+        strip_root(l) for l in t.splitlines() if not l.startswith("compiled ")).strip()
     if done.returncode == 0:
         return keep(done.stdout), "accepted"
     shown = keep(done.stdout + done.stderr)

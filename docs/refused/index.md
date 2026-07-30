@@ -43,7 +43,7 @@ print(total);
 
 ```
 error: cannot + Decimal<2> and Decimal<4>: scales must match. Burxt does not silently rescale money.
- --> /home/andre/burxt/examples/refused/01-mixed-scales.bx:5:25
+ --> examples/refused/01-mixed-scales.bx:5:25
   |
 5 | let total: Decimal<2> = price + rate;
   |                         ^^^^^^^^^^^^
@@ -66,7 +66,7 @@ print(tax);
 
 ```
 error: this multiplication of Decimal<2> by Decimal<4> has an exact product with 6 decimal places, and reaching Decimal<2> means rounding it. Say how — Decimal<2, RoundHalfEven> — or take the exact answer with Decimal<6>.
- --> /home/andre/burxt/examples/refused/02-unrounded-product.bx:5:28
+ --> examples/refused/02-unrounded-product.bx:5:28
   |
 5 | let tax:      Decimal<2> = subtotal * rate;
   |                            ^^^^^^^^^^^^^^^
@@ -112,7 +112,7 @@ print(a.owner);
 
 ```
 error: `Account.balance` is private, so `Account` cannot be built here: a literal may set a private field only inside `Account`. Give the class a constructor — `function open(...) -> Account` in its body, called as `Account.open(...)` — which is the point of making the field private.
-  --> /home/andre/burxt/examples/refused/04-bypassed-private.bx:11:18
+  --> examples/refused/04-bypassed-private.bx:11:18
    |
 11 | let a: Account = Account { owner: "eve", balance: $0.00 - $999.00 };
    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -139,7 +139,7 @@ print(fee(Method.Transfer));
 
 ```
 error: this `match` on `Method` does not handle `Transfer`. Every variant must be handled — that is what makes adding a variant later a compile error instead of a silent fall-through.
- --> /home/andre/burxt/examples/refused/05-forgotten-variant.bx:7:19
+ --> examples/refused/05-forgotten-variant.bx:7:19
   |
 7 |         Card => { return $0.30; }
   |                   ^^^^^^^^^^^^^
@@ -189,7 +189,7 @@ print(label(7));
 
 ```
 error: cannot return this String: it was built inside a `region` block, which releases at its closing brace, so its storage would not outlive the call. Move the allocation out of the `region` block, or return a scalar summary.
- --> /home/andre/burxt/examples/refused/07-escaping-region.bx:6:9
+ --> examples/refused/07-escaping-region.bx:6:9
   |
 6 |         return text;
   |         ^^^^^^^^^^^^
@@ -211,7 +211,7 @@ print(total);
 
 ```
 error: type mismatch in `let total`: declared Decimal<2>, but expression has type String
- --> /home/andre/burxt/examples/refused/08-text-as-money.bx:4:25
+ --> examples/refused/08-text-as-money.bx:4:25
   |
 4 | let total: Decimal<2> = reply;
   |                         ^^^^^
@@ -239,7 +239,7 @@ print(t.rate_for(true));
 
 ```
 error: `class FlatTax implements Tax` is missing the method `label`. Every interface method must be implemented — Burxt has no default bodies.
- --> /home/andre/burxt/examples/refused/09-incomplete-interface.bx:6:1
+ --> examples/refused/09-incomplete-interface.bx:6:1
   |
 6 | class FlatTax implements Tax {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -261,7 +261,7 @@ print(quantity == price);
 
 ```
 error: type error: cannot compare Int and Decimal<2> — the types must match exactly
- --> /home/andre/burxt/examples/refused/10-comparing-kinds.bx:5:7
+ --> examples/refused/10-comparing-kinds.bx:5:7
   |
 5 | print(quantity == price);
   |       ^^^^^^^^^^^^^^^^^
