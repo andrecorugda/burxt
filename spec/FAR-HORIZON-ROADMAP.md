@@ -358,6 +358,13 @@ rather than *"add floats"* — which would be on-thesis rather than beside it.
 Per the plan, this decision waits for the count above rather than an argument. The count says floats
 block a **narrower** set than the pointer wall does.
 
+**Specced out in full, and it survived contact:** [N9-VECTORS-EXACTLY.md](N9-VECTORS-EXACTLY.md). The
+arithmetic is verified working today — a 1536-dimension dot product at `Decimal<7>` answers exactly,
+and at `Decimal<8>` it **traps**. Rows 1–5 of that spec's table need no language change at all, which
+makes "the only vector store whose scores are reproducible" about a week of work rather than a
+milestone. That is the strongest argument yet for keeping no-float: the flagship use nobody thought was
+reachable without floats turns out to be reachable, and better, without them.
+
 ### 6. What this does NOT change
 
 The near-term order stays: **bugs first, then usability.** Nothing in this table is a reason to stop
