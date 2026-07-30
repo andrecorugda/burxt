@@ -64,6 +64,32 @@
 >
 > Nothing was built for M13 in stage-1. This note exists so the next attempt starts from the real
 > problem rather than the one the spec used to describe.
+>
+> ### v0.0.165: the wall is narrower than this note claimed
+>
+> Two of the three things blocked on "stage-1 cannot hold a synthesized name" turned out not to be.
+>
+> **Constructors were not blocked at all.** `Account.open` looked unreachable because it is not
+> contiguous in the source — and stage-1 already keys a METHOD by TWO spans, a receiver and a name,
+> because that is how `Account` + `shown` is found. A qualified name *is* a name in two parts. So an
+> associated function is a method with a flag and no receiver argument, the existing lookup finds it,
+> and no name is built in either compiler. Shipped in v0.0.165 as roughly forty lines.
+>
+> The lesson generalises and is worth carrying into the next attempt at this: **the constraint is not
+> "every name is a span", it is "every name is a span, and a name may be more than one of them."**
+> Before reaching for a synth buffer, ask whether the name in question is already written down in
+> pieces somewhere.
+>
+> **The clause text (obstacle 2) is not helped by that**, and option 2 above looks better than it
+> did. `balance: Decimal<2> [> $0.00]` is contiguous as a *whole declaration*, so quoting the written
+> form needs no synthesis in either compiler — and it is arguably the more honest message anyway,
+> since it shows what the programmer typed rather than a rewrite of it.
+>
+> **The return bracket (obstacle 1) is the one that genuinely needs new machinery**, and it is now
+> the only one. `result` is never written in a bracket-form program, so no span anywhere spells it.
+> The narrowest fix is not a general synth buffer: it is a BINDING KIND — one flag on the binding
+> meaning "this is the result slot" — so nothing has to name it at all. That is smaller than the
+> synthetic token this note proposed, and it is where the next attempt should start.
 
 ## 0. What is wrong with the current form
 
