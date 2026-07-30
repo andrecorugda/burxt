@@ -22,6 +22,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BURXT = os.path.join(ROOT, "target", "release", "burxt")
 DIR = os.path.join(ROOT, "examples", "refused")
 OUT = os.path.join(DIR, "README.md")
+# The same panels as a website page. Generated from the same run, so the site cannot say something
+# the repository does not — which was the whole reason for generating either of them.
+SITE = os.path.join(ROOT, "docs", "refused", "index.md")
 
 # What each one is, in a reviewer's terms rather than a compiler's.
 POINTS = {
@@ -130,16 +133,34 @@ eventually stop happening.
     return "\n".join(parts)
 
 
+def site_page(body: str) -> str:
+    """The same page with Jekyll front matter, so it renders on burxt-lang.org."""
+    front = """---
+layout: default
+title: What it refuses
+section: refused
+description: Ten mistakes that compile in every other language, and what this compiler says instead.
+---
+
+"""
+    # The repository page links to sibling directories; the site version links to the site.
+    return front + body.replace("(../../tests/fail/", "(https://github.com/andrecorugda/burxt/tree/main/tests/fail/")
+
+
 if __name__ == "__main__":
     if not os.path.exists(BURXT):
         sys.exit("build the release binary first: cargo build --release")
     page = build()
+    site = site_page(page)
     if "--check" in sys.argv:
-        on_disk = open(OUT).read() if os.path.exists(OUT) else ""
-        if on_disk != page:
-            sys.exit("examples/refused/README.md is out of date — run: python3 scripts/refused.py")
-        print("examples/refused/README.md is current")
+        for path, wanted in ((OUT, page), (SITE, site)):
+            on_disk = open(path).read() if os.path.exists(path) else ""
+            if on_disk != wanted:
+                sys.exit(f"{path} is out of date — run: python3 scripts/refused.py")
+        print("the refusals page is current, in both places")
     else:
-        with open(OUT, "w") as f:
-            f.write(page)
-        print("wrote examples/refused/README.md")
+        os.makedirs(os.path.dirname(SITE), exist_ok=True)
+        for path, text in ((OUT, page), (SITE, site)):
+            with open(path, "w") as f:
+                f.write(text)
+        print("wrote examples/refused/README.md and docs/refused/index.md")

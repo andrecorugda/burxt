@@ -3665,3 +3665,84 @@ fn the_refusals_page_is_not_stale() {
     let panels = page.matches("\n## ").count();
     assert!(panels >= 10, "examples/refused/ lost panels: {} left", panels);
 }
+
+/// Every `burxt` code block on the landing page compiles, and the one that claims an answer
+/// produces it.
+///
+/// The front page is the first thing anyone reads and the last thing anyone re-reads, which is
+/// exactly how it rots. This project has already shipped a guide containing two INVENTED error
+/// messages and a function that did not exist; both were caught by running the examples, not by
+/// proofreading.
+///
+/// So the rule is the same one `scripts/site-examples.py` and `scripts/refused.py` follow: if a
+/// page shows code, a test compiles it. Fragments are skipped — a three-line excerpt with no
+/// declaration in sight is not wrong, it is partial — which is decided by whether the block
+/// contains a `function`, a `class` or a `let`.
+#[test]
+fn the_landing_page_code_compiles() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let page = fs::read_to_string(root.join("docs/index.md")).unwrap();
+    let scratch = scratch_dir("landing-page");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let mut checked = 0;
+    let mut failures = Vec::new();
+
+    // The HERO sample is HTML, not a fenced block — it lives inside the `hero` div where a
+    // markdown fence does not render, so it is written as `<pre><code>` with `<` and `>` escaped.
+    // It is also the most-read code on the site, which makes it the most important to compile:
+    // the first version of this test looked only at fences and quietly checked everything except
+    // the one line a visitor actually reads.
+    let mut blocks: Vec<String> = Vec::new();
+    if let Some((_, rest)) = page.split_once("<pre><code>") {
+        if let Some((body, _)) = rest.split_once("</code></pre>") {
+            blocks.push(body.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&"));
+        }
+    }
+    blocks.extend(
+        page.split("```burxt")
+            .skip(1)
+            .filter_map(|b| b.split_once("```").map(|(body, _)| body.trim_start_matches('\n').to_string())),
+    );
+
+    for (i, source) in blocks.into_iter().enumerate() {
+        // Only whole declarations, not excerpts.
+        if !(source.contains("function ") || source.contains("class ") || source.contains("let ")) {
+            continue;
+        }
+        let path = scratch.join(format!("block{}.bx", i));
+        fs::write(&path, &source).unwrap();
+        let out = burxt("check", &path, &scratch);
+        if !out.status.success() {
+            failures.push(format!(
+                "docs/index.md block {} does not compile:\n{}\n{}",
+                i + 1,
+                source,
+                String::from_utf8_lossy(&out.stdout)
+            ));
+        }
+        checked += 1;
+    }
+
+    // The page claims `59.97`. Claiming an answer is a stronger promise than claiming it compiles,
+    // so it is checked separately — and by running the program, not by trusting the comment.
+    let sample = scratch.join("money.bx");
+    fs::write(
+        &sample,
+        "let price: Decimal<2> = 19.99;\nlet quantity: Int     = 3;\nlet total: Decimal<2> = price * quantity;\nprint(total);\n",
+    )
+    .unwrap();
+    let ran = burxt("run", &sample, &scratch);
+    let shown = String::from_utf8_lossy(&ran.stdout);
+    let printed: String = shown.lines().filter(|l| !l.starts_with("compiled ")).collect();
+    if printed.trim() != "59.97" {
+        failures.push(format!(
+            "docs/index.md says that program prints 59.97; it printed {:?}",
+            printed.trim()
+        ));
+    }
+
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+    assert!(checked >= 3, "expected at least three code blocks on the landing page, found {}", checked);
+}
