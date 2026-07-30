@@ -386,12 +386,16 @@
       var no = n + 1;
       var here = marks[no];
       var body;
-      if (here && here.length) {
+      var m = here && here.length ? here[0] : null;
+      var from = m ? Math.max(0, m.from - 1) : 0;
+      var to = m ? Math.min(text.length, from + m.width) : 0;
+      // A range that covers nothing means the shown snippet and the quoted error disagree about
+      // line numbers — an author trimmed a comment, say. Underlining zero characters would draw an
+      // invisible marker and look like the feature silently not working, so fall back to the
+      // message alone, which is still true.
+      if (m && to > from) {
         // Underline exactly the run the carets covered, and colour each part properly — the
         // squiggle wraps coloured tokens rather than replacing them.
-        var m = here[0];
-        var from = Math.max(0, m.from - 1);
-        var to = Math.min(text.length, from + m.width);
         body = paint(text.slice(0, from), lang) +
                '<span class="sq">' + paint(text.slice(from, to), lang) + '</span>' +
                paint(text.slice(to), lang);
@@ -455,7 +459,10 @@
       else done();
     });
 
-    pre.replaceWith(panel);
+    // If the block came wrapped, the wrapper goes too — otherwise the finished panel sits inside an
+    // empty bordered box that rouge drew.
+    var host = pre.closest('div.highlighter-rouge') || pre;
+    host.replaceWith(panel);
   }
 
   /* ---- pairing a refusal with its message -----------------------------------------------------
@@ -465,15 +472,46 @@
    * matched a perfectly good `class Account` on guide page 3 that is followed by prose and THEN an
    * error about a different snippet. A lead-in of a few words, and nothing more. */
 
+  /* Two shapes of code block reach the browser, and this cost the squiggles a deploy to find.
+   *
+   * `highlighter: rouge` is set, and rouge lexes a fence it recognises — a bare ``` is `plaintext` —
+   * into a wrapper:
+   *
+   *     DIV.language-plaintext.highlighter-rouge > DIV.highlight > PRE.highlight > CODE
+   *
+   * `burxt` is not a language rouge knows, so kramdown falls back to emitting a bare
+   * `PRE > CODE.language-burxt` with no wrapper at all. So on every refusal on the site the code
+   * block is a bare `<pre>` and its error block is three levels deeper — which means the error was
+   * never `pre.nextElementSibling`, and every squiggle silently did not happen.
+   *
+   * It looked right locally because the harness it was built against reproduced the shape this file
+   * assumed rather than the shape Jekyll emits. There is no Ruby on the machine, so the only place
+   * that difference was visible was the live site. */
+
+  function unwrap(node) {
+    // The <pre> a following sibling holds, whether it IS one or merely wraps one.
+    if (!node) return null;
+    if (node.tagName === 'PRE') return node;
+    if (node.tagName === 'DIV' && /highlight/.test(String(node.className))) {
+      return node.querySelector('pre');
+    }
+    return null;
+  }
+
   function outputFor(pre) {
     var lead = null;
-    var node = pre.nextElementSibling;
+    // A wrapped code block's siblings are the WRAPPER's siblings, not the <pre>'s.
+    var from = pre.closest('div.highlighter-rouge') || pre;
+    var node = from.nextElementSibling;
     for (var hops = 0; node && hops < 2; hops++) {
-      if (node.tagName === 'PRE') {
-        var text = node.textContent.replace(/\s+$/, '');
+      var found = unwrap(node);
+      if (found) {
+        var text = found.textContent.replace(/\s+$/, '');
         var isDiag = /^error: /.test(text) || text.indexOf('burxt runtime error') >= 0;
         // A `burxt` block is the next EXAMPLE, not this one's output.
-        var isCode = node.querySelector('code.language-burxt');
+        var isCode = found.querySelector('code.language-burxt');
+        // `node`, not `found`: removing the <pre> out of a rouge wrapper would leave the wrapper
+        // behind as an empty bordered box.
         if (isDiag && !isCode) return { pre: node, text: text, lead: lead };
         return null;
       }
