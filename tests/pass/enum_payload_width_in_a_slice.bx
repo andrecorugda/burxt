@@ -1,0 +1,62 @@
+// The size of an enum is the tag plus its WIDEST payload — measured in cells, not counted in types.
+//
+// This is a regression fixture for a silent memory corruption, and the shape of the bug is the
+// interesting part: `layout_of` computed the payload area as `variants.iter().map(|p| p.len()).max()`
+// — the NUMBER of things a variant carries rather than how WIDE they are. A slice is three cells
+// (pointer, length, capacity) and a class is as many as it has fields, so `Object([Field])` was sized
+// at one cell instead of three.
+//
+// The LLVM type was right the whole time, because `set_body` used a DIFFERENT function that got it
+// right. So `%bx.enum.Json` really was 32 bytes and `burxt.alloc` was asked for 16 — the worst
+// possible split, because nothing in the IR looks wrong.
+//
+// What it did, from tests/pass/json_round_trip.bx's own shape: a one-element array literal of a
+// 40-byte class allocated 24 bytes and then stored 40, running 16 bytes past the end of the region
+// block. It printed a WRONG ANSWER — a field's value silently empty — and then exhausted a 1 GB
+// region, in that order.
+//
+// It is also the SECOND time this exact bug was fixed. The note above `enum_types` in src/codegen.rs
+// records `Line(Point, Point)` giving each Point one cell; that fix built `payload_cells` and
+// `payload_area` and taught `set_body` to use them, and left `layout_of` counting. One source of
+// truth now — a third size computation appearing is this bug again.
+enum Shape {
+    Nothing,
+    Count(Int),
+    Many([Leaf]),                                // three cells: the widest, and the one that was wrong
+    Pair(Leaf, Leaf),                            // two cells, which the counting version also missed
+}
+
+class Leaf { n: Int }
+class Holder { tag: String, shape: Shape }
+
+function describe(h: Holder) -> String {
+    match h.shape {
+        Nothing => { return h.tag + ":none"; }
+        Count(n) => { return h.tag + ":" + to_string(n); }
+        Many(leaves) => { return h.tag + ":" + to_string(len(leaves)) + " leaves"; }
+        Pair(a, b) => { return h.tag + ":" + to_string(a.n + b.n); }
+    }
+}
+
+// A one-element array LITERAL of a class holding the enum, built by calls that allocate. Every part
+// of that sentence was needed to trigger it: binding the array first, or using a payload that
+// allocates nothing, both hid it.
+function holder(tag: String, shape: Shape) -> Holder {
+    return Holder { tag: tag, shape: shape };
+}
+
+function counted(n: Int) -> Shape {
+    return Shape.Count(n);
+}
+
+let direct: [Holder] = [holder("a", counted(1))];
+print(len(direct));
+print(describe(direct[0]));
+
+// And the wide variants, so the area really is three cells rather than one that happened to fit.
+let mutable leaves: [Leaf] = [];
+let one: Int = push(leaves, Leaf { n: 4 });
+let two: Int = push(leaves, Leaf { n: 5 });
+print(describe(holder("b", Shape.Many(leaves))));
+print(describe(holder("c", Shape.Pair(Leaf { n: 6 }, Leaf { n: 7 }))));
+print(describe(holder("d", Shape.Nothing)));

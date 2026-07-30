@@ -1140,13 +1140,27 @@ impl<'ctx> CodeGen<'ctx> {
         match ty {
             Type::Slice(_) => Layout { size: 24, align: 8, field_offsets: vec![] },
             Type::Named(name) if self.enum_types.contains_key(name) => {
-                // tag + payload slots, all 8-byte
-                let slots = self.enum_types[name]
-                    .1
-                    .iter()
-                    .map(|p| p.len())
-                    .max()
-                    .unwrap_or(0) as u64;
+                // tag + payload slots, all 8-byte.
+                //
+                // `payload_area`, NOT `p.len()`. Counting payload TYPES answers how many things a
+                // variant carries; the payload area needs how WIDE they are, and a slice is three
+                // cells while a class is as many as it has fields.
+                //
+                // Counting was the bug, and it is the second time the same one: the note above
+                // `enum_types` records `Line(Point, Point)` giving each Point one cell. That fix
+                // built `payload_cells` / `payload_area` and taught `set_body` to use them — and
+                // left this function counting. So the LLVM TYPE was right and the SIZE was wrong,
+                // which is the worst possible split: `%bx.enum.Json` really is 32 bytes, and
+                // `burxt.alloc` was asked for 16.
+                //
+                // What that did: `[json_field("n", json_int(1))]` allocated 24 bytes for a `Field`
+                // that is 40, and the store ran 16 bytes past the end of the region block. Silent
+                // corruption of whatever came next, then a wrong answer, then region exhaustion.
+                //
+                // One source of truth now. If a third size computation ever appears, it is this
+                // bug again.
+                let variants = self.enum_types[name].1.clone();
+                let slots = self.payload_area(&variants) as u64;
                 Layout { size: 8 * (1 + slots), align: 8, field_offsets: vec![] }
             }
             Type::Named(name) => {
