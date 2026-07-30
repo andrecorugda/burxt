@@ -22,6 +22,7 @@ mod parser;
 mod typeck;
 mod codegen;
 mod review;
+mod schema;
 
 use inkwell::context::Context;
 use std::path::Path;
@@ -69,7 +70,8 @@ fn compile_main() {
         eprintln!("  burxt run     <file.bx> [link args...]   compile then run");
         eprintln!("  burxt emit-ir <file.bx>                  print LLVM IR");
         eprintln!("  burxt layout  <file.bx>                  print class layouts");
-        eprintln!("  burxt review  <old.bx> <new.bx>          what changed about what it PROMISES");
+        eprintln!("  burxt review  <old.bx> <new.bx>          what changed about what it PROMISES
+  burxt mcp-schema <file.bx>               the MCP tool manifest, from the preconditions");
         eprintln!();
         eprintln!("  -o <path>     where to write the executable (default ./<name>)");
         eprintln!();
@@ -91,6 +93,17 @@ fn compile_main() {
             std::process::exit(2);
         }
         match review::review(path, &arguments[3]) {
+            Ok(code) => std::process::exit(code),
+            Err(message) => {
+                eprintln!("error: {}", message);
+                std::process::exit(2);
+            }
+        }
+    }
+    if cmd == "mcp-schema" {
+        // The manifest for an MCP server, derived from the preconditions the tools already carry.
+        // See src/schema.rs — the schema and the check are one sentence, so they cannot drift.
+        match schema::emit(path) {
             Ok(code) => std::process::exit(code),
             Err(message) => {
                 eprintln!("error: {}", message);

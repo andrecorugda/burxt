@@ -1,0 +1,55 @@
+// ============================================================================
+// examples/mcp/tools.bx — the money tools, and their promises.
+//
+// Every tool is an ordinary Burxt function whose **preconditions are written on the values they
+// constrain**. That is not decoration: `burxt mcp-schema` reads these declarations and emits the JSON
+// Schema an MCP client validates against, so the schema and the check are the same sentence.
+//
+// Everywhere else those are two artifacts. A hand-written schema says `minimum: 1` and the function
+// says `if quantity < 1 { ... }`, and nothing keeps them equal — the schema drifts, the client sends
+// something the tool refuses, and the error surfaces as a 500 rather than as a validation message.
+// Here there is one place to change, and forgetting to change the other is not a thing you can do.
+// ============================================================================
+
+use "../../lib/json.bx";
+
+// One line of an invoice.
+//
+// `[> $0.00]` and `[> 0]` are the schema. A quantity of zero is not a free line, it is a mistake in
+// whatever produced the request, and answering `$0.00` would hide it.
+function line_total(unit: Decimal<2> [> $0.00], quantity: Int [> 0, <= 100000])
+    -> Decimal<2>
+{
+    return unit * quantity;
+}
+
+// Tax on a subtotal, at a rate.
+//
+// The return type names the rounding, which is what makes this safe to expose: a caller reading the
+// signature knows how the half-cent goes, and `Decimal<2, RoundHalfEven>` travels through every
+// signature the value reaches afterwards.
+//
+// `[<= 1.0000]` is a real constraint and not a formality — a rate above 100% is how a misplaced
+// decimal point in a config file becomes a bill nobody can pay.
+function tax_on(subtotal: Decimal<2> [>= $0.00], rate: Decimal<4> [>= 0.0000, <= 1.0000])
+    -> Decimal<2, RoundHalfEven>
+{
+    return subtotal * rate;
+}
+
+// A whole invoice line: the total and the tax, as one answer.
+function line_with_tax(unit: Decimal<2> [> $0.00], quantity: Int [> 0, <= 100000],
+                       rate: Decimal<4> [>= 0.0000, <= 1.0000]) -> Json
+{
+    let subtotal: Decimal<2> = unit * quantity;
+    let tax: Decimal<2, RoundHalfEven> = subtotal * rate;
+    let mutable fields: [Field] = [];
+    let a: Int = push(fields, json_field("subtotal", json_money(subtotal)));
+    // `json_text(to_string(tax))` rather than `json_money(tax)`, and the reason is a papercut rather
+    // than a design: `json_money` takes `Decimal<2>` and `tax` is `Decimal<2, RoundHalfEven>`, and a
+    // contract may be ADDED at a `let` but not at an argument. Same digits either way — `json_money`
+    // is `json_text(to_string(...))` internally — so nothing is lost but the intent reads worse.
+    let b: Int = push(fields, json_field("tax", json_text(to_string(tax))));
+    let c: Int = push(fields, json_field("total", json_text(to_string(subtotal + tax))));
+    return json_object(fields);
+}

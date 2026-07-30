@@ -4278,3 +4278,241 @@ fn the_json_library_round_trips() {
 
     let _ = fs::remove_dir_all(&scratch);
 }
+
+/// `burxt mcp-schema` derives the tool schema from the PRECONDITIONS — so changing a contract changes
+/// the schema, and forgetting to update one of the two is not a thing that can happen.
+///
+/// The second half is the test. Anyone can generate a schema; the claim is that it **cannot drift**,
+/// and the only way to check that is to change a contract and watch the schema follow. A test that
+/// merely compared the output to a recorded string would pass forever while the derivation quietly
+/// stopped reading the clauses at all.
+///
+/// This is also the invariant that would have caught the M13 bracket form going fourteen versions with
+/// no fixture: the thing being claimed is a RELATIONSHIP between two artifacts, and a relationship
+/// needs both sides varied.
+#[test]
+fn the_mcp_schema_follows_the_contracts() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("mcp-schema");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let schema_of = |source: &str, name: &str| -> String {
+        let path = scratch.join(format!("{}.bx", name));
+        fs::write(&path, source).unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("mcp-schema")
+            .arg(&path)
+            .current_dir(&scratch)
+            .output()
+            .expect("burxt mcp-schema");
+        assert!(
+            out.status.success(),
+            "mcp-schema failed on {}:\n{}",
+            name,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+
+    // The bracket form and the written form are the SAME sentence, so they must produce the same
+    // schema down to the byte. Clauses are read structurally rather than as text, which is what makes
+    // that true rather than a coincidence that holds today.
+    let bracketed = schema_of(
+        "function line_total(unit: Decimal<2> [> $0.00], quantity: Int [> 0, <= 100000])\n\
+         -> Decimal<2> { return unit * quantity; }\n",
+        "bracketed",
+    );
+    let written = schema_of(
+        "function line_total(unit: Decimal<2>, quantity: Int) -> Decimal<2>\n\
+         requires unit > $0.00\n\
+         requires quantity > 0\n\
+         requires quantity <= 100000\n\
+         { return unit * quantity; }\n",
+        "written",
+    );
+    assert_eq!(
+        bracketed, written,
+        "the bracket form and the `requires` form produced DIFFERENT schema, so one of them is not \
+         being read as a contract"
+    );
+
+    // Every bound arrived, and as EXACT DIGITS. `0.00` never went through a float — a `DecimalLit` is
+    // already an unscaled integer and a scale, so rendering it inserts a point.
+    for needle in [
+        "\"exclusiveMinimum\":\"0.00\"",
+        "\"exclusiveMinimum\":\"0\"",
+        "\"maximum\":\"100000\"",
+        "\"unit\"",
+        "\"quantity\"",
+    ] {
+        assert!(
+            bracketed.contains(needle),
+            "the schema is missing {}:\n{}",
+            needle,
+            bracketed
+        );
+    }
+
+    // THE ANTI-DRIFT CHECK. Tighten one clause and the schema must move with it.
+    let tightened = schema_of(
+        "function line_total(unit: Decimal<2> [>= $1.00], quantity: Int [> 0, <= 50])\n\
+         -> Decimal<2> { return unit * quantity; }\n",
+        "tightened",
+    );
+    assert_ne!(
+        bracketed, tightened,
+        "changing two preconditions did not change the schema, so the schema is not derived from them"
+    );
+    assert!(
+        tightened.contains("\"minimum\":\"1.00\"") && tightened.contains("\"maximum\":\"50\""),
+        "the tightened bounds did not reach the schema:\n{}",
+        tightened
+    );
+    assert!(
+        !tightened.contains("100000"),
+        "the OLD bound survived a change to the contract, which is the drift this tool exists to \
+         prevent:\n{}",
+        tightened
+    );
+
+    // Only the file's OWN functions are tools. Without this filter, a three-line server published the
+    // entire standard library — `string_find`, `file_delete`, `os_run` — because the loader
+    // concatenates. Inviting a model to call `os_run` because it happened to be in scope is the exact
+    // shape of failure this project is against.
+    let _ = std::os::unix::fs::symlink(root.join("lib"), scratch.join("lib"));
+    let with_imports = schema_of(
+        "use \"lib/string.bx\";\n\
+         function priced(unit: Decimal<2> [> $0.00]) -> Decimal<2> { return unit; }\n",
+        "with_imports",
+    );
+    assert!(
+        with_imports.contains("\"priced\""),
+        "the file's own function is missing:\n{}",
+        with_imports
+    );
+    assert!(
+        !with_imports.contains("string_find") && !with_imports.contains("string_split"),
+        "a `use`d module's functions were published as tools:\n{}",
+        with_imports
+    );
+
+    // A clause JSON Schema cannot express is LEFT OUT and reported, never approximated. `amount <=
+    // balance` relates two parameters and has no key; emitting something for it would be the drift.
+    let relational = scratch.join("relational.bx");
+    fs::write(
+        &relational,
+        "function withdraw(balance: Decimal<2>, amount: Decimal<2> [<= balance]) -> Decimal<2>\n\
+         { return balance - amount; }\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("mcp-schema")
+        .arg(&relational)
+        .current_dir(&scratch)
+        .output()
+        .expect("burxt mcp-schema");
+    let note = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        note.contains("could not be expressed"),
+        "a relational clause was silently dropped instead of reported:\n{}",
+        note
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+/// The MCP server answers a real `initialize` / `tools/list` / `tools/call` exchange.
+///
+/// Against a recorded transcript, because "it runs" is not the claim. The claim is that money crosses
+/// the wire with all its digits — `19.99 * 3` comes back as `59.97` and not `59.96999999999999` — and
+/// that a request violating a precondition gets a JSON-RPC error rather than taking the process down.
+///
+/// That last part is why the server checks arguments itself as well as declaring contracts on the
+/// tools. A server must not die on a bad request, so the polite check has to exist; and if the polite
+/// check and the contract ever disagreed, the contract would abort LOUDLY rather than let a bad value
+/// through. The redundancy is a tripwire on what would otherwise be a silent divergence.
+#[test]
+fn the_mcp_server_answers_a_real_exchange() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("mcp-server");
+    fs::create_dir_all(&scratch).unwrap();
+    let server = scratch.join("server");
+
+    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("examples/mcp/server.bx"))
+        .arg("-o")
+        .arg(&server)
+        .current_dir(&scratch)
+        .output()
+        .expect("build the server");
+    assert!(
+        built.status.success(),
+        "the MCP server did not build:\n{}{}",
+        String::from_utf8_lossy(&built.stdout),
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let requests = concat!(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#, "\n",
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"line_total","arguments":{"unit":"19.99","quantity":3}}}"#, "\n",
+        // The same amount sent as a JSON NUMBER rather than a string. Both are read, because an exact
+        // producer sends a string and a careless one sends a number, and the difference carries no
+        // information about what was meant.
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"line_total","arguments":{"unit":19.99,"quantity":3}}}"#, "\n",
+        r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"tax_on","arguments":{"subtotal":"59.97","rate":"0.0825"}}}"#, "\n",
+        // A precondition violated: an error, and the process survives to answer the next one.
+        r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"line_total","arguments":{"unit":"0.00","quantity":3}}}"#, "\n",
+        // More precision than Decimal<2> holds. Refused, never rounded — the caller sent a third
+        // decimal place for a reason and no default here can know what it was.
+        r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"line_total","arguments":{"unit":"19.999","quantity":1}}}"#, "\n",
+        r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"nope","arguments":{}}}"#, "\n",
+        "not json at all\n",
+        // And it kept going after every one of those.
+        r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"line_total","arguments":{"unit":"1.00","quantity":2}}}"#, "\n",
+    );
+
+    let mut child = Command::new(&server)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .current_dir(&scratch)
+        .spawn()
+        .expect("spawn the server");
+    use std::io::Write;
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(requests.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().expect("the server exited");
+    assert!(out.status.success(), "the server exited {:?}", out.status.code());
+    let lines: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| l.to_string())
+        .collect();
+    assert_eq!(lines.len(), 9, "expected nine responses, got:\n{}", lines.join("\n"));
+
+    let expect = |i: usize, needle: &str| {
+        assert!(
+            lines[i].contains(needle),
+            "response {} is missing {:?}:\n{}",
+            i + 1,
+            needle,
+            lines[i]
+        );
+    };
+    expect(0, "\"protocolVersion\":\"2024-11-05\"");
+    // 19.99 x 3 = 59.97. Exactly, from a string and from a JSON number alike.
+    expect(1, "\"text\":\"59.97\"");
+    expect(2, "\"text\":\"59.97\"");
+    // 59.97 x 8.25% = 4.947525, half-to-even at two places.
+    expect(3, "\"text\":\"4.95\"");
+    expect(4, "\"code\":-32602");
+    expect(5, "\"code\":-32602");
+    expect(6, "\"code\":-32601");
+    expect(7, "\"code\":-32700");
+    expect(8, "\"text\":\"2.00\"");
+
+    let _ = fs::remove_dir_all(&scratch);
+}

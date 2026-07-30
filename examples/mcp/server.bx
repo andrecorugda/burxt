@@ -1,0 +1,310 @@
+// ============================================================================
+// examples/mcp/server.bx — an MCP server, over stdio, in Burxt.
+//
+//     burxt build examples/mcp/server.bx -o /tmp/mcp
+//     echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | /tmp/mcp
+//
+// JSON-RPC 2.0, one message per line, which is what MCP over stdio is. `os_read_line` rather than
+// `os_read_all`, because a server has to answer the first request before the client sends the second
+// — reading to EOF is not a slow version of that, it is a deadlock.
+//
+// ---- Why this example exists ------------------------------------------------------------
+//
+// Not to show that Burxt can speak a protocol. It is to show the one thing nothing else here can do:
+// **the tool schema is derived from the preconditions, so it cannot drift from the implementation.**
+//
+//     burxt mcp-schema examples/mcp/tools.bx
+//
+// reads `line_total(unit: Decimal<2> [> $0.00], quantity: Int [> 0, <= 100000])` and emits the JSON
+// Schema for it — `exclusiveMinimum: 0`, `minimum: 1`, `maximum: 100000` — because those numbers are
+// already written down in the only place that also enforces them.
+//
+// Everywhere else that is two artifacts maintained by hand, and the schema is the one that rots: it
+// says a field is optional after the code started requiring it, the client sends a valid-by-schema
+// request, and the failure arrives as a 500 instead of a validation message.
+//
+// ---- The validation is deliberately doubled, and that is the point ----------------------
+//
+// This server checks each argument and answers `-32602 Invalid params` before calling the tool. The
+// tool ALSO carries the contract, which aborts the process if it is ever violated.
+//
+// That looks redundant and is not. A server must not die on a bad request, so the polite check has to
+// exist — and if the polite check and the contract ever disagreed, the contract would take the process
+// down LOUDLY rather than letting a bad value through quietly. The redundancy is a tripwire on the
+// thing that would otherwise be a silent divergence, and both are generated from one declaration.
+// ============================================================================
+
+use "../../lib/json.bx";
+use "../../lib/os.bx";
+use "tools.bx";
+
+// ---- JSON-RPC plumbing -------------------------------------------------------
+
+function rpc_result(id: Json, result: Json) -> String {
+    let mutable fields: [Field] = [];
+    let a: Int = push(fields, json_field("jsonrpc", json_text("2.0")));
+    let b: Int = push(fields, json_field("id", id));
+    let c: Int = push(fields, json_field("result", result));
+    return json_render(json_object(fields));
+}
+
+function rpc_error(id: Json, code: Int, message: String) -> String {
+    let mutable inner: [Field] = [];
+    let a: Int = push(inner, json_field("code", json_int(code)));
+    let b: Int = push(inner, json_field("message", json_text(message)));
+    let mutable fields: [Field] = [];
+    let c: Int = push(fields, json_field("jsonrpc", json_text("2.0")));
+    let d: Int = push(fields, json_field("id", id));
+    let e: Int = push(fields, json_field("error", json_object(inner)));
+    return json_render(json_object(fields));
+}
+
+// An MCP tool answers with a `content` array. Text, because a model reads text — and because money as
+// text is the only way all its digits arrive (see lib/json.bx's header).
+function tool_text(body: String) -> Json {
+    let mutable one: [Field] = [];
+    let a: Int = push(one, json_field("type", json_text("text")));
+    let b: Int = push(one, json_field("text", json_text(body)));
+    let mutable items: [Json] = [];
+    let c: Int = push(items, json_object(one));
+    let mutable fields: [Field] = [];
+    let d: Int = push(fields, json_field("content", json_list(items)));
+    return json_object(fields);
+}
+
+// ---- the manifest ------------------------------------------------------------
+// Written out here so the server can answer `tools/list` with no compiler present. `burxt mcp-schema`
+// generates exactly this from tools.bx, and `the_mcp_schema_follows_the_contracts` in tests/runner.rs
+// checks that the generated form still matches — so a contract changing without this changing is a
+// failing test rather than a lie told to a client.
+
+function schema_number(description: String, minimum: String, maximum: String) -> Json {
+    let mutable f: [Field] = [];
+    let a: Int = push(f, json_field("type", json_text("string")));
+    let b: Int = push(f, json_field("description", json_text(description)));
+    if len(minimum) > 0 {
+        let c: Int = push(f, json_field("minimum", json_text(minimum)));
+    }
+    if len(maximum) > 0 {
+        let d: Int = push(f, json_field("maximum", json_text(maximum)));
+    }
+    return json_object(f);
+}
+
+function tool_entry(name: String, description: String, properties: [Field],
+                   required: [Json]) -> Json {
+    let mutable schema: [Field] = [];
+    let a: Int = push(schema, json_field("type", json_text("object")));
+    let b: Int = push(schema, json_field("properties", json_object(properties)));
+    let c: Int = push(schema, json_field("required", json_list(required)));
+    let mutable entry: [Field] = [];
+    let d: Int = push(entry, json_field("name", json_text(name)));
+    let e: Int = push(entry, json_field("description", json_text(description)));
+    let f: Int = push(entry, json_field("inputSchema", json_object(schema)));
+    return json_object(entry);
+}
+
+function manifest() -> Json {
+    let mutable tools: [Json] = [];
+
+    let mutable p1: [Field] = [];
+    let a1: Int = push(p1, json_field("unit",
+                       schema_number("the unit price, exact, as digits", "0.01", "")));
+    let a2: Int = push(p1, json_field("quantity", schema_number("how many", "1", "100000")));
+    let mutable r1: [Json] = [];
+    let a3: Int = push(r1, json_text("unit"));
+    let a4: Int = push(r1, json_text("quantity"));
+    let t1: Int = push(tools, tool_entry("line_total",
+                       "unit price times quantity, exactly", p1, r1));
+
+    let mutable p2: [Field] = [];
+    let b1: Int = push(p2, json_field("subtotal",
+                       schema_number("the amount to tax, as digits", "0.00", "")));
+    let b2: Int = push(p2, json_field("rate",
+                       schema_number("the rate, 0.0825 for 8.25%", "0.0000", "1.0000")));
+    let mutable r2: [Json] = [];
+    let b3: Int = push(r2, json_text("subtotal"));
+    let b4: Int = push(r2, json_text("rate"));
+    let t2: Int = push(tools, tool_entry("tax_on",
+                       "tax on a subtotal, rounded half to even", p2, r2));
+
+    let mutable fields: [Field] = [];
+    let c: Int = push(fields, json_field("tools", json_list(tools)));
+    return json_object(fields);
+}
+
+// ---- dispatch ----------------------------------------------------------------
+
+function initialize_result() -> Json {
+    let mutable info: [Field] = [];
+    let a: Int = push(info, json_field("name", json_text("burxt-money")));
+    let b: Int = push(info, json_field("version", json_text("0.1.0")));
+    let mutable caps: [Field] = [];
+    let c: Int = push(caps, json_field("tools", json_object([])));
+    let mutable fields: [Field] = [];
+    let d: Int = push(fields, json_field("protocolVersion", json_text("2024-11-05")));
+    let e: Int = push(fields, json_field("capabilities", json_object(caps)));
+    let f: Int = push(fields, json_field("serverInfo", json_object(info)));
+    return json_object(fields);
+}
+
+// A named argument as money, or None. The digits arrive as a string or a number and either is read —
+// see `json_digits`, which takes both because an exact producer sends a string and a careless one
+// sends a number, and the difference carries no information.
+function money_arg(arguments: Json, name: String) -> Option<Decimal<2>> {
+    match json_at(arguments, name) {
+        None => { return Option.None; }
+        Some(v) => { return json_as_money(v); }
+    }
+}
+
+function int_arg(arguments: Json, name: String) -> Option<Int> {
+    match json_at(arguments, name) {
+        None => { return Option.None; }
+        Some(v) => { return json_as_int(v); }
+    }
+}
+
+// A rate at four places. `json_as_money` reads two, so the digits are read as an Int of
+// ten-thousandths and multiplied by one — the same penny-times-a-count trick, one scale down.
+function rate_arg(arguments: Json, name: String) -> Option<Decimal<4>> {
+    let mutable digits: String = "";
+    match json_at(arguments, name) {
+        None => { return Option.None; }
+        Some(v) => { digits = option_or(json_digits(v), ""); }
+    }
+    if len(digits) == 0 {
+        return Option.None;
+    }
+    let dot: Int = string_find(digits, ".");
+    let mutable whole: String = digits;
+    let mutable fraction: String = "";
+    if dot >= 0 {
+        whole = substring(digits, 0, dot);
+        fraction = substring(digits, dot + 1, len(digits) - dot - 1);
+    }
+    if len(fraction) > 4 {
+        return Option.None;                          // finer than Decimal<4>: a question, not a round
+    }
+    while len(fraction) < 4 {
+        fraction = fraction + "0";
+    }
+    if len(whole) == 0 {
+        whole = "0";
+    }
+    match string_parse_int(whole) {
+        None => { return Option.None; }
+        Some(units) => {
+            match string_parse_int(fraction) {
+                None => { return Option.None; }
+                Some(part) => {
+                    let tick: Decimal<4> = 0.0001;
+                    return Option.Some(tick * (units * 10000 + part));
+                }
+            }
+        }
+    }
+}
+
+function call_line_total(arguments: Json) -> Result<Json, String> {
+    match money_arg(arguments, "unit") {
+        None => { return Result.Error("`unit` must be an exact amount, as digits"); }
+        Some(unit) => {
+            match int_arg(arguments, "quantity") {
+                None => { return Result.Error("`quantity` must be a whole number"); }
+                Some(quantity) => {
+                    // The SAME conditions the contract carries. If these two ever disagree, the
+                    // contract aborts the process rather than letting a bad value through.
+                    if unit <= $0.00 {
+                        return Result.Error("`unit` must be greater than 0.00");
+                    }
+                    if quantity <= 0 || quantity > 100000 {
+                        return Result.Error("`quantity` must be between 1 and 100000");
+                    }
+                    return Result.Ok(tool_text(to_string(line_total(unit, quantity))));
+                }
+            }
+        }
+    }
+}
+
+function call_tax_on(arguments: Json) -> Result<Json, String> {
+    match money_arg(arguments, "subtotal") {
+        None => { return Result.Error("`subtotal` must be an exact amount, as digits"); }
+        Some(subtotal) => {
+            match rate_arg(arguments, "rate") {
+                None => { return Result.Error("`rate` must be a rate at four places or fewer"); }
+                Some(rate) => {
+                    if subtotal < $0.00 {
+                        return Result.Error("`subtotal` must not be negative");
+                    }
+                    if rate < 0.0000 || rate > 1.0000 {
+                        return Result.Error("`rate` must be between 0.0000 and 1.0000");
+                    }
+                    return Result.Ok(tool_text(to_string(tax_on(subtotal, rate))));
+                }
+            }
+        }
+    }
+}
+
+function handle(request: Json) -> String {
+    let id: Json = option_or(json_at(request, "id"), json_null());
+    let method: String = option_or(json_as_text(option_or(json_at(request, "method"),
+                             json_null())), "");
+    if method == "initialize" {
+        return rpc_result(id, initialize_result());
+    }
+    if method == "tools/list" {
+        return rpc_result(id, manifest());
+    }
+    if method == "tools/call" {
+        let params: Json = option_or(json_at(request, "params"), json_null());
+        let name: String = option_or(json_as_text(option_or(json_at(params, "name"),
+                                 json_null())), "");
+        let arguments: Json = option_or(json_at(params, "arguments"), json_null());
+        if name == "line_total" {
+            match call_line_total(arguments) {
+                Error(why) => { return rpc_error(id, 0 - 32602, why); }
+                Ok(answer) => { return rpc_result(id, answer); }
+            }
+        }
+        if name == "tax_on" {
+            match call_tax_on(arguments) {
+                Error(why) => { return rpc_error(id, 0 - 32602, why); }
+                Ok(answer) => { return rpc_result(id, answer); }
+            }
+        }
+        return rpc_error(id, 0 - 32601, "no tool named `" + name + "`");
+    }
+    if method == "" {
+        return rpc_error(id, 0 - 32600, "a request needs a `method`");
+    }
+    return rpc_error(id, 0 - 32601, "no method named `" + method + "`");
+}
+
+// ---- the loop ----------------------------------------------------------------
+// One region per request, which is the documented pattern and the whole of what keeps a long-running
+// server's memory flat: everything a request builds is released at the closing brace. Without it the
+// arena grows in a straight line and a busy server eventually reaches its 1 GB reservation.
+
+let mutable running: Bool = true;
+while running {
+    match os_read_line() {
+        None => { running = false; }
+        Some(line) => {
+            region request {
+                if len(string_trim(line)) > 0 {
+                    match json_parse(line) {
+                        Error(why) => {
+                            print(rpc_error(json_null(), 0 - 32700, "parse error: " + why));
+                        }
+                        Ok(message) => {
+                            print(handle(message));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

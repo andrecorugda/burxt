@@ -68,6 +68,16 @@ All four print the same receipt. Writing them found a **wrong answer in money** 
 compiler that 36 invariants had missed, which is the argument for the exercise: three
 independent implementations agreeing with each other and not with you is hard to argue with.
 
+## Something you would actually deploy
+
+| | |
+|---|---|
+| [`mcp/`](mcp/README.md) | **An MCP server** — JSON-RPC over stdio, two money tools, and `burxt mcp-schema` deriving the tool schema from the preconditions so it cannot drift from the implementation |
+
+That last part is the point, and it is the one thing here no other language can do: everywhere else
+the JSON Schema a client validates against and the check the function performs are two artifacts
+maintained by hand, and the schema is the one that rots.
+
 ## What it refuses
 
 | | |

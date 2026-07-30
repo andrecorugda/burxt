@@ -9,6 +9,8 @@
 // the C boundary says why.
 // ============================================================================
 
+use "option.bx";
+
 external function system(command: String) -> CInt touches commands;
 external function time(unused: Int) -> Int touches clock;
 external function getchar() -> CInt touches input;
@@ -59,6 +61,46 @@ function os_capture(command: String) -> String touches commands, files {
 // a time, is what a program can do today — `fgets` needs a buffer it does not own.
 function os_read_byte() -> Int touches input {
     return getchar();
+}
+
+// One line of standard input, without its newline, or None at end of input.
+//
+// The distinction from `os_read_all` is the whole reason this exists: `os_read_all` blocks until EOF,
+// which never arrives for a SERVER. A protocol that frames its messages one per line — MCP over
+// stdio, and most of the others — needs to answer the first request before the client has sent the
+// second, so reading to EOF is not a slow version of this, it is a deadlock.
+//
+// A bare `\r` before the newline is dropped, so a CRLF client and an LF client are read identically.
+// Nothing else is stripped: a line is its bytes.
+//
+// `None` at end of input rather than an empty String, because an empty LINE is a real thing a client
+// can send and the two must be distinguishable. That is the same reason `string_parse_int` exists
+// beside `string_to_int`.
+function os_read_line() -> Option<String> touches input {
+    let mutable chunk: String = "";
+    let mutable text: String = "";
+    let mutable any: Bool = false;
+    let mutable b: Int = getchar();
+    while b >= 0 && b != 10 {
+        any = true;
+        chunk += os_byte_as_string(b);
+        // In CHUNKS, because `text += one_byte` copies the whole String for every byte — the mistake
+        // this project has paid for three times, and `os_read_all` right below carries the same note.
+        if len(chunk) >= 4096 {
+            text = text + chunk;
+            chunk = "";
+        }
+        b = getchar();
+    }
+    if b < 0 && !any {
+        return Option.None;                          // end of input, and nothing before it
+    }
+    let line: String = text + chunk;
+    // A CRLF client's `\r` belongs to the framing, not to the message.
+    if len(line) > 0 && byte_at(line, len(line) - 1) == 13 {
+        return Option.Some(substring(line, 0, len(line) - 1));
+    }
+    return Option.Some(line);
 }
 
 function os_read_all() -> String touches input {
