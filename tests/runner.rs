@@ -3562,62 +3562,6 @@ fn every_call_site_mirrors_the_declared_abi() {
 }
 
 
-/// Features that exist in stage-0 and not yet in stage-1.
-///
-/// A directory rather than an exemption on the 111-of-111 equality, and the reason is the
-/// argument for making that equality an equality at all: a floor with holes cannot see a
-/// regression. `tests/pass/` means BOTH compilers accept a program and print the same bytes;
-/// anything stage-0 alone can do has to be tested somewhere else or not at all.
-///
-/// This directory existed once before, for M14's `allocates` inference, and was deleted when
-/// stage-1 caught up — which is what it is for. Its current occupants are class CONSTRUCTORS
-/// (v0.0.151): stage-0 stores an associated function under the qualified name `Account.open`,
-/// and stage-1 cannot, because it names every declaration by its SPAN in the source and
-/// `Account.open` is not contiguous — the class name and the function name are far apart. The
-/// same wall that blocks M13's return bracket, and it wants the same fix: synthesized names.
-///
-/// When that lands, these move to `tests/pass/` and this test goes away again.
-#[test]
-fn stage_zero_only_features_still_work() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let dir = root.join("tests/stage0-only");
-    let scratch = scratch_dir("stage0-only");
-    fs::create_dir_all(&scratch).unwrap();
-
-    let mut ran = 0;
-    for entry in fs::read_dir(&dir).unwrap() {
-        let source = entry.unwrap().path();
-        if source.extension().and_then(|e| e.to_str()) != Some("bx") {
-            continue;
-        }
-        let expected = fs::read_to_string(source.with_extension("stdout"))
-            .unwrap_or_else(|_| panic!("{} has no .stdout beside it", source.display()));
-        let out = burxt("run", &source, &scratch);
-        let shown = String::from_utf8_lossy(&out.stdout);
-        let got: String = shown
-            .lines()
-            .filter(|l| !l.starts_with("compiled "))
-            .map(|l| format!("{}\n", l))
-            .collect();
-        assert!(
-            out.status.success(),
-            "{} no longer compiles:\n{}{}",
-            source.display(),
-            shown,
-            String::from_utf8_lossy(&out.stderr)
-        );
-        assert_eq!(got, expected, "{} printed something else", source.display());
-        ran += 1;
-    }
-    let _ = fs::remove_dir_all(&scratch);
-    assert!(
-        ran > 0,
-        "tests/stage0-only/ is empty — if stage-1 caught up, move its fixtures into \
-         tests/pass/ and delete this test rather than leaving an assertion that passes \
-         because it checked nothing"
-    );
-}
-
 /// `burxt review` reports what changed about what a program PROMISES — and, just as importantly,
 /// stays silent when nothing did.
 ///

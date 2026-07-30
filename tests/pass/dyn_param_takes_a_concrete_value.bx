@@ -1,0 +1,48 @@
+// A concrete value passed STRAIGHT to an interface parameter, with no binding in between.
+//
+// `is_cheap(b)` where `b` is a `Book` and the parameter is a `dynamic Priced`. The coercion to a
+// {data, vtable} pair happens at the argument, which is the case every other fixture avoids:
+// `tests/pass/trait_dyn_param.bx` and `abi_dyn_record_params.bx` both write
+//
+//     let db: dynamic Priced = b;      // the coercion happens HERE
+//     print(is_cheap(db));
+//
+// so they exercise the BINDING path and never the argument one. Neither compiler's suite had a case
+// for the direct form, and stage-1 miscompiled it — silently, passing a class pointer where a fat
+// pointer was expected — for as long as the feature has existed. Found in v0.0.174 by reading the
+// note that claimed the explicit keyword already worked here.
+//
+// The lesson is about the fixture rather than the bug: a test that reaches a feature by its most
+// convenient path can leave the inconvenient one untested indefinitely, and the two paths were
+// different code.
+interface Priced {
+    function price(self) -> Decimal<2>
+}
+
+class Book implements Priced {
+    cost: Decimal<2>,
+    function (self) price() -> Decimal<2> { return self.cost; }
+}
+
+class Meal implements Priced {
+    cost: Decimal<2>,
+    tip: Decimal<2>,
+    function (self) price() -> Decimal<2> { return self.cost + self.tip; }
+}
+
+function is_cheap(item: dynamic Priced) -> Bool {
+    return item.price() < 20.00;
+}
+
+function twice(item: dynamic Priced) -> Decimal<2> {
+    return item.price() * 2;
+}
+
+let b: Book = Book { cost: 12.99 };
+let m: Meal = Meal { cost: 30.00, tip: 4.50 };
+
+// The direct form: no `let db: dynamic Priced` anywhere.
+print(is_cheap(b));
+print(is_cheap(m));
+print(twice(b));
+print(twice(m));

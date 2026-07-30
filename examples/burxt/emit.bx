@@ -817,10 +817,18 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
         }
         let receiver: String = self.emit_expr(src, n.a);
         let list: Node = self.nodes[n.b];
+        // Against the METHOD's declared parameters, for the same reason as an ordinary call: a
+        // method taking `item: Priced` wants a fat pointer, and only its declaration says so.
+        let found_method: Int = self.find_method(src, holder, n.token);
+        let mutable method_params: Int = 0 - 1;
+        if found_method >= 0 {
+            method_params = self.methods[found_method].parameters;
+        }
         let mutable args: String = "i64 " + receiver;
         let mutable k: Int = 0;
         while k < list.b {
-            let value: String = self.emit_expr(src, self.children[list.a + k]);
+            let want: Type = self.param_type_at(src, method_params, k);
+            let value: String = self.emit_value_for(src, want, self.children[list.a + k]);
             args += ", i64 " + value;
             k += 1;
         }
@@ -864,11 +872,23 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
                                      + to_string(captured) + "\n");
             return held;
         }
+        // The callee is found BEFORE its arguments are emitted, because each argument has to be
+        // emitted AGAINST its declared parameter type: a concrete value passed where an interface is
+        // wanted becomes a {data, vtable} pair, and only the declaration says which parameters want
+        // one. It used to be looked up afterwards and every argument emitted with plain `emit_expr`,
+        // which passed a class pointer where a fat pointer belonged — accepted by the checker and
+        // segfaulting at run time. See tests/pass/dyn_param_takes_a_concrete_value.bx.
+        let found_fn: Int = self.find_function(src, t.start, t.length);
+        let mutable declared_params: Int = 0 - 1;
+        if found_fn >= 0 {
+            declared_params = self.functions[found_fn].parameters;
+        }
         let mutable args: String = "";
         let mutable arg_values: [String] = [];
         let mutable i: Int = 0;
         while i < list.b {
-            let value: String = self.emit_expr(src, self.children[list.a + i]);
+            let want: Type = self.param_type_at(src, declared_params, i);
+            let value: String = self.emit_value_for(src, want, self.children[list.a + i]);
             if i > 0 {
                 args += ", ";
             }
@@ -885,7 +905,6 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
                 let bounded: Int = self.check_measure_at_call(src, arg_values);
             }
         }
-        let found_fn: Int = self.find_function(src, t.start, t.length);
         if found_fn >= 0 {
             if flag_external(self.functions[found_fn].flags) == 1 {
                 return self.emit_c_call(src, n, self.functions[found_fn]);
@@ -1158,10 +1177,19 @@ function (mutable self: Unit) emit_associated_call(src: String, node: Int, n: No
     let holder: Type = Type { kind: 46, scale: 0, contract: 0,
                           name_start: named.start, name_length: named.length };
     let list: Node = self.nodes[n.b];
+    // Against the associated function's declared parameters — a constructor taking an interface is
+    // the same crossing as any other. Found by the two-span lookup, exactly as the checker found it.
+    let found: Int = self.find_method_named(src, named.start, named.length,
+                         self.tokens[n.token].start, self.tokens[n.token].length);
+    let mutable declared_params: Int = 0 - 1;
+    if found >= 0 {
+        declared_params = self.methods[found].parameters;
+    }
     let mutable args: String = "";
     let mutable k: Int = 0;
     while k < list.b {
-        let value: String = self.emit_expr(src, self.children[list.a + k]);
+        let want: Type = self.param_type_at(src, declared_params, k);
+        let value: String = self.emit_value_for(src, want, self.children[list.a + k]);
         if k > 0 {
             args += ", ";
         }
@@ -1603,7 +1631,14 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int {
     }
 
     if n.kind == 63 {                                // return
-        let value: String = self.emit_expr(src, n.a);
+        // Against the function's declared RETURN type, which is the fourth crossing: a function
+        // answering `-> Priced` with a concrete value has to hand back a fat pointer.
+        //
+        // The NODE rather than a resolved Type, for the same reason `result_type_node` is a node —
+        // a Type field would need a value in stage1.bx's Unit literal, and `declared_type` already
+        // turns one into the other.
+        let want: Type = self.declared_type(src, self.returns_node);
+        let value: String = self.emit_value_for(src, want, n.a);
         if self.sret != "" {
             let copied: Int = self.copy_cells(src, self.sret, value, self.sret_cells);
             // No `ensures` here: the checker already refuses one on a function whose answer
@@ -2072,6 +2107,25 @@ function (mutable self: Unit) emit_value_for(src: String, want: Type, node: Int)
         return self.emit_dynamic(src, want, node);
     }
     return self.emit_expr(src, node);
+}
+
+// The declared type of parameter `i`, or unknown when there is none to read — an unknown callee, a
+// builtin, an arity mismatch the checker has already complained about.
+//
+// Unknown is the right answer rather than a problem, because `emit_value_for` only acts when the
+// wanted type is an interface object and passes everything else straight to `emit_expr`. So every
+// argument site can ask for the wanted type unconditionally and none of them needs to know which
+// types coerce.
+function (mutable self: Unit) param_type_at(src: String, params_node: Int, i: Int) -> Type {
+    if params_node < 0 {
+        return unknown_type();
+    }
+    let list: Node = self.nodes[params_node];
+    if i < 0 || i >= list.b {
+        return unknown_type();
+    }
+    let param: Node = self.nodes[self.children[list.a + i]];
+    return self.declared_type(src, param.a);
 }
 
 // What C sees for one Burxt type. A String is a pointer; a CInt is 32 bits wide and must
@@ -2758,6 +2812,10 @@ function (mutable self: Unit) emit_function(src: String, index: Int, suffix: Str
     // into the callee's own frame would be a dangling one, which is why this is not an
     // optimisation but the only correct shape.
     let answers: Type = self.resolve_shallow(src, self.declared_type(src, signature_node.c));
+    // What a `return` in this body has to produce. Saved and restored, because a nested emit — a
+    // generic instantiated while this one is being written — must not leave the wrong answer behind.
+    let outer_returns: Int = self.returns_node;
+    self.returns_node = signature_node.c;
     let outer_sret: String = self.sret;
     self.sret = "";
     let mutable signature: String = "";
@@ -2911,6 +2969,7 @@ function (mutable self: Unit) emit_function(src: String, index: Int, suffix: Str
     let closed: Int = self.close_function("  ret i64 0\n\}\n\n");
     let dropped: Int = truncate(self.slots, base);
     self.sret = outer_sret;
+    self.returns_node = outer_returns;
     self.ensures_start = outer_ensures_start;
     self.ensures_count = outer_ensures_count;
     self.ensures_owner = outer_ensures_owner;

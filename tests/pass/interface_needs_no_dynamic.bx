@@ -1,0 +1,46 @@
+// A bare interface name means a dynamic one — no `dynamic` keyword.
+//
+// `rule: Tax` is what Java, C#, TypeScript and PHP all write. `dynamic` was Rust's `dyn`, and
+// requiring it made every polymorphic parameter carry a word the reader had to decode and the
+// writer had to remember. Per DESIGN.md the reader is a REVIEWER scanning code an agent wrote,
+// so familiarity is a property of the review surface rather than a preference.
+//
+// `dynamic Tax` stays legal and identical. The static path `<T: Tax>` is untouched and still
+// pays no vtable — what went is the ceremony on the DEFAULT, not the choice.
+//
+// ---- Both compilers, since v0.0.175 — and the note that was wrong -------------------
+//
+// This waited two versions in tests/stage0-only/ because stage-1 would ACCEPT it and emit a binary
+// that SEGFAULTED: a class pointer passed where a `{data, vtable}` pair belongs.
+//
+// The note here used to say the gap was the call-argument path, and that "explicit `dynamic Priced`
+// works today". The second half was false. Nothing coerced an argument at all — stage-1's emitter
+// built the fat pointer in exactly three places (a field initializer, a `let`, an assignment), so a
+// call argument, a method argument, an associated function's argument and a `return` all went out
+// uncoerced. `dynamic Priced` was equally broken; it only looked fine because
+// tests/pass/trait_dyn_param.bx and abi_dyn_record_params.bx both write
+//
+//     let db: dynamic Priced = b;      // the coercion happens HERE
+//     print(is_cheap(db));
+//
+// and never pass a concrete value straight to the parameter. Neither compiler's suite had that case
+// until tests/pass/dyn_param_takes_a_concrete_value.bx.
+//
+// The lesson is about the fixture, not the bug: a test that reaches a feature by its most convenient
+// path can leave the inconvenient one untested indefinitely, and here the two paths were different
+// code. Stage-0 avoids the whole class of mistake by coercing in ONE place — `check_expr_kind`,
+// gated on an expected type that every site passes down.
+interface Priced { function price(self) -> Decimal<2> }
+class Book implements Priced {
+    cost: Decimal<2>,
+    function (self) price() -> Decimal<2> { return self.cost; }
+}
+// No `dynamic`. Reads like every OOP language.
+function total(item: Priced, quantity: Int) -> Decimal<2> {
+    return item.price() * quantity;
+}
+let b: Book = Book { cost: 12.99 };
+print(total(b, 3));
+// And a binding.
+let p: Priced = b;
+print(p.price());

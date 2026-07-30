@@ -530,19 +530,31 @@ function (self: Unit) declared_type(src: String, node: Int) -> Type {
         // A generic application also carries its arguments: `a` is their start in
         // `nested_children` and `b` is how many.
         let t: Token = self.tokens[n.token];
-        // NOT rewritten here, deliberately. Stage-0 makes a bare interface name mean a dynamic
-        // one (v0.0.155, in `expand`), and the same three lines here would make stage-1 ACCEPT
-        // `item: Priced` and emit a binary that SEGFAULTS — a class pointer passed where a
-        // `{data, vtable}` pair is expected.
+        // A BARE INTERFACE NAME means a dynamic one — `item: Priced` is `item: dynamic Priced`
+        // (stage-0 v0.0.155, stage-1 v0.0.175). `dynamic` was Rust's `dyn`, and requiring it put a
+        // word on every polymorphic parameter that a reviewer had to decode and an agent had to
+        // remember. `dynamic Priced` stays legal and identical; the static path `<T: Priced>` is
+        // untouched and still pays no vtable.
         //
-        // A refusal is safe and a miscompile is not, so stage-1 keeps refusing the sugar until
-        // the coercion is fixed. The gap: `emit_value_for` is the one home for the coercion and
-        // is reached from a field initializer, a `let` and an assignment — but the CALL-ARGUMENT
-        // path does not go through it. Explicit `dynamic Priced` works today because the
-        // checker records a coerced type at the argument node, and whatever does that keys off
-        // something the sugar bypasses. Find that, then this becomes three lines.
+        // These three lines were held back for two versions, and the reason is worth keeping: with
+        // them alone stage-1 ACCEPTED `item: Priced` and emitted a binary that SEGFAULTED, because
+        // its emitter coerced a concrete value into a `{data, vtable}` pair in only three places —
+        // a field initializer, a `let` and an assignment. A call argument, a method argument, an
+        // associated function's argument and a `return` all went out uncoerced.
         //
-        // Tracked with the rest of the stage-1 catch-up. tests/stage0-only/ holds the fixture.
+        // A refusal is safe and a miscompile is not, so the sugar waited for the four crossings.
+        // See tests/pass/dyn_param_takes_a_concrete_value.bx, which is the case no fixture in
+        // either compiler's suite had: every other one launders the value through a binding first,
+        // where the coercion already happened.
+        if n.kind == 46 {
+            let named: Int = self.find_type(src, t.start, t.length);
+            if named >= 0 {
+                if self.types[named].kind == 84 {
+                    return Type { kind: 49, scale: n.a, contract: n.b,
+                                name_start: t.start, name_length: t.length };
+                }
+            }
+        }
         return Type { kind: n.kind, scale: n.a, contract: n.b,
                     name_start: t.start, name_length: t.length };
     }

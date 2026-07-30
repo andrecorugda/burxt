@@ -301,6 +301,11 @@ class Unit {
     // the ordinary name lookup to find. The longhand form still resolves through the span, and both
     // land on the same slot because `emit_ensures` declares exactly one.
     result_slot: Int,
+    // The declared RETURN type's node of the function being emitted, or -1 outside one. A `return`
+    // whose function answers with an interface has to build a fat pointer, and that is the fourth of
+    // the four places a concrete value crosses into an interface object — the other three are a call
+    // argument, a method argument and an associated function's argument.
+    returns_node: Int,
     instances: [Instance],
     // The type arguments of every instance, laid end to end. `Instance` carries a start and a
     // count into this, the same shape `nested_children` and `type_parameters` use.
