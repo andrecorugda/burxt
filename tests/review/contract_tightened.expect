@@ -1,0 +1,2 @@
+STRICTER
+gained `requires amount <= self.balance`

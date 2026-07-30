@@ -21,6 +21,7 @@ mod lexer;
 mod parser;
 mod typeck;
 mod codegen;
+mod review;
 
 use inkwell::context::Context;
 use std::path::Path;
@@ -68,6 +69,7 @@ fn compile_main() {
         eprintln!("  burxt run     <file.bx> [link args...]   compile then run");
         eprintln!("  burxt emit-ir <file.bx>                  print LLVM IR");
         eprintln!("  burxt layout  <file.bx>                  print class layouts");
+        eprintln!("  burxt review  <old.bx> <new.bx>          what changed about what it PROMISES");
         eprintln!();
         eprintln!("  -o <path>     where to write the executable (default ./<name>)");
         eprintln!();
@@ -77,6 +79,25 @@ fn compile_main() {
     }
     let cmd = &arguments[1];
     let path = &arguments[2];
+    // `review` is the odd one out: two paths, no output file, no linking. It answers what changed
+    // about what the program PROMISES — signatures, contracts, privacy — rather than what changed
+    // in the text. Handled here, before the flags every other command shares.
+    if cmd == "review" {
+        if arguments.len() < 4 {
+            eprintln!("usage: burxt review <old.bx> <new.bx>");
+            eprintln!();
+            eprintln!("Compares what two versions of a program GUARANTEE. Exits 1 if any promise");
+            eprintln!("was weakened, so it works as a gate without parsing the output.");
+            std::process::exit(2);
+        }
+        match review::review(path, &arguments[3]) {
+            Ok(code) => std::process::exit(code),
+            Err(message) => {
+                eprintln!("error: {}", message);
+                std::process::exit(2);
+            }
+        }
+    }
     let rest = &arguments[3..];
     // `--json` makes diagnostics machine-readable: one JSON object per line, for
     // editors and CI. It is not passed on to the linker.

@@ -1,0 +1,12 @@
+// A comment, a rename, a rewritten body, and a different layout.
+function w(
+    amount:  Decimal<2>,
+    balance: Decimal<2>,
+) -> Decimal<2>
+    requires amount > $0.00
+    requires amount <= balance
+{
+    let difference: Decimal<2> = balance - amount;
+    return difference;
+}
+print("x");

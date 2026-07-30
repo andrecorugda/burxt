@@ -1,0 +1,9 @@
+class Account {
+    owner: String,
+    private balance: Decimal<2>,
+    function (self) withdraw(amount: Decimal<2>) -> Decimal<2>
+        requires amount > $0.00
+        requires amount <= self.balance
+    { return self.balance - amount; }
+}
+print("x");

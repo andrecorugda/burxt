@@ -3556,3 +3556,66 @@ fn stage_zero_only_features_still_work() {
          because it checked nothing"
     );
 }
+
+/// `burxt review` reports what changed about what a program PROMISES — and, just as importantly,
+/// stays silent when nothing did.
+///
+/// The tool exists because the most dangerous change in agent-written code is a weakened contract:
+/// an agent that cannot satisfy `requires amount <= self.balance` deletes it, which passes every
+/// test — the tests were failing BECAUSE of it. No other language can flag that, because
+/// everywhere else the assertion is a line in a body.
+///
+/// Two of these four fixtures exist for failures already made while building it:
+///
+/// * `contract_deleted` — the first version compared `Contract.text`, and `Parser::new` keeps no
+///   source, so every text came back EMPTY and two empty strings compared equal. The tool reported
+///   the privacy and `pure` weakenings and silently missed the one it exists for. A tool that
+///   under-reports is worse than no tool, because it is believed.
+/// * `reformatted` — comparing text then reported a renamed parameter as a lost contract AND a
+///   gained one: two WEAKENED lines for a change that weakened nothing. A tool that cries wolf on
+///   a rename teaches a reviewer to skim past the line that mattered. Clauses are now compared
+///   structurally, with parameters rendered by position, and shown as the programmer wrote them.
+///
+/// The exit code is part of the contract: non-zero exactly when something was weakened, so this
+/// works as a CI gate without parsing the output.
+#[test]
+fn review_reports_weakened_promises_and_nothing_else() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = root.join("tests/review");
+    let mut checked = 0;
+    for entry in fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let Some(stem) = name.strip_suffix(".expect") else { continue };
+        let expect = fs::read_to_string(&path).unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("review")
+            .arg(dir.join(format!("{}.old.bx", stem)))
+            .arg(dir.join(format!("{}.new.bx", stem)))
+            .output()
+            .expect("burxt review");
+        let shown = String::from_utf8_lossy(&out.stdout);
+        for wanted in expect.lines().filter(|l| !l.trim().is_empty()) {
+            assert!(
+                shown.contains(wanted),
+                "review of `{}` did not report {:?}\nit said:\n{}",
+                stem,
+                wanted,
+                shown
+            );
+        }
+        // Exit 1 exactly when a weakening was reported, so CI can gate on it directly.
+        let weakened = shown.contains("WEAKENED");
+        let code = out.status.code().unwrap_or(-1);
+        assert_eq!(
+            code,
+            i32::from(weakened),
+            "review of `{}` exited {} but {} a weakening — the exit code is what a CI gate reads",
+            stem,
+            code,
+            if weakened { "reported" } else { "reported no" }
+        );
+        checked += 1;
+    }
+    assert!(checked >= 4, "expected at least four review fixtures, ran {}", checked);
+}

@@ -1,0 +1,2 @@
+class Account { owner: String, private balance: Decimal<2> }
+print("x");

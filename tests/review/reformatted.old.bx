@@ -1,0 +1,5 @@
+function w(a: Decimal<2>, b: Decimal<2>) -> Decimal<2>
+    requires a > $0.00
+    requires a <= b
+{ return b - a; }
+print("x");
