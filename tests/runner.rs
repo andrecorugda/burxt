@@ -4173,3 +4173,101 @@ fn bracket_contracts_desugar_to_the_same_message() {
 
     let _ = fs::remove_dir_all(&scratch);
 }
+
+/// `lib/json.bx` renders, parses, and renders back to the SAME BYTES — and money survives it.
+///
+/// A named invariant rather than a `tests/pass/` fixture, and the reason is a real gap rather than a
+/// preference: `tests/pass/` means BOTH compilers accept a program, and stage-1 refuses
+/// `Option<Json>` because it refuses an ENUM as a generic enum's payload outright.
+///
+/// Stage-0 allows it and is right to: `Json`'s recursion passes through a SLICE, so its width is
+/// finite — 32 bytes, which `payload_area` computes without trouble. The rule both compilers state,
+/// "a variant may not carry an enum", is a proxy for the rule they mean, "a variant's width must be
+/// finite", and the proxy is wrong whenever the recursion goes through a pointer.
+///
+/// Stage-0 is also inconsistent with itself about it: `enum X { V(SomeEnum) }` written out is
+/// refused, while the identical shape reached through `Option<Json>` is allowed. Fixing that — one
+/// finite-width check, in both compilers, replacing two flat refusals — is what moves this into
+/// `tests/pass/`. Until then the library is tested here, by name, rather than untested.
+///
+/// The claim is not "it parses JSON". It is that a document rendered, parsed and rendered again is
+/// byte-identical, which is the only way to know nothing was quietly reinterpreted in between — the
+/// same instrument the self-hosting fixpoint uses.
+#[test]
+fn the_json_library_round_trips() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("json-lib");
+    fs::create_dir_all(&scratch).unwrap();
+    let _ = std::os::unix::fs::symlink(root.join("lib"), scratch.join("lib"));
+
+    let program = scratch.join("round.bx");
+    fs::write(
+        &program,
+        "use \"lib/json.bx\";\n\
+         let mutable rows: [Json] = [];\n\
+         let r: Int = push(rows, json_object([json_field(\"sku\", json_text(\"RICE\")),\n\
+                                              json_field(\"price\", json_money($52.75))]));\n\
+         let doc: Json = json_object([json_field(\"total\", json_money($158.25)),\n\
+                                      json_field(\"rows\", json_list(rows)),\n\
+                                      json_field(\"ok\", json_truth(true)),\n\
+                                      json_field(\"note\", json_null())]);\n\
+         let once: String = json_render(doc);\n\
+         print(once);\n\
+         match json_parse(once) {\n\
+             Error(why) => { print(\"PARSE FAILED: \" + why); }\n\
+             Ok(back) => {\n\
+                 if json_render(back) == once { print(\"identical\"); } else { print(\"DRIFTED\"); }\n\
+             }\n\
+         }\n\
+         let tricky: String = \"say \\\"hi\\\"\\r\\n\\tand\\\\done\";\n\
+         match json_parse(json_render(json_text(tricky))) {\n\
+             Error(why) => { print(\"ESCAPE FAILED\"); }\n\
+             Ok(v) => {\n\
+                 if option_or(json_as_text(v), \"\") == tricky { print(\"escapes survive\"); }\n\
+                 else { print(\"ESCAPES LOST\"); }\n\
+             }\n\
+         }\n\
+         match json_parse(\"\\{\\\"a\\\": \\\"19.99\\\", \\\"b\\\": 1.5, \\\"c\\\": 7, \\\"d\\\": 19.999, \\\"e\\\": -2.50\\}\") {\n\
+             Error(why) => { print(\"FAILED: \" + why); }\n\
+             Ok(v) => {\n\
+                 print(to_string(option_or(json_as_money(option_or(json_at(v, \"a\"), json_null())), $0.00)));\n\
+                 print(to_string(option_or(json_as_money(option_or(json_at(v, \"b\"), json_null())), $0.00)));\n\
+                 print(to_string(option_or(json_as_money(option_or(json_at(v, \"c\"), json_null())), $0.00)));\n\
+                 print(option_is_some(json_as_money(option_or(json_at(v, \"d\"), json_null()))));\n\
+                 print(to_string(option_or(json_as_money(option_or(json_at(v, \"e\"), json_null())), $0.00)));\n\
+             }\n\
+         }\n\
+         match json_parse(\"\\{\\\"a\\\": \\}\") {\n\
+             Error(why) => { print(\"refused\"); }\n\
+             Ok(v) => { print(\"ACCEPTED BAD JSON\"); }\n\
+         }\n",
+    )
+    .unwrap();
+
+    let out = burxt("run", &program, &scratch);
+    let shown: String = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| !l.starts_with("compiled "))
+        .map(|l| format!("{}\n", l))
+        .collect();
+    assert!(
+        out.status.success(),
+        "lib/json.bx did not run:\n{}{}",
+        shown,
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Money out as a quoted STRING, which is the one position this library takes: a JSON number
+    // reaches a JavaScript consumer as a double and loses the cent. `19.999` asked for as a
+    // `Decimal<2>` answers `false` — None — because a value arriving with more precision than you
+    // asked for is a question, not a rounding. That `false` is the whole thesis in one line.
+    let expected = "{\"total\":\"158.25\",\"rows\":[{\"sku\":\"RICE\",\"price\":\"52.75\"}],\
+                    \"ok\":true,\"note\":null}\n\
+                    identical\n\
+                    escapes survive\n\
+                    19.99\n1.50\n7.00\nfalse\n-2.50\n\
+                    refused\n";
+    assert_eq!(shown, expected, "lib/json.bx answered something else");
+
+    let _ = fs::remove_dir_all(&scratch);
+}

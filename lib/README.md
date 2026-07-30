@@ -12,11 +12,17 @@ written **once, carefully**, instead of forty times.
 
 | Module | What it holds |
 |---|---|
-| [`str.bx`](str.bx) | `string_find`, `string_contains`, `string_starts_with`, `string_ends_with`, `string_trim`, `string_split`, `string_lines`, `string_join`, `string_repeat`, `string_to_int` |
+| [`string.bx`](string.bx) | `string_find`, `string_contains`, `string_starts_with`, `string_ends_with`, `string_trim`, `string_split`, `string_lines`, `string_join`, `string_repeat`, `string_to_int`, `string_parse_int` |
 | [`option.bx`](option.bx) | `Option<T>` — absence as a type. `option_or`, `option_is_some`, `option_is_none`. No `unwrap`, on purpose. |
 | [`result.bx`](result.bx) | `Result<T, E>` — failure as a type. `result_or`, `result_is_ok`. Both `match` arms always required. |
-| [`fs.bx`](fs.bx) | `file_read`, `file_write`, `file_append`, `file_exists`, `file_delete`, `file_move`, `file_make_directory`, `file_list_directory` |
-| [`os.bx`](os.bx) | `os_args`, `os_arg`, `os_arg_count`, `os_now`, `os_run`, `os_capture`, `os_read_byte`, `os_read_all` |
+| [`map.bx`](map.bx) | `Map<K, V>` in insertion order, always. `map_new`, then methods: `set`, `get`, `find`, `has`, `remove`, `count`, `keys` |
+| [`json.bx`](json.bx) | `Json` and `Field`, `json_render`, `json_parse`, and the typed readers. **A JSON number is its digits, not a float** — see the header |
+| [`files.bx`](files.bx) | `file_read`, `file_write`, `file_append`, `file_exists`, `file_delete`, `file_move`, `file_make_directory`, `file_list_directory` |
+| [`os.bx`](os.bx) | `os_args`, `os_arg`, `os_arg_count`, `os_now`, `os_run`, `os_capture`, `os_read_byte`, `os_read_all`, `os_byte_as_string` |
+
+The first two rows used to read `str.bx` and `fs.bx`, which have never been the filenames — so both
+links 404'd, and `map.bx` and `json.bx` were missing from a table whose whole job is saying what is
+here.
 
 ## Why it exists
 
