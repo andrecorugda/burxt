@@ -48,6 +48,10 @@ which is right.
 | [M8 Errors](M8-ERRORS.md) | **DONE** (v0.0.94, 97) | `Option<T>` and `Result<T, E>` in `lib/`, written in Burxt. `?` recognises the failure by VARIANT name, so neither type is known to the compiler — and it does not convert between error types |
 | [M9 Performance](M9-PERFORMANCE.md) | **DONE** (v0.0.87–v0.0.90) | The self-compile: 190 s → 1.17 s, ~1 GB → 196 MB. `byte_at` bounds-checked with a `strlen` per byte |
 | [M10 Ergonomics](M10-ERGONOMICS.md) | **Slices 1–2c DONE** (v0.0.91–92, 95, 98) | `let x = 0;`, `for x in xs`, trailing commas everywhere, `function (self)` inside an `implement` — both compilers. Plus the rounding rule corrected: a contract where a value narrows, and nowhere else |
+| [M11 Maps](M11-MAPS.md) | **DONE** (v0.0.119) | `Map<K, V>` in `lib/map.bx` — ordinary Burxt, one builtin (`hash`). Iteration order is INSERTION order, defined rather than unspecified, because a container whose order depends on a hash function is a determinism hazard in a language whose thesis is reproducibility. `find` answers `Option<V>` since v0.0.118 |
+| [M12 Strings](M12-STRINGS.md) | **DONE** (v0.0.121) | Both compilers, fixpoint intact. Known gaps tracked elsewhere: the `string_split` separator is a single BYTE, so `", "` cannot be split on, and there is no case conversion |
+| [M13 Contract syntax](M13-CONTRACT-SYNTAX.md) | **stage-0 DONE** (v0.0.135; `it` v0.0.167) | `function f(p: Type [> 0, <= q]) -> T [>= 0]` — the claim on the value it constrains. The comma is AND, `||` is OR. Desugars to `requires`/`ensures` with the SUBJECT synthesized into the message: `p > 0`, never `> 0`. Andre's call, v0.0.166. Stage-1 pending, one obstacle — the return bracket's `result` is written in no program, so no span spells it |
+| [M14 Implicit regions](M14-IMPLICIT-REGIONS.md) | **Slices 1–2 DONE** (v0.0.142–146) | `allocates` inferred rather than written, and allocation outside a `region` is no longer an error — so a five-line program is five lines. Slice 3, per-block RELEASE, is open and is the memory half: without a region, memory grows in a straight line (5,280 KB against 1,408 KB per 100k Strings) |
 
 ## The audit, in detail
 

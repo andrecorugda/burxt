@@ -357,6 +357,25 @@ Verified at compile time where possible, else a checked guard is inserted.
 Either way the intent lives in the signature, not a comment. Attributes
 remain for other cross-cutting metadata — they are not the contract syntax.
 
+**A claim may also sit on the value it constrains** (M13, v0.0.135):
+
+```text
+function withdraw(balance: Decimal<2> [> $0.00], amount: Decimal<2> [<= balance])
+    -> Decimal<2> [>= $0.00]
+```
+
+Pure sugar — each bracket becomes a `requires`, or an `ensures` on the return
+type, and the two spellings produce byte-identical failure messages. The comma
+is **and**, `||` is **or**, and `it` names the subject where elision cannot
+reach.
+
+The message carries the subject even though nobody wrote it: `balance > $0.00`,
+never `> $0.00`. That is the decision worth recording, because the cheaper
+implementation was available and was declined — a message that does not name
+the value which broke sends the reader back to the declaration to work it out,
+and that is a cost paid on every failure forever. The same reason the comma
+exists rather than one `&&`: `[a, b]` says which one broke.
+
 ### Money and units as first-class literals
 
 ```text
