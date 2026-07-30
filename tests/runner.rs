@@ -1184,6 +1184,14 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     // pure, a clause that is not a Bool, and `[]` promising nothing. The number did not move, which
     // is the point of having written the note: without it, a floor that held would have looked like
     // nothing happening rather than five fixtures changing hands.
+    //
+    // v0.0.170 did the same for `match` on a scalar: four `match_scalar_*` fixtures that stage-1 had
+    // been rejecting as PARSE errors (it refused a literal pattern outright) are now rejected by its
+    // checker, each naming the rule it broke. Again the count is unchanged, and again that is only
+    // legible because the previous version wrote down which ones were borrowed.
+    //
+    // The lesson about the instrument, now twice over: a floor cannot tell you that a fixture changed
+    // hands. Only a note in the version that borrowed it can, so write the note.
     let mut caught = 0;
     let mut total = 0;
     for entry in fs::read_dir(root.join("tests/fail")).unwrap() {

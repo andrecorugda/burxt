@@ -1740,6 +1740,16 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int {
     }
 
     if n.kind == 71 {                                // match
+        // A SCALAR match — on an Int, a String, a Bool or a Decimal. Not a tag comparison: a chain of
+        // ordinary equalities against the literals, with the `_` arm as the tail. Emitted here rather
+        // than desugared into nodes because the emitter builds IR directly and a chain IS the IR;
+        // stage-0 desugars in its checker for the mirror-image reason, so that neither of ITS
+        // backends learns a new statement kind.
+        let scrutinee: Type = self.type_at(n.a);
+        if scrutinee.kind == 40 || scrutinee.kind == 41 || scrutinee.kind == 42
+           || scrutinee.kind == 45 {
+            return self.emit_scalar_match(src, n, scrutinee);
+        }
         // The value is an enum, so its first cell is the tag. Each arm is a comparison
         // against the variant's position in the declaration, and the arm's bindings are
         // the payload cells that follow. No jump table: a chain of comparisons is what a
@@ -1787,6 +1797,62 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int {
     let complained: Int = self.complain_at(src, n.token,
         "the Burxt backend does not emit this statement yet");
     return 0;
+}
+
+// A `match` on a scalar, as a chain of equalities.
+//
+// The subject is emitted ONCE and reused, which is not only cheaper: a subject with a side effect —
+// `match next_row() { ... }` — evaluated per arm would run it as many times as there are arms, and a
+// match that consumes four rows to test one is a wrong answer rather than a slow one.
+//
+// Strings compare through `burxt.strcmp` for the same reason `==` does: comparing the i64s would
+// compare POINTERS, which is true only when two Strings are the same object.
+function (mutable self: Unit) emit_scalar_match(src: String, n: Node, scrutinee: Type) -> Int {
+    let subject: String = self.emit_expr(src, n.a);
+    let done: String = self.fresh_label("match.end");
+    let mutable i: Int = 0;
+    while i < n.c {
+        let arm: Node = self.nodes[self.children[n.b + i]];
+        let pattern: Token = self.tokens[arm.token];
+        let is_wildcard: Bool = pattern.kind == 1
+                                && span_equal(src, pattern.start, pattern.length, "_");
+        if is_wildcard {
+            // The tail. The checker proved `_` is present and last, so nothing follows it.
+            let body: Int = self.emit_block(src, arm.a);
+            let joined: Int = self.write_body("  br label %" + done + "\n");
+            i += 1;
+        } else {
+            let hit: String = self.fresh();
+            if pattern.kind == 4 {
+                let literal: String = self.intern(src, pattern.start + 1, pattern.length - 2);
+                let order: String = self.fresh();
+                let compared: Int = self.write_body("  " + order
+                                           + " = call i64 @burxt.strcmp(i64 " + subject
+                                           + ", i64 ptrtoint (ptr " + literal + " to i64))\n");
+                let tested: Int = self.write_body("  " + hit + " = icmp eq i64 " + order
+                                         + ", 0\n");
+            } else {
+                // An Int or Decimal literal is its own value; `true` is 1 and `false` is 0, which is
+                // what a Bool already is in this ABI.
+                let mutable literal: Int = pattern.value;
+                if pattern.kind == 120 { literal = 1; }
+                if pattern.kind == 121 { literal = 0; }
+                let compared: Int = self.write_body("  " + hit + " = icmp eq i64 " + subject + ", "
+                                           + to_string(literal) + "\n");
+            }
+            let body_label: String = self.fresh_label("match.arm");
+            let next_label: String = self.fresh_label("match.next");
+            let branched: Int = self.write_body("  br i1 " + hit + ", label %" + body_label
+                                       + ", label %" + next_label + "\n"
+                                       + body_label + ":\n");
+            let body: Int = self.emit_block(src, arm.a);
+            let joined: Int = self.write_body("  br label %" + done + "\n" + next_label + ":\n");
+            i += 1;
+        }
+    }
+    // The `_` arm terminated its own block, so this one is reached only when there was none — which
+    // the checker refuses. LLVM still needs every block terminated.
+    return self.write_body("  br label %" + done + "\n" + done + ":\n");
 }
 
 // An arm's bindings, pointing into the value being matched. A scalar payload is loaded

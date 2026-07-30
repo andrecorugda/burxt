@@ -1995,12 +1995,39 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
                 if self.types[declared].kind == 83 { enum_decl = declared; }
             }
         }
+        // A SCALAR match — on an Int, a String or a Bool. A different set of rules, and they are the
+        // OPPOSITE of the enum ones on purpose: an enum match refuses `_` because listing every
+        // variant is the point, and a scalar match REQUIRES it because `Int` cannot be enumerated and
+        // a match without a catch-all would be a hole with no error to mark it. Both messages say
+        // which rule they are, because two rules for one keyword that differ will otherwise read as
+        // arbitrary.
+        if value.kind == 40 || value.kind == 41 || value.kind == 42 {
+            let checked: Int = self.check_scalar_match(src, n, value, return_type);
+            return 1;
+        }
         if !is_unknown(value) && enum_decl < 0 {
             let complained: Int = self.complain_at(src, n.token,
-                "`match` chooses between an enum's variants, and " + self.show_type(src, value)
-                + " has none");
+                "`match` chooses between an enum's variants or a scalar, and "
+                + self.show_type(src, value) + " is neither. Use `if` to branch on anything else");
         }
         if enum_decl >= 0 {
+            // `_` on an ENUM match, said as itself. The parser accepts `_` as an arm pattern now
+            // (a scalar match requires one), so an enum match with a wildcard reaches here — and
+            // without this it was reported as "no arm for `Stop`", which names a symptom and sends
+            // the reader to add a variant they already handled. The rule being broken is the
+            // wildcard, so the message is about the wildcard.
+            let mutable w: Int = 0;
+            while w < n.c {
+                let arm: Node = self.nodes[self.children[n.b + w]];
+                let pattern: Token = self.tokens[arm.token];
+                if span_equal(src, pattern.start, pattern.length, "_") {
+                    let complained: Int = self.complain_at(src, arm.token,
+                        "Burxt has no `_` wildcard arm on an enum: it would silently absorb "
+                        + "variants added later, which is the one thing exhaustive matching exists "
+                        + "to prevent. List the remaining variants");
+                }
+                w += 1;
+            }
             // Every variant needs an arm, and no variant twice: exhaustiveness is what
             // makes a match an answer rather than a guess, and there is no `_` to hide
             // behind. Both questions are the same walk.
@@ -2048,6 +2075,93 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
     }
 
     return 0;
+}
+
+// A `match` on an Int, a String or a Bool.
+//
+// The arms are literals and a `_`, and every rule here is the mirror of the enum ones. `_` is
+// REQUIRED and must be LAST — an arm after it could never run, and silently unreachable code is
+// exactly what a reviewer should not have to spot.
+//
+// Equality is the ordinary one: no coercion, so an Int literal does not match a String subject. That
+// is not a special rule for `match`, it is the one rule `==` follows everywhere, which is why it
+// needed no new machinery.
+function (mutable self: Unit) check_scalar_match(src: String, n: Node, value: Type,
+                                       return_type: Type) -> Int {
+    let mutable wildcards: Int = 0;
+    let mutable i: Int = 0;
+    while i < n.c {
+        let arm: Node = self.nodes[self.children[n.b + i]];
+        let pattern: Token = self.tokens[arm.token];
+        let is_wildcard: Bool = pattern.kind == 1
+                                && span_equal(src, pattern.start, pattern.length, "_");
+        if arm.c > 0 {
+            let complained: Int = self.complain_at(src, arm.token,
+                "a literal carries nothing to name — payload names belong to an enum variant");
+        }
+        if is_wildcard {
+            wildcards += 1;
+            if wildcards > 1 {
+                let complained: Int = self.complain_at(src, arm.token,
+                    "this `match` has two `_` arms");
+            }
+        } else {
+            if wildcards > 0 {
+                let complained: Int = self.complain_at(src, arm.token,
+                    "this arm comes after the `_` arm, so it could never run. Put `_` last");
+            }
+            // The literal's type, from the token the parser left. A name that is not `_` is a
+            // variant name, which a scalar match cannot have.
+            let mutable literal: Int = 0;
+            if pattern.kind == 2 { literal = 40; }
+            if pattern.kind == 4 { literal = 42; }
+            if pattern.kind == 120 || pattern.kind == 121 { literal = 41; }
+            if literal == 0 {
+                let complained: Int = self.complain_at(src, arm.token,
+                    "this `match` is on " + self.show_type(src, value) + ", so `"
+                    + substring(src, pattern.start, pattern.length)
+                    + "` is not a pattern it can have — a scalar match takes literals and `_`, "
+                    + "not variant names");
+            } else {
+                // An Int literal against a Decimal subject is the one crossing allowed, the same way
+                // `price * 3` is: an Int is exact at any scale.
+                let mutable fits: Bool = literal == value.kind;
+                if value.kind == 45 && literal == 40 {
+                    fits = true;
+                }
+                if !fits {
+                    let complained: Int = self.complain_at(src, arm.token,
+                        "this `match` is on " + self.show_type(src, value) + ", but `"
+                        + substring(src, pattern.start, pattern.length) + "` is "
+                        + self.show_type(src, simple_type(literal))
+                        + ". There is one equality in Burxt and it never converts");
+                }
+                // No literal twice, for the same reason no variant may have two arms: only the
+                // first could ever run, and the second is a claim the reader would trust.
+                let mutable k: Int = 0;
+                while k < i {
+                    let earlier: Node = self.nodes[self.children[n.b + k]];
+                    let seen: Token = self.tokens[earlier.token];
+                    if spans_equal(src, seen.start, seen.length, pattern.start, pattern.length) {
+                        let complained: Int = self.complain_at(src, arm.token,
+                            "`" + substring(src, pattern.start, pattern.length)
+                            + "` is matched twice in this `match`");
+                    }
+                    k += 1;
+                }
+            }
+        }
+        let body: Int = self.check_block_nodes(src, arm.a, return_type);
+        i += 1;
+    }
+    if wildcards == 0 {
+        let complained: Int = self.complain_at(src, n.token,
+            "this `match` on " + self.show_type(src, value) + " has no `_` arm. A scalar cannot be "
+            + "enumerated, so a match without a catch-all would leave values with nowhere to go — "
+            + "which is the opposite of an enum match, where `_` is refused because listing every "
+            + "variant is the point");
+    }
+    return 1;
 }
 
 // ---- the pass ----------------------------------------------------------------

@@ -22,8 +22,17 @@
 // for an Int, and already calling `burxt.streq` for a String. In a money language, no new
 // branching to get wrong is worth more than a switch table.
 //
-// In tests/stage0-only/ because stage-1's parser refuses a literal pattern — cleanly, as a parse
-// error, which is the safe direction.
+// ---- Both compilers, since v0.0.170 ---------------------------------------------------
+//
+// Stage-1 needed no new representation to hold a literal pattern, and that is worth knowing because
+// the obvious move was to add a field to the arm node saying what kind of pattern it is. The TOKEN
+// already says: kind 2 is an Int literal, 4 a String, 120/121 are `true`/`false`, and kind 1 is a
+// name — a variant, or `_`, told apart by its span.
+//
+// Stage-1 emits the chain in its BACKEND rather than desugaring in its checker, which is the mirror
+// image of stage-0's reason for desugaring: stage-0 has two backends and wants neither to learn a new
+// statement kind, while stage-1's backend writes IR directly and a chain of comparisons IS the IR.
+// Same semantics from opposite directions, and the differential test is what says so.
 
 function describe(status: Int) -> String {
     match status {

@@ -1497,10 +1497,19 @@ function (mutable self: Unit) parse_stmt(src: String) -> Int {
         let base: Int = len(self.stack);
         let mutable count: Int = 0;
         while !self.at(32) && !self.done() {         // until '}'
-            // `Variant => { ... }` or `Variant(a, b) => { ... }`. Every arm names a
-            // variant: there is no wildcard, on purpose.
-            if !self.at(1) {
-                return self.complain(src, "a variant name — Burxt has no `_` arm");
+            // `Variant => { ... }`, `Variant(a, b) => { ... }`, or — when the subject is a scalar —
+            // a LITERAL and a `_`. Which of the two kinds of match this is settled by the checker
+            // from the subject's TYPE, not here, because the parser does not know types.
+            //
+            // The pattern needs no field on the arm node: the token itself says what it is. Kind 2
+            // is an Int literal, 4 a String, 120/121 are `true`/`false`, and kind 1 is a name —
+            // which is a variant, or `_`, and its span tells those apart. The information was
+            // already there, which is the third time this milestone that noticing so replaced a
+            // new representation.
+            let pk: Int = self.kind_at(0);
+            if pk != 1 && pk != 2 && pk != 4 && pk != 120 && pk != 121 {
+                return self.complain(src, "a variant name, or a literal and `_` when the match is "
+                            + "on an Int, a String or a Bool");
             }
             let variant_tok: Int = self.position;
             let v: Int = self.advance();
