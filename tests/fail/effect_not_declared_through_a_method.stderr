@@ -1,0 +1,1 @@
+`Reader.grab` touches files, but `wrapper` does not say it does

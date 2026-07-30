@@ -599,6 +599,67 @@ function (mutable self: Unit) complain_at(src: String, token: Int, message: Stri
 }
 
 // ---- declarations ------------------------------------------------------------
+// Refuse a call that reaches further than this signature admits.
+//
+// Written once, because the messages ARE the agent's instruction set and two wordings for one rule is
+// how a language starts feeling arbitrary. Word for word stage-0's, which is not a courtesy — the
+// .stderr fixtures pin one text and two compilers must produce it.
+function (self: Unit) effect_refusal(callee: String, bit: Int) -> String {
+    let named: String = effect_name(bit);
+    if len(self.effects_owner) == 0 {
+        return "`" + callee + "` touches " + named + ", and top-level code declares nothing it "
+            + "touches. Call it from a function that says `touches " + named + "`, where a reader "
+            + "can see it.";
+    }
+    return "`" + callee + "` touches " + named + ", but `" + self.effects_owner + "` does not say "
+        + "it does. Add `touches " + named + "` to `" + self.effects_owner + "`'s signature — so "
+        + "anyone reading it can see what this call can reach — or stop calling `" + callee + "`.";
+}
+
+// Every effect `reaches` claims that this signature does not admit, complained about in the closed
+// set's order so two programs differing only in clause order report identically.
+function (mutable self: Unit) check_effects(src: String, at: Int, callee: String,
+                                 reaches: Int) -> Int {
+    let mutable bit: Int = 1;
+    while bit <= 32 {
+        if remainder(divide_floor(reaches, bit), 2) == 1 {
+            if remainder(divide_floor(self.allowed_effects, bit), 2) == 0 {
+                let complained: Int = self.complain_at(src, at,
+                    self.effect_refusal(callee, bit));
+            }
+        }
+        bit = bit * 2;
+    }
+    return 0;
+}
+
+// The lowest set bit of a mask, so a message names one effect rather than a list. The first one is
+// enough: fixing it brings the reader back for the next.
+function lowest_effect(mask: Int) -> Int {
+    let mutable bit: Int = 1;
+    while bit <= 32 {
+        if remainder(divide_floor(mask, bit), 2) == 1 {
+            return bit;
+        }
+        bit = bit * 2;
+    }
+    return 1;
+}
+
+// What a BUILTIN reaches. Kept beside the effect rule rather than as a second rule for builtins that
+// would have to be held in step with the first — the same list stage-0 carries.
+//
+// `print` is deliberately absent: it would be on almost every function, and an annotation that appears
+// on everything tells a reviewer nothing, which is the lesson `allocates` taught.
+function builtin_effects(name: String) -> Int {
+    if name == "read_file" { return 1; }             // files
+    if name == "write_file" { return 1; }
+    if name == "write_bytes" { return 1; }
+    if name == "argument" { return 8; }              // input: the command line
+    if name == "argument_count" { return 8; }
+    return 0;
+}
+
 // May the code being checked right now see `holder`'s private members?
 //
 // The CLASS is the scope, not the file — so the question is only ever "is the enclosing method's
@@ -993,8 +1054,25 @@ function (mutable self: Unit) collect_declarations(src: String) -> Int {
                     // Ints rather than mixing a CInt with one.
                     return_type = as_burxt_sees(return_type);
                 }
+                // `pure` and `touches` are the same claim from opposite ends: pure means the answer
+                // depends on the arguments and nothing else, which IS touching nothing. Saying both is
+                // a contradiction rather than a refinement, and refusing it at the DECLARATION is what
+                // makes the message name the contradiction instead of some later call.
+                if flag_pure(item.value) == 1 && flag_effects(item.value) > 0 {
+                    let complained: Int = self.complain_at(src, item.token,
+                        "`pure function " + substring(src, name.start, name.length)
+                        + "` cannot also `touches "
+                        + effect_name(lowest_effect(flag_effects(item.value)))
+                        + "`: `pure` means the answer depends on the arguments and nothing else, "
+                        + "which is the same thing as touching nothing. Drop one of the two.");
+                }
                 let mutable flags: Int = item.value;
-                if item.kind == 86 { flags = 8; }    // the external marker
+                if item.kind == 86 {
+                    // The external marker, plus the effect mask the extern declared. An extern's
+                    // `touches` is where an effect ENTERS the program — there is no body to reason
+                    // about, so the declaration is the only source.
+                    flags = 8 + item.c * 64;
+                }
                 push(self.functions, DeclaredFunction { start: name.start, length: name.length,
                                       return_type: return_type, parameters: item.a, flags: flags });
                 let indexed: Int = self.index_fun(src, name.start, name.length);
@@ -1430,6 +1508,14 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             return unknown_type();
         }
         let m: Method = self.methods[found];
+        if self.in_pure == 0 {
+            let reaches: Int = flag_effects(m.flags);
+            if reaches > 0 {
+                let checked: Int = self.check_effects(src, n.token,
+                    self.show_type(src, holder) + "." + substring(src, m.start, m.length),
+                    reaches);
+            }
+        }
         if flag_private(m.flags) == 1 && !self.inside_class(src, holder) {
             let complained: Int = self.complain_at(src, n.token,
                 "`" + self.show_type(src, holder) + "."
@@ -1560,6 +1646,26 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
 
     if n.kind == 13 {                                // a call
         let t: Token = self.tokens[n.token];
+        // The effect check, at the TOP of the arm and before the builtin dispatch.
+        //
+        // Placement is the whole of it, and stage-0 records getting this wrong: further down, past the
+        // builtins, `read_file` was invisible to the rule that exists to catch exactly that.
+        //
+        // Silent inside a `pure` function, so the purity rule speaks instead. Both are true there — a
+        // pure function declares no effects and may reach none — but "`pure function f` may not read a
+        // file" names the PROMISE being broken, and the effect message would only name the
+        // bookkeeping. One rule speaks per situation and the more specific one wins.
+        if self.in_pure == 0 {
+            let called: String = substring(src, t.start, t.length);
+            let mutable reaches: Int = builtin_effects(called);
+            let declared_fn: Int = self.find_function(src, t.start, t.length);
+            if declared_fn >= 0 {
+                reaches = flag_effects(self.functions[declared_fn].flags);
+            }
+            if reaches > 0 {
+                let checked: Int = self.check_effects(src, n.token, called, reaches);
+            }
+        }
         if span_equal(src, t.start, t.length, "old") {
             // `old(e)` is the pre-state, hoisted to the function's entry. It means
             // nothing where there is no exit to compare against.
@@ -2291,6 +2397,14 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int {
     if self.current_method >= 0 {
         self.in_caller_region = flag_allocates(self.methods[self.current_method].flags);
     }
+    // What this body may reach, and whose signature said so. Read from the STORED signature for the
+    // same reason `allocates` is — the node's flags are what was parsed, and the stored one is what
+    // the rest of the checker agrees on.
+    let outer_effects: Int = self.allowed_effects;
+    let outer_owner: String = self.effects_owner;
+    self.allowed_effects = flag_effects(item.value);
+    self.effects_owner = substring(src, self.tokens[item.token].start,
+                             self.tokens[item.token].length);
     let clauses: Int = self.check_clauses(src, index, signature, return_type);
     let outer_function: Int = self.in_function;
     let outer_loop: Int = self.loop_depth;
@@ -2308,6 +2422,8 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int {
     self.loop_depth = outer_loop;
     self.current_function = outer_fn;
     self.current_method = outer_method;
+    self.allowed_effects = outer_effects;
+    self.effects_owner = outer_owner;
     let dropped: Int = truncate(self.bindings, base);
     self.depth -= 1;
     self.in_caller_region = outer_caller;

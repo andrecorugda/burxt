@@ -186,7 +186,11 @@ function (mutable self: Loader) load(path: String) -> Int touches files {
     return 1;
 }
 
-function load_program(path: String) -> String {
+// `touches files`, and it was missing until v0.0.183 — which is the point of the rule rather than a
+// blemish on it. `Loader.load` reads files; this wraps it and said nothing, so a reader of
+// `load_program`'s signature could not tell that compiling a program touches the disk. Stage-0's
+// effect check never looked at method calls, so nothing caught it for twenty-four versions.
+function load_program(path: String) -> String touches files {
     let mutable loader: Loader = Loader { seen: [], buffer: "" };
     let done: Int = loader.load(path);
     return loader.buffer;

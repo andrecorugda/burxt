@@ -5364,6 +5364,35 @@ impl TypeChecker {
                     }
                 }
 
+                // What the method REACHES, checked against what this signature admits — the same
+                // rule the free-function form has had since v0.0.159, and it was missing here.
+                //
+                // `method_effects` was populated and read in exactly one place: setting
+                // `allowed_effects` for a method's own BODY. So a method's declared effects were
+                // enforced INWARD, permitting what its body does, and never OUTWARD at its callers.
+                //
+                // That made the property this feature exists for **false through a method call**. A
+                // function declaring nothing could call `Loader.load`, which touches files, and the
+                // effect vanished from the signature chain — so "a signature that says nothing about
+                // the network is a signature you can trust about the network, however deep the call
+                // goes" was not true, and `burxt review` reporting a GAINED effect could be evaded by
+                // putting the call behind a method.
+                //
+                // Found in v0.0.183 by stage-1, which enforced effects for the first time and
+                // immediately refused stage-1's own `load_program`. The differential running in that
+                // direction is the third time this week.
+                if self.in_pure.is_none() {
+                    if let Some(reaches) =
+                        self.method_effects.get(&(receiver.clone(), method.clone())).cloned()
+                    {
+                        for e in &reaches {
+                            if !self.allowed_effects.contains(e) {
+                                return Err(self
+                                    .effect_refusal(&format!("{}.{}", receiver, method), *e));
+                            }
+                        }
+                    }
+                }
                 // An `allocates` method builds in OUR region, same rule as the
                 // free-function form.
                 if self.alloc_methods.contains(&(receiver.clone(), method.clone()))

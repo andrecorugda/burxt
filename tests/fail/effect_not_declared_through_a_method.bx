@@ -1,0 +1,33 @@
+// A method that `touches` is checked at its CALLERS, not only inside its own body.
+//
+// This was missing for twenty-four versions, and what it broke is the whole point of the feature.
+// `method_effects` was populated and read in exactly ONE place — setting what a method's own body may
+// reach — so a method's declared effects were enforced INWARD and never OUTWARD. A function declaring
+// nothing could call a method that touches files, and the effect vanished from the signature chain.
+//
+// So this claim, which docs/guide/06-effects.md makes and `burxt review` depends on:
+//
+//     a signature that says nothing about the network is a signature you can trust about the
+//     network, however deep the call goes
+//
+// was FALSE through a method call. `burxt review` reporting a GAINED effect could be evaded by putting
+// the call behind one — which is precisely the weakening it exists to catch.
+//
+// Found in v0.0.183 by stage-1, which enforced effects for the first time and immediately refused
+// stage-1's own `load_program`. The differential running from stage-1 toward stage-0 rather than the
+// other way is the third time this week.
+class Reader {
+    count: Int,
+
+    function (self) grab(path: String) -> Int touches files {
+        return len(read_file(path));
+    }
+}
+
+// Says nothing, reaches the disk.
+function wrapper(path: String) -> Int {
+    let r: Reader = Reader { count: 0 };
+    return r.grab(path);
+}
+
+print(wrapper("/etc/hostname"));

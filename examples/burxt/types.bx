@@ -319,6 +319,19 @@ class Unit {
     // scoped correctly on the way OUT — a base taken before, truncated after — and not on the way
     // IN, which is the half nobody had needed until two calls to one generic nested.
     type_binding_floor: Int,
+    // The effects the function being checked ADMITS, as a bitmask, and whose signature said so.
+    //
+    // ALL SIX at the top level — 63, every bit set — because top-level code may reach anything. There
+    // is no signature there for a reviewer to read, since the file itself is what they are reading, so
+    // nothing is hidden by allowing it; and forbidding it would mean no program could do I/O at its
+    // entry point. docs/guide/06-effects.md states this as design, and stage-0 does the same.
+    //
+    // The first version here set 0 at the top level, reasoning that nothing declared means nothing
+    // permitted — and stage-1 then refused its OWN source at `argument_count()`. The rule reads
+    // plausibly and is wrong: it would make `touches` a tax on every program's entry point rather
+    // than information in a signature.
+    allowed_effects: Int,
+    effects_owner: String,
     instances: [Instance],
     // The type arguments of every instance, laid end to end. `Instance` carries a start and a
     // count into this, the same shape `nested_children` and `type_parameters` use.
