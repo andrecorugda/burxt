@@ -1,0 +1,6 @@
+// Adding a tax RATE to a money amount. Both are decimals, both look like numbers, and in
+// Python, PHP, JavaScript or Java this computes something — just not the total.
+let price: Decimal<2> = 19.99;
+let rate:  Decimal<4> = 0.0825;
+let total: Decimal<2> = price + rate;
+print(total);

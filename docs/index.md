@@ -79,6 +79,7 @@ no runtime to ship and no VM to start.
 
 <div class="cta" style="justify-content:flex-start; margin: 2.5rem 0 0;">
   <a class="btn" href="{{ site.baseurl }}/examples/">See it doing something</a>
+  <a class="btn ghost" href="https://github.com/andrecorugda/burxt/blob/main/examples/refused/README.md">See what it refuses</a>
   <a class="btn ghost" href="https://codespaces.new/andrecorugda/burxt?quickstart=1">Try it in a browser</a>
 </div>
 

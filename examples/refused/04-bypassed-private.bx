@@ -1,0 +1,12 @@
+// The class checks its own invariant on the way in. So build one directly instead — which is
+// what an agent does when the constructor is inconvenient.
+class Account {
+    owner: String,
+    private balance: Decimal<2>,
+
+    function open(owner: String, opening: Decimal<2>) -> Account
+        requires opening >= $0.00
+    { return Account { owner: owner, balance: opening }; }
+}
+let a: Account = Account { owner: "eve", balance: $0.00 - $999.00 };
+print(a.owner);

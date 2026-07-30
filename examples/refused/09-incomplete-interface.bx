@@ -1,0 +1,11 @@
+// An interface gained a method. This class satisfied it last week and still looks complete.
+interface Tax {
+    function rate_for(self, taxable: Bool) -> Decimal<4>
+    function label(self) -> String
+}
+class FlatTax implements Tax {
+    rate: Decimal<4>,
+    function (self) rate_for(taxable: Bool) -> Decimal<4> { return self.rate; }
+}
+let t: FlatTax = FlatTax { rate: 0.1200 };
+print(t.rate_for(true));

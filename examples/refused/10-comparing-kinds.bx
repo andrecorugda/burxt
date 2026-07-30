@@ -1,0 +1,5 @@
+// A quantity against a price. Both are numbers to a human and to every dynamic language; one is
+// a count and the other is money.
+let quantity: Int = 3;
+let price: Decimal<2> = 3.00;
+print(quantity == price);

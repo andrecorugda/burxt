@@ -2776,13 +2776,18 @@ fn the_language_server_checks_the_program_a_file_belongs_to() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
 
     // The Burxt files that MUST be clean in an editor: every real example, the standard
-    // library, and each module of the compiler. `examples/negative/` is excluded on purpose —
-    // those are meant to be wrong, and a squiggle there is the point.
+    // library, and each module of the compiler. Two directories are excluded on purpose, and for
+    // the same reason: `examples/negative/` and `examples/refused/` are meant to be wrong. A
+    // squiggle there is the point — `refused/` exists to show a reviewer ten mistakes an agent
+    // writes confidently, so a clean editor on those files would mean the page had stopped being
+    // true. `the_refusals_page_is_not_stale` asserts the opposite of this test about them.
     let mut sources: Vec<PathBuf> = Vec::new();
     for dir in ["examples", "lib"] {
         collect_bx(&root.join(dir), &mut sources);
     }
-    sources.retain(|p| !p.components().any(|c| c.as_os_str() == "negative"));
+    sources.retain(|p| {
+        !p.components().any(|c| c.as_os_str() == "negative" || c.as_os_str() == "refused")
+    });
     sources.push(root.join("tests/runner.bx"));
     assert!(sources.len() > 15, "expected to sweep the examples, got {}", sources.len());
 
@@ -3618,4 +3623,45 @@ fn review_reports_weakened_promises_and_nothing_else() {
         checked += 1;
     }
     assert!(checked >= 4, "expected at least four review fixtures, ran {}", checked);
+}
+
+/// `examples/refused/README.md` says exactly what the compiler says.
+///
+/// That page IS the argument this language makes: it shows a reviewer ten mistakes an agent writes
+/// confidently, and what the compiler says instead. So a made-up message there would be a lie
+/// about the one thing being sold — and the guide already told that lie once, with two invented
+/// error messages, which running the examples is what caught.
+///
+/// This regenerates the page and diffs it, exactly as `the_site_examples_are_not_stale` does for
+/// the website. It also means IMPROVING a message is a two-line change rather than a hunt: fix the
+/// compiler, rerun the script, and the page follows.
+#[test]
+fn the_refusals_page_is_not_stale() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = root.join("scripts/refused.py");
+    let out = Command::new("python3")
+        .arg(&script)
+        .arg("--check")
+        .current_dir(root)
+        .output()
+        .expect("python3 scripts/refused.py --check");
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Every panel must actually be refused. A panel that starts compiling — because a rule was
+    // relaxed or a fixture drifted — would silently become an advertisement for something the
+    // language no longer does, which is worse than having no page.
+    let page = fs::read_to_string(root.join("examples/refused/README.md")).unwrap();
+    assert!(
+        !page.contains("ACCEPTED"),
+        "a panel in examples/refused/ now COMPILES. Either the refusal was lost, or the example \
+         needs rewriting to still demonstrate one:\n{}",
+        page.lines().filter(|l| l.contains("ACCEPTED")).collect::<Vec<_>>().join("\n")
+    );
+    let panels = page.matches("\n## ").count();
+    assert!(panels >= 10, "examples/refused/ lost panels: {} left", panels);
 }

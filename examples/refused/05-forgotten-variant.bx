@@ -1,0 +1,10 @@
+// A payment method was added to the enum last week. This `match` was written before that and
+// still compiles everywhere else, silently treating the new case as "none of the above".
+enum Method { Cash, Card, Transfer }
+function fee(m: Method) -> Decimal<2> {
+    match m {
+        Cash => { return $0.00; }
+        Card => { return $0.30; }
+    }
+}
+print(fee(Method.Transfer));

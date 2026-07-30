@@ -1,0 +1,5 @@
+// A number that arrived as text — from a model, a form, or a CSV. Every dynamic language lets you
+// treat it as money and find out later.
+let reply: String = "the total is 52.75";
+let total: Decimal<2> = reply;
+print(total);

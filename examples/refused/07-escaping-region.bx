@@ -1,0 +1,9 @@
+// A helper that builds a label inside a `region` so the memory is tidy, then returns it. The
+// region releases at its closing brace, so the caller is handed freed bytes.
+function label(id: Int) -> String {
+    region scratch {
+        let text: String = "item " + to_string(id);
+        return text;
+    }
+}
+print(label(7));

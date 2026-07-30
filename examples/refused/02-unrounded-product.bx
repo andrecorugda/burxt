@@ -1,0 +1,6 @@
+// Tax on a line: money times a rate. The exact answer has six decimal places, so landing it on
+// two is a rounding — and somebody has to decide which way. Nothing here says.
+let subtotal: Decimal<2> = 158.25;
+let rate:     Decimal<4> = 0.1200;
+let tax:      Decimal<2> = subtotal * rate;
+print(tax);

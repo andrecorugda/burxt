@@ -1,0 +1,10 @@
+// The contract is right there in the signature, and the call still breaks it. This is what an
+// agent does with a value it did not check: it passes it.
+function withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>
+    requires amount > $0.00
+    requires amount <= balance
+{
+    return balance - amount;
+}
+print(withdraw($100.00, $30.00));
+print(withdraw($100.00, $500.00));

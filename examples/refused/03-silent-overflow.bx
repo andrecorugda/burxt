@@ -1,0 +1,4 @@
+// A running total that has grown past what an Int can hold. Every other language wraps this
+// around to a negative number and keeps going.
+let running: Int = 9223372036854775807;
+print(running + 1);
