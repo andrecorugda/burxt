@@ -3111,7 +3111,7 @@ impl TypeChecker {
         let mut typed_args = Vec::new();
         for (argument, want) in arguments.iter().zip(parameters.iter()) {
             let t = self.check_expr(argument, Some(want))?;
-            if t.ty != *want {
+            if !self.storable(&t.ty, want) {
                 return Err(format!(
                     "`{}` expects {} {} here, but this argument has type {}",
                     name,
@@ -3510,7 +3510,7 @@ impl TypeChecker {
                     ));
                 }
                 let typed = self.check_expr(value, Some(&declared))?;
-                if typed.ty != declared {
+                if !self.storable(&typed.ty, &declared) {
                     return Err(format!(
                         "cannot assign {} {} to `{}`, which was declared {}",
                         typed.ty.article(), typed.ty, name, declared
@@ -4947,7 +4947,7 @@ impl TypeChecker {
                 let mut typed_args = Vec::new();
                 for (i, (argument, param_ty)) in arguments.iter().zip(&param_tys).enumerate() {
                     let typed = self.check_expr(argument, Some(param_ty))?;
-                    if &typed.ty != param_ty {
+                    if !self.storable(&typed.ty, param_ty) {
                         // Point at the argument, not at the whole call.
                         self.blame(argument.span);
                         // The boundary-exactness case gets its own message,
@@ -5061,7 +5061,7 @@ impl TypeChecker {
                             )
                         })?;
                     let typed = self.check_expr(value, Some(fty))?;
-                    if &typed.ty != fty {
+                    if !self.storable(&typed.ty, fty) {
                         return Err(format!(
                             "in `{} {{ ... }}`, the field `{}` must be {}, but its \
                              value has type {}",
@@ -5174,7 +5174,7 @@ impl TypeChecker {
                     let mut typed_args = Vec::new();
                     for (i, (argument, p)) in arguments.iter().zip(&signature.parameters).enumerate() {
                         let typed = self.check_expr(argument, Some(&p.ty))?;
-                        if typed.ty != p.ty {
+                        if !self.storable(&typed.ty, &p.ty) {
                             return Err(format!(
                                 "in the call to `dynamic {}.{}`, argument {} must be \
                                  {}, but it has type {}",
@@ -5271,7 +5271,7 @@ impl TypeChecker {
                     let mut typed_args = Vec::new();
                     for (argument, want) in arguments.iter().zip(&signature.parameters) {
                         let t = self.check_expr(argument, Some(&want.ty))?;
-                        if t.ty != want.ty {
+                        if !self.storable(&t.ty, &want.ty) {
                             self.blame(argument.span);
                             return Err(format!(
                                 "`{}.{}` expects {} here, but this argument has type {}",
@@ -5630,7 +5630,7 @@ impl TypeChecker {
         let mut typed_args = Vec::new();
         for (i, (argument, want)) in arguments.iter().zip(payload).enumerate() {
             let t = self.check_expr(argument, Some(want))?;
-            if &t.ty != want {
+            if !self.storable(&t.ty, want) {
                 return Err(format!(
                     "in `{}.{}`, payload {} must be {}, but it has type {}",
                     enum_name,
@@ -5896,7 +5896,8 @@ impl TypeChecker {
 
     /// Both operands must be the SAME decimal type: equal scale and equal
     /// rounding contract. Burxt never reconciles differing money types.
-    /// Whether a value of type `have` may be stored where `want` was declared.
+    /// Whether a value of type `have` may go where `want` was declared — a `let`, a call argument, a
+    /// field initializer, a variant payload, an assignment, a `return`.
     ///
     /// Equality, plus **one** widening: a rounding contract may be ADDED to a value that
     /// has none. The representation is byte-identical — both are a scaled i64 holding the
@@ -5909,6 +5910,14 @@ impl TypeChecker {
     /// price * qty;` failed and the fix was not where the error was — you had to walk back
     /// to the binding of `price` and change that. Dropping a contract stays refused: that
     /// loses a declared intention, and losing one silently is what this language is for.
+    ///
+    /// **Used at every position, since v0.0.181.** It had one call site — the `let` — so
+    /// `json_money(tax)` was refused where `let m: Decimal<2, RoundHalfEven> = tax;` was fine, and the
+    /// rule read as arbitrary because it WAS arbitrary: a relaxation implemented in one place. That is
+    /// the same shape as the `dynamic` coercion gap closed in v0.0.175, where the binding path coerced
+    /// and the argument path did not. Worth stating as a rule for this codebase: a relaxation that
+    /// applies at a binding applies wherever a declared type meets a value, and finding it at one
+    /// site means the others were not checked.
     fn storable(&self, have: &Type, want: &Type) -> bool {
         if have == want {
             return true;

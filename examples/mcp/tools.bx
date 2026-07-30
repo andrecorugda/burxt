@@ -45,10 +45,17 @@ function line_with_tax(unit: Decimal<2> [> $0.00], quantity: Int [> 0, <= 100000
     let tax: Decimal<2, RoundHalfEven> = subtotal * rate;
     let mutable fields: [Field] = [];
     let a: Int = push(fields, json_field("subtotal", json_money(subtotal)));
-    // `json_text(to_string(tax))` rather than `json_money(tax)`, and the reason is a papercut rather
-    // than a design: `json_money` takes `Decimal<2>` and `tax` is `Decimal<2, RoundHalfEven>`, and a
-    // contract may be ADDED at a `let` but not at an argument. Same digits either way — `json_money`
-    // is `json_text(to_string(...))` internally — so nothing is lost but the intent reads worse.
+    // `json_text(to_string(tax))` rather than `json_money(tax)`, and the refusal behind that is
+    // CORRECT rather than a papercut — which is worth writing down, because the first note here said
+    // the opposite.
+    //
+    // `tax` is `Decimal<2, RoundHalfEven>` and `json_money` takes `Decimal<2>`. Passing it would DROP
+    // the contract, and dropping one loses a stated intention. The widening goes the other way: a
+    // value with no contract may go where one is wanted, because that is strictly more information.
+    //
+    // `to_string` is exactly where the intention stops mattering. Nothing downstream can round text,
+    // so the contract has done its whole job by the time the digits are rendered — which is why this
+    // spelling is the honest one and not a workaround.
     let b: Int = push(fields, json_field("tax", json_text(to_string(tax))));
     let c: Int = push(fields, json_field("total", json_text(to_string(subtotal + tax))));
     return json_object(fields);

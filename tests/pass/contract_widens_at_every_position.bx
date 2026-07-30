@@ -1,0 +1,59 @@
+// A rounding contract may be ADDED to a value that has none — at every position a declared type meets
+// a value, not only at a `let`.
+//
+// The widening itself is from v0.0.86: `Decimal<2>` and `Decimal<2, RoundHalfEven>` hold the SAME
+// integer, and a contract does not reinterpret a value, it constrains what future operations may do to
+// it. That is strictly more information, so it can arrive at the binding that needs it.
+//
+// What v0.0.181 fixed is that it had ONE call site — the `let`. So `takes_contracted(plain)` was
+// refused while `let m: Decimal<2, RoundHalfEven> = plain;` was fine, and the rule read as arbitrary
+// because it was: a relaxation implemented in one place.
+//
+// That is the same shape as the `dynamic` coercion gap closed in v0.0.175, where the binding path
+// coerced a concrete value into an interface object and the argument path did not. Twice in a week, so
+// it is a rule for this codebase now: **a relaxation that applies at a binding applies wherever a
+// declared type meets a value**, and finding it at one site means the others were never checked.
+//
+// The reverse is still refused, and this fixture would be wrong to test it as passing: DROPPING a
+// contract loses a declared intention. See tests/fail/contract_dropped.bx.
+
+function takes_contracted(m: Decimal<2, RoundHalfEven>) -> String {
+    return to_string(m);
+}
+
+class Invoice {
+    total: Decimal<2, RoundHalfEven>,
+}
+
+enum Amount {
+    Nothing,
+    Some_(Decimal<2, RoundHalfEven>),
+}
+
+function shown(a: Amount) -> String {
+    match a {
+        Nothing => { return "none"; }
+        Some_(m) => { return to_string(m); }
+    }
+}
+
+let plain: Decimal<2> = $19.99;
+
+// a `let` — the one position that always worked
+let bound: Decimal<2, RoundHalfEven> = plain;
+print(to_string(bound));
+
+// a call ARGUMENT
+print(takes_contracted(plain));
+
+// a FIELD initializer
+let inv: Invoice = Invoice { total: plain };
+print(to_string(inv.total));
+
+// a variant PAYLOAD
+print(shown(Amount.Some_(plain)));
+
+// an ASSIGNMENT
+let mutable running: Decimal<2, RoundHalfEven> = $0.00;
+running = plain;
+print(to_string(running));
