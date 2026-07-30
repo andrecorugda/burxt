@@ -2514,10 +2514,11 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
             .unwrap_or(0);
         assert!(kb > 0, "could not read peak RSS from:\n{}", reported);
         eprintln!("the compiler's peak RSS on its own source: {} MB", kb / 1024);
-        // 440 MB from v0.0.169, up from 400, and the TREND is what this number is for rather than
-        // the value. 196 MB at v0.0.90, 239 at v0.0.110, 335 at v0.0.121, 392 at v0.0.168, 400 at
-        // v0.0.169 — which is roughly 40 KB of peak RSS per line of compiler, growing with the
-        // source and nothing else. M13's brackets added ~290 lines and 8 MB, exactly on that line.
+        // 480 MB from v0.0.185, and the TREND is what this number is for rather than the value.
+        // 196 MB at v0.0.90, 239 at v0.0.110, 335 at v0.0.121, 392 at v0.0.168, 400 at v0.0.169,
+        // 440 at v0.0.169 — which is roughly 40 KB of peak RSS per line of compiler, growing with
+        // the source and nothing else. M13's brackets added ~290 lines and 8 MB, exactly on that
+        // line. v0.0.183's `touches` enforcement in stage-1 added ~400 lines and ~16 MB, also on it.
         //
         // The ceiling is raised rather than the growth fixed, and it is worth being clear about why
         // that is a decision and not an accident. Nothing here LEAKS: stage-1 allocates every
@@ -2525,15 +2526,23 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
         // to release into — per-block release is M14 slice 3, still open, and it is the fix. Until
         // then peak RSS is the total ever allocated, which is a linear function of the input.
         //
+        // The 440 raise was too small, and HOW it failed is the part worth keeping. v0.0.183 landed
+        // at 440 MB on the CI runner and 436 MB on a developer laptop — so the same commit failed
+        // in one place and passed in the other, and the first read of that is "the docs branch broke
+        // the compiler". A ceiling with 1% of margin is not measuring the trend it exists to
+        // measure; it is measuring the machine. 480 leaves ~1,100 lines of headroom, which is a
+        // milestone's worth rather than a rounding error's.
+        //
         // The arithmetic that says when this stops being a raise: the region reserves 1 GB, so at
-        // 40 KB per line the wall is around 25,000 lines of Burxt. Stage-1 is 9,600. Two more
+        // 40 KB per line the wall is around 25,000 lines of Burxt. Stage-1 is 10,400. Two more
         // milestones of this size and the answer has to be slice 3 rather than a bigger number.
         assert!(
-            kb < 440 * 1024,
-            "the compiler's peak RSS on its own source is {} MB; the ceiling is 440 MB, and \
+            kb < 480 * 1024,
+            "the compiler's peak RSS on its own source is {} MB; the ceiling is 480 MB, and \
              the region it reserves is 1 GB (196 MB at v0.0.90, 239 MB at v0.0.110, 335 MB at \
-             v0.0.121, 400 MB at v0.0.169 — roughly 40 KB per line of compiler, and nothing \
-             releases until the process exits because per-block release is M14 slice 3)",
+             v0.0.121, 400 MB at v0.0.169, 440 MB at v0.0.183 — roughly 40 KB per line of \
+             compiler, and nothing releases until the process exits because per-block release is \
+             M14 slice 3)",
             kb / 1024
         );
     }
