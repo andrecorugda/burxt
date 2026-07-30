@@ -10,16 +10,22 @@
 // checked there are no files, only one long program. A class needs no such knowledge, because
 // it is its own boundary. That is why `class` had to land before `private` could.
 //
-// ---- Why this is in tests/stage0-only/ ----------------------------------------------
+// ---- It needed a constructor, which stage-1 could not hold (until v0.0.165) ----------
 //
-// It needs a CONSTRUCTOR, and constructors are stage-0's alone for now. Stage-0 stores an
-// associated function under the qualified name `Account.open` and emits `bx.Account.open`,
-// exactly as it does for a method. Stage-1 cannot: it names every declaration by its SPAN in
-// the source, and `Account.open` is not contiguous — the class name and the function name are
-// far apart — so there is nothing to point at. The same wall that blocks M13's return bracket.
+// This lived in tests/stage0-only/ because it needs a CONSTRUCTOR. Stage-0 stores an associated
+// function under the qualified name `Account.open`; stage-1 names every declaration by its SPAN
+// in the source, and `Account.open` is not contiguous — the class name and the function name are
+// far apart — so there appeared to be nothing to point at, and the plan of record was to give
+// stage-1 synthesized names.
 //
-// tests/pass/ means both compilers accept a program byte for byte, so this cannot live there.
-// Staged the way M7 staged generics.
+// That turned out to be the wrong fix for the wrong problem. Stage-1 already keys a METHOD by
+// two spans, a receiver and a name, because that is how `Account` + `shown` is looked up. A
+// qualified name IS a name in two parts, so an associated function is a method with bit 32 set
+// and no receiver argument, and the lookup that already existed finds it. No name is built
+// anywhere, in either compiler.
+//
+// What still wants synthesized names is narrower than it looked: M13's return bracket, where the
+// word `result` is never written down and so has no span in any program that uses it.
 class Account {
     owner: String,
     private balance: Decimal<2>,

@@ -574,6 +574,97 @@ function (mutable self: Unit) complain_at(src: String, token: Int, message: Stri
 }
 
 // ---- declarations ------------------------------------------------------------
+// May the code being checked right now see `holder`'s private members?
+//
+// The CLASS is the scope, not the file — so the question is only ever "is the enclosing method's
+// receiver this same class". A free function has no receiver and top-level code has no enclosing
+// anything, so both answer false, which is the whole rule.
+//
+// No new state, and that is deliberate: `current_method` is already saved and restored around every
+// body. Stage-0's first version of this kept its own `current_receiver`, set it and never restored
+// it, and the top level inherited the LAST class's privileges — a private method called from
+// outside compiled cleanly. A leaked capability is the dangerous direction of that bug, so the
+// answer here is derived from state that cannot leak rather than tracked again.
+function (self: Unit) inside_class(src: String, holder: Type) -> Bool {
+    if self.current_method < 0 {
+        return false;
+    }
+    if holder.kind != 46 {
+        return false;
+    }
+    let m: Method = self.methods[self.current_method];
+    return spans_equal(src, m.receiver_start, m.receiver_length,
+               holder.name_start, holder.name_length);
+}
+
+// Is this field of this class declared `private`? The field node's spare slot carries it, set by
+// the parser. 0 for a public field and for a name that is no field at all — "no such field" is a
+// better message than a privacy one, and it is already reported elsewhere.
+function (self: Unit) field_is_private(src: String, holder: Type, name_tok: Int) -> Bool {
+    if holder.kind != 46 {
+        return false;
+    }
+    let found: Int = self.find_type(src, holder.name_start, holder.name_length);
+    if found < 0 {
+        return false;
+    }
+    let decl: TypeDeclaration = self.types[found];
+    if decl.kind != 82 {
+        return false;
+    }
+    let item: Node = self.nodes[decl.node];
+    let wanted: Token = self.tokens[name_tok];
+    let mutable i: Int = 0;
+    while i < item.b {
+        let field: Node = self.nodes[self.children[item.a + i]];
+        let field_name: Token = self.tokens[field.token];
+        if spans_equal(src, field_name.start, field_name.length, wanted.start, wanted.length) {
+            return field.value == 1;
+        }
+        i += 1;
+    }
+    return false;
+}
+
+// `Account.open(...)` — is this method call actually a call to an ASSOCIATED function? The index
+// of the method if so, -1 otherwise.
+//
+// Three questions, in the order that makes each cheap. The base has to be a bare name (kind 5), so
+// `sale.total.round()` never reaches the rest. That name must not be a BINDING — a local called
+// `Account` shadows the class, exactly as it does everywhere else in the language, and getting this
+// order wrong would let a variable's method call be resolved against a class. And it must be a
+// declared type, so a typo answers "unknown name" rather than "no such method".
+//
+// The receiver's span comes straight from the source, which is the point: `Account` is written at
+// the call site and written again at the declaration, so two spans compare equal with no name
+// having to be built. That is why stage-1 needed no synthesized-name machinery for constructors.
+function (mutable self: Unit) associated_at(src: String, node: Int) -> Int {
+    let n: Node = self.nodes[node];
+    let base: Node = self.nodes[n.a];
+    if base.kind != 5 {
+        return -1;
+    }
+    let holder: Token = self.tokens[base.token];
+    if self.find_binding(src, holder.start, holder.length) >= 0 {
+        return -1;
+    }
+    if self.find_type(src, holder.start, holder.length) < 0 {
+        return -1;
+    }
+    let wanted: Token = self.tokens[n.token];
+    let found: Int = self.find_method_named(src, holder.start, holder.length,
+                         wanted.start, wanted.length);
+    if found < 0 {
+        return -1;
+    }
+    if flag_associated(self.methods[found].flags) == 0 {
+        // A real method reached through the class name rather than a value. Not this rule's
+        // business: fall through and let the ordinary path say what it says.
+        return -1;
+    }
+    return found;
+}
+
 function (mutable self: Unit) find_binding(src: String, start: Int, length: Int) -> Int {
     self.find_binding_calls += 1;
     // Backwards: the innermost binding with this name is the one in scope.
@@ -1260,6 +1351,30 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
     }
 
     if n.kind == 14 {                                // a method call on a value
+        // `Account.open(...)` — an ASSOCIATED function, which reads exactly like a method call and
+        // is told apart the same way stage-0 tells one: by what the name in FRONT of the dot is. A
+        // class name that is not also a binding, holding a method flagged associated.
+        //
+        // Checked before `type_of` on the base, because `Account` on its own is not an expression
+        // and asking for its type is what produced "unknown name" for every constructor call.
+        let associated: Int = self.associated_at(src, node);
+        if associated >= 0 {
+            let m: Method = self.methods[associated];
+            if flag_allocates(m.flags) == 1 && !self.has_region() {
+                let r: Int = self.needs_region(src, n.token,
+                    "`" + substring(src, m.start, m.length) + "`");
+            }
+            if self.in_pure == 1 {
+                let complained: Int = self.not_pure(src, n.token, "call a method");
+            }
+            let ok: Int = self.check_against_params(src, n.token, n.b, m.parameters, "method");
+            // The node is marked so the emitter needs none of this reasoning again: `c` is unused
+            // on a method call, and a second copy of "is this associated" in the backend is how
+            // two answers to one question drift apart.
+            self.nodes[node] = Node { kind: n.kind, a: n.a, b: n.b, c: 1,
+                                  value: n.value, token: n.token };
+            return m.return_type;
+        }
         let holder: Type = self.type_of(src, n.a, unknown_type());
         if is_unknown(holder) {
             let visited: Int = self.check_args(src, n.b);
@@ -1276,6 +1391,13 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             return unknown_type();
         }
         let m: Method = self.methods[found];
+        if flag_private(m.flags) == 1 && !self.inside_class(src, holder) {
+            let complained: Int = self.complain_at(src, n.token,
+                "`" + self.show_type(src, holder) + "."
+                + substring(src, m.start, m.length)
+                + "()` is private: it is callable only from `"
+                + self.show_type(src, holder) + "`'s own methods");
+        }
         if flag_allocates(m.flags) == 1 && !self.has_region() {
             let r: Int = self.needs_region(src, n.token,
                 "`" + substring(src, m.start, m.length) + "`");
@@ -1311,6 +1433,13 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             let complained: Int = self.complain_at(src, n.token,
                 self.show_type(src, holder) + " has no such field");
         }
+        if self.field_is_private(src, holder, n.token) && !self.inside_class(src, holder) {
+            let complained: Int = self.complain_at(src, n.token,
+                "`" + self.show_type(src, holder) + "."
+                + substring(src, self.tokens[n.token].start, self.tokens[n.token].length)
+                + "` is private: it is reachable only from `"
+                + self.show_type(src, holder) + "`'s own methods");
+        }
         return field;
     }
 
@@ -1339,6 +1468,19 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             if is_unknown(want) {
                 let complained: Int = self.complain_at(src, pair.token,
                     self.show_type(src, holder) + " has no such field");
+            }
+            // A private field a literal could still set from outside would be half a boundary:
+            // `private` would protect reading and writing but not CONSTRUCTION, and every
+            // `requires` on the class's constructor would be a suggestion. This is the rule that
+            // turns the other two into a wall.
+            if self.field_is_private(src, holder, pair.token) && !self.inside_class(src, holder) {
+                let complained: Int = self.complain_at(src, n.token,
+                    "`" + self.show_type(src, holder) + "."
+                    + substring(src, self.tokens[pair.token].start,
+                                self.tokens[pair.token].length)
+                    + "` is private, so `" + self.show_type(src, holder)
+                    + "` cannot be built here: a literal may set a private field only inside `"
+                    + self.show_type(src, holder) + "`");
             }
             let got: Type = self.type_of(src, pair.a, want);
             if !is_unknown(got) && !is_unknown(want) && !self.fits(src, got, want) {
@@ -1911,7 +2053,11 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int {
     self.in_caller_region = flag_allocates(item.value);
     self.in_pure = flag_pure(item.value);
     let signature: Node = self.nodes[item.c];
-    if item.kind == 81 {
+    // An ASSOCIATED function is stored as a method so the two-span lookup finds it, but it has no
+    // receiver clause and therefore no `self` anywhere in its text. Binding one would send
+    // `self_token` scanning backwards for a word that was never written, and it would find some
+    // earlier method's — a wrong span rather than a refusal, which is the dangerous direction.
+    if item.kind == 81 && flag_associated(item.value) == 0 {
         // `self` is a name like any other once it is bound: the receiver's type is
         // written in the clause node, so a method body needs no special rule.
         let receiver: Token = self.tokens[signature.value];
@@ -1957,9 +2103,13 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int {
         enclosing = self.generic_named(src, receiver.start, receiver.length);
     }
     self.current_generic = enclosing;
-    let clauses: Int = self.check_clauses(src, index, signature, return_type);
-    let outer_function: Int = self.in_function;
-    let outer_loop: Int = self.loop_depth;
+    // Which declaration this body IS, settled BEFORE the clauses are checked rather than after.
+    //
+    // It used to be after, and privacy is what exposed the ordering: `requires amount <=
+    // self.balance` reads a private field, and while `current_method` was still the previous
+    // body's the clause was being checked as though it stood outside the class. A contract is part
+    // of the method, so it has to be checked knowing which method it belongs to — the false
+    // positive was the honest signal that it was not.
     let outer_fn: Int = self.current_function;
     let outer_method: Int = self.current_method;
     self.current_function = -1;
@@ -1982,6 +2132,9 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int {
     if self.current_method >= 0 {
         self.in_caller_region = flag_allocates(self.methods[self.current_method].flags);
     }
+    let clauses: Int = self.check_clauses(src, index, signature, return_type);
+    let outer_function: Int = self.in_function;
+    let outer_loop: Int = self.loop_depth;
     self.in_function = 1;
     self.loop_depth = 0;
     let body: Int = self.check_block_nodes(src, item.b, return_type);

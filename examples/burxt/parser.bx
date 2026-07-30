@@ -992,6 +992,13 @@ function flag_external(flags: Int) -> Int {
 function flag_private(flags: Int) -> Int {
     return remainder(divide_floor(flags, 16), 2);
 }
+// An ASSOCIATED function — `function open(...)` inside a class body, with no receiver clause.
+// Bit 5. It is stored as a method so that the lookup `Account` + `open` finds it, which is the
+// whole reason a synthesized name `"Account.open"` turned out not to be needed: stage-1 already
+// keys a method by TWO spans, and a qualified name is exactly a name in two parts.
+function flag_associated(flags: Int) -> Int {
+    return remainder(divide_floor(flags, 32), 2);
+}
 
 // ---- expressions -------------------------------------------------------------
 // Precedence climbs the way the Rust parser's does: or, and, comparison, additive,
@@ -1645,6 +1652,15 @@ function (mutable self: Unit) parse_function(src: String, is_pure: Int, owner: I
     // `(` right after `function` is the tell, exactly as in the Rust parser.
     let mutable receiver_tok: Int = -1;
     let mutable receiver_mut: Int = 0;
+    // `function open(...)` with an OWNER but no receiver clause: an associated function, which is
+    // how a class gets a constructor. It is recorded as a method on the owner so that the two-span
+    // lookup finds it at `Account.open(...)`, and flagged so that nothing looks for a `self`
+    // that was never written.
+    let mutable associated: Int = 0;
+    if owner >= 0 && !self.at(29) {
+        associated = 1;
+        receiver_tok = owner;
+    }
     if self.at(29) {
         let n: Int = self.advance();
         if self.at(101) {                            // mutable
@@ -1729,6 +1745,7 @@ function (mutable self: Unit) parse_function(src: String, is_pure: Int, owner: I
     if is_pure == 1 { flags += 1; }
     if builds_in_caller == 1 { flags += 2; }
     if receiver_mut == 1 { flags += 4; }
+    if associated == 1 { flags += 32; }
     if receiver_tok >= 0 {
         // A method: `c` is the clause node, which holds the receiver and the return
         // type both, so a method item has the same shape a function's does.
@@ -1799,11 +1816,12 @@ function (mutable self: Unit) parse_record(src: String) -> Int {
         }
         // `function name(...)` with no receiver clause: an ASSOCIATED function, which is how a
         // class gets a constructor. Stage-0 stores it under the qualified name `Account.open`
-        // and emits `bx.Account.open`, exactly as it already does for a method. Stage-1 parses
-        // it as an ordinary function for now — the qualified name and the privacy rule that
-        // makes it matter are stage-0's, staged the way M7 staged generics.
+        // and emits `bx.Account.open`; stage-1 records it as a method on this class with bit 32
+        // set, because a method here is already keyed by (receiver span, name span) and a
+        // qualified name is a name in two parts. Passing the class's token as the OWNER is the
+        // whole change — `parse_function` sees an owner with no receiver clause and knows.
         if self.at(102) && self.kind_at(1) != 29 {
-            let associated: Int = self.parse_function(src, 0, 0 - 1);
+            let associated: Int = self.parse_function(src, 0, name_tok);
             if associated < 0 { return -1; }
             push(self.items, associated);
             continue;

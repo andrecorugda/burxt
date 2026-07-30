@@ -1,0 +1,23 @@
+// A literal may not set a private field from outside its own class.
+//
+// This is the rule that makes the other two privacy rules a WALL rather than a fence. Protecting
+// reading and writing while leaving construction open would mean every `requires` on a class's
+// constructor was a suggestion: `Account.open` refuses a negative opening balance, and anyone who
+// wanted one would simply not go through the door.
+//
+// It shipped in v0.0.151 with no fail fixture of its own — found in v0.0.165 while teaching stage-1
+// the same rule, which is the argument for two implementations. Stage-0 enforced it correctly the
+// whole time; nothing in the suite said so.
+class Account {
+    owner: String,
+    private balance: Decimal<2>,
+
+    function open(owner: String, opening: Decimal<2>) -> Account
+        requires opening >= $0.00
+    {
+        return Account { owner: owner, balance: opening };
+    }
+}
+
+let eve: Account = Account { owner: "eve", balance: -999.00 };
+print(eve.owner);

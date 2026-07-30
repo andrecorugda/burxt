@@ -788,6 +788,13 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
         return reg;
     }
     if n.kind == 14 {                                // a method call
+        // `c == 1`: the checker already decided this is an ASSOCIATED function, so the base is a
+        // class NAME rather than a value and there is no receiver to evaluate. Taking the marker
+        // rather than re-deriving it means the backend cannot disagree with the checker about which
+        // call this is — and a disagreement there is a wrong call, not an error message.
+        if n.c == 1 {
+            return self.emit_associated_call(src, node, n);
+        }
         let holder: Type = self.type_at(n.a);
         if holder.kind == 49 {
             // The call's own type, resolved here because a dynamic call needs it for the
@@ -1126,6 +1133,53 @@ function (mutable self: Unit) emit_construction(src: String, holder: Type, call:
 
 // A method's symbol: the receiver's type, a dot, the method's name. Two types may both
 // have a `label`, and the linker needs to tell them apart.
+// `Account.open(...)` — the same shape as a method call with the receiver taken out. The symbol is
+// still qualified, because that is what the definition emitted, and an aggregate answer still
+// travels through the caller's storage, because that is about the RETURN and not about `self`.
+//
+// The holder is built from the base node's own token rather than from `type_at`, which is the whole
+// reason this is a separate path: `Account` on its own has no type, and asking for one is what used
+// to fail here.
+function (mutable self: Unit) emit_associated_call(src: String, node: Int, n: Node) -> String {
+    let base: Node = self.nodes[n.a];
+    let named: Token = self.tokens[base.token];
+    let holder: Type = Type { kind: 46, scale: 0, contract: 0,
+                          name_start: named.start, name_length: named.length };
+    let list: Node = self.nodes[n.b];
+    let mutable args: String = "";
+    let mutable k: Int = 0;
+    while k < list.b {
+        let value: String = self.emit_expr(src, self.children[list.a + k]);
+        if k > 0 {
+            args += ", ";
+        }
+        args += "i64 " + value;
+        k += 1;
+    }
+    let answers: Type = self.type_at(node);
+    let symbol: String = method_symbol(src, holder, self.tokens[n.token])
+        + self.holder_suffix(src, holder);
+    let seen: Int = self.note_holder(src, holder);
+    if self.is_aggregate_written(src, answers) {
+        let storage: String = self.scratch(self.cells_of(src, answers));
+        let dropped: String = self.fresh();
+        let mutable handed: String = "ptr " + storage;
+        if len(args) > 0 {
+            handed += ", " + args;
+        }
+        let called_it: Int = self.write_body("  " + dropped + " = call i64 @" + symbol
+                                    + "(" + handed + ")\n");
+        let reg: String = self.fresh();
+        let address: Int = self.write_body("  " + reg + " = ptrtoint ptr " + storage
+                                  + " to i64\n");
+        return reg;
+    }
+    let reg: String = self.fresh();
+    let visited: Int = self.write_body("  " + reg + " = call i64 @" + symbol
+                              + "(" + args + ")\n");
+    return reg;
+}
+
 function method_symbol(src: String, holder: Type, name: Token) -> String {
     return substring(src, holder.name_start, holder.name_length) + "."
         + substring(src, name.start, name.length);
@@ -2511,7 +2565,13 @@ function (mutable self: Unit) emit_function(src: String, index: Int, suffix: Str
     let params: Node = self.nodes[item.a];
     let signature_node: Node = self.nodes[item.c];
     let base: Int = len(self.slots);
-    let is_method: Bool = item.kind == 81;
+    // Two questions, and they are not the same one. `qualified` asks whether the SYMBOL carries the
+    // class's name — true for a method and for an associated function alike, because both are
+    // `Account.something`. `is_method` asks whether a RECEIVER arrives, which an associated
+    // function's does not. Conflating them emitted `Account.open` with a third parameter nothing
+    // ever passed.
+    let qualified: Bool = item.kind == 81;
+    let is_method: Bool = item.kind == 81 && flag_associated(item.value) == 0;
 
     // An aggregate return travels through the CALLER's storage: the caller hands over a
     // pointer as the first argument and the callee copies into it. Returning a pointer
@@ -2530,11 +2590,13 @@ function (mutable self: Unit) emit_function(src: String, index: Int, suffix: Str
     }
 
     let mutable symbol: String = substring(src, name.start, name.length) + suffix;
-    if is_method {
+    if qualified {
         let receiver: Token = self.tokens[signature_node.value];
         let holder: Type = Type { kind: 46, scale: 0, contract: 0,
                               name_start: receiver.start, name_length: receiver.length };
         symbol = method_symbol(src, holder, name) + suffix;
+    }
+    if is_method {
         if first > 0 {
             signature += ", ";
         }

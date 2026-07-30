@@ -1162,6 +1162,18 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     // `region` block still cannot leave it, because that block still releases.
     // `allocates_cannot_escape_inner_region` and `allocates_cannot_escape_via_a_binding` cover
     // the two spellings of it.
+    //
+    // v0.0.165 raised it to 199, and how far it had DRIFTED is the more interesting number. The
+    // floor said 189; stage-1 was actually rejecting 195. Six fixtures' worth of progress had
+    // accumulated above the line, where — exactly as the note above predicts — a regression in any
+    // of them would have gone unnoticed. Privacy enforcement in stage-1 added the three
+    // `private_*` fixtures and a fourth written the same day, and the floor was moved to the
+    // measured value rather than to the measured value minus a cushion. A cushion is the drift.
+    //
+    // The fourth is worth naming: `private_literal_bypasses_the_constructor` did not exist. The
+    // rule shipped in v0.0.151 and stage-0 enforced it correctly for fourteen versions with
+    // nothing in the suite saying so, and it surfaced only because a second implementation had to
+    // be told the same rule. That is the argument for stage-1 in one sentence.
     let mut caught = 0;
     let mut total = 0;
     for entry in fs::read_dir(root.join("tests/fail")).unwrap() {
@@ -1177,8 +1189,8 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
 
     let _ = fs::remove_dir_all(&scratch);
     assert!(
-        caught >= 189,
-        "stage-1 rejected only {} of {} fail programs, down from 189",
+        caught >= 199,
+        "stage-1 rejected only {} of {} fail programs, down from 199",
         caught,
         total
     );
