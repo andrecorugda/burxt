@@ -1,0 +1,14 @@
+// A contract clause must not be able to change the program it checks — a check that can have an
+// effect is a second program that only runs when somebody is looking.
+//
+// The rule is the same for a bracket as for a written `requires`, which is the point of the
+// desugaring: by the time anything checks this, the two forms ARE the same clause.
+function noisy() -> Bool {
+    print("side effect");
+    return true;
+}
+
+function guarded(n: Int [it > 0 && noisy()]) -> Int {
+    return n;
+}
+print(guarded(5));

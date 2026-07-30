@@ -1174,6 +1174,11 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     // rule shipped in v0.0.151 and stage-0 enforced it correctly for fourteen versions with
     // nothing in the suite saying so, and it surfaced only because a second implementation had to
     // be told the same rule. That is the argument for stage-1 in one sentence.
+    //
+    // v0.0.167 raised it to 204, and every one of the five is a REFUSAL stage-1 gets for the wrong
+    // reason — it does not parse contract brackets at all, so `bracket_*` counts as caught because
+    // the parse fails. Written down rather than quietly banked: when stage-1 learns brackets (#1)
+    // those five will need re-earning, and a floor that silently held would hide it.
     let mut caught = 0;
     let mut total = 0;
     for entry in fs::read_dir(root.join("tests/fail")).unwrap() {
@@ -1189,8 +1194,8 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
 
     let _ = fs::remove_dir_all(&scratch);
     assert!(
-        caught >= 199,
-        "stage-1 rejected only {} of {} fail programs, down from 199",
+        caught >= 204,
+        "stage-1 rejected only {} of {} fail programs, down from 204",
         caught,
         total
     );
@@ -4049,7 +4054,7 @@ fn bracket_contracts_desugar_to_the_same_message() {
     // Each pair: the same constraint written as a bracket and as a clause, and the message both
     // must produce. The parameter form, the elided-subject return form, and a clause naming a
     // SECOND parameter — which is the case a synthesized subject could most easily get wrong.
-    let cases: [(&str, &str, &str); 3] = [
+    let cases: [(&str, &str, &str); 5] = [
         (
             "function withdraw(balance: Decimal<2> [> $0.00], amount: Decimal<2>) -> Decimal<2> {\n\
              return balance - amount;\n\
@@ -4088,6 +4093,39 @@ fn bracket_contracts_desugar_to_the_same_message() {
              }\n\
              print(take($1.00, $9.00));\n",
             "`requires amount <= balance` failed in `take`",
+        ),
+        // `it` names the subject where elision cannot reach — spec Decision 2. The message resolves
+        // it too: reporting `it > $0.00 || it > -$100.00` would name no value, which is the tax the
+        // synthesized-subject decision was taken to avoid.
+        (
+            "function band(balance: Decimal<2> [it > $0.00 || it > -$100.00]) -> Decimal<2> {\n\
+             return balance;\n\
+             }\n\
+             print(band(-$500.00));\n",
+            "function band(balance: Decimal<2>) -> Decimal<2>\n\
+             requires balance > $0.00 || balance > -$100.00\n\
+             {\n\
+             return balance;\n\
+             }\n\
+             print(band(-$500.00));\n",
+            "`requires balance > $0.00 || balance > -$100.00` failed in `band`",
+        ),
+        // `it` on a RETURN bracket is `result`, and TWO clauses using it — the case where computing
+        // "did this clause use it" as a change across the clause reported the second one unresolved,
+        // because the flag it read was monotonic.
+        (
+            "function bounded(amount: Decimal<2>) -> Decimal<2> [it >= $0.00, it < $100.00] {\n\
+             return amount;\n\
+             }\n\
+             print(bounded($500.00));\n",
+            "function bounded(amount: Decimal<2>) -> Decimal<2>\n\
+             ensures result >= $0.00\n\
+             ensures result < $100.00\n\
+             {\n\
+             return amount;\n\
+             }\n\
+             print(bounded($500.00));\n",
+            "`ensures result < $100.00` failed in `bounded`",
         ),
     ];
 

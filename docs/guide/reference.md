@@ -20,11 +20,15 @@ if something is missing here it is probably missing from the language too.
 
 Reserved but not yet used: `for`, `is`, `interface`.
 
-**Contextual markers** — `allocates`, `requires`, `ensures`, `decreases`, `old`, `result`.
+**Contextual markers** — `allocates`, `requires`, `ensures`, `decreases`, `old`, `result`, `it`,
+`touches`.
 `allocates` is **optional and inferred** since v0.0.142; writing it is still legal and still
 checked. Every one of these may also be used as an ordinary name.
 These are only special where they appear (on a signature, inside a clause), so a variable
-may still be called `ensures` anywhere else.
+may still be called `ensures` anywhere else. `it` means the subject **only inside a contract
+bracket**; a declaration that both takes a parameter called `it` and writes `it` in a bracket is
+refused for the collision rather than shadowed silently, which is the rule `result` already follows
+inside `ensures`.
 
 **Names the language owns**, which a program may not declare: `print`, `len`, `byte_at`,
 `push`, `truncate`, `substring`, `to_string`, `read_file`, `write_file`, `argument`,
@@ -207,12 +211,25 @@ Not yet: generics in the Burxt-hosted compiler. See [`spec/M7-GENERICS.md`](../.
 ## Signature grammar
 
 ```
-[pure] function name(params) -> Type [allocates] [requires E] [ensures E] [decreases E] { body }
-[pure] function (self: Type) name(params) -> Type [allocates] [clauses] { body }
+[pure] function name(params) -> Type [touches E,...] [requires E] [ensures E] [decreases E] { body }
+[pure] function (self: Type) name(params) -> Type [clauses] { body }
        function (mutable self: Type) name(...)                // writes through to the caller
-external function name(params) -> Int | CInt;                 // returns only Int or CInt
+       function name(params) -> Owner { body }                // in a class body: a constructor
+external function name(params) -> Int | CInt [touches E,...]; // returns only Int or CInt
 external function name(amount: Decimal<S> as scaled) -> Int;  // money crosses as its integer
 ```
+
+Square brackets above mean *optional*. Written in a signature they mean something else — a
+**contract on the value they follow**:
+
+```
+function f(p: Type [> 0, <= q]) -> Type [>= 0] { body }   // requires p > 0, p <= q; ensures result >= 0
+function f(p: Type [it * 2 > 0]) -> Type { body }         // `it` is p, where elision cannot reach
+```
+
+Each comma is a separate clause, so a failure names the one that broke. A bracket on a parameter is a
+`requires`; on the return type it is an `ensures` whose subject is `result`. The message carries the
+subject either way — `p > 0`, never `> 0`. See [Contracts](05-contracts.md#a-shorter-spelling-put-the-claim-on-the-value).
 
 ## Runtime failures
 

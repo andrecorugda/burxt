@@ -163,6 +163,93 @@ the law:
 burxt runtime error: `ensures self.from_side + self.to_side == old(self.from_side + self.to_side)` failed in `Ledger.transfer`
 ```
 
+## A shorter spelling: put the claim on the value
+
+`requires amount > $0.00` names `amount` in order to say which value it is about. Once a function has
+four parameters and three claims, the reader is matching names across six lines to work out what
+constrains what. So a claim can sit **on the value it is about**:
+
+```burxt
+function withdraw(balance: Decimal<2> [> $0.00], amount: Decimal<2> [<= balance]) -> Decimal<2>
+{
+    return balance - amount;
+}
+```
+
+That is *exactly* the same program as:
+
+```burxt
+function withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>
+    requires balance > $0.00
+    requires amount <= balance
+{
+    return balance - amount;
+}
+```
+
+Same checks, same order, and **the same failure message down to the byte** — a test in the suite
+compiles both spellings and compares the two runs, because a claim like that is worth checking rather
+than asserting.
+
+The subject is written into the message even though you did not write it:
+
+```
+burxt runtime error: `requires balance > $0.00` failed in `withdraw`
+```
+
+`balance > $0.00`, not `> $0.00`. A message that does not name the value which broke sends you back
+to the declaration to find out, and that is a cost paid on every failure forever.
+
+A bracket on the **return type** is an `ensures`, and its subject is `result`:
+
+```burxt
+function fee(amount: Decimal<2> [> $0.00]) -> Decimal<2> [>= $0.00] {
+    return amount;
+}
+```
+
+Each comma is a **separate clause**, so a failure names the one that broke rather than a conjunction:
+
+```burxt
+function withdraw(balance: Decimal<2> [> $0.00, < $1000000.00]) -> Decimal<2> {
+    return balance;
+}
+```
+
+### `it`, when the value appears twice
+
+The leading form only reaches the left of a comparison. When the value is needed anywhere else, name
+it `it`:
+
+```burxt
+function band(balance: Decimal<2> [it > $0.00 || it > -$100.00]) -> Decimal<2> {
+    return balance;
+}
+
+function shout(word: String [len(it) > 0]) -> String {
+    return word;
+}
+```
+
+`it` is resolved in the message too — `band` reports `balance > $0.00 || balance > -$100.00`, for the
+same reason as above.
+
+And `it` is **not a keyword**. Outside a bracket the name is free:
+
+```burxt
+function count() -> Int {
+    let it: Int = 7;
+    return it;
+}
+```
+
+A function with a parameter *called* `it` and a bracket that *says* `it` has two meanings for one
+word, so that is refused rather than silently shadowed — the same rule `result` follows inside
+`ensures`.
+
+Spreading the elision across `||` was considered and rejected: `[a > 0 || > 1]` would be a rule you
+had to remember, and remembering rules is what this language tries not to charge you for.
+
 ## `pure` — an answer that depends on its arguments and nothing else
 
 ```burxt

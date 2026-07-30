@@ -1,0 +1,7 @@
+// A bracket holds a CLAIM, so it has to be a Bool. `[n + 1]` is an expression of type Int, which is
+// a value rather than a claim about one — and there is no coercion from a number to a truth in this
+// language, so nothing can quietly decide that nonzero means yes.
+function f(n: Int [n + 1]) -> Int {
+    return n;
+}
+print(f(5));

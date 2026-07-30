@@ -1,0 +1,12 @@
+// `it` means the subject ONLY inside a contract bracket. A written `requires` names the value it is
+// about, because there is no bracket to say which one that would be — so `it` there is an ordinary
+// identifier that nothing declared.
+//
+// This is the half of Decision 2 that keeps `it` from being a keyword: outside the one position
+// where it has a meaning, the name is free, and `let it: Int = 7;` is a legal program.
+function fee(amount: Decimal<2>) -> Decimal<2>
+    requires it > $0.00
+{
+    return amount;
+}
+print(fee($5.00));

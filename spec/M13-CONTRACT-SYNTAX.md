@@ -1,23 +1,49 @@
 # Burxt — contracts on the values they constrain (M13)
 
-> Status: **stage-0 DONE except Decision 2 (v0.0.135). Stage-1 pending, one obstacle left.**
+> Status: **stage-0 DONE, and now tested (v0.0.135 · `it` v0.0.167). Stage-1 pending, one obstacle.**
 >
-> **Two corrections, both found in v0.0.166 by finally writing a fixture.**
+> **The bracket form had NO test coverage for fourteen versions**, and writing the first fixture in
+> v0.0.166 found that **Decision 2 — `it` — had never been implemented**: `[it * 2 > 0]` answered
+> `unknown variable: it`, because the parser deferred to a checker binding nobody built.
+> `src/parser.rs` cited a `tests/pass/contract_brackets.bx` that had never existed, and the claim
+> below that the desugaring is "observable rather than asserted" was true of neither — nothing
+> observed it and nothing asserted it.
 >
-> 1. **Decision 2 — `it` — is NOT implemented.** `[it * 2 > 0]` answers `unknown variable: it`. The
->    parser's comment says `it` is "resolved later against a binding this function installs nowhere.
->    The checker is what knows it means the subject" — and the checker does not. Naming the parameter
->    works; `it` is specified and absent. Acceptance item 3's fail fixtures for it do not exist either.
+> Both closed:
 >
-> 2. **The bracket form had NO test coverage at all**, for fourteen versions. `src/parser.rs` cited a
->    `tests/pass/contract_brackets.bx` that had never been written. The claim below that the
->    desugaring is "observable rather than asserted" was true of neither: nothing observed it and
->    nothing asserted it. It is now `bracket_contracts_desugar_to_the_same_message` in
->    tests/runner.rs, which compiles both spellings and compares the failure text, plus
->    `tests/stage0-only/contract_brackets.bx` for the accepting side.
+> * `bracket_contracts_desugar_to_the_same_message` (v0.0.166, extended v0.0.167) compiles **both**
+>   spellings of five constraints and compares the failure text byte for byte.
+> * `tests/stage0-only/contract_brackets.bx` covers the accepting side.
+> * Five fail fixtures, which are acceptance item 3: `bracket_it_collides_with_a_parameter`,
+>   `bracket_it_outside_a_bracket`, `bracket_clause_is_not_pure`, `bracket_clause_is_not_a_bool`,
+>   `bracket_promises_nothing`.
+> * `it` works, in the condition **and in the message**: `[it > $0.00 || it > -$100.00]` on `balance`
+>   reports `balance > $0.00 || balance > -$100.00`. Reporting the written `it` would have named no
+>   value, which is precisely the tax the synthesized-subject decision was taken to avoid, so
+>   resolving it in the text is that decision applied consistently rather than a separate choice.
 >
 > Worth stating plainly, because it is the second time in two days: a status line saying DONE is not
 > evidence. The suite is.
+>
+> ### How `it` is resolved, and the two bugs on the way
+>
+> At the **one place a bare identifier becomes a `Var`**, gated on a parser field holding what `it`
+> currently means — `Some(subject)` inside a bracket, `None` everywhere else. Not by walking the
+> parsed expression afterwards: a walker has to know every variant that can hold an expression, and
+> forgetting one is a silent miss rather than a compile error.
+>
+> The field is set and **restored** around each clause. Left switched on it would be exactly the
+> capability leak stage-1's first `current_receiver` had.
+>
+> The message text uses a **whole-word** replacement over the written span, so `it` inside `limit`,
+> `omit` or `items` is untouched. The alternative is a pretty-printer for contract expressions, whose
+> output would then differ from the source spelling for every other clause in the language. The one
+> case it gets wrong is a bare `it` inside a string literal in a bracket clause.
+>
+> Two flags, not one, and the first attempt at one is why: a signature-level `used_it` has to stay
+> true for the collision check, so "did THIS clause use `it`" computed as a *change* across the clause
+> answered false for every clause after the first — a return bracket with two `it` clauses reported
+> the second one unresolved. Now `used_it` is per clause and `it_seen` per signature.
 >
 > Purely additive: `requires` and `ensures` keep working and keep their meaning, and the whole suite
 > passes unchanged — 35 invariants, fixpoint intact, not one existing contract touched.

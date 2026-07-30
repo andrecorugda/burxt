@@ -46,6 +46,23 @@ pub struct Parser {
     /// The type parameters of the generic being parsed, so `parse_type` can tell `T`
     /// from a struct called `T`. Cleared when the declaration ends.
     type_parameters: Vec<String>,
+    /// What `it` stands for, while a contract bracket is being parsed and only then. `Some(name)`
+    /// inside `[...]` on `name`'s declaration, `None` everywhere else — which is how `it` manages to
+    /// mean the subject in one place and be an ordinary identifier in every other.
+    it_means: Option<String>,
+    /// Whether THIS clause used `it`, so its message text knows whether to resolve one. Cleared
+    /// before every clause.
+    used_it: bool,
+    /// Whether any bracket on the declaration being parsed used `it`. Needed for the collision rule:
+    /// a parameter may still be CALLED `it`, and a bracket that says `it` on such a function is an
+    /// error about the collision rather than a silent shadow. Checked once the parameter list is
+    /// complete, because a bracket on parameter one cannot know about parameter three.
+    ///
+    /// Two flags rather than one, and the first attempt at one flag is why: `used_it` is monotonic
+    /// if it also has to survive for the collision check, so "did this clause use it" computed as a
+    /// CHANGE across the clause answered false for every clause after the first. A return bracket
+    /// with two `it` clauses reported the second one unresolved.
+    it_seen: bool,
 }
 
 impl Parser {
@@ -65,6 +82,9 @@ impl Parser {
             allow_struct_lit: true,
             src: src.to_string(),
             type_parameters: Vec::new(),
+            it_means: None,
+            used_it: false,
+            it_seen: false,
         }
     }
 
@@ -585,13 +605,14 @@ impl Parser {
     /// decides what the clause is about, which is why there is no `self` here to be confused with a
     /// method's receiver. See spec/M13-CONTRACT-SYNTAX.md Decision 1.
     ///
-    /// A clause that needs the subject anywhere else is supposed to write `it` (spec Decision 2),
-    /// left to the ordinary expression parser — `it` is an identifier like any other here, meant to
-    /// be resolved later against a binding this function installs nowhere.
+    /// A clause that needs the subject anywhere else writes `it` (spec Decision 2), resolved at the
+    /// one place a bare identifier becomes a `Var` — see `it_means`. Shipped in v0.0.167, after this
+    /// comment spent thirty-two versions claiming it was "resolved later against a binding this
+    /// function installs nowhere. The checker is what knows it means the subject." The checker did
+    /// not, nothing did, and `[it * 2 > 0]` answered `unknown variable: it` the whole time.
     ///
-    /// **That resolution was never built.** `[it * 2 > 0]` answers `unknown variable: it`, because
-    /// the checker this comment defers to does not install the binding. Naming the parameter works.
-    /// Found in v0.0.166; the spec's status line now says so.
+    /// Worth leaving the history here: a comment describing behaviour that does not exist reads
+    /// exactly like one describing behaviour that does.
     ///
     /// Each comma is a SEPARATE clause rather than one `&&`, so a failure can name the one that
     /// broke. Decision 3.
@@ -610,6 +631,7 @@ impl Parser {
         }
         loop {
             let start = self.span().start;
+            self.used_it = false;
             let leading = match self.peek() {
                 Token::Gt => Some(CmpOp::Gt),
                 Token::Lt => Some(CmpOp::Lt),
@@ -631,8 +653,22 @@ impl Parser {
                     span: Span { start, end: self.prev_end().max(start + 1) },
                 }
             } else {
-                self.parse_cond()?
+                // `it` means the subject for exactly the length of this clause. Set and restored
+                // rather than left on, because `it` is an ordinary name everywhere else — and a
+                // capability left switched on is the bug shape stage-1's `current_receiver` had.
+                let outer = self.it_means.take();
+                self.it_means = Some(subject.to_string());
+                let parsed = self.parse_cond();
+                self.it_means = outer;
+                parsed?
             };
+            // Per CLAUSE, not per signature: `used_it` only ever goes from false to true, and it has
+            // to stay true for the collision check below, so "did THIS clause use it" is the change
+            // across it rather than its value.
+            let clause_used_it = self.used_it;
+            if clause_used_it {
+                self.it_seen = true;
+            }
             let span = Span { start, end: self.prev_end().max(start + 1) };
             // The text classes the clause as a reader would WRITE it, subject included — so an
             // elided `[<= balance]` on `amount` reports `amount <= balance` rather than a fragment
@@ -649,6 +685,19 @@ impl Parser {
             let written = self.text_of(span);
             let text = if leading.is_some() {
                 format!("{} {}", subject, written)
+            } else if clause_used_it {
+                // `it` is resolved in the MESSAGE too, not only in the condition. Reporting
+                // `` `requires it > $0.00` `` would name no value, which is precisely the tax the
+                // synthesized-subject decision was taken to avoid: the reader would have to go back
+                // to the declaration to learn what `it` was. So `[it > $0.00 || it < $10.00]` on
+                // `balance` reports `balance > $0.00 || balance < $10.00`.
+                //
+                // A whole-word replacement over the written text, which is the honest instrument
+                // here: the alternative is a pretty-printer for contract expressions, and its output
+                // would then differ from the source spelling for every OTHER clause in the language.
+                // The one thing it gets wrong is a bare `it` inside a string literal in a bracket
+                // clause, which is why the check is whole-word rather than a substring.
+                replace_whole_word(&written, "it", subject)
             } else {
                 written
             };
@@ -964,6 +1013,7 @@ impl Parser {
         self.expect(&Token::LParen)?;
         let mut parameters = Vec::new();
         let mut bracket_requires: Vec<Contract> = Vec::new();
+        self.it_seen = false;
         if !self.at(&Token::RParen) {
             loop {
                 let pname = match self.bump() {
@@ -983,6 +1033,21 @@ impl Parser {
             }
         }
         self.expect(&Token::RParen)?;
+        // The collision rule, checked here because a bracket on parameter one cannot know about a
+        // parameter three called `it`. `it` is NOT a keyword — a program may still name something
+        // `it` — but a function that has such a parameter AND a bracket saying `it` has two meanings
+        // for one word, and picking either would be a silent shadow. The same rule `result` follows
+        // inside `ensures`, which is the point: one decision, applied twice, rather than a second
+        // mechanism to remember.
+        if self.it_seen && parameters.iter().any(|p| p.name == "it") {
+            return Err(format!(
+                "`{}` has a parameter called `it`, and a contract bracket that says `it` — so `it` \
+                 would mean two things in one signature. Inside a bracket `it` is the value the \
+                 bracket is about; rename the parameter, or write its name in the clause instead \
+                 of `it`.",
+                name
+            ));
+        }
         if !self.at(&Token::Arrow) {
             return Err(format!(
                 "expected `->` and a return type after function {}'s parameter list \
@@ -1878,6 +1943,16 @@ impl Parser {
                     }
                     self.expect(&Token::RBrace)?;
                     Ok(ExprKind::StructLit { name: s, fields })
+                } else if s == "it" && self.it_means.is_some() {
+                    // Inside a contract bracket, `it` IS the subject — spec M13 Decision 2. Resolved
+                    // here, at the one place a bare name becomes a `Var`, rather than by walking the
+                    // parsed expression afterwards: a walker would have to know every variant that
+                    // can hold an expression, and forgetting one is a silent miss.
+                    //
+                    // Everywhere else `it` is an ordinary identifier, which is what `it_means` being
+                    // None encodes. Not a keyword: a program may still call something `it`.
+                    self.used_it = true;
+                    Ok(ExprKind::Var(self.it_means.clone().unwrap()))
                 } else {
                     // `name[i]` is handled by the postfix loop, so a bare name
                     // is all that is left here.
@@ -1912,4 +1987,35 @@ fn describe_iterable(kind: &ExprKind) -> &'static str {
         ExprKind::Binary { .. } => "an expression",
         _ => "not a name",
     }
+}
+
+/// Replace every whole-word occurrence of `word` with `with`.
+///
+/// Whole-word so that `it` inside `limit`, `omit` or `items` is left alone — a substring replace here
+/// would rewrite a clause into nonsense, silently, in a runtime message nobody looks at until it
+/// fires. A word boundary is "not alphanumeric and not `_`", the same set the lexer uses to end an
+/// identifier, so the two agree about where a name stops.
+fn replace_whole_word(text: &str, word: &str, with: &str) -> String {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < text.len() {
+        if text[i..].starts_with(word) {
+            let before_ok = i == 0 || !ident(bytes[i - 1] as char);
+            let after = i + word.len();
+            let after_ok = after >= text.len() || !ident(bytes[after] as char);
+            if before_ok && after_ok {
+                out.push_str(with);
+                i = after;
+                continue;
+            }
+        }
+        // Push one CHARACTER, not one byte: a clause may hold any UTF-8, and advancing by a byte
+        // would split a multi-byte one and produce a String that is not valid text.
+        let ch = text[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
 }

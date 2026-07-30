@@ -40,12 +40,34 @@ function take(balance: Decimal<2>, amount: Decimal<2> [<= balance]) -> Decimal<2
     return balance - amount;
 }
 
-// A clause that needs the subject somewhere other than the left of a comparison writes it out. The
-// spec's Decision 2 says `it` should work here — `[it * 2 > 0]` — and it does NOT: stage-0 answers
-// "unknown variable: it", because the checker never installs the binding the parser's comment says
-// it will. Found in v0.0.166 writing this fixture. Naming the parameter is what works today.
-function scaled(quantity: Int [quantity * 2 > 0]) -> Int {
+// `it` is the subject, for a clause that needs it somewhere other than the left of a comparison —
+// spec Decision 2, shipped in v0.0.167 after this fixture found it missing. Elision only reaches the
+// LEADING position, and distributing it across `||` was rejected on purpose, so `it` is the only way
+// to write a two-place clause in a bracket.
+function scaled(quantity: Int [it * 2 > 0]) -> Int {
     return quantity * 2;
+}
+
+// `it` twice, in a clause elision could never express, and inside a call.
+function band(balance: Decimal<2> [it > $0.00 || it > -$100.00]) -> Decimal<2> {
+    return balance;
+}
+
+function shout(word: String [len(it) > 0]) -> String {
+    return word;
+}
+
+// `it` on the RETURN bracket means `result`, because that is what the return bracket's subject is.
+// Two clauses, both using it, which is where a first attempt at the flag reported the second one
+// unresolved.
+function bounded(amount: Decimal<2>) -> Decimal<2> [it >= $0.00, it < $100.00] {
+    return amount;
+}
+
+// `it` is not a keyword. Outside a bracket the name is free, and this is a legal program.
+function it_is_free() -> Int {
+    let it: Int = 7;
+    return it;
 }
 
 // Brackets and written clauses together on one function, in the order they are checked: brackets
@@ -69,6 +91,10 @@ class Account {
 print(withdraw($10.00, $3.00));
 print(take($9.00, $4.00));
 print(scaled(21));
+print(band($5.00));
+print(shout("hi"));
+print(bounded($9.00));
+print(it_is_free());
 print(fee($5.00));
 let a: Account = Account { balance: $50.00 };
 print(a.spend($20.00));

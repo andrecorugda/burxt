@@ -1,0 +1,8 @@
+// `[]` after a type promises nothing, and a reader who sees brackets expects a constraint. Refused
+// rather than ignored, because an empty bracket most likely means somebody deleted the clause and
+// left the punctuation — which is exactly the weakening `burxt review` exists to catch, and this
+// catches it a step earlier.
+function f(n: Int []) -> Int {
+    return n;
+}
+print(f(5));

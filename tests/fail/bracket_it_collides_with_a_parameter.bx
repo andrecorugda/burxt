@@ -1,0 +1,11 @@
+// `it` inside a contract bracket means the value the bracket is about (spec M13 Decision 2). It is
+// NOT a keyword — a program may still call something `it` — but a function with a parameter of that
+// name AND a bracket saying `it` has two meanings for one word, and picking either would be a silent
+// shadow.
+//
+// The same rule `result` already follows inside `ensures`: not reserved, but it collides. One
+// decision applied twice beats a second mechanism to remember.
+function transfer(it: Decimal<2>, amount: Decimal<2> [it > $0.00]) -> Decimal<2> {
+    return it - amount;
+}
+print(transfer($10.00, $3.00));
