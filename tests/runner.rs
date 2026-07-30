@@ -2248,12 +2248,24 @@ fn the_release_tarball_works_without_rust_or_llvm() {
         String::from_utf8_lossy(&built.stderr)
     );
 
+    // The tarball for THIS version, not whichever one `read_dir` happens to return first.
+    //
+    // It used to be `find(|p| ends_with(".tar.gz"))`, and that passed only because `dist/` held
+    // exactly one file. With three old artifacts lying beside it the test unpacked a v0.0.83 binary
+    // and certified that — a release test that green-lights the wrong compiler, which is worse than
+    // one that fails, because the whole point of it is to be the last thing between a build and
+    // somebody's machine.
+    let version = env!("CARGO_PKG_VERSION");
+    let wanted = format!("burxt-{}-", version);
     let tarball = fs::read_dir(root.join("dist"))
         .expect("dist/")
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .find(|p| p.to_string_lossy().ends_with(".tar.gz"))
-        .expect("a tarball in dist/");
+        .find(|p| {
+            let name = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            name.starts_with(&wanted) && name.ends_with(".tar.gz")
+        })
+        .unwrap_or_else(|| panic!("no dist/{}*.tar.gz — release.sh should have just written it", wanted));
 
     assert!(Command::new("tar")
         .arg("xzf")
