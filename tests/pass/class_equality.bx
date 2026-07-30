@@ -1,0 +1,46 @@
+// `==` on a class, field by field, with no `derive`.
+//
+// Burxt can do without a derive where Rust cannot, and the reason is its own restrictions paying off:
+// a class has value semantics, no interior pointers and a fixed cell layout, so field-by-field is not
+// *a* definition of equality — it is the only one available. Nothing is being chosen on the
+// programmer's behalf, which is what a derive exists to make explicit.
+//
+// ---- The case that makes it more than a convenience ----------------------------------
+//
+// NOT memcmp. A String field holds a POINTER, and two equal strings need not live at the same
+// address, so comparing the struct's bytes would answer false for two accounts with the same owner
+// built separately. `one` and `two` below differ in exactly that way — one label is a literal, the
+// other is built by joining — and they must be equal.
+//
+// Stage-1 was getting this wrong SILENTLY until v0.0.184: class comparison fell through to the integer
+// path, which compared the two ADDRESSES, so `a == b` on two identical Points answered false. Its
+// checker accepted the program. A wrong answer reachable from three lines of ordinary code, for as
+// long as classes have existed.
+class Point { x: Int, y: Int }
+
+class Named {
+    label: String,
+    at: Point,                                       // a nested class, stored INLINE
+    price: Decimal<2>,
+    ok: Bool,
+}
+
+let a: Point = Point { x: 1, y: 2 };
+let b: Point = Point { x: 1, y: 2 };
+let c: Point = Point { x: 1, y: 9 };
+print(a == b);
+print(a == c);
+print(a != c);
+
+let one: Named = Named { label: "ab", at: a, price: $1.00, ok: true };
+// The same label, built rather than written. memcmp would say these differ.
+let two: Named = Named { label: "a" + "b", at: b, price: $1.00, ok: true };
+print(one == two);
+
+// One field different, each in turn — so a comparison that ignored a field would show up here
+// rather than in whichever program happened to depend on it.
+print(one == Named { label: "zz", at: a, price: $1.00, ok: true });
+print(one == Named { label: "ab", at: c, price: $1.00, ok: true });
+print(one == Named { label: "ab", at: a, price: $1.01, ok: true });
+print(one == Named { label: "ab", at: a, price: $1.00, ok: false });
+print(one != two);

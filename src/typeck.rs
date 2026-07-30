@@ -5723,6 +5723,55 @@ impl TypeChecker {
             })
     }
 
+    /// Every field of `name` can be compared, or the first one that cannot, named.
+    ///
+    /// Recursive, because a class holding a class compares field by field all the way down —
+    /// and cycle-guarded, because `embeds_by_value` proved that a walk over types has to be. A class
+    /// cannot contain itself by value (that rule refuses it), so the guard is belt and braces rather
+    /// than load-bearing; it costs one Vec and removes a class of hang.
+    fn class_is_comparable(&self, name: &str, seen: &mut Vec<String>) -> Result<(), String> {
+        if seen.iter().any(|s| s == name) {
+            return Ok(());
+        }
+        seen.push(name.to_string());
+        let Some(fields) = self.fields_of(name) else {
+            return Err(format!("unknown type `{}`", name));
+        };
+        for (field, ty) in fields {
+            let why = match &ty {
+                Type::Int | Type::Bool | Type::String | Type::Decimal { .. } => None,
+                Type::Named(inner) if self.is_enum(inner) => Some(format!(
+                    "the enum `{}`, and `==` on an enum is not available yet",
+                    inner
+                )),
+                Type::Named(inner) => {
+                    self.class_is_comparable(inner, seen)?;
+                    None
+                }
+                // A slice is a pointer, a length and a capacity. Comparing it element-wise is a
+                // reasonable thing to want and a separate decision — two slices of equal contents but
+                // different capacity would have to be equal, and nothing says so yet.
+                Type::Slice(_) => Some("a growable array, and `==` on one is a separate question                                         — two arrays with equal contents and different capacity                                         would have to be equal, and nothing has decided that"
+                    .to_string()),
+                Type::Array { .. } => Some(
+                    "a fixed array, and element-wise `==` on one is not available yet".to_string(),
+                ),
+                Type::Dyn(t) => Some(format!(
+                    "a `dynamic {}`, which is a pointer pair — comparing it would compare                      addresses, not values",
+                    t
+                )),
+                other => Some(format!("{}, which cannot be compared", other)),
+            };
+            if let Some(why) = why {
+                return Err(format!(
+                    "`==` on `{}` needs every field to be comparable, and `{}.{}` is {}.",
+                    name, name, field, why
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Comparisons are always exact, and both sides must have the SAME type —
     /// comparing money of different scales (or contracts) is refused just like
     /// adding it would be.
@@ -5730,10 +5779,40 @@ impl TypeChecker {
         use Type::*;
         match (lhs, rhs) {
             (Int, Int) => Ok(()),
-            (Named(_), Named(_)) => Err(
-                "record comparison is not available yet — compare fields individually."
-                    .to_string(),
-            ),
+            (Named(a), Named(b)) if a == b => {
+                // A CLASS compares field by field, and needs no `derive` to do it.
+                //
+                // Burxt can get away with that where Rust cannot, and the reason is the language's
+                // own restrictions paying off: a class has value semantics, no interior pointers and
+                // a fixed cell layout, so field-by-field is not *a* definition of equality — it is
+                // the only one available. Nothing is being chosen on the programmer's behalf, which
+                // is what a `derive` exists to make explicit.
+                //
+                // NOT memcmp, and that distinction is the whole of the work: a class holding a
+                // String holds a POINTER, and two equal strings need not live at the same address.
+                // Comparing the bytes of the struct would answer `false` for two accounts with the
+                // same owner built separately — a wrong answer that looks like a working program.
+                //
+                // Ordering is refused: `<` on a class would have to pick which field dominates, and
+                // that is a decision nobody wrote down.
+                if !matches!(op, CmpOp::Eq | CmpOp::Ne) {
+                    return Err(format!(
+                        "`{}` on `{}` would have to decide which field comes first, and nothing                          says which. Compare the field you mean, or give `{}` a method that                          answers the question you are really asking.",
+                        op, a, a
+                    ));
+                }
+                if self.is_enum(a) {
+                    return Err(format!(
+                        "`==` on the enum `{}` is not available yet: two variants can carry                          different payloads, so equality has to compare the TAG first and then                          only the payload that variant holds. Use `match`.",
+                        a
+                    ));
+                }
+                self.class_is_comparable(a, &mut Vec::new())
+            }
+            (Named(a), Named(b)) => Err(format!(
+                "cannot compare `{}` with `{}`: one equality, no coercion. Both sides of `==`                  must be the same type.",
+                a, b
+            )),
             // Strings compare by BYTES, and only for equality. This is the
             // same `==` every other type uses — not a parallel string-equals
             // path — so a cross-type comparison involving a String falls

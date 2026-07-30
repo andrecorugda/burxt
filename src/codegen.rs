@@ -1757,6 +1757,31 @@ impl<'ctx> CodeGen<'ctx> {
                         )),
                     };
                 }
+                // A CLASS compares field by field. NOT `memcmp`, and that is the whole of the
+                // work: a class holding a String holds a POINTER, and two equal strings need not
+                // live at the same address, so comparing the struct's bytes would answer `false`
+                // for two accounts with the same owner built separately. A wrong answer that looks
+                // like a working program is the one outcome this language is built against.
+                //
+                // Typeck has already proved every field is comparable, so every arm below is
+                // reachable and none of them can be a slice, an array, a `dynamic` or an enum.
+                if let Type::Named(name) = &lhs.ty {
+                    let a = self.gen_expr(lhs)?;
+                    let b = self.gen_expr(rhs)?;
+                    let eq = self.build_class_eq(name, a, b)?;
+                    return match op {
+                        CmpOp::Eq => Ok(eq.into()),
+                        CmpOp::Ne => self
+                            .builder
+                            .build_int_sub(i64t.const_int(1, false), eq, "class_ne")
+                            .map(Into::into)
+                            .map_err(|e| e.to_string()),
+                        other => Err(format!(
+                            "codegen bug: `{}` on a class should have been refused",
+                            other
+                        )),
+                    };
+                }
                 let l = self.gen_expr(lhs)?.into_int_value();
                 let r = self.gen_expr(rhs)?.into_int_value();
                 // Scaled decimals of equal scale compare exactly as plain
@@ -3976,6 +4001,81 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     /// Emit a call to `@burxt.streq(a, b)` — 1 if the bytes match, else 0.
+    /// Field-by-field equality for a class, answered as an i64 that is 0 or 1.
+    ///
+    /// **Not `memcmp`.** A class holding a String holds a pointer, and two equal strings need not
+    /// live at the same address — so comparing the struct's bytes would answer `false` for two
+    /// accounts with the same owner built separately. That is a wrong answer that looks like a
+    /// working program, which is the failure this language exists to prevent.
+    ///
+    /// It is also why padding does not matter here: nothing reads the bytes, only the fields.
+    ///
+    /// Both sides arrive as STRUCT VALUES — `gen_expr` on an aggregate answers one — so each field
+    /// comes out with `extract_value` rather than a load from an address. That also makes the
+    /// operands unrestricted: a call result and a temporary have no address, and comparing
+    /// `open("a", $1.00) == open("a", $1.00)` has to work.
+    ///
+    /// Ands the field results rather than branching, so there is no short circuit and no basic-block
+    /// bookkeeping. A class has a handful of fields and each comparison is a few instructions; a
+    /// branch per field would cost more to emit than it could ever save, and LLVM will find whatever
+    /// early exit is worth having.
+    fn build_class_eq(
+        &mut self,
+        name: &str,
+        a: BasicValueEnum<'ctx>,
+        b: BasicValueEnum<'ctx>,
+    ) -> Result<IntValue<'ctx>, String> {
+        let i64t = self.ctx.i64_type();
+        let fields = self
+            .struct_fields
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("codegen bug: no layout for class `{}`", name))?;
+        let sa = a.into_struct_value();
+        let sb = b.into_struct_value();
+        let mut all = i64t.const_int(1, false);
+        for (i, fty) in fields.iter().enumerate() {
+            let va = self
+                .builder
+                .build_extract_value(sa, i as u32, "eq_a")
+                .map_err(|e| e.to_string())?;
+            let vb = self
+                .builder
+                .build_extract_value(sb, i as u32, "eq_b")
+                .map_err(|e| e.to_string())?;
+            let one = match fty {
+                // A nested class: recurse. `extract_value` answers its struct value.
+                Type::Named(inner) if self.struct_fields.contains_key(inner) => {
+                    self.build_class_eq(inner, va, vb)?
+                }
+                Type::String => {
+                    self.build_str_eq(va.into_pointer_value(), vb.into_pointer_value())?
+                }
+                // Int, Bool and Decimal are all one i64 cell, and a scaled decimal of equal scale
+                // compares exactly as a plain integer — no rescaling, no rounding, no float.
+                _ => {
+                    let bit = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::EQ,
+                            va.into_int_value(),
+                            vb.into_int_value(),
+                            "eq_f",
+                        )
+                        .map_err(|e| e.to_string())?;
+                    self.builder
+                        .build_int_z_extend(bit, i64t, "eq_f64")
+                        .map_err(|e| e.to_string())?
+                }
+            };
+            all = self
+                .builder
+                .build_int_mul(all, one, "eq_and")
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(all)
+    }
+
     fn build_str_eq(
         &mut self,
         a: PointerValue<'ctx>,

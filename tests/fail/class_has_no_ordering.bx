@@ -1,0 +1,10 @@
+// `<` on a class would have to decide which field comes first, and nothing says which.
+//
+// `==` needs no such decision — every field must match, and there is only one way to ask that. Ordering
+// needs a priority nobody wrote down, so it is refused rather than invented, and the message points at
+// the two honest answers: compare the field you mean, or give the class a method.
+class Point { x: Int, y: Int }
+
+let a: Point = Point { x: 1, y: 2 };
+let b: Point = Point { x: 3, y: 4 };
+print(a < b);

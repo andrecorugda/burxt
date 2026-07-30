@@ -1,0 +1,13 @@
+// `==` on a class needs every field to be comparable, and the message names the field that is not.
+//
+// A growable array is the interesting refusal, because element-wise `==` on one is a reasonable thing
+// to want and a SEPARATE decision: two arrays with equal contents and different capacity would have to
+// be equal, and nothing has decided that. Refusing beats guessing, and the message says which is which.
+class Bag {
+    label: String,
+    items: [Int],
+}
+
+let a: Bag = Bag { label: "x", items: [] };
+let b: Bag = Bag { label: "x", items: [] };
+print(a == b);

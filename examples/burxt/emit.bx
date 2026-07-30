@@ -731,6 +731,22 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
     if n.kind == 9 {                                 // a comparison
         let left: String = self.emit_expr(src, n.a);
         let right: String = self.emit_expr(src, n.b);
+        // A CLASS compares field by field. Before v0.0.184 this fell through to the integer path,
+        // which compared the two ADDRESSES — so `a == b` on two identical Points answered false, and
+        // the checker accepted it. A silent wrong answer, for as long as classes have existed,
+        // reachable from three lines of ordinary code.
+        //
+        // Not memcmp either: a String field holds a POINTER, and two equal strings need not live at
+        // the same address, so comparing the cells would be the same bug one level down.
+        if self.type_at(n.a).kind == 46 {
+            let bit: String = self.class_equal(src, self.type_at(n.a), left, right);
+            if n.value == 13 {                       // `!=`
+                let flipped: String = self.fresh();
+                let inverted: Int = self.write_body("  " + flipped + " = sub i64 1, " + bit + "\n");
+                return flipped;
+            }
+            return bit;
+        }
         if self.type_at(n.a).kind == 42 {
             // Strings compare by BYTES. Comparing the i64s would compare pointers, which
             // is true only when two Strings are the same object — a bug that reads as a
@@ -1051,6 +1067,93 @@ function (mutable self: Unit) emit_piece(src: String, node: Int) -> String {
 // instruction. Anything else is refused by name.
 // `memcpy` of a whole aggregate. Burxt passes and stores aggregates BY VALUE, so this
 // is where that promise is kept: a copy at the point a copy is meant, and nowhere else.
+// Field-by-field equality for a class, as an i64 that is 0 or 1.
+//
+// A class value is an ADDRESS here, and its fields are i64 cells at offsets — so each field is one
+// getelementptr and one load, compared according to its own type.
+//
+// NOT a cell-by-cell memcmp, and that is the whole of the work: a String field holds a POINTER, and
+// two equal strings need not live at the same address. Comparing the cells would answer false for two
+// accounts with the same owner built separately — the same bug the String path above records, one
+// level down.
+//
+// Ands the field results rather than branching: a class has a handful of fields, each comparison is a
+// few instructions, and a branch per field would cost more to emit than it could ever save.
+function (mutable self: Unit) class_equal(src: String, holder: Type, left: String,
+                                right: String) -> String {
+    let found: Int = self.find_type(src, holder.name_start, holder.name_length);
+    if found < 0 {
+        return "0";
+    }
+    let item: Node = self.nodes[self.types[found].node];
+    let restore: Int = self.bind_from_application(src, holder);
+    let left_ptr: String = self.fresh();
+    let cast_l: Int = self.write_body("  " + left_ptr + " = inttoptr i64 " + left + " to ptr\n");
+    let right_ptr: String = self.fresh();
+    let cast_r: Int = self.write_body("  " + right_ptr + " = inttoptr i64 " + right + " to ptr\n");
+    let mutable all: String = "1";
+    let mutable offset: Int = 0;
+    let mutable f: Int = 0;
+    while f < item.b {
+        let field: Node = self.nodes[self.children[item.a + f]];
+        let held: Type = self.resolve_shallow(src, self.declared_type(src, field.a));
+        let at_l: String = self.fresh();
+        let step_l: Int = self.write_body("  " + at_l + " = getelementptr i64, ptr " + left_ptr
+                                 + ", i64 " + to_string(offset) + "\n");
+        let at_r: String = self.fresh();
+        let step_r: Int = self.write_body("  " + at_r + " = getelementptr i64, ptr " + right_ptr
+                                 + ", i64 " + to_string(offset) + "\n");
+        let mutable one: String = "1";
+        if held.kind == 46 {
+            // A nested class is stored INLINE — its cells sit right here, so the cell at this offset
+            // is its FIRST FIELD and not a pointer to it. The address is what the recursion wants.
+            //
+            // Loading it instead was the first version, and it segfaulted immediately: for
+            // `Named { label, at: Point, ... }` it read `at.x` and used the integer 1 as an address.
+            // The lesson is the ABI, not the bug — an aggregate's value IS its address here, and a
+            // FIELD of aggregate type is its cells rather than a reference to them.
+            let addr_l: String = self.fresh();
+            let cast_al: Int = self.write_body("  " + addr_l + " = ptrtoint ptr " + at_l
+                                      + " to i64\n");
+            let addr_r: String = self.fresh();
+            let cast_ar: Int = self.write_body("  " + addr_r + " = ptrtoint ptr " + at_r
+                                      + " to i64\n");
+            one = self.class_equal(src, held, addr_l, addr_r);
+        } else {
+            let val_l: String = self.fresh();
+            let load_l: Int = self.write_body("  " + val_l + " = load i64, ptr " + at_l + "\n");
+            let val_r: String = self.fresh();
+            let load_r: Int = self.write_body("  " + val_r + " = load i64, ptr " + at_r + "\n");
+            if held.kind == 42 {
+                let order: String = self.fresh();
+                let compared: Int = self.write_body("  " + order
+                                           + " = call i64 @burxt.strcmp(i64 " + val_l + ", i64 "
+                                           + val_r + ")\n");
+                let bit: String = self.fresh();
+                let tested: Int = self.write_body("  " + bit + " = icmp eq i64 " + order
+                                         + ", 0\n");
+                one = self.fresh();
+                let widened: Int = self.write_body("  " + one + " = zext i1 " + bit + " to i64\n");
+            } else {
+                // Int, Bool and a Decimal of equal scale are all one i64 cell, and a scaled decimal
+                // compares exactly as a plain integer — no rescaling, no rounding, no float.
+                let bit: String = self.fresh();
+                let tested: Int = self.write_body("  " + bit + " = icmp eq i64 " + val_l + ", "
+                                         + val_r + "\n");
+                one = self.fresh();
+                let widened: Int = self.write_body("  " + one + " = zext i1 " + bit + " to i64\n");
+            }
+        }
+        let combined: String = self.fresh();
+        let anded: Int = self.write_body("  " + combined + " = mul i64 " + all + ", " + one + "\n");
+        all = combined;
+        offset += self.cells_of(src, held);
+        f += 1;
+    }
+    let dropped: Int = truncate(self.type_bindings, restore);
+    return all;
+}
+
 // The ADDRESS a place names, for the left of an assignment. Reading `x.f` loads from
 // here; writing stores to here.
 function (mutable self: Unit) place_of(src: String, node: Int) -> String {
