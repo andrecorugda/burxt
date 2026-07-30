@@ -3937,3 +3937,78 @@ fn the_guide_code_compiles() {
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
     assert!(checked >= 15, "expected the guide to hold at least fifteen whole examples, found {}", checked);
 }
+
+/// The guide reads in order: every numbered page's heading, its `title:`, and its `Next` link agree
+/// with its filename.
+///
+/// Renumbering the guide in v0.0.161 to insert the effects page renamed four files and left all
+/// four H1s behind, so `07-ffi.md` opened with "# 6. The C boundary" and `10-absence-and-failure.md`
+/// with "# 9.". A reader following the guide in order met 6 twice, then 7 twice, and never saw an
+/// 11 at all. `the_guide_code_compiles` cannot see this — every code block on those pages was
+/// perfectly fine — and neither can a link checker, because every link resolved.
+///
+/// It is the shape of rot worth a test: a rename is mechanical, the thing it breaks is prose, and
+/// nothing else in the suite reads prose.
+#[test]
+fn the_guide_reads_in_order() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut pages: Vec<(u32, String, String)> = fs::read_dir(root.join("docs/guide"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("md"))
+        .filter_map(|p| {
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
+            // `01-` … `11-`. reference.md, index.md and README.md carry no number by design.
+            let n: u32 = name.split('-').next()?.parse().ok()?;
+            Some((n, name, fs::read_to_string(&p).unwrap()))
+        })
+        .collect();
+    pages.sort();
+
+    let mut problems = Vec::new();
+    assert!(pages.len() >= 11, "expected at least eleven numbered guide pages, found {}", pages.len());
+
+    for (i, (n, name, text)) in pages.iter().enumerate() {
+        assert_eq!(
+            *n as usize,
+            i + 1,
+            "guide page numbers must run 1..n with no gap; found {} at position {}",
+            name,
+            i + 1
+        );
+
+        // The H1 states the page's own number.
+        match text.lines().find(|l| l.starts_with("# ")) {
+            Some(h1) => {
+                let stated = h1
+                    .trim_start_matches("# ")
+                    .split('.')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if stated != n.to_string() {
+                    problems.push(format!(
+                        "docs/guide/{} opens with `{}` — the heading says {} and the filename says {}",
+                        name, h1, stated, n
+                    ));
+                }
+            }
+            None => problems.push(format!("docs/guide/{} has no `# ` heading", name)),
+        }
+
+        // Every page but the last hands off to the next one by filename, so following the guide
+        // forward cannot skip a page or loop back to one already read.
+        if let Some((_, next_name, _)) = pages.get(i + 1) {
+            let link = next_name.trim_end_matches(".md");
+            if !text.contains(&format!("({}.md", link)) {
+                problems.push(format!(
+                    "docs/guide/{} never links to {} — a reader following `Next` would stop here",
+                    name, next_name
+                ));
+            }
+        }
+    }
+
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}

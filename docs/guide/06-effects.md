@@ -215,4 +215,5 @@ never decide what a number is.
 
 ## Next
 
-[Modules](07-modules.md) — `use`, one file per module, and what is visible.
+[The C boundary](07-ffi.md) — where an effect enters the program, and where money stops being
+exact in every other stack.
