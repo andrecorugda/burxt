@@ -16,15 +16,21 @@ class Item {
     taxable: Bool,
 }
 
-// One line on a receipt: a thing, and how many of it.
+// One line on a receipt: a thing, and how many of it — and what it costs, which now lives
+// with it rather than beside it.
+//
+// Until v0.0.149 this was `class Line { ... }` followed by a free function
+// `line_subtotal(line)`. The two were adjacent by convention: nothing connected them, and
+// nothing stopped the next function about a Line landing in another file. That was the largest
+// readability gap the four-language comparison found, and it is what the word `class` is for.
 class Line {
     item: Item,
     quantity: Int,
-}
 
-// What a line costs before tax. `quantity` is an Int and `price` is a Decimal<2>,
-// so the product is a Decimal<2> exactly — no rounding happens here, and none is
-// allowed to happen silently.
-function line_subtotal(line: Line) -> Decimal<2, RoundHalfUp> {
-    return line.item.price * line.quantity;
+    // What this line costs before tax. `quantity` is an Int and `price` is a Decimal<2>, so
+    // the product is a Decimal<2> exactly — no rounding happens here, and none is allowed to
+    // happen silently.
+    function (self) subtotal() -> Decimal<2, RoundHalfUp> {
+        return self.item.price * self.quantity;
+    }
 }

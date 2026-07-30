@@ -53,7 +53,7 @@ function ring_up(rule: dynamic Tax, sale: [Line]) -> Int {
     while i < len(sale) {
         let line: Line = sale[i];
         print(line_text(rule, line));
-        subtotal += line_subtotal(line);
+        subtotal += line.subtotal();
         tax += line_tax(rule, line);
         i += 1;
     }

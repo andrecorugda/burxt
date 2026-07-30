@@ -31,7 +31,7 @@ function money_column(amount: Decimal<2, RoundHalfUp>) -> String {
 }
 
 function line_text(rule: dynamic Tax, line: Line) -> String {
-    let subtotal: Decimal<2, RoundHalfUp> = line_subtotal(line);
+    let subtotal: Decimal<2, RoundHalfUp> = line.subtotal();
     return line.item.name + "  x" + to_string(line.quantity)
         + money_column(subtotal);
 }

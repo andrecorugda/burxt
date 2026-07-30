@@ -50,6 +50,6 @@ implement Tax for SplitTax {
 // find it. `RoundHalfUp` is what a till does.
 function line_tax(rule: dynamic Tax, line: Line) -> Decimal<2, RoundHalfUp> {
     let rate: Decimal<4> = rule.rate_for(line.item);
-    let base: Decimal<2, RoundHalfUp> = line_subtotal(line);
+    let base: Decimal<2, RoundHalfUp> = line.subtotal();
     return base * rate;
 }

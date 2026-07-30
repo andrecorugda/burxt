@@ -1715,7 +1715,14 @@ function (mutable self: Unit) parse_function(src: String, is_pure: Int, owner: I
     return f;
 }
 
-// `record Name { field: Type, ... }`
+// `class Name { field: Type, ..., function (self) method() -> T { ... } }`
+//
+// Fields and methods in one block, which is what the word `class` is for. A method here is
+// parsed by `parse_function` with the class's name token as its OWNER — the same mechanism
+// `implement Trait for Type` already used, so `function (self) price()` needs no repeated
+// type — and then pushed straight into `self.items`, which makes it indistinguishable from a
+// method written outside the class. Nothing downstream learns anything new: the checker, the
+// emitter and the layout walk all see the method list they already saw.
 function (mutable self: Unit) parse_record(src: String) -> Int {
     if !self.eat(src, 109, "`class`") { return -1; }
     if !self.at(1) { return self.complain(src, "a class name"); }
@@ -1729,7 +1736,19 @@ function (mutable self: Unit) parse_record(src: String) -> Int {
     let base: Int = len(self.stack);
     let mutable count: Int = 0;
     while !self.at(32) && !self.done() {
-        if !self.at(1) { return self.complain(src, "a field name"); }
+        // A method, not a field. `pure` is refused with the same sentence a free-standing
+        // one gets, because a method cannot carry the marker yet.
+        if self.at(124) {
+            return self.complain(src, "a method cannot be declared `pure` yet — the marker "
+                        + "goes on a free function for now");
+        }
+        if self.at(102) {
+            let method: Int = self.parse_function(src, 0, name_tok);
+            if method < 0 { return -1; }
+            push(self.items, method);
+            continue;
+        }
+        if !self.at(1) { return self.complain(src, "a field name or a `function`"); }
         let field_tok: Int = self.position;
         let f: Int = self.advance();
         if !self.eat(src, 20, "`:` and the field's type") { return -1; }
@@ -1741,9 +1760,14 @@ function (mutable self: Unit) parse_record(src: String) -> Int {
         if self.more_in_list(32) {
             continue;
         }
+        // No comma: either the block ends here, or a method follows the last field. Both are
+        // legal, so the loop keeps going and the `}` check below is what actually ends it.
+        if self.at(102) || self.at(124) {
+            continue;
+        }
         break;
     }
-    if !self.eat(src, 32, "`\}` closing the fields") { return -1; }
+    if !self.eat(src, 32, "`\}` closing the class") { return -1; }
     let start: Int = self.commit(base);
     return self.add(82, start, count, 0, 0, name_tok);
 }

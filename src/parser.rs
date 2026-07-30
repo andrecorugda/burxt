@@ -130,7 +130,11 @@ impl Parser {
         let mut stmts = Vec::new();
         while !self.at(&Token::Eof) {
             if self.at(&Token::Class) {
-                structs.push(self.parse_struct()?);
+                let (declared, its_methods) = self.parse_struct()?;
+                structs.push(declared);
+                // A method declared inside a class is indistinguishable, from here on, from
+                // one written outside it. That is the point: nothing downstream changes.
+                methods.extend(its_methods);
             } else if self.at(&Token::Enum) {
                 enums.push(self.parse_enum()?);
             } else if self.at(&Token::Trait) {
@@ -207,7 +211,7 @@ impl Parser {
 
     // ---- structs ----
 
-    fn parse_struct(&mut self) -> Result<StructDef, String> {
+    fn parse_struct(&mut self) -> Result<(StructDef, Vec<MethodDef>), String> {
         let start = self.span().start;
         self.expect(&Token::Class)?;
         let name = match self.bump() {
@@ -218,10 +222,29 @@ impl Parser {
         self.type_parameters = type_parameters.iter().map(|p| p.name.clone()).collect();
         self.expect(&Token::LBrace)?;
         let mut fields = Vec::new();
+        let mut methods = Vec::new();
+        // Fields, then methods, in one block — which is the whole reason `record` became
+        // `class` in v0.0.148. A method here is parsed by `parse_method` with the class as
+        // its `owner`, so `function (self) price()` needs no repeated type: a class body is
+        // exactly the situation an `implement` block already was. It desugars to the same
+        // `MethodDef`, so the typechecker and both backends learn nothing new.
         while !self.at(&Token::RBrace) {
+            if self.at(&Token::Eof) {
+                return Err(format!("unclosed class `{}`: expected `}}`", name));
+            }
+            if self.at(&Token::Fn) || self.at(&Token::Pure) {
+                methods.push(self.parse_method_in_class(&name)?);
+                continue;
+            }
             let fname = match self.bump() {
                 Token::Ident(s) => s,
-                other => return Err(format!("expected a field name in class {}, found {}", name, other.describe())),
+                other => {
+                    return Err(format!(
+                        "expected a field name or a `function` in class {}, found {}",
+                        name,
+                        other.describe()
+                    ))
+                }
             };
             self.expect(&Token::Colon)?;
             let ty = self.parse_type()?;
@@ -230,14 +253,32 @@ impl Parser {
             let marshal = self.parse_marshal()?;
             fields.push(Param { name: fname, ty, marshal });
             if self.at(&Token::Comma) {
-                self.bump(); // trailing comma allowed
-            } else {
-                break;
+                self.bump(); // trailing comma allowed, and required before a method follows
             }
         }
         self.expect(&Token::RBrace)?;
         self.type_parameters.clear();
-        Ok(StructDef { name, type_parameters, fields, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok((
+            StructDef { name, type_parameters, fields, span: Span { start, end: self.prev_end().max(start + 1) } },
+            methods,
+        ))
+    }
+
+    /// A method written inside a class body.
+    ///
+    /// `pure` is refused here with the same sentence the top level uses, because a method
+    /// cannot carry the marker yet and two wordings for one rule is how a language starts
+    /// feeling arbitrary.
+    fn parse_method_in_class(&mut self, owner: &str) -> Result<MethodDef, String> {
+        if self.at(&Token::Pure) {
+            return Err(
+                "a method cannot be declared `pure` yet — the marker goes on \
+                 a free function for now. Move the calculation into one, or \
+                 drop `pure`."
+                    .to_string(),
+            );
+        }
+        self.parse_method(Some(owner))
     }
 
     /// `enum Name { Unit, WithPayload(Int, String), }`

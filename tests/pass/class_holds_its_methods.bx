@@ -1,0 +1,54 @@
+// A class holds its fields AND what you do with them, in one block.
+//
+// This is the whole reason `record` became `class` in v0.0.148. Writing the same
+// point-of-sale in Burxt, Python, PHP and Rust, the largest readability gap of the four was
+// that the other three put a type's data and its behaviour together and Burxt could not:
+// `record Item` sat in one place and `line_subtotal(line)` beside it as a free function,
+// adjacent by convention only, with nothing stopping the next function about Items landing in
+// another file.
+//
+// The desugaring is the point: a method written here becomes exactly the `MethodDef` a
+// free-standing one produces. `function (self) label()` needs no repeated type, because a
+// class body is the same situation `implement Trait for Type` already was. The checker, both
+// backends and the layout walk learn nothing new — which is why this cost a parser change and
+// nothing else.
+class Item {
+    sku: String,
+    name: String,
+    price: Decimal<2>,
+
+    function (self) label() -> String {
+        return self.sku + " " + self.name;
+    }
+    function (self) total(quantity: Int) -> Decimal<2> {
+        return self.price * quantity;
+    }
+}
+
+// A mutating method, which needs `mutable self` and a `let mutable` receiver — unchanged by
+// where it is written.
+class Counter {
+    n: Int,
+    function (mutable self) bump() -> Int {
+        self.n = self.n + 1;
+        return self.n;
+    }
+}
+
+// Methods may still be written OUTSIDE the class. Both spellings produce the same thing, and
+// the free-standing form is what a class in someone else's file needs.
+class Tally { total: Int }
+function (self: Tally) doubled() -> Int {
+    return self.total * 2;
+}
+
+let rice: Item = Item { sku: "RICE", name: "Rice 5kg", price: 52.75 };
+print(rice.label());
+print(rice.total(3));
+
+let mutable c: Counter = Counter { n: 0 };
+print(c.bump());
+print(c.bump());
+
+let t: Tally = Tally { total: 21 };
+print(t.doubled());

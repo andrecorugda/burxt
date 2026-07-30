@@ -16,7 +16,7 @@ in something they already know.
 
 | | items | tax | receipt | till | **code** |
 |---|---|---|---|---|---|
-| **Burxt** | 13 | 28 | 24 | 52 | **117** |
+| **Burxt** | 13 | 28 | 24 | 50 | **115** |
 | Python | 17 | 31 | 13 | 39 | **100** |
 | PHP | 32 | 46 | 18 | 45 | **141** |
 | Rust | 40 | 44 | 21 | 61 | **166** |
@@ -97,12 +97,27 @@ the attributes its callee declares. Three sites do; two of them always did.
 
 Not speed. Three things about how the code is shaped:
 
-1. **The other three put data and behaviour in one block.** `class Item` / `impl Line` — the fields
-   and the thing you do with them, in one place, findable by one jump. In `items.bx` at the time,
-   `record Item` and `line_subtotal(line)` were adjacent by *convention*; nothing connected them, and
-   nothing stopped the next function about Items landing in another file. **This was the largest
-   readability gap of the four, and it is what got `record` renamed to `class` in v0.0.148** — a class
-   holds its fields and its methods together, which is the whole point of the word.
+1. ~~**The other three put data and behaviour in one block.**~~ **Fixed, and it is what the
+   comparison was for.** `class Item` / `impl Line` put the fields and the thing you do with them in
+   one place, findable by one jump. `record Item` and `line_subtotal(line)` were adjacent by
+   *convention*: nothing connected them, and nothing stopped the next function about Items landing in
+   another file. This was the largest readability gap of the four, and it produced two versions —
+   v0.0.148 renamed `record` to `class`, and v0.0.149 let a class hold its methods:
+
+   ```burxt
+   class Line {
+       item: Item,
+       quantity: Int,
+
+       function (self) subtotal() -> Decimal<2, RoundHalfUp> {
+           return self.item.price * self.quantity;
+       }
+   }
+   ```
+
+   `line_subtotal(line)` is now `line.subtotal()`, and the receipt is byte-identical. Note what
+   `line_tax(rule, line)` is *not*: it relates a tax rule and a line, belonging to neither, so it
+   stays a free function — exactly as it does in the Python and Rust versions.
 2. ~~**`region sale { ... }` is bookkeeping no other version has.**~~ `till.bx` used to wrap the
    entire program in a region whose name was never mentioned again. **Gone in v0.0.146**: nothing
    needs a region in order to allocate, so the program sits at the left margin. A `region` is now
