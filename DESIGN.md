@@ -1,7 +1,82 @@
-# Burxt — Design Notes (v0.0.127)
+# Burxt — Design Notes (v0.0.152)
 
-**Burxt** is a typed, compiled programming language: exact decimals for money,
-correctness by construction, native code through LLVM.
+**Burxt** is a typed, compiled programming language built for a working
+arrangement that did not exist when the languages we use were designed: **an AI
+agent writes the code, and a senior developer reviews it.**
+
+## Why Burxt exists
+
+> **A language strict enough that an agent cannot make a costly mistake, and
+> plain enough that a reviewer can see that it didn't.**
+
+That sentence is the reason. Read it before arguing for or against anything
+below, because most design disagreements in this repository turn out to be
+someone arguing from a different premise.
+
+**The premise, in Andre's words:** *"Devs are all using AI. They won't touch the
+code, they will just scan it for review. This is real senior developer
+experience. This is the AI era — that is why I am creating Burxt for AI and for
+human, what other languages can't."*
+
+### What that changes, concretely
+
+Every other language assumes a human types the code and a compiler checks it
+afterwards. Burxt assumes the opposite ordering, and two consequences follow that
+are easy to get backwards:
+
+**1. Every compile error is a review the human does not have to do.** That is the
+whole economy of the language. A refusal is not friction — it is a category of
+mistake permanently removed from the reviewer's job. When a rule looks annoying,
+the question is not "is this convenient" but "does a reviewer now get to skip
+checking for this".
+
+**2. An agent reasons locally; a reviewer scans.** Neither has the whole program
+in view. So **the facts must be where you are looking.** This is why a rounding
+contract travels through signatures, why `requires` sits on the declaration rather
+than in a comment, and why `private` is visible at the field. Information that
+lives somewhere else may as well not exist for either audience.
+
+The second point reverses a judgement made earlier in this repository:
+`examples/pos/README.md` once called the viral rounding contract "a real cost".
+It is not a cost. It is the mechanism.
+
+### The two audiences, and what each needs
+
+| | needs |
+|---|---|
+| **The agent** | Refusals with actionable messages. One spelling per concept. `burxt check --json`. Contracts, so its own stated intent is what catches its mistake. Nothing inferable from context it does not have |
+| **The reviewer** | To tell at a glance whether this is right. Familiar shapes — the 70% who write **PHP and C#** should need no new mental model. Signatures that carry the promise. No hidden control flow, no hidden allocation, no hidden coercion |
+
+Where the two conflict, they mostly don't: both are served by *the obvious
+spelling being the correct one*.
+
+### Bonuses, not goals
+
+Exact decimal money and memory safety without a collector are **consequences** of
+the strictness, not the reason for it. They are the best demonstrations of it —
+money is where a silent wrong answer is most expensive, which is why the flagship
+example is a till — but a version of Burxt that got money perfectly right and let
+an agent ship a plausible wrong program would have failed at its purpose.
+
+Two corollaries worth stating because they have already been got wrong:
+
+- **A silent wrong answer is the worst possible outcome**, worse than a crash and
+  far worse than a refusal. Neither an agent nor a scanning reviewer can see one.
+  Three were found and fixed in one day (v0.0.141 vtable ABI, v0.0.142
+  use-after-free, v0.0.152 `string_to_int` answering 0) and each had been sitting
+  in a green test suite.
+- **Familiarity is a safety feature, not a compromise.** An unfamiliar spelling is
+  a thing the reviewer has to stop and decode, and a thing the agent has to have
+  memorised correctly. Copying Rust's vocabulary was a mistake for exactly this
+  reason — *"if Burxt is just a strict copy of Rust I will just use Rust, which is
+  mature"* — and v0.0.153 onward undoes it.
+
+### What this is NOT
+
+Not a claim to put on the website. "AI-native" is a phrase that ages badly and
+invites eye-rolls. The strictness, the contracts, the JSON diagnostics and the
+messages that say what to do are the argument; the demo makes it. Let the reader
+reach the conclusion.
 
 ## Identity (the anchor)
 
@@ -13,17 +88,22 @@ correctness by construction, native code through LLVM.
 
 Distinct from PHP (enforces nothing; null + inheritance footguns) and from
 Rust (no inheritance, no built-in contracts). And honest: it does not claim to
-mechanically enforce the unenforceable. Everything below serves this line.
+mechanically enforce the unenforceable.
 
-## Thesis (what makes Burxt worth existing)
+## Thesis (what the strictness is made of)
 
 1. **Exact decimal is the DEFAULT numeric type for money.** No silent
    binary-float representation of currency. `Decimal<S, R>` carries scale and
-   rounding contract in the type.
+   rounding contract in the type — which is what makes the rule visible at the
+   point of review.
 2. **Correctness by construction.** Rounding must be explicit; float↔decimal
-   mixing is a compile error. (Refinement types come later.)
+   mixing is a compile error.
 3. **Native, no runtime baggage.** Compiles through LLVM to a native binary.
-   No VM, no GC (yet).
+   No VM, no GC.
+4. **Nothing important is inferable-only.** If a promise matters, it is written
+   in the signature where an agent and a reviewer both see it. Ceremony that
+   carries no promise gets inferred away instead — which is why `allocates` and
+   `region` stopped being written in v0.0.144–147.
 
 ## Grammar principle
 
