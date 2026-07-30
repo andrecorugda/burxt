@@ -518,6 +518,18 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
         }
         return joined;
     }
+    // Kind 21: the value being returned. No name, so no span, so no slot lookup — it reads the one
+    // slot `emit_ensures` declared. That is the whole of what stage-1 needed for a return bracket,
+    // and it is smaller than the synthetic token spec/M13 proposed for two versions.
+    if n.kind == 21 {
+        if self.result_slot < 0 {
+            return "0";
+        }
+        let reg: String = self.fresh();
+        let visited: Int = self.write_body("  " + reg + " = load i64, ptr %v"
+                                  + to_string(self.result_slot) + "\n");
+        return reg;
+    }
     if n.kind == 5 {                                 // a name
         let t: Token = self.tokens[n.token];
         let slot: Int = self.find_slot(src, t.start, t.length);
@@ -2518,12 +2530,26 @@ function (mutable self: Unit) emit_ensures(src: String, value: String) -> Int {
         return 0;
     }
     // The slot has to exist before the clause is emitted, because the clause reads it.
+    //
+    // EXACTLY ONE slot, whichever form the program used. The longhand `ensures result >= $0.00` finds
+    // it by the span of the word `result`; a bracket `[>= $0.00]` writes that word nowhere, so kind 21
+    // reads `result_slot` instead. Two slots would mean the bracket form checking an uninitialised
+    // one, which is a wrong answer rather than an error.
+    //
+    // When the word is absent the slot is declared at a span nothing can look up — a name is never
+    // zero-length — because the span is only ever used BY `find_slot`, and nothing will.
     let spelling: Int = find_text(src, "result");
+    let mutable slot_start: Int = 0 - 1;
+    let mutable slot_length: Int = 0;
     if spelling >= 0 {
-        let slot: Int = self.declare_slot(src, spelling, 6, 1, 0);
-        let stored: Int = self.write_body("  store i64 " + value + ", ptr %v" + to_string(slot)
-                                 + "\n");
+        slot_start = spelling;
+        slot_length = 6;
     }
+    let outer_result_slot: Int = self.result_slot;
+    let slot: Int = self.declare_slot(src, slot_start, slot_length, 1, 0);
+    self.result_slot = slot;
+    let stored: Int = self.write_body("  store i64 " + value + ", ptr %v" + to_string(slot)
+                             + "\n");
     c = 0;
     while c < self.ensures_count {
         let clause: Node = self.nodes[self.children[self.ensures_start + c]];
@@ -2532,7 +2558,95 @@ function (mutable self: Unit) emit_ensures(src: String, value: String) -> Int {
         }
         c += 1;
     }
+    self.result_slot = outer_result_slot;
     return 1;
+}
+
+// Replace every WHOLE-WORD occurrence of `word` with `with`.
+//
+// Whole-word so that `it` inside `limit`, `omit` or `items` survives: a substring replace would
+// rewrite a clause into nonsense, silently, in a message nobody reads until it fires. A boundary is
+// "not alphanumeric and not `_`", which is where the lexer ends an identifier — so the two agree
+// about where a name stops.
+function replace_whole_word(text: String, word: String, with_text: String) -> String {
+    let mutable out: String = "";
+    // Everything below `copied` is already in `out`. Runs are copied WHOLE rather than a byte at a
+    // time: `out = out + substring(text, i, 1)` in a loop allocates a fresh String per byte, in a
+    // region, in a compiler — the shape that made the lexer quadratic for eleven versions.
+    let mutable copied: Int = 0;
+    let n: Int = len(text);
+    let w: Int = len(word);
+    let mutable i: Int = 0;
+    while i < n {
+        let mutable matched: Bool = i + w <= n;
+        let mutable k: Int = 0;
+        while matched && k < w {
+            if byte_at(text, i + k) != byte_at(word, k) {
+                matched = false;
+            }
+            k += 1;
+        }
+        if matched && i > 0 && is_name_byte(byte_at(text, i - 1)) {
+            matched = false;
+        }
+        if matched && i + w < n && is_name_byte(byte_at(text, i + w)) {
+            matched = false;
+        }
+        if matched {
+            out = out + substring(text, copied, i - copied) + with_text;
+            i += w;
+            copied = i;
+        } else {
+            i += 1;
+        }
+    }
+    return out + substring(text, copied, n - copied);
+}
+
+
+// The text a failure quotes, which for a BRACKET contract is not one span.
+//
+// `balance: Decimal<2> [> $0.00]` has to report `balance > $0.00`, and the subject and the clause are
+// not contiguous — the type sits between them. So the subject comes from `clause_subjects`, the side
+// table the parser filled, and the message is two pieces joined. The same answer as v0.0.165's
+// qualified names: a thing that is not one span may still be two.
+//
+// The subject is written in even though nobody wrote it, and that is Andre's call: a message reading
+// `> $0.00` names no value, which sends the reader back to the declaration to work out which one
+// broke — a cost paid on every failure forever.
+//
+// A clause using `it` already HAS a subject in its text, spelled `it`, so that one is replaced rather
+// than prepended. Stage-0 does exactly this, and the two messages have to match byte for byte.
+function (self: Unit) clause_text(src: String, clause: Node) -> String {
+    let written: String = substring(src, clause.b, clause.c);
+    // Keyed by the clause's TEXT START rather than its node index, because two clauses cannot begin
+    // at the same byte and the emitter is handed a Node rather than an index. A key that is already
+    // unique beats threading an extra argument through every call site.
+    let mutable i: Int = 0;
+    while i < len(self.clause_subjects) {
+        let entry: ClauseSubject = self.clause_subjects[i];
+        if entry.clause == clause.b {
+            // A bracket writes no `requires`/`ensures` word, and a longhand clause's span includes
+            // one — so the word goes in front here, or the two forms would not report the same text.
+            let mutable keyword: String = "requires ";
+            if clause.value == 127 {
+                keyword = "ensures ";
+            }
+            let mutable subject: String = "result";
+            if entry.is_result == 0 {
+                subject = substring(src, entry.start, entry.length);
+            }
+            if entry.mode == 1 {
+                return keyword + subject + " " + written;
+            }
+            if entry.mode == 2 {
+                return keyword + replace_whole_word(written, "it", subject);
+            }
+            return keyword + written;
+        }
+        i += 1;
+    }
+    return written;
 }
 
 // One contract clause, checked. `kind` is the word to quote — "requires" or "ensures" — and the
@@ -2550,7 +2664,7 @@ function (mutable self: Unit) emit_clause_check(src: String, clause: Node,
     let branched: Int = self.write_body("  br i1 " + held + ", label %" + ok + ", label %"
                                + broken + "\n");
     let opened: Int = self.write_body(broken + ":\n");
-    let text: String = substring(src, clause.b, clause.c);
+    let text: String = self.clause_text(src, clause);
     let message: String = self.intern_text("burxt runtime error: `" + text + "` failed in `"
                                   + owner + "`\n");
     let told: Int = self.write_body("  call void @burxt.contract_failed(i64 ptrtoint (ptr "

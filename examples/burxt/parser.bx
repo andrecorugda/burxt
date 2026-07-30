@@ -1311,6 +1311,25 @@ function (mutable self: Unit) parse_primary(src: String) -> Int {
             let start: Int = self.commit(base);
             return self.add(19, start, count, 0, 0, name_tok);
         }
+        // `it` inside a contract bracket IS the subject — spec M13 Decision 2. Resolved here, at the
+        // one place a bare name becomes an operand, rather than by walking the parsed expression
+        // afterwards: a walker has to know every node that can hold an expression, and forgetting one
+        // is a silent miss instead of an error.
+        //
+        // Outside a bracket `it_token` is -1 and `it_is_result` is 0, and `it` is an ordinary name.
+        if span_equal(src, self.tokens[name_tok].start, self.tokens[name_tok].length, "it") {
+            if self.it_is_result == 1 {
+                self.used_it = 1;
+                return self.add(21, 0, 0, 0, 0, name_tok);
+            }
+            if self.it_token >= 0 {
+                self.used_it = 1;
+                // A name node at the SUBJECT's token, not at `it`'s. Every lookup downstream compares
+                // spans, so pointing at where the parameter is written is the whole of what makes
+                // `it` BE that parameter.
+                return self.add(5, 0, 0, 0, 0, self.it_token);
+            }
+        }
         return self.add(5, 0, 0, 0, 0, name_tok);
     }
     return self.complain(src, "an expression");
@@ -1588,6 +1607,10 @@ function (mutable self: Unit) parse_params(src: String) -> Int {
             marshalled = 1;
             let m: Int = self.advance();
         }
+        // AFTER the marshaller, so `as scaled` still reads as part of the type and the contract
+        // reads as a statement about the value.
+        let bracketed: Int = self.parse_value_contracts(src, name_tok, 0, 126);
+        if bracketed < 0 { return -1; }
         let param: Int = self.add(90, type_node, 0, 0, marshalled, name_tok);
         push(self.stack, param);
         count += 1;
@@ -1601,6 +1624,115 @@ function (mutable self: Unit) parse_params(src: String) -> Int {
     return self.add(15, start, count, 0, 0, here);
 }
 
+// `[> $0.00, (it < $1000.00 || it > -$100.00)]` — M13: a contract on the value it constrains.
+//
+// The comma is AND: each clause is separate, so a failure names the one that broke rather than a
+// conjunction. `||` is OR inside a clause, and parentheses group.
+//
+// `subject_tok` is the parameter's name token, or -1 for the return type, where the subject is
+// `result`. `which` is 126 for a `requires` and 127 for an `ensures` — a bracket on a parameter is
+// the first, on the return type the second, and after this point nothing downstream can tell a
+// bracket from a written clause. Which is the definition of sugar.
+//
+// Answers 0 when there was no bracket at all, 1 when it read one, -1 on a parse error.
+function (mutable self: Unit) parse_value_contracts(src: String, subject_tok: Int,
+                                              is_result: Int, which: Int) -> Int {
+    if !self.at(33) {                                // '[' — no bracket here
+        return 0;
+    }
+    let open_tok: Int = self.position;
+    let opened: Int = self.advance();
+    if self.at(34) {
+        // `[]` promises nothing, and a reader who sees brackets expects a constraint. Most likely
+        // somebody deleted the clause and left the punctuation, which is the weakening `burxt review`
+        // exists to catch — caught a step earlier here.
+        return self.complain(src, "a clause inside the brackets — `[> 0]` — or no brackets at all");
+    }
+    let mutable more: Bool = true;
+    while more {
+        self.used_it = 0;
+        let clause_start: Int = self.position;
+        // The ELIDED form: a leading comparison operator, with the subject understood. Told apart
+        // from a whole condition by the first token, exactly as stage-0 tells them apart.
+        let first: Int = self.kind_at(0);
+        let elided: Bool = first == 12 || first == 13 || first == 14 || first == 15
+                           || first == 35 || first == 36;
+        let mutable cond: Int = -1;
+        if elided {
+            let op_tok: Int = self.position;
+            let op: Int = self.advance();
+            // The subject, as an operand. For a parameter it is a name that IS written down, so an
+            // ordinary name node at its token does it. For the return type nothing is written, which
+            // is why kind 21 exists: an operand meaning "the value being returned", needing no span
+            // and no invented name.
+            let mutable lhs: Int = -1;
+            if is_result == 1 {
+                lhs = self.add(21, 0, 0, 0, 0, op_tok);
+            } else {
+                lhs = self.add(5, 0, 0, 0, 0, subject_tok);
+            }
+            self.no_record_literal += 1;
+            let rhs: Int = self.parse_additive(src);
+            self.no_record_literal -= 1;
+            if rhs < 0 { return -1; }
+            cond = self.add(9, lhs, rhs, 0, first, op_tok);
+        } else {
+            // A whole condition, and `it` means the subject for exactly its length. Restored rather
+            // than left set: outside a bracket `it` is an ordinary name, and `let it: Int = 7;` is a
+            // legal program.
+            let outer_token: Int = self.it_token;
+            let outer_result: Int = self.it_is_result;
+            self.it_token = subject_tok;
+            self.it_is_result = is_result;
+            self.no_record_literal += 1;
+            cond = self.parse_expr(src);
+            self.no_record_literal -= 1;
+            self.it_token = outer_token;
+            self.it_is_result = outer_result;
+            if cond < 0 { return -1; }
+        }
+        let last: Token = self.tokens[self.position - 1];
+        let began: Token = self.tokens[clause_start];
+        let text_start: Int = began.start;
+        let text_length: Int = last.start + last.length - began.start;
+        // The clause's token is the SUBJECT's for a parameter, so a diagnostic points at the value
+        // the claim is about rather than at a bracket, and the opening bracket's for a return.
+        let mutable at: Int = open_tok;
+        if is_result == 0 {
+            at = subject_tok;
+        }
+        let clause: Int = self.add(93, cond, text_start, text_length, which, at);
+        push(self.bracket_clauses, clause);
+        // EVERY bracket clause is recorded, not only the ones needing a subject written in. A bracket
+        // writes no `requires` or `ensures` word, and the message quotes one — so even a clause
+        // written in full needs an entry to say which word goes in front of it. The first version
+        // recorded only the elided and `it` forms, and `[balance > amount]` reported without its
+        // keyword while every other clause in the language had one.
+        let mutable mode: Int = 0;
+        if elided { mode = 1; }
+        if self.used_it == 1 { mode = 2; }
+        let mutable start: Int = 0;
+        let mutable length: Int = 0;
+        if is_result == 0 {
+            let named: Token = self.tokens[subject_tok];
+            start = named.start;
+            length = named.length;
+        }
+        push(self.clause_subjects, ClauseSubject { clause: text_start, start: start,
+                                      length: length, is_result: is_result, mode: mode });
+        if self.used_it == 1 {
+            self.it_seen = 1;
+        }
+        more = false;
+        if self.at(22) {                             // ','
+            let comma: Int = self.advance();
+            more = true;
+        }
+    }
+    if !self.eat(src, 34, "`]` closing the contract") { return -1; }
+    return 1;
+}
+
 // `requires`, `ensures` and `decreases`, between the signature and the body.
 // `return_type` and `receiver_tok` ride in the clause node's two spare slots. A method item
 // has five slots and six things to say, and this is the one that costs nothing: the
@@ -1609,6 +1741,22 @@ function (mutable self: Unit) parse_clauses(src: String, return_type: Int, recei
     let here: Int = self.position;
     let base: Int = len(self.stack);
     let mutable count: Int = 0;
+    // Bracket clauses FIRST, then what was written below — the order stage-0 uses, so the two
+    // compilers report the same clause when a function has both and more than one could fail.
+    //
+    // They were collected in a side array rather than pushed here directly, because they are parsed
+    // while the scratch stack holds the parameter list and `commit` would have swept them into it.
+    let mutable b: Int = 0;
+    while b < len(self.bracket_clauses) {
+        push(self.stack, self.bracket_clauses[b]);
+        count += 1;
+        b += 1;
+    }
+    // Cleared for the next signature. Left uncleared, one function's brackets would be checked
+    // inside the next — and a contract checked in the wrong function is a wrong answer rather than
+    // an error, which is the direction that matters.
+    let dropped: Int = truncate(self.bracket_clauses, 0);
+    self.it_seen = 0;
     while self.at_word(src, "requires") || self.at_word(src, "ensures")
           || self.at_word(src, "decreases") {
         // Which clause, decided before the word is consumed.
@@ -1711,6 +1859,28 @@ function (mutable self: Unit) parse_function(src: String, is_pure: Int, owner: I
     }
     let return_type: Int = self.parse_type(src);
     if return_type < 0 { return -1; }
+    // A bracket on the RETURN type is an `ensures`, and its subject is `result` — the same name a
+    // written `ensures` binds, so the two forms are the same clause by the time anything checks them.
+    let returns_bracketed: Int = self.parse_value_contracts(src, 0 - 1, 1, 127);
+    if returns_bracketed < 0 { return -1; }
+    // The collision rule, checked once the whole signature is read because a bracket on parameter one
+    // cannot know about a parameter three called `it`. Not a keyword — a program may still name
+    // something `it` — but a function with both has two meanings for one word, and picking either
+    // would be a silent shadow. The rule `result` already follows inside `ensures`.
+    if self.it_seen == 1 {
+        let list: Node = self.nodes[params];
+        let mutable p: Int = 0;
+        while p < list.b {
+            let param: Node = self.nodes[self.children[list.a + p]];
+            let named: Token = self.tokens[param.token];
+            if span_equal(src, named.start, named.length, "it") {
+                return self.complain(src, "a parameter not called `it`, on a function whose "
+                            + "contract bracket says `it` — `it` would mean two things in one "
+                            + "signature. Rename the parameter, or write its name in the clause");
+            }
+            p += 1;
+        }
+    }
     let mutable builds_in_caller: Int = 0;
     if self.at_word(src, "allocates") {              // contextual: only here does the
         builds_in_caller = 1;                        // word mean the marker.

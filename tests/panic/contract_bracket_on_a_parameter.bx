@@ -1,0 +1,15 @@
+// A bracket contract on a parameter fires exactly as the `requires` it desugars to, and quotes the
+// same text — including the SUBJECT, which nobody wrote.
+//
+// `balance > $0.00`, not `> $0.00`. Andre's call in v0.0.166, and the reason is the one the language
+// is organised around: a message that does not name the value which broke sends the reader back to
+// the declaration to work it out, and that cost is paid on every failure forever.
+//
+// In tests/panic/ rather than tests/fail/ because the claim is about the runtime MESSAGE, and this
+// suite is run through both compilers — so it is also the check that stage-1 and stage-0 agree about
+// what a program prints when a contract breaks.
+function withdraw(balance: Decimal<2> [> $0.00], amount: Decimal<2>) -> Decimal<2> {
+    return balance - amount;
+}
+
+print(withdraw($0.00, $3.00));

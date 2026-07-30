@@ -1350,6 +1350,20 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
         return self.declared_type(src, holder.scale);
     }
 
+    // Kind 21: the value being returned, which is what an elided `[>= $0.00]` on a return type
+    // compares against, and what `it` means there. It answers the enclosing signature's return type
+    // and has no name at all — which is the point. The word `result` appears in no program that uses
+    // the bracket form, so there is no span for a name node to carry, and inventing one was the wall
+    // spec/M13 spent two versions describing.
+    if n.kind == 21 {
+        if self.result_type_node < 0 {
+            let complained: Int = self.complain_at(src, n.token,
+                "the value being returned is only meaningful in a contract on the return type");
+            return unknown_type();
+        }
+        return self.declared_type(src, self.result_type_node);
+    }
+
     if n.kind == 14 {                                // a method call on a value
         // `Account.open(...)` — an ASSOCIATED function, which reads exactly like a method call and
         // is told apart the same way stage-0 tells one: by what the name in FRONT of the dot is. A
@@ -2166,6 +2180,10 @@ function (mutable self: Unit) check_clauses(src: String, index: Int, signature: 
     let outer_pure: Int = self.in_pure;
     self.in_pure = 1;
     self.in_contract = 1;
+    // The return type's node, for kind 21 — the operand a return bracket's elided subject becomes.
+    // Saved and restored, because clauses of one function must not answer with another's return type.
+    let outer_result_node: Int = self.result_type_node;
+    self.result_type_node = signature.c;
     let mutable measures: Int = 0;
     let mutable i: Int = 0;
     while i < signature.b {
@@ -2224,6 +2242,7 @@ function (mutable self: Unit) check_clauses(src: String, index: Int, signature: 
     }
     self.in_contract = 0;
     self.in_pure = outer_pure;
+    self.result_type_node = outer_result_node;
     return 1;
 }
 

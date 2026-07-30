@@ -1,0 +1,1 @@
+`ensures result < $100.00` failed in `bounded`

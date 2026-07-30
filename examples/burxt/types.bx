@@ -120,6 +120,29 @@ class Binding { start: Int, length: Int, bound_type: Type, writable: Int, depth:
 // reaches it. That is what lets stage-1 hold generics with no new arena entries at all.
 class TypeBinding { name_start: Int, name_length: Int, bound: Type }
 
+// The SUBJECT of a bracket contract, keyed by the clause node it belongs to.
+//
+// A side table rather than two more fields on the node, because a clause node's six slots are all
+// spoken for — kind, condition, text start, text length, which clause, token. And a side table is
+// what stage-1 reaches for whenever a declaration needs one more fact than a node can hold; see
+// `generics` and `type_param_bounds`.
+//
+// `is_result` is 1 for a bracket on the RETURN type, where the subject is the word `result` and no
+// program that writes the bracket form ever spells it — so there is no span, and the renderer uses
+// the constant instead. That is the whole of the obstacle spec/M13 spent two versions on.
+//
+// `mode` says what the message has to DO, because the three bracket shapes differ:
+//   0  written in full — `[balance > amount]`. The text already names its subject; only the
+//      `requires`/`ensures` word has to go in front, because a bracket does not write one.
+//   1  elided — `[> $0.00]`. The text starts at the operator, so the subject goes in front of it.
+//   2  used `it` — `[it * 2 > 0]`. The text names a subject in the wrong spelling, so `it` is
+//      replaced rather than prepended.
+//
+// `clause` is the clause's TEXT START, not its node index: two clauses cannot begin at the same byte,
+// and the emitter is handed a Node rather than an index. A key that is already unique beats threading
+// an extra argument through every call site.
+class ClauseSubject { clause: Int, start: Int, length: Int, is_result: Int, mode: Int }
+
 // Which declaration is generic over which parameters. A side table, looked up by name span
 // like every other declaration here, because every field of a node is already spoken for.
 // `type_param_start`/`type_param_count` index `type_parameters`, which holds the TOKEN of each parameter's name —
@@ -231,6 +254,53 @@ class Unit {
     ensures_start: Int,
     ensures_count: Int,
     ensures_owner: String,
+    // ---- M13: a contract written on the value it constrains ------------------------------
+    //
+    // `function f(p: Type [> 0, <= q]) -> T [>= 0]`. Pure sugar: each bracket is a `requires`, or an
+    // `ensures` on the return type, with the SUBJECT synthesized in.
+    //
+    // The clause nodes cannot go on the scratch stack when they are parsed, because the stack is
+    // holding the parameter list at that moment and `commit` would sweep them into it. So they are
+    // collected here and prepended to the written clauses by `parse_clauses` — which also gives the
+    // order stage-0 uses: brackets first, then what was written below.
+    bracket_clauses: [Int],
+    // A bracket clause's SUBJECT, which is not contiguous with its text: in
+    // `balance: Decimal<2> [> $0.00]` the type sits between them, so no single span can spell
+    // `balance > $0.00`. The same answer as v0.0.165's qualified names — a thing that is not one
+    // span may still be two — and this is the second span.
+    clause_subjects: [ClauseSubject],
+    // What `it` stands for while a bracket clause is being parsed, and only then: the TOKEN of the
+    // subject's name, or -1 outside a bracket, where `it` is an ordinary name.
+    //
+    // A token rather than a span, because a name node takes its name from its token like every other
+    // name in the language — so `it` becomes a node pointing at where the parameter is written, and
+    // every span comparison downstream then works with no new representation at all.
+    //
+    // Set and RESTORED around each clause. A capability left switched on is the bug shape stage-1's
+    // first `current_receiver` had, and this one would make `it` mean the last parameter anywhere in
+    // the program.
+    it_token: Int,
+    it_is_result: Int,
+    // Two flags, not one. `used_it` is per CLAUSE, so the message knows whether to resolve one;
+    // `it_seen` is per SIGNATURE, for the collision check — a parameter may still be called `it`,
+    // and a bracket saying `it` on such a function is an error rather than a silent shadow.
+    //
+    // Stage-0's first attempt used one flag and computed "did this clause use it" as a CHANGE across
+    // the clause. Since the flag has to survive for the collision check it is monotonic, so that
+    // answered false for every clause after the first, and a return bracket with two `it` clauses
+    // reported the second one unresolved.
+    used_it: Int,
+    it_seen: Int,
+    // The return type's NODE while a signature's clauses are being checked, or -1 outside one. Node
+    // kind 21 — `it` or the elided subject on a return bracket, meaning "the value being returned" —
+    // answers this. A node rather than a Type, because a Type field would need a value in stage1.bx's
+    // Unit literal and `declared_type` already turns a node into one.
+    result_type_node: Int,
+    // The slot holding the value being returned, while `ensures` clauses are emitted. Kind 21 loads
+    // it directly, because the bracket form writes the word `result` nowhere and so has no span for
+    // the ordinary name lookup to find. The longhand form still resolves through the span, and both
+    // land on the same slot because `emit_ensures` declares exactly one.
+    result_slot: Int,
     instances: [Instance],
     // The type arguments of every instance, laid end to end. `Instance` carries a start and a
     // count into this, the same shape `nested_children` and `type_parameters` use.

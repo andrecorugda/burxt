@@ -1,6 +1,6 @@
 # Burxt — contracts on the values they constrain (M13)
 
-> Status: **stage-0 DONE, and now tested (v0.0.135 · `it` v0.0.167). Stage-1 pending, one obstacle.**
+> Status: **DONE in BOTH compilers** (stage-0 v0.0.135 · `it` v0.0.167 · stage-1 v0.0.169).
 >
 > **The bracket form had NO test coverage for fourteen versions**, and writing the first fixture in
 > v0.0.166 found that **Decision 2 — `it` — had never been implemented**: `[it * 2 > 0]` answered
@@ -13,7 +13,8 @@
 >
 > * `bracket_contracts_desugar_to_the_same_message` (v0.0.166, extended v0.0.167) compiles **both**
 >   spellings of five constraints and compares the failure text byte for byte.
-> * `tests/stage0-only/contract_brackets.bx` covers the accepting side.
+> * `tests/pass/contract_brackets.bx` covers the accepting side, in BOTH compilers since v0.0.169,
+>   plus two panic fixtures for the runtime messages.
 > * Five fail fixtures, which are acceptance item 3: `bracket_it_collides_with_a_parameter`,
 >   `bracket_it_outside_a_bracket`, `bracket_clause_is_not_pure`, `bracket_clause_is_not_a_bool`,
 >   `bracket_promises_nothing`.
@@ -154,6 +155,39 @@
 > Note also that `emit_ensures` currently finds the result slot with `find_text(src, "result")`,
 > literally searching the program for the word. That works only because the longhand form writes it.
 > The slot needs an identity that is not a span before the bracket form can emit.
+>
+> ### v0.0.169: stage-1 has it, and neither proposal was needed
+>
+> This note spent two versions proposing a **synthetic token** and then a general **synthesized-name
+> buffer**. Both were answers to the wrong question. The right one, and the third time in five days
+> that a stage-1 wall dissolved the same way:
+>
+> | what it needed | what it got |
+> |---|---|
+> | a name for the value being returned | **no name at all** — node kind 21, which the checker answers with the enclosing signature's return type and the emitter reads from the one result slot |
+> | a synthesized clause TEXT | **two pieces** — the subject from a side table keyed by the clause's text start, joined to the written span. `ClauseSubject` carries a `mode` saying whether the subject is prepended, replaces an `it`, or is already there |
+> | a slot identity that is not a span | `emit_ensures` declares **exactly one** slot and records it. The longhand form still finds it by the span of the word `result`; the bracket form reads the recorded index. Two slots would have meant the bracket form checking an uninitialised one |
+>
+> **A thing that has no name needs no way to spell one.** That is the whole of it, and it is the same
+> shape as v0.0.165's qualified names (a thing that is not one span may still be two).
+>
+> Two bugs on the way, both worth the record:
+>
+> 1. The first version recorded a `ClauseSubject` only for clauses NEEDING a subject written in — the
+>    elided and `it` forms. But a bracket writes no `requires`/`ensures` word and a longhand clause's
+>    span includes one, so `[balance > amount]` reported without its keyword while every other clause
+>    in the language had one. Every bracket clause is recorded now, and `mode 0` means "the text is
+>    already right, just put the word in front".
+> 2. `replace_whole_word` first built its answer one byte at a time — `out = out + substring(text, i,
+>    1)` — which allocates a fresh String per byte, in a region, in a compiler. The same shape that
+>    made the lexer quadratic for eleven versions. It copies runs whole now.
+>
+> Verified by comparing the two compilers' failure text byte for byte across every bracket shape:
+> elided, written in full, `it` twice in one clause, `it` inside a call, a return bracket's SECOND
+> clause, and a function mixing brackets with written clauses. `tests/pass/contract_brackets.bx` moved
+> out of `tests/stage0-only/`, two panic fixtures were added that could not exist before, and the five
+> `bracket_*` fail fixtures are now caught by stage-1 for the right reason rather than by failing to
+> parse.
 
 ## 0. What is wrong with the current form
 

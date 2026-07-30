@@ -1,0 +1,12 @@
+// A bracket on the RETURN type is an `ensures`, and its subject is `result`.
+//
+// This is the case that kept the whole feature out of stage-1 for three versions: the word `result`
+// appears nowhere in this program, so there is no span for a name node to carry. It is a node kind
+// with no name instead — the checker answers the signature's return type, the emitter loads the one
+// slot `emit_ensures` declares. Two clauses here, because the SECOND one is where a first attempt at
+// tracking `it` per-clause went wrong.
+function bounded(amount: Decimal<2>) -> Decimal<2> [it >= $0.00, it < $100.00] {
+    return amount;
+}
+
+print(bounded($500.00));

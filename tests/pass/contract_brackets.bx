@@ -18,13 +18,16 @@
 // value broke sends the reader back to the declaration to work it out, and that tax is paid on every
 // failure forever.
 //
-// ---- Why this is in tests/stage0-only/ ------------------------------------------------
+// ---- Both compilers, since v0.0.169 ---------------------------------------------------
 //
-// Stage-1 does not parse brackets yet. Three of the four pieces it needs are free — a parameter's
-// subject is a real span, and a message built from two spans is the same trick that gave stage-1
-// constructors in v0.0.165. The fourth is not: an elided `[>= $0.00]` on a RETURN type needs an
-// operand meaning "the value being returned", and no program that uses the bracket form ever writes
-// the word `result`, so there is no span to point at. See spec/M13-CONTRACT-SYNTAX.md.
+// This lived in tests/stage0-only/ for three versions because stage-1 could not hold the RETURN
+// bracket: an elided `[>= $0.00]` needs an operand meaning "the value being returned", and no program
+// that writes the bracket form ever spells the word `result`, so there was no span to point a name
+// node at. spec/M13 proposed a synthetic token, then a general synthesized-name buffer.
+//
+// Neither was needed. The answer was a NODE KIND with no name at all — the checker answers the
+// enclosing signature's return type, the emitter loads the one result slot — which is smaller than
+// either proposal, because a thing that has no name needs no way to spell one.
 
 // A parameter bracket, and a second clause in the same brackets — each comma is a separate clause,
 // so a failure can name the one that broke.
