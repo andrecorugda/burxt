@@ -1,1 +1,1 @@
-`match` needs an enum value, but this has type Int. Use `if` to branch on other types.
+so `Plus` is not a pattern it can have — a scalar match takes literals and `_`

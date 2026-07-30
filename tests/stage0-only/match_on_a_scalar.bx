@@ -1,0 +1,60 @@
+// `match` on an Int, a String or a Bool — not only on an enum.
+//
+// Every numeric switch used to be an `if / else if` chain, which every mainstream language
+// spells as a switch. Per DESIGN.md the reader is a REVIEWER scanning code an agent wrote, and a
+// chain of comparisons hides its shape: a switch says "these are the cases" in one glance.
+//
+// ---- The two `match` rules are OPPOSITE, on purpose ---------------------------------
+//
+// An enum match REFUSES `_`, because listing every variant is the point — add a variant later
+// and every incomplete match becomes an error naming it.
+//
+// A scalar match REQUIRES `_`, because `Int` cannot be enumerated and a match without a
+// catch-all would be a hole with no error to mark it.
+//
+// Both messages say which rule they are and why, because two rules for one keyword that differ
+// will otherwise read as arbitrary.
+//
+// ---- How it works, and why it needed no codegen -------------------------------------
+//
+// Desugared to an `if / else if` chain in the checker. So nothing below it and nothing in either
+// backend learns a new statement kind, and the comparison is the ordinary `==` — already correct
+// for an Int, and already calling `burxt.streq` for a String. In a money language, no new
+// branching to get wrong is worth more than a switch table.
+//
+// In tests/stage0-only/ because stage-1's parser refuses a literal pattern — cleanly, as a parse
+// error, which is the safe direction.
+
+function describe(status: Int) -> String {
+    match status {
+        200 => { return "ok"; }
+        404 => { return "missing"; }
+        500 => { return "broken"; }
+        _   => { return "unknown"; }
+    }
+}
+
+function kind(word: String) -> Int {
+    match word {
+        "add"    => { return 1; }
+        "remove" => { return 2; }
+        _        => { return 0; }
+    }
+}
+
+function yes_or_no(flag: Bool) -> String {
+    match flag {
+        true => { return "yes"; }
+        _    => { return "no"; }
+    }
+}
+
+print(describe(200));
+print(describe(404));
+print(describe(500));
+print(describe(418));
+print(kind("add"));
+print(kind("remove"));
+print(kind("fly"));
+print(yes_or_no(true));
+print(yes_or_no(false));

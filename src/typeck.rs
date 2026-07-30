@@ -2977,6 +2977,132 @@ impl TypeChecker {
     /// one still holding parameters because we are inside the generic that declared it.
     /// One implementation, so exhaustiveness and payload binding cannot differ between
     /// the declaration and its instantiations.
+    /// A `match` on a scalar, desugared to an `if / else if` chain.
+    ///
+    /// The rule here is the OPPOSITE of the enum rule, and that is worth saying plainly because
+    /// two `match` rules that differ will otherwise read as arbitrary. An enum match REFUSES a
+    /// wildcard, because listing every variant is the whole point — add a variant later and the
+    /// match becomes an error naming it. A scalar match REQUIRES one, because `Int` cannot be
+    /// enumerated and a match with no catch-all would be a hole with no error to mark it.
+    fn desugar_scalar_match(
+        &mut self,
+        subject: &Expr,
+        scrutinee: TypedExpr,
+        arms: &[MatchArm],
+        at: Span,
+    ) -> Result<TypedStmt, String> {
+        self.current_span.set(at);
+        let ty = scrutinee.ty.clone();
+        let shown = format!("{}", ty);
+
+        // Split off the wildcard, which must be last: an arm after it could never run, and
+        // silently unreachable code is the kind of thing a reviewer should never have to spot.
+        let mut cases: Vec<(&MatchArm, &MatchLiteral)> = Vec::new();
+        let mut fallback: Option<&MatchArm> = None;
+        for (i, arm) in arms.iter().enumerate() {
+            if !arm.bindings.is_empty() {
+                return Err(format!(
+                    "`{}` is a literal, so it carries nothing to name. Payload names belong to \
+                     an enum variant.",
+                    arm.variant
+                ));
+            }
+            match &arm.literal {
+                Some(lit) => {
+                    if fallback.is_some() {
+                        return Err(format!(
+                            "`{}` comes after the `_` arm, so it could never run. Put `_` last.",
+                            arm.variant
+                        ));
+                    }
+                    if cases.iter().any(|(_, seen)| *seen == lit) {
+                        return Err(format!("`{}` is matched twice in this `match`", arm.variant));
+                    }
+                    let literal_ty = match lit {
+                        MatchLiteral::Int(_) => Type::Int,
+                        MatchLiteral::Text(_) => Type::String,
+                        MatchLiteral::Truth(_) => Type::Bool,
+                    };
+                    // One equality, no coercion — the same rule `==` follows everywhere.
+                    if !matches!(
+                        (&ty, lit),
+                        (Type::Decimal { .. }, MatchLiteral::Int(_))
+                    ) && literal_ty != ty
+                    {
+                        return Err(format!(
+                            "this `match` is on {}, but `{}` is {}. There is one equality in \
+                             Burxt and it never converts.",
+                            shown, arm.variant, literal_ty
+                        ));
+                    }
+                    cases.push((arm, lit));
+                }
+                None if arm.variant == "_" => {
+                    if fallback.is_some() {
+                        return Err("this `match` has two `_` arms".to_string());
+                    }
+                    fallback = Some(arm);
+                }
+                None => {
+                    return Err(format!(
+                        "this `match` is on {}, so `{}` is not a pattern it can have — a scalar \
+                         match takes literals and `_`, not variant names.",
+                        shown, arm.variant
+                    ));
+                }
+            }
+            let _ = i;
+        }
+
+        let Some(fallback) = fallback else {
+            return Err(format!(
+                "this `match` on {} has no `_` arm. A scalar cannot be enumerated, so a match \
+                 without a catch-all would leave values with nowhere to go — which is the \
+                 opposite of an enum match, where `_` is refused because listing every variant \
+                 is the point.",
+                shown
+            ));
+        };
+
+        // Built back to front, so each arm's else-branch is the chain already assembled.
+        let mut chain = self.check_block(&fallback.body)?;
+        for (arm, lit) in cases.iter().rev() {
+            let literal_expr = Expr {
+                kind: match lit {
+                    MatchLiteral::Int(n) => ExprKind::IntLit(*n),
+                    MatchLiteral::Text(s) => ExprKind::StrLit(s.clone()),
+                    MatchLiteral::Truth(b) => ExprKind::BoolLit(*b),
+                },
+                span: at,
+            };
+            let cond = self.check_expr(
+                &Expr {
+                    kind: ExprKind::Compare {
+                        op: CmpOp::Eq,
+                        lhs: Box::new(subject.clone()),
+                        rhs: Box::new(literal_expr),
+                    },
+                    span: at,
+                },
+                Some(&Type::Bool),
+            )?;
+            let then_block = self.check_block(&arm.body)?;
+            chain = vec![TypedStmt::If { cond, then_block, else_block: Some(chain) }];
+        }
+        // A chain of one is the wildcard alone, which is a block and not an `if`.
+        Ok(match chain.len() {
+            1 => chain.into_iter().next().unwrap(),
+            _ => TypedStmt::If {
+                cond: self.check_expr(
+                    &Expr { kind: ExprKind::BoolLit(true), span: at },
+                    Some(&Type::Bool),
+                )?,
+                then_block: chain,
+                else_block: None,
+            },
+        })
+    }
+
     fn check_match_arms(
         &mut self,
         variants: Vec<(String, Vec<Type>)>,
@@ -3414,12 +3540,24 @@ impl TypeChecker {
                         );
                     }
                 }
+                // A SCALAR match — `match status { 200 => ..., _ => ... }`. Desugared to an
+                // `if / else if` chain right here, so nothing below this and nothing in either
+                // backend learns a new statement kind, and the comparison is the ordinary `==`
+                // that is already correct for an Int and already calls `burxt.streq` for a
+                // String. No new branching to get wrong, which matters more in a money language
+                // than a switch table does.
+                if matches!(
+                    scrutinee.ty,
+                    Type::Int | Type::Bool | Type::String | Type::Decimal { .. }
+                ) {
+                    return self.desugar_scalar_match(value, scrutinee, arms, s.span);
+                }
                 let enum_name = match &scrutinee.ty {
                     Type::Named(n) if self.is_enum(n) => n.clone(),
                     other => {
                         return Err(format!(
-                            "`match` needs an enum value, but this has type {}. \
-                             Use `if` to branch on other types.",
+                            "`match` needs an enum value or a scalar, but this has type {}. \
+                             Use `if` to branch on anything else.",
                             other
                         ))
                     }

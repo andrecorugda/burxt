@@ -1,0 +1,7 @@
+// A scalar `match` requires `_`, which is the OPPOSITE of the enum rule — and the message says
+// so, because two rules for one keyword that differ would otherwise read as arbitrary.
+let n: Int = 3;
+match n {
+    1 => { print("one"); }
+    3 => { print("three"); }
+}

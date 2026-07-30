@@ -1,0 +1,7 @@
+// An arm after `_` can never run, and silently unreachable code is exactly what a reviewer
+// should not have to spot.
+let n: Int = 3;
+match n {
+    _ => { print("any"); }
+    1 => { print("one"); }
+}

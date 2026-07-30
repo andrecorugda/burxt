@@ -542,9 +542,28 @@ pub struct EnumDef {
 /// and the block to run.
 #[derive(Debug, Clone)]
 pub struct MatchArm {
+    /// The variant name for an enum arm, the literal's text for a scalar arm, and `_` for a
+    /// wildcard. Kept as a String because every message quotes it, and `_` was already the
+    /// wildcard's spelling before scalar matching existed.
     pub variant: String,
     pub bindings: Vec<String>,
     pub body: Vec<Stmt>,
+    /// Set when the pattern is a LITERAL rather than a variant name — `match status { 200 => ... }`.
+    ///
+    /// A scalar `match` is desugared to an `if / else if` chain by the checker, so nothing below
+    /// it and nothing in either backend learns a new statement kind. The comparison is the
+    /// ordinary `==`, which is already correct for an Int and already uses `burxt.streq` for a
+    /// String — so there is no new branching to get wrong, which matters more here than a switch
+    /// table would.
+    pub literal: Option<MatchLiteral>,
+}
+
+/// A literal in a `match` pattern. Only the types `==` accepts, because the desugaring IS `==`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MatchLiteral {
+    Int(i64),
+    Text(String),
+    Truth(bool),
 }
 
 /// `struct Name { field: Type, ... }` — the nominal class type and the

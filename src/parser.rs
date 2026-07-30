@@ -1204,13 +1204,30 @@ impl Parser {
             if self.at(&Token::Eof) {
                 return Err("unclosed `match`: expected `}`".to_string());
             }
+            // A pattern is a variant name, or a LITERAL when the subject is a scalar. `_` lexes
+            // as an identifier, so the wildcard arrives through the Ident arm.
+            let mut literal = None;
             let variant = match self.bump() {
                 Token::Ident(s) => s,
-                // `_` would lex as an identifier, so a wildcard cannot reach
-                // here as a distinct token; every other token is a real slip.
+                Token::Int(n) => {
+                    literal = Some(MatchLiteral::Int(n));
+                    n.to_string()
+                }
+                Token::Str(s) => {
+                    literal = Some(MatchLiteral::Text(s.clone()));
+                    format!("\"{}\"", s)
+                }
+                Token::True => {
+                    literal = Some(MatchLiteral::Truth(true));
+                    "true".to_string()
+                }
+                Token::False => {
+                    literal = Some(MatchLiteral::Truth(false));
+                    "false".to_string()
+                }
                 other => {
                     return Err(format!(
-                        "expected a variant name to match on, found {}",
+                        "expected a variant name or a literal to match on, found {}",
                         other.describe()
                     ))
                 }
@@ -1244,7 +1261,7 @@ impl Parser {
             }
             self.bump();
             let body = self.parse_block()?;
-            arms.push(MatchArm { variant, bindings, body });
+            arms.push(MatchArm { variant, bindings, body, literal });
             if self.at(&Token::Comma) {
                 self.bump(); // a separating comma is allowed
             }

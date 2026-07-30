@@ -1,0 +1,6 @@
+// One equality, no coercion — the same rule `==` follows everywhere, applied to a pattern.
+let n: Int = 3;
+match n {
+    "one" => { print("a"); }
+    _     => { print("b"); }
+}

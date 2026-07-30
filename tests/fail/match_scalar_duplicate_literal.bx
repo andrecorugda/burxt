@@ -1,0 +1,7 @@
+// The same case twice is a mistake, not a preference — the second could never run.
+let n: Int = 3;
+match n {
+    1 => { print("a"); }
+    1 => { print("b"); }
+    _ => { print("c"); }
+}
