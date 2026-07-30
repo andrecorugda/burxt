@@ -64,7 +64,7 @@ function same<T: Equatable>(a: T, b: T) -> Bool {
 // methods. This is STATIC dispatch: one copy per type, no vtable, no runtime type
 // information. `dynamic Priced` is still there for when one implementation must serve
 // many types at run time — generics are for when many implementations should.
-trait Priced {
+interface Priced {
     function price(self) -> Decimal<2>
 }
 

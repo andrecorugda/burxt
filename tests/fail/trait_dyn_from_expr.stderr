@@ -1,1 +1,1 @@
-a `dynamic Priced` must come from a variable — a trait object borrows the storage
+a `dynamic Priced` must come from a variable — an interface object borrows the storage

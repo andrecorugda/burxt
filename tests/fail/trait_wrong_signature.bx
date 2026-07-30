@@ -1,4 +1,4 @@
-trait HasBalance {
+interface HasBalance {
     function balance_of(self) -> Decimal<2>
 }
 class Account { balance: Decimal<2> }

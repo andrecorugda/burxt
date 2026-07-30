@@ -16,7 +16,7 @@ print("tax {tax}");
 // ---- Aggregates with value semantics, and behaviour attached to them ----
 class LineItem { label: String, price: Decimal<2>, quantity: Int }
 
-trait Priced { function total(self) -> Decimal<2> }
+interface Priced { function total(self) -> Decimal<2> }
 
 implement Priced for LineItem {
     function (self) total() -> Decimal<2> {
@@ -27,7 +27,7 @@ implement Priced for LineItem {
 let widget: LineItem = LineItem { label: "widget", price: $19.99, quantity: 3 };
 print("{widget.label}: {widget.total()}");
 
-// A trait object: runtime dispatch only where `dynamic` is written.
+// A interface object: runtime dispatch only where `dynamic` is written.
 function show(item: dynamic Priced) -> Int {
     print("via dynamic: {item.total()}");
     return 0;

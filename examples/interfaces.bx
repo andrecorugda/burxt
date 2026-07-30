@@ -1,16 +1,16 @@
 // ============================================================================
-// Traits — the whole of Burxt's abstraction story. There is no `class` and no
-// inheritance: a trait says what a type can DO, an `implement` says a type does it,
+// Interfaces — the whole of Burxt's abstraction story. There is no `class` and no
+// inheritance: an interface says what a type can DO, an `implement` says a type does it,
 // and `dynamic` is the only place a decision is made at runtime.
 // ============================================================================
 
-// A trait is a list of signatures. No bodies, no fields, no state — a trait
+// An interface is a list of signatures. No bodies, no fields, no state — an interface
 // describes behaviour, and behaviour is all it can describe.
-trait Priced {
+interface Priced {
     function price(self) -> Decimal<2>
     function label(self) -> String
 }
-// (In a trait the receiver is just `self`; inside an `implement` block it may be just
+// (In an interface the receiver is just `self`; inside an `implement` block it may be just
 //  `function (self)` too, because the header already said which type.)
 
 class Book { title: String, cost: Decimal<2> }
@@ -37,8 +37,8 @@ function describe_book(item: Book) -> String {
 }
 
 // ---- Runtime dispatch: only where you write `dynamic` -------------------------
-// `dynamic Priced` is a fat pointer — the value, and a table of the trait's
-// methods. Slot order comes from the trait declaration, so `price` is slot 0
+// `dynamic Priced` is a fat pointer — the value, and a table of the interface's
+// methods. Slot order comes from the interface declaration, so `price` is slot 0
 // for every implementor. You pay for this exactly where you ask for it.
 function show(item: dynamic Priced) -> Decimal<2> {
     return item.price();
@@ -64,17 +64,17 @@ print(anything.price());
 //
 // An implement that leaves a method out:
 //     implement Priced for Book { function (self: Book) price() -> Decimal<2> { ... } }
-//     error: this implement leaves out `label`, which the trait requires
+//     error: this implement leaves out `label`, which the interface requires
 //
-// An implement that adds one the trait never declared:
-//     error: the trait has no method of this name, and an implementation is an answer to
-//            a trait rather than a place to add to a type
+// An implement that adds one the interface never declared:
+//     error: the interface has no method of this name, and an implementation is an answer to
+//            an interface rather than a place to add to a type
 //
 // A signature that does not match — including the receiver form, since `self`
 // and `mutable self` are different promises:
-//     error: the trait returns Decimal<2>, and this returns Int
+//     error: the interface returns Decimal<2>, and this returns Int
 //
 // And there is no inheritance to reach for instead. A `Book` is not a kind of
-// anything; it is a class that satisfies a trait. Composition and traits do
+// anything; it is a class that satisfies an interface. Composition and interfaces do
 // the work a base class would, without the fragile-base-class problem or the
 // question of which parent a method came from.

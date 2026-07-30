@@ -62,7 +62,7 @@ print(log.describe());
 //         runs. This one was only refused correctly for three versions: the check was
 //         missing entirely until v0.0.143, enforced for a direct call and silently skipped
 //         here. It found nothing to refuse then, and there is nothing to refuse now.
-trait Describable {
+interface Describable {
     function describe(self) -> String
 }
 class Tag { id: Int }

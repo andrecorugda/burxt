@@ -1,1 +1,1 @@
-is missing the method `label`. Every trait method must be implemented — Burxt has no default bodies.
+is missing the method `label`. Every interface method must be implemented — Burxt has no default bodies.

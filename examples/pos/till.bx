@@ -70,7 +70,7 @@ let two: Int = push(basket, Line { item: find_item(shelf, "MILK"), quantity: 2 }
 let three: Int = push(basket, Line { item: find_item(shelf, "NEWS"), quantity: 1 });
 
 // The same basket, priced two ways. Neither `ring_up` nor `receipt.bx` knows
-// which rule it is running — that is what the trait is for.
+// which rule it is running — that is what the interface is for.
 let flat: FlatTax = FlatTax { rate: 0.1200 };
 let split: SplitTax = SplitTax { staples: 0.0200, rest: 0.1200 };
 

@@ -2,7 +2,7 @@
 // well-tested families that nobody had written a program in.
 //
 // `tests/pass/abi_*` covers classes across call boundaries. `tests/pass/trait_dyn_*`
-// covers dispatch through a trait object. Seven fixtures pass a class to a method and
+// covers dispatch through an interface object. Seven fixtures pass a class to a method and
 // not one of them does it dynamically, so this path had no test at all — and it was
 // WRONG. A vtable target declares its record parameter `byval(T)`, meaning the aggregate
 // travels in the stack argument area; the indirect call passed a bare pointer, which
@@ -23,7 +23,7 @@ class Item { sku: String, name: String, price: Decimal<2>, taxable: Bool }
 // ---- 16 bytes: two words. The shape that was accidentally right. -----------
 class Pair { lo: Int, hi: Int }
 
-trait Rule {
+interface Rule {
     function rate_for(self, item: Item) -> Decimal<4>
     function fold(self, p: Pair) -> Int
     function shift(self, p: Pair) -> Pair
@@ -53,7 +53,7 @@ implement Rule for Flat {
 }
 
 // A `dynamic` FORWARDED through a call, which is how the original wrong answer was
-// reached: the trait object is a parameter here, not a value coerced at this call site.
+// reached: the interface object is a parameter here, not a value coerced at this call site.
 function tax_of(rule: dynamic Rule, item: Item, quantity: Int) -> Decimal<2, RoundHalfUp> {
     let rate: Decimal<4> = rule.rate_for(item);
     let base: Decimal<2> = item.price * quantity;

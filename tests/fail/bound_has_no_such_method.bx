@@ -1,6 +1,6 @@
 // The bound is the whole interface: a method it does not declare does not exist on the
 // parameter, however many types happen to have one.
-trait Priced { function price(self) -> Int }
+interface Priced { function price(self) -> Int }
 function f<T: Priced>(x: T) -> Int {
     return x.cost();
 }

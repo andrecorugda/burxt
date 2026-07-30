@@ -222,10 +222,10 @@ Leaving an arm out is an error. So is writing the same arm twice. There is delib
 say what it means there. That is the entire value of sum types — a wildcard throws it away
 in exchange for a few seconds now.
 
-## Traits — the abstraction mechanism
+## Interfaces — the abstraction mechanism
 
 ```burxt
-trait Priced {
+interface Priced {
     function price(self) -> Decimal<2>
     function label(self) -> String
 }
@@ -236,7 +236,7 @@ implement Priced for Book {
 }
 ```
 
-Conformance is **declared, not inferred**: a type does not accidentally satisfy a trait by
+Conformance is **declared, not inferred**: a type does not accidentally satisfy an interface by
 having methods with the right names. The compiler checks the implementation answers every signature,
 adds none, and matches each one exactly — parameter count, parameter types, return type,
 and the receiver form.
@@ -260,13 +260,13 @@ function show(item: dynamic Priced) -> Decimal<2> { return item.price(); }
 ```
 
 Static dispatch is the default and costs nothing. `dynamic Priced` is a fat pointer — a value
-plus a table of the trait's methods — and you pay for the indirection exactly where you
+plus a table of the interface's methods — and you pay for the indirection exactly where you
 asked for it. `dynamic` values are storable: bindings, record fields, arrays.
 
 ## No inheritance, and why
 
 There is no `class`, no base type, no `super`. This was **decided and closed**, not
-deferred: across thirty versions nothing needed it, and composition plus traits did the
+deferred: across thirty versions nothing needed it, and composition plus interfaces did the
 work every time.
 
 What you would reach for a base class for:
@@ -274,7 +274,7 @@ What you would reach for a base class for:
 | Instead of | Use |
 |---|---|
 | Shared fields | A record field holding the common record |
-| Shared behaviour | A trait, implemented by each type |
+| Shared behaviour | An interface, implemented by each type |
 | "Is-a" polymorphism | `dynamic Trait` |
 
 What you avoid: the fragile base class problem, the question of which parent a method came
@@ -340,7 +340,7 @@ checkout service with an injected tax-rate provider.
 | **Constructor** | A function returning the record: `function new_order(...) -> Order` |
 | **Validation while constructing** | `requires` on that function — checked on **every** call, quoting the clause when it fails, with no build mode that removes it and no factory that bypasses it |
 | **Initialization** | A record literal must set **every field**. There is no half-built object and no `null` to leave in one |
-| **Interface** | `trait` |
+| **Interface** | `interface` |
 | **Reuse / polymorphism** | `implement Trait for Type`, and `dynamic Trait` where the choice is made at runtime |
 | **Dependency injection** | A `dynamic Trait` **field**: `class Checkout { rates: dynamic Rates }`. The dependency is chosen by whoever builds the service — a record literal instead of a container |
 | **Destructor / cleanup** | The [region](04-memory.md). You do not write one |
@@ -370,7 +370,7 @@ first**. A `dynamic` borrows the storage of the value it refers to, and a tempor
 ### Where this is stricter, not weaker
 
 Three things in that example would have been allowed by a class-based language and are not
-here: a record literal cannot omit a field, a precondition cannot be bypassed, and a trait
+here: a record literal cannot omit a field, a precondition cannot be bypassed, and an interface
 object cannot borrow a temporary. Each one is a bug class removed rather than a feature
 withheld.
 

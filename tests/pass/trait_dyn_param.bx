@@ -1,6 +1,6 @@
 // Dependency Inversion, made ergonomic: a function depends on the CONTRACT,
 // not the concrete record. The same function serves both types.
-trait Priced {
+interface Priced {
     function price(self) -> Decimal<2>
 }
 

@@ -91,8 +91,8 @@ pub struct CodeGen<'ctx> {
     methods: HashMap<(String, String), FunctionValue<'ctx>>,
     /// (trait, concrete) -> its static vtable global
     vtables: HashMap<(String, String), inkwell::values::GlobalValue<'ctx>>,
-    /// trait name -> method return types in slot order, for indirect calls
-    trait_slots: HashMap<String, Vec<(Vec<Type>, Type)>>,
+    /// interface name -> method return types in slot order, for indirect calls
+    interface_slots: HashMap<String, Vec<(Vec<Type>, Type)>>,
     /// the hidden sret pointer of the function being generated, if it returns
     /// an aggregate
     current_sret: Option<PointerValue<'ctx>>,
@@ -163,7 +163,7 @@ impl<'ctx> CodeGen<'ctx> {
             fn_sigs: HashMap::new(),
             methods: HashMap::new(),
             vtables: HashMap::new(),
-            trait_slots: HashMap::new(),
+            interface_slots: HashMap::new(),
             current_sret: None,
             arguments: None,
             region_mark: None,
@@ -274,9 +274,9 @@ impl<'ctx> CodeGen<'ctx> {
 
         // Vtables: static, read-only tables of function pointers in
         // trait-declaration slot order, one per (Type, Trait) used as `dyn`.
-        // Shared by every trait object of that pair — the instance carries
+        // Shared by every interface object of that pair — the instance carries
         // only two words. Emitted BEFORE any body, since a body may build a
-        // trait object or dispatch through one.
+        // interface object or dispatch through one.
         for vt in &prog.vtables {
             let ptr = self.ctx.ptr_type(AddressSpace::default());
             let fns: Vec<PointerValue> = vt
@@ -292,17 +292,17 @@ impl<'ctx> CodeGen<'ctx> {
             let global = self.module.add_global(
                 table_ty,
                 None,
-                &format!("bx.vtable.{}.{}", vt.trait_name, vt.concrete),
+                &format!("bx.vtable.{}.{}", vt.interface_name, vt.concrete),
             );
             global.set_initializer(&ptr.const_array(&fns));
             global.set_constant(true);
             self.vtables
-                .insert((vt.trait_name.clone(), vt.concrete.clone()), global);
+                .insert((vt.interface_name.clone(), vt.concrete.clone()), global);
 
             // Record each slot's signature once, so an indirect call can build
-            // the right function type. Every impl of a trait matches the
+            // the right function type. Every impl of an interface matches the
             // trait's signatures exactly, so the first one speaks for all.
-            self.trait_slots.entry(vt.trait_name.clone()).or_insert_with(|| {
+            self.interface_slots.entry(vt.interface_name.clone()).or_insert_with(|| {
                 vt.slots
                     .iter()
                     .map(|m| {
@@ -1270,8 +1270,8 @@ impl<'ctx> CodeGen<'ctx> {
                     .into()
             }
             Type::Array { elem, len } => self.llvm_type(elem).array_type(*len).into(),
-            // A trait object is a fat pointer: { data, vtable }. The vtable
-            // lives OUTSIDE the data, which is why becoming a trait object
+            // An interface object is a fat pointer: { data, vtable }. The vtable
+            // lives OUTSIDE the data, which is why becoming an interface object
             // never changes a struct's layout.
             Type::Dyn(_) => {
                 let ptr = self.ctx.ptr_type(AddressSpace::default());
@@ -2150,19 +2150,19 @@ impl<'ctx> CodeGen<'ctx> {
                     )),
                 }
             }
-            TypedExprKind::DynCoerce { trait_name, concrete, var } => {
+            TypedExprKind::DynCoerce { interface_name, concrete, var } => {
                 // Pair the binding's storage with the static vtable. No copy:
                 // the data half IS the borrowed value (and the layout it points
-                // at is unchanged by being viewed as a trait object).
+                // at is unchanged by being viewed as an interface object).
                 let (slot, _) = *self
                     .vars
                     .get(var)
                     .ok_or_else(|| format!("codegen: unknown variable {}", var))?;
                 let vtable = self
                     .vtables
-                    .get(&(trait_name.clone(), concrete.clone()))
+                    .get(&(interface_name.clone(), concrete.clone()))
                     .ok_or_else(|| {
-                        format!("codegen bug: no vtable for {}/{}", concrete, trait_name)
+                        format!("codegen bug: no vtable for {}/{}", concrete, interface_name)
                     })?
                     .as_pointer_value();
                 let fat_ty = self.llvm_type(&e.ty).into_struct_type();
@@ -2179,7 +2179,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .into_struct_value();
                 Ok(fat.into())
             }
-            TypedExprKind::DynCall { trait_name, method, slot, base, arguments } => {
+            TypedExprKind::DynCall { interface_name, method, slot, base, arguments } => {
                 let fat = self.gen_expr(base)?.into_struct_value();
                 let data = self
                     .builder
@@ -2214,12 +2214,12 @@ impl<'ctx> CodeGen<'ctx> {
                 // Typeck refused mutating methods here, so the receiver is the
                 // byval form — the callee copies from `data`.
                 let (param_tys, ret_ty) = self
-                    .trait_slots
-                    .get(trait_name)
+                    .interface_slots
+                    .get(interface_name)
                     .and_then(|s| s.get(*slot as usize))
                     .cloned()
                     .ok_or_else(|| {
-                        format!("codegen bug: no signature for {}.{}", trait_name, method)
+                        format!("codegen bug: no signature for {}.{}", interface_name, method)
                     })?;
                 let mut ll_params: Vec<BasicMetadataTypeEnum> = Vec::new();
                 let ret_is_agg = is_aggregate(&ret_ty);
@@ -2311,7 +2311,7 @@ impl<'ctx> CodeGen<'ctx> {
                     inkwell::values::ValueKind::Basic(v) => Ok(v),
                     _ => Err(format!(
                         "codegen bug: dynamic call to {}.{} returned void",
-                        trait_name, method
+                        interface_name, method
                     )),
                 }
             }
@@ -4789,7 +4789,7 @@ pub fn is_aggregate(ty: &Type) -> bool {
 /// else — no type tag, no vtable pointer, no refcount, no hidden header.
 ///
 /// This is the forward guarantee the object model depends on: a field's offset
-/// is a pure function of the declared field types and order, so adding a trait
+/// is a pure function of the declared field types and order, so adding an interface
 /// implementation later can never move a field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layout {

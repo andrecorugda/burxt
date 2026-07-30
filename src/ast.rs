@@ -81,10 +81,10 @@ pub enum Type {
     /// Two parameters are the same type only if they have the same name.
     /// See spec/M7-GENERICS.md.
     Param(String),
-    /// `dyn Trait` — a trait object: the ONLY thing that triggers dynamic
+    /// `dyn Trait` — an interface object: the ONLY thing that triggers dynamic
     /// dispatch. Represented as a fat pointer (data pointer, vtable pointer);
     /// the vtable lives outside the data, which is why the A4.5 layout
-    /// guarantee means becoming a trait object never moves a field.
+    /// guarantee means becoming an interface object never moves a field.
     Dyn(String),
 }
 
@@ -389,7 +389,7 @@ impl std::fmt::Display for Marshal {
     }
 }
 
-/// One type parameter of a generic: its name, and the trait a value of it must satisfy.
+/// One type parameter of a generic: its name, and the interface a value of it must satisfy.
 ///
 /// A parameter with **no bound** can only be stored, copied, passed and returned — the
 /// signature is the contract, so anything more has to be written in it. A bound may be one
@@ -467,10 +467,10 @@ pub struct MethodDef {
     pub span: Span,
 }
 
-/// One method signature inside a `trait` declaration: a name, a receiver form
-/// and a type — no body, no fields, no state. Traits declare signatures only.
+/// One method signature inside a `interface` declaration: a name, a receiver form
+/// and a type — no body, no fields, no state. Interfaces declare signatures only.
 #[derive(Debug, Clone)]
-pub struct TraitSig {
+pub struct InterfaceSig {
     pub name: String,
     pub receiver_mut: bool,
     pub parameters: Vec<Param>,
@@ -480,19 +480,19 @@ pub struct TraitSig {
 /// `trait Name { fn m(self) -> T ... }` — a named set of method signatures a
 /// type can promise to satisfy. That is the whole concept.
 #[derive(Debug, Clone)]
-pub struct TraitDef {
+pub struct InterfaceDef {
     pub name: String,
-    pub methods: Vec<TraitSig>,
+    pub methods: Vec<InterfaceSig>,
     /// Where this item was written, for errors about the item itself.
     pub span: Span,
 }
 
 /// `impl Trait for Type { <methods> }` — satisfaction is EXPLICIT and nominal:
-/// Burxt never auto-satisfies a trait because method shapes happen to match,
+/// Burxt never auto-satisfies an interface because method shapes happen to match,
 /// so conformance is a deliberate, greppable declaration.
 #[derive(Debug, Clone)]
 pub struct ImplBlock {
-    pub trait_name: String,
+    pub interface_name: String,
     pub type_name: String,
     pub methods: Vec<MethodDef>,
     /// Where this item was written, for errors about the item itself.
@@ -565,7 +565,7 @@ pub struct StructDef {
 pub struct Program {
     pub structs: Vec<StructDef>,
     pub enums: Vec<EnumDef>,
-    pub traits: Vec<TraitDef>,
+    pub interfaces: Vec<InterfaceDef>,
     pub impls: Vec<ImplBlock>,
     pub externs: Vec<ExternFn>,
     pub fns: Vec<FnDef>,

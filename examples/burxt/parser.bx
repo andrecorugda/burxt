@@ -128,7 +128,7 @@ function (mutable self: Unit) parse_type_params(src: String) -> Int {
         if self.at(20) {                             // ':'
             let colon: Int = self.advance();
             if !self.at(1) {
-                let complained: Int = self.complain(src, "a trait name after the parameter's `:`");
+                let complained: Int = self.complain(src, "an interface name after the parameter's `:`");
                 return 0 - 1;
             }
             bound_tok = self.position;
@@ -197,7 +197,7 @@ function (mutable self: Unit) parse_type(src: String) -> Int {
     }
     if k == 115 {                                    // dynamic
         let n: Int = self.advance();
-        if !self.at(1) { return self.complain(src, "a trait name after `dynamic`"); }
+        if !self.at(1) { return self.complain(src, "an interface name after `dynamic`"); }
         let name_tok: Int = self.position;
         let m: Int = self.advance();
         return self.add(49, 0, 0, 0, 0, name_tok);
@@ -557,7 +557,7 @@ function (mutable self: Unit) builtin_type(src: String, name: Token, at: Int, ar
     return builtin_result(called);
 }
 
-// A `dynamic Trait` value can do exactly what the trait says, so the trait's signature
+// A `dynamic Trait` value can do exactly what the interface says, so the interface's signature
 // is what the call is checked against — no concrete type is involved, which is the
 // whole point of the indirection.
 function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: Node) -> Type {
@@ -574,7 +574,7 @@ function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: No
         let sig: Node = self.nodes[self.children[item.a + i]];
         let named: Token = self.tokens[sig.token];
         if spans_equal(src, named.start, named.length, wanted.start, wanted.length) {
-            // A trait signature's parameters live in `nested_children`, after the receiver.
+            // An interface signature's parameters live in `nested_children`, after the receiver.
             let list: Node = self.nodes[call.b];
             if list.b != sig.c {
                 let complained: Int = self.complain_at(src, call.token,
@@ -1850,15 +1850,15 @@ function (mutable self: Unit) parse_enum(src: String) -> Int {
 
 // `trait Name { function sig(self) -> Type }` — signatures only, no bodies.
 function (mutable self: Unit) parse_trait(src: String) -> Int {
-    if !self.eat(src, 112, "`trait`") { return -1; }
-    if !self.at(1) { return self.complain(src, "a trait name"); }
+    if !self.eat(src, 112, "`interface`") { return -1; }
+    if !self.at(1) { return self.complain(src, "an interface name"); }
     let name_tok: Int = self.position;
     let n: Int = self.advance();
-    if !self.eat(src, 31, "`\{` opening the trait") { return -1; }
+    if !self.eat(src, 31, "`\{` opening the interface") { return -1; }
     let base: Int = len(self.stack);
     let mutable count: Int = 0;
     while !self.at(32) && !self.done() {
-        if !self.eat(src, 102, "`function` — a trait holds signatures") { return -1; }
+        if !self.eat(src, 102, "`function` — an interface holds signatures") { return -1; }
         if !self.at(1) { return self.complain(src, "a method name"); }
         let method_tok: Int = self.position;
         let m: Int = self.advance();
@@ -1869,7 +1869,7 @@ function (mutable self: Unit) parse_trait(src: String) -> Int {
             let mu: Int = self.advance();
         }
         if !self.eat(src, 119, "`self`") { return -1; }
-        // A trait signature may take parameters after `self`.
+        // An interface signature may take parameters after `self`.
         let extra_start: Int = len(self.nested_children);
         let mutable extra: Int = 0;
         while self.at(22) {                          // ',' more parameters
@@ -1892,7 +1892,7 @@ function (mutable self: Unit) parse_trait(src: String) -> Int {
         push(self.stack, sig);
         count += 1;
     }
-    if !self.eat(src, 32, "`\}` closing the trait") { return -1; }
+    if !self.eat(src, 32, "`\}` closing the interface") { return -1; }
     let start: Int = self.commit(base);
     return self.add(84, start, count, 0, 0, name_tok);
 }
@@ -1900,11 +1900,11 @@ function (mutable self: Unit) parse_trait(src: String) -> Int {
 // `implement Trait for Type { methods }`
 function (mutable self: Unit) parse_impl(src: String) -> Int {
     if !self.eat(src, 113, "`implement`") { return -1; }
-    if !self.at(1) { return self.complain(src, "a trait name"); }
+    if !self.at(1) { return self.complain(src, "an interface name"); }
     let trait_tok: Int = self.position;
     let t: Int = self.advance();
     if !self.eat(src, 114, "`for`") { return -1; }
-    if !self.at(1) { return self.complain(src, "the type implementing the trait"); }
+    if !self.at(1) { return self.complain(src, "the type implementing the interface"); }
     let type_tok: Int = self.position;
     let type_node: Int = self.advance();
     if !self.eat(src, 31, "`\{` opening the implementation") { return -1; }

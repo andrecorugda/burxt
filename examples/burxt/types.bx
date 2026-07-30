@@ -149,7 +149,7 @@ class Unit {
     nodes: [Node],
     children: [Int],
     // A SECOND child array, for lists nested inside another list: a match arm's
-    // bindings, an enum variant's payload types, a trait signature's parameters.
+    // bindings, an enum variant's payload types, an interface signature's parameters.
     //
     // Not tidiness — correctness. Pushing bindings and arms into one array
     // interleaves them, and the design's whole premise is that a list is contiguous.
@@ -236,7 +236,7 @@ class Unit {
     // count into this, the same shape `nested_children` and `type_parameters` use.
     instance_arguments: [Type],
     type_parameters: [Int],
-    // Each parameter's bound, as the token of the trait's name, or -1 for none. Parallel to
+    // Each parameter's bound, as the token of the interface's name, or -1 for none. Parallel to
     // `type_parameters`, because a parameter has exactly one bound and two arrays are cheaper
     // than a class that is copied at every lookup.
     type_param_bounds: [Int],
@@ -395,7 +395,7 @@ function (mutable self: Unit) install_keywords() -> Int {
     n = self.add_word("class", 109);
     n = self.add_word("enum", 110);
     n = self.add_word("match", 111);
-    n = self.add_word("trait", 112);
+    n = self.add_word("interface", 112);
     n = self.add_word("implement", 113);
     n = self.add_word("for", 114);
     n = self.add_word("dynamic", 115);
@@ -413,7 +413,6 @@ function (mutable self: Unit) install_keywords() -> Int {
     // the parser recognises them by position. A lexer that disagreed with stage-0
     // about this would reject `let allocates: Int = 0;` — which the cross-check test
     // caught within a minute of the change.
-    n = self.add_word("interface", 129);
     n = self.add_word("is", 130);
     // `for x in xs`. `for` is already a keyword (114) from `implement Trait for Type`.
     n = self.add_word("in", 131);

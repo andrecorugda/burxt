@@ -62,9 +62,9 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
      live contiguously in a side array, so nothing needs back-patching. Parses every
      source in the repository, including its own.
    - **3b DONE (v0.0.54):** items — `function`, `pure function`, methods, `record`, `enum` with
-     payloads, `trait`, `implement`, `external function` — with `allocates`, `requires`, `ensures`,
+     payloads, `interface`, `implement`, `external function` — with `allocates`, `requires`, `ensures`,
      `decreases` and `as scaled`. **stage-1 parses its own source**: 6,610 nodes, no
-     errors. Still open: splitting interpolation fragments into pieces, and a trait
+     errors. Still open: splitting interpolation fragments into pieces, and an interface
      signature's parameters beyond the receiver.
 4. **A full typechecker in Burxt.** The big one, and the one where the language will
    hurt most: rules with linear-search symbol tables and one source file.
@@ -123,7 +123,7 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
        arity and argument types for functions and methods alike;
      - `dynamic Trait` accepts a type that implements it (`fits`, kept separate from
        `ty_same` because equality must stay equality), and a method on a `dynamic` value is
-       checked against the trait's signature rather than any concrete type.
+       checked against the interface's signature rather than any concrete type.
 
      Measured the other way too, which is the honest half: stage-1 rejects **67 of the
      190 fail programs** on its own. The rest are the rules it does not yet mention —
@@ -183,7 +183,7 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
        may not be empty or declare a variant twice. Plus `print` of a record, an enum,
        a `dynamic` or an array, which has no rendering the language could choose.
 
-   - **4b DONE — contracts and traits (v0.0.63):** **140 of the 190 fail programs**
+   - **4b DONE — contracts and interfaces (v0.0.63):** **140 of the 190 fail programs**
      rejected, from 125, still **0 false positives**.
      - **the clauses**: `requires`, `ensures` and `decreases` are checked at all, under
        the `pure` rule A5 gives the reason for — a contract that can change the program
@@ -193,9 +193,9 @@ Burxt runs 1.2–1.5× the line count of equivalent Rust: no generics, no closur
        is refused naming the copy that is not built; `ensures` on a function returning
        an aggregate is refused for the reason A5 §2 states; one `decreases` per
        function, none on a method, and none on a function that never calls itself.
-     - **the impls**: every signature the trait declares, no extras, and the same shape
+     - **the impls**: every signature the interface declares, no extras, and the same shape
        for each — receiver form (`self` and `mutable self` are different promises),
-       parameter count, parameter types, return type. A trait is a promise a `dynamic` value
+       parameter count, parameter types, return type. An interface is a promise a `dynamic` value
        makes on the implementor's behalf, so a mismatch here is a promise nobody keeps.
 
      Two mechanisms worth naming. Binding `result` needs a *span whose bytes spell it*,

@@ -302,7 +302,7 @@ function (mutable self: Map<K, V>) remove(key: K) -> Bool {
 // `keys`, which cannot capture anything by accident.
 //
 // No record or array as a KEY. It would need structural hashing, which needs a per-type walk,
-// which needs a derive mechanism or a trait with a method. `hash` says so by name. For a compound
+// which needs a derive mechanism or an interface with a method. `hash` says so by name. For a compound
 // key, build a String from the parts.
 //
 // No seeded constructor yet, and therefore no HashDoS protection. spec/M11-MAPS.md Decision 4

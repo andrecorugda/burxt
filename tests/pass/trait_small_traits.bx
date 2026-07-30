@@ -1,7 +1,7 @@
 // Interface Segregation: a one-method trait is the healthy default, and a
-// type may satisfy several small traits rather than one fat one.
-trait Named { function name_id(self) -> Int }
-trait Valued { function value(self) -> Decimal<2> }
+// type may satisfy several small interfaces rather than one fat one.
+interface Named { function name_id(self) -> Int }
+interface Valued { function value(self) -> Decimal<2> }
 
 class Item { id: Int, cost: Decimal<2> }
 

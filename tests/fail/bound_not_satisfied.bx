@@ -1,6 +1,6 @@
 // Conformance is declared, never inferred from having the right method names — so a type
 // argument must have an `implement`, even if its methods would happen to work.
-trait Priced { function price(self) -> Int }
+interface Priced { function price(self) -> Int }
 class Book { cost: Int }
 function describe<T: Priced>(item: T) -> Int { return item.price(); }
 region r {

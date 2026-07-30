@@ -3,7 +3,7 @@
 //
 //     use "tax.bx";
 //
-// A trait with two implementations, which is the shape any configurable service
+// An interface with two implementations, which is the shape any configurable service
 // takes here: the till does not know which rule it is running.
 // ============================================================================
 
@@ -14,7 +14,7 @@ use "items.bx";
 // precision. The language refuses `$0.1200` by name rather than rounding it to `$0.12`.
 
 // ---- The interface ---------------------------------------------------------
-trait Tax {
+interface Tax {
     function rate_for(self, item: Item) -> Decimal<4>
     function label(self) -> String
 }

@@ -55,14 +55,14 @@ measurable and local problem; erasure's cost is a representation nobody asked fo
 `dynamic Trait` already exists for the cases that genuinely want one implementation over many
 types. Generics are for the cases that want many.
 
-### Decision 2 — bounds are traits, and they are required
+### Decision 2 — bounds are interfaces, and they are required
 
 ```text
 function largest<T: Ordered>(xs: [T]) -> T
 ```
 
 A type parameter with no bound can only be stored, copied and passed. To compare it, print
-it or add it, the parameter must say so with a trait — and the compiler checks the body
+it or add it, the parameter must say so with an interface — and the compiler checks the body
 against the bound rather than against each instantiation.
 
 **Why required rather than inferred.** A generic function whose constraints are whatever its
@@ -70,7 +70,7 @@ body happens to do is a function whose signature is a lie: adding a `>` inside i
 narrows every caller. Bounds make the contract the signature, which is the same argument
 `allocates` and rounding contracts already make.
 
-Two traits ship with this milestone, because the checker needs them for its own operators:
+Two interfaces ship with this milestone, because the checker needs them for its own operators:
 `Ordered` (`<`, `<=`, `>`, `>=`) and `Equatable` (`==`, `!=`). `Int`, `Decimal<S>`, `String`
 and `Bool` implement them where the language already allows those operators.
 
@@ -201,7 +201,7 @@ function describe<T: Priced>(item: T) -> String allocates    // any declared tra
 so `Ordered` does not claim them — **a bound cannot promise more than the language delivers**,
 and when Strings gain an order they gain it in one place.
 
-**A trait bound gives static dispatch.** `describe<Book>` and `describe<Meal>` are two
+**An interface bound gives static dispatch.** `describe<Book>` and `describe<Meal>` are two
 functions; there is no vtable and no runtime type information. `dynamic Priced` remains for the
 opposite case — one implementation serving many types at run time. Generics are for when many
 implementations should serve one shape.

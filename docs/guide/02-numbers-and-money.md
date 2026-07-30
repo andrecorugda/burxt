@@ -174,4 +174,4 @@ in most languages, and here you say which one you meant.
 
 ## Next
 
-[Types](03-types.md) — records, enums, traits, and why there is no inheritance.
+[Types](03-types.md) — records, enums, interfaces, and why there is no inheritance.

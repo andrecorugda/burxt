@@ -47,7 +47,7 @@ without learning anything.
 
 ### Decision 2 — everything a module declares is visible, and there is no `pub` yet
 
-A `use`d file's functions, records, enums, traits and impls are all available to the file
+A `use`d file's functions, records, enums, interfaces and impls are all available to the file
 that used it. No visibility annotations in this slice.
 
 **Why.** `pub` doubles the annotation burden on every declaration, and its value is hiding —

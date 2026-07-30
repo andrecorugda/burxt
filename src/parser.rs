@@ -122,7 +122,7 @@ impl Parser {
     fn parse_program_inner(&mut self) -> Result<Program, String> {
         let mut structs = Vec::new();
         let mut enums = Vec::new();
-        let mut traits = Vec::new();
+        let mut interfaces = Vec::new();
         let mut impls = Vec::new();
         let mut externs = Vec::new();
         let mut fns = Vec::new();
@@ -138,8 +138,8 @@ impl Parser {
                 methods.extend(its_methods);
             } else if self.at(&Token::Enum) {
                 enums.push(self.parse_enum()?);
-            } else if self.at(&Token::Trait) {
-                traits.push(self.parse_trait()?);
+            } else if self.at(&Token::Interface) {
+                interfaces.push(self.parse_interface()?);
             } else if self.at(&Token::Impl) {
                 impls.push(self.parse_impl()?);
             } else if self.at(&Token::Extern) {
@@ -175,7 +175,7 @@ impl Parser {
                 stmts.push(self.parse_stmt()?);
             }
         }
-        Ok(Program { structs, enums, traits, impls, externs, fns, methods, stmts })
+        Ok(Program { structs, enums, interfaces, impls, externs, fns, methods, stmts })
     }
 
     // ---- helpers ----
@@ -363,18 +363,18 @@ impl Parser {
         Ok(EnumDef { name, type_parameters, variants, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
-    // ---- traits and impls ----
+    // ---- interfaces and impls ----
 
     /// `trait Name { fn m(self) -> T   fn n(mut self, x: U) -> V }`
     /// Signatures only: no bodies, no fields, no default methods.
-    fn parse_trait(&mut self) -> Result<TraitDef, String> {
+    fn parse_interface(&mut self) -> Result<InterfaceDef, String> {
         let start = self.span().start;
-        self.expect(&Token::Trait)?;
+        self.expect(&Token::Interface)?;
         let name = match self.bump() {
             Token::Ident(s) => s,
             other => {
                 return Err(format!(
-                    "expected a trait name after 'trait', found {}",
+                    "expected an interface name after 'interface', found {}",
                     other.describe()
                 ))
             }
@@ -383,29 +383,29 @@ impl Parser {
         let mut methods = Vec::new();
         while !self.at(&Token::RBrace) {
             if self.at(&Token::Eof) {
-                return Err(format!("unclosed trait `{}`: expected `}}`", name));
+                return Err(format!("unclosed interface `{}`: expected `}}`", name));
             }
-            methods.push(self.parse_trait_sig(&name)?);
+            methods.push(self.parse_interface_sig(&name)?);
             // a separating semicolon is allowed but not required
             if self.at(&Token::Semicolon) {
                 self.bump();
             }
         }
         self.expect(&Token::RBrace)?;
-        Ok(TraitDef { name, methods, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok(InterfaceDef { name, methods, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
-    /// One signature inside a trait: `fn m(self) -> T`, or
+    /// One signature inside an interface: `fn m(self) -> T`, or
     /// `fn m(mut self, extra: U) -> V`. The receiver has no type — it is
-    /// whichever type implements the trait.
-    fn parse_trait_sig(&mut self, trait_name: &str) -> Result<TraitSig, String> {
+    /// whichever type implements the interface.
+    fn parse_interface_sig(&mut self, interface_name: &str) -> Result<InterfaceSig, String> {
         self.expect(&Token::Fn)?;
         let name = match self.bump() {
             Token::Ident(s) => s,
             other => {
                 return Err(format!(
-                    "expected a method name in trait `{}`, found {}",
-                    trait_name,
+                    "expected a method name in interface `{}`, found {}",
+                    interface_name,
                     other.describe()
                 ))
             }
@@ -419,7 +419,7 @@ impl Parser {
         };
         if !self.at(&Token::SelfKw) {
             return Err(format!(
-                "every trait method takes `self` first: write `function {}({}self, ...)`, \
+                "every interface method takes `self` first: write `function {}({}self, ...)`, \
                  found {}",
                 name,
                 if receiver_mut { "mutable " } else { "" },
@@ -445,25 +445,25 @@ impl Parser {
             return Err(format!(
                 "expected `->` and a return type for `{}.{}` (every Burxt function \
                  returns a value), found {}",
-                trait_name,
+                interface_name,
                 name,
                 self.peek().describe()
             ));
         }
         self.bump();
         let ret = self.parse_type()?;
-        Ok(TraitSig { name, receiver_mut, parameters, ret })
+        Ok(InterfaceSig { name, receiver_mut, parameters, ret })
     }
 
     /// `impl Trait for Type { <method definitions> }`
     fn parse_impl(&mut self) -> Result<ImplBlock, String> {
         let start = self.span().start;
         self.expect(&Token::Impl)?;
-        let trait_name = match self.bump() {
+        let interface_name = match self.bump() {
             Token::Ident(s) => s,
             other => {
                 return Err(format!(
-                    "expected a trait name after 'implement', found {}",
+                    "expected an interface name after 'implement', found {}",
                     other.describe()
                 ))
             }
@@ -471,7 +471,7 @@ impl Parser {
         if !self.at(&Token::For) {
             return Err(format!(
                 "expected `for` in `implement {} for Type`, found {}",
-                trait_name,
+                interface_name,
                 self.peek().describe()
             ));
         }
@@ -481,7 +481,7 @@ impl Parser {
             other => {
                 return Err(format!(
                     "expected a type name in `implement {} for ...`, found {}",
-                    trait_name,
+                    interface_name,
                     other.describe()
                 ))
             }
@@ -492,13 +492,13 @@ impl Parser {
             if self.at(&Token::Eof) {
                 return Err(format!(
                     "unclosed `implement {} for {}`: expected `}}`",
-                    trait_name, type_name
+                    interface_name, type_name
                 ));
             }
             methods.push(self.parse_method(Some(&type_name))?);
         }
         self.expect(&Token::RBrace)?;
-        Ok(ImplBlock { trait_name, type_name, methods, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok(ImplBlock { interface_name, type_name, methods, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     // ---- functions ----
@@ -850,8 +850,8 @@ impl Parser {
                             Token::Ident(b) => Some(b),
                             other => {
                                 return Err(format!(
-                                    "expected a trait name after `{}:`, found {} — a \
-                                     bound is `Ordered`, `Equatable`, or a trait this \
+                                    "expected an interface name after `{}:`, found {} — a \
+                                     bound is `Ordered`, `Equatable`, or an interface this \
                                      program declares.",
                                     s,
                                     other.describe()
@@ -1444,7 +1444,7 @@ impl Parser {
             Token::Dyn => match self.bump() {
                 Token::Ident(name) => Ok(Type::Dyn(name)),
                 other => Err(format!(
-                    "expected a trait name after `dynamic`, found {}",
+                    "expected an interface name after `dynamic`, found {}",
                     other.describe()
                 )),
             },

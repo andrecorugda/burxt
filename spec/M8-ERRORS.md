@@ -52,7 +52,7 @@ decides on your behalf which information about a failure survives, and every one
 place where a cause quietly becomes "something went wrong".
 
 **Earns its place when:** a real program has two error enums it genuinely needs to bridge, and
-the conversion is worth naming. Then it is a trait with one method, declared per pair — not a
+the conversion is worth naming. Then it is an interface with one method, declared per pair — not a
 blanket rule.
 
 The cost, stated: a function that calls two libraries with different error types writes two

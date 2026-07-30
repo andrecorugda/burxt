@@ -280,7 +280,7 @@ fn explain(ty: &Type) -> Option<String> {
                   exactness.".to_string())
         }
         Type::Dyn(t) => Some(format!(
-            "A trait object: dispatch to whichever type implements `{}`, decided at \
+            "A interface object: dispatch to whichever type implements `{}`, decided at \
              runtime.",
             t
         )),

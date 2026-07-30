@@ -4,7 +4,7 @@
 //   Constructor              a function returning the class
 //   Validation on construct  `requires` on that function — checked every call
 //   Initialization           a class literal must set EVERY field
-//   Interface                `trait`
+//   Interface                `interface`
 //   Polymorphism             `implement Trait for Type`, and `dynamic Trait` at runtime
 //   Dependency injection     a `dynamic Trait` FIELD, chosen by whoever builds it
 //   Destructor               the region; you do not write one
@@ -16,7 +16,7 @@
 // ============================================================================
 
 // ---- The interface ---------------------------------------------------------
-trait Rates {
+interface Rates {
     function rate_for(self, country: String) -> Decimal<4>
     function name(self) -> String
 }
@@ -102,18 +102,18 @@ print(stubbed.total_for(new_order($100.00, "US")));
 //
 // A `dynamic` built from a temporary rather than a variable:
 //     Checkout { rates: FlatRates { everywhere: 5.00% } }
-//     error: a `dynamic Rates` must come from a variable — a trait object borrows the
+//     error: a `dynamic Rates` must come from a variable — an interface object borrows the
 //            storage of the value it refers to, and an expression has none
 //
 // An implement that does not answer the whole trait:
-//     error: this implement leaves out `name`, which the trait requires
+//     error: this implement leaves out `name`, which the interface requires
 //
 // ---- And the one thing that is missing on purpose --------------------------
 //
 // There is no inheritance. No `extends`, no base class, no `super`, no abstract
 // class. If the instinct is "I would put the shared behaviour in an AbstractRates
 // base", the answer here is: put it in a function both impls call, or in a class
-// field both hold, and let each type implement the trait.
+// field both hold, and let each type implement the interface.
 //
 // That was decided in v0.0.46 after thirty versions in which nothing needed it —
 // the same conclusion Go and Rust reached — and it buys the absence of the

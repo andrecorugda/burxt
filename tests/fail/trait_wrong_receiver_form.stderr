@@ -1,1 +1,1 @@
-method `bump` declares `self` but the trait declares `mutable self`
+method `bump` declares `self` but the interface declares `mutable self`

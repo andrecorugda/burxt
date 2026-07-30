@@ -41,7 +41,7 @@ function is_unknown(t: Type) -> Bool {
     return t.kind == 0;
 }
 
-// A trait implementation: a pair of names, which is all `dynamic` dispatch needs to know.
+// An interface implementation: a pair of names, which is all `dynamic` dispatch needs to know.
 // The method table already knows what the type can do.
 class Implementation { trait_start: Int, trait_len: Int, type_start: Int, type_len: Int }
 
@@ -199,19 +199,19 @@ function (mutable self: Unit) check_bound(src: String, bound: Int, argument: Typ
         return 1;
     }
     // Any other bound names a declared trait, and satisfying it means having an implementation.
-    // Traits are registered in the same table classes and enums are, so one lookup covers all
-    // three — and a bound naming a class rather than a trait fails the implementation check
+    // Interfaces are registered in the same table classes and enums are, so one lookup covers all
+    // three — and a bound naming a class rather than an interface fails the implementation check
     // below, which is the honest place for it.
     if self.find_type(src, named.start, named.length) < 0 {
         let complained: Int = self.complain_at(src, at,
             "`" + substring(src, parameter.start, parameter.length) + ": "
             + substring(src, named.start, named.length)
-            + "` names something that is not a trait this program declares");
+            + "` names something that is not an interface this program declares");
         return 1;
     }
     if argument.kind != 46 {
         let complained: Int = self.complain_at(src, at,
-            self.show_type(src, argument) + " cannot implement a trait — only a class or an "
+            self.show_type(src, argument) + " cannot implement an interface — only a class or an "
             + "enum can");
         return 1;
     }
@@ -233,7 +233,7 @@ function (mutable self: Unit) check_bound(src: String, bound: Int, argument: Typ
     return 1;
 }
 
-// The bound declared for this type parameter, as the token of the trait's name, or -1.
+// The bound declared for this type parameter, as the token of the interface's name, or -1.
 // Looked up by the parameter's own name span, which is unique within the declaration that
 // owns it.
 // A node that denotes this type, so a resolved element can be pointed AT.
@@ -525,7 +525,7 @@ function (self: Unit) declared_type(src: String, node: Int) -> Type {
         return decimal_type(n.a, n.b);
     }
     if n.kind == 46 || n.kind == 49 || n.kind == 50 {
-        // A named type, a trait object, or a type PARAMETER — all three carry the span of a
+        // A named type, an interface object, or a type PARAMETER — all three carry the span of a
         // name written in the source, which is why a parameter needs no invented identifier.
         // A generic application also carries its arguments: `a` is their start in
         // `nested_children` and `b` is how many.
@@ -2193,7 +2193,7 @@ function (self: Unit) body_calls(src: String, body: Int, name: Token) -> Bool {
     return false;
 }
 
-// An `implement` answers a trait exactly: every signature, no extras, same shapes. A trait
+// An `implement` answers an interface exactly: every signature, no extras, same shapes. An interface
 // is a promise a `dynamic` value makes on the implementor's behalf, so a mismatch here is a
 // promise nobody keeps.
 function (mutable self: Unit) check_impl(src: String, index: Int) -> Int {
@@ -2207,7 +2207,7 @@ function (mutable self: Unit) check_impl(src: String, index: Int) -> Int {
     let decl: TypeDeclaration = self.types[found];
     if decl.kind != 84 {
         let complained: Int = self.complain_at(src, item.token,
-            "`implement` implements a trait, and this name belongs to a type");
+            "`implement` implements an interface, and this name belongs to a type");
         return 0;
     }
     let declared: Node = self.nodes[decl.node];
@@ -2228,20 +2228,20 @@ function (mutable self: Unit) check_impl(src: String, index: Int) -> Int {
         if matched < 0 {
             let complained: Int = self.complain_at(src, item.token,
                 "this implement leaves out `" + substring(src, sig_name.start, sig_name.length)
-                + "`, which the trait requires");
+                + "`, which the interface requires");
         } else {
             let method: Node = self.nodes[matched];
             let mutable mutating: Int = 0;
             if method.value >= 4 { mutating = 1; }
             if mutating != sig.value {
                 let complained: Int = self.complain_at(src, method.token,
-                    "the trait writes this receiver differently: `self` and `mutable self` "
+                    "the interface writes this receiver differently: `self` and `mutable self` "
                     + "are different promises");
             }
             let params: Node = self.nodes[method.a];
             if params.b != sig.c {
                 let complained: Int = self.complain_at(src, method.token,
-                    "the trait's signature takes " + to_string(sig.c)
+                    "the interface's signature takes " + to_string(sig.c)
                     + " parameter(s), and this takes " + to_string(params.b));
             } else {
                 let mutable p: Int = 0;
@@ -2251,7 +2251,7 @@ function (mutable self: Unit) check_impl(src: String, index: Int) -> Int {
                     if !self.same_type(src, got, want) {
                         let complained: Int = self.complain_at(src, method.token,
                             "parameter " + to_string(p + 1) + " is " + self.show_type(src, want)
-                            + " in the trait, and " + self.show_type(src, got) + " here");
+                            + " in the interface, and " + self.show_type(src, got) + " here");
                     }
                     p += 1;
                 }
@@ -2260,7 +2260,7 @@ function (mutable self: Unit) check_impl(src: String, index: Int) -> Int {
             let got_ret: Type = self.declared_type(src, self.nodes[method.c].c);
             if !self.same_type(src, got_ret, want_ret) {
                 let complained: Int = self.complain_at(src, method.token,
-                    "the trait returns " + self.show_type(src, want_ret) + ", and this returns "
+                    "the interface returns " + self.show_type(src, want_ret) + ", and this returns "
                     + self.show_type(src, got_ret));
             }
         }
@@ -2282,7 +2282,7 @@ function (mutable self: Unit) check_impl(src: String, index: Int) -> Int {
         }
         if !known {
             let complained: Int = self.complain_at(src, method.token,
-                "the trait has no method of this name, and an implementation is an answer to a "
+                "the interface has no method of this name, and an implementation is an answer to a "
                 + "trait rather than a place to add to a type");
         }
         k += 1;

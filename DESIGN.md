@@ -270,7 +270,7 @@ Listed so they are not mistaken for finished work:
 > Composition-only is final, and this is now the settled model rather than a
 > waypoint.
 >
-> The reason is evidence, not taste. Traits + `implement` + composition shipped in
+> The reason is evidence, not taste. Interfaces + `implement` + composition shipped in
 > v0.0.13–v0.0.14, and in every version since — regions, sum types, contracts,
 > conservation laws, a self-hosted lexer and parser — **nothing has needed
 > inheritance.** Not once. An item that sits on a roadmap through thirty versions
@@ -278,7 +278,7 @@ Listed so they are not mistaken for finished work:
 > project's rule is that a feature earns its place by being needed.
 >
 > What the earlier plan was reaching for, it already has: *reuse* comes from
-> composition, *substitutability* from traits, and the fragile-base-class and
+> composition, *substitutability* from interfaces, and the fragile-base-class and
 > diamond problems are absent because there is no base class to be fragile. The
 > "opt-in safe inheritance" design below is kept as the record of what was
 > considered and why it was dropped.
@@ -287,7 +287,7 @@ Listed so they are not mistaken for finished work:
 constrained so the classic footguns (fragile base class, diamond problem) could not
 happen — which is the real goal the original absolute rule was reaching for.
 
-- Sharing **behavior** → traits (interfaces). Small by default.
+- Sharing **behavior** → interfaces (interfaces). Small by default.
 - Reusing **state/structure** → composition ("has-a"). The ergonomic default.
 - **Inheritance** ("is-a") only from a class explicitly marked `open`, and
   only single inheritance. Not marked `open` → cannot be extended, so the
@@ -328,10 +328,10 @@ positives and lose trust. So:
 | Principle | Burxt stance |
 |---|---|
 | Single Responsibility | Encouraged; optional lint. NOT a hard error — too subjective. |
-| Open/Closed | Traits extend behaviour without modifying what exists. (No `open` classes — see the decision above.) |
-| Liskov Substitution | Unrepresentable to violate: a type satisfies a trait exactly or it is a compile error, and there is no subtype to weaken a contract. Contracts themselves are checked (v0.0.43). |
-| Interface Segregation | Structurally nudged: small traits are the easy path; lint warns on bloat. |
-| Dependency Inversion | Depending on a trait is ergonomic (`dynamic Trait` as a parameter); depending on a concrete type is the awkward opt-in. |
+| Open/Closed | Interfaces extend behaviour without modifying what exists. (No `open` classes — see the decision above.) |
+| Liskov Substitution | Unrepresentable to violate: a type satisfies an interface exactly or it is a compile error, and there is no subtype to weaken a contract. Contracts themselves are checked (v0.0.43). |
+| Interface Segregation | Structurally nudged: small interfaces are the easy path; lint warns on bloat. |
+| Dependency Inversion | Depending on an interface is ergonomic (`dynamic Trait` as a parameter); depending on a concrete type is the awkward opt-in. |
 
 ## Signature grammar — eloquent because it matches intent (committed)
 
@@ -526,7 +526,7 @@ it travels.
 - A4. Strings (v0.0.7), records (v0.0.8), arrays (v0.0.10) — DONE
 - A4.5. The aggregate ABI: `byval` params, `sret` returns, layout guarantee
   — DONE (v0.0.12)
-- A4.6. Composition-first OOP: receiver methods (v0.0.13), traits + `dynamic`
+- A4.6. Composition-first OOP: receiver methods (v0.0.13), interfaces + `dynamic`
   dispatch (v0.0.14) — **DONE and CLOSED.** `class` / `open` single inheritance
   was dropped in v0.0.46: thirty versions of real programs never needed it.
 - A4.7. Signature grammar: money/unit literals (`$19.99`, `8.25%`), string

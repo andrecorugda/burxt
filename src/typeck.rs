@@ -107,13 +107,13 @@ pub enum TypedExprKind {
         base: Box<TypedExpr>,
         arguments: Vec<TypedExpr>,
     },
-    /// Build a trait object from a concrete binding: a fat pointer pairing the
+    /// Build an interface object from a concrete binding: a fat pointer pairing the
     /// binding's storage with the static (Type, Trait) vtable.
-    DynCoerce { trait_name: String, concrete: String, var: String },
+    DynCoerce { interface_name: String, concrete: String, var: String },
     /// A dynamically dispatched call: load slot `slot` from the receiver's
     /// vtable and call it with the data pointer.
     DynCall {
-        trait_name: String,
+        interface_name: String,
         method: String,
         slot: u32,
         base: Box<TypedExpr>,
@@ -283,7 +283,7 @@ pub struct TypedStruct {
 /// order, which is what fixes each method's slot index at compile time.
 #[derive(Debug, Clone)]
 pub struct TypedVTable {
-    pub trait_name: String,
+    pub interface_name: String,
     pub concrete: String,
     pub slots: Vec<String>,
 }
@@ -361,13 +361,13 @@ pub struct TypeChecker {
     enums: HashMap<String, Vec<(String, Vec<Type>)>>,
     /// (receiver, method name) -> (is mutating, param types, return type)
     methods: HashMap<(String, String), (bool, Vec<Type>, Type)>,
-    /// trait name -> its method signatures, in declaration order (slot order)
-    traits: HashMap<String, Vec<TraitSig>>,
+    /// interface name -> its method signatures, in declaration order (slot order)
+    interfaces: HashMap<String, Vec<InterfaceSig>>,
     /// which (trait, concrete type) pairs have an explicit impl
     impls: HashSet<(String, String)>,
-    /// (trait, concrete) pairs that need a vtable because the trait is used
+    /// (trait, concrete) pairs that need a vtable because the interface is used
     /// as `dyn` somewhere — pay for what you use.
-    dyn_traits: HashSet<String>,
+    dyn_interfaces: HashSet<String>,
     /// return type of the function currently being checked, if any.
     /// Where the checker currently is, for attaching a position to any error it
     /// returns. Updated on entering a statement or a top-level item, and refined
@@ -553,9 +553,9 @@ impl TypeChecker {
             structs: HashMap::new(),
             enums: HashMap::new(),
             methods: HashMap::new(),
-            traits: HashMap::new(),
+            interfaces: HashMap::new(),
             impls: HashSet::new(),
-            dyn_traits: HashSet::new(),
+            dyn_interfaces: HashSet::new(),
             current_span: Cell::new(Span::default()),
             error_located: Cell::new(false),
             expr_types: RefCell::new(Vec::new()),
@@ -1274,12 +1274,12 @@ impl TypeChecker {
                     callee, param, shown
                 )),
             },
-            trait_name => {
-                if !self.traits.contains_key(trait_name) {
+            interface_name => {
+                if !self.interfaces.contains_key(interface_name) {
                     return Err(format!(
-                        "`{}` bounds `{}` by `{}`, which is not a trait this program \
-                         declares. A bound is `Ordered`, `Equatable`, or a declared trait.",
-                        callee, param, trait_name
+                        "`{}` bounds `{}` by `{}`, which is not an interface this program \
+                         declares. A bound is `Ordered`, `Equatable`, or a declared interface.",
+                        callee, param, interface_name
                     ));
                 }
                 let concrete = match argument {
@@ -1287,19 +1287,19 @@ impl TypeChecker {
                     _ => {
                         return Err(format!(
                             "`{}` needs `{}: {}`, and {} is not a type that can implement \
-                             a trait — only a class or an enum can.",
-                            callee, param, trait_name, shown
+                             an interface — only a class or an enum can.",
+                            callee, param, interface_name, shown
                         ))
                     }
                 };
-                if self.impls.contains(&(trait_name.to_string(), concrete.clone())) {
+                if self.impls.contains(&(interface_name.to_string(), concrete.clone())) {
                     return Ok(());
                 }
                 Err(format!(
                     "`{}` needs `{}: {}`, and `{}` does not implement it. Write `implement {} \
                      for {} {{ ... }}` — conformance is declared, never inferred from \
                      having the right method names.",
-                    callee, param, trait_name, shown, trait_name, concrete
+                    callee, param, interface_name, shown, interface_name, concrete
                 ))
             }
         }
@@ -1631,15 +1631,15 @@ impl TypeChecker {
                     .collect(),
             );
         }
-        // Traits: signature sets only, hoisted so impls may precede them.
-        for t in &prog.traits {
+        // Interfaces: signature sets only, hoisted so impls may precede them.
+        for t in &prog.interfaces {
             self.current_span.set(t.span);
-            if self.traits.contains_key(&t.name) {
-                return Err(format!("trait `{}` is defined twice", t.name));
+            if self.interfaces.contains_key(&t.name) {
+                return Err(format!("interface `{}` is defined twice", t.name));
             }
             if self.structs.contains_key(&t.name) {
                 return Err(format!(
-                    "`{}` is already a class — a trait cannot reuse the name",
+                    "`{}` is already a class — an interface cannot reuse the name",
                     t.name
                 ));
             }
@@ -1647,17 +1647,17 @@ impl TypeChecker {
             for signature in &t.methods {
                 if seen.contains(&signature.name.as_str()) {
                     return Err(format!(
-                        "trait `{}` declares the method `{}` twice",
+                        "interface `{}` declares the method `{}` twice",
                         t.name, signature.name
                     ));
                 }
                 seen.push(&signature.name);
             }
-            self.traits.insert(t.name.clone(), t.methods.clone());
+            self.interfaces.insert(t.name.clone(), t.methods.clone());
         }
-        // Validate the types inside the signatures only once every trait name
-        // is known, so traits may reference each other in any order.
-        for t in &prog.traits {
+        // Validate the types inside the signatures only once every interface name
+        // is known, so interfaces may reference each other in any order.
+        for t in &prog.interfaces {
             self.current_span.set(t.span);
             for signature in &t.methods {
                 for p in &signature.parameters {
@@ -1823,14 +1823,14 @@ impl TypeChecker {
                     f.name, f.ret
                 ));
             }
-            // Returning a trait object stays refused. A `dyn` borrows its source
+            // Returning an interface object stays refused. A `dyn` borrows its source
             // BINDING, which is a local — so the borrow dangles on return
             // whether or not a region is involved. Regions bound
-            // region-allocated data's lifetime; they do not change what a trait
+            // region-allocated data's lifetime; they do not change what an interface
             // object points at.
             if matches!(f.ret, Type::Dyn(_)) {
                 return Err(format!(
-                    "function `{}` cannot return a trait object — it borrows the value it \
+                    "function `{}` cannot return an interface object — it borrows the value it \
                      refers to, which would not outlive the call. Take one as a \
                      parameter instead.",
                     f.name
@@ -1850,7 +1850,7 @@ impl TypeChecker {
         }
 
         // Collect the methods declared inside impl blocks alongside the
-        // free-standing ones: a trait method is just a method that also counts
+        // free-standing ones: an interface method is just a method that also counts
         // toward a contract, so it uses the SAME machinery.
         let mut all_methods: Vec<&MethodDef> = prog.methods.iter().collect();
         for im in &prog.impls {
@@ -1920,13 +1920,13 @@ impl TypeChecker {
             self.methods.insert(key, (m.receiver_mut, param_tys, m.ret.clone()));
         }
 
-        // Impls: satisfaction must be EXACT — every trait method present, with
+        // Impls: satisfaction must be EXACT — every interface method present, with
         // matching receiver form and types. A partial or mismatched impl names
         // the offending method.
         for im in &prog.impls {
             self.current_span.set(im.span);
             self.check_impl(im)?;
-            self.impls.insert((im.trait_name.clone(), im.type_name.clone()));
+            self.impls.insert((im.interface_name.clone(), im.type_name.clone()));
         }
 
         // Every method on a generic record whose instantiation the DECLARED types already
@@ -2049,17 +2049,17 @@ impl TypeChecker {
             }
         }
 
-        // A vtable is emitted only for impls of traits actually used as `dyn`
-        // — if a type never becomes a trait object, it costs nothing.
+        // A vtable is emitted only for impls of interfaces actually used as `dyn`
+        // — if a type never becomes an interface object, it costs nothing.
         let mut vtables = Vec::new();
         for im in &prog.impls {
             self.current_span.set(im.span);
-            if !self.dyn_traits.contains(&im.trait_name) {
+            if !self.dyn_interfaces.contains(&im.interface_name) {
                 continue;
             }
-            let sigs = &self.traits[&im.trait_name];
+            let sigs = &self.interfaces[&im.interface_name];
             vtables.push(TypedVTable {
-                trait_name: im.trait_name.clone(),
+                interface_name: im.interface_name.clone(),
                 concrete: im.type_name.clone(),
                 // trait-declaration order fixes each slot index
                 slots: sigs.iter().map(|s| s.name.clone()).collect(),
@@ -2078,36 +2078,36 @@ impl TypeChecker {
     /// An impl must satisfy its trait EXACTLY: every declared method present,
     /// same receiver form, same parameter types, same return type.
     fn check_impl(&self, im: &ImplBlock) -> Result<(), String> {
-        let sigs = self.traits.get(&im.trait_name).ok_or_else(|| {
+        let sigs = self.interfaces.get(&im.interface_name).ok_or_else(|| {
             format!(
-                "unknown trait `{}` — declare it with `trait {} {{ ... }}`",
-                im.trait_name, im.trait_name
+                "unknown interface `{}` — declare it with `interface {} {{ ... }}`",
+                im.interface_name, im.interface_name
             )
         })?;
         if !self.structs.contains_key(&im.type_name) {
             return Err(format!(
                 "`implement {} for {}`: unknown type `{}` — declare it with \
                  `class {} {{ ... }}`",
-                im.trait_name, im.type_name, im.type_name, im.type_name
+                im.interface_name, im.type_name, im.type_name, im.type_name
             ));
         }
-        if self.impls.contains(&(im.trait_name.clone(), im.type_name.clone())) {
+        if self.impls.contains(&(im.interface_name.clone(), im.type_name.clone())) {
             return Err(format!(
                 "`{}` already implements `{}`",
-                im.type_name, im.trait_name
+                im.type_name, im.interface_name
             ));
         }
 
-        // Every method in the block must belong to the trait...
+        // Every method in the block must belong to the interface...
         for m in &im.methods {
             if !sigs.iter().any(|s| s.name == m.name) {
                 return Err(format!(
                     "`implement {} for {}` defines `{}`, which is not a method of \
                      `{}`. Its methods are: {}.",
-                    im.trait_name,
+                    im.interface_name,
                     im.type_name,
                     m.name,
-                    im.trait_name,
+                    im.interface_name,
                     sigs.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")
                 ));
             }
@@ -2115,25 +2115,25 @@ impl TypeChecker {
                 return Err(format!(
                     "in `implement {} for {}`, method `{}` has receiver `self: {}` — \
                      it must be `self: {}`.",
-                    im.trait_name, im.type_name, m.name, m.receiver, im.type_name
+                    im.interface_name, im.type_name, m.name, m.receiver, im.type_name
                 ));
             }
         }
 
-        // ...and every trait method must be present, matching exactly.
+        // ...and every interface method must be present, matching exactly.
         for signature in sigs {
             let found = im.methods.iter().find(|m| m.name == signature.name).ok_or_else(|| {
                 format!(
-                    "`implement {} for {}` is missing the method `{}`. Every trait \
+                    "`implement {} for {}` is missing the method `{}`. Every interface \
                      method must be implemented — Burxt has no default bodies.",
-                    im.trait_name, im.type_name, signature.name
+                    im.interface_name, im.type_name, signature.name
                 )
             })?;
             if found.receiver_mut != signature.receiver_mut {
                 return Err(format!(
                     "in `implement {} for {}`, method `{}` declares `{}self` but the \
-                     trait declares `{}self`.",
-                    im.trait_name,
+                     interface declares `{}self`.",
+                    im.interface_name,
                     im.type_name,
                     signature.name,
                     if found.receiver_mut { "mutable " } else { "" },
@@ -2143,8 +2143,8 @@ impl TypeChecker {
             if found.parameters.len() != signature.parameters.len() {
                 return Err(format!(
                     "in `implement {} for {}`, method `{}` takes {} parameter(s) but \
-                     the trait declares {}.",
-                    im.trait_name,
+                     the interface declares {}.",
+                    im.interface_name,
                     im.type_name,
                     signature.name,
                     found.parameters.len(),
@@ -2155,8 +2155,8 @@ impl TypeChecker {
                 if fp.ty != sp.ty {
                     return Err(format!(
                         "in `implement {} for {}`, method `{}` parameter {} is {} but \
-                         the trait declares {}.",
-                        im.trait_name,
+                         the interface declares {}.",
+                        im.interface_name,
                         im.type_name,
                         signature.name,
                         i + 1,
@@ -2167,30 +2167,30 @@ impl TypeChecker {
             }
             if found.ret != signature.ret {
                 return Err(format!(
-                    "in `implement {} for {}`, method `{}` returns {} but the trait \
+                    "in `implement {} for {}`, method `{}` returns {} but the interface \
                      declares {}.",
-                    im.trait_name, im.type_name, signature.name, found.ret, signature.ret
+                    im.interface_name, im.type_name, signature.name, found.ret, signature.ret
                 ));
             }
         }
         Ok(())
     }
 
-    /// Coerce a concrete struct value to a trait object where one is expected.
+    /// Coerce a concrete struct value to an interface object where one is expected.
     /// Lives here rather than in `let` so that struct fields, call arguments
     /// and returns all coerce too — every site that knows its expected type.
     /// The source must be a plain variable: the fat pointer borrows its storage,
     /// and an expression has none.
     fn coerce_dyn(
         &self,
-        trait_name: &str,
+        interface_name: &str,
         e: &Expr,
     ) -> Result<TypedExpr, String> {
         let ExprKind::Var(var) = &e.kind else {
             return Err(format!(
-                "a `dynamic {}` must come from a variable — a trait object borrows the \
+                "a `dynamic {}` must come from a variable — an interface object borrows the \
                  storage of the value it refers to, and an expression has none.",
-                trait_name
+                interface_name
             ));
         };
         let (src_ty, _) = self
@@ -2202,7 +2202,7 @@ impl TypeChecker {
             Type::Named(c) if self.is_record(c) => c.clone(),
             Type::Dyn(_) => {
                 return Err(format!(
-                    "`{}` is already a trait object; re-borrowing one is deferred \
+                    "`{}` is already an interface object; re-borrowing one is deferred \
                      until Burxt tracks borrows.",
                     var
                 ))
@@ -2210,21 +2210,21 @@ impl TypeChecker {
             other => {
                 return Err(format!(
                     "`{}` has type {}, which cannot be a `dynamic {}` — only a class \
-                     that implements the trait can.",
-                    var, other, trait_name
+                     that implements the interface can.",
+                    var, other, interface_name
                 ))
             }
         };
-        if !self.impls.contains(&(trait_name.to_string(), concrete.clone())) {
+        if !self.impls.contains(&(interface_name.to_string(), concrete.clone())) {
             return Err(format!(
                 "`{}` does not implement `{}` — add `implement {} for {} {{ ... }}`.",
-                concrete, trait_name, trait_name, concrete
+                concrete, interface_name, interface_name, concrete
             ));
         }
         Ok(TypedExpr {
-            ty: Type::Dyn(trait_name.to_string()),
+            ty: Type::Dyn(interface_name.to_string()),
             kind: TypedExprKind::DynCoerce {
-                trait_name: trait_name.to_string(),
+                interface_name: interface_name.to_string(),
                 concrete,
                 var: var.clone(),
             },
@@ -2334,16 +2334,16 @@ impl TypeChecker {
 
     /// A Named type must refer to a declared struct; CInt never leaves the
     /// C boundary. `dyn Trait` must name a declared trait — and using one
-    /// classes that the trait needs vtables.
+    /// classes that the interface needs vtables.
     fn validate_type(&mut self, ty: &Type) -> Result<(), String> {
         if let Type::Dyn(name) = ty {
-            if !self.traits.contains_key(name) {
+            if !self.interfaces.contains_key(name) {
                 return Err(format!(
-                    "unknown trait `{}` — declare it with `trait {} {{ ... }}`",
+                    "unknown interface `{}` — declare it with `interface {} {{ ... }}`",
                     name, name
                 ));
             }
-            self.dyn_traits.insert(name.clone());
+            self.dyn_interfaces.insert(name.clone());
             return Ok(());
         }
         match ty {
@@ -2366,7 +2366,7 @@ impl TypeChecker {
             // (children referenced by index, never by pointer) possible without
             // any heap. Refused: nested arrays, because `a[i][j]` cannot be
             // written — indexing takes a binding name, not an expression — and
-            // trait objects, because they borrow and storing a borrow needs
+            // interface objects, because they borrow and storing a borrow needs
             // tracking Burxt does not have.
             Type::Slice(elem) => match elem.as_ref() {
                 Type::Slice(_) | Type::Array { .. } => Err(
@@ -2376,7 +2376,7 @@ impl TypeChecker {
                 ),
                 Type::Dyn(t) => Err(format!(
                     "a growable array cannot hold `dynamic {}` yet — region-allocated \
-                     trait objects arrive in a later slice.",
+                     interface objects arrive in a later slice.",
                     t
                 )),
                 Type::CInt => Err(
@@ -2393,7 +2393,7 @@ impl TypeChecker {
                         .to_string(),
                 ),
                 Type::Dyn(t) => Err(format!(
-                    "an array cannot hold `dynamic {}` — a trait object borrows the value \
+                    "an array cannot hold `dynamic {}` — an interface object borrows the value \
                      it refers to, and storing borrows needs tracking Burxt does not \
                      have yet.",
                     t
@@ -3487,7 +3487,7 @@ impl TypeChecker {
                     }
                     Type::Dyn(t) => {
                         return Err(format!(
-                            "print does not know how to show a `dynamic {}` — a trait \
+                            "print does not know how to show a `dynamic {}` — an interface \
                              object exposes only its trait methods, so call one \
                              and print that.",
                             t
@@ -3604,7 +3604,7 @@ impl TypeChecker {
     }
 
     fn check_expr_kind(&self, e: &Expr, expected: Option<&Type>) -> Result<TypedExpr, String> {
-        // A concrete value becomes a trait object wherever one is expected.
+        // A concrete value becomes an interface object wherever one is expected.
         if let Some(Type::Dyn(t)) = expected {
             let already = match &e.kind {
                 ExprKind::Var(n) => {
@@ -4724,8 +4724,8 @@ impl TypeChecker {
 
                 // A call on a `dyn Trait` is the ONE place dispatch happens at
                 // runtime: find the method's slot from trait-declaration order.
-                if let Type::Dyn(trait_name) = typed_base.ty.clone() {
-                    let sigs = &self.traits[&trait_name];
+                if let Type::Dyn(interface_name) = typed_base.ty.clone() {
+                    let sigs = &self.interfaces[&interface_name];
                     let slot = sigs
                         .iter()
                         .position(|s| s.name == *method)
@@ -4733,7 +4733,7 @@ impl TypeChecker {
                             format!(
                                 "`dynamic {}` has no method named `{}`. Its methods \
                                  are: {}.",
-                                trait_name,
+                                interface_name,
                                 method,
                                 sigs.iter()
                                     .map(|s| s.name.as_str())
@@ -4745,7 +4745,7 @@ impl TypeChecker {
                     if signature.receiver_mut {
                         return Err(format!(
                             "`{}` takes `mutable self`, and calling a mutating method \
-                             through a trait object is not available yet: the \
+                             through an interface object is not available yet: the \
                              compiler still cannot tell whether the value behind \
                              the object was declared mutable. Regions bound its \
                              LIFETIME, not its mutability. Call it on the concrete \
@@ -4756,7 +4756,7 @@ impl TypeChecker {
                     if arguments.len() != signature.parameters.len() {
                         return Err(format!(
                             "`dynamic {}.{}` takes {} argument(s), but {} were given",
-                            trait_name,
+                            interface_name,
                             method,
                             signature.parameters.len(),
                             arguments.len()
@@ -4769,7 +4769,7 @@ impl TypeChecker {
                             return Err(format!(
                                 "in the call to `dynamic {}.{}`, argument {} must be \
                                  {}, but it has type {}",
-                                trait_name,
+                                interface_name,
                                 method,
                                 i + 1,
                                 p.ty,
@@ -4778,14 +4778,14 @@ impl TypeChecker {
                         }
                         typed_args.push(typed);
                     }
-                    // A method reached through a trait object allocates if ANY
+                    // A method reached through an interface object allocates if ANY
                     // implementation of it does. The call site cannot know which one runs —
                     // that is what `dynamic` means — so the conservative answer is the only
                     // sound one, and it costs a region the program was going to need anyway.
                     //
                     // This check was MISSING, not merely weak: the branch returns before the
                     // `alloc_methods` test further down, so `allocates` was enforced for a
-                    // direct call and silently skipped through a trait object. It corrupted
+                    // direct call and silently skipped through an interface object. It corrupted
                     // nothing in the reproduction only because a region happened to be open
                     // further up the stack. spec/M14-IMPLICIT-REGIONS.md §5.
                     //
@@ -4800,23 +4800,23 @@ impl TypeChecker {
                     // wanted a region, so asking it first would record on every such call and
                     // mark half the program as allocating.
                     let leaks = self.impls.iter().any(|(implemented, concrete)| {
-                        *implemented == trait_name
+                        *implemented == interface_name
                             && self.alloc_methods.contains(&(concrete.clone(), method.clone()))
                     });
                     if leaks && !self.has_region() {
                         return Err(format!(
                             "`dynamic {}.{}` builds its result in the caller's region — some \
-                             implementation of it allocates, and a call through a trait \
+                             implementation of it allocates, and a call through an interface \
                              object cannot know which one runs. There is no region open \
                              here: wrap the call in `region name {{ ... }}`, or declare the \
                              enclosing function `allocates` too.",
-                            trait_name, method
+                            interface_name, method
                         ));
                     }
                     return Ok(TypedExpr {
                         ty: signature.ret.clone(),
                         kind: TypedExprKind::DynCall {
-                            trait_name,
+                            interface_name,
                             method: method.clone(),
                             slot: slot as u32,
                             base: Box::new(typed_base),
@@ -4826,27 +4826,27 @@ impl TypeChecker {
                 }
 
                 // A method on a value of a type PARAMETER: the bound says which methods
-                // exist, so the body is checked against the trait rather than against each
+                // exist, so the body is checked against the interface rather than against each
                 // instantiation. That is what makes the signature the contract.
                 if let Type::Param(p) = &typed_base.ty {
                     let bound = self.param_bounds.get(p).cloned().flatten();
-                    let Some(trait_name) = bound else {
+                    let Some(interface_name) = bound else {
                         return Err(unbounded(p, &format!("asked for `.{}(...)`", method)));
                     };
-                    let Some(sigs) = self.traits.get(&trait_name) else {
+                    let Some(sigs) = self.interfaces.get(&interface_name) else {
                         return Err(format!(
-                            "`{}: {}` is not a trait bound with methods — `Ordered` and \
+                            "`{}: {}` is not an interface bound with methods — `Ordered` and \
                              `Equatable` allow comparison, not calls.",
-                            p, trait_name
+                            p, interface_name
                         ));
                     };
                     let Some(signature) = sigs.iter().find(|s| &s.name == method) else {
                         return Err(format!(
                             "`{}: {}` has no method `{}`. `{}` declares: {}.",
                             p,
-                            trait_name,
+                            interface_name,
                             method,
-                            trait_name,
+                            interface_name,
                             sigs.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")
                         ));
                     };
@@ -4872,11 +4872,11 @@ impl TypeChecker {
                         typed_args.push(t);
                     }
                     // The same rule for a value of a type parameter, asked of the BOUND:
-                    // `largest<T: Priced>` calls `T`'s methods through the trait exactly as a
-                    // trait object does, and any implementation may allocate. `trait_name`
+                    // `largest<T: Priced>` calls `T`'s methods through the interface exactly as a
+                    // trait object does, and any implementation may allocate. `interface_name`
                     // here is the bound, never `p` — `p` is the parameter's own name.
                     let leaks = self.impls.iter().any(|(implemented, concrete)| {
-                        *implemented == trait_name
+                        *implemented == interface_name
                             && self.alloc_methods.contains(&(concrete.clone(), method.clone()))
                     });
                     if leaks && !self.has_region() {
@@ -4885,7 +4885,7 @@ impl TypeChecker {
                              satisfied by an implementation that allocates. There is no \
                              region open here: wrap the call in `region name {{ ... }}`, or \
                              declare the enclosing function `allocates` too.",
-                            p, method, p, trait_name
+                            p, method, p, interface_name
                         ));
                     }
                     return Ok(TypedExpr {

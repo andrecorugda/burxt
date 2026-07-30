@@ -1,5 +1,5 @@
 // A class cannot be hashed. It would need structural hashing, which needs a per-type walk,
-// which needs a derive mechanism or a trait with a method — all larger than the milestone that
+// which needs a derive mechanism or an interface with a method — all larger than the milestone that
 // added `hash`. The honest answer for a compound key is a String built from the parts.
 class Point { x: Int, y: Int }
 

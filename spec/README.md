@@ -24,7 +24,7 @@ which is right.
 |---|---|---|
 | [A4.4 Strings & Collections](A4.4-STRINGS-COLLECTIONS.md) | **DONE bar one view** | Arrays fixed (v0.0.10) and growable (v0.0.24). Strings: literals, printing, FFI, length, equality, `byte_at` (v0.0.21), **concatenation (v0.0.25)**, **`read_file` / `to_string` (v0.0.28)**. Remaining: `.chars()`. |
 | [A4.5 Aggregate ABI](A4.5-AGGREGATE-ABI.md) | **DONE** (v0.0.12) | — |
-| [A4.6 Interfaces & Dispatch](A4.6-INTERFACES-DISPATCH.md) | **DONE and CLOSED** (v0.0.14) | Traits, `implement`, static + `dynamic` dispatch. `class` / `open` inheritance was **dropped in v0.0.46** — nothing needed it across thirty versions, so composition-only is final. |
+| [A4.6 Interfaces & Dispatch](A4.6-INTERFACES-DISPATCH.md) | **DONE and CLOSED** (v0.0.14) | Interfaces, `implement`, static + `dynamic` dispatch. `class` / `open` inheritance was **dropped in v0.0.46** — nothing needed it across thirty versions, so composition-only is final. |
 | [A4.7 Signature Grammar](A4.7-SIGNATURE-GRAMMAR.md) | **Mostly done** (v0.0.17–v0.0.19, v0.0.28) | Brace hazard, interpolation (as a print, then as a value), money and percent literals, mixed-scale `*` all shipped. Remaining: unit literals (`5.km`), `requires`/`ensures`, pipelines. |
 | [A5.0 Control Flow](A5.0-CONTROL-FLOW.md) | **DONE** (v0.0.3–v0.0.4, v0.0.15) | — |
 | [Far-horizon M1–M4](FAR-HORIZON-ROADMAP.md) | **Direction only** | Re-spec each on arrival. **M1's trigger is now MET** — see its amendment; two new criteria argue against the ARC lean. |

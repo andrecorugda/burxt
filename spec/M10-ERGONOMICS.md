@@ -303,7 +303,7 @@ came from. That is a habit, not a decision — and it sat badly next to the rest
 
 | Spelled out | Clipped |
 |---|---|
-| `let` `return` `while` `for` `in` `if` `else` `match` `trait` `region` `print` `pure` `break` `continue` `allocates` `requires` `ensures` `decreases` | `fn` `mut` `impl` `dyn` `extern` `struct` |
+| `let` `return` `while` `for` `in` `if` `else` `match` `interface` `region` `print` `pure` `break` `continue` `allocates` `requires` `ensures` `decreases` | `fn` `mut` `impl` `dyn` `extern` `struct` |
 
 **Twenty-five words against six.** And the rule had already been decided once, in the other
 direction: `RoundHalfEven`, not `HalfEven`, because the self-explanatory spelling wins. So the

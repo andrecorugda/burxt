@@ -1,4 +1,4 @@
-// A bound is `Ordered`, `Equatable`, or a trait this program declares. Anything else is
+// A bound is `Ordered`, `Equatable`, or an interface this program declares. Anything else is
 // a name that means nothing.
 function f<T: Nope>(x: T) -> T {
     return x;

@@ -44,7 +44,7 @@ sit among them; anything else ends the header.
 
 ## Everything a module declares is visible
 
-Its functions, records, enums, traits and impls are all available to the file that used it.
+Its functions, records, enums, interfaces and impls are all available to the file that used it.
 There is no `pub` yet, and that is a deliberate deferral rather than an oversight: `pub`
 doubles the annotation burden on every declaration, and its value is *hiding*, which matters
 when strangers depend on your module and not before. It earns its place when a library needs

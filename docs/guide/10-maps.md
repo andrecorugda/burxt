@@ -73,7 +73,7 @@ print(by_number.get(1, "?"));           // one
 ```
 
 A **record** as a key is refused. It would need structural hashing, which needs a per-type walk,
-which needs either a derive mechanism or a trait with a method — both larger than this container.
+which needs either a derive mechanism or an interface with a method — both larger than this container.
 For a compound key, build a `String` from the parts.
 
 Values have no such restriction. A record value works:

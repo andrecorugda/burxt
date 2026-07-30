@@ -1,6 +1,6 @@
 // Satisfaction is nominal: matching method shapes is NOT enough, the implement
 // must be declared.
-trait Priced {
+interface Priced {
     function price(self) -> Decimal<2>
 }
 class Book { cost: Decimal<2> }

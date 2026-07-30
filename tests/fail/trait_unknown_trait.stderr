@@ -1,1 +1,1 @@
-unknown trait `Nonexistent` — declare it with `trait Nonexistent { ... }`
+unknown interface `Nonexistent` — declare it with `interface Nonexistent { ... }`

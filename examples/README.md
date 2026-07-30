@@ -10,7 +10,7 @@ burxt run examples/invoice.bx -o /tmp/invoice
 
 | File | What it teaches |
 |---|---|
-| [`tour.bx`](tour.bx) | The whole language in 68 lines — money, records, traits, enums, tail calls, regions, FFI. Read this first. |
+| [`tour.bx`](tour.bx) | The whole language in 68 lines — money, records, interfaces, enums, tail calls, regions, FFI. Read this first. |
 | [`invoice.bx`](invoice.bx) | The program someone would actually write: line items, a tax rate, exact totals, and a contract on the tax function. |
 | [`money.bx`](money.bx) | The five lines that prove the thesis. |
 
@@ -21,7 +21,7 @@ burxt run examples/invoice.bx -o /tmp/invoice
 | [`inference.bx`](inference.bx) | `let x = e;` — where the type may be left out, where it may not, and why an array is the exception. |
 | [`absence.bx`](absence.bx) | No null: `Option<T>` and `Result<T, E>` as library types, and the compiler making you handle both cases. |
 | [`generics.bx`](generics.bx) | One definition, one copy per type: monomorphisation, inference at the call site, and what an unbounded parameter may not do. |
-| [`traits.bx`](traits.bx) | Traits, `implement Trait for Type`, static dispatch, `dynamic` — and why there is no inheritance. |
+| [`interfaces.bx`](interfaces.bx) | Interfaces, `implement Interface for Type`, static dispatch, `dynamic` — and why there is no inheritance. |
 | [`enums.bx`](enums.bx) | Variants with payloads, exhaustive `match` with no wildcard, and what a new variant breaks. |
 | [`regions.bx`](regions.bx) | Regions as the unit of ownership, `allocates`, and every escape the compiler refuses. |
 | [`services.bx`](services.bx) | **Coming from classes**: a constructor with validation, an interface, dependency injection through a `dynamic` field, and two implementations swapped with no change to the service. |

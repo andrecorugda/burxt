@@ -112,7 +112,7 @@ Every ledger entry that was waiting on ownership:
 - storing a `dynamic` in a record (though the real enabler was block scoping, not
   regions — see §6a)
 - ~~returning a `dynamic`~~ and ~~mutating methods through `dynamic`~~ — **these were
-  overclaimed.** A trait object borrows its source binding, a stack local, so
+  overclaimed.** A interface object borrows its source binding, a stack local, so
   neither was ever memory-blocked. Both need borrow/mutability tracking.
 
 ## 4. What M1 must NOT do
@@ -144,7 +144,7 @@ Every ledger entry that was waiting on ownership:
 | Nested regions | One level suffices to start | A required program needs sub-scopes |
 | Thread transfer / shared regions | Concurrency is its own milestone | Threads exist |
 | Per-object borrows | Region granularity is the bet | Region granularity provably blocks a required program |
-| Region-allocated trait objects | Depends on §3 landing first | After `List<T>` works |
+| Region-allocated interface objects | Depends on §3 landing first | After `List<T>` works |
 
 ## 6. Implementation staging
 
@@ -197,7 +197,7 @@ Revised staging:
    ships here; interpolation-as-a-value moves to its own small slice once a
    formatter exists, and is no longer an M1 ledger entry.
 4. **Storable `dynamic`** — done, but NOT as predicted. A record field may hold a
-   trait object (block scoping already bounded it). The other two entries are
+   interface object (block scoping already bounded it). The other two entries are
    re-diagnosed rather than retired: returning a `dynamic` needs borrow tracking,
    and mutating through one needs mutability tracking. **A `dynamic` borrows its
    source binding, which is a stack local — so regions were never the blocker

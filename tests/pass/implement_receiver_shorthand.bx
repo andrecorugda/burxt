@@ -1,7 +1,7 @@
 // Inside `implement Trait for Type`, the header already says which type — so a method may
 // write `function (self)` and let it. Repeating the type on every method buys nothing, and on
-// a trait with five methods it was the type written six times.
-trait Priced {
+// an interface with five methods it was the type written six times.
+interface Priced {
     function price(self) -> Decimal<2>
     function label(self) -> String
 }

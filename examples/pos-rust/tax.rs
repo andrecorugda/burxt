@@ -3,7 +3,7 @@
 //
 //     mod tax;   // declared in till.rs, the crate root
 //
-// A trait with two implementations, which is the shape any configurable service
+// An interface with two implementations, which is the shape any configurable service
 // takes here too: the till does not know which rule it is running.
 // ============================================================================
 

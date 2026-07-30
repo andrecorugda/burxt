@@ -54,11 +54,11 @@ pub enum Token {
     FatArrow,
     // reserved today for the OOP layers (methods, interfaces), so no program
     // written now breaks when they land
-    /// `interface` stays reserved (v0.0.8) but `trait` is the chosen keyword.
+    /// `interface` stays reserved (v0.0.8) but `interface` is the chosen keyword.
     Interface,
     Is,
     SelfKw,
-    Trait,
+
     Impl,
     For,
     In,
@@ -152,7 +152,7 @@ impl Token {
             Token::Match => "`match`".to_string(),
             Token::FatArrow => "`=>`".to_string(),
             Token::Interface => "`interface`".to_string(),
-            Token::Trait => "`trait`".to_string(),
+            Token::Interface => "`interface`".to_string(),
             Token::Impl => "`implement`".to_string(),
             Token::For => "`for`".to_string(),
             Token::In => "`in`".to_string(),
@@ -704,7 +704,6 @@ impl<'a> Lexer<'a> {
             "interface" => Token::Interface,
             "is" => Token::Is,
             "self" => Token::SelfKw,
-            "trait" => Token::Trait,
             "implement" => Token::Impl,
             "for" => Token::For,
             // `for x in xs { }`. `for` was already reserved by `impl Trait for Type`;
@@ -751,6 +750,16 @@ fn renamed_keyword(word: &str) -> Option<String> {
         // no inheritance, no hidden header and no constructor order to remember; it is nearer a
         // Swift struct or a Kotlin data class than a Java class. What it borrows from the word
         // is the part people actually want: fields, behaviour and privacy in one place.
+        // `trait` was the word until v0.0.153. Renamed for the reason the whole
+        // de-Rust-ification has: `interface` is what Java, C#, TypeScript, PHP and Go call
+        // this, and the target reader is the 70% who write PHP and C#. An unfamiliar spelling
+        // is something a REVIEWER has to stop and decode and an AGENT has to have memorised —
+        // so familiarity is a safety property here, not a preference. See DESIGN.md.
+        "trait" => (
+            "interface",
+            "a set of methods a type promises to have, which is what every language outside \
+             Rust and Scala calls an interface",
+        ),
         "record" => (
             "class",
             "a class holds its fields and its methods together, which is what `record` could \

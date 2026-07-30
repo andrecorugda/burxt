@@ -90,7 +90,7 @@ fn main() {
     ];
 
     // The same basket, priced two ways. Neither ring_up nor receipt.rs knows
-    // which rule it is running — that is what the trait is for.
+    // which rule it is running — that is what the interface is for.
     let flat = FlatTax { rate: 1200 };
     let split = SplitTax { staples: 200, rest: 1200 };
 

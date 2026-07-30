@@ -1,6 +1,6 @@
-// Calling a mutating method through a trait object is deferred: the compiler
+// Calling a mutating method through an interface object is deferred: the compiler
 // cannot yet tell whether the borrowed value is itself mutable.
-trait Bumpable {
+interface Bumpable {
     function bump(mutable self) -> Int
 }
 class Counter { n: Int }

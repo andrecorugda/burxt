@@ -123,7 +123,7 @@ fn panic_programs_die_cleanly_at_runtime() {
 /// The forward guarantee the object model depends on: an aggregate's layout is
 /// EXACTLY its declared fields, in order, standard alignment — no type tag, no
 /// vtable pointer, no refcount, no hidden header word. If this ever fails,
-/// adding a trait implementation could move a field, and codegen written
+/// adding an interface implementation could move a field, and codegen written
 /// against these offsets would break.
 #[test]
 fn record_layout_has_no_hidden_header() {
@@ -161,7 +161,7 @@ Order: size 24 align 8
 }
 
 /// The A4.5 layout guarantee, cashed in by A4.6: a struct's field offsets must
-/// be byte-identical whether or not it is ever used as a trait object, because
+/// be byte-identical whether or not it is ever used as an interface object, because
 /// the vtable lives OUTSIDE the value. Also checks the pay-for-what-you-use
 /// rule: a program with no `dyn` emits no vtable at all.
 #[test]
@@ -169,7 +169,7 @@ fn dynamic_does_not_change_layout_and_costs_nothing_unused() {
     let scratch = scratch_dir("dynamic-layout");
     fs::create_dir_all(&scratch).unwrap();
 
-    let common = "trait Priced { function price(self) -> Decimal<2> }\n\
+    let common = "interface Priced { function price(self) -> Decimal<2> }\n\
                   class Book { cost: Decimal<2>, pages: Int }\n\
                   implement Priced for Book {\n\
                   function (self: Book) price() -> Decimal<2> { return self.cost; }\n\
@@ -204,7 +204,7 @@ fn dynamic_does_not_change_layout_and_costs_nothing_unused() {
     );
     assert_eq!(
         l_static, l_dyn,
-        "becoming a trait object moved a field — the vtable must live outside the value"
+        "becoming an interface object moved a field — the vtable must live outside the value"
     );
     assert!(
         !s_ir.contains("bx.vtable"),
@@ -1702,6 +1702,7 @@ fn the_guide_and_examples_are_linked_and_compile() {
     let stale: &[(&str, &str)] = &[
         ("fn ", "function"),
         ("struct ", "class"),
+        ("trait ", "interface"),
         ("record ", "class"),
         ("impl ", "implement"),
         ("mut ", "mutable"),
@@ -2454,7 +2455,7 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
 // existing has expired is worse than no test: it looks like coverage.
 //
 // Its nine grounds are now covered by four fixtures in tests/pass/ — generics_functions (a `[T]`
-// element, a bound, a trait bound, a generic calling a generic), generics_types (two type
+// element, a bound, an interface bound, a generic calling a generic), generics_types (two type
 // parameters, Option, Result), generics_layout (separate layouts, a generic inside a generic) and
 // generics_methods (a method on a generic type) — and a fixture there is held against BOTH
 // compilers end to end by the pass-suite sweep, which the inline test never did. Strictly more

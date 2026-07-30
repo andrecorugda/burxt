@@ -92,7 +92,7 @@ that can have a hash. No new concept is introduced, and there is no `Hashable` t
 would name the same set twice.
 
 A record as a key is refused. It would need structural hashing, which needs a per-type walk, which
-needs either a derive mechanism or a trait with a method — and both are larger than this milestone.
+needs either a derive mechanism or an interface with a method — and both are larger than this milestone.
 **Trigger:** a program that genuinely wants a compound key, at which point the honest answer is
 probably a `String` built from the parts, and if that is not enough, a `Hashable` trait with one
 method.

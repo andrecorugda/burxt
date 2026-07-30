@@ -14,7 +14,7 @@ if something is missing here it is probably missing from the language too.
 | `let` | `mutable` | `function` | `return` |
 | `if` | `else` | `while` | `break` |
 | `continue` | `match` | `record` | `enum` |
-| `trait` | `implement` | `dynamic` | `external` |
+| `interface` | `implement` | `dynamic` | `external` |
 | `region` | `pure` | `tail` | `print` |
 | `self` | `true` | `false` | `as` |
 
@@ -41,7 +41,7 @@ may still be called `ensures` anywhere else.
 | `Decimal<S, R>` | The same, carrying a rounding contract: `RoundHalfEven` or `RoundHalfUp`. |
 | `[T; N]` | Fixed array. The length is part of the type. Bounds always checked. |
 | `[T]` | Growable array. Lives in a region. Bounds always checked. |
-| `dynamic Trait` | A trait object: a value plus the trait's method table. |
+| `dynamic Trait` | A interface object: a value plus the interface's method table. |
 | `CInt`, `CDouble` | C's widths. Only in `external function` signatures. |
 
 ## Operators

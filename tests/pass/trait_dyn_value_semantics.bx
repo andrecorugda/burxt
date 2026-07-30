@@ -1,7 +1,7 @@
-// Behavior must be IDENTICAL whether a trait method is reached statically or
-// through a trait object — the mechanism-switch property, extended to dynamic.
-// A trait method also cannot corrupt the caller: its receiver is read-only.
-trait Peek {
+// Behavior must be IDENTICAL whether an interface method is reached statically or
+// through an interface object — the mechanism-switch property, extended to dynamic.
+// An interface method also cannot corrupt the caller: its receiver is read-only.
+interface Peek {
     function peek(self) -> Int
     function copy_and_clobber(self) -> Int
 }

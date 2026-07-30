@@ -73,7 +73,7 @@ refuse.
 Three independent implementations agreeing with each other and not with Burxt is what made it
 undeniable, and that is the argument for writing the same program four times.
 
-**The cause was an ABI mismatch on vtable calls.** A trait method taking a record declares its
+**The cause was an ABI mismatch on vtable calls.** An interface method taking a record declares its
 parameter `byval(T)` — on x86-64 the record travels in the stack argument area. The indirect call
 passed a bare pointer, which travels in a register. So the method read its `Item` from whatever
 happened to be on the stack, and `if !item.taxable` answered from garbage: a taxable item taxed at
@@ -85,7 +85,7 @@ Two things about it are worth keeping:
   answering correctly, which is why six earlier reductions all "passed". A wrong answer that
   disappears when you look at it is the worst kind.
 - **The coverage gap was shaped like the intersection of two well-tested things.** `tests/pass/abi_*`
-  covers records crossing call boundaries. `tests/pass/trait_dyn_*` covers dispatch through a trait
+  covers records crossing call boundaries. `tests/pass/trait_dyn_*` covers dispatch through an interface
   object. Seven fixtures pass a record to a method, and **not one** did it dynamically.
 
 Fixed in v0.0.141. The regression fixture is `tests/pass/abi_dyn_record_params.bx`, and because a
@@ -130,5 +130,5 @@ Not speed. Three things about how the code is shaped:
    is the same shape and also the one that fails at run time rather than compile time.
 
 One smaller thing, found by writing them: `label()` on the tax rule was dead in all four versions
-until the header line started using it. A trait with a method nobody calls is a bad example of a
+until the header line started using it. An interface with a method nobody calls is a bad example of a
 trait, and only the Rust compiler said so.
