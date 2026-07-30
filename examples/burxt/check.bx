@@ -128,7 +128,17 @@ function (mutable self: Unit) bind_type_arguments(src: String, generic: Int, arg
     while i < wanted.b && i < given.b {
         let parameter: Node = self.nodes[self.children[wanted.a + i]];
         let declared: Type = self.declared_type(src, parameter.a);
-        if declared.kind == 50 || declared.kind == 47 || declared.kind == 48 {
+        // A bare `T`, a slice, an array — or a generic APPLICATION like `Option<T>`, which is kind 46
+        // and was skipped here. `unify` has handled applications since generics landed; this was the
+        // only place that did not ask it to.
+        //
+        // It went unnoticed because a parameter reachable ONLY through an application —
+        // `option_is_some(o: Option<T>) -> Bool`, whose single parameter mentions T nowhere else —
+        // happened to find `T` already bound by an enclosing call. Scoping the lookup to the current
+        // call (see `type_binding_floor`) removed that accident and the gap showed immediately, which
+        // is the useful shape of a fix: it made a second bug visible rather than hiding it.
+        if declared.kind == 50 || declared.kind == 47 || declared.kind == 48
+           || declared.kind == 46 {
             let actual: Type = self.type_of(src, self.children[given.a + i], unknown_type());
             if !is_unknown(actual) {
                 let matched: Bool = self.unify(src, declared, actual);
@@ -404,8 +414,11 @@ function (self: Unit) resolve_shallow(src: String, t: Type) -> Type {
     if t.kind != 50 {
         return t;
     }
+    // Backwards to the FLOOR, not to zero. The floor is where the current generic call's bindings
+    // begin, so a nested call to the same generic starts with `T` unbound rather than inheriting the
+    // enclosing call's answer — see `type_binding_floor`.
     let mutable i: Int = len(self.type_bindings) - 1;
-    while i >= 0 {
+    while i >= self.type_binding_floor {
         let binding: TypeBinding = self.type_bindings[i];
         if spans_equal(src, binding.name_start, binding.name_length, t.name_start, t.name_length) {
             return binding.bound;
@@ -1604,6 +1617,11 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
         // an ordinary call is checked. Nothing below this line knows generics exist — the
         // bindings do their work through `same_type`, which resolves as it recurses.
         let base: Int = len(self.type_bindings);
+        // This call's bindings begin here, and `resolve_shallow` looks no further back while it is in
+        // effect. Saved and restored, so a nested call gets its own clean view of `T` and this one gets
+        // its view back afterwards.
+        let outer_floor: Int = self.type_binding_floor;
+        self.type_binding_floor = base;
         let generic: Int = self.generic_named(src, t.start, t.length);
         if generic >= 0 {
             // Anything the arguments cannot settle is read from the EXPECTATION first, so that
@@ -1635,6 +1653,7 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
         // The bindings belong to this call. A nested generic call pushed its own on top and
         // truncating restores ours, which is why the base is taken before and not after.
         let dropped: Int = truncate(self.type_bindings, base);
+        self.type_binding_floor = outer_floor;
         return answer;
     }
 

@@ -2284,7 +2284,16 @@ function (mutable self: Unit) find_instance(src: String, generic: Int, args_star
             let mutable same: Bool = true;
             let mutable k: Int = 0;
             while k < args_count {
-                if !type_identical(self.instance_arguments[it.args_start + k],
+                // `same_type`, NOT `type_identical`. Two instantiations are the same instance when
+                // their arguments are the same TYPE — and `type_identical` compares span POSITIONS,
+                // so the word `Json` written at two different offsets came out unequal and a second
+                // `option_or$Json` was recorded. LLVM then refused the module for defining one symbol
+                // twice, which is the loud end of a wrong answer rather than the quiet one.
+                //
+                // `type_identical` is right where it is used in check.bx — asking whether resolving
+                // CHANGED a type, where an identical span means nothing moved. It is the wrong
+                // question here, where identity means "would emit the same machine function".
+                if !self.same_type(src, self.instance_arguments[it.args_start + k],
                                    self.instance_arguments[args_start + k]) {
                     same = false;
                 }
@@ -2342,7 +2351,16 @@ function (mutable self: Unit) instance_of_call(src: String, generic: Int, params
     while i < wanted.b && i < given.b {
         let parameter: Node = self.nodes[self.children[wanted.a + i]];
         let declared: Type = self.declared_type(src, parameter.a);
-        if declared.kind == 50 || declared.kind == 47 || declared.kind == 48 {
+        // Kind 46 too — a generic APPLICATION like `Option<T>`. The same omission the checker had
+        // (see `bind_type_arguments`), and the emitter's copy of it had the louder symptom: a parameter
+        // reachable only through an application meant no instance was selected, so the call went out
+        // UNMANGLED — `@option_is_some` instead of `@option_is_some$Json`, a symbol nothing defines.
+        //
+        // Two implementations of one question is the shape to notice: the checker and the emitter both
+        // decide which instantiation a call is, and they have to decide it the same way or the module
+        // does not link.
+        if declared.kind == 50 || declared.kind == 47 || declared.kind == 48
+           || declared.kind == 46 {
             let recorded: Type = self.type_at(self.children[given.a + i]);
             let actual: Type = self.resolve_deep(src, recorded, self.children[given.a + i]);
             let matched: Bool = self.unify(src, declared, actual);

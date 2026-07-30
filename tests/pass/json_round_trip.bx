@@ -1,0 +1,63 @@
+// lib/json.bx: render, parse, and back, with money surviving the trip.
+//
+// The claim being checked is not "it parses JSON" — it is that a document rendered and then parsed
+// and then rendered again is BYTE-IDENTICAL, which is the only way to know nothing was quietly
+// reinterpreted in between. That is the same instrument the self-hosting fixpoint uses.
+//
+// And the position lib/json.bx takes: a JSON number is its DIGITS, not a float. `19.999` asked for
+// as `Decimal<2>` answers None rather than 20.00, because a value arriving from outside with more
+// precision than you asked for is a question and not a rounding.
+use "../../lib/json.bx";
+
+let mutable rows: [Json] = [];
+let r: Int = push(rows, json_object([json_field("sku", json_text("RICE")),
+                                     json_field("price", json_money($52.75)),
+                                     json_field("qty", json_int(3))]));
+
+let doc: Json = json_object([json_field("total", json_money($158.25)),
+                            json_field("rows", json_list(rows)),
+                            json_field("ok", json_truth(true)),
+                            json_field("note", json_null())]);
+
+let once: String = json_render(doc);
+print(once);
+
+// Render -> parse -> render. Identical, or something was reinterpreted.
+match json_parse(once) {
+    Error(why) => { print("PARSE FAILED: " + why); }
+    Ok(back) => {
+        let twice: String = json_render(back);
+        print(twice);
+        if once == twice { print("identical"); } else { print("DRIFTED"); }
+    }
+}
+
+// The escapes, round-tripped. A string quietly missing a character is a wrong answer.
+let tricky: String = "say \"hi\"\r\n\tand\\done";
+match json_parse(json_render(json_text(tricky))) {
+    Error(why) => { print("ESCAPE FAILED: " + why); }
+    Ok(v) => {
+        if option_or(json_as_text(v), "") == tricky { print("escapes survive"); }
+        else { print("ESCAPES LOST"); }
+    }
+}
+
+// Money in, from both spellings a caller might send, and the one that must be refused.
+match json_parse("\{\"a\": \"19.99\", \"b\": 1.5, \"c\": 7, \"d\": 19.999, \"e\": -2.50\}") {
+    Error(why) => { print("FAILED: " + why); }
+    Ok(v) => {
+        print(to_string(option_or(json_as_money(option_or(json_at(v, "a"), json_null())), $0.00)));
+        print(to_string(option_or(json_as_money(option_or(json_at(v, "b"), json_null())), $0.00)));
+        print(to_string(option_or(json_as_money(option_or(json_at(v, "c"), json_null())), $0.00)));
+        // 19.999 has a third decimal place, so it is NOT Decimal<2>. None, never 20.00.
+        print(option_is_some(json_as_money(option_or(json_at(v, "d"), json_null()))));
+        print(to_string(option_or(json_as_money(option_or(json_at(v, "e"), json_null())), $0.00)));
+        print(option_or(json_as_int(option_or(json_at(v, "c"), json_null())), 0 - 1));
+    }
+}
+
+// A malformed document is refused, and says where.
+match json_parse("\{\"a\": \}") {
+    Error(why) => { print("refused"); }
+    Ok(v) => { print("ACCEPTED BAD JSON"); }
+}

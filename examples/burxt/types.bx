@@ -310,6 +310,15 @@ class Unit {
     // deciding whether an enum contains itself by value. Truncated on the way out of each level, like
     // `type_bindings`. A field rather than a parameter because Burxt has no writable parameters.
     walked_types: [Int],
+    // Where the CURRENT generic call's type bindings begin. `resolve_shallow` looks no further back
+    // than this, which is what keeps a nested call to the same generic from seeing the enclosing
+    // call's answer for `T`.
+    //
+    // Without it, `option_or(code(option_or(...)), 0)` bound T = Int for the outer call and then the
+    // INNER call's `unify` found T already bound and refused to make it Colour. The bindings were
+    // scoped correctly on the way OUT — a base taken before, truncated after — and not on the way
+    // IN, which is the half nobody had needed until two calls to one generic nested.
+    type_binding_floor: Int,
     instances: [Instance],
     // The type arguments of every instance, laid end to end. `Instance` carries a start and a
     // count into this, the same shape `nested_children` and `type_parameters` use.
