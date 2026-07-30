@@ -1,0 +1,51 @@
+// `private` — the first visibility Burxt has ever had.
+//
+// The class is the SCOPE: a private field or method is reachable only from that class's own
+// methods. Before v0.0.150 there was no privacy at all — a file could reach into a
+// transitively-imported file's helpers and read any type's fields directly, bypassing whatever
+// method it provided.
+//
+// FILE-level privacy is deliberately absent, and the reason is structural rather than a
+// shortfall: `use` is a text pre-pass that concatenates files, so by the time anything is
+// checked there are no files, only one long program. A class needs no such knowledge, because
+// it is its own boundary. That is why `class` had to land before `private` could.
+class Account {
+    owner: String,
+    private balance: Decimal<2>,
+
+    // Its own methods reach its own privates — both the field and the helper.
+    function (self) statement() -> String {
+        return self.owner + " has " + to_string(self.spendable());
+    }
+
+    // An implementation detail, and now sayable as one.
+    private function (self) spendable() -> Decimal<2> {
+        return self.balance;
+    }
+}
+
+// A method written OUTSIDE the class body is still a method OF the class, so it reaches the
+// privates too. The boundary is the type, not the block — there is no file boundary to appeal
+// to, and inventing one here would be a rule with no mechanism behind it.
+function (self: Account) shouted() -> String {
+    return "BALANCE " + to_string(self.balance);
+}
+
+// Everything public is reachable as before.
+class Item {
+    sku: String,
+    price: Decimal<2>,
+    function (self) label() -> String { return self.sku; }
+}
+
+// A class literal may still set a private field, and that is a DECISION rather than an
+// oversight: Burxt has no constructor functions, so refusing it would make a class with any
+// private field unconstructible from outside. `private` restricts reading and writing through a
+// value; construction is exempt until there is a constructor to put the rule on.
+let a: Account = Account { owner: "ada", balance: 10.00 };
+print(a.statement());
+print(a.shouted());
+
+let rice: Item = Item { sku: "RICE", price: 52.75 };
+print(rice.label());
+print(rice.price);

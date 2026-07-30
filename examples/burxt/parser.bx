@@ -987,6 +987,11 @@ function flag_allocates(flags: Int) -> Int {
 function flag_external(flags: Int) -> Int {
     return remainder(divide_floor(flags, 8), 2);
 }
+// `private`, on a method declared inside a class body. Bit 4: 1 is pure, 2 is
+// builds-in-caller, 4 is a mutating receiver and 8 is external.
+function flag_private(flags: Int) -> Int {
+    return remainder(divide_floor(flags, 16), 2);
+}
 
 // ---- expressions -------------------------------------------------------------
 // Precedence climbs the way the Rust parser's does: or, and, comparison, additive,
@@ -1742,9 +1747,23 @@ function (mutable self: Unit) parse_record(src: String) -> Int {
             return self.complain(src, "a method cannot be declared `pure` yet — the marker "
                         + "goes on a free function for now");
         }
+        // `private` applies to whichever of the two follows it. Recorded in the field node's
+        // spare slot for a field, and in the method item's flags for a method.
+        let mutable is_private: Int = 0;
+        if self.at(132) {
+            let p: Int = self.advance();
+            is_private = 1;
+        }
         if self.at(102) {
             let method: Int = self.parse_function(src, 0, name_tok);
             if method < 0 { return -1; }
+            if is_private == 1 {
+                // Set the bit on the item that was just built. `parse_function` assembles the
+                // flags itself and has no reason to know about class bodies.
+                let m: Node = self.nodes[method];
+                self.nodes[method] = Node { kind: m.kind, a: m.a, b: m.b, c: m.c,
+                                        value: m.value + 16, token: m.token };
+            }
             push(self.items, method);
             continue;
         }
@@ -1754,7 +1773,7 @@ function (mutable self: Unit) parse_record(src: String) -> Int {
         if !self.eat(src, 20, "`:` and the field's type") { return -1; }
         let type_node: Int = self.parse_type(src);
         if type_node < 0 { return -1; }
-        let field: Int = self.add(91, type_node, 0, 0, 0, field_tok);
+        let field: Int = self.add(91, type_node, 0, 0, is_private, field_tok);
         push(self.stack, field);
         count += 1;
         if self.more_in_list(32) {

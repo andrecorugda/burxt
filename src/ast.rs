@@ -440,6 +440,10 @@ pub struct FnDef {
 #[derive(Debug, Clone)]
 pub struct MethodDef {
     pub receiver: String,
+    /// Declared `private` inside its class body: callable only from that class's own methods.
+    /// Always false for a method written outside a class, where there is no boundary to be
+    /// private from.
+    pub private: bool,
     /// `function (mutable self: Stack<T>) push_one(...)` — the receiver's type arguments,
     /// which for a method are always the class's own parameter NAMES. A method may use the
     /// parameters of the type it is on and declare none of its own, per
@@ -544,6 +548,12 @@ pub struct StructDef {
     /// overwhelming majority. See spec/M7-GENERICS.md.
     pub type_parameters: Vec<TypeParam>,
     pub fields: Vec<Param>,
+    /// Field names declared `private`: reachable only from this class's own methods.
+    ///
+    /// A list on the CLASS rather than a flag on `Param`, because `Param` is also a function
+    /// parameter and a private parameter is not a thing. Linear lookup, over a handful of
+    /// names, at a site that already resolves a type.
+    pub private_fields: Vec<String>,
     /// Where this item was written, for errors about the item itself.
     pub span: Span,
 }

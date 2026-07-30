@@ -223,6 +223,7 @@ impl Parser {
         self.expect(&Token::LBrace)?;
         let mut fields = Vec::new();
         let mut methods = Vec::new();
+        let mut private_fields = Vec::new();
         // Fields, then methods, in one block — which is the whole reason `record` became
         // `class` in v0.0.148. A method here is parsed by `parse_method` with the class as
         // its `owner`, so `function (self) price()` needs no repeated type: a class body is
@@ -232,8 +233,15 @@ impl Parser {
             if self.at(&Token::Eof) {
                 return Err(format!("unclosed class `{}`: expected `}}`", name));
             }
+            // `private` applies to whichever of the two follows it.
+            let is_private = self.at(&Token::Private);
+            if is_private {
+                self.bump();
+            }
             if self.at(&Token::Fn) || self.at(&Token::Pure) {
-                methods.push(self.parse_method_in_class(&name)?);
+                let mut m = self.parse_method_in_class(&name)?;
+                m.private = is_private;
+                methods.push(m);
                 continue;
             }
             let fname = match self.bump() {
@@ -251,6 +259,9 @@ impl Parser {
             // Accepted here only so the typechecker can explain WHY a field
             // cannot have one; "expected `}`" would not teach anything.
             let marshal = self.parse_marshal()?;
+            if is_private {
+                private_fields.push(fname.clone());
+            }
             fields.push(Param { name: fname, ty, marshal });
             if self.at(&Token::Comma) {
                 self.bump(); // trailing comma allowed, and required before a method follows
@@ -259,7 +270,7 @@ impl Parser {
         self.expect(&Token::RBrace)?;
         self.type_parameters.clear();
         Ok((
-            StructDef { name, type_parameters, fields, span: Span { start, end: self.prev_end().max(start + 1) } },
+            StructDef { name, type_parameters, fields, private_fields, span: Span { start, end: self.prev_end().max(start + 1) } },
             methods,
         ))
     }
@@ -760,7 +771,7 @@ impl Parser {
         }
         let body = self.parse_block()?;
         self.type_parameters.clear();
-        Ok(MethodDef { receiver, receiver_arguments, receiver_mut, name, parameters, ret, allocates, requires, ensures, body, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok(MethodDef { receiver, private: false, receiver_arguments, receiver_mut, name, parameters, ret, allocates, requires, ensures, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `as <marshaller>` declares how a value crosses a foreign boundary.

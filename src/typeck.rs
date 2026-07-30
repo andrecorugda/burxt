@@ -454,6 +454,20 @@ pub struct TypeChecker {
     /// returning a parameter is safe and must keep working.
     region_locals: HashSet<String>,
 
+    /// Per class, the field names declared `private`, and per (class, method) the private
+    /// methods. The class is the SCOPE: a private member is reachable only from that class's
+    /// own methods.
+    ///
+    /// This is the first visibility Burxt has ever had. Before it, a file could reach into a
+    /// transitively-imported file's helpers and read any type's fields directly, bypassing
+    /// whatever method it provided. FILE-level privacy is deliberately not attempted: `use` is
+    /// a text pre-pass that concatenates files, so by the time anything is checked there are no
+    /// files, only one long program. A class needs no such knowledge — it is its own boundary.
+    private_fields: HashMap<String, Vec<String>>,
+    private_methods: HashSet<(String, String)>,
+    /// The class whose method is being checked, if any. What makes `private` mean anything.
+    current_receiver: Option<String>,
+
     // ---- M14 slice 1: working out `allocates` instead of asking for it ------
     //
     // The compiler has always computed this. `expr_allocates` walks a body and answers
@@ -550,6 +564,9 @@ impl TypeChecker {
             current_signature: None,
             current_region: None,
             region_locals: HashSet::new(),
+            private_fields: HashMap::new(),
+            private_methods: HashSet::new(),
+            current_receiver: None,
             probing: false,
             probe_owner: RefCell::new((String::new(), String::new())),
             probe_fns: RefCell::new(HashSet::new()),
@@ -1573,6 +1590,9 @@ impl TypeChecker {
                 }
                 fields.push((f.name.clone(), f.ty.clone()));
             }
+            if !s.private_fields.is_empty() {
+                self.private_fields.insert(s.name.clone(), s.private_fields.clone());
+            }
             self.structs.insert(s.name.clone(), fields);
         }
         // Enum names must be known before any type is validated, exactly like
@@ -1894,6 +1914,9 @@ impl TypeChecker {
             if m.allocates {
                 self.alloc_methods.insert(key.clone());
             }
+            if m.private {
+                self.private_methods.insert(key.clone());
+            }
             self.methods.insert(key, (m.receiver_mut, param_tys, m.ret.clone()));
         }
 
@@ -1949,6 +1972,7 @@ impl TypeChecker {
         // to carry the answer. Without clearing it, a probing pass would credit whichever
         // function happened to be checked last.
         *self.probe_owner.borrow_mut() = (String::new(), String::new());
+        self.current_receiver = None;
         let mut stmts = Vec::new();
         // Top-level statements recover exactly as a function body's do.
         for s in &prog.stmts {
@@ -2532,6 +2556,8 @@ impl TypeChecker {
         self.current_span.set(f.span);
         // Who a probing pass should credit for an allocation found in this body.
         *self.probe_owner.borrow_mut() = (String::new(), f.name.clone());
+        // A free function is inside no class, so it may reach nothing private.
+        self.current_receiver = None;
         self.env.clear();
         self.region_locals.clear();
         let mut parameters = Vec::new();
@@ -2653,6 +2679,11 @@ impl TypeChecker {
     fn check_method(&mut self, m: &MethodDef) -> Result<TypedMethod, String> {
         self.current_span.set(m.span);
         *self.probe_owner.borrow_mut() = (m.receiver.clone(), m.name.clone());
+        // Inside this body, this class's private members are reachable. Nowhere else — which
+        // means this has to be RESTORED, not merely set. Set-and-forget left it pointing at
+        // whichever class was checked last, so the top level inherited that class's privileges
+        // and a private method called from outside compiled cleanly.
+        let outer_receiver = self.current_receiver.replace(m.receiver.clone());
         self.env.clear();
         self.region_locals.clear();
         self.env.insert(
@@ -2733,6 +2764,7 @@ impl TypeChecker {
                 m.ret
             ));
         }
+        self.current_receiver = outer_receiver;
         Ok(TypedMethod {
             receiver: m.receiver.clone(),
             receiver_mut: m.receiver_mut,
@@ -4837,6 +4869,16 @@ impl TypeChecker {
                             receiver, method
                         )
                     })?;
+                // `private` on a method, same rule and same boundary as a private field.
+                if self.current_receiver.as_deref() != Some(receiver.as_str())
+                    && self.private_methods.contains(&(receiver.clone(), method.clone()))
+                {
+                    return Err(format!(
+                        "`{}.{}()` is private: it is callable only from `{}`'s own methods. \
+                         It is an implementation detail of `{}`, not part of its API.",
+                        receiver, method, receiver, receiver
+                    ));
+                }
 
                 if receiver_mut {
                     // A mutating method is passed a true reference, so the
@@ -5163,6 +5205,20 @@ impl TypeChecker {
                 ))
             }
         };
+        // `private` — and this is the only place a field is resolved, which is why the rule
+        // needs no sweep. A class's own methods may reach its private fields; nothing else can.
+        if self.current_receiver.as_deref() != Some(name.as_str()) {
+            if let Some(hidden) = self.private_fields.get(name) {
+                if hidden.iter().any(|h| h == field) {
+                    return Err(format!(
+                        "`{}.{}` is private: it is reachable only from `{}`'s own methods. \
+                         Read it through a method that `{}` provides, or drop `private` from \
+                         the field if it is part of the type's API.",
+                        name, field, name, name
+                    ));
+                }
+            }
+        }
         let fields = self
             .fields_of(name)
             .ok_or_else(|| format!("unknown type `{}`", name))?;

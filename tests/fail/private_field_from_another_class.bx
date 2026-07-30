@@ -1,0 +1,15 @@
+// The scope is ONE class, not "any class". A method of `Ledger` is not a method of `Account`,
+// so it may not reach into one — which is the whole point of a boundary.
+class Account {
+    owner: String,
+    private balance: Decimal<2>,
+}
+class Ledger {
+    total: Decimal<2>,
+    function (self) peek(a: Account) -> Decimal<2> {
+        return a.balance;
+    }
+}
+let a: Account = Account { owner: "ada", balance: 10.00 };
+let l: Ledger = Ledger { total: 0.00 };
+print(l.peek(a));

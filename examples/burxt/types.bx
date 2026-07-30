@@ -417,6 +417,10 @@ function (mutable self: Unit) install_keywords() -> Int {
     n = self.add_word("is", 130);
     // `for x in xs`. `for` is already a keyword (114) from `implement Trait for Type`.
     n = self.add_word("in", 131);
+    // `private` on a class's field or method. A real keyword rather than a contextual word,
+    // because it appears where a field NAME is expected — `private balance: Decimal<2>` — and a
+    // contextual reading could not tell the two apart without lookahead.
+    n = self.add_word("private", 132);
     // Type names are keywords too: the parser needs them distinguished from
     // ordinary identifiers, exactly as the Rust lexer does.
     n = self.add_word("Int", 140);

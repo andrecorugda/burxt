@@ -4,6 +4,80 @@ title: Types
 
 # 3. Types
 
+## A class holds its fields and its methods
+
+```burxt
+class Item {
+    sku: String,
+    name: String,
+    price: Decimal<2>,
+
+    function (self) label() -> String {
+        return self.sku + " " + self.name;
+    }
+}
+
+let rice: Item = Item { sku: "RICE", name: "Rice 5kg", price: 52.75 };
+print(rice.label());        // RICE Rice 5kg
+```
+
+Both halves in one block, findable by one jump. Methods may still be written outside the
+class — `function (self: Item) label() -> String { ... }` — and that is what you need for a
+class someone else declared, but for your own the block is where they belong.
+
+This was `record` until v0.0.148, and the rename came out of writing the same point-of-sale
+in four languages. Python, PHP and Rust all put a type's data and its behaviour together;
+Burxt could not, and it was the largest readability gap of the four.
+
+## `private` — what the class keeps to itself
+
+```burxt
+class Account {
+    owner: String,
+    private balance: Decimal<2>,
+
+    function (self) statement() -> String {
+        return self.owner + " has " + to_string(self.spendable());
+    }
+
+    private function (self) spendable() -> Decimal<2> {
+        return self.balance;
+    }
+}
+```
+
+From outside:
+
+```
+error: `Account.balance` is private: it is reachable only from `Account`'s own methods.
+       Read it through a method that `Account` provides, or drop `private` from the field
+       if it is part of the type's API.
+```
+
+**The class is the scope, not the file.** A method of another class cannot reach in, and
+neither can top-level code — but a method written *outside* the block on the same class
+still can, because the boundary is the type. There is no file boundary to appeal to: `use`
+is a text pre-pass that concatenates files (page 7), so by the time anything is checked
+there are no files, only one long program. A class needs no such knowledge.
+
+### What `private` does not do yet, stated plainly
+
+A class literal may still set a private field:
+
+```burxt
+let a: Account = Account { owner: "ada", balance: 10.00 };     // accepted
+```
+
+That is a decision, not an oversight. Burxt has no constructor functions, so refusing this
+would make a class with any private field impossible to build from outside. `private`
+restricts **reading and writing through a value**; construction is exempt until there is a
+constructor to put the rule on.
+
+So `private` gives you an implementation detail nobody can read or call. It does not yet let
+a class *defend an invariant* — `Account` cannot promise `balance >= $0.00` while anyone can
+construct one directly. That needs a constructor mechanism, and it is the next thing this
+page will have to be rewritten for.
+
 ## Bindings, and where the type goes
 
 ```burxt

@@ -1,0 +1,9 @@
+// A private field is reachable only from its class's own methods. This is the first
+// visibility Burxt has ever had (v0.0.150): before it, any file could read any field.
+class Account {
+    owner: String,
+    private balance: Decimal<2>,
+    function (self) statement() -> String { return self.owner; }
+}
+let a: Account = Account { owner: "ada", balance: 10.00 };
+print(a.balance);

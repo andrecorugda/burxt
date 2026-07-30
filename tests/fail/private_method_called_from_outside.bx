@@ -1,0 +1,8 @@
+// The same boundary for a method. A private method is an implementation detail of its class,
+// and now it can say so.
+class Account {
+    owner: String,
+    private function (self) audit() -> Int { return 1; }
+}
+let a: Account = Account { owner: "ada" };
+print(a.audit());

@@ -47,6 +47,7 @@ pub enum Token {
     True,
     False,
     Class,
+    Private,
     Enum,
     Region,
     Match,
@@ -145,6 +146,7 @@ impl Token {
             Token::True => "`true`".to_string(),
             Token::False => "`false`".to_string(),
             Token::Class => "`class`".to_string(),
+            Token::Private => "`private`".to_string(),
             Token::Region => "`region`".to_string(),
             Token::Enum => "`enum`".to_string(),
             Token::Match => "`match`".to_string(),
@@ -684,6 +686,7 @@ impl<'a> Lexer<'a> {
             "true" => Token::True,
             "false" => Token::False,
             "class" => Token::Class,
+            "private" => Token::Private,
             "region" => Token::Region,
             // `enum` stays clipped, and this is the reason rather than an oversight.
             //

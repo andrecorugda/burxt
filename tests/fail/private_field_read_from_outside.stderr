@@ -1,0 +1,1 @@
+`Account.balance` is private: it is reachable only from `Account`
