@@ -27,7 +27,7 @@ class Outcome { ran: Int, passed: Int, failed: Int }
 
 // Every name in a directory, one per line, via the shell. `ls` is the only thing
 // here that is not Burxt, and it is doing what a directory read would do.
-function listing_of(directory: String, into: String) -> String {
+function listing_of(directory: String, into: String) -> String touches files {
     let command: String = "ls " + directory + " > " + into + " 2>/dev/null";
     let status: Int = system(command);
     return read_file(into);
@@ -116,7 +116,7 @@ function (mutable self: Outcome) note(passed: Bool, name: String, why: String) -
 }
 
 function (mutable self: Outcome) check_pass(compiler: String, name: String, work: String)
-    -> Int
+    -> Int touches files
 {
     let source: String = "tests/pass/" + name + ".bx";
     let expected: String = trimmed(read_file("tests/pass/" + name + ".stdout"));
@@ -144,7 +144,7 @@ function (mutable self: Outcome) check_pass(compiler: String, name: String, work
 }
 
 function (mutable self: Outcome) check_fail(compiler: String, name: String, work: String)
-    -> Int
+    -> Int touches files
 {
     let source: String = "tests/fail/" + name + ".bx";
     let wanted: String = trimmed(read_file("tests/fail/" + name + ".stderr"));
@@ -168,7 +168,7 @@ function (mutable self: Outcome) check_fail(compiler: String, name: String, work
 }
 
 function (mutable self: Outcome) check_panic(compiler: String, name: String, work: String)
-    -> Int
+    -> Int touches files
 {
     let source: String = "tests/panic/" + name + ".bx";
     let wanted: String = trimmed(read_file("tests/panic/" + name + ".stderr"));
@@ -197,7 +197,7 @@ function (mutable self: Outcome) check_panic(compiler: String, name: String, wor
 // ---- the sweep ---------------------------------------------------------------
 
 function (mutable self: Outcome) sweep(compiler: String, kind: String, work: String)
-    -> Int
+    -> Int touches files
 {
     let names: String = listing_of("tests/" + kind, work + "/listing");
     let mutable at: Int = 0;

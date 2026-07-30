@@ -1,0 +1,4 @@
+// The effect vocabulary is CLOSED, and it has to be: two libraries spelling the same thing
+// `network` and `net` would make scanning for what a change can reach useless.
+function f() -> Int touches sockets { return 1; }
+print(f());

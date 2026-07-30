@@ -1,0 +1,6 @@
+// Transitive, like `pure`: what the callee reaches, the caller reaches. A signature that says
+// nothing about commands is a signature you can trust about commands, however deep the call goes.
+external function system(command: String) -> CInt touches commands;
+function run(cmd: String) -> Int touches commands { return system(cmd); }
+function quietly(cmd: String) -> Int { return run(cmd); }
+print(quietly("true"));

@@ -332,6 +332,20 @@ pub struct TypeChecker {
     /// registered — so an application of a type that exists but is not generic can say
     /// so, instead of calling it unknown.
     declared_type_names: HashSet<String>,
+    /// What each function and method declares it `touches`, and what the current body may.
+    ///
+    /// DECLARED, not inferred — the opposite of the call taken for `allocates`, and deliberately
+    /// so. `allocates` carried no promise a reviewer needed, which is why inferring it removed
+    /// pure ceremony (v0.0.142). `touches network` IS the promise they need: if the compiler
+    /// worked it out, it would not be in the signature, and being in the signature is the entire
+    /// point. So this is transitive by DECLARATION, exactly as `pure` already is.
+    fn_effects: HashMap<String, Vec<Effect>>,
+    method_effects: HashMap<(String, String), Vec<Effect>>,
+    /// What the body being checked is allowed to reach. Empty for a `pure` function and for the
+    /// top level, which is why both refuse everything.
+    allowed_effects: Vec<Effect>,
+    /// Whose signature `allowed_effects` came from, for the message.
+    effects_owner: String,
     /// Interface names, collected before `expand_program` so a bare `Tax` in a signature can be
     /// rewritten to `dynamic Tax`. Separate from `interfaces`, which holds the signatures and is
     /// not populated until the declaration pass — by which time the rewrite is over.
@@ -539,6 +553,10 @@ impl TypeChecker {
             param_bounds: HashMap::new(),
             declared_type_names: HashSet::new(),
             interface_names: HashSet::new(),
+            fn_effects: HashMap::new(),
+            method_effects: HashMap::new(),
+            allowed_effects: Vec::new(),
+            effects_owner: String::new(),
             made_enums: RefCell::new(HashMap::new()),
             made_order: RefCell::new(Vec::new()),
             instance_of: RefCell::new(HashMap::new()),
@@ -808,6 +826,26 @@ impl TypeChecker {
 
     fn allocates_method(&self, receiver: &str, name: &str) -> bool {
         self.alloc_methods.contains(&(receiver.to_string(), name.to_string()))
+    }
+
+    /// Refuse a call that reaches further than this signature admits.
+    ///
+    /// Written once, because the messages ARE the agent's instruction set and two wordings for one
+    /// rule is how a language starts feeling arbitrary.
+    fn effect_refusal(&self, callee: &str, e: Effect) -> String {
+        if self.effects_owner.is_empty() {
+            return format!(
+                "`{}` touches {}, and top-level code declares nothing it touches. Call it from a \
+                 function that says `touches {}`, where a reader can see it.",
+                callee, e, e
+            );
+        }
+        format!(
+            "`{}` touches {}, but `{}` does not say it does. Add `touches {}` to `{}`'s \
+             signature — so anyone reading it can see what this call can reach — or stop calling \
+             `{}`.",
+            callee, e, self.effects_owner, e, self.effects_owner, callee
+        )
     }
 
     /// The sentence that tells a reader how to get a region, written once.
@@ -1577,6 +1615,22 @@ impl TypeChecker {
         for t in &prog.interfaces {
             self.interface_names.insert(t.name.clone());
         }
+        // The builtins that reach the world, registered as if they were externs that declared it.
+        // One transitive rule then covers builtins, externs, functions and methods alike, rather
+        // than a second rule for builtins that would have to be kept in step with the first.
+        //
+        // `print` is deliberately absent: it would be on almost every function, and an annotation
+        // that appears on everything tells a reviewer nothing — the lesson `allocates` taught.
+        // `argument`/`argument_count` read the command line, which is `input`.
+        for (builtin, effect) in [
+            ("read_file", Effect::Files),
+            ("write_file", Effect::Files),
+            ("write_bytes", Effect::Files),
+            ("argument", Effect::Input),
+            ("argument_count", Effect::Input),
+        ] {
+            self.fn_effects.insert(builtin.to_string(), vec![effect]);
+        }
         let mut owned = prog.clone();
         self.expand_program(&mut owned)?;
         let prog = &owned;
@@ -1785,6 +1839,13 @@ impl TypeChecker {
             let param_tys: Vec<Type> = e.parameters.iter().map(|p| seen(&p.ty)).collect();
             self.fns.insert(e.name.clone(), (param_tys, seen(&e.ret)));
             self.extern_names.insert(e.name.clone());
+            // The boundary is where effects have to be DECLARED: there is no body to reason
+            // about, so whatever a C function reaches, only its declaration can say. An extern
+            // declaring nothing is taken at its word, which is right for `strlen` and would be a
+            // lie for `system` — so lib/ declares its own.
+            if !e.touches.is_empty() {
+                self.fn_effects.insert(e.name.clone(), e.touches.clone());
+            }
             self.extern_parameters.insert(
                 e.name.clone(),
                 e.parameters.iter().map(|p| (p.ty.clone(), p.marshal)).collect(),
@@ -1866,6 +1927,18 @@ impl TypeChecker {
             if f.allocates {
                 self.alloc_fns.insert(f.name.clone());
             }
+            if !f.touches.is_empty() {
+                self.fn_effects.insert(f.name.clone(), f.touches.clone());
+            }
+            if f.is_pure && !f.touches.is_empty() {
+                return Err(format!(
+                    "`pure function {}` cannot also `touches {}`: `pure` means the answer depends \
+                     on the arguments and nothing else, which is the same thing as touching \
+                     nothing. Drop one of the two.",
+                    f.name,
+                    f.touches.iter().map(|e| e.to_string()).collect::<Vec<_>>().join(", ")
+                ));
+            }
             if f.is_pure {
                 self.pure_fns.insert(f.name.clone());
             }
@@ -1939,6 +2012,9 @@ impl TypeChecker {
             if m.private {
                 self.private_methods.insert(key.clone());
             }
+            if !m.touches.is_empty() {
+                self.method_effects.insert(key.clone(), m.touches.clone());
+            }
             self.methods.insert(key, (m.receiver_mut, param_tys, m.ret.clone()));
         }
 
@@ -1995,6 +2071,12 @@ impl TypeChecker {
         // function happened to be checked last.
         *self.probe_owner.borrow_mut() = (String::new(), String::new());
         self.current_receiver = None;
+        // Top-level code may reach anything. There is no signature here for a reviewer to read,
+        // because the file itself is what they are reading — so nothing is hidden by allowing it,
+        // and forbidding it would mean no program could do I/O at its entry point.
+        self.allowed_effects =
+            vec![Effect::Files, Effect::Commands, Effect::Clock, Effect::Input, Effect::Network, Effect::Model];
+        self.effects_owner = String::new();
         let mut stmts = Vec::new();
         // Top-level statements recover exactly as a function body's do.
         for s in &prog.stmts {
@@ -2664,6 +2746,11 @@ impl TypeChecker {
         // same state a written one does, or the inference would only remove the error and
         // not the reason for it.
         self.in_caller_region = self.allocates_fn(&f.name);
+        let outer_allowed = std::mem::replace(
+            &mut self.allowed_effects,
+            self.fn_effects.get(&f.name).cloned().unwrap_or_default(),
+        );
+        let outer_effects_owner = std::mem::replace(&mut self.effects_owner, f.name.clone());
         self.in_pure = if f.is_pure { Some(f.name.clone()) } else { None };
         self.current_signature =
             Some((f.name.clone(), f.parameters.iter().map(|p| p.ty.clone()).collect()));
@@ -2750,6 +2837,8 @@ impl TypeChecker {
             ));
         }
         let olds = std::mem::take(&mut *self.olds.borrow_mut());
+        self.allowed_effects = outer_allowed;
+        self.effects_owner = outer_effects_owner;
         Ok(TypedFn { name: f.name.clone(), parameters, ret: f.ret.clone(), body, requires, ensures, decreases, olds })
     }
 
@@ -2797,6 +2886,15 @@ impl TypeChecker {
         }
         self.current_ret = Some(m.ret.clone());
         self.in_caller_region = self.allocates_method(&m.receiver, &m.name);
+        let outer_allowed = std::mem::replace(
+            &mut self.allowed_effects,
+            self.method_effects
+                .get(&(m.receiver.clone(), m.name.clone()))
+                .cloned()
+                .unwrap_or_default(),
+        );
+        let outer_effects_owner =
+            std::mem::replace(&mut self.effects_owner, format!("{}.{}", m.receiver, m.name));
 
         // Contracts, in the receiver-and-parameter scope, under the `pure` rule —
         // exactly as on a free function. A MUTATING method is where they earn the
@@ -2845,6 +2943,8 @@ impl TypeChecker {
             ));
         }
         self.current_receiver = outer_receiver;
+        self.allowed_effects = outer_allowed;
+        self.effects_owner = outer_effects_owner;
         Ok(TypedMethod {
             receiver: m.receiver.clone(),
             receiver_mut: m.receiver_mut,
@@ -4159,6 +4259,29 @@ impl TypeChecker {
             }
 
             ExprKind::Call { name, arguments } => {
+                // What the callee reaches, the caller must admit to reaching. Placed at the TOP of
+                // this arm on purpose: builtins, externs and ordinary functions all arrive here,
+                // and one rule over one table means the three cannot disagree.
+                //
+                // My first attempt put this further down, past the builtin dispatch — so
+                // `read_file` was invisible to the rule that exists to catch exactly that, which
+                // is the failure mode this whole feature is about. Placement was the bug, not the
+                // rule.
+                //
+                // Silent inside a `pure` function, so the purity rule below speaks instead. Both
+                // are true there — a pure function declares no effects and may reach none — but
+                // `pure function f may not read a file` names the PROMISE being broken, and the
+                // effect message would only name the bookkeeping. One rule speaks per situation,
+                // and the more specific one wins.
+                if self.in_pure.is_none() {
+                    if let Some(reaches) = self.fn_effects.get(name).cloned() {
+                        for effect in &reaches {
+                            if !self.allowed_effects.contains(effect) {
+                                return Err(self.effect_refusal(name, *effect));
+                            }
+                        }
+                    }
+                }
                 // `len` is a builtin over both arrays and strings, but the two
                 // are different KINDS of length, and the difference is worth
                 // keeping visible:
@@ -4736,6 +4859,21 @@ impl TypeChecker {
                                 holder, name, name, holder
                             )
                         });
+                    }
+                }
+                // What the callee reaches, the caller reaches. Transitive by DECLARATION, the
+                // same way `pure` above is — so a signature that says nothing about the network
+                // is a signature you can trust about the network, however deep the call goes.
+                //
+                // That is the property `burxt review` needs: an agent cannot add an effect
+                // without changing a signature, and a signature change is what a reviewer looks
+                // at. Inferring this would have removed it from the signature, which is why
+                // effects are declared and `allocates` is not.
+                if let Some(reaches) = self.fn_effects.get(name).cloned() {
+                    for e in &reaches {
+                        if !self.allowed_effects.contains(e) {
+                            return Err(self.effect_refusal(name, *e));
+                        }
                     }
                 }
                 // An `allocates` callee builds in OUR region, so there has to be

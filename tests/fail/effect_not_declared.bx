@@ -1,0 +1,7 @@
+// A function that reaches the world without saying so. Since v0.0.159 the signature has to
+// admit it, so a reviewer scanning declarations sees what a call can reach without reading a
+// body — and an agent cannot add an effect without changing a signature.
+function load(path: String) -> String {
+    return read_file(path);
+}
+print(len(load("x")));

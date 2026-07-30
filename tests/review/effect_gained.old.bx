@@ -1,0 +1,4 @@
+function total(price: Decimal<2>, quantity: Int) -> Decimal<2> {
+    return price * quantity;
+}
+print(total($1.00, 2));

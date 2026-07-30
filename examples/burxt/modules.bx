@@ -147,7 +147,7 @@ function blank_imports(text: String) -> String {
 // and the seen-list live on a class and the walk is a method on it.
 class Loader { seen: [String], buffer: String }
 
-function (mutable self: Loader) load(path: String) -> Int {
+function (mutable self: Loader) load(path: String) -> Int touches files {
     for seen in self.seen {
         if seen == path {
             return 0;                            // read once already; cycles are fine

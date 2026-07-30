@@ -418,6 +418,10 @@ pub struct FnDef {
     /// Declared `pure`: the result depends only on the arguments. No I/O, no FFI,
     /// and no calls to functions that do not make the same promise.
     pub is_pure: bool,
+    /// Declared `touches ...`. Optional and inferred: the compiler works out what a body reaches
+    /// and refuses a declaration that claims LESS than that. Over-declaring is allowed, because
+    /// it is a promise the function keeps.
+    pub touches: Vec<Effect>,
     /// Preconditions, checked on entry in the order written.
     pub requires: Vec<Contract>,
     /// Postconditions, checked before every return. `result` is in scope.
@@ -440,6 +444,8 @@ pub struct FnDef {
 #[derive(Debug, Clone)]
 pub struct MethodDef {
     pub receiver: String,
+    /// Declared `touches ...`, inferred and verified exactly as on a free function.
+    pub touches: Vec<Effect>,
     /// Declared `private` inside its class body: callable only from that class's own methods.
     /// Always false for a method written outside a class, where there is no boundary to be
     /// private from.
@@ -515,8 +521,72 @@ pub struct ExternFn {
     pub name: String,
     pub parameters: Vec<Param>,
     pub ret: Type,
+    /// Declared `touches ...`. REQUIRED reasoning lives at this boundary: there is no body to
+    /// infer from, so whatever a C function reaches, only the declaration can say.
+    pub touches: Vec<Effect>,
     /// Where this item was written, for errors about the item itself.
     pub span: Span,
+}
+
+/// What a function reaches outside itself.
+///
+/// A closed vocabulary, and it has to be: two libraries spelling the same thing `network` and
+/// `net` would make the whole point — a reviewer scanning for what a change can reach — useless.
+///
+/// The list is what the language can actually DISTINGUISH plus what the FFI boundary needs to be
+/// able to say. `system`, `time` and `getchar` are all just `external function` today, so nothing
+/// below the boundary could derive `commands` from `clock`; the programmer declares it there, and
+/// everything above it is inferred. Exactly the shape `allocates` took — declared where there is
+/// no body, worked out where there is.
+///
+/// `print` is deliberately NOT here. It would be on almost every function, and an annotation that
+/// is on everything tells a reviewer nothing — the lesson `allocates` taught in v0.0.142.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Effect {
+    /// `read_file`, `write_file`, `write_bytes`, and anything at the boundary that says so.
+    Files,
+    /// Runs another program. The one that can do anything, so it is named on its own.
+    Commands,
+    /// The clock, a random source — anything that answers differently for the same arguments.
+    Clock,
+    /// Reads stdin, arguments, the environment.
+    Input,
+    /// Speaks to something over a network.
+    Network,
+    /// Asks a language model. Kept apart from `network` because the rule that matters is about
+    /// this one: an LLM may decide what to DO, never what a NUMBER is.
+    Model,
+}
+
+impl Effect {
+    pub fn parse(word: &str) -> Option<Effect> {
+        Some(match word {
+            "files" => Effect::Files,
+            "commands" => Effect::Commands,
+            "clock" => Effect::Clock,
+            "input" => Effect::Input,
+            "network" => Effect::Network,
+            "model" => Effect::Model,
+            _ => return None,
+        })
+    }
+
+    pub fn all() -> &'static str {
+        "files, commands, clock, input, network, model"
+    }
+}
+
+impl std::fmt::Display for Effect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Effect::Files => "files",
+            Effect::Commands => "commands",
+            Effect::Clock => "clock",
+            Effect::Input => "input",
+            Effect::Network => "network",
+            Effect::Model => "model",
+        })
+    }
 }
 
 /// One variant of an enum: a name plus zero or more positional payload types.

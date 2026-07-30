@@ -1700,6 +1700,25 @@ function (mutable self: Unit) parse_function(src: String, is_pure: Int, owner: I
         builds_in_caller = 1;                        // word mean the marker.
         let a: Int = self.advance();
     }
+    // `touches files, commands` — what this function reaches outside itself. SKIPPED here, not
+    // yet enforced: stage-0 checks it (v0.0.159), and stage-1 has to be able to read its own
+    // source, which now declares it. Parsing and ignoring is the honest intermediate — it cannot
+    // miscompile anything, because an effect declaration changes no code.
+    if self.at_word(src, "touches") {
+        let word: Int = self.advance();
+        let mutable more: Bool = true;
+        while more {
+            if !self.at(1) {
+                return self.complain(src, "an effect name after `touches`");
+            }
+            let effect: Int = self.advance();
+            more = false;
+            if self.at(22) {                             // ','
+                let comma: Int = self.advance();
+                more = true;
+            }
+        }
+    }
     let clauses: Int = self.parse_clauses(src, return_type, receiver_tok);
     if clauses < 0 { return -1; }
     let body: Int = self.parse_block(src);
@@ -1963,6 +1982,23 @@ function (mutable self: Unit) parse_extern(src: String) -> Int {
     if !self.eat(src, 10, "`->` and a return type") { return -1; }
     let return_type: Int = self.parse_type(src);
     if return_type < 0 { return -1; }
+    // `touches ...` on an extern, skipped for the same reason as on a function: stage-0 enforces
+    // it and stage-1 must be able to read a standard library that now declares it.
+    if self.at_word(src, "touches") {
+        let word: Int = self.advance();
+        let mutable more: Bool = true;
+        while more {
+            if !self.at(1) {
+                return self.complain(src, "an effect name after `touches`");
+            }
+            let effect: Int = self.advance();
+            more = false;
+            if self.at(22) {                             // ','
+                let comma: Int = self.advance();
+                more = true;
+            }
+        }
+    }
     if !self.eat(src, 21, "`;` — an external declaration has no body") { return -1; }
     return self.add(86, params, return_type, 0, 0, name_tok);
 }

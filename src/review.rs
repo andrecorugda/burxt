@@ -34,12 +34,14 @@
 //! refuses the old spelling by design. Found by pointing this at its own repository's history.
 //! Reviewing across a rename would need the old compiler, which is a different tool.
 //!
-//! ## What it does not do yet
+//! ## Effects
 //!
-//! Effects. `pure` is all-or-nothing today, so "this function now reaches the network" is not
-//! sayable — that is Phase 4 (`reads network`, `writes files`), after which GAINED covers it.
+//! Since v0.0.159 a signature says what it `touches` — files, commands, clock, input, network,
+//! model — so "this function now talks to the network" is a WEAKENED finding. That works only
+//! because effects are DECLARED rather than inferred: an agent cannot add one without changing a
+//! signature, and a signature change is what a reviewer reads.
 
-use crate::ast::{Contract, Expr, ExprKind, Param, Program, Type};
+use crate::ast::{Contract, Effect, Expr, ExprKind, Param, Program, Type};
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 use std::collections::BTreeMap;
@@ -62,6 +64,10 @@ struct Promise {
     ensures: Vec<String>,
     is_pure: bool,
     private: bool,
+    /// What this reaches outside itself. GAINING one is the second half of what a reviewer needs
+    /// — "this function now talks to the network" is a change in what the program can do, and
+    /// since v0.0.159 it cannot happen without the signature changing.
+    touches: Vec<Effect>,
 }
 
 /// One thing worth telling a reviewer, and how much it should worry them.
@@ -180,6 +186,28 @@ fn compare(name: &str, was: &Promise, now: &Promise, out: &mut Vec<Finding>) {
             });
         }
     }
+    // An effect GAINED is the change a reviewer most wants surfaced: this function can now reach
+    // something it could not. Because effects are declared rather than inferred (v0.0.159), an
+    // agent cannot add one without changing a signature — which is what makes this reportable at
+    // all.
+    for effect in &now.touches {
+        if !was.touches.contains(effect) {
+            out.push(Finding {
+                verdict: WEAKENED,
+                name: name.to_string(),
+                detail: format!("now touches {} — it could not before", effect),
+            });
+        }
+    }
+    for effect in &was.touches {
+        if !now.touches.contains(effect) {
+            out.push(Finding {
+                verdict: STRICTER,
+                name: name.to_string(),
+                detail: format!("no longer touches {}", effect),
+            });
+        }
+    }
     if was.is_pure && !now.is_pure {
         out.push(Finding {
             verdict: WEAKENED,
@@ -252,6 +280,7 @@ fn collect(prog: &Program) -> BTreeMap<String, Promise> {
                 ensures: normalised(&f.ensures, &f.parameters),
                 is_pure: f.is_pure,
                 private: false,
+                touches: f.touches.clone(),
             },
         );
     }
@@ -265,6 +294,7 @@ fn collect(prog: &Program) -> BTreeMap<String, Promise> {
                 ensures: normalised(&m.ensures, &m.parameters),
                 is_pure: false,
                 private: m.private,
+                touches: m.touches.clone(),
             },
         );
     }
@@ -279,6 +309,7 @@ fn collect(prog: &Program) -> BTreeMap<String, Promise> {
                     ensures: normalised(&m.ensures, &m.parameters),
                     is_pure: false,
                     private: m.private,
+                    touches: m.touches.clone(),
                 },
             );
         }
@@ -293,6 +324,7 @@ fn collect(prog: &Program) -> BTreeMap<String, Promise> {
                 ensures: Vec::new(),
                 is_pure: false,
                 private: false,
+                touches: Vec::new(),
             },
         );
         for f in &s.fields {
@@ -305,6 +337,7 @@ fn collect(prog: &Program) -> BTreeMap<String, Promise> {
                     ensures: Vec::new(),
                     is_pure: false,
                     private: s.private_fields.contains(&f.name),
+                    touches: Vec::new(),
                 },
             );
         }
@@ -319,6 +352,7 @@ fn collect(prog: &Program) -> BTreeMap<String, Promise> {
                 ensures: Vec::new(),
                 is_pure: false,
                 private: false,
+                touches: Vec::new(),
             },
         );
     }

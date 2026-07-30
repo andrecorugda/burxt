@@ -1,0 +1,7 @@
+// `pure` and `touches` are the same claim from opposite ends: pure means the answer depends on
+// the arguments and nothing else, which IS touching nothing. Saying both is a contradiction, not
+// a refinement.
+pure function f(n: Int) -> Int touches files {
+    return n * 2;
+}
+print(f(2));

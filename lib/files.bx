@@ -15,55 +15,55 @@
 // than in every program.
 // ============================================================================
 
-external function system(command: String) -> CInt;
-external function remove(path: String) -> CInt;
-external function rename(from: String, to: String) -> CInt;
-external function mkdir(path: String, mode: Int) -> CInt;
+external function system(command: String) -> CInt touches commands;
+external function remove(path: String) -> CInt touches files;
+external function rename(from: String, to: String) -> CInt touches files;
+external function mkdir(path: String, mode: Int) -> CInt touches files;
 
 // Everything a path holds, as one String. Empty when the file cannot be read —
 // which is indistinguishable from an empty file, and the honest fix is
 // `Option<String>`, which the language does not have yet. Said plainly rather
 // than papered over.
-function file_read(path: String) -> String {
+function file_read(path: String) -> String touches files {
     return read_file(path);
 }
 
 // Replaces the file. Answers the number of bytes written.
-function file_write(path: String, text: String) -> Int {
+function file_write(path: String, text: String) -> Int touches files {
     return write_file(path, text);
 }
 
 // Adds to the end, leaving what was there. Read-modify-write, because the
 // builtin replaces rather than appends — fine for a log line, wrong for a
 // gigabyte, and that is worth knowing before you use it.
-function file_append(path: String, text: String) -> Int {
+function file_append(path: String, text: String) -> Int touches files {
     let existing: String = read_file(path);
     return write_file(path, existing + text);
 }
 
-function file_exists(path: String) -> Bool {
+function file_exists(path: String) -> Bool touches commands {
     // `test -e` rather than a read: a file may exist and be unreadable, and it may
     // be a directory, and both are still "it exists".
     return system("test -e " + file_quote(path)) == 0;
 }
 
-function file_delete(path: String) -> Bool {
+function file_delete(path: String) -> Bool touches files {
     return remove(path) == 0;
 }
 
-function file_move(from: String, to: String) -> Bool {
+function file_move(from: String, to: String) -> Bool touches files {
     return rename(from, to) == 0;
 }
 
 // 0755: readable and executable by everyone, writable by its owner.
-function file_make_directory(path: String) -> Bool {
+function file_make_directory(path: String) -> Bool touches commands {
     return system("mkdir -p " + file_quote(path)) == 0;
 }
 
 // Every name in a directory. The shell does the reading because `opendir` returns
 // a pointer Burxt will not accept, and the answer comes back through a file —
 // visible here, so no program has to know it.
-function file_list_directory(directory: String) -> [String] {
+function file_list_directory(directory: String) -> [String] touches commands, files {
     let scratch: String = "/tmp/burxt-fs-list";
     let status: Int = system("ls -1 " + file_quote(directory) + " > " + scratch + " 2>/dev/null");
     let text: String = read_file(scratch);

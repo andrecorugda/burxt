@@ -566,8 +566,13 @@ impl Parser {
                 name
             ));
         }
+        // The one place `touches` is REQUIRED reasoning rather than optional: there is no body
+        // here, so whatever this C function reaches, only this line can say. An extern that
+        // declares nothing is taken at its word — it touches nothing — which is right for
+        // `strlen` and a lie for `system`, so the standard library declares its own.
+        let touches = self.parse_touches()?;
         self.expect(&Token::Semicolon)?;
-        Ok(ExternFn { name, parameters, ret, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok(ExternFn { name, parameters, ret, touches, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// Contract clauses sit between the signature and the body, where a reader
@@ -701,7 +706,11 @@ impl Parser {
         if allocates {
             self.bump();
         }
-        let (mut requires, mut ensures, decreases) = self.parse_contracts()?;
+        // After `allocates`, before the clauses: a signature reads left to right as what it
+        // answers, what it builds, what it reaches, and what it promises.
+        let touches = self.parse_touches()?;
+        let (mut requires, mut ensures, decimal_decreases) = self.parse_contracts()?;
+        let decreases = decimal_decreases;
         // Brackets FIRST, then the written clauses. A precondition on a parameter is about a value
         // the caller already passed, so it should be the first thing checked and the first thing
         // reported — and the escape-hatch `requires`, which is usually about the call as a whole,
@@ -715,7 +724,7 @@ impl Parser {
         let body = self.parse_block()?;
         // The parameters are only in scope for this signature and body.
         self.type_parameters.clear();
-        Ok(FnDef { name, type_parameters, parameters, ret, allocates, is_pure, requires, ensures, decreases, body, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok(FnDef { name, type_parameters, parameters, ret, allocates, touches, is_pure, requires, ensures, decreases, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `fn (self: Type) name(parameters) -> ret { body }`, or `fn (mut self: ...)`
@@ -807,7 +816,11 @@ impl Parser {
         if allocates {
             self.bump();
         }
-        let (mut requires, mut ensures, decreases) = self.parse_contracts()?;
+        // After `allocates`, before the clauses: a signature reads left to right as what it
+        // answers, what it builds, what it reaches, and what it promises.
+        let touches = self.parse_touches()?;
+        let (mut requires, mut ensures, decimal_decreases) = self.parse_contracts()?;
+        let decreases = decimal_decreases;
         // Same order as a free function: brackets first, then the written clauses.
         let mut all_requires = bracket_requires;
         all_requires.append(&mut requires);
@@ -825,7 +838,7 @@ impl Parser {
         }
         let body = self.parse_block()?;
         self.type_parameters.clear();
-        Ok(MethodDef { receiver, private: false, receiver_arguments, receiver_mut, name, parameters, ret, allocates, requires, ensures, body, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok(MethodDef { receiver, private: false, touches, receiver_arguments, receiver_mut, name, parameters, ret, allocates, requires, ensures, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `as <marshaller>` declares how a value crosses a foreign boundary.
@@ -976,6 +989,54 @@ impl Parser {
         // where a conservation law lives even though it is not about the returned value.
         let bracket_ensures = self.parse_value_contracts("result")?;
         Ok((name, type_parameters, parameters, ret, bracket_requires, bracket_ensures))
+    }
+
+    /// `touches files, commands` — what this function reaches outside itself.
+    ///
+    /// Contextual, like `allocates` and `requires`: recognised by position rather than reserved,
+    /// so a program may still name a variable `touches`. The effect names are ordinary
+    /// identifiers checked against a closed vocabulary, so a typo is an error naming the whole
+    /// list rather than a silently invented effect.
+    fn parse_touches(&mut self) -> Result<Vec<Effect>, String> {
+        let mut effects = Vec::new();
+        if !self.at_word("touches") {
+            return Ok(effects);
+        }
+        self.bump();
+        loop {
+            let word = match self.bump() {
+                Token::Ident(s) => s,
+                other => {
+                    return Err(format!(
+                        "expected an effect name after `touches`, found {}. The effects are: {}.",
+                        other.describe(),
+                        Effect::all()
+                    ))
+                }
+            };
+            match Effect::parse(&word) {
+                Some(e) => {
+                    if effects.contains(&e) {
+                        return Err(format!("`touches` lists `{}` twice", e));
+                    }
+                    effects.push(e);
+                }
+                None => {
+                    return Err(format!(
+                        "`{}` is not an effect this language knows. The effects are: {}.",
+                        word,
+                        Effect::all()
+                    ))
+                }
+            }
+            if self.at(&Token::Comma) {
+                self.bump();
+            } else {
+                break;
+            }
+        }
+        effects.sort();
+        Ok(effects)
     }
 
     fn parse_block(&mut self) -> Result<Vec<Stmt>, String> {
