@@ -242,3 +242,123 @@ today without the intervening code would be guesses. The value of this file is t
 and so no milestone gets built before its prerequisites. Build near-term in the
 verified-increment loop; return for a deep spec session when you hit M1, the fork that
 defines what Burxt becomes.
+
+---
+
+## The production-readiness gap, measured against languages people ship in
+
+> Added 2026-07-31, at Andre's request: *"see what other gaps we might have missed or not added
+> in the roadmap to make it production ready."*
+>
+> **Every row was verified by running the compiler, not by reading it.** That matters: writing the
+> first fixture for contract brackets found they had gone fourteen versions untested, and `it` had
+> never been implemented at all despite being specified. A gap document that is wrong about a gap is
+> worse than none, because it will be believed.
+>
+> **This is not a list of things to copy.** Several rows are DECISIONS and are marked so — no float
+> is the money thesis, no bitwise was refused on purpose, no inheritance was closed in v0.0.46. A
+> reader who "fixes" those has broken the language. The point is to know which absences are load
+> bearing and which are merely unbuilt.
+
+### How to read the verdict column
+
+- **Decision** — deliberate, and the reason is on record. Not a gap.
+- **Blocking** — a real program cannot be written. This is the list that loses users.
+- **Papercut** — a workaround exists and is ugly.
+
+### 1. Can you write the program at all?
+
+| Capability | Rust | PHP / Python | Java | Burxt today | Verdict |
+|---|---|---|---|---|---|
+| Floating point | yes | yes | yes | **none.** `Float` exists nowhere in the compiler; `CDouble` is FFI-only | Decision, but see §5 |
+| Bitwise `& \| ^ << >>` | yes | yes | yes | **none.** `&` is refused with a message pointing at `&&` | Decision — revisit, §5 |
+| Integer widths, unsigned | yes | partly | yes | **`Int` only**, signed 64-bit, traps | Blocking for binary work |
+| Concurrency | threads, async | threads-ish, async | threads, virtual threads | **none.** No thread, no async, no scheduler | Blocking |
+| Network / sockets | std + crates | built in | built in | **nothing wrapped.** A fd is an int so it is reachable, but no library | Blocking |
+| TLS / crypto | crates | built in | built in | **none**, and gated on bitwise | Blocking |
+| Calling an existing C library | yes | yes (ext) | JNI | **the pointer wall** — anything returning a pointer is out of reach | Blocking |
+| Dependency management | cargo | composer / pip | maven | **none.** Every program starts from `lib/` | Blocking |
+| Cross-compilation | `--target` | n/a | JVM | **none.** M3 unstarted; web/Android/iOS unreachable | Blocking |
+| Closures / function values | yes | yes | yes | **none.** `map`/`filter` deferred on the memory question | Papercut |
+| Tuples | yes | arrays | records | **none** | Papercut |
+| Char type | yes | yes | yes | **none.** A String is bytes | Decision |
+| Unicode, case conversion | yes | yes | yes | **none.** No `to_upper`, no codepoints | Blocking for text |
+| Regex | crate | built in | built in | **none** | Papercut |
+| Reflection | limited | yes | yes | **none** | Decision |
+
+### 2. Can you run it in production?
+
+| Capability | Others | Burxt today | Verdict |
+|---|---|---|---|
+| Set an exit code | trivial | **NOT DIRECTLY.** `external function exit` is refused — the runtime owns the symbol. A differently-named wrapper (`_exit`) works and answers 3 | **Blocking.** A CLI that cannot signal failure to a shell is not shippable |
+| Write to stderr | trivial | **no.** `print` is stdout only; nothing in `lib/` reaches stderr | Blocking |
+| Read an environment variable | trivial | **no.** `getenv` returns a pointer, so the wall blocks it | Blocking |
+| Structured logging | crates/libs | **none.** `print` is the whole story | Blocking |
+| Catch a failure / recover | `catch_unwind`, exceptions | **no.** A contract or bounds failure exits 70. There is no handler | Decision worth stating |
+| Stack trace on failure | yes | **no.** The message names the clause and the function, and nothing below it | Papercut, sharp |
+| Debugger / breakpoints | yes | **no DWARF.** An agent that cannot debug inserts `print`, which MOVES THE STACK and changes the answer — exactly the v0.0.141 trap | Blocking |
+| Profiler | yes | **none** | Papercut |
+| Test framework | built in | **none in the language.** This repo's suite is Rust + fixture directories, which a user cannot reuse | Blocking |
+| Formatter | rustfmt, black | **none.** No `burxt fmt` | Papercut, but see below |
+| Optimisation | flags | **O2 always** (`run_passes("default<O2>")`). No flag, no `-O0` for debugging | Fine, worth a flag later |
+| Date / time | libraries | **`os_now()` — unix seconds.** No formatting, no arithmetic, no timezone | Blocking for most apps |
+| Random numbers | yes | **none** | Blocking |
+| Versioned dependencies / semver | yes | n/a — `use` is a path | Follows the package manager |
+
+### 3. What Burxt has that these mostly do not
+
+Worth keeping in view, because the gap list above is long and one-sided by construction.
+
+| | |
+|---|---|
+| Exact decimals with the scale IN THE TYPE | Java has BigDecimal as a library; nobody has it as the default with mixed-scale arithmetic refused |
+| A rounding rule that travels through signatures | nothing else does this |
+| `burxt review` — a diff of what a program PROMISES, non-zero when weaker | no equivalent anywhere |
+| Effects declared in the signature and transitive | closest is Haskell's monads, and nothing in this class of language |
+| Contracts as the JSON Schema, so it cannot drift | `burxt mcp-schema`. Nothing else can, because nothing else puts the precondition in the signature |
+| A byte-identical self-hosting fixpoint, checked every push | rare at any size |
+| Two independent implementations that must agree | this is why five silent wrong answers this week became failing tests |
+
+### 4. The ranking — by what fixing it unblocks
+
+Counted rather than guessed, over §1 and §2:
+
+1. **The pointer wall** (unblocks: every C library, sockets, TLS, env vars, platform APIs, `mmap`,
+   the database idea). It is the only entry that appears in every one of Andre's three targets, and
+   the prediction recorded in the plan before the count was that it would rank first. It does.
+2. **Cross-compilation, M3** (unblocks: web, Android, iOS — all three reach visions at once). The
+   roadmap above already says the hard architectural work is done.
+3. **Bitwise + integer widths** (unblocks: binary formats, hashing, checksums, compression, a
+   database file format, crypto).
+4. **The small production trio — exit code, stderr, env** (unblocks: shipping *anything* as a CLI).
+   Cheap, unglamorous, and currently the reason a Burxt program cannot behave like a Unix citizen.
+5. **Concurrency** (unblocks: serving, using a second core).
+6. **A test framework in the language** (unblocks: anyone else trusting their own Burxt code — this
+   repo tests Burxt with Rust, which a user cannot do).
+7. **Time and randomness** (unblocks: most ordinary applications).
+8. **DWARF** (unblocks: debugging without `print`, which is the trap that costs correctness).
+
+### 5. Two decisions this audit says should be RE-OPENED
+
+Not overturned — re-opened, with the reason the original call may not survive contact.
+
+**Bitwise operators.** Refused on purpose, and the refusal message is helpful. But the consequence is
+that Burxt cannot parse a binary format, compute a checksum, or implement a hash — which means it
+cannot write its own database file format, and Andre's local-database vision is gated on exactly
+that. Reversing a stated decision needs the reason written down, and the reason is: the decision was
+made when the language had no ambition to store data.
+
+**Floating point.** The money thesis says no float, and that is right for money. But it also rules
+out geometry, statistics, and standard vector similarity — which gates the RAG vision. The third
+option is the interesting one and belongs in the record: **cosine similarity in `Decimal<6>` is exact
+and reproducible across CPUs**, because f32 accumulation is not associative and scaled-integer
+arithmetic is. No float-based vector store can claim that. So the answer may be *"vectors, exactly"*
+rather than *"add floats"* — which would be on-thesis rather than beside it.
+
+Per the plan, this decision waits for the count above rather than an argument. The count says floats
+block a **narrower** set than the pointer wall does.
+
+### 6. What this does NOT change
+
+The near-term order stays: **bugs first, then usability.** Nothing in this table is a reason to stop
+fixing a silent wrong answer, and five of them turned up this week while building something else.
