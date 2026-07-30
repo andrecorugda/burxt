@@ -1,1 +1,1 @@
-an enum inside an enum needs indirection to have a finite size, which arrives with the memory model
+which contains `L` by value

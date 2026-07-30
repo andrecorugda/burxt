@@ -1,0 +1,17 @@
+// MUTUAL containment by value, which is the case the cycle guard exists for: deciding that this
+// recurses forever must not itself recurse forever.
+//
+// `A` holds a `B`, `B` holds an `A`. Neither is bigger than the other and both would have to be, so
+// the walk reports the first one it can name rather than looping.
+enum A {
+    StopA,
+    ToB(B),
+}
+
+enum B {
+    StopB,
+    ToA(A),
+}
+
+let a: A = A.StopA;
+print(1);

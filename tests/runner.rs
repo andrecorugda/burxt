@@ -1192,6 +1192,13 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     //
     // The lesson about the instrument, now twice over: a floor cannot tell you that a fixture changed
     // hands. Only a note in the version that borrowed it can, so write the note.
+    //
+    // v0.0.179 raised it to 205, and the arithmetic is a fixture RETIRED and two added.
+    // `enum_cannot_carry_an_enum` described a program that is now CORRECT — the rule it tested was a
+    // proxy for finite width, and `enum Outer { Held(Inner) }` is finite. Its coverage moved into
+    // `tests/pass/enum_payload_finite_width.bx`, the same way M14 moved nine region fixtures into
+    // `no_region_needed.bx`. `enum_carries_itself_by_value` and `enums_carry_each_other_by_value`
+    // replaced it, and both are caught for the right reason in both compilers.
     let mut caught = 0;
     let mut total = 0;
     for entry in fs::read_dir(root.join("tests/fail")).unwrap() {
@@ -1207,8 +1214,8 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
 
     let _ = fs::remove_dir_all(&scratch);
     assert!(
-        caught >= 204,
-        "stage-1 rejected only {} of {} fail programs, down from 204",
+        caught >= 205,
+        "stage-1 rejected only {} of {} fail programs, down from 205",
         caught,
         total
     );

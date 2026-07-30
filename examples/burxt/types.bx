@@ -306,6 +306,10 @@ class Unit {
     // the four places a concrete value crosses into an interface object — the other three are a call
     // argument, a method argument and an associated function's argument.
     returns_node: Int,
+    // The cycle guard for `embeds_by_value`: the declaration index of each type already entered while
+    // deciding whether an enum contains itself by value. Truncated on the way out of each level, like
+    // `type_bindings`. A field rather than a parameter because Burxt has no writable parameters.
+    walked_types: [Int],
     instances: [Instance],
     // The type arguments of every instance, laid end to end. `Instance` carries a start and a
     // count into this, the same shape `nested_children` and `type_parameters` use.

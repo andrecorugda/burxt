@@ -1,0 +1,13 @@
+// An enum that contains ITSELF by value has no finite width — its size would have to be bigger than
+// its own size.
+//
+// This is the rule that survives after v0.0.179 replaced the proxy "a variant may not carry an enum".
+// Recursion through a slice is fine, because a slice is a pointer; recursion by VALUE is not, and the
+// message says which and what to do about it.
+enum Step {
+    Stop,
+    Again(Step),
+}
+
+let s: Step = Step.Stop;
+print(1);

@@ -894,26 +894,26 @@ function (mutable self: Unit) collect_declarations(src: String) -> Int {
                     let shaped: Int = self.check_type_shape(src, payload, variant.token);
                     let held: Node = self.nodes[payload];
                     if held.kind == 46 {
-                        let held_name: Token = self.tokens[held.token];
-                        if spans_equal(src, held_name.start, held_name.length,
-                                    name.start, name.length) {
+                        // The rule is FINITE WIDTH, not "no enum payload". A width is unbounded only
+                        // when a type contains ITSELF by value; recursion through a slice is a
+                        // pointer and terminates, which is most recursive data — a tree, a JSON
+                        // document, an AST.
+                        //
+                        // This used to be two flat refusals: one for `E` inside `E` and one for `E`
+                        // inside `F`. The second was a proxy and refused finite shapes, and stage-0
+                        // did not obey it either — the same shape reached through a generic
+                        // instantiation was allowed and worked. One walk now, covering both, and it
+                        // follows classes and arrays as well because either can carry the enum on.
+                        let carried: Type = self.declared_type(src, payload);
+                        if self.embeds_by_value(src, carried, name.start, name.length) {
                             let complained: Int = self.complain_at(src, variant.token,
-                                "an enum cannot carry itself: its size would have to be "
-                                + "bigger than itself");
-                        }
-                        let inner: Int = self.find_type(src, held_name.start, held_name.length);
-                        if inner >= 0 {
-                            // A RECORD payload is allowed since v0.0.118 — `cells_of` sums a
-                            // variant's payload cells, so the layout was never actually missing.
-                            // Another ENUM is still refused, and not for layout: an enum inside an
-                            // enum has no finite size without indirection. The self-reference check
-                            // above catches only `E` inside `E`; this catches `E` inside `F`.
-                            if self.types[inner].kind == 83 {
-                                let complained: Int = self.complain_at(src, variant.token,
-                                    "a variant cannot carry an enum: two enums nested need "
-                                    + "indirection to have a finite size, which is a memory "
-                                    + "question and not a layout one. Carry the parts instead");
-                            }
+                                "this variant carries `"
+                                + substring(src, name.start, name.length)
+                                + "` by value, so its size would have to be bigger than itself. "
+                                + "Carry it behind a slice — `["
+                                + substring(src, name.start, name.length)
+                                + "]` — which is a pointer, so the size is finite and the recursion "
+                                + "still works");
                         }
                     }
                     p += 1;
@@ -2701,6 +2701,85 @@ function (self: Unit) unsettled_generic(src: String, t: Type) -> Bool {
     return declaration.type_param_count > 0;
 }
 
+// Does `carried` embed the type named by `(target_start, target_length)` — its own bytes, directly or
+// through anything it contains?
+//
+// **By value is the whole of the question.** A width is unbounded only when a type contains ITSELF: a
+// variant carrying `[Json]` carries a pointer, a length and a capacity no matter how wide a `Json` is,
+// so recursion through a slice always terminates. An ARRAY does embed its element, so it recurses.
+//
+// This replaces the rule both compilers used to state — "a variant may not carry an enum" — which was
+// a proxy for this one and wrong whenever the recursion went through a pointer. Stage-0 did not obey
+// its own proxy either: the same shape reached through `Option<Json>` was allowed and worked.
+//
+// `self.walked_types` is the cycle guard, holding the DECLARATION INDEX of each type already entered —
+// which is what makes the walk terminate on the very shapes it exists to refuse. Without it,
+// `enum A { Go(B) }` / `enum B { Back(A) }` recurses forever while deciding that it recurses forever.
+//
+// A field rather than a parameter because Burxt has no writable parameters — the same constraint that
+// made `lib/map.bx` method-based — and truncated on the way out, exactly as `type_bindings` is.
+function (mutable self: Unit) embeds_by_value(src: String, carried: Type, target_start: Int,
+                                    target_length: Int) -> Bool {
+    // A pointer, whatever it points at. This is the case the old rule got wrong.
+    if carried.kind == 47 || carried.kind == 49 {
+        return false;
+    }
+    if carried.kind == 48 {                          // an array DOES embed its element
+        let element: Type = self.declared_type(src, carried.scale);
+        return self.embeds_by_value(src, element, target_start, target_length);
+    }
+    if carried.kind != 46 {
+        return false;
+    }
+    if spans_equal(src, carried.name_start, carried.name_length, target_start, target_length) {
+        return true;
+    }
+    let found: Int = self.find_type(src, carried.name_start, carried.name_length);
+    if found < 0 {
+        return false;
+    }
+    let mutable w: Int = 0;
+    while w < len(self.walked_types) {
+        if self.walked_types[w] == found {
+            return false;                            // already entered; not a fresh path
+        }
+        w += 1;
+    }
+    let depth: Int = len(self.walked_types);
+    let added: Int = push(self.walked_types, found);
+    let decl: TypeDeclaration = self.types[found];
+    let item: Node = self.nodes[decl.node];
+    let mutable answer: Bool = false;
+    if decl.kind == 82 {                             // a class: every field
+        let mutable f: Int = 0;
+        while f < item.b {
+            let field: Node = self.nodes[self.children[item.a + f]];
+            let held: Type = self.declared_type(src, field.a);
+            if self.embeds_by_value(src, held, target_start, target_length) {
+                answer = true;
+            }
+            f += 1;
+        }
+    }
+    if decl.kind == 83 {                             // an enum: every variant's every payload
+        let mutable v: Int = 0;
+        while v < item.b {
+            let variant: Node = self.nodes[self.children[item.a + v]];
+            let mutable p: Int = 0;
+            while p < variant.c {
+                let held: Type = self.declared_type(src, self.nested_children[variant.b + p]);
+                if self.embeds_by_value(src, held, target_start, target_length) {
+                    answer = true;
+                }
+                p += 1;
+            }
+            v += 1;
+        }
+    }
+    let dropped: Int = truncate(self.walked_types, depth);
+    return answer;
+}
+
 // A variant payload must be a scalar, and for a generic enum that is a rule about the
 // INSTANTIATION rather than the declaration: `Option<T>`'s payload is a parameter, which is
 // neither scalar nor aggregate until an argument says. So the rule is checked where the
@@ -2732,15 +2811,16 @@ function (mutable self: Unit) check_payloads(src: String, application: Int) -> I
             // variant's payload cells, so the layout question this rule deferred was already
             // answered here — stage-1 was refusing something its own emitter could do.
             //
-            // An ENUM payload is still refused, and for a different reason: an enum inside an enum
-            // has no finite size without indirection, which is a memory-model question rather than
-            // a layout one. `dynamic Trait` too, whose two cells hold a pointer into storage that a
-            // variant's payload area does not own.
+            // An enum payload is allowed when its width is FINITE, which is the rule this used to
+            // approximate by refusing every enum payload. What makes a width unbounded is a type
+            // containing ITSELF by value; recursion through a slice is a pointer and terminates.
+            // `dynamic Trait` is still refused — its two cells hold a pointer into storage a
+            // variant's payload area does not own, which is an ownership question rather than a
+            // width one.
             let mutable refused: Bool = carried.kind == 49;
             if carried.kind == 46 {
-                let named: Int = self.find_type(src, carried.name_start, carried.name_length);
-                if named >= 0 {
-                    refused = self.types[named].kind == 83;      // an enum
+                if self.embeds_by_value(src, carried, applied.name_start, applied.name_length) {
+                    refused = true;
                 }
             }
             if refused {

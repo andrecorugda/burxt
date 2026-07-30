@@ -1005,6 +1005,51 @@ impl TypeChecker {
         self.enums.contains_key(name) || self.made_enums.borrow().contains_key(name)
     }
 
+    /// Does `ty` embed `target`'s own bytes, directly or through anything it contains?
+    ///
+    /// **By value is the whole of the question.** A width is unbounded only when a type contains
+    /// ITSELF — a variant carrying `[Json]` carries a pointer, a length and a capacity no matter how
+    /// wide a `Json` is, so recursion through a slice always terminates. Same for `dynamic`, which is
+    /// a pointer pair. An ARRAY does embed its element, so it recurses.
+    ///
+    /// This replaces the rule both compilers used to state — "a variant may not carry an enum" —
+    /// which was a proxy for this one and wrong whenever the recursion went through a pointer. It was
+    /// also a proxy stage-0 did not itself obey: `enum X { V(SomeEnum) }` written out was refused,
+    /// while the identical shape reached through `Option<Json>` was allowed and worked, because the
+    /// instantiation path never ran this check. One rule now, and the permissive path was the correct
+    /// one.
+    ///
+    /// `seen` is the cycle guard, and it is what makes the walk terminate on the very shapes it
+    /// exists to refuse: `enum A { Go(B) }` / `enum B { Back(A) }` would otherwise recur forever
+    /// while deciding that it recurs forever.
+    fn embeds_by_value(&self, ty: &Type, target: &str, seen: &mut Vec<String>) -> bool {
+        match ty {
+            // A pointer, whatever it points at. This is the case the old rule got wrong.
+            Type::Slice(_) | Type::Dyn(_) => false,
+            Type::Array { elem, .. } => self.embeds_by_value(elem, target, seen),
+            Type::Named(name) => {
+                if name == target {
+                    return true;
+                }
+                if seen.iter().any(|s| s == name) {
+                    return false;                    // already walked; not a fresh path to `target`
+                }
+                seen.push(name.clone());
+                let mut found = false;
+                if let Some(fields) = self.structs.get(name) {
+                    found = fields.iter().any(|(_, t)| self.embeds_by_value(t, target, seen));
+                } else if let Some(variants) = self.variants_of(name) {
+                    found = variants
+                        .iter()
+                        .any(|(_, p)| p.iter().any(|t| self.embeds_by_value(t, target, seen)));
+                }
+                seen.pop();
+                found
+            }
+            _ => false,
+        }
+    }
+
     fn variants_of(&self, name: &str) -> Option<Vec<(String, Vec<Type>)>> {
         if let Some(v) = self.enums.get(name) {
             return Some(v.clone());
@@ -1758,16 +1803,26 @@ impl TypeChecker {
                 for (i, t) in v.payload.iter().enumerate() {
                     match t {
                         Type::Int | Type::Bool | Type::String | Type::Decimal { .. } => {}
-                        Type::Named(n) if self.is_enum(n) => {
+                        // An enum payload is fine when its width is FINITE, which is the rule this
+                        // used to approximate by refusing every enum payload. What actually makes a
+                        // width unbounded is a type containing ITSELF by value; recursion through a
+                        // slice is a pointer and always terminates. See `embeds_by_value`.
+                        Type::Named(n)
+                            if self.is_enum(n)
+                                && self.embeds_by_value(t, &e.name, &mut Vec::new()) =>
+                        {
                             return Err(format!(
-                                "`{}.{}` payload {} is the enum `{}` — an enum inside \
-                                 an enum needs indirection to have a finite size, \
-                                 which arrives with the memory model. Carry the \
-                                 parts as scalars for now.",
+                                "`{}.{}` payload {} is `{}`, which contains `{}` by value — so \
+                                 `{}` would have to be wider than itself. Carry it behind a slice \
+                                 (`[{}]`) instead: a slice is a pointer, so the size is finite and \
+                                 the recursion still works.",
                                 e.name,
                                 v.name,
                                 i + 1,
-                                n
+                                n,
+                                e.name,
+                                e.name,
+                                e.name
                             ))
                         }
                         // A RECORD or an ARRAY payload is allowed since v0.0.118. The question

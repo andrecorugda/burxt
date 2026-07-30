@@ -1,0 +1,93 @@
+// A variant may carry an enum when the width is FINITE — which is the rule, and it used to be stated
+// as a proxy that got it wrong.
+//
+// Both compilers said "a variant may not carry an enum". What actually makes a width unbounded is a
+// type containing ITSELF by value. Recursion through a SLICE is a pointer, a length and a capacity,
+// so it terminates no matter how wide the element is — and that is most recursive data.
+//
+// Stage-0 did not obey its own proxy either: `enum X { V(SomeEnum) }` written out was refused, while
+// the identical shape reached through `Option<Json>` was allowed and worked, because the generic
+// instantiation path never ran the check. Two rules for one question, and the permissive one was
+// right.
+enum Tree {
+    Leaf(Int),
+    Branch([Tree]),                                  // through a slice: finite, and now allowed
+}
+
+// An enum inside a CLASS inside an enum, which the walk has to follow to answer correctly.
+class Tagged { label: String, tree: Tree }
+enum Holder {
+    Empty,
+    One(Tagged),
+    Many([Tagged]),
+}
+
+function total(t: Tree) -> Int {
+    match t {
+        Leaf(n) => { return n; }
+        Branch(kids) => {
+            let mutable sum: Int = 0;
+            let mutable i: Int = 0;
+            while i < len(kids) {
+                sum += total(kids[i]);
+                i += 1;
+            }
+            return sum;
+        }
+    }
+}
+
+function held(h: Holder) -> Int {
+    match h {
+        Empty => { return 0; }
+        One(t) => { return total(t.tree); }
+        Many(ts) => {
+            let mutable sum: Int = 0;
+            let mutable i: Int = 0;
+            while i < len(ts) {
+                sum += total(ts[i].tree);
+                i += 1;
+            }
+            return sum;
+        }
+    }
+}
+
+// An enum inside an enum with NO recursion at all — `Outer` holds `Inner` holds a class. This was
+// `tests/fail/enum_cannot_carry_an_enum.bx` until v0.0.179, and its own comment had the reasoning
+// backwards: it said "the inner one's payload area would have to be big enough for the outer one",
+// when it is the outer that must hold the inner, and that is a finite number. `Outer` is one tag cell
+// plus `Inner`, which is one tag cell plus a two-cell Point: four cells, computable, never recursive.
+//
+// The fixture was retired rather than deleted — the coverage moved here, the same way M14 moved nine
+// region fixtures into `no_region_needed.bx` when the rule they tested stopped existing.
+class Point { x: Int, y: Int }
+enum Inner { Nothing, Dot(Point) }
+enum Outer { Empty, Held(Inner) }
+
+function inner_sum(o: Outer) -> Int {
+    match o {
+        Empty => { return 0; }
+        Held(i) => {
+            match i {
+                Nothing => { return 0; }
+                Dot(p) => { return p.x + p.y; }
+            }
+        }
+    }
+}
+
+let mutable kids: [Tree] = [];
+let a: Int = push(kids, Tree.Leaf(3));
+let b: Int = push(kids, Tree.Leaf(4));
+print(total(Tree.Branch(kids)));
+
+let mutable deeper: [Tree] = [];
+let c: Int = push(deeper, Tree.Branch(kids));
+let d: Int = push(deeper, Tree.Leaf(10));
+print(total(Tree.Branch(deeper)));
+
+print(held(Holder.One(Tagged { label: "x", tree: Tree.Branch(kids) })));
+print(held(Holder.Empty));
+print(inner_sum(Outer.Held(Inner.Dot(Point { x: 5, y: 6 }))));
+print(inner_sum(Outer.Empty));
