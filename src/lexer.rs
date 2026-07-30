@@ -154,7 +154,6 @@ impl Token {
             Token::Match => "`match`".to_string(),
             Token::FatArrow => "`=>`".to_string(),
             Token::Interface => "`interface`".to_string(),
-            Token::Interface => "`interface`".to_string(),
             Token::Impl => "`implement`".to_string(),
             Token::Implements => "`implements`".to_string(),
             Token::For => "`for`".to_string(),
