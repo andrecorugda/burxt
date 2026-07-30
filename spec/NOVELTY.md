@@ -288,6 +288,73 @@ Recorded in the far-horizon M1 entry.
 
 ---
 
+## 7. The tool contract IS the tool schema (MCP)
+
+**Novelty: nothing else can do this.** **Buildable: reachable from here — the parts exist.**
+
+Raised by Andre, 2026-07-30: *"Can we make burxt build mcp lib as easy as it is?"* The question
+is more on-thesis than it first looks. An MCP server is the thing an AI agent talks to, and
+`DESIGN.md`'s purpose is a language an agent cannot make a costly mistake in. Andre's own
+production MCP servers answer invoice, payment, commission and payroll queries — money tools,
+called by an agent, which is the exact intersection.
+
+### The claim
+
+An MCP tool ships a **JSON Schema** describing what may be passed to it. A Burxt function
+already carries `requires` clauses describing the same thing. **They are one fact written
+twice**, and everywhere else in the industry they drift — the schema says `client_id` is a
+positive integer, the handler forgets to check, and an agent passing `-1` finds out at the
+database.
+
+    function invoice_query(client_id: Int, from: String, to: String) -> Json
+        requires client_id > 0
+        requires len(from) == 10
+
+Derive the manifest from the signature — `burxt mcp-schema server.bx` — and the schema cannot
+drift from the implementation, because there is only one of it. The agent calling the tool is
+bounded by the same rule the compiler enforces inside the body, checked at both ends.
+
+No other language can do this, and the reason is not tooling: **no other language has the
+contract in the signature.** In Python or TypeScript the schema is a decorator or a separate
+object, and keeping the two in step is a code review — which is precisely the review this
+language exists to remove.
+
+### The second half, which is the money part
+
+An MCP tool that returns money is where a wrong answer costs. `Json.Money(Decimal<2>)` means an
+agent cannot be handed `1234.5600000001`. Every other MCP stack turns money into a float or a
+string somewhere on that path, and the agent believes whatever it is handed.
+
+### Measured, 2026-07-30 — the shape already works
+
+Not a sketch; this ran:
+
+    class Field { key: String, value: Json }
+    enum Json {
+        Null, Truth(Bool), Whole(Int), Money(Decimal<2>), Text(String),
+        Items([Json]), Fields([Field]),
+    }
+    -> {"sku":"RICE","price":52.75,"taxable":true}
+
+Mutual recursion `Json -> [Field] -> Json` typechecks, the recursive renderer is about thirty
+lines, and the Decimal serialises exactly. `os_read_byte` and `os_read_all` already exist for
+stdio.
+
+**Four gaps, all small:** a JSON parser (render is done); `os_read_line`, since MCP is
+newline-delimited; `match` on String for method dispatch, already approved as task R; and
+`Map<String, Json>` is impossible — `Map.find` answers `Option<Json>` and a variant payload may
+not carry an enum — so an object is `[Field]` with linear lookup, which is nothing at MCP scale.
+
+**One papercut worth fixing on its own merits:** `"{"` must be written `"\{"`, because `{` opens
+an interpolation. For JSON work that is every brace. A language for writing MCP servers should
+not fight you on braces.
+
+### Why this belongs in the novelty register rather than a milestone
+
+The pieces are ordinary — a JSON library, a line reader, a subcommand. The *claim* is not, and
+it is the first candidate here that follows from `DESIGN.md`'s stated purpose rather than from
+exact money. Money is how it is demonstrated; the agent boundary is what it is for.
+
 ## What is NOT claimed here
 
 Kept explicit so the register stays honest:
