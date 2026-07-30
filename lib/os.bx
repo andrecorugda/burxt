@@ -89,6 +89,9 @@ function os_byte_as_string(byte: Int) -> String {
     if byte == 9 {
         return "\t";
     }
+    if byte == 13 {
+        return "\r";
+    }
     if byte >= 32 && byte < 127 {
         return substring(printable, byte - 32, 1);
     }

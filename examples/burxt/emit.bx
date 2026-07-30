@@ -386,6 +386,7 @@ function (mutable self: Unit) intern(src: String, start: Int, length: Int) -> St
             let next: Int = byte_at(src, start + i + 1);
             let mutable resolved: Int = next;
             if next == 110 { resolved = 10; }        // \n
+            if next == 114 { resolved = 13; }        // \r
             if next == 116 { resolved = 9; }         // \t
             if next == 48 { resolved = 0; }          // \0
             body += hex_of(resolved);

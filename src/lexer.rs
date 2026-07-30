@@ -606,12 +606,19 @@ impl<'a> Lexer<'a> {
                     Some('"') => s.push('"'),
                     Some('n') => s.push('\n'),
                     Some('t') => s.push('\t'),
+                    // A carriage return had no spelling at all until v0.0.176, which was an
+                    // oversight rather than a decision: `\r` is standard in every language that has
+                    // string escapes, and its absence meant a Burxt program could not PRODUCE the
+                    // byte. `lib/os.bx`'s `os_byte_as_string` answered `"?"` for it, and
+                    // `lib/json.bx` could not decode a `\r` inside a JSON string without losing it.
+                    Some('r') => s.push('\r'),
+                    Some('0') => s.push('\0'),
                     Some('{') => s.push('{'),
                     Some('}') => s.push('}'),
                     Some(other) if other != '\n' => {
                         return Err(format!(
                             "unknown escape `\\{}` — Burxt strings support \\\\, \\\", \
-                             \\n, \\t, \\{{ and \\}}",
+                             \\n, \\r, \\t, \\0, \\{{ and \\}}",
                             other
                         ))
                     }

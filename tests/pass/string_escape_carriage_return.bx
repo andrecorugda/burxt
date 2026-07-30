@@ -1,0 +1,28 @@
+// `\r` and `\0` in a string literal.
+//
+// Neither had a spelling until v0.0.176, which was an oversight and not a decision: `\r` is standard
+// in every language that has string escapes, and without it a Burxt program could not PRODUCE the
+// byte at all. `lib/os.bx`'s `os_byte_as_string` answered `"?"` for it — the one place in that table
+// that returned a wrong answer rather than the character asked for.
+//
+// Found while writing lib/json.bx, which cannot decode a `\r` inside a JSON string without it, and
+// would have had to either drop the character (a silent wrong answer) or refuse the document (a
+// refusal for a byte the language simply could not write down).
+//
+// It also unblocks splitting on "\r\n", which `lib/string.bx` still cannot do for a different
+// reason — its separator is a single byte.
+let crlf: String = "a\r\nb";
+print(len(crlf));
+print(byte_at(crlf, 1));
+print(byte_at(crlf, 2));
+
+// `\0` is a byte like any other in a Burxt String, because a String carries its LENGTH in a header
+// rather than being terminated. That is exactly why `len` can answer 3 here.
+let embedded: String = "x\0y";
+print(len(embedded));
+print(byte_at(embedded, 1));
+
+// The escapes that already worked, so a regression in the table shows up as a diff rather than a
+// missing line.
+let rest: String = "q\"\\\t\{\}";
+print(len(rest));
