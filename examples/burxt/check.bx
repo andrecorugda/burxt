@@ -530,6 +530,19 @@ function (self: Unit) declared_type(src: String, node: Int) -> Type {
         // A generic application also carries its arguments: `a` is their start in
         // `nested_children` and `b` is how many.
         let t: Token = self.tokens[n.token];
+        // NOT rewritten here, deliberately. Stage-0 makes a bare interface name mean a dynamic
+        // one (v0.0.155, in `expand`), and the same three lines here would make stage-1 ACCEPT
+        // `item: Priced` and emit a binary that SEGFAULTS — a class pointer passed where a
+        // `{data, vtable}` pair is expected.
+        //
+        // A refusal is safe and a miscompile is not, so stage-1 keeps refusing the sugar until
+        // the coercion is fixed. The gap: `emit_value_for` is the one home for the coercion and
+        // is reached from a field initializer, a `let` and an assignment — but the CALL-ARGUMENT
+        // path does not go through it. Explicit `dynamic Priced` works today because the
+        // checker records a coerced type at the argument node, and whatever does that keys off
+        // something the sugar bypasses. Find that, then this becomes three lines.
+        //
+        // Tracked with the rest of the stage-1 catch-up. tests/stage0-only/ holds the fixture.
         return Type { kind: n.kind, scale: n.a, contract: n.b,
                     name_start: t.start, name_length: t.length };
     }

@@ -332,6 +332,10 @@ pub struct TypeChecker {
     /// registered — so an application of a type that exists but is not generic can say
     /// so, instead of calling it unknown.
     declared_type_names: HashSet<String>,
+    /// Interface names, collected before `expand_program` so a bare `Tax` in a signature can be
+    /// rewritten to `dynamic Tax`. Separate from `interfaces`, which holds the signatures and is
+    /// not populated until the declaration pass — by which time the rewrite is over.
+    interface_names: HashSet<String>,
     /// Instantiations of generic enums, made on demand: mangled name -> variants, and
     /// mangled name -> what it was an instantiation OF, so a value's type can be read
     /// back into `(Option, [Int])` when a variant has no payload to infer from.
@@ -534,6 +538,7 @@ impl TypeChecker {
             made_record_order: RefCell::new(Vec::new()),
             param_bounds: HashMap::new(),
             declared_type_names: HashSet::new(),
+            interface_names: HashSet::new(),
             made_enums: RefCell::new(HashMap::new()),
             made_order: RefCell::new(Vec::new()),
             instance_of: RefCell::new(HashMap::new()),
@@ -977,6 +982,20 @@ impl TypeChecker {
     /// generic is instantiated. See spec/M7-GENERICS.md Decision 4.
     fn expand(&self, ty: &Type) -> Result<Type, String> {
         match ty {
+            // A bare interface name MEANS a dynamic one. `rule: Tax` is what Java, C#,
+            // TypeScript and PHP all write, and it is what v0.0.155 made Burxt write: `dynamic`
+            // was Rust's `dyn`, and requiring it made every polymorphic parameter carry a word
+            // the reader had to decode and the writer had to remember.
+            //
+            // Nothing downstream changes, because this pass exists for exactly this: after it,
+            // no rule below knows the sugar happened — the same argument the generic
+            // instantiation cases below make. `dynamic Tax` stays legal and identical.
+            //
+            // The static path is still expressible and still explicit: `<T: Tax>` monomorphises
+            // and pays no vtable. What went is the ceremony on the DEFAULT.
+            Type::Named(name) if self.interface_names.contains(name) => {
+                Ok(Type::Dyn(name.clone()))
+            }
             // A generic RECORD application. Same shape as the enum case below: the concrete
             // instantiation becomes an ordinary nominal record, made once, and after that no
             // rule in this file knows generics exist.
@@ -1554,6 +1573,9 @@ impl TypeChecker {
         }
         for e in &prog.enums {
             self.declared_type_names.insert(e.name.clone());
+        }
+        for t in &prog.interfaces {
+            self.interface_names.insert(t.name.clone());
         }
         let mut owned = prog.clone();
         self.expand_program(&mut owned)?;
