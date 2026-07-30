@@ -2119,7 +2119,7 @@ fn the_standard_library_compiles_and_works() {
         &program,
         format!(
             "use \"{0}/string.bx\";\nuse \"{0}/files.bx\";\nuse \"{0}/os.bx\";\n\
-             region r {{\n  print(string_find(\"hello, modules\", \"modules\"));\n               print(string_trim(\"   padded   \"));\n  print(string_to_int(\"-42\"));\n               print(string_join(string_split(\"a,b,c\", 44), \" | \"));\n               let wrote: Int = file_write(\"{1}/demo.txt\", \"first\\n\");\n               let more: Int = file_append(\"{1}/demo.txt\", \"second\\n\");\n               print(len(file_read(\"{1}/demo.txt\")));\n               print(file_exists(\"{1}/demo.txt\"));\n               print(len(file_list_directory(\"{0}\")) >= 3);\n               print(os_run(\"true\"));\n  print(string_trim(os_capture(\"echo captured\")));\n}}\n",
+             region r {{\n  print(string_find(\"hello, modules\", \"modules\"));\n               print(string_trim(\"   padded   \"));\n  print(string_to_int(\"-42\", 0));\n               print(string_to_int(\"nope\", 99));\n               print(string_join(string_split(\"a,b,c\", 44), \" | \"));\n               let wrote: Int = file_write(\"{1}/demo.txt\", \"first\\n\");\n               let more: Int = file_append(\"{1}/demo.txt\", \"second\\n\");\n               print(len(file_read(\"{1}/demo.txt\")));\n               print(file_exists(\"{1}/demo.txt\"));\n               print(len(file_list_directory(\"{0}\")) >= 3);\n               print(os_run(\"true\"));\n  print(string_trim(os_capture(\"echo captured\")));\n}}\n",
             lib.display(),
             scratch.display()
         ),
@@ -2140,7 +2140,7 @@ fn the_standard_library_compiles_and_works() {
     assert!(ran.status.success(), "the library program failed:\n{}", complained);
     assert_eq!(
         printed,
-        "7\npadded\n-42\na | b | c\n13\ntrue\ntrue\n0\ncaptured\n",
+        "7\npadded\n-42\n99\na | b | c\n13\ntrue\ntrue\n0\ncaptured\n",
         "the library answered differently than expected"
     );
 

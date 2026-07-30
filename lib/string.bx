@@ -9,6 +9,8 @@
 // point of a standard library rather than a privileged one.
 // ============================================================================
 
+use "option.bx";
+
 // Where `needle` first appears in `text`, or -1. The naive scan, deliberately:
 // a compiler's lexer does not search, and a program that needs Boyer-Moore knows
 // it does. Simple until measured.
@@ -108,30 +110,63 @@ function string_lines(text: String) -> [String] {
     return string_split(text, 10);
 }
 
-// An Int parsed from decimal digits, with a leading `-` allowed. Answers 0 for
-// anything it cannot read — which is a real limitation, and the honest fix is
-// `Option<Int>`, which the language does not have yet. Named in the guide rather
-// than hidden here.
-function string_to_int(text: String) -> Int {
+// ---- Reading a number out of text ------------------------------------------
+//
+// Two functions, and the difference is whether a fallback is the right answer. That is the
+// same pair `lib/map.bx` offers for a missing key — `get(key, fallback)` and `find(key)` — and
+// it is deliberately NOT a `Result`: parsing a number is the most ordinary thing a program
+// does with input, and making the ordinary case cost a `match` or a `?` would be the language
+// charging you for its own strictness.
+//
+// It used to be one function returning a bare `Int`, and it answered **0** for anything it
+// could not read. `"0"` and `"not a number"` were indistinguishable — a silent wrong answer, in
+// the standard library of a language whose whole thesis is refusing them. Fixed in v0.0.152.
+
+// The number, or the fallback you chose. Use this when a default is genuinely right — a
+// missing count is zero, a missing page number is one.
+//
+//     let port: Int = string_to_int(configured, 8080);
+function string_to_int(text: String, fallback: Int) -> Int {
+    match string_parse_int(text) {
+        None => { return fallback; }
+        Some(n) => { return n; }
+    }
+}
+
+// The number, or nothing — for when there is no sensible default and the program has to say
+// what it does about bad input.
+//
+//     match string_parse_int(field) {
+//         None    => { print("not a number: " + field); }
+//         Some(n) => { print(n * 2); }
+//     }
+function string_parse_int(text: String) -> Option<Int> {
+    if len(text) == 0 {
+        return Option.None;
+    }
     let mutable i: Int = 0;
     let mutable negative: Bool = false;
-    if len(text) > 0 && byte_at(text, 0) == 45 {
+    if byte_at(text, 0) == 45 {
         negative = true;
         i = 1;
+    }
+    // `-` alone is not a number, which the old version read as 0.
+    if i >= len(text) {
+        return Option.None;
     }
     let mutable value: Int = 0;
     while i < len(text) {
         let b: Int = byte_at(text, i);
         if b < 48 || b > 57 {
-            return 0;
+            return Option.None;
         }
         value = value * 10 + (b - 48);
         i += 1;
     }
     if negative {
-        return 0 - value;
+        return Option.Some(0 - value);
     }
-    return value;
+    return Option.Some(value);
 }
 
 // The separator between each piece. The join a program would write, written once.

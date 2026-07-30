@@ -61,10 +61,11 @@ function result_is_ok<T, E>(r: Result<T, E>) -> Bool {
 //         return Result.Ok(n * 2);
 //     }
 //
-// (An earlier version of this comment used a `parse_int` that does not exist. The real one is
-// `string_to_int` in lib/string.bx, and it answers an Int rather than a Result — so it was the
-// wrong function to illustrate `?` with, twice over. A comment is documentation and rots the
-// same way.)
+// (An earlier version of this comment used a `parse_int` that does not exist. The real pair is
+// `string_to_int(text, fallback)` and `string_parse_int(text) -> Option<Int>` in lib/string.bx,
+// and NEITHER answers a Result — parsing a number is too ordinary to charge a `?` for. So it
+// was the wrong function to illustrate `?` with, three times over now. A comment is
+// documentation and rots the same way.)
 //
 // `?` yields the success value, or returns the failure from the enclosing function
 // immediately. It recognises a failure by the VARIANT name — `Error` here, `None` in

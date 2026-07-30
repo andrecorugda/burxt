@@ -1,0 +1,30 @@
+// Reading a number out of text, without a silent wrong answer.
+//
+// `string_to_int` used to return a bare Int and answer **0** for anything it could not read, so
+// `"0"` and `"not a number"` were indistinguishable — a silent wrong answer in the standard
+// library of a language whose whole thesis is refusing them.
+//
+// The fix is deliberately NOT a `Result`. It is the pair `lib/map.bx` already offers for a
+// missing key — a fallback when a default is right, an `Option` when it is not — because
+// parsing a number is the most ordinary thing a program does with input, and making the
+// ordinary case cost a `match` would be the language charging you for its own strictness.
+use "../../lib/string.bx";
+
+print(string_to_int("41", 0));
+print(string_to_int("-7", 0));
+
+// Everything the old version quietly called zero.
+print(string_to_int("not a number", -1));
+print(string_to_int("", -1));
+print(string_to_int("-", -1));
+print(string_to_int("12x", -1));
+
+// And when there is no sensible default, the program has to say what it does.
+match string_parse_int("41") {
+    None => { print("refused"); }
+    Some(n) => { print(n * 2); }
+}
+match string_parse_int("garbage") {
+    None => { print("refused, and said so"); }
+    Some(n) => { print(n); }
+}
