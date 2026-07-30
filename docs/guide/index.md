@@ -20,7 +20,7 @@ the language refuses is usually the interesting part.
 <li><a href="08-modules.html"><span class="n">8</span> <span>Modules</span> <span class="what"><code>use</code>, one file per module, what is visible</span></a></li>
 <li><a href="09-generics.html"><span class="n">9</span> <span>Generics</span> <span class="what">Type parameters, bounds, why nothing is erased</span></a></li>
 <li><a href="10-absence-and-failure.html"><span class="n">10</span> <span>Absence and failure</span> <span class="what"><code>Option</code>, <code>Result</code>, <code>?</code>, and no null</span></a></li>
-<li><a href="11-maps.html"><span class="n">11</span> <span>Maps</span> <span class="what">Insertion order, <code>Equatable</code> keys, <code>get</code> and <code>find</code></span></a></li>
+<li><a href="11-maps.html"><span class="n">11</span> <span>Maps and strings</span> <span class="what">Insertion order, <code>Equatable</code> keys, bytes</span></a></li>
 <li><a href="reference.html"><span class="n">—</span> <span>Reference</span> <span class="what">Every keyword, builtin, operator and error</span></a></li>
 </ul>
 

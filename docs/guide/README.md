@@ -15,7 +15,7 @@ what the language refuses is usually the interesting part.
 | 8 | [Modules](08-modules.md) | `use`, one file per module, what is visible |
 | 9 | [Generics](09-generics.md) | Type parameters, bounds, why nothing is erased |
 | 10 | [Absence and failure](10-absence-and-failure.md) | `Option`, `Result`, `?`, and no null |
-| 11 | [Maps](11-maps.md) | Insertion order, `Equatable` keys, `get` and `find` |
+| 11 | [Maps and strings](11-maps.md) | Insertion order, `Equatable` keys, bytes |
 | — | [Reference](reference.md) | Every keyword, builtin, operator and error |
 
 Running code beats prose: [`../../examples/`](../../examples) has one program per idea, and
