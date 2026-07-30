@@ -71,12 +71,25 @@ Two corollaries worth stating because they have already been got wrong:
   reason — *"if Burxt is just a strict copy of Rust I will just use Rust, which is
   mature"* — and v0.0.153 onward undoes it.
 
-### What this is NOT
+### What this is NOT — and what it very much IS
 
-Not a claim to put on the website. "AI-native" is a phrase that ages badly and
-invites eye-rolls. The strictness, the contracts, the JSON diagnostics and the
-messages that say what to do are the argument; the demo makes it. Let the reader
-reach the conclusion.
+**The premise belongs on the website.** An agent writes the code, a reviewer
+scans it rather than reading it, and a mistake costs money. Say that plainly, in
+the first thing a visitor reads. It is the reason anyone should care about
+anything else here.
+
+What does not belong is the **slogan**. "AI-native" is a phrase that ages badly
+and invites eye-rolls; the *situation* it gestures at is concrete, is somebody's
+Tuesday, and does not age at all. Describe the circumstance, not the trend.
+
+An earlier version of this section said the premise itself was off the site. That
+was wrong, and it was expensive: the landing page spent four versions arguing the
+**mechanism** — "the signature carries the promise" — to a reader who had never
+been told the **stake**. Avoiding a buzzword had quietly become avoiding the
+thesis, and those are not the same instruction.
+
+> *"Devs are all using AI. They won't touch the code, they will just scan it for
+> review."* — that sentence is publishable as it stands. `AI-native` is not.
 
 ## Identity (the anchor)
 
