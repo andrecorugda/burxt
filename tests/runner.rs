@@ -3274,15 +3274,14 @@ fn the_site_is_honest_and_complete() {
         );
     }
 
-    // The generated examples page is current. Skipped rather than failed when the release binary is
-    // absent, because the generator needs a compiler and a debug build is not what the site quotes.
-    if !root.join("target/release/burxt").exists() {
-        eprintln!("skipping the examples-page check: no release binary (cargo build --release)");
-        return;
-    }
+    // The generated examples page is current. The generator is handed the binary CARGO built for
+    // this test rather than looking for a release one itself, which is what it used to do — and in
+    // CI, which builds debug, that meant this check SKIPPED for thirteen versions. A check that has
+    // never run looks exactly like one that passes, so it no longer has a way to opt out.
     let checked = Command::new("python3")
         .arg("scripts/site-examples.py")
         .arg("--check")
+        .env("BURXT", env!("CARGO_BIN_EXE_burxt"))
         .current_dir(root)
         .output()
         .expect("the site example generator");
@@ -3699,6 +3698,7 @@ fn the_refusals_page_is_not_stale() {
     let out = Command::new("python3")
         .arg(&script)
         .arg("--check")
+        .env("BURXT", env!("CARGO_BIN_EXE_burxt"))
         .current_dir(root)
         .output()
         .expect("python3 scripts/refused.py --check");

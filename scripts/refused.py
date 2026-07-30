@@ -19,7 +19,14 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BURXT = os.path.join(ROOT, "target", "release", "burxt")
+# The compiler to run. `BURXT` in the environment wins, so a caller that already has a binary — the
+# test suite, which is handed one by cargo whatever profile it built — can say which. Falling back to
+# the release build is right for a human typing this by hand.
+#
+# It used to be the release path and nothing else, and CI paid for thirteen versions: CI builds debug,
+# so the release binary was never there. One test hard-failed on it and another SKIPPED silently,
+# which is the worse half — a check that has never run in CI looks exactly like one that passes.
+BURXT = os.environ.get("BURXT") or os.path.join(ROOT, "target", "release", "burxt")
 DIR = os.path.join(ROOT, "examples", "refused")
 OUT = os.path.join(DIR, "README.md")
 # The same panels as a website page. Generated from the same run, so the site cannot say something
