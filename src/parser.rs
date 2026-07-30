@@ -585,9 +585,13 @@ impl Parser {
     /// decides what the clause is about, which is why there is no `self` here to be confused with a
     /// method's receiver. See spec/M13-CONTRACT-SYNTAX.md Decision 1.
     ///
-    /// A clause that needs the subject anywhere else writes `it`, and that is left to the ordinary
-    /// expression parser — `it` is an identifier like any other here, resolved later against a
-    /// binding this function installs nowhere. The checker is what knows it means the subject.
+    /// A clause that needs the subject anywhere else is supposed to write `it` (spec Decision 2),
+    /// left to the ordinary expression parser — `it` is an identifier like any other here, meant to
+    /// be resolved later against a binding this function installs nowhere.
+    ///
+    /// **That resolution was never built.** `[it * 2 > 0]` answers `unknown variable: it`, because
+    /// the checker this comment defers to does not install the binding. Naming the parameter works.
+    /// Found in v0.0.166; the spec's status line now says so.
     ///
     /// Each comma is a SEPARATE clause rather than one `&&`, so a failure can name the one that
     /// broke. Decision 3.
@@ -636,7 +640,12 @@ impl Parser {
             //
             // It also makes the desugaring observable: the same program written with brackets and
             // with `requires` produces byte-identical failure messages, which is what
-            // tests/pass/contract_brackets.bx checks rather than asserts.
+            // `bracket_contracts_desugar_to_the_same_message` in tests/runner.rs checks rather than
+            // asserts — it compiles both spellings and compares the stderr.
+            //
+            // This comment used to cite `tests/pass/contract_brackets.bx`, which never existed. The
+            // bracket form went fourteen versions with no fixture anywhere, cited by a comment that
+            // read as though it had one.
             let written = self.text_of(span);
             let text = if leading.is_some() {
                 format!("{} {}", subject, written)

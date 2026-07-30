@@ -1,6 +1,23 @@
 # Burxt — contracts on the values they constrain (M13)
 
-> Status: **stage-0 DONE (v0.0.135). Stage-1 pending, with one identified obstacle.**
+> Status: **stage-0 DONE except Decision 2 (v0.0.135). Stage-1 pending, one obstacle left.**
+>
+> **Two corrections, both found in v0.0.166 by finally writing a fixture.**
+>
+> 1. **Decision 2 — `it` — is NOT implemented.** `[it * 2 > 0]` answers `unknown variable: it`. The
+>    parser's comment says `it` is "resolved later against a binding this function installs nowhere.
+>    The checker is what knows it means the subject" — and the checker does not. Naming the parameter
+>    works; `it` is specified and absent. Acceptance item 3's fail fixtures for it do not exist either.
+>
+> 2. **The bracket form had NO test coverage at all**, for fourteen versions. `src/parser.rs` cited a
+>    `tests/pass/contract_brackets.bx` that had never been written. The claim below that the
+>    desugaring is "observable rather than asserted" was true of neither: nothing observed it and
+>    nothing asserted it. It is now `bracket_contracts_desugar_to_the_same_message` in
+>    tests/runner.rs, which compiles both spellings and compares the failure text, plus
+>    `tests/stage0-only/contract_brackets.bx` for the accepting side.
+>
+> Worth stating plainly, because it is the second time in two days: a status line saying DONE is not
+> evidence. The suite is.
 >
 > Purely additive: `requires` and `ensures` keep working and keep their meaning, and the whole suite
 > passes unchanged — 35 invariants, fixpoint intact, not one existing contract touched.
@@ -80,16 +97,37 @@
 > Before reaching for a synth buffer, ask whether the name in question is already written down in
 > pieces somewhere.
 >
-> **The clause text (obstacle 2) is not helped by that**, and option 2 above looks better than it
-> did. `balance: Decimal<2> [> $0.00]` is contiguous as a *whole declaration*, so quoting the written
-> form needs no synthesis in either compiler — and it is arguably the more honest message anyway,
-> since it shows what the programmer typed rather than a rewrite of it.
+> **The clause text (obstacle 2) is not helped by that.** Option 2 — quote the written form in both
+> compilers — was offered and **DECLINED by Andre in v0.0.165**:
 >
-> **The return bracket (obstacle 1) is the one that genuinely needs new machinery**, and it is now
-> the only one. `result` is never written in a bracket-form program, so no span anywhere spells it.
-> The narrowest fix is not a general synth buffer: it is a BINDING KIND — one flag on the binding
-> meaning "this is the result slot" — so nothing has to name it at all. That is smaller than the
-> synthetic token this note proposed, and it is where the next attempt should start.
+> > *"`balance > $0.00` this one cause it is understandable that this comes from a contract"*
+>
+> Which settles it, and the reason is the one this whole language is organised around: the message a
+> reviewer reads has to say **which value broke**. `[> $0.00]` on its own does not, and asking a
+> reader to look back at the declaration to find out is the kind of small tax that gets paid on every
+> failure forever. The synthesized form stands, and stage-1 has to produce it.
+>
+> ### What that costs, decomposed (v0.0.165)
+>
+> Stage-0 builds `format!("{} {}", subject, written)` where `written` is the bracket's own span. So
+> the text is **two pieces**, which is the shape v0.0.165 already showed stage-1 can hold — a thing
+> that is not one span may still be two.
+>
+> | Piece | Parameter bracket | Return bracket |
+> |---|---|---|
+> | the subject, in the message | the parameter's name span | the constant `"result"` — a compiler string, in no program |
+> | the clause, in the message | its own span | its own span |
+> | the subject, in the CONDITION | a `Var` node at the name token | **nothing to point at** |
+>
+> Three of those four are free. The last one is the whole remaining wall, and it is narrower than a
+> synth buffer: the elided `[>= $0.00]` on a return type needs an operand meaning *the value being
+> returned*, and nothing has to NAME that. A dedicated node kind — the checker answers the enclosing
+> function's return type, the emitter loads the result slot — is smaller than the synthetic token this
+> note originally proposed, and does not require stage-1 to invent a span.
+>
+> Note also that `emit_ensures` currently finds the result slot with `find_text(src, "result")`,
+> literally searching the program for the word. That works only because the longhand form writes it.
+> The slot needs an identity that is not a span before the bracket form can emit.
 
 ## 0. What is wrong with the current form
 

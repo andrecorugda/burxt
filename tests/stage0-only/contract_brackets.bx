@@ -1,0 +1,74 @@
+// M13: a contract written on the value it constrains.
+//
+//     function withdraw(balance: Decimal<2> [> $0.00], ...)
+//
+// rather than a `requires` three lines below, repeating the parameter's name to say which value it
+// is about. The bracket sits on the thing it is a claim about, which is where a reader looks.
+//
+// It is pure sugar: each bracket becomes a `requires` (or, on the return type, an `ensures`) with the
+// subject synthesized in, so `[> $0.00]` on `balance` is exactly `requires balance > $0.00` — same
+// check, same runtime message, same order of evaluation. `bracket_contracts_desugar_to_the_same_message`
+// in tests/runner.rs compiles both spellings and compares the failure text, which is the claim being
+// checked rather than asserted.
+//
+// ---- Why the message names the subject ------------------------------------------------
+//
+// A failure reports `balance > $0.00`, not the written fragment `> $0.00`. Andre's call in v0.0.165,
+// and the reason is the one the language is organised around: a message that does not say WHICH
+// value broke sends the reader back to the declaration to work it out, and that tax is paid on every
+// failure forever.
+//
+// ---- Why this is in tests/stage0-only/ ------------------------------------------------
+//
+// Stage-1 does not parse brackets yet. Three of the four pieces it needs are free — a parameter's
+// subject is a real span, and a message built from two spans is the same trick that gave stage-1
+// constructors in v0.0.165. The fourth is not: an elided `[>= $0.00]` on a RETURN type needs an
+// operand meaning "the value being returned", and no program that uses the bracket form ever writes
+// the word `result`, so there is no span to point at. See spec/M13-CONTRACT-SYNTAX.md.
+
+// A parameter bracket, and a second clause in the same brackets — each comma is a separate clause,
+// so a failure can name the one that broke.
+function withdraw(balance: Decimal<2> [> $0.00, < $1000000.00], amount: Decimal<2>)
+    -> Decimal<2> [>= $0.00]
+{
+    return balance - amount;
+}
+
+// A clause naming ANOTHER parameter, which is the case a synthesized subject could most easily get
+// wrong: the subject is `amount`, the comparison is against `balance`.
+function take(balance: Decimal<2>, amount: Decimal<2> [<= balance]) -> Decimal<2> {
+    return balance - amount;
+}
+
+// A clause that needs the subject somewhere other than the left of a comparison writes it out. The
+// spec's Decision 2 says `it` should work here — `[it * 2 > 0]` — and it does NOT: stage-0 answers
+// "unknown variable: it", because the checker never installs the binding the parser's comment says
+// it will. Found in v0.0.166 writing this fixture. Naming the parameter is what works today.
+function scaled(quantity: Int [quantity * 2 > 0]) -> Int {
+    return quantity * 2;
+}
+
+// Brackets and written clauses together on one function, in the order they are checked: brackets
+// first, then what was written below.
+function fee(amount: Decimal<2> [> $0.00]) -> Decimal<2>
+    requires amount < $100.00
+    ensures result >= $0.00
+{
+    return amount;
+}
+
+// A method takes them too, and on the receiver's own fields through `self`.
+class Account {
+    balance: Decimal<2>,
+
+    function (self) spend(amount: Decimal<2> [<= self.balance]) -> Decimal<2> {
+        return self.balance - amount;
+    }
+}
+
+print(withdraw($10.00, $3.00));
+print(take($9.00, $4.00));
+print(scaled(21));
+print(fee($5.00));
+let a: Account = Account { balance: $50.00 };
+print(a.spend($20.00));

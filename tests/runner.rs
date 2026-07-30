@@ -4024,3 +4024,112 @@ fn the_guide_reads_in_order() {
 
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
+
+/// A bracket contract and the `requires` it desugars to produce **byte-identical** failure messages.
+///
+/// spec/M13-CONTRACT-SYNTAX.md opens by claiming exactly this, and says the desugaring is
+/// "observable rather than asserted". It was neither: the bracket form shipped in v0.0.135 with no
+/// fixture anywhere in the suite, and `src/parser.rs` carried a comment citing a
+/// `tests/pass/contract_brackets.bx` that had never existed. Fourteen versions of a syntax nobody
+/// tested — found in v0.0.166 while deciding how stage-1 should render the message.
+///
+/// Not a fixture pair, because that is the wrong instrument here: a `.stderr` file pins ONE text and
+/// what matters is that TWO programs agree. Comparing the two runs directly says the thing the spec
+/// says, so a divergence fails rather than needing somebody to notice two files drifting.
+///
+/// It also pins the answer to the question the spec spent two versions on. `[> $0.00]` on `balance`
+/// reports `balance > $0.00` — the SUBJECT, synthesized in — and not the written fragment, because a
+/// message that does not name the value that broke sends the reader back to the declaration to find
+/// out. Andre's call, and the reason is the one the language is organised around.
+#[test]
+fn bracket_contracts_desugar_to_the_same_message() {
+    let scratch = scratch_dir("bracket-desugar");
+    fs::create_dir_all(&scratch).unwrap();
+
+    // Each pair: the same constraint written as a bracket and as a clause, and the message both
+    // must produce. The parameter form, the elided-subject return form, and a clause naming a
+    // SECOND parameter — which is the case a synthesized subject could most easily get wrong.
+    let cases: [(&str, &str, &str); 3] = [
+        (
+            "function withdraw(balance: Decimal<2> [> $0.00], amount: Decimal<2>) -> Decimal<2> {\n\
+             return balance - amount;\n\
+             }\n\
+             print(withdraw($0.00, $3.00));\n",
+            "function withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>\n\
+             requires balance > $0.00\n\
+             {\n\
+             return balance - amount;\n\
+             }\n\
+             print(withdraw($0.00, $3.00));\n",
+            "`requires balance > $0.00` failed in `withdraw`",
+        ),
+        (
+            "function fee(amount: Decimal<2>) -> Decimal<2> [>= $0.00] {\n\
+             return amount;\n\
+             }\n\
+             print(fee(-$1.00));\n",
+            "function fee(amount: Decimal<2>) -> Decimal<2>\n\
+             ensures result >= $0.00\n\
+             {\n\
+             return amount;\n\
+             }\n\
+             print(fee(-$1.00));\n",
+            "`ensures result >= $0.00` failed in `fee`",
+        ),
+        (
+            "function take(balance: Decimal<2>, amount: Decimal<2> [<= balance]) -> Decimal<2> {\n\
+             return balance - amount;\n\
+             }\n\
+             print(take($1.00, $9.00));\n",
+            "function take(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>\n\
+             requires amount <= balance\n\
+             {\n\
+             return balance - amount;\n\
+             }\n\
+             print(take($1.00, $9.00));\n",
+            "`requires amount <= balance` failed in `take`",
+        ),
+    ];
+
+    for (i, (bracketed, written, expected)) in cases.iter().enumerate() {
+        let mut messages = Vec::new();
+        for (spelling, source) in [("bracket", bracketed), ("clause", written)] {
+            let path = scratch.join(format!("{}-{}.bx", spelling, i));
+            fs::write(&path, source).unwrap();
+            let out = burxt("run", &path, &scratch);
+            assert!(
+                !out.status.success(),
+                "the {} spelling of case {} was supposed to FAIL its contract:\n{}{}",
+                spelling,
+                i,
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            // Without dropping the `compiled <path> -> <out>` line the two runs differ by their
+            // own filenames, which is the comparison saying something true and useless.
+            let stderr: String = String::from_utf8_lossy(&out.stderr)
+                .lines()
+                .filter(|l| !l.starts_with("compiled "))
+                .map(|l| format!("{}\n", l))
+                .collect();
+            assert!(
+                stderr.contains(expected),
+                "the {} spelling of case {} reported the wrong clause\n  expected to contain: \
+                 {:?}\n  actual: {:?}",
+                spelling,
+                i,
+                expected,
+                stderr
+            );
+            messages.push(stderr);
+        }
+        assert_eq!(
+            messages[0], messages[1],
+            "case {}: the bracket form and the `requires` form reported DIFFERENT messages, so the \
+             desugaring is observable and wrong",
+            i
+        );
+    }
+
+    let _ = fs::remove_dir_all(&scratch);
+}
