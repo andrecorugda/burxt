@@ -1,0 +1,10 @@
+[a|b|c] n=3
+[a|b|c] n=3
+[a|b|c] n=3
+[a|b|] n=3
+[|a] n=2
+[abc] n=1
+[] n=1
+[abc] n=1
+[a|b|c] n=3
+[one|two|three] n=3

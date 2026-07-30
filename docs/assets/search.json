@@ -291,7 +291,14 @@
   "name": "string_split",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-split",
-  "where": "function string_split(text: String, separator: Int) -> [String]"
+  "where": "function string_split(text: String, separator: String) -> [String]"
+ },
+ {
+  "kind": "function",
+  "name": "string_matches_at",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-matches-at",
+  "where": "function string_matches_at(text: String, needle: String, at: Int) -> Bool"
  },
  {
   "kind": "function",

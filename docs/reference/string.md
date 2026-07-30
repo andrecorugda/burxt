@@ -27,8 +27,9 @@ A Burxt String is bytes, and the language gives you `len`, `byte_at`, `substring
 | [`string_ends_with`](#string-ends-with) | function | — |
 | [`string_trim`](#string-trim) | function | Whitespace removed from both ends: space, tab, newline, carriage return. |
 | [`string_is_space`](#string-is-space) | function | — |
-| [`string_split`](#string-split) | function | Split on a single byte. Answers a growable array, so it needs a region — the pieces are new Strings and they have to liv |
-| [`string_lines`](#string-lines) | function | — |
+| [`string_split`](#string-split) | function | Split on a separator STRING. Answers a growable array, so the pieces are new Strings and they have to live somewhere. |
+| [`string_matches_at`](#string-matches-at) | function | Does `needle` sit at `at` in `text`? Compared in place, because `substring` would allocate once per position and a split |
+| [`string_lines`](#string-lines) | function | Lines, on either ending. A CRLF file and an LF file split identically, which is the whole reason a multi-character separ |
 | [`string_to_int`](#string-to-int) | function | The number, or the fallback you chose. Use this when a default is genuinely right — a missing count is zero, a missing p |
 | [`string_parse_int`](#string-parse-int) | function | The number, or nothing — for when there is no sensible default and the program has to say what it does about bad input. |
 | [`string_join`](#string-join) | function | The separator between each piece. The join a program would write, written once. |
@@ -99,12 +100,29 @@ function string_is_space(byte: Int) -> Bool
 {: #string-split}
 
 ```burxt
-function string_split(text: String, separator: Int) -> [String]
+function string_split(text: String, separator: String) -> [String]
 ```
 
-Split on a single byte. Answers a growable array, so it needs a region — the pieces are new Strings and they have to live somewhere.
+Split on a separator STRING. Answers a growable array, so the pieces are new Strings and they have to live somewhere.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L95)
+It took an `Int` until v0.0.188 — `string_split(text, 44)` for a comma — which meant a caller had to know ASCII codes, and `", "` and `"\r\n"` could not be split on at all. That is not an inconvenience, it is ordinary text handling out of reach: CSV with spaces after the commas, and any file written on Windows.
+
+One spelling per concept, so the byte form is gone rather than kept beside this. A separator is a string; that a one-character string is also a byte is not a second idea.
+
+An EMPTY separator answers the whole text as one piece rather than splitting into characters. Burxt has no character type — a String is bytes — so "split into characters" is not a thing this could mean, and looping forever on a zero-width match is the alternative.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L107)
+
+### `string_matches_at`
+{: #string-matches-at}
+
+```burxt
+function string_matches_at(text: String, needle: String, at: Int) -> Bool
+```
+
+Does `needle` sit at `at` in `text`? Compared in place, because `substring` would allocate once per position and a split has no business needing a region.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L133)
 
 ### `string_lines`
 {: #string-lines}
@@ -113,7 +131,9 @@ Split on a single byte. Answers a growable array, so it needs a region — the p
 function string_lines(text: String) -> [String]
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L109)
+Lines, on either ending. A CRLF file and an LF file split identically, which is the whole reason a multi-character separator had to exist: `"\r\n"` could not be written as a byte.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L150)
 
 ### `string_to_int`
 {: #string-to-int}
@@ -128,7 +148,7 @@ The number, or the fallback you chose. Use this when a default is genuinely righ
  let port: Int = string_to_int(configured, 8080);
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L129)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L183)
 
 ### `string_parse_int`
 {: #string-parse-int}
@@ -146,7 +166,7 @@ The number, or nothing — for when there is no sensible default and the program
  }
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L143)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L197)
 
 ### `string_join`
 {: #string-join}
@@ -157,7 +177,7 @@ function string_join(pieces: [String], separator: String) -> String
 
 The separator between each piece. The join a program would write, written once.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L173)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L227)
 
 ### `string_repeat`
 {: #string-repeat}
@@ -166,5 +186,5 @@ The separator between each piece. The join a program would write, written once.
 function string_repeat(text: String, times: Int) -> String
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L186)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L240)
 

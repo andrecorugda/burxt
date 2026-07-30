@@ -258,7 +258,7 @@ one, which means it allocates, which means [Memory](04-memory.md) applies.
 | `string_find(text, needle)` | the byte offset, or `-1` |
 | `string_contains` / `string_starts_with` / `string_ends_with` | `Bool` |
 | `string_trim(text)` | leading and trailing whitespace removed |
-| `string_split(text, separator)` | the separator is **one byte** — `44` for a comma |
+| `string_split(text, separator)` | the separator is a **String**, so `", "` and `"\r\n"` both work |
 | `string_lines(text)` | split on newlines |
 | `string_join(pieces, separator)` | the separator here *is* a String |
 | `string_to_int(text, fallback)` | the number, or the fallback you named |
@@ -271,8 +271,8 @@ Those last two are a pair on purpose. `string_to_int` used to be the only one an
 garbage — which is the silent-wrong-answer shape this whole language is against, and it took a real
 bug to notice. Now the fallback is either named by the caller or handed back as an `Option`.
 
-Two honest gaps: **the split separator is a single byte**, so `", "` and `"\r\n"` cannot be split on
-yet, and there is no case conversion. Both are on the list.
+One honest gap: there is no case conversion yet. The split separator was a single byte until
+v0.0.189 — so `", "` and `"\r\n"` could not be split on at all — and it is a String now.
 
 ## Why it is built this way
 {: #why-it-is-built-this-way}

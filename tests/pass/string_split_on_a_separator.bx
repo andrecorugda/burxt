@@ -1,0 +1,39 @@
+// `string_split` takes a separator STRING, not a byte.
+//
+// It took an `Int` until v0.0.189 — `string_split(text, 44)` for a comma — so a caller had to know
+// ASCII codes, and `", "` and `"\r\n"` could not be split on at all. That is not an inconvenience; it
+// is ordinary text handling out of reach: CSV with a space after each comma, and any file written on
+// Windows.
+//
+// One spelling per concept, so the byte form is GONE rather than kept beside this. That a
+// one-character string is also a byte is not a second idea.
+use "../../lib/string.bx";
+
+function show(xs: [String]) -> String {
+    return "[" + string_join(xs, "|") + "] n=" + to_string(len(xs));
+}
+
+print(show(string_split("a,b,c", ",")));
+print(show(string_split("a, b, c", ", ")));            // the case a byte could not express
+print(show(string_split("a\r\nb\r\nc", "\r\n")));      // nor this one
+
+// A TRAILING separator means an empty final field. Every CSV reader has to agree on this, and the
+// alternative — dropping it — loses a column.
+print(show(string_split("a,b,", ",")));
+print(show(string_split(",a", ",")));
+
+// Nothing to split on: one piece, the whole text. Not zero pieces, and not an error.
+print(show(string_split("abc", "xyz")));
+print(show(string_split("", ",")));
+
+// An EMPTY separator answers the whole text rather than splitting into characters. Burxt has no
+// character type — a String is bytes — so "split into characters" is not a thing this could mean, and
+// looping forever on a zero-width match is the alternative.
+print(show(string_split("abc", "")));
+
+// A multi-byte separator that repeats.
+print(show(string_split("aXXbXXc", "XX")));
+
+// `string_lines` handles either ending, which is the whole reason a multi-character separator had to
+// exist: `"\r\n"` cannot be written as a byte.
+print(show(string_lines("one\ntwo\r\nthree")));

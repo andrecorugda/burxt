@@ -90,24 +90,78 @@ function string_is_space(byte: Int) -> Bool {
     return byte == 32 || byte == 9 || byte == 10 || byte == 13;
 }
 
-// Split on a single byte. Answers a growable array, so it needs a region — the
-// pieces are new Strings and they have to live somewhere.
-function string_split(text: String, separator: Int) -> [String] {
+// Split on a separator STRING. Answers a growable array, so the pieces are new Strings and they have
+// to live somewhere.
+//
+// It took an `Int` until v0.0.188 — `string_split(text, 44)` for a comma — which meant a caller had to
+// know ASCII codes, and `", "` and `"\r\n"` could not be split on at all. That is not an
+// inconvenience, it is ordinary text handling out of reach: CSV with spaces after the commas, and any
+// file written on Windows.
+//
+// One spelling per concept, so the byte form is gone rather than kept beside this. A separator is a
+// string; that a one-character string is also a byte is not a second idea.
+//
+// An EMPTY separator answers the whole text as one piece rather than splitting into characters. Burxt
+// has no character type — a String is bytes — so "split into characters" is not a thing this could
+// mean, and looping forever on a zero-width match is the alternative.
+function string_split(text: String, separator: String) -> [String] {
     let mutable pieces: [String] = [];
+    let width: Int = len(separator);
+    if width == 0 {
+        let whole: Int = push(pieces, text);
+        return pieces;
+    }
     let mutable from: Int = 0;
     let mutable i: Int = 0;
-    while i <= len(text) {
-        if i == len(text) || byte_at(text, i) == separator {
+    while i <= len(text) - width {
+        if string_matches_at(text, separator, i) {
             let added: Int = push(pieces, substring(text, from, i - from));
-            from = i + 1;
+            i += width;
+            from = i;
+        } else {
+            i += 1;
         }
-        i += 1;
     }
+    // The tail, always — so "a,b," answers three pieces, the last of them empty. A trailing separator
+    // means an empty final field, which is what every CSV reader has to agree on.
+    let last: Int = push(pieces, substring(text, from, len(text) - from));
     return pieces;
 }
 
+// Does `needle` sit at `at` in `text`? Compared in place, because `substring` would allocate once per
+// position and a split has no business needing a region.
+function string_matches_at(text: String, needle: String, at: Int) -> Bool {
+    let width: Int = len(needle);
+    if at < 0 || at + width > len(text) {
+        return false;
+    }
+    let mutable k: Int = 0;
+    while k < width {
+        if byte_at(text, at + k) != byte_at(needle, k) {
+            return false;
+        }
+        k += 1;
+    }
+    return true;
+}
+
+// Lines, on either ending. A CRLF file and an LF file split identically, which is the whole reason a
+// multi-character separator had to exist: `"\r\n"` could not be written as a byte.
 function string_lines(text: String) -> [String] {
-    return string_split(text, 10);
+    let mutable out: [String] = [];
+    let pieces: [String] = string_split(text, "\n");
+    let mutable i: Int = 0;
+    while i < len(pieces) {
+        let piece: String = pieces[i];
+        // A bare `\r` before the newline belongs to the line ending, not to the line.
+        if len(piece) > 0 && byte_at(piece, len(piece) - 1) == 13 {
+            let added: Int = push(out, substring(piece, 0, len(piece) - 1));
+        } else {
+            let added: Int = push(out, piece);
+        }
+        i += 1;
+    }
+    return out;
 }
 
 // ---- Reading a number out of text ------------------------------------------
