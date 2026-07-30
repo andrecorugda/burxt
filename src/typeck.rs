@@ -2098,6 +2098,62 @@ impl TypeChecker {
             ));
         }
 
+        // `class X implements Y` — the class's OWN methods satisfy it, so conformance is
+        // checked against the method table rather than against a list this block carries.
+        // A class may also have methods the interface never mentions, which is normal and is
+        // why the "not a method of the interface" complaint below does not apply here.
+        if im.declared_on_class {
+            for signature in sigs {
+                let key = (im.type_name.clone(), signature.name.clone());
+                let (receiver_mut, param_tys, ret) = self.methods.get(&key).cloned().ok_or_else(|| {
+                    format!(
+                        "`class {} implements {}` is missing the method `{}`. Every interface \
+                         method must be implemented — Burxt has no default bodies.",
+                        im.type_name, im.interface_name, signature.name
+                    )
+                })?;
+                if receiver_mut != signature.receiver_mut {
+                    return Err(format!(
+                        "in `class {} implements {}`, method `{}` declares `{}self` but the \
+                         interface declares `{}self`.",
+                        im.type_name,
+                        im.interface_name,
+                        signature.name,
+                        if receiver_mut { "mutable " } else { "" },
+                        if signature.receiver_mut { "mutable " } else { "" }
+                    ));
+                }
+                if param_tys.len() != signature.parameters.len() {
+                    return Err(format!(
+                        "in `class {} implements {}`, method `{}` takes {} parameter(s) but the \
+                         interface declares {}.",
+                        im.type_name,
+                        im.interface_name,
+                        signature.name,
+                        param_tys.len(),
+                        signature.parameters.len()
+                    ));
+                }
+                for (i, (have, want)) in param_tys.iter().zip(&signature.parameters).enumerate() {
+                    if have != &want.ty {
+                        return Err(format!(
+                            "in `class {} implements {}`, method `{}` parameter {} is {} but the \
+                             interface declares {}.",
+                            im.type_name, im.interface_name, signature.name, i + 1, have, want.ty
+                        ));
+                    }
+                }
+                if ret != signature.ret {
+                    return Err(format!(
+                        "in `class {} implements {}`, method `{}` returns {} but the interface \
+                         declares {}.",
+                        im.type_name, im.interface_name, signature.name, ret, signature.ret
+                    ));
+                }
+            }
+            return Ok(());
+        }
+
         // Every method in the block must belong to the interface...
         for m in &im.methods {
             if !sigs.iter().any(|s| s.name == m.name) {

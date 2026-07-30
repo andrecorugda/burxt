@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 REPO="andrecorugda/burxt"
 
 # /usr/local, not ~/.local. The editor extension resolves the compiler as: the `burxt.path`
-# setting, then ./target/debug/burxt in the workspace, then `burxt` from PATH. A VS Code extension
+# setting, then the newer of ./target/{release,debug}/burxt in the workspace, then `burxt` from PATH. A VS Code extension
 # host does not reliably inherit a PATH set in .bashrc, so ~/.local/bin left the language server
 # unable to start — the compiler worked in the terminal and the editor had no diagnostics, which is
 # exactly what the first real Codespace showed.

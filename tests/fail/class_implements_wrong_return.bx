@@ -1,0 +1,8 @@
+// A shape mismatch, named at the class rather than at a block that no longer exists.
+interface Priced { function price(self) -> Decimal<2> }
+class Book implements Priced {
+    cost: Decimal<2>,
+    function (self) price() -> Int { return 1; }
+}
+let b: Book = Book { cost: 1.00 };
+print(b.price());

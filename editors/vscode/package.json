@@ -122,7 +122,7 @@
         "burxt.path": {
           "type": "string",
           "default": "",
-          "description": "Path to the burxt compiler, which also hosts the language server (`burxt lsp`). Empty means: use ./target/debug/burxt in the workspace if it exists, otherwise `burxt` from PATH."
+          "description": "Path to the burxt compiler, which also hosts the language server (`burxt lsp`). Empty means: use whichever of ./target/release/burxt and ./target/debug/burxt in the workspace is NEWER, otherwise `burxt` from PATH."
         }
       }
     }

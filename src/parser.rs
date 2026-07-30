@@ -130,9 +130,10 @@ impl Parser {
         let mut stmts = Vec::new();
         while !self.at(&Token::Eof) {
             if self.at(&Token::Class) {
-                let (declared, its_methods, its_associated) = self.parse_struct()?;
+                let (declared, its_methods, its_associated, its_impls) = self.parse_struct()?;
                 structs.push(declared);
                 fns.extend(its_associated);
+                impls.extend(its_impls);
                 // A method declared inside a class is indistinguishable, from here on, from
                 // one written outside it. That is the point: nothing downstream changes.
                 methods.extend(its_methods);
@@ -212,7 +213,7 @@ impl Parser {
 
     // ---- structs ----
 
-    fn parse_struct(&mut self) -> Result<(StructDef, Vec<MethodDef>, Vec<FnDef>), String> {
+    fn parse_struct(&mut self) -> Result<(StructDef, Vec<MethodDef>, Vec<FnDef>, Vec<ImplBlock>), String> {
         let start = self.span().start;
         self.expect(&Token::Class)?;
         let name = match self.bump() {
@@ -221,6 +222,31 @@ impl Parser {
         };
         let type_parameters = self.parse_type_params(&name)?;
         self.type_parameters = type_parameters.iter().map(|p| p.name.clone()).collect();
+        // `class FlatTax implements Tax` — the shape Java, C#, TypeScript and PHP all use, and
+        // the reason `interface` had to land first. The class's own methods satisfy it, so this
+        // synthesizes an impl block carrying none of its own; the standalone
+        // `implement Tax for FlatTax { ... }` stays legal, because it is the only way to add an
+        // interface to a class declared somewhere else.
+        let mut implements = Vec::new();
+        if self.at(&Token::Implements) {
+            self.bump();
+            loop {
+                match self.bump() {
+                    Token::Ident(s) => implements.push(s),
+                    other => {
+                        return Err(format!(
+                            "expected an interface name after `implements`, found {}",
+                            other.describe()
+                        ))
+                    }
+                }
+                if self.at(&Token::Comma) {
+                    self.bump();
+                } else {
+                    break;
+                }
+            }
+        }
         self.expect(&Token::LBrace)?;
         let mut fields = Vec::new();
         let mut methods = Vec::new();
@@ -285,10 +311,21 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
         self.type_parameters.clear();
+        let name_for_impls = name.clone();
         Ok((
             StructDef { name, type_parameters, fields, private_fields, span: Span { start, end: self.prev_end().max(start + 1) } },
             methods,
             associated,
+            implements
+                .into_iter()
+                .map(|interface_name| ImplBlock {
+                    interface_name,
+                    type_name: name_for_impls.clone(),
+                    methods: Vec::new(),
+                    declared_on_class: true,
+                    span: Span { start, end: self.prev_end().max(start + 1) },
+                })
+                .collect(),
         ))
     }
 
@@ -498,7 +535,7 @@ impl Parser {
             methods.push(self.parse_method(Some(&type_name))?);
         }
         self.expect(&Token::RBrace)?;
-        Ok(ImplBlock { interface_name, type_name, methods, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok(ImplBlock { interface_name, type_name, methods, declared_on_class: false, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     // ---- functions ----

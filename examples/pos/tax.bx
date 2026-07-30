@@ -20,27 +20,34 @@ interface Tax {
 }
 
 // ---- One rule: the same rate on everything taxable -------------------------
-class FlatTax { rate: Decimal<4> }
+//
+// `class FlatTax implements Tax` — the fields, the methods and the promise in one block. Until
+// v0.0.154 this was `class FlatTax { ... }` followed by a separate `implement Tax for FlatTax
+// { ... }`, which is Rust's shape; this is what Java, C#, TypeScript and PHP all write. The
+// standalone form is still legal and is the only way to add an interface to a class declared
+// somewhere else.
+class FlatTax implements Tax {
+    rate: Decimal<4>,
 
-implement Tax for FlatTax {
     function (self) rate_for(item: Item) -> Decimal<4> {
         if !item.taxable { return 0.0000; }
         return self.rate;
     }
-    function (self: FlatTax) label() -> String { return "flat"; }
+    function (self) label() -> String { return "flat"; }
 }
 
 // ---- Another: staples cheaper than the rest --------------------------------
-class SplitTax { staples: Decimal<4>, rest: Decimal<4> }
+class SplitTax implements Tax {
+    staples: Decimal<4>,
+    rest: Decimal<4>,
 
-implement Tax for SplitTax {
     function (self) rate_for(item: Item) -> Decimal<4> {
         if !item.taxable { return 0.0000; }
         if item.sku == "RICE" { return self.staples; }
         if item.sku == "MILK" { return self.staples; }
         return self.rest;
     }
-    function (self: SplitTax) label() -> String { return "split"; }
+    function (self) label() -> String { return "split"; }
 }
 
 // ---- The tax on one line ---------------------------------------------------

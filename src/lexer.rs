@@ -60,6 +60,8 @@ pub enum Token {
     SelfKw,
 
     Impl,
+
+    Implements,
     For,
     In,
     Dyn,
@@ -154,6 +156,7 @@ impl Token {
             Token::Interface => "`interface`".to_string(),
             Token::Interface => "`interface`".to_string(),
             Token::Impl => "`implement`".to_string(),
+            Token::Implements => "`implements`".to_string(),
             Token::For => "`for`".to_string(),
             Token::In => "`in`".to_string(),
             Token::Dyn => "`dynamic`".to_string(),
@@ -705,6 +708,7 @@ impl<'a> Lexer<'a> {
             "is" => Token::Is,
             "self" => Token::SelfKw,
             "implement" => Token::Impl,
+            "implements" => Token::Implements,
             "for" => Token::For,
             // `for x in xs { }`. `for` was already reserved by `impl Trait for Type`;
             // `in` joins it rather than becoming contextual, because `for` opens a

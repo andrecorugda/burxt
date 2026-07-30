@@ -1,0 +1,1 @@
+`class Book implements Priced` is missing the method `label`

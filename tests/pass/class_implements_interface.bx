@@ -1,0 +1,63 @@
+// `class X implements Y` — the fields, the methods and the promise in one block.
+//
+// This is what Java, C#, TypeScript and PHP all write. Until v0.0.154 Burxt needed a separate
+// `implement Y for X { ... }` block, which is Rust's shape, and which became redundant the
+// moment a class could hold its own methods (v0.0.149).
+//
+// Why the spelling matters rather than being taste: per DESIGN.md the reader is a REVIEWER
+// scanning code an agent wrote, and an unfamiliar shape is something they must stop and decode.
+// Familiarity is a property of the review surface.
+interface Priced {
+    function price(self) -> Decimal<2>
+    function label(self) -> String
+}
+
+class Book implements Priced {
+    title: String,
+    cost: Decimal<2>,
+
+    function (self) price() -> Decimal<2> { return self.cost; }
+    function (self) label() -> String { return "book: " + self.title; }
+
+    // A class may have methods the interface never mentions. That is normal, and it is why the
+    // "no extras" rule of a standalone `implement` block does not apply to this form.
+    function (self) shelved() -> Bool { return true; }
+}
+
+// Two interfaces on one class, comma-separated.
+interface Countable { function count(self) -> Int }
+
+class Shelf implements Priced, Countable {
+    total: Decimal<2>,
+    books: Int,
+
+    function (self) price() -> Decimal<2> { return self.total; }
+    function (self) label() -> String { return "shelf"; }
+    function (self) count() -> Int { return self.books; }
+}
+
+// The standalone form is STILL LEGAL, and it is the only way to add an interface to a class
+// declared somewhere else — in another file, or in lib/. Both spellings produce the same vtable.
+class Meal { dish: String, cost: Decimal<2> }
+
+implement Priced for Meal {
+    function (self) price() -> Decimal<2> { return self.cost; }
+    function (self) label() -> String { return "meal: " + self.dish; }
+}
+
+let b: Book = Book { title: "Dune", cost: 12.99 };
+let d: dynamic Priced = b;
+print(d.label());
+print(d.price());
+print(b.shelved());
+
+let s: Shelf = Shelf { total: 40.00, books: 3 };
+let sp: dynamic Priced = s;
+let sc: dynamic Countable = s;
+print(sp.label());
+print(sc.count());
+
+let m: Meal = Meal { dish: "soup", cost: 6.50 };
+let dm: dynamic Priced = m;
+print(dm.label());
+print(dm.price());

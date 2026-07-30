@@ -1737,6 +1737,30 @@ function (mutable self: Unit) parse_record(src: String) -> Int {
     let declared_params: Int = self.parse_type_params(src);
     if declared_params < 0 { return -1; }
     let noted: Int = self.note_generic(name_tok, declared_params);
+    // `class FlatTax implements Tax, Priced` — one impl item per interface named, each carrying
+    // NO methods of its own: the class's own methods are what satisfy it, and the checker looks
+    // them up in the method table. Emitted as items so the vtable pass sees them exactly as it
+    // sees a standalone `implement Tax for FlatTax { }`.
+    if self.at(133) {
+        let word: Int = self.advance();
+        let mutable more: Bool = true;
+        while more {
+            if !self.at(1) {
+                return self.complain(src, "an interface name after `implements`");
+            }
+            let interface_tok: Int = self.position;
+            let n2: Int = self.advance();
+            // kind 85 is an implementation block; 0 children, and `value` marks it as
+            // declared on the class so the checker knows where to find the methods.
+            let block: Int = self.add(85, 0, 0, name_tok, 1, interface_tok);
+            push(self.items, block);
+            more = false;
+            if self.at(22) {                             // ','
+                let comma: Int = self.advance();
+                more = true;
+            }
+        }
+    }
     if !self.eat(src, 31, "`\{` opening the fields") { return -1; }
     let base: Int = len(self.stack);
     let mutable count: Int = 0;

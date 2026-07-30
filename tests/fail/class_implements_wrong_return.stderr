@@ -1,0 +1,1 @@
+method `price` returns Int but the interface declares Decimal<2>

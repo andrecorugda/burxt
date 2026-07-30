@@ -32,15 +32,31 @@ function compilerPath() {
   if (configured && configured.trim() !== "") {
     return configured;
   }
-  // A contributor to the language itself will have a workspace build.
+  // A contributor to the language itself will have a workspace build. Prefer whichever of the
+  // two is NEWER, rather than always debug.
+  //
+  // This defaulted to `target/debug/burxt` and it was a real trap, not a preference: `cargo
+  // test` and every script in this repository build RELEASE, so the debug binary is the one you
+  // forget. On 2026-07-30 the editor had been running a compiler from the previous afternoon —
+  // twelve versions and one wrong answer in money behind — while every test was green against
+  // release. The editor said `class` was a syntax error, and it was right about the binary it
+  // had. Silently using a stale compiler is exactly the kind of wrongness this language refuses
+  // everywhere else, so it must not be the default here.
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (folder) {
-    const local = path.join(folder.uri.fsPath, "target", "debug", "burxt");
-    try {
-      if (fs.existsSync(local)) return local;
-    } catch {
-      // Fall through to PATH.
+    const candidates = ["release", "debug"].map((profile) =>
+      path.join(folder.uri.fsPath, "target", profile, "burxt")
+    );
+    let best = null;
+    for (const candidate of candidates) {
+      try {
+        const at = fs.statSync(candidate).mtimeMs;
+        if (!best || at > best.at) best = { path: candidate, at };
+      } catch {
+        // Not built with this profile; try the other.
+      }
     }
+    if (best) return best.path;
   }
   return "burxt";
 }

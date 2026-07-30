@@ -495,6 +495,14 @@ pub struct ImplBlock {
     pub interface_name: String,
     pub type_name: String,
     pub methods: Vec<MethodDef>,
+    /// Synthesized from `class X implements Y`, rather than written as a standalone
+    /// `implement Y for X { ... }` block.
+    ///
+    /// When true, `methods` is EMPTY and the class's own methods are what satisfy the
+    /// interface — so conformance is checked against the method table rather than against a
+    /// list this block carries. The standalone form stays legal, because it is the only way
+    /// to add an interface to a class declared somewhere else.
+    pub declared_on_class: bool,
     /// Where this item was written, for errors about the item itself.
     pub span: Span,
 }

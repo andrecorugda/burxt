@@ -397,6 +397,9 @@ function (mutable self: Unit) install_keywords() -> Int {
     n = self.add_word("match", 111);
     n = self.add_word("interface", 112);
     n = self.add_word("implement", 113);
+    // `class X implements Y` — a separate word from `implement`, because it appears where a `{`
+    // is otherwise expected and a contextual reading would need lookahead.
+    n = self.add_word("implements", 133);
     n = self.add_word("for", 114);
     n = self.add_word("dynamic", 115);
     n = self.add_word("external", 116);

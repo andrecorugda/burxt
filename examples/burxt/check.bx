@@ -2211,6 +2211,27 @@ function (mutable self: Unit) check_impl(src: String, index: Int) -> Int {
         return 0;
     }
     let declared: Node = self.nodes[decl.node];
+    // `class X implements Y` sets `value` to 1 and carries no children: the class's OWN methods
+    // satisfy the interface, so conformance is checked against the method table. A class may also
+    // have methods the interface never mentions, which is normal — so the "no extras" rule that
+    // applies to a standalone `implement` block does not apply here.
+    if item.value == 1 {
+        let holder: Token = self.tokens[item.c];
+        let mutable s: Int = 0;
+        while s < declared.b {
+            let sig: Node = self.nodes[self.children[declared.a + s]];
+            let sig_name: Token = self.tokens[sig.token];
+            let found_method: Int = self.find_method_named(src, holder.start, holder.length,
+                                        sig_name.start, sig_name.length);
+            if found_method < 0 {
+                let complained: Int = self.complain_at(src, item.token,
+                    "this class does not have `" + substring(src, sig_name.start, sig_name.length)
+                    + "`, which the interface it implements requires");
+            }
+            s += 1;
+        }
+        return 0;
+    }
     let mutable i: Int = 0;
     while i < declared.b {
         let sig: Node = self.nodes[self.children[declared.a + i]];

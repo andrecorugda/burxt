@@ -1,0 +1,12 @@
+// `class X implements Y` is checked exactly as a standalone block is: every interface method
+// present, with the same shape. Conformance is explicit and complete or it is not.
+interface Priced {
+    function price(self) -> Decimal<2>
+    function label(self) -> String
+}
+class Book implements Priced {
+    cost: Decimal<2>,
+    function (self) price() -> Decimal<2> { return self.cost; }
+}
+let b: Book = Book { cost: 1.00 };
+print(b.price());
