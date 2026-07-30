@@ -208,11 +208,41 @@ function fee(amount: Decimal<2> [> $0.00]) -> Decimal<2> [>= $0.00] {
 }
 ```
 
-Each comma is a **separate clause**, so a failure names the one that broke rather than a conjunction:
+### A bracket is a list of claims
+
+The comma is **and**. `||` is **or**. Parentheses group.
 
 ```burxt
-function withdraw(balance: Decimal<2> [> $0.00, < $1000000.00]) -> Decimal<2> {
-    return balance;
+function banded(v: Decimal<2> [it > $0.00, (it < $1000.00 || it > -$100.00)]) -> Decimal<2> {
+    return v;
+}
+```
+
+That is **two** claims, not three: the second is one claim with an `||` inside it. Break it and the
+message quotes it whole, parentheses included:
+
+```
+burxt runtime error: `requires (v < $1000.00 || v > -$100.00)` failed in `banded`
+```
+
+Which is the reason the comma exists at all, since you could always write one `&&` instead:
+**`[a, b]` tells you which one broke; `[a && b]` tells you only that something did.** Same check,
+worse message — the same argument as the synthesized subject.
+
+Two more things follow from the comma being *and*:
+
+**Clauses are checked left to right, and the first failure wins.** `[it > 0, it > 10, it > 100]`
+given `5` reports `n > 10` — not `n > 0`, which passed, and not `n > 100`, which was never reached.
+
+**A comma inside a call is not a separator.** This is two clauses, not four:
+
+```burxt
+pure function between(v: Int, lo: Int, hi: Int) -> Bool {
+    return v > lo && v < hi;
+}
+
+function ranged(n: Int [between(it, 0, 100), it != 42]) -> Int {
+    return n;
 }
 ```
 

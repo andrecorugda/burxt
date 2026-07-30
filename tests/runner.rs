@@ -4054,7 +4054,7 @@ fn bracket_contracts_desugar_to_the_same_message() {
     // Each pair: the same constraint written as a bracket and as a clause, and the message both
     // must produce. The parameter form, the elided-subject return form, and a clause naming a
     // SECOND parameter — which is the case a synthesized subject could most easily get wrong.
-    let cases: [(&str, &str, &str); 5] = [
+    let cases: [(&str, &str, &str); 6] = [
         (
             "function withdraw(balance: Decimal<2> [> $0.00], amount: Decimal<2>) -> Decimal<2> {\n\
              return balance - amount;\n\
@@ -4126,6 +4126,24 @@ fn bracket_contracts_desugar_to_the_same_message() {
              }\n\
              print(bounded($500.00));\n",
             "`ensures result < $100.00` failed in `bounded`",
+        ),
+        // The comma is AND and `||` is OR, so a bracket is a LIST of claims each of which may be any
+        // Bool expression. Two clauses here, not three — and the failing one is quoted with its
+        // parentheses intact, which is the whole reason the comma exists rather than one `&&`.
+        (
+            "function banded(v: Decimal<2> [it > $0.00, (it < $10.00 || it > $2000.00)]) \
+             -> Decimal<2> {\n\
+             return v;\n\
+             }\n\
+             print(banded($50.00));\n",
+            "function banded(v: Decimal<2>) -> Decimal<2>\n\
+             requires v > $0.00\n\
+             requires (v < $10.00 || v > $2000.00)\n\
+             {\n\
+             return v;\n\
+             }\n\
+             print(banded($50.00));\n",
+            "`requires (v < $10.00 || v > $2000.00)` failed in `banded`",
         ),
     ];
 

@@ -57,6 +57,28 @@ function shout(word: String [len(it) > 0]) -> String {
     return word;
 }
 
+// The comma is AND, `||` is OR, and parentheses group — so a bracket is a LIST of claims, each of
+// which may itself be any Bool expression. Two clauses here, not three: the second is one claim with
+// an `||` inside it, and a failure quotes it with its parentheses intact.
+//
+// The comma could always be written `&&` instead, and the reason not to is the message: `[a, b]` says
+// which one broke and `[a && b]` says only that something did. Same argument as the synthesized
+// subject.
+function banded(v: Decimal<2> [it > $0.00, (it < $1000.00 || it > -$100.00)]) -> Decimal<2> {
+    return v;
+}
+
+// A comma INSIDE a call is not a clause separator. Two clauses, not four — the expression parser
+// consumes the call's own parentheses before the splitter looks for the next comma. Worth a fixture
+// because the failure mode is silent: the clause list would come out wrong rather than refused.
+pure function between(v: Int, lo: Int, hi: Int) -> Bool {
+    return v > lo && v < hi;
+}
+
+function ranged(n: Int [between(it, 0, 100), it != 42]) -> Int {
+    return n;
+}
+
 // `it` on the RETURN bracket means `result`, because that is what the return bracket's subject is.
 // Two clauses, both using it, which is where a first attempt at the flag reported the second one
 // unresolved.
@@ -93,6 +115,8 @@ print(take($9.00, $4.00));
 print(scaled(21));
 print(band($5.00));
 print(shout("hi"));
+print(banded($5.00));
+print(ranged(7));
 print(bounded($9.00));
 print(it_is_free());
 print(fee($5.00));
