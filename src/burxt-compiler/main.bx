@@ -339,7 +339,7 @@ function is_subcommand(word: String) -> Bool {
 // stderr, product to stdout.** So `burxt emit-ir x.bx > x.ll` writes IR and not a progress
 // report, and a CI log shows what went wrong on the stream built for it.
 function usage() -> Int {
-    print_error("burxt 0.0.228 — the Burxt compiler, written in Burxt");
+    print_error("burxt 0.0.229 — the Burxt compiler, written in Burxt");
     print_error("usage:");
     print_error("  burxt check   <file.bx>                  parse and typecheck only");
     print_error("  burxt build   <file.bx> [-o <path>]      compile to a native executable");
@@ -370,7 +370,7 @@ if argument_count() > 1 {
 }
 
 if command == "--version" || command == "-V" {
-    print_error("burxt 0.0.228 — the Burxt compiler, written in Burxt");
+    print_error("burxt 0.0.229 — the Burxt compiler, written in Burxt");
     exit(0);
 }
 

@@ -94,17 +94,6 @@ jobs:
           /tmp/burxt-runner "$(realpath ./target/debug/burxt)" /tmp/burxt-suite-work | tee /tmp/suite.log
           grep -qx 'all green' /tmp/suite.log
 
-      # And the check that LICENSES the step above. A runner that walked all 447 fixtures and
-      # compared nothing would print `ran 447, passed 447, failed 0` and be perfectly green — the
-      # oldest failure shape in this project, and the reason `tests/pass` fixtures cannot tell
-      # "supported" from "not examined". So this breaks exactly one thing a fixture asserts, in a
-      # scratch copy of the tree, and requires the runner to NAME that fixture. Mutation is the only
-      # instrument that can tell "checked and correct" from "not checked".
-      - name: The Burxt runner examines what it claims to
-        run: |
-          ./target/debug/burxt build tests/support/runner_agreement.bx -o /tmp/burxt-agreement
-          /tmp/burxt-agreement /tmp/burxt-runner "$(realpath ./target/debug/burxt)" /tmp/agreement-work
-
       # The Rust suite, now the CROSS-CHECK rather than the authority. All of them, and the list is
       # the point: the byte-identical self-hosting fixpoint, the differential test between the two
       # compilers, every pass fixture compiled by BOTH and compared byte for byte, the refusal
@@ -115,7 +104,31 @@ jobs:
       # the two runners' verdicts are comparable name by name. Without it a green Rust run emits
       # nothing per fixture, and two runners that both examine nothing agree perfectly.
       - name: Run the suite on Rust, as the cross-check
-        run: BURXT_VERDICTS=1 cargo test --locked -- --nocapture
+        run: BURXT_VERDICTS=1 cargo test --locked -- --nocapture | tee /tmp/rust-verdicts.txt
+
+      # And the check that LICENSES the Burxt runner — it runs AFTER the Rust cross-check, which is
+      # the one wrinkle in the inversion and is worth it.
+      #
+      # The harness compares the two runners VERDICT BY VERDICT, which needs `runner.rs`'s stream, so
+      # it takes the tee'd file as a 4th argument. Omit that argument and it runs the Rust sweeps
+      # ITSELF rather than skipping the comparison — a check that quietly does not happen is exactly
+      # what this file exists to prevent — but that costs another 64 s, so the file is handed over.
+      #
+      # `--nocapture` on the step above is load-bearing: the verdicts are `println!`, and without it
+      # cargo swallows them and the file arrives EMPTY. Measured — my first attempt produced 0
+      # verdict lines and the harness correctly reported itself unfit.
+      # A runner that walked all 447 fixtures and
+      # compared nothing would print `ran 447, passed 447, failed 0` and be perfectly green — the
+      # oldest failure shape in this project, and the reason `tests/pass` fixtures cannot tell
+      # "supported" from "not examined". So this breaks exactly one thing a fixture asserts, in a
+      # scratch copy of the tree, and requires the runner to NAME that fixture. Mutation is the only
+      # instrument that can tell "checked and correct" from "not checked".
+      - name: The Burxt runner examines what it claims to
+        run: |
+          ./target/debug/burxt build tests/support/runner_agreement.bx -o /tmp/burxt-agreement
+          /tmp/burxt-agreement /tmp/burxt-runner "$(realpath ./target/debug/burxt)" \
+            /tmp/agreement-work /tmp/rust-verdicts.txt
+
 
       # A cheap end-to-end check that the thing a user actually types works. `print("...");` with
       # no wrapper is a whole Burxt program — no entry point to declare — and if that ever stops
