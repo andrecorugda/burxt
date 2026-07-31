@@ -1,7 +1,11 @@
 // ============================================================================
 // The test suite, in Burxt.
 //
-//     burxt build tests/runner.bx -o /tmp/burxt-runner && /tmp/burxt-runner
+//     burxt build tests/runner.bx -o /tmp/burxt-runner
+//     /tmp/burxt-runner [compiler] [work-dir] [only]
+//
+// `only` is empty for everything, `pass` for one kind, `pass/name` for one fixture, `invariant`
+// for every invariant, or `invariant/name` for one of those.
 //
 // It runs the same fixtures `tests/runner.rs` runs, and a Rust test asserts the
 // two agree — so this is a second implementation of the harness, not a
@@ -21,7 +25,38 @@
 
 external function system(command: String) -> CInt;
 
-class Outcome { ran: Int, passed: Int, failed: Int }
+// Whether a path can be opened for reading. **The only guard there is**: `read_file` does not
+// answer a failure, it ENDS THE PROCESS — `burxt runtime error: cannot open file for reading`.
+//
+// It is here because of a measured hole, not a hypothetical one. A fixture whose `.stdout` was
+// missing killed this runner outright: no verdict, no summary, and the crash line arrived BEFORE
+// the banner because the abort discarded stdout's buffer. A contributor adding `foo.bx` and
+// forgetting `foo.stdout` got a dead runner instead of "foo has no .stdout". For a file that is
+// about to become the suite's primary authority that is the wrong failure shape — an authority
+// must report, not die.
+external function fopen(path: String, mode: String) -> CPointer touches files;
+external function fclose(stream: CPointer) -> CInt touches files;
+
+function readable(path: String) -> Bool touches files {
+    let f: CPointer = fopen(path, "r");
+    if c_is_null(f) {
+        return false;
+    }
+    let closed: Int = fclose(f);
+    return true;
+}
+
+// Fixtures and invariants are counted APART, and that is not bookkeeping tidiness.
+//
+// `the_suite_also_runs_on_burxt` in `tests/runner.rs` asserts this program prints
+// `ran N, passed N, failed 0` where N is the number of `.bx` files in `tests/{pass,fail,panic}`.
+// Folding two invariants into that total made it 449 against 447 on disk and would have failed
+// the Rust cross-check — correctly, because the number no longer meant what its name says. They
+// are also genuinely different claims: a fixture is a program with a recorded answer, an
+// invariant is a statement about the repository. One total for both would be the kind of summary
+// that hides which half went red.
+class Outcome { ran: Int, passed: Int, failed: Int,
+                claims: Int, claims_passed: Int, claims_failed: Int }
 
 // ---- talking to the machine -------------------------------------------------
 
@@ -29,6 +64,16 @@ class Outcome { ran: Int, passed: Int, failed: Int }
 // here that is not Burxt, and it is doing what a directory read would do.
 function listing_of(directory: String, into: String) -> String touches files {
     let command: String = "ls " + directory + " > " + into + " 2>/dev/null";
+    let status: Int = system(command);
+    return read_file(into);
+}
+
+// Every name in a directory INCLUDING the dotfiles, which `ls` hides by default. `-A` rather
+// than `-a` because `.` and `..` are not entries anyone means. Needed by the repository-root
+// invariant: `.gitignore` and `.github` are exactly the kind of thing that belongs there, and a
+// listing that cannot see them would call a stray root file clean.
+function listing_all_of(directory: String, into: String) -> String touches files, commands {
+    let command: String = "ls -A " + directory + " > " + into + " 2>/dev/null";
     let status: Int = system(command);
     return read_file(into);
 }
@@ -117,42 +162,101 @@ function trimmed(text: String) -> String {
 
 // ---- the three kinds of check -----------------------------------------------
 
-function (mutable self: Outcome) note(passed: Bool, name: String, why: String) -> Int {
-    self.ran += 1;
+// One verdict per fixture, named, on stdout.
+//
+// **A summary is not evidence and a count cannot see a fixture change hands.** `ran 447, passed
+// 447` is true of a runner that examined 447 fixtures and equally true of one that examined 446
+// and one of them twice. So every fixture says its own name and its own answer, and
+// `tests/support/runner_agreement.bx` compares that SET against the directory rather than
+// comparing two totals — which is the whole reason this line exists.
+//
+// `ok` / `not ok` is TAP's spelling, chosen because it is a format other tools already read, and
+// because a fixture's name is the only stable identifier the suite has.
+function (mutable self: Outcome) note(passed: Bool, kind: String, name: String,
+                                      why: String) -> Int {
+    if kind == "invariant" {
+        self.claims += 1;
+        if passed {
+            self.claims_passed += 1;
+        } else {
+            self.claims_failed += 1;
+        }
+    } else {
+        self.ran += 1;
+        if passed {
+            self.passed += 1;
+        } else {
+            self.failed += 1;
+        }
+    }
     if passed {
-        self.passed += 1;
+        print("ok " + kind + "/" + name);
         return 0;
     }
-    self.failed += 1;
-    print("FAIL " + name + ": " + why);
+    print("not ok " + kind + "/" + name + ": " + one_line(why));
     return 0;
+}
+
+// A reason, flattened to one line.
+//
+// **A verdict that spans lines is not machine-readable, and finding that out cost a confusing
+// hour.** `printed X, expected Y` embeds a fixture's own output, and `tests/pass/rounding_negative`
+// prints three lines — so its failure verdict was five lines, of which only the first began with
+// `not ok`. Every consumer that reads this stream a line at a time then miscounts: the agreement
+// harness reported a fixture as NOT EXAMINED when it had been examined and had failed.
+//
+// So the newline becomes a visible `\n` and the verdict is one line by construction. Carriage
+// returns go too, because a `.stdout` recorded on Windows would otherwise split a line at the
+// terminal without splitting it in the file.
+function one_line(why: String) -> String {
+    let mutable out: String = "";
+    let mutable i: Int = 0;
+    while i < len(why) {
+        let b: Int = byte_at(why, i);
+        if b == 10 {
+            out += "\\n";
+        } else if b == 13 {
+            out += "\\r";
+        } else {
+            out += substring(why, i, 1);
+        }
+        i += 1;
+    }
+    return out;
 }
 
 function (mutable self: Outcome) check_pass(compiler: String, name: String, work: String)
     -> Int touches files
 {
     let source: String = "tests/pass/" + name + ".bx";
-    let expected: String = trimmed(read_file("tests/pass/" + name + ".stdout"));
+    let expectation: String = "tests/pass/" + name + ".stdout";
+    if !readable(expectation) {
+        let noted: Int = self.note(false, "pass", name,
+            "has no .stdout — a fixture must state what it expects");
+        return 0;
+    }
+    let expected: String = trimmed(read_file(expectation));
     let binary: String = work + "/" + name;
     let log: String = work + "/out";
 
     let built: Int = run_capturing(compiler + " build " + source + " -o " + binary, log);
     if built != 0 {
-        let noted: Int = self.note(false, name, "did not compile: " + trimmed(read_file(log)));
+        let noted: Int = self.note(false, "pass", name, "did not compile: " + trimmed(read_file(log)));
         return 0;
     }
     // In the fixture directory, because a program may read a file next to it.
     let ran: Int = run_capturing_stdout("cd tests/pass && " + binary, log);
     let printed: String = trimmed(read_file(log));
     if ran != 0 {
-        let noted: Int = self.note(false, name, "exited " + to_string(ran));
+        let noted: Int = self.note(false, "pass", name, "exited " + to_string(ran));
         return 0;
     }
     if printed == expected {
-        let noted: Int = self.note(true, name, "");
+        let noted: Int = self.note(true, "pass", name, "");
         return 0;
     }
-    let noted: Int = self.note(false, name, "printed " + printed + ", expected " + expected);
+    let noted: Int = self.note(false, "pass", name,
+        "printed " + printed + ", expected " + expected);
     return 0;
 }
 
@@ -160,7 +264,13 @@ function (mutable self: Outcome) check_fail(compiler: String, name: String, work
     -> Int touches files
 {
     let source: String = "tests/fail/" + name + ".bx";
-    let wanted: String = trimmed(read_file("tests/fail/" + name + ".stderr"));
+    let expectation: String = "tests/fail/" + name + ".stderr";
+    if !readable(expectation) {
+        let noted: Int = self.note(false, "fail", name,
+            "has no .stderr — a fixture must state what it expects");
+        return 0;
+    }
+    let wanted: String = trimmed(read_file(expectation));
     let log: String = work + "/out";
 
     // `check` rather than `build`: a refusal needs no linker, and this is the only
@@ -168,14 +278,14 @@ function (mutable self: Outcome) check_fail(compiler: String, name: String, work
     let status: Int = run_capturing(compiler + " check " + source, log);
     let said: String = read_file(log);
     if status == 0 {
-        let noted: Int = self.note(false, name, "was accepted, and should not be");
+        let noted: Int = self.note(false, "fail", name, "was accepted, and should not be");
         return 0;
     }
     if contains(said, wanted) {
-        let noted: Int = self.note(true, name, "");
+        let noted: Int = self.note(true, "fail", name, "");
         return 0;
     }
-    let noted: Int = self.note(false, name,
+    let noted: Int = self.note(false, "fail", name,
         "refused it for the wrong reason: " + trimmed(said));
     return 0;
 }
@@ -184,40 +294,295 @@ function (mutable self: Outcome) check_panic(compiler: String, name: String, wor
     -> Int touches files
 {
     let source: String = "tests/panic/" + name + ".bx";
-    let wanted: String = trimmed(read_file("tests/panic/" + name + ".stderr"));
+    let expectation: String = "tests/panic/" + name + ".stderr";
+    if !readable(expectation) {
+        let noted: Int = self.note(false, "panic", name,
+            "has no .stderr — a fixture must state what it expects");
+        return 0;
+    }
+    let wanted: String = trimmed(read_file(expectation));
     let binary: String = work + "/" + name;
     let log: String = work + "/out";
 
     let built: Int = run_capturing(compiler + " build " + source + " -o " + binary, log);
     if built != 0 {
-        let noted: Int = self.note(false, name, "did not compile, and should have");
+        let noted: Int = self.note(false, "panic", name, "did not compile, and should have");
         return 0;
     }
     let ran: Int = run_capturing(binary, log);
     let said: String = read_file(log);
     if ran == 0 {
-        let noted: Int = self.note(false, name, "ran to completion, and should have died");
+        let noted: Int = self.note(false, "panic", name, "ran to completion, and should have died");
         return 0;
     }
     if contains(said, wanted) {
-        let noted: Int = self.note(true, name, "");
+        let noted: Int = self.note(true, "panic", name, "");
         return 0;
     }
-    let noted: Int = self.note(false, name, "died for the wrong reason: " + trimmed(said));
+    let noted: Int = self.note(false, "panic", name,
+        "died for the wrong reason: " + trimmed(said));
     return 0;
 }
 
-// ---- the sweep ---------------------------------------------------------------
 
-function (mutable self: Outcome) sweep(compiler: String, kind: String, work: String)
-    -> Int touches files
-{
-    let names: String = listing_of("tests/" + kind, work + "/listing");
+// ---- invariants ---------------------------------------------------------------------------
+//
+// A fixture is a program with a recorded answer. An INVARIANT is a claim about the repository
+// that no single program can carry — that the root holds nothing stray, that every example still
+// typechecks. `tests/runner.rs` has 72 of them and gets four services from `cargo test` for
+// free: naming, selection, isolation, and parallelism. This section supplies the first three.
+//
+// **Dispatch is a chain of `if`s and the list of names is written separately, which is a real
+// hazard worth naming rather than hiding.** Burxt has no function values, so an invariant cannot
+// be put in an array — and that means an implemented invariant missing from `invariant_names`
+// would simply never run, silently, which is this project's oldest failure shape. Two things
+// guard it: an unknown name answers `?unknown invariant` and is reported as a failure rather
+// than skipped, and `tests/support/runner_agreement.bx` compares this list against the `#[test]`
+// names in `runner.rs` and prints the shortfall as a number. A number can be ratcheted; a
+// forgotten `push` cannot.
+
+// The `runner.rs` invariants this file answers WITHOUT a named invariant of its own — because the
+// fixture walk already does exactly their work. Listed rather than inferred, so the coverage
+// number in `tests/support/runner_agreement.bx` credits real work instead of understating it, and
+// so that adding a name here is a visible claim someone can check rather than a silent bump.
+function answered_by_the_fixture_sweep() -> [String] {
+    let mutable all: [String] = [];
+    push(all, "pass_programs_produce_expected_stdout");
+    push(all, "fail_programs_are_rejected_with_expected_error");
+    push(all, "panic_programs_die_cleanly_at_runtime");
+    return all;
+}
+
+function invariant_names() -> [String] {
+    let mutable all: [String] = [];
+    push(all, "the_repository_root_holds_only_what_belongs_there");
+    push(all, "every_example_still_typechecks");
+    return all;
+}
+
+// What may sit at the repository root. Word for word `runner.rs`'s two lists, and they are one
+// list here because Burxt has no `const [&str; N]` and the distinction between "file" and
+// "directory" does no work in the comparison.
+function allowed_at_root(name: String) -> Bool {
+    if name == "Cargo.toml" { return true; }
+    if name == "Cargo.lock" { return true; }
+    if name == ".cargo" { return true; }
+    if name == ".git" { return true; }
+    if name == ".gitignore" { return true; }
+    if name == ".gitattributes" { return true; }
+    if name == ".vscode" { return true; }
+    if name == "target" { return true; }
+    if name == "README.md" { return true; }
+    if name == "DESIGN.md" { return true; }
+    if name == "CONTRIBUTING.md" { return true; }
+    if name == "CODE_OF_CONDUCT.md" { return true; }
+    if name == "LICENSE-MIT" { return true; }
+    if name == "LICENSE-APACHE" { return true; }
+    if name == "src" { return true; }
+    if name == "spec" { return true; }
+    if name == "tests" { return true; }
+    if name == "examples" { return true; }
+    if name == "editors" { return true; }
+    if name == "assets" { return true; }
+    if name == "docs" { return true; }
+    if name == "lib" { return true; }
+    if name == "scripts" { return true; }
+    if name == "dist" { return true; }
+    if name == ".github" { return true; }
+    if name == ".devcontainer" { return true; }
+    return false;
+}
+
+function root_holds_only_what_belongs(work: String) -> String touches files, commands {
+    let names: String = listing_all_of(".", work + "/root-listing");
+    let mutable strays: String = "";
+    let mutable at: Int = 0;
+    while at < len(names) {
+        let stop: Int = line_end(names, at);
+        let entry: String = substring(names, at, stop - at);
+        if len(entry) > 0 && !allowed_at_root(entry) {
+            if len(strays) > 0 {
+                strays += ", ";
+            }
+            strays += entry;
+        }
+        at = stop + 1;
+    }
+    if len(strays) == 0 {
+        return "";
+    }
+    return "these do not belong at the repository root — build with `-o <path>` and move sources "
+        + "into a directory: " + strays;
+}
+
+// Every `examples/*.bx` must still typecheck. `check` rather than `build`, exactly as the Rust
+// one does: an example is about the language, not about the linker.
+//
+// The floor is `runner.rs`'s — at least three — and it is here for the reason the floor exists
+// there: an empty `examples/` would otherwise make this invariant pass by having nothing to say.
+function examples_typecheck(compiler: String, work: String) -> String touches files, commands {
+    let names: String = listing_of("examples", work + "/examples-listing");
+    let log: String = work + "/out";
+    let mutable checked: Int = 0;
+    let mutable failures: String = "";
     let mutable at: Int = 0;
     while at < len(names) {
         let stop: Int = line_end(names, at);
         let entry: String = substring(names, at, stop - at);
         if ends_with_bx(entry) {
+            let status: Int = run_capturing(compiler + " check examples/" + entry, log);
+            checked += 1;
+            if status != 0 {
+                if len(failures) > 0 {
+                    failures += "; ";
+                }
+                failures += entry + ": " + trimmed(read_file(log));
+            }
+        }
+        at = stop + 1;
+    }
+    if checked < 3 {
+        return "expected several examples, checked only " + to_string(checked);
+    }
+    if len(failures) > 0 {
+        return failures;
+    }
+    return "";
+}
+
+// The reason an invariant does NOT hold, or `""` when it does.
+function run_invariant(name: String, compiler: String, work: String) -> String
+    touches files, commands
+{
+    if name == "the_repository_root_holds_only_what_belongs_there" {
+        return root_holds_only_what_belongs(work);
+    }
+    if name == "every_example_still_typechecks" {
+        return examples_typecheck(compiler, work);
+    }
+    // Not silence. A name in the list with no implementation behind it is a bug in this file,
+    // and the only safe answer is to fail loudly — see the note at the top of this section.
+    return "?unknown invariant";
+}
+
+// ---- isolation ---------------------------------------------------------------------------
+//
+// **Each invariant runs as a SUBPROCESS of the runner, and the reason is measured rather than
+// theoretical.** `read_file` on a missing path ends the process, and a fixture with no `.stdout`
+// used to kill this runner outright — no verdict, no summary, and the crash line printed before
+// the banner because the abort discarded stdout's buffer. `cargo test` catches a panic and fails
+// one test; the equivalent here is a process boundary, and `argument(0)` gives this program its
+// own path, so it can re-invoke itself for exactly one invariant.
+//
+// So a crash becomes `not ok invariant/NAME: crashed`, which is a verdict, and the other 71 still
+// run. The child is told which invariant to run through the same `only` argument a person uses.
+function (mutable self: Outcome) sweep_invariants(compiler: String, work: String, only: String)
+    -> Int touches files, commands, input
+{
+    let me: String = argument(0);
+    let names: [String] = invariant_names();
+    for name in names {
+        if selected(only, "invariant", name) {
+            // A single named invariant is run HERE rather than in a grandchild: `only` naming one
+            // invariant is how the parent asks a child to do exactly this, so recursing would
+            // never terminate.
+            if only == "invariant/" + name {
+                let why: String = run_invariant(name, compiler, work);
+                let noted: Int = self.note(len(why) == 0, "invariant", name, why);
+            } else {
+                let log: String = work + "/invariant-" + name;
+                let status: Int = run_capturing(me + " " + compiler + " " + work
+                                                + " invariant/" + name, log);
+                let said: String = read_file(log);
+                if status == 0 && contains(said, "ok invariant/" + name) {
+                    let noted: Int = self.note(true, "invariant", name, "");
+                } else if contains(said, "not ok invariant/" + name) {
+                    // The child reported properly; carry ITS reason rather than inventing one.
+                    let noted: Int = self.note(false, "invariant", name,
+                        after_colon(said, "not ok invariant/" + name));
+                } else {
+                    let noted: Int = self.note(false, "invariant", name,
+                        "crashed or said nothing: " + trimmed(said));
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+// The text after `label: ` in `text`, to the end of that line. Used to carry a child's own reason
+// up to the parent unchanged — a parent that re-worded it would be a second place the message
+// lives, and the two would drift.
+function after_colon(text: String, label: String) -> String {
+    let mutable i: Int = 0;
+    while i + len(label) <= len(text) {
+        if starts_with_at_runner(text, i, label) {
+            let mutable j: Int = i + len(label);
+            if j < len(text) && byte_at(text, j) == 58 {
+                j += 1;
+            }
+            if j < len(text) && byte_at(text, j) == 32 {
+                j += 1;
+            }
+            let stop: Int = line_end(text, j);
+            return substring(text, j, stop - j);
+        }
+        i += 1;
+    }
+    return "";
+}
+
+function starts_with_at_runner(text: String, at: Int, prefix: String) -> Bool {
+    if at + len(prefix) > len(text) {
+        return false;
+    }
+    let mutable i: Int = 0;
+    while i < len(prefix) {
+        if byte_at(text, at + i) != byte_at(prefix, i) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+// ---- the sweep ---------------------------------------------------------------
+
+// `only` selects: `""` is everything, `pass` is one kind, `pass/name` is one fixture.
+//
+// Two jobs, one mechanism, and the second is why it exists. The obvious one is a person
+// debugging: re-running 447 fixtures to see one of them is a bad loop.
+//
+// The one that matters is that **`cargo test` gives `runner.rs` four things for free that this
+// file has none of** — naming, selection, isolation, and parallelism — and selection is the one
+// the other three are built on. `tests/support/runner_agreement.bx` mutates a fixture and asks
+// whether the runner minds; without selection each question costs a full 28-second sweep, and the
+// harness took five minutes to ask eight of them. With it, isolation is also reachable: a check
+// can be run as a SUBPROCESS of the runner (`argument(0)` gives its own path, measured), so a
+// crash fails one fixture instead of the suite — which is not hypothetical, a missing `.stdout`
+// used to kill this program outright.
+function selected(only: String, kind: String, name: String) -> Bool {
+    if len(only) == 0 {
+        return true;
+    }
+    if only == kind {
+        return true;
+    }
+    return only == kind + "/" + name;
+}
+
+function (mutable self: Outcome) sweep(compiler: String, kind: String, work: String, only: String)
+    -> Int touches files
+{
+    // The listing is read even when one fixture is wanted, because `ls` is cheap and because a
+    // selection that names a fixture the directory does not hold should find nothing rather than
+    // invent it.
+    let names: String = listing_of("tests/" + kind, work + "/listing");
+    let mutable at: Int = 0;
+    while at < len(names) {
+        let stop: Int = line_end(names, at);
+        let entry: String = substring(names, at, stop - at);
+        if ends_with_bx(entry) && selected(only, kind, without_extension(entry)) {
             let name: String = without_extension(entry);
             if kind == "pass" {
                 let done: Int = self.check_pass(compiler, name, work);
@@ -250,17 +615,35 @@ region suite {
 
     print("running the suite with " + compiler);
 
-    let mutable result: Outcome = Outcome { ran: 0, passed: 0, failed: 0 };
-    let a: Int = result.sweep(compiler, "pass", work);
-    let b: Int = result.sweep(compiler, "fail", work);
-    let c: Int = result.sweep(compiler, "panic", work);
+    let mutable only: String = "";
+    if argument_count() > 3 {
+        only = argument(3);
+    }
+
+    let mutable result: Outcome = Outcome { ran: 0, passed: 0, failed: 0,
+                                            claims: 0, claims_passed: 0, claims_failed: 0 };
+    let a: Int = result.sweep(compiler, "pass", work, only);
+    let b: Int = result.sweep(compiler, "fail", work, only);
+    let c: Int = result.sweep(compiler, "panic", work, only);
+    let d: Int = result.sweep_invariants(compiler, work, only);
 
     print("---");
     print("ran " + to_string(result.ran) + ", passed " + to_string(result.passed)
           + ", failed " + to_string(result.failed));
-    if result.failed > 0 {
+    print("invariants " + to_string(result.claims) + ", passed "
+          + to_string(result.claims_passed) + ", failed " + to_string(result.claims_failed));
+    if result.failed > 0 || result.claims_failed > 0 {
         print("SUITE FAILED");
-    } else {
-        print("all green");
+        // **And exit NONZERO, which this program did not do for its whole life so far.** It
+        // printed `SUITE FAILED` and exited 0, so a CI step that ran it and trusted the exit
+        // status would go green on a red suite — the one failure mode a test runner must not
+        // have. Found by making an invariant crash on purpose and reading the exit code instead
+        // of the output.
+        //
+        // `the_suite_also_runs_on_burxt` reads the OUTPUT for `all green` rather than the status,
+        // so this is safe to add and always should have been here. A runner is a program a shell
+        // asks a yes-or-no question of.
+        exit(1);
     }
+    print("all green");
 }

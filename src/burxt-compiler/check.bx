@@ -631,6 +631,159 @@ function (self: Unit) enclosing_return_type() -> Type {
     return unknown_type();
 }
 
+// ---- the C boundary ------------------------------------------------------------------------
+//
+// Everything a value has to survive to cross into C, checked at the DECLARATION rather than at a
+// call. A crossing that cannot work does not become workable because nobody called it yet, and the
+// declaration is the line a reader can fix.
+//
+// **Why this group matters more than its size suggests.** These rules are what stop a `Decimal<2>`
+// reaching C as a float. A Decimal is an exact scaled integer; a C `double` cannot hold most money
+// amounts, so a crossing that let one through would lose cents silently — which is the failure the
+// whole language exists to refuse, at the one boundary where the type system stops. Stage-1 parsed
+// `external` and `as scaled` since they landed and checked neither, so all five refusals below were
+// stage-0's alone: five of the 43 gaps, in the group where being wrong costs most.
+
+// May this type come back from C?
+//
+// Int, CInt and CPointer, and nothing else. `CDouble` and `String` get their own messages because
+// the two mistakes have different answers — one is about precision, the other about ownership.
+function (mutable self: Unit) check_extern_return(src: String, at: Int, named: String,
+                                                 answered: Type) -> Int {
+    if answered.kind == 40 || answered.kind == 43 || answered.kind == 51 {
+        return 0;
+    }
+    if answered.kind == 44 {                         // CDouble
+        let complained: Int = self.complain_at(src, at,
+            "external function `" + named + "` returns CDouble, but Burxt has no float type to "
+            + "receive it exactly — a double cannot hold most decimal amounts. Have the C function "
+            + "return the scaled integer (declare `-> Int`), or return it as text.");
+        return 1;
+    }
+    let complained: Int = self.complain_at(src, at,
+        "external function `" + named + "` returns " + self.show_type(src, answered)
+        + ", but only Int, CInt or CPointer may cross the C boundary as a return — a "
+        + self.show_type(src, answered) + " is a Burxt value with an owner, and C cannot say whose "
+        + "it is. If the C function returns a pointer, declare `-> CPointer` and read it with "
+        + "`c_string_at`, which copies.");
+    return 1;
+}
+
+// The marshalling rules, which are two halves of one fact: `as scaled` says how a Decimal is
+// encoded for a foreign callee, so it is REQUIRED on a Decimal crossing into C and MEANINGLESS
+// anywhere else.
+//
+// `foreign` decides which half applies, so one function serves both and the two cannot drift into
+// disagreeing about what a marshaller is for.
+function (mutable self: Unit) check_marshalling(src: String, params: Int, foreign: Int,
+                                               label: String) -> Int {
+    if params < 0 {
+        return 0;
+    }
+    let list: Node = self.nodes[params];
+    let mutable p: Int = 0;
+    while p < list.b {
+        let param: Node = self.nodes[self.children[list.a + p]];
+        let named: Token = self.tokens[param.token];
+        let own: String = substring(src, named.start, named.length);
+        let declared: Type = self.declared_type(src, param.a);
+        if foreign == 0 {
+            // A Burxt-to-Burxt call passes the value itself, exactly. There is no foreign encoding
+            // on the other side, so there is nothing to marshal INTO.
+            if param.value == 1 {
+                let complained: Int = self.complain_at(src, param.token,
+                    "in " + label + ", parameter `" + own + "` is marked `as scaled`, but "
+                    + "marshalling only exists where there is a foreign encoding to marshal into. "
+                    + "A Burxt-to-Burxt call passes the value itself, exactly — drop the "
+                    + "`as scaled`.");
+            }
+        } else {
+            if declared.kind == 45 && param.value == 0 {
+                let complained: Int = self.complain_at(src, param.token,
+                    "in " + label + ", parameter `" + own + "` is "
+                    + self.show_type(src, declared) + " and C has no decimal type, so the crossing "
+                    + "has to say how the value is encoded. Declare `" + own + ": "
+                    + self.show_type(src, declared) + " as scaled` to pass the exact unscaled "
+                    + "integer, or take a String and pass `to_string(" + own + ")` as text.");
+            }
+            if declared.kind != 45 && param.value == 1 {
+                let complained: Int = self.complain_at(src, param.token,
+                    "in " + label + ", parameter `" + own + "` is "
+                    + self.show_type(src, declared) + ", which C holds directly — `as scaled` only "
+                    + "means something for a Decimal, whose scale C has no way to carry.");
+            }
+        }
+        p += 1;
+    }
+    return 1;
+}
+
+// ---- lvalues: what a write actually names --------------------------------------------------
+
+// The ROOT name of an assignment target. `a[0]`, `item.price` and `grid[i].cells[j]` all write
+// into ONE binding, and it is that binding's mutability that decides whether the write is allowed
+// — so the rule has to walk down to the name rather than look at the outermost node.
+//
+// -1 when the target bottoms out in something that is not a name, which is how
+// `Account { ... }.balance = 1` is told from `acct.balance = 1`: there is no binding to ask about.
+function (self: Unit) lvalue_root(node: Int) -> Int {
+    let mutable at: Int = node;
+    while at >= 0 {
+        let n: Node = self.nodes[at];
+        if n.kind == 5 {
+            return at;
+        }
+        if n.kind == 11 || n.kind == 12 {            // .field, [index]
+            at = n.a;
+        } else {
+            return -1;
+        }
+    }
+    return -1;
+}
+
+// The target as the programmer wrote it — `item.price`, `a[...]` — for the message. An index is
+// shown as `[...]` rather than evaluated, which is stage-0's spelling too: the index may be any
+// expression and quoting it back would make the message longer without making it clearer.
+function (self: Unit) lvalue_text(src: String, node: Int) -> String {
+    let n: Node = self.nodes[node];
+    if n.kind == 5 || n.kind == 11 {
+        let named: Token = self.tokens[n.token];
+        let own: String = substring(src, named.start, named.length);
+        if n.kind == 5 {
+            return own;
+        }
+        return self.lvalue_text(src, n.a) + "." + own;
+    }
+    if n.kind == 12 {
+        return self.lvalue_text(src, n.a) + "[...]";
+    }
+    return "this";
+}
+
+// Refuse a write through an immutable name. Answers 1 when it complained.
+//
+// Stage-1 checked mutability for `name = value` and NOWHERE else until v0.0.223, so `a[0] = 9` and
+// `item.price = 2.00` on immutable bindings both compiled — two of the 43 fixtures stage-0 refused
+// and stage-1 waved through. The rule was there; it only looked at one shape of target.
+function (mutable self: Unit) refuse_immutable_write(src: String, target: Int) -> Int {
+    let root: Int = self.lvalue_root(target);
+    if root < 0 {
+        return 0;
+    }
+    let base: Token = self.tokens[self.nodes[root].token];
+    let found: Int = self.find_binding(src, base.start, base.length);
+    if found < 0 || self.bindings[found].writable != 0 {
+        return 0;
+    }
+    let named: String = substring(src, base.start, base.length);
+    let complained: Int = self.complain_at(src, self.nodes[root].token,
+        "cannot assign to `" + self.lvalue_text(src, target) + "`: `" + named
+        + "` was declared immutable. Declare it `let mutable " + named + ": "
+        + self.show_type(src, self.bindings[found].bound_type) + "` to allow it.");
+    return 1;
+}
+
 function (self: Unit) generic_named(src: String, start: Int, length: Int) -> Int {
     let mutable i: Int = 0;
     while i < len(self.generics) {
@@ -1053,8 +1206,7 @@ function (mutable self: Unit) collect_method(src: String, index: Int) -> Int {
     let name: Token = self.tokens[item.token];
     let signature: Node = self.nodes[item.c];
     let receiver: Token = self.tokens[signature.value];
-    let mutable mutating: Int = 0;
-    if item.value >= 4 { mutating = 1; }
+    let mutating: Int = flag_mutating(item.value);
     if flag_pure(item.value) == 1 {
         let complained: Int = self.complain_at(src, item.token,
             "`pure` is not available on a method: a receiver is state, and a claim "
@@ -1064,6 +1216,45 @@ function (mutable self: Unit) collect_method(src: String, index: Int) -> Int {
                               name.start, name.length) >= 0 {
         let complained: Int = self.complain_at(src, item.token, "this method is declared twice");
         return 0;
+    }
+    // `mutable` on a METHOD's parameter is not available yet, and the refusal is the honest form of
+    // a limit rather than a rule: the emitter passes a method's arguments by value, so the marker
+    // would be a promise the backend does not keep. I met this exact refusal from stage-0 while
+    // writing `schema.bx` — it is why the skipped-clause count there is a second walk instead of a
+    // `mutable skipped: [Int]` out-parameter — and stage-1 accepted the same signature silently,
+    // which means the two compilers disagreed about whether that program exists.
+    // `self: Point<T>` names type parameters, and `Point` may not have any. Read from the TOKEN
+    // AFTER the receiver's name — `<` iff the receiver wrote type arguments — which is the same
+    // question `parse_type_params` asked and therefore cannot drift from it. A side table would have
+    // been the alternative and the parser records nothing here, so the token is both cheaper and the
+    // only thing available.
+    //
+    // Checked HERE rather than in the parser because a generic class may be declared AFTER a method
+    // that names it: at parse time `generic_named` would answer "not generic" for a class that is,
+    // and refuse a correct program. By this pass every declaration has been collected.
+    if self.tokens[signature.value + 1].kind == 35 {
+        if self.generic_named(src, receiver.start, receiver.length) < 0 {
+            let complained: Int = self.complain_at(src, item.token,
+                "`self: " + substring(src, receiver.start, receiver.length)
+                + "<...>` names type parameters, and `"
+                + substring(src, receiver.start, receiver.length) + "` is not generic.");
+        }
+    }
+    let declared_params: Node = self.nodes[item.a];
+    let mutable q: Int = 0;
+    while q < declared_params.b {
+        let param: Node = self.nodes[self.children[declared_params.a + q]];
+        if param.b == 1 {
+            let param_name: Token = self.tokens[param.token];
+            let complained: Int = self.complain_at(src, param.token,
+                "in `" + substring(src, receiver.start, receiver.length) + "."
+                + substring(src, name.start, name.length) + "`, parameter `"
+                + substring(src, param_name.start, param_name.length)
+                + "` is declared `mutable`, which is not available on a METHOD yet — only on a free "
+                + "function. If the method should change its own receiver, write "
+                + "`function (mutable self) ...`.");
+        }
+        q += 1;
     }
     push(self.methods, Method {
         receiver_start: receiver.start, receiver_length: receiver.length,
@@ -1231,6 +1422,47 @@ function (mutable self: Unit) collect_declarations(src: String) -> Int {
                         + "`: `pure` means the answer depends on the arguments and nothing else, "
                         + "which is the same thing as touching nothing. Drop one of the two.");
                 }
+                // The C boundary, at the declaration. `external` picks which marshalling half
+                // applies; a plain function only ever gets the "there is nothing to marshal into"
+                // half. See `check_extern_return` and `check_marshalling`.
+                if item.kind == 86 {
+                    // The DECLARED return type, read again from the node rather than taken from
+                    // `return_type` above — `as_burxt_sees` has already folded CInt and CDouble into
+                    // the Int a Burxt caller receives, which is right for every other rule and wrong
+                    // for this one: it is precisely `-> CDouble` that has to be refused, and by then
+                    // it no longer says CDouble. The first version of this check read the converted
+                    // type and silently passed the one fixture it existed for.
+                    let returned: Int = self.check_extern_return(src, item.token,
+                        substring(src, name.start, name.length),
+                        self.declared_type(src, item.b));
+                    let marshalled: Int = self.check_marshalling(src, item.a, 1,
+                        "external function `" + substring(src, name.start, name.length) + "`");
+                } else {
+                    let marshalled: Int = self.check_marshalling(src, item.a, 0,
+                        "`function " + substring(src, name.start, name.length) + "`");
+                }
+                // Returning a FIXED array is not available yet: handing one back needs
+                // whole-array binding, which arrives with collections. The limit is stage-0's and it
+                // is named rather than half-supported — stage-1 accepted the signature and the
+                // backend then had no way to pass the block, so the two disagreed about whether the
+                // program exists.
+                // An interface OBJECT is a fat pointer that BORROWS the value behind it, so
+                // returning one hands back a reference to storage the call is about to drop. The
+                // same reasoning that refuses returning a region value, one level of indirection out.
+                if return_type.kind == 49 {
+                    let complained: Int = self.complain_at(src, item.token,
+                        "function `" + substring(src, name.start, name.length)
+                        + "` cannot return an interface object — it borrows the value it refers to, "
+                        + "which would not outlive the call. Return the concrete type, or a class "
+                        + "holding it.");
+                }
+                if return_type.kind == 48 {
+                    let complained: Int = self.complain_at(src, item.token,
+                        "function `" + substring(src, name.start, name.length)
+                        + "` cannot return an array yet — returning one needs whole-array binding, "
+                        + "which arrives with collections. Return a class holding it, or fill an "
+                        + "array the caller owns.");
+                }
                 let mutable flags: Int = item.value;
                 if item.kind == 86 {
                     // The external marker, plus the effect mask the extern declared. An extern's
@@ -1345,7 +1577,17 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
     }
 
     if n.kind == 6 {                                 // -x
-        return self.type_of(src, n.a, expected);
+        let inner: Type = self.type_of(src, n.a, expected);
+        // Negation needs a NUMBER. `-"nope"` and `-true` are not arithmetic on an odd type, they are
+        // not arithmetic at all — and stage-1 typed `-x` as simply the type of `x`, so both took the
+        // type of their operand and travelled on. Int, Decimal, CInt and CDouble are the four things
+        // a minus sign means something for.
+        if !is_unknown(inner) && inner.kind != 40 && inner.kind != 45 && inner.kind != 43
+           && inner.kind != 44 {
+            let complained: Int = self.complain_at(src, n.token,
+                "`-` needs a number, but this has type " + self.show_type(src, inner));
+        }
+        return inner;
     }
     if n.kind == 7 {                                 // !x
         let inner: Type = self.type_of(src, n.a, simple_type(41));
@@ -1503,6 +1745,54 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             let complained: Int = self.complain_at(src, n.token,
                 "cannot compare " + self.show_type(src, left) + " with " + self.show_type(src, right)
                 + ": one equality, no coercion");
+        }
+        // A Bool is not ORDERED. `true < false` has to pick which of the two is smaller, and there is
+        // no answer that is not a convention — so `==` and `!=` apply and the four ordering operators
+        // do not. Stage-1 allowed all six, because the rule above only asks whether the two SIDES
+        // agree, and two Bools agree.
+        let ordering_only: Bool = n.value != 12 && n.value != 13;   // not `==`, not `!=`
+        if ordering_only && left.kind == 41 {
+            let complained: Int = self.complain_at(src, n.token,
+                "Bools have no order: `<` does not apply; only `==` and `!=` do");
+        }
+        // A CLASS gets `==` field by field and no ordering at all, and the asymmetry is the point.
+        // Equality has one obvious meaning — every field equal — so it is derived. Ordering does not:
+        // `<` on a two-field class would have to decide which field is compared first, and nothing in
+        // the declaration says. Deriving it would be inventing a convention and hiding it inside an
+        // operator, which is the opposite of what this language is for.
+        if left.kind == 46 && !is_unknown(left) {
+            let decl: Int = self.find_type(src, left.name_start, left.name_length);
+            if decl >= 0 && self.types[decl].kind == 82 {
+                if ordering_only {
+                    let complained: Int = self.complain_at(src, n.token,
+                        "`<` on `" + self.show_type(src, left) + "` would have to decide which "
+                        + "field comes first, and nothing says which. Compare the fields you mean.");
+                } else {
+                    // Derived equality is only as available as its FIELDS are. A growable array
+                    // field is the case that stops it: `==` on one is a separate question — same
+                    // contents, or same storage — that nobody has answered, so a class holding one
+                    // cannot borrow an answer it does not have.
+                    let holder: Node = self.nodes[self.types[decl].node];
+                    let restore: Int = self.bind_from_application(src, left);
+                    let mutable f: Int = 0;
+                    while f < holder.b {
+                        let field: Node = self.nodes[self.children[holder.a + f]];
+                        let held: Type = self.resolve_shallow(src,
+                            self.declared_type(src, field.a));
+                        if held.kind == 47 {
+                            let field_named: Token = self.tokens[field.token];
+                            let complained: Int = self.complain_at(src, n.token,
+                                "`==` on `" + self.show_type(src, left) + "` needs every field to "
+                                + "be comparable, and `" + self.show_type(src, left) + "."
+                                + substring(src, field_named.start, field_named.length)
+                                + "` is a growable array, and `==` on one is a separate question "
+                                + "— same contents, or same storage — that nothing here answers.");
+                        }
+                        f += 1;
+                    }
+                    let dropped: Int = truncate(self.type_bindings, restore);
+                }
+            }
         }
         // Two values of a type PARAMETER: whether this is allowed is entirely what the bound
         // says. Without one, a parameter can be stored, copied, passed and returned and
@@ -1820,6 +2110,37 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
                     reaches);
             }
         }
+        // A MUTATING method writes through its receiver, so the receiver needs the same permission
+        // an assignment to it would need: it must be a variable, and that variable must be
+        // `let mutable`. Two refusals rather than one, because the two mistakes are different —
+        // `Account { ... }.deposit(1.00)` has nowhere for the change to land at all, while
+        // `acct.deposit(1.00)` has somewhere that was declared not to change.
+        //
+        // Stage-1 checked neither until v0.0.223, which is the same hole the write-through rule had:
+        // `mutable` was enforced on `x = v` and on nothing else, so a method declared
+        // `function (mutable self: Account)` could be called on an immutable binding and quietly
+        // rewrite it. Both are in the 43 stage-0 refused and stage-1 accepted.
+        if m.mutating == 1 {
+            let root: Int = self.lvalue_root(n.a);
+            if root < 0 {
+                let complained: Int = self.complain_at(src, n.token,
+                    "`" + substring(src, m.start, m.length)
+                    + "` is a mutating method (`function (mutable self: "
+                    + self.show_type(src, holder) + ") ...`); it can only be called on a "
+                    + "variable, not an expression.");
+            } else {
+                let base: Token = self.tokens[self.nodes[root].token];
+                let bound: Int = self.find_binding(src, base.start, base.length);
+                if bound >= 0 && self.bindings[bound].writable == 0 {
+                    let named: String = substring(src, base.start, base.length);
+                    let complained: Int = self.complain_at(src, n.token,
+                        "cannot call the mutating method `" + substring(src, m.start, m.length)
+                        + "` on `" + named + "`: it was declared immutable. Declare it "
+                        + "`let mutable " + named + ": " + self.show_type(src, holder)
+                        + "` to allow it.");
+                }
+            }
+        }
         if flag_private(m.flags) == 1 && !self.inside_class(src, holder) {
             let complained: Int = self.complain_at(src, n.token,
                 "`" + self.show_type(src, holder) + "."
@@ -2129,6 +2450,38 @@ function (mutable self: Unit) check_against_params(src: String, at: Int, list_no
                 "argument " + to_string(i + 1) + " should be " + self.show_type(src, want)
                 + ", but it is " + self.show_type(src, got));
         }
+        // `mutable xs: [Int]` says the CALL changes the caller's value, so the argument needs the
+        // same two things an assignment target needs: somewhere for the change to land, and
+        // permission to land it. Two refusals, because the two mistakes have different answers —
+        // `reverse([1, 2])` has nowhere at all, while `reverse(frozen)` has somewhere that was
+        // declared not to change.
+        //
+        // Checked HERE rather than at each call kind, because this function is the one place both a
+        // function call and a method call compare arguments against parameters — which is what its
+        // header already says it is for. The rule shipped in v0.0.201 and stage-1 never learned to
+        // refuse either misuse: two of the 43, and both silent, since the callee then writes through
+        // a pointer to something the caller believes is fixed.
+        if param.b == 1 {
+            let argument: Int = self.children[list.a + i];
+            let root: Int = self.lvalue_root(argument);
+            if root < 0 {
+                let complained: Int = self.complain_at(src, at,
+                    "argument " + to_string(i + 1) + " of this call is declared `mutable`, so the "
+                    + "call changes what it is given — and this is not something that can be "
+                    + "changed. Pass a `let mutable` variable.");
+            } else {
+                let base: Token = self.tokens[self.nodes[root].token];
+                let bound: Int = self.find_binding(src, base.start, base.length);
+                if bound >= 0 && self.bindings[bound].writable == 0 {
+                    let named: String = substring(src, base.start, base.length);
+                    let complained: Int = self.complain_at(src, at,
+                        "argument " + to_string(i + 1) + " is declared `mutable`, so this call can "
+                        + "change it — cannot modify `" + named + "`: it was declared immutable. "
+                        + "Declare it `let mutable " + named + ": "
+                        + self.show_type(src, self.bindings[bound].bound_type) + "` to allow it.");
+                }
+            }
+        }
         i += 1;
     }
     return 1;
@@ -2193,6 +2546,17 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
         if n.a >= 0 {
             declared = self.declared_type(src, n.a);
             let actual: Type = self.type_of(src, n.b, declared);
+            // An interface object BORROWS the storage of the value it refers to, so there has to be
+            // a value with storage to borrow. `let d: dynamic Priced = Book { cost: 1.00 };` points
+            // at a temporary that is gone by the next statement — a dangling fat pointer, accepted
+            // silently until now, and the same escape shape as returning one.
+            if declared.kind == 49 && self.lvalue_root(n.b) < 0 {
+                let complained: Int = self.complain_at(src, n.token,
+                    "a `" + self.show_type(src, declared) + "` must come from a variable — an "
+                    + "interface object borrows the storage of the value it refers to, and an "
+                    + "expression has none that outlives this statement. Bind it first, then take "
+                    + "the interface object.");
+            }
             if !is_unknown(actual) && !self.fits(src, actual, declared) {
                 let complained: Int = self.complain_at(src, n.token,
                     "declared " + self.show_type(src, declared) + ", but the value is "
@@ -2200,6 +2564,17 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
             }
         } else {
             declared = self.type_of(src, n.b, unknown_type());
+            // An ARRAY LITERAL does not say whether the array is fixed or growable, and the two are
+            // different types with different storage: `[Int; 3]` is a contiguous block, `[Int]` lives
+            // in a region and can grow. Inference removes typing, not deciding — there is nothing
+            // here to read the answer off, so the annotation is required rather than guessed.
+            let value_node: Node = self.nodes[n.b];
+            if value_node.kind == 17 {
+                let complained: Int = self.complain_at(src, n.token,
+                    "an array literal does not say whether the array is fixed or growable, so an "
+                    + "array binding names its type: `let xs: [Int; 3] = ...` for a fixed one, or "
+                    + "`let mutable xs: [Int] = ...` for a growable one.");
+            }
             // `let nothing = Option.None;` and `let b = Bag { items: [] };` name a generic
             // and settle nothing: the value carries no type to read `T` off. With an
             // annotation both are fine, so the fix is to write one, and the message says so
@@ -2217,8 +2592,27 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
             let complained: Int = self.complain_at(src, n.token,
                 "this name is already declared — Burxt does not shadow");
         }
+        // `in_region`: declared while a `region` was open, so region storage may be assigned to it
+        // — it dies with the region, which is correct. This is the ONLY site that marks, mirroring
+        // stage-0, where `region_scope.insert` happens on `Let` and nowhere else. The other five
+        // binding sites — a `for` element, a match payload, `self`, a parameter, `result` — pass 0,
+        // and that cannot cause a false refusal because none of them is assignable.
+        let mutable declared_in_region: Int = 0;
+        let mutable given_region_bytes: Int = 0;
+        if self.region_depth > 0 {
+            declared_in_region = 1;
+            // The same question the escape rules ask about a `return`, remembered instead of
+            // discarded: did this initializer build something in the region? If so the NAME is
+            // region storage from here on, and `return name` has to be refused exactly as
+            // `return <that expression>` already is. Stage-0's `region_locals.insert` on `Let`.
+            if self.expr_allocates(src, n.b) {
+                given_region_bytes = 1;
+            }
+        }
         push(self.bindings, Binding { start: name.start, length: name.length,
-                              bound_type: declared, writable: n.value, depth: self.depth });
+                              bound_type: declared, writable: n.value, depth: self.depth,
+                              in_region: declared_in_region,
+                              holds_region: given_region_bytes });
         return 1;
     }
 
@@ -2250,7 +2644,7 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
         let base: Int = len(self.bindings);
         self.depth += 1;
         push(self.bindings, Binding { start: name.start, length: name.length, bound_type: element,
-                              writable: 0, depth: self.depth });
+                              writable: 0, depth: self.depth, in_region: 0, holds_region: 0 });
         self.loop_depth += 1;
         let body: Int = self.check_block_nodes(src, n.b, return_type);
         self.loop_depth -= 1;
@@ -2267,6 +2661,12 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
             let complained: Int = self.complain_at(src, n.token,
                 "cannot assign " + self.show_type(src, got) + " to " + self.show_type(src, want));
         }
+        // A write THROUGH a name — `a[0] = 9`, `item.price = 2.00` — needs the same permission a
+        // write TO it does. The binding is the thing that was declared immutable, whichever way the
+        // write reaches it.
+        if target.kind == 11 || target.kind == 12 {
+            let refused: Int = self.refuse_immutable_write(src, n.a);
+        }
         // Only a `let mutable` binding may be assigned to.
         if target.kind == 5 {
             let name: Token = self.tokens[target.token];
@@ -2274,6 +2674,60 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
             if found >= 0 && self.bindings[found].writable == 0 {
                 let complained: Int = self.complain_at(src, target.token,
                     "this was declared immutable — declare it `let mutable` to allow it");
+            }
+            // ---- M1: region storage cannot be assigned OUTWARD -----------------------------
+            //
+            // Region storage may be assigned to a name declared INSIDE the region — it dies with
+            // the region, which is correct — but never to one declared outside it. Stage-0 gained
+            // this rule in v0.0.222 and stage-1 accepted the program until this line existed, so
+            // the two compilers disagreed about whether a use-after-free is a program.
+            //
+            // **What it looked like before the rule**, and it is worth writing down because it is
+            // the outcome this whole language exists to prevent:
+            //
+            //     let mutable kept: String = "";
+            //     region one_turn { let made: String = "turn " + to_string(turn); kept = made; }
+            //     print("after turn " + to_string(turn) + ": " + kept);
+            //
+            // printed `after turn 0: after turn 0` — `kept` reading back as the print statement's
+            // own concatenation buffer, because the region released its bytes at the closing brace
+            // and handed the same address out for the next allocation. It compiled clean, printed a
+            // plausible answer, and said nothing.
+            //
+            // Stage-0's version of this bug is the sharper lesson: its checker ALREADY marked
+            // `kept` as region storage, so `return kept` was refused — but the mark was cleared
+            // when the region closed, so the read afterwards was unguarded. **Marking a hazard is
+            // not refusing it**, and a rule one line away from being enforced is not a rule.
+            //
+            // The message does not name the region, where stage-0's says `region one_turn`. The
+            // region's name is not reachable here: it lives on the `region` node, and reaching it
+            // would take a `Unit` field, which would mean editing the `Unit { ... }` literal in
+            // `main.bx` — another change's file. The rule and the refusal are identical; only the
+            // quoted name is missing, and `tests/fail/` compares stage-1 by whether it refuses
+            // rather than by its wording, so nothing is claimed that is not delivered.
+            if self.region_depth > 0 && found >= 0 && self.expr_allocates(src, n.b) {
+                if self.bindings[found].in_region == 0 {
+                    let complained: Int = self.complain_at(src, target.token,
+                        "`" + substring(src, name.start, name.length) + "` was declared outside "
+                        + "this `region`, so it cannot be assigned a value built inside it — the "
+                        + "bytes are released at the closing brace and `"
+                        + substring(src, name.start, name.length) + "` would read whatever the "
+                        + "region hands out next. Declare `"
+                        + substring(src, name.start, name.length) + "` inside the region, or "
+                        + "build the value outside it.");
+                } else {
+                    // Legal — the name lives inside the region and dies with it — but it now HOLDS
+                    // region storage, so `return` of it must still be refused. Written back as a
+                    // whole `Binding` because Burxt has no `xs[i].field = v`; the same shape
+                    // `parse_record` uses to set a method's private bit. Stage-0's
+                    // `region_locals.insert` on the assignment path, and the half whose absence was
+                    // the v0.0.222 bug: it marked and then cleared, so the mark met nothing.
+                    let was: Binding = self.bindings[found];
+                    self.bindings[found] = Binding { start: was.start, length: was.length,
+                                          bound_type: was.bound_type, writable: was.writable,
+                                          depth: was.depth, in_region: was.in_region,
+                                          holds_region: 1 };
+                }
             }
         }
         return 1;
@@ -2460,6 +2914,17 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
             let complained: Int = self.complain_at(src, n.token,
                 "regions do not nest: the inner one would end while the outer is still "
                 + "open, and one bump pointer cannot serve two marks");
+        }
+        // A region's name and a variable's name live in one namespace as far as a READER is
+        // concerned: `region tx { ... }` under `let tx: Int = 1;` gives one word two meanings, and
+        // the reader has to know which is which to know what the block does. Refused rather than
+        // shadowed, which is the rule `let` already follows — Burxt does not shadow.
+        let region_named: Token = self.tokens[n.token];
+        if self.find_binding(src, region_named.start, region_named.length) >= 0 {
+            let complained: Int = self.complain_at(src, n.token,
+                "`" + substring(src, region_named.start, region_named.length)
+                + "` is already a variable, so it cannot name a region too — pick a different "
+                + "name.");
         }
         self.region_depth += 1;
         let body: Int = self.check_block_nodes(src, n.a, return_type);
@@ -2678,13 +3143,14 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int {
         // right for all three.
         let self_tok: Int = self.self_token(item.token);
         let word: Token = self.tokens[self_tok];
-        let mutable writable: Int = 0;
-        if item.value >= 4 { writable = 1; }
+        // `mutable self` and nothing else. Read with the accessor rather than `>= 4`; see
+        // `flag_mutating` for what that magnitude test cost.
+        let writable: Int = flag_mutating(item.value);
         push(self.bindings, Binding { start: word.start, length: word.length,
                               bound_type: Type { kind: 46, scale: 0, contract: 0,
                                        name_start: receiver.start,
                                        name_length: receiver.length },
-                              writable: writable, depth: self.depth });
+                              writable: writable, depth: self.depth, in_region: 0, holds_region: 0 });
     }
     let params: Node = self.nodes[item.a];
     let mutable p: Int = 0;
@@ -2716,7 +3182,7 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int {
         }
         push(self.bindings, Binding { start: name.start, length: name.length,
                               bound_type: declared, writable: param.b,
-                              depth: self.depth });
+                              depth: self.depth, in_region: 0, holds_region: 0 });
         p += 1;
     }
     let return_type: Type = self.declared_type(src, signature.c);
@@ -2831,7 +3297,7 @@ function (mutable self: Unit) check_clauses(src: String, index: Int, signature: 
             let spelling: Int = find_text(src, "result");
             if spelling >= 0 {
                 push(self.bindings, Binding { start: spelling, length: 6,
-                                      bound_type: return_type, writable: 0, depth: self.depth });
+                                      bound_type: return_type, writable: 0, depth: self.depth, in_region: 0, holds_region: 0 });
             }
         }
         let got: Type = self.type_of(src, clause.a, simple_type(41));
@@ -3040,6 +3506,39 @@ function (mutable self: Unit) check_impl(src: String, index: Int) -> Int {
                 let complained: Int = self.complain_at(src, item.token,
                     "this class does not have `" + substring(src, sig_name.start, sig_name.length)
                     + "`, which the interface it implements requires");
+            } else {
+                // A method with the right NAME is not conformance. This path checked only that one
+                // existed, so `function (self) price() -> Int` satisfied an interface declaring
+                // `-> Decimal<2>` — and the vtable then held a function returning the wrong width.
+                // The `implement Trait for Type` path had checked the whole signature all along;
+                // `class X implements Y` shares the interface and did not share the rule.
+                let mine: Method = self.methods[found_method];
+                let want_ret: Type = self.declared_type(src, sig.a);
+                if !self.same_type(src, mine.return_type, want_ret) {
+                    let complained: Int = self.complain_at(src, item.token,
+                        "in `class " + substring(src, holder.start, holder.length)
+                        + " implements " + substring(src, trait_name.start, trait_name.length)
+                        + "`, method `" + substring(src, sig_name.start, sig_name.length)
+                        + "` returns " + self.show_type(src, mine.return_type)
+                        + " but the interface declares " + self.show_type(src, want_ret) + ".");
+                }
+                if mine.mutating != sig.value {
+                    let complained: Int = self.complain_at(src, item.token,
+                        "in `class " + substring(src, holder.start, holder.length)
+                        + " implements " + substring(src, trait_name.start, trait_name.length)
+                        + "`, method `" + substring(src, sig_name.start, sig_name.length)
+                        + "` writes its receiver differently from the interface: `self` and "
+                        + "`mutable self` are different promises.");
+                }
+                let mine_params: Node = self.nodes[mine.parameters];
+                if mine_params.b != sig.c {
+                    let complained: Int = self.complain_at(src, item.token,
+                        "in `class " + substring(src, holder.start, holder.length)
+                        + " implements " + substring(src, trait_name.start, trait_name.length)
+                        + "`, method `" + substring(src, sig_name.start, sig_name.length)
+                        + "` takes " + to_string(mine_params.b)
+                        + " parameter(s), and the interface declares " + to_string(sig.c) + ".");
+                }
             }
             s += 1;
         }
@@ -3065,8 +3564,7 @@ function (mutable self: Unit) check_impl(src: String, index: Int) -> Int {
                 + "`, which the interface requires");
         } else {
             let method: Node = self.nodes[matched];
-            let mutable mutating: Int = 0;
-            if method.value >= 4 { mutating = 1; }
+            let mutating: Int = flag_mutating(method.value);
             if mutating != sig.value {
                 let complained: Int = self.complain_at(src, method.token,
                     "the interface writes this receiver differently: `self` and `mutable self` "

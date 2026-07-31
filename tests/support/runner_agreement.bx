@@ -1,0 +1,523 @@
+// ============================================================================
+// tests/support/runner_agreement.bx — is `tests/runner.bx` fit to be the suite's AUTHORITY?
+//
+//     runner_agreement <runner-binary> <compiler-binary> <work-dir>
+//
+// Andre, v0.0.222: *"runner.rs main runner should be bx, we should eventually get rid of rust —
+// not delete, but don't use as main. We are BURXT!"* Inverting that relationship means a Burxt
+// program decides whether Burxt works, and **the danger in that promotion is not that the Burxt
+// runner reports the wrong answer — it is that it reports a RIGHT answer about less than it
+// claims.** This file exists to make that specific failure impossible to reach quietly.
+//
+// ---- why a count is not enough ---------------------------------------------------------
+//
+// `the_suite_also_runs_on_burxt` in `tests/runner.rs` already checks two things, and they are
+// worth keeping: the Burxt runner says `all green`, and it says `ran N` where N is the number of
+// `.bx` files on disk. That catches a runner that stops early.
+//
+// It cannot catch two things, and both are this project's own recorded failure mode — *a floor
+// cannot see a fixture change hands*:
+//
+//   1. **Wrong set, right size.** 447 examined with one fixture counted twice and another
+//      skipped is `ran 447` too. So this file compares the SET, name by name, and requires each
+//      name exactly once — which needs the per-fixture verdicts `runner.bx` now prints.
+//   2. **Right set, no depth.** A runner that walked all 447 and compared nothing would print
+//      `ran 447, passed 447, failed 0` and be entirely green. **A count cannot distinguish
+//      "checked and correct" from "not checked."** That is the same hole as a pass fixture that
+//      cannot tell *supported* from *not examined*, and it is the reason the mutation oracle
+//      below is the important half of this file rather than an extra.
+//
+// ---- the mutation oracle ---------------------------------------------------------------
+//
+// For each thing a fixture asserts, break exactly that thing in a scratch copy of the tree and
+// require the runner to NAME that fixture as failing. Seven mutations, one per claim the three
+// fixture kinds make:
+//
+//     pass    .stdout changed            the recorded output is compared at all
+//     pass    source broken              compiling is required
+//     pass    .stdout missing            a fixture with no expectation is reported, not skipped
+//     fail    source made valid          being REFUSED is required, not just "not run"
+//     fail    .stderr changed            the reason is compared, not merely the exit code
+//     panic   .stderr changed            the death message is compared
+//     panic   source no longer dies      dying is required
+//
+// A runner that misses any of them is examining less than it says. This is the instrument the
+// promotion needs, and it is deliberately the crude kind: it does not read the runner's source,
+// it breaks something and asks whether the runner minds.
+//
+// **The scratch tree needs `lib/` beside `tests/`.** Eleven pass fixtures open with
+// `use "../../lib/vector.bx"`, so a copy of `tests/` alone fails 13 of them for a reason that
+// has nothing to do with the mutation under test — measured, and it is why `prepare` copies both.
+// A dirty baseline would have made every verdict here meaningless: the runner would have been
+// "noticing" failures it was going to report anyway.
+//
+// ---- what this file is NOT -------------------------------------------------------------
+//
+// It does not compare the Burxt runner against `runner.rs` verdict for verdict, and that is a
+// stated gap rather than an oversight. The Rust sweeps collect their failures into a `Vec` and
+// print them only when they assert, so **the Rust runner emits no per-fixture verdict when it is
+// green** — there is nothing to diff against on a healthy tree. Closing that needs `runner.rs`
+// to print a verdict line per fixture, which is one line in a file this file may not edit, and
+// it is reported instead. What is here is stronger than a green/green comparison anyway: two
+// runners that both examine nothing agree perfectly.
+// ============================================================================
+
+external function system(command: String) -> CInt touches commands;
+external function fopen(path: String, mode: String) -> CPointer touches files;
+external function fclose(stream: CPointer) -> CInt touches files;
+
+// The same guard `runner.bx` grew, and for the same reason: `read_file` on a missing path ends
+// the process instead of answering.
+function readable(path: String) -> Bool touches files {
+    let f: CPointer = fopen(path, "r");
+    if c_is_null(f) {
+        return false;
+    }
+    let closed: Int = fclose(f);
+    return true;
+}
+
+// Run a command, capturing both streams, and answer its exit code. `system` reports a wait
+// status; the exit code is its high byte.
+function run_capturing(command: String, output: String) -> Int touches commands {
+    let status: Int = system(command + " > " + output + " 2>&1");
+    return divide_floor(status, 256);
+}
+
+// ---- reading text -----------------------------------------------------------------------
+
+function line_end(text: String, from: Int) -> Int {
+    let mutable i: Int = from;
+    while i < len(text) && byte_at(text, i) != 10 {
+        i += 1;
+    }
+    return i;
+}
+
+function starts_with(text: String, at: Int, prefix: String) -> Bool {
+    if at + len(prefix) > len(text) {
+        return false;
+    }
+    let mutable i: Int = 0;
+    while i < len(prefix) {
+        if byte_at(text, at + i) != byte_at(prefix, i) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+function ends_with_bx(name: String) -> Bool {
+    let n: Int = len(name);
+    if n < 3 {
+        return false;
+    }
+    return byte_at(name, n - 3) == 46 && byte_at(name, n - 2) == 98
+        && byte_at(name, n - 1) == 120;
+}
+
+// ---- the report --------------------------------------------------------------------------
+
+class Report { checks: Int, problems: Int }
+
+function (mutable self: Report) claim(held: Bool, what: String) -> Int {
+    self.checks += 1;
+    if held {
+        print("  ok    " + what);
+        return 0;
+    }
+    self.problems += 1;
+    print("  BROKEN " + what);
+    return 0;
+}
+
+// ---- what is on disk ---------------------------------------------------------------------
+//
+// Burxt cannot list a directory — `opendir` answers a pointer and the memory model has nothing
+// to say about who owns it — so the shell lists it and the answer comes back through a file.
+// `runner.bx` says the same thing at greater length; the limit is real, worked around in the
+// open, and it is the first thing a standard library will hide.
+class Fixtures { kinds: [String], names: [String] }
+
+function (mutable self: Fixtures) gather(kind: String, work: String) -> Int touches files, commands {
+    let listing: String = work + "/listing-" + kind;
+    let status: Int = system("ls tests/" + kind + " > " + listing + " 2>/dev/null");
+    let text: String = read_file(listing);
+    let mutable at: Int = 0;
+    while at < len(text) {
+        let stop: Int = line_end(text, at);
+        let entry: String = substring(text, at, stop - at);
+        if ends_with_bx(entry) {
+            push(self.kinds, kind);
+            push(self.names, substring(entry, 0, len(entry) - 3));
+        }
+        at = stop + 1;
+    }
+    return len(self.names);
+}
+
+// ---- what the runner examined ------------------------------------------------------------
+//
+// Parsed from the verdict lines rather than from the summary. A verdict is `ok kind/name` or
+// `not ok kind/name: why`, and both are reduced to `kind/name` here — this comparison is about
+// WHICH fixtures were examined, not what they answered.
+// Fixture verdicts only. An `ok invariant/NAME` line is a verdict too, and it must NOT enter the
+// set comparison below — the set is compared against the `.bx` files in `tests/{pass,fail,panic}`,
+// and an invariant has no file. Folding them in made the runner look like it had examined 449 of
+// 447 fixtures.
+function is_fixture_label(label: String) -> Bool {
+    return starts_with(label, 0, "pass/") || starts_with(label, 0, "fail/")
+        || starts_with(label, 0, "panic/");
+}
+
+class Examined { seen: [String], failed: [String], claims: [String], claims_failed: [String] }
+
+function (mutable self: Examined) read(output: String) -> Int {
+    let mutable at: Int = 0;
+    while at < len(output) {
+        let stop: Int = line_end(output, at);
+        if starts_with(output, at, "ok ") {
+            let label: String = substring(output, at + 3, stop - at - 3);
+            if is_fixture_label(label) {
+                push(self.seen, label);
+            } else {
+                push(self.claims, label);
+            }
+        } else if starts_with(output, at, "not ok ") {
+            // `not ok kind/name: why` — the label ends at the colon.
+            let mutable cut: Int = at + 7;
+            while cut < stop && byte_at(output, cut) != 58 {
+                cut += 1;
+            }
+            let label: String = substring(output, at + 7, cut - at - 7);
+            if is_fixture_label(label) {
+                push(self.seen, label);
+                push(self.failed, label);
+            } else {
+                push(self.claims, label);
+                push(self.claims_failed, label);
+            }
+        }
+        at = stop + 1;
+    }
+    return len(self.seen);
+}
+
+function (self: Examined) count_of(label: String) -> Int {
+    let mutable found: Int = 0;
+    for one in self.seen {
+        if one == label {
+            found += 1;
+        }
+    }
+    return found;
+}
+
+function (self: Examined) named_failing(label: String) -> Bool {
+    for one in self.failed {
+        if one == label {
+            return true;
+        }
+    }
+    return false;
+}
+
+// ---- how much of `runner.rs` the Burxt runner answers -----------------------------------
+//
+// **A number, because a document rots and a number can be ratcheted.** The inventory of what has
+// and has not moved was a report first; a report is true on the day it is written and silently
+// false a week later. So the same question is asked here by measurement: how many of the `#[test]`
+// invariants in `tests/runner.rs` does `tests/runner.bx` answer by NAME?
+//
+// The Rust side is read from the source; the Burxt side is read from the runner's own verdicts
+// rather than from `invariant_names` — what RUNS is the honest list, and an invariant that is
+// declared and never dispatched would inflate a source parse while changing nothing real.
+//
+// The floor below is a floor and not an equality on purpose. It is `spec/M4`'s ratchet shape: it
+// may only go up, and the day it can be raised is the day someone should raise it.
+function rust_invariant_names(work: String) -> [String] touches files, commands {
+    let mutable names: [String] = [];
+    let text: String = read_file("tests/runner.rs");
+    let mutable at: Int = 0;
+    let mutable armed: Bool = false;
+    while at < len(text) {
+        let stop: Int = line_end(text, at);
+        // `#[test]` sits on its own line, then the function follows — with doc comments and
+        // attributes possibly in between, which is why `armed` survives until the `fn` is seen.
+        if starts_with(text, at, "#[test]") {
+            armed = true;
+        } else if armed && starts_with(text, at, "fn ") {
+            let mutable j: Int = at + 3;
+            while j < stop && byte_at(text, j) != 40 {
+                j += 1;
+            }
+            push(names, substring(text, at + 3, j - at - 3));
+            armed = false;
+        }
+        at = stop + 1;
+    }
+    return names;
+}
+
+// ---- the scratch tree --------------------------------------------------------------------
+
+// A fresh copy of everything a fixture can reach. `lib/` is not optional: see the header.
+function prepare(scratch: String) -> Int touches commands {
+    let wiped: Int = system("rm -rf " + scratch + " && mkdir -p " + scratch);
+    let copied: Int = system("cp -r tests " + scratch + "/tests && cp -r lib " + scratch + "/lib");
+    let made: Int = system("mkdir -p " + scratch + "/work");
+    return 0;
+}
+
+// An absolute path for something the caller may have named relatively.
+//
+// **Not a tidiness fix.** Every run below changes directory into a scratch copy of the tree, and
+// `./target/release/burxt` does not exist there. The first version passed the caller's string
+// through unchanged: 143 pass fixtures failed with `exited 2`, the untouched-tree check reported
+// 447 failures, and the mutation results were meaningless because the baseline was already red.
+// A relative path is a different path once you `cd`, and this harness `cd`s nine times.
+function absolute(path: String, work: String) -> String touches files, commands {
+    let answer: String = work + "/abs";
+    let status: Int = system("realpath " + path + " > " + answer + " 2>/dev/null");
+    let text: String = read_file(answer);
+    let mutable n: Int = len(text);
+    while n > 0 && byte_at(text, n - 1) == 10 {
+        n -= 1;
+    }
+    if n == 0 {
+        return path;                                 // not a path on disk; let the caller fail loudly
+    }
+    return substring(text, 0, n);
+}
+
+// Run the runner over a tree and answer everything it printed.
+//
+// The runner's own scratch is `where`, and it is created here rather than assumed. The first
+// version passed `tree + "/work"` and never made it, so with `tree` = the repository root the
+// runner tried to write `./work/out` — which is both nonexistent AND inside the repository, where
+// `the_repository_root_holds_only_what_belongs_there` would have failed the whole suite.
+function runner_output(runner: String, compiler: String, tree: String, where: String,
+                      only: String, log: String) -> String touches files, commands
+{
+    let made: Int = system("mkdir -p " + where);
+    let ran: Int = run_capturing("cd " + tree + " && " + runner + " " + compiler + " " + where
+                                 + " " + only, log);
+    return read_file(log);
+}
+
+// ---- one mutation ------------------------------------------------------------------------
+
+// Break one thing, and require the runner to name the fixture it broke.
+//
+// The fixture is whichever one the listing named first, not a hard-coded name: a hard-coded
+// fixture is a test that quietly stops testing the day someone renames a file, which is exactly
+// the class of rot this whole file is built to catch.
+function (mutable self: Report) mutation(runner: String, compiler: String, scratch: String,
+                                         label: String, kind: String, name: String,
+                                         command: String) -> Int touches files, commands
+{
+    let prepared: Int = prepare(scratch);
+    let broken: Int = system(command);
+    // Only the mutated fixture is re-run. **Eight full sweeps cost five minutes and asked eight
+    // questions**; the same eight questions against one fixture each cost under a second, which is
+    // the difference between an invariant CI runs on every commit and one nobody waits for.
+    let output: String = runner_output(runner, compiler, scratch, scratch + "/work",
+                                       kind + "/" + name, scratch + "/log");
+    let mutable found: Examined = Examined { seen: [], failed: [], claims: [],
+                                             claims_failed: [] };
+    let parsed: Int = found.read(output);
+    let noticed: Bool = found.named_failing(kind + "/" + name);
+    // A runner that examined nothing would also fail to notice, so the count is checked too:
+    // "did not notice" and "did not run" are different diseases with the same symptom.
+    if parsed == 0 {
+        let claimed: Int = self.claim(false, label + " — the runner produced NO verdicts at all");
+        return 0;
+    }
+    return self.claim(noticed, label);
+}
+
+// ---- the run -----------------------------------------------------------------------------
+
+region agreement {
+    let mutable runner: String = "/tmp/burxt-runner";
+    if argument_count() > 1 {
+        runner = argument(1);
+    }
+    let mutable compiler: String = "./target/release/burxt";
+    if argument_count() > 2 {
+        compiler = argument(2);
+    }
+    let mutable work: String = "/tmp/burxt-agreement";
+    if argument_count() > 3 {
+        work = argument(3);
+    }
+    let made: Int = system("mkdir -p " + work);
+    let scratch: String = work + "/tree";
+    // Resolved before anything changes directory. See `absolute`.
+    let repo: String = absolute(".", work);
+    runner = absolute(runner, work);
+    compiler = absolute(compiler, work);
+
+    print("runner agreement: " + runner);
+    print("  compiler: " + compiler);
+    print("  tree:     " + repo);
+
+    let mutable report: Report = Report { checks: 0, problems: 0 };
+
+    // ---- 1. the set, name by name ----
+    //
+    // Not the count. See the header: 447 with one fixture twice and one missing is `ran 447`.
+    let mutable disk: Fixtures = Fixtures { kinds: [], names: [] };
+    let a: Int = disk.gather("pass", work);
+    let b: Int = disk.gather("fail", work);
+    let c: Int = disk.gather("panic", work);
+    print("fixtures on disk: " + to_string(len(disk.names)));
+
+    // The real tree, with the runner's scratch under /tmp — never `./work`, which would put a
+    // directory in the repository root.
+    let whole: String = runner_output(runner, compiler, repo, work + "/runner-work", "",
+                                      work + "/log");
+    let mutable examined: Examined = Examined { seen: [], failed: [], claims: [],
+                                                claims_failed: [] };
+    let read: Int = examined.read(whole);
+    print("verdicts from the runner: " + to_string(read));
+
+    let mutable missing: Int = 0;
+    let mutable twice: Int = 0;
+    let mutable i: Int = 0;
+    while i < len(disk.names) {
+        let label: String = disk.kinds[i] + "/" + disk.names[i];
+        let times: Int = examined.count_of(label);
+        if times == 0 {
+            missing += 1;
+            print("  NOT EXAMINED: " + label);
+        }
+        if times > 1 {
+            twice += 1;
+            print("  EXAMINED " + to_string(times) + " TIMES: " + label);
+        }
+        i += 1;
+    }
+    let claimed_a: Int = report.claim(missing == 0,
+        "every fixture on disk got a verdict (" + to_string(len(disk.names)) + ")");
+    let claimed_b: Int = report.claim(twice == 0, "no fixture got two verdicts");
+    // The other direction: a verdict for something not on disk means the runner invented a
+    // fixture, or a name was parsed wrong. Equal sizes plus no duplicates plus none missing is
+    // set equality, so this is the arithmetic that closes it.
+    let claimed_c: Int = report.claim(read == len(disk.names),
+        "the runner examined exactly what is on disk, no more");
+
+    // ---- 2. the mutation oracle ----
+    //
+    // The half that a count cannot supply. See the header.
+    print("mutations (each must be NOTICED):");
+    let p: String = disk.names[0];                   // the first pass fixture the listing named
+    let mutable first_fail: String = "";
+    let mutable first_panic: String = "";
+    let mutable k: Int = 0;
+    while k < len(disk.names) {
+        if disk.kinds[k] == "fail" && len(first_fail) == 0 {
+            first_fail = disk.names[k];
+        }
+        if disk.kinds[k] == "panic" && len(first_panic) == 0 {
+            first_panic = disk.names[k];
+        }
+        k += 1;
+    }
+
+    let m1: Int = report.mutation(runner, compiler, scratch,
+        "pass/" + p + ": .stdout changed", "pass", p,
+        "printf 'a line nothing prints\\n' >> " + scratch + "/tests/pass/" + p + ".stdout");
+    let m2: Int = report.mutation(runner, compiler, scratch,
+        "pass/" + p + ": source broken", "pass", p,
+        "printf 'let never_typechecks: Int = \\\"no\\\";\\n' >> "
+        + scratch + "/tests/pass/" + p + ".bx");
+    let m3: Int = report.mutation(runner, compiler, scratch,
+        "pass/" + p + ": .stdout missing", "pass", p,
+        "rm " + scratch + "/tests/pass/" + p + ".stdout");
+    let m4: Int = report.mutation(runner, compiler, scratch,
+        "fail/" + first_fail + ": source made valid", "fail", first_fail,
+        "printf 'print(1);\\n' > " + scratch + "/tests/fail/" + first_fail + ".bx");
+    let m5: Int = report.mutation(runner, compiler, scratch,
+        "fail/" + first_fail + ": .stderr changed", "fail", first_fail,
+        "printf 'a reason no diagnostic gives\\n' > "
+        + scratch + "/tests/fail/" + first_fail + ".stderr");
+    let m6: Int = report.mutation(runner, compiler, scratch,
+        "panic/" + first_panic + ": .stderr changed", "panic", first_panic,
+        "printf 'a death no program dies of\\n' > "
+        + scratch + "/tests/panic/" + first_panic + ".stderr");
+    let m7: Int = report.mutation(runner, compiler, scratch,
+        "panic/" + first_panic + ": no longer dies", "panic", first_panic,
+        "printf 'print(1);\\n' > " + scratch + "/tests/panic/" + first_panic + ".bx");
+
+    // ---- 3. the untouched tree is green ----
+    //
+    // Last on purpose. A dirty baseline makes every mutation above meaningless — the runner
+    // would be "noticing" failures it was going to report anyway — so this is the check that
+    // licenses the other seven, and it is stated after them because that is the order a reader
+    // needs it in.
+    let prepared: Int = prepare(scratch);
+    let clean: String = runner_output(runner, compiler, scratch, scratch + "/work", "",
+                                      scratch + "/log");
+    let mutable base: Examined = Examined { seen: [], failed: [], claims: [],
+                                            claims_failed: [] };
+    let counted: Int = base.read(clean);
+    let claimed_d: Int = report.claim(len(base.failed) == 0,
+        "an untouched copy of the tree is green (" + to_string(len(base.failed))
+        + " failures), which is what makes the mutations above mean anything");
+
+    // ---- 4. how much of the Rust suite has moved ----
+    print("coverage of tests/runner.rs:");
+    let rust_names: [String] = rust_invariant_names(work);
+    let mutable answered: Int = 0;
+    let mutable shown: Int = 0;
+    // The three fixture sweeps are answered by the fixture walk rather than by a named invariant,
+    // so they are credited here. `runner.bx` states that list itself (`answered_by_the_fixture_
+    // sweep`), and it is repeated as text rather than read from it for the same reason the Rust
+    // names are read from source: this harness must not take the runner's word for its own
+    // coverage. Three names is a small enough duplication to check by eye.
+    for wanted in rust_names {
+        let mutable here: Bool = false;
+        if wanted == "pass_programs_produce_expected_stdout" { here = true; }
+        if wanted == "fail_programs_are_rejected_with_expected_error" { here = true; }
+        if wanted == "panic_programs_die_cleanly_at_runtime" { here = true; }
+        for got in examined.claims {
+            if got == "invariant/" + wanted {
+                here = true;
+            }
+        }
+        if here {
+            answered += 1;
+        } else if shown < 6 {
+            print("  not yet in Burxt: " + wanted);
+            shown += 1;
+        }
+    }
+    print("  answered " + to_string(answered) + " of " + to_string(len(rust_names))
+          + " invariants in tests/runner.rs");
+    // The FLOOR, which is the only part that can fail. Raise it whenever it can be raised; never
+    // lower it. Two is what has moved so far, and stating it as a floor is what stops the next
+    // change from quietly removing one.
+    let claimed_e: Int = report.claim(answered >= 5,
+        "at least 5 of runner.rs's invariants are answered in Burxt (answered "
+        + to_string(answered) + ")");
+    // Against the REAL repository, and the first version got this wrong in an instructive way. It
+    // read the untouched SCRATCH copy, which holds only `tests/` and `lib/` — so
+    // `the_repository_root_holds_only_what_belongs_there` correctly called `work` a stray and
+    // `every_example_still_typechecks` correctly found no examples, and the harness reported the
+    // runner unfit for reporting the truth. **A fixture is a program and travels with a copy of
+    // the tree; an invariant is a claim ABOUT the tree and does not.** That is the distinction
+    // that makes them two counts rather than one, and this is where forgetting it shows up.
+    let claimed_f: Int = report.claim(len(examined.claims_failed) == 0,
+        "every invariant the Burxt runner does answer, holds against the real repository");
+
+    let tidy: Int = system("rm -rf " + scratch);
+    print("---");
+    print("checked " + to_string(report.checks) + ", broken " + to_string(report.problems));
+    if report.problems > 0 {
+        print("THE RUNNER IS NOT FIT TO BE THE AUTHORITY");
+        exit(1);
+    }
+    print("the runner examines what it claims to examine");
+}

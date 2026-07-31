@@ -182,6 +182,15 @@ function (mutable self: Unit) parse_type(src: String) -> Int {
         if !self.eat(src, 35, "`<` after `Decimal`") { return -1; }
         if !self.at(2) { return self.complain(src, "a scale, e.g. `Decimal<2>`"); }
         let scale: Int = self.tokens[self.position].value;
+        // 0..18, because a Decimal IS a scaled i64 and 10^19 does not fit in one. Accepting a wider
+        // scale is not a missing diagnostic, it is a wrong ANSWER: every arithmetic result would
+        // silently overflow the unscaled integer while the type claimed the precision was there.
+        // Refused at the type rather than at the first operation, so the message names the
+        // declaration the reader can fix.
+        if scale < 0 || scale > 18 {
+            return self.complain(src, "a scale between 0 and 18 — this is "
+                + to_string(scale) + ", and a scaled i64 holds at most 18 fractional digits");
+        }
         let m: Int = self.advance();
         let mutable contract: Int = 0;
         if self.at(22) {                             // ','
@@ -211,11 +220,32 @@ function (mutable self: Unit) parse_type(src: String) -> Int {
             let semi: Int = self.advance();
             if !self.at(2) { return self.complain(src, "an array length"); }
             let count: Int = self.tokens[self.position].value;
+            // `[Int; 0]` describes storage no value can occupy, and every index into it is out of
+            // bounds — so it is a type with no inhabitants, written by accident. Refused at the type
+            // rather than at the first index, because there may never be one.
+            if count < 1 {
+                return self.complain(src, "an array length of at least 1 — an array must hold at "
+                    + "least one value, and `[T; 0]` is storage nothing can occupy");
+            }
             let m: Int = self.advance();
             if !self.eat(src, 34, "`]` closing the array type") { return -1; }
             return self.add(48, elem, count, 0, 0, here);
         }
         if !self.eat(src, 34, "`]` closing the slice type") { return -1; }
+        // `[[Int]]` — a GROWABLE array whose element is itself an array. Refused because the element
+        // would need its own region reasoning: a growable array lives in a region, and one holding
+        // another would have to say which region the inner storage belongs to and when it is
+        // released. A named limit, not a rule: a class element carries the same data and answers the
+        // question, which is what the message says to do.
+        //
+        // A FIXED array of arrays is untouched — `[[Int; 2]; 3]` is one contiguous block with no
+        // second owner — so this asks about the element of a slice only.
+        let element: Node = self.nodes[elem];
+        if element.kind == 47 || element.kind == 48 {
+            return self.complain(src, "an element that is not itself an array — a growable array "
+                + "cannot hold one yet, because its element would need its own region reasoning. "
+                + "Use a class element");
+        }
         return self.add(47, elem, 0, 0, 0, here);
     }
     if k == 1 {                                      // a named record, enum or trait
@@ -418,12 +448,31 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
                 + self.show_type(src, second));
         }
         if second_node >= 0 {
-            let counted: Node = self.nodes[second_node];
-            if counted.kind == 1 {
-                if counted.value < 0 {
+            // `-1` is a unary minus WRAPPING the literal 1, not a literal holding -1: the lexer
+            // reads no sign. So this rule existed and never fired — it tested `kind == 1` and every
+            // negative count it was written for arrives as kind 6. Unwrapped here, which is the same
+            // one-level-too-shallow mistake the class-literal escape rule had, found the same way.
+            let mutable counted: Node = self.nodes[second_node];
+            let mutable magnitude: Int = counted.value;
+            let mutable negative: Bool = false;
+            if counted.kind == 6 {
+                let inner: Node = self.nodes[counted.a];
+                if inner.kind == 1 {
+                    negative = true;
+                    magnitude = inner.value;
+                    counted = inner;
+                }
+            }
+            if counted.kind == 1 && (negative || counted.value < 0) {
+                let mutable shown: Int = magnitude;
+                if negative {
+                    shown = 0 - magnitude;
+                }
+                if shown < 0 {
                     let complained: Int = self.complain_at(src, at,
-                        "`c_bytes_at(p, " + to_string(counted.value) + ")` asks for a negative "
-                        + "number of bytes, which is not a smaller read but an enormous one");
+                        "`c_bytes_at(p, " + to_string(shown) + ")` asks for a negative "
+                        + "number of bytes, which is not a smaller read but an enormous one. "
+                        + "A count is 0 or more.");
                 }
             }
         }
@@ -697,6 +746,18 @@ function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: No
         let sig: Node = self.nodes[self.children[item.a + i]];
         let named: Token = self.tokens[sig.token];
         if spans_equal(src, named.start, named.length, wanted.start, wanted.length) {
+            // A MUTATING method through an interface object is not available yet, and the limit is
+            // the emitter's: a `dynamic` value is a fat pointer that BORROWS its referent, so the
+            // vtable would have to carry a writable receiver and nothing arranges that. Named rather
+            // than half-supported — stage-1 accepted the call and the write went to the borrowed
+            // copy, which is a silent wrong answer rather than a missing feature.
+            if sig.value == 1 {
+                let complained: Int = self.complain_at(src, call.token,
+                    "`" + substring(src, named.start, named.length) + "` takes `mutable self`, and "
+                    + "calling a mutating method through an interface object is not available yet: "
+                    + "an interface object borrows the value it refers to, so there is nothing for "
+                    + "the change to reach. Call it on the concrete type.");
+            }
             // An interface signature's parameters live in `nested_children`, after the receiver.
             let list: Node = self.nodes[call.b];
             if list.b != sig.c {
@@ -851,7 +912,8 @@ function (mutable self: Unit) bind_arm(src: String, holder: Type, arm: Node) -> 
                 let stated: Type = self.declared_type(src, self.nested_children[variant.b + p]);
                 let payload_type: Type = self.resolve_deep(src, stated, arm.token);
                 push(self.bindings, Binding { start: name.start, length: name.length,
-                                      bound_type: payload_type, writable: 0, depth: self.depth + 1 });
+                                      bound_type: payload_type, writable: 0, depth: self.depth + 1,
+                                      in_region: 0, holds_region: 0 });
                 p += 1;
             }
             let dropped: Int = truncate(self.type_bindings, bound_base);
@@ -917,19 +979,62 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
     if n.kind == 6 || n.kind == 7 {
         return self.expr_allocates(src, n.a);
     }
+    // A bare NAME allocates when it HOLDS region storage — see `Binding.holds_region`.
+    //
+    // Without this case a built value launders itself through a binding: `region r { let s = "a" +
+    // "b"; return s; }` is the same escape as `return "a" + "b"`, which was already refused, and
+    // the only difference is a name in between. Stage-0 reads its `region_locals` set here for
+    // exactly this reason, with the comment "slipped past the rule that refuses `return "a" + "b"`".
+    //
+    // The mark is only ever set while a region is open, so an ordinary `let` outside one is
+    // untouched and the ALLOCATION INFERENCE does not move — which matters, because this function
+    // is what decides whether a function is `allocates`, and a name that suddenly counted as built
+    // would re-classify functions that have nothing to do with regions.
+    if n.kind == 5 {
+        let named: Token = self.tokens[n.token];
+        let found: Int = self.find_binding(src, named.start, named.length);
+        if found < 0 {
+            return false;
+        }
+        return self.bindings[found].holds_region == 1;
+    }
     // `e?` hands back a value read out of `e`'s OWN cells — and for an aggregate payload that
     // value is a pointer into them, not a copy. So it is built exactly when `e` is, and answering
     // `false` here would let a function return a pointer into storage its region just closed.
     if n.kind == 22 {
         return self.expr_allocates(src, n.a);
     }
-    if n.kind == 17 || n.kind == 19 {                // an array or class literal
+    if n.kind == 17 {                                // an array literal: children ARE the values
         if self.type_at(node).kind == 47 {
             return true;                             // a growable array lives in a region
         }
         let mutable i: Int = 0;
         while i < n.b {
             if self.expr_allocates(src, self.children[n.a + i]) {
+                return true;
+            }
+            i += 1;
+        }
+        return false;
+    }
+    // A class literal. Its children are field PAIRS — kind 18, with the value in `a` and the field's
+    // name on the token — not the values themselves, which is one level deeper than an array
+    // literal's. Reading the pair as if it were the value asked `expr_allocates` about a node kind it
+    // does not handle, so the answer was always `false`, and
+    // `tests/fail/escape_via_record_field.bx` — `return Named { word: substring(src, 0, 3) }` inside
+    // a region — compiled clean and returned a pointer into released bytes.
+    //
+    // Found while fixing the assignment rule, by sweeping every `tests/fail/` fixture stage-1 still
+    // accepts rather than by reading this function. The one-level-deep mistake is invisible on
+    // inspection precisely because the loop looks right.
+    if n.kind == 19 {
+        if self.type_at(node).kind == 47 {
+            return true;
+        }
+        let mutable i: Int = 0;
+        while i < n.b {
+            let pair: Node = self.nodes[self.children[n.a + i]];
+            if self.expr_allocates(src, pair.a) {
                 return true;
             }
             i += 1;
@@ -955,6 +1060,21 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
         if found >= 0 {
             return flag_allocates(self.functions[found].flags) == 1;
         }
+        // A BUILTIN's answer is decided by the cases above and by nothing else — in particular not
+        // by its arguments. `substring`, `read_file`, `argument` and `to_string` build a String and
+        // said so already; every other builtin answers a scalar it computed, so a built ARGUMENT
+        // does not make the ANSWER built. `len(xs)` is an Int whoever `xs` is.
+        //
+        // This line is here because the fallthrough below cost two false refusals the moment a bare
+        // name could be region storage: `return len(xs)` and `total = len(joined)` inside a region
+        // were both refused, in `tests/pass/region_released_on_return.bx` and
+        // `tests/pass/inferred_allocates.bx`. The fallthrough was never wrong before, because a name
+        // never answered true — which is the useful shape of the failure: a latent divergence that
+        // only a second change could expose. Stage-0 has no such case at all, because it asks
+        // `alloc_fns.contains(name)` and never looks at a call's arguments.
+        if builtin_arity(substring(src, name.start, name.length)) >= 0 {
+            return false;
+        }
         // An enum constructor carries its payload, so it is built if the payload is.
         let list: Node = self.nodes[n.a];
         let mutable i: Int = 0;
@@ -967,6 +1087,29 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
         return false;
     }
     if n.kind == 14 {                                // a method call
+        // `Enum.Variant(payload)` is ALSO a method-call node — the base is a type name rather than a
+        // value — and a variant carries its payload, so it is built when the payload is. Told apart
+        // the same way `emit_construction` tells it apart: the base is a bare name that resolves to
+        // an enum declaration. Without this, `return Wrapped.Some(substring(src, 0, 3))` inside a
+        // region was accepted (`tests/fail/escape_via_enum_payload.bx`): `find_method` looks for a
+        // method called `Some`, finds none, and answered `false` — a "no" that meant "I did not
+        // recognise this" rather than "it does not allocate".
+        let base: Node = self.nodes[n.a];
+        if base.kind == 5 {
+            let base_name: Token = self.tokens[base.token];
+            let declared: Int = self.find_type(src, base_name.start, base_name.length);
+            if declared >= 0 && self.types[declared].kind == 83 {
+                let list: Node = self.nodes[n.b];
+                let mutable i: Int = 0;
+                while i < list.b {
+                    if self.expr_allocates(src, self.children[list.a + i]) {
+                        return true;
+                    }
+                    i += 1;
+                }
+                return false;
+            }
+        }
         let holder: Type = self.type_at(n.a);
         let found: Int = self.find_method(src, holder, n.token);
         if found >= 0 {
@@ -1188,6 +1331,21 @@ function flag_external(flags: Int) -> Int {
 // builds-in-caller, 4 is a mutating receiver and 8 is external.
 function flag_private(flags: Int) -> Int {
     return remainder(divide_floor(flags, 16), 2);
+}
+// `mutable self` — bit 2, the receiver's own writability.
+//
+// **This helper is late, and its absence was a real bug rather than an untidiness.** Three places
+// read the bit as `item.value >= 4`, which is a MAGNITUDE test on a BITMASK: `private` is 16 and the
+// effect mask starts at 64, so a `private function (self) ...` or any method declaring `touches`
+// read as `mutable self`. It was invisible for as long as nothing consumed the answer, and it
+// surfaced the moment a rule did — `self.spendable()` inside `Account.statement()` was refused as
+// "cannot call the mutating method `spendable` on `self`" in `tests/pass/class_private_members.bx`,
+// where `spendable` is private and mutates nothing.
+//
+// Every other flag already had a named accessor doing the arithmetic correctly. The one bit that
+// did not is the one that was wrong, which is the argument for the helper existing at all.
+function flag_mutating(flags: Int) -> Int {
+    return remainder(divide_floor(flags, 4), 2);
 }
 // An ASSOCIATED function — `function open(...)` inside a class body, with no receiver clause.
 // Bit 5. It is stored as a method so that the lookup `Account` + `open` finds it, which is the
@@ -1837,6 +1995,16 @@ function (mutable self: Unit) parse_params(src: String) -> Int {
             let a: Int = self.advance();
             if !self.at(1) {
                 return self.complain(src, "a marshaller name, e.g. `scaled`");
+            }
+            // A CLOSED vocabulary, checked here where the word is read, exactly as `effect_bit`
+            // closes the `touches` list — and for the same reason: a typo that invented a
+            // marshaller would be a silent no-op at the one crossing where being wrong means C
+            // reads a Decimal as something else entirely.
+            let marshaller: Token = self.tokens[self.position];
+            if !span_equal(src, marshaller.start, marshaller.length, "scaled") {
+                return self.complain(src, "the boundary marshaller `scaled` — it is the only one, "
+                    + "as in `amount: Decimal<2> as scaled`, which passes the exact unscaled "
+                    + "integer");
             }
             marshalled = 1;
             let m: Int = self.advance();
