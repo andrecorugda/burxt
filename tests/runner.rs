@@ -4679,6 +4679,84 @@ fn no_document_claims_a_coverage_number_the_suite_refutes() {
     );
 }
 
+/// **A Burxt program reads standard input, including a framed protocol message.**
+///
+/// This test replaces a claim that was wrong. v0.0.216's parity map said `lsp.rs` was *"BLOCKED,
+/// not merely missing — the language server frames LSP messages over STDIN, and Burxt has no
+/// stdin. No builtin reads it, and `fread` is unreachable because a caller cannot make a pointer
+/// to writable memory."* Every sentence there is a fact and the conclusion is false:
+/// `external function getchar() -> CInt touches input` was already declared in `lib/os.bx` and
+/// already in use, and a byte at a time is all a framed protocol needs.
+///
+/// **The failure was in the method.** I reasoned about the wall instead of walking up to it — two
+/// versions after adding `no_document_claims_a_coverage_number_the_suite_refutes`, whose entire
+/// purpose is to stop a stale claim from being believed. That test checks numbers, and *"there is
+/// no way to do X"* has no number in it. Prose of that shape has no instrument but the habit:
+///
+/// > **Before writing "blocked", run the smallest program that would prove it.**
+///
+/// So `lsp.bx` is ordinary work, and this is what makes that statement checkable rather than
+/// another assertion. It lives in `tests/support/` because the pass harness gives a program no
+/// stdin at all — a fixture there could not tell "read nothing" from "read the empty input it was
+/// handed", which is the same shape as `spec/A7.0-NAMING.md`'s directory-boundary gap.
+#[test]
+fn a_burxt_program_reads_standard_input() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("reads-stdin");
+    fs::create_dir_all(&scratch).unwrap();
+    let exe = scratch.join("reads_stdin");
+    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("tests/support/reads_stdin.bx"))
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("burxt");
+    assert!(
+        built.status.success(),
+        "the stdin reader did not compile:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    // A real LSP frame: a header, a blank line, and a body of the stated length. The `\r\n\r\n`
+    // matters — those are control bytes, and the first version of the reader's own precondition
+    // fired on them, which is how the fixture learned what it was actually parsing.
+    let message = "Content-Length: 17\r\n\r\n{\"jsonrpc\":\"2.0\"}";
+    let mut child = Command::new(&exe)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("the stdin reader");
+    {
+        use std::io::Write;
+        child.stdin.as_mut().unwrap().write_all(message.as_bytes()).unwrap();
+    }
+    let out = child.wait_with_output().expect("the stdin reader");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let _ = fs::remove_dir_all(&scratch);
+
+    assert!(out.status.success(), "the stdin reader failed: {}", text);
+    // The byte count, the framing boundary, and the body — three claims, because reading SOME
+    // bytes is not the same as reading the right ones, and finding the header's end is the part
+    // a language server actually depends on.
+    assert!(
+        text.contains(&format!("bytes: {}", message.len())),
+        "expected all {} bytes to be read, got:\n{}",
+        message.len(),
+        text
+    );
+    assert!(
+        text.contains("header ends at: 18"),
+        "the `\\r\\n\\r\\n` boundary was not found where it is:\n{}",
+        text
+    );
+    assert!(
+        text.contains("body: {\"jsonrpc\":\"2.0\"}"),
+        "the body did not survive the read:\n{}",
+        text
+    );
+}
+
 /// **Every directory has a declared purpose, and a new one has to earn its place.**
 ///
 /// Andre, v0.0.216: *"see if I did not mention, you are just creating trash unorganized language
@@ -5181,10 +5259,14 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
             "lsp.rs",
             &[],
             Strength::Missing,
-            "BLOCKED, not merely missing — the language server frames LSP messages over STDIN, \
-             and Burxt has no stdin. No builtin reads it, and `fread` is unreachable because a \
-             caller cannot make a pointer to writable memory (CPointer is opaque by design). \
-             Needs a stdin primitive designed first; see ROADMAP B12",
+            "the language server. **v0.0.216 called this row BLOCKED and that was WRONG** — it \
+             said Burxt has no stdin and `fread` is unreachable, so a stdin primitive had to be \
+             designed first. `external function getchar() -> CInt touches input` was already \
+             declared in `lib/os.bx` and already in use, and a Burxt program was measured reading \
+             a framed LSP message off stdin in v0.0.218. I reasoned about the wall instead of \
+             walking up to it — two versions after adding the test that exists to stop exactly \
+             that. Ordinary work now: framing, JSON-RPC (`lib/json.bx`), and the 0-based positions \
+             `diag.bx` already emits",
         ),
     ];
 

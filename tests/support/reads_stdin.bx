@@ -1,0 +1,94 @@
+// ============================================================================
+// tests/support/reads_stdin.bx — proof that a Burxt program can read standard input.
+//
+// This file exists because of a WRONG claim, and it is the evidence that replaces it.
+// v0.0.216's parity map said `lsp.rs` was "BLOCKED, not merely missing — the language
+// server frames LSP messages over STDIN, and Burxt has no stdin. No builtin reads it, and
+// `fread` is unreachable because a caller cannot make a pointer to writable memory."
+//
+// Every sentence of that is a fact, and the conclusion drawn from them is false.
+// `external function getchar() -> CInt touches input` was already declared in `lib/os.bx`
+// and already in use. A byte at a time is all a framed protocol needs.
+//
+// The failure was in the METHOD, not the knowledge: I reasoned about the wall instead of
+// walking up to it, two versions after adding a test whose whole purpose is to stop a stale
+// claim from being believed. That test checks NUMBERS, and "there is no way to do X" has no
+// number in it — so prose of that shape has no instrument but the habit:
+//
+//   > **Before writing "blocked", run the smallest program that would prove it.**
+//
+// This is that program. It cost five lines and one minute, against a roadmap row that would
+// have sat there as a language-design question.
+//
+// It is in `tests/support/` rather than `tests/pass/` because the pass harness gives a
+// program no stdin — a fixture there could not distinguish "read nothing" from "read the
+// empty input it was handed". `a_burxt_program_reads_standard_input` pipes it real bytes.
+// ============================================================================
+
+// One byte from standard input, or -1 at end of file. The C library's own signature, and
+// `touches input` is the effect it declares — so a `pure` function still cannot call it,
+// which is `spec/N2` Decision 5's rule arriving before the clock it was written for.
+external function getchar() -> CInt touches input;
+
+// Everything on standard input, as a String.
+//
+// Byte-at-a-time and `out + one` per byte, which is O(n²) and is the honest first version:
+// correctness first, and `ROADMAP-1.0.md` D0 is where the run-based builder gets decided for
+// the library. For a language server's messages this wants measuring before it is trusted —
+// measuring, not assuming, which is the lesson this whole file records.
+function read_all_of_stdin() -> String touches input {
+    let mutable out: String = "";
+    let mutable b: Int = getchar();
+    while b != 0 - 1 {
+        out = out + byte_as_text(b);
+        b = getchar();
+    }
+    return out;
+}
+
+// One byte as a one-byte String. Only the bytes this test sends, and it REFUSES the rest
+// rather than substituting `?` — which is exactly the bug `lib/os.bx`'s `os_byte_as_string`
+// has (ROADMAP B2: every byte >= 127 silently becomes a question mark). A test helper that
+// quietly corrupts its input would make this proof worthless.
+// The three whitespace bytes come FIRST, and the reason is worth keeping: the first version of
+// this function required `b >= 32` and the contract fired immediately — on the `\r` of
+// `Content-Length: 17\r\n\r\n`. **The framing bytes of the protocol this was written to prove
+// are themselves control characters.** The contract caught it and named itself
+// (`requires b >= 32 failed in byte_as_text`), which is the whole argument for preconditions:
+// the wrong assumption became a sentence rather than a corrupted string.
+function byte_as_text(b: Int) -> String
+    requires b == 9 || b == 10 || b == 13 || (b >= 32 && b < 127)
+{
+    if b == 9 {
+        return "\t";
+    }
+    if b == 10 {
+        return "\n";
+    }
+    if b == 13 {
+        return "\r";
+    }
+    let printable: String = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz\{|\}~";
+    return substring(printable, b - 32, 1);
+}
+
+// The framing a language server actually uses: a header, a blank line, then a body of a
+// stated length. Reading it needs nothing but the loop above.
+region main {
+    let all: String = read_all_of_stdin();
+    print("bytes: " + to_string(len(all)));
+    // Where the header ends. Proof that the framing is reachable, not just the bytes.
+    let mutable i: Int = 0;
+    let mutable header_end: Int = 0 - 1;
+    while i + 3 < len(all) {
+        if byte_at(all, i) == 13 && byte_at(all, i + 1) == 10
+            && byte_at(all, i + 2) == 13 && byte_at(all, i + 3) == 10 {
+            header_end = i;
+            i = len(all);
+        } else {
+            i += 1;
+        }
+    }
+    print("header ends at: " + to_string(header_end));
+    print("body: " + substring(all, header_end + 4, len(all) - header_end - 4));
+}

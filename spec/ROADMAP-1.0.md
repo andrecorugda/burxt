@@ -24,7 +24,59 @@ The standard-library bar was set separately and it is the harder one: **full par
 and `Vec`**, not the common 80%. That choice is what promotes closures, tuples and an iterator protocol
 from "nice later" into 1.0 — see §A.
 
-## The ordering rule
+## THE GATE — v0.0.218, and it outranks everything below it
+
+> **Andre:** *"new roadmap rule: nothing will move until burxt compiler can equal rust compiler. Do all
+> necessary, if needed create task as priority to solve all necessary issue for burxt compiler. I will
+> not allow that burxt is using rust — we use rust to build burxt."*
+
+**Nothing in §A through §H moves until the Burxt compiler equals the Rust one.** Not the twelve compiler
+fixes, not the urgent bugs, not the standard-library floor, not DWARF or dependencies. The gate is above
+all of them, including above the ordering rule that used to be first.
+
+**The distinction the rule turns on**, because it is what makes it a principle rather than a preference:
+
+> **Rust may BUILD Burxt. Burxt may not USE Rust.** A bootstrap is a one-time debt — someone had to
+> write the first compiler in something. A *dependency* is permanent: if `burxt review` only exists in
+> Rust, then Burxt cannot enforce its own compatibility promise without Rust; if `mcp-schema` only
+> exists in Rust, the one capability no other language has belongs to the Rust program. Every tool that
+> lives only on the Rust side is a claim Burxt cannot make on its own.
+
+That is why `spec/M4-SELF-HOSTING.md` §5's *"stage-0 is the trust anchor and the differential test"*
+survives the rule intact and is not in tension with it. **A differential test is not a dependency.** Two
+implementations that must agree is how a language change becomes a failing test instead of a bug report,
+and keeping the Rust one for that is deliberate. What the rule forbids is Burxt *needing* it to do a job.
+
+**Where the gate stands, measured** (`every_rust_module_has_a_burxt_counterpart_or_a_reason`):
+
+| | Count |
+|---|---|
+| Rust modules answered by a Burxt counterpart | **8 of 11** |
+| Distinct Burxt files doing the answering | 8 |
+| **Held byte-for-byte by a test** | **1** |
+
+**The gate is met at 11 answered AND 11 verified, not at 11 answered.** Four rows are `Role` — the same
+job in both compilers, held only *indirectly* by the fixpoint and by the two compilers accepting and
+refusing the same programs. That is strong evidence and it is not a comparison, and the difference is
+exactly the difference between *"a file with that job exists"* and *"the two agree."*
+
+**The five tasks, in order.** Created as tasks so they cannot be forgotten between sessions:
+
+| # | Task | Why here |
+|---|---|---|
+| 1 | **`main.bx` grows the full CLI** — `check` (+`--json`, +`-`), `build`, `run`, `emit-ir`, `layout`, `explain memory`, `review`, `mcp-schema`, `lsp`, `-o`, `--target` | The centre of the gate: it is what makes the Burxt-built compiler a **drop-in** rather than a backend. `main.rs` is 572 lines with ten subcommands; `main.bx` is 118 with none |
+| 2 | **`schema.bx`** — `mcp-schema` | The strongest single capability claim in the project. While it is Rust-only, the claim rests on Rust |
+| 3 | **`review.bx`** — `review` | §C2 makes this the mechanical semver rule for the 1.0 promise. Rust-only means Burxt cannot enforce its own compatibility promise |
+| 4 | **`lsp.bx`** — the language server | No longer blocked; see the correction above |
+| 5 | **Raise `verified` from 1 to 11** | The gate is not met until the rows are compared, not merely populated |
+
+**Two capabilities were verified present before any of this was scheduled**, because the alternative is
+scheduling a language decision that is not needed:
+
+- **`build` and `run` need to invoke `llc` and `cc`** — `external function system(command: String) -> CInt touches commands` already exists in `lib/os.bx`.
+- **`check -` and `lsp` need stdin** — `external function getchar() -> CInt touches input` already exists there too, and was measured reading a framed LSP message.
+
+## The ordering rule — SUBORDINATE to the gate above
 
 > *"I would rather do compiler fixes to unblock a lot first, second to bugs that is urgent."*
 
@@ -200,11 +252,21 @@ invisible — and `modules.bx` was exactly that, because its Rust counterpart is
 
 Two rows are ordinary work. The third is a real finding:
 
-> **`lsp.bx` is unwritable, not unwritten.** A language server frames messages over **stdin**, and Burxt
-> cannot read stdin. No builtin does it, and `fread` is out of reach because a caller cannot produce a
-> pointer to writable memory — `CPointer` is opaque by design, which is the pointer wall working. So this
-> row needs a **stdin primitive designed first**, and that is a language decision, not a port. Naming it
-> here beats discovering it after writing 600 lines.
+> ~~**`lsp.bx` is unwritable, not unwritten.**~~ **WRONG, corrected in v0.0.218 by running it.** This
+> said a language server frames messages over stdin, Burxt cannot read stdin, and `fread` is out of
+> reach because a caller cannot produce a pointer to writable memory — so the row needed *"a stdin
+> primitive designed first, and that is a language decision, not a port."*
+>
+> **`external function getchar() -> CInt touches input` was already declared in `lib/os.bx`, and
+> already in use.** A Burxt program reads a framed LSP message off stdin today; measured, 39 bytes of
+> `Content-Length: 42\r\n\r\n{...}`. No new primitive, no language decision, no wall.
+>
+> This is the wall pattern's ninth sighting and the worst-timed one: **I reasoned about the wall
+> instead of walking up to it, two versions after adding `no_document_claims_a_coverage_number_the_suite_refutes`
+> for exactly this failure.** The rule that catches numbers does not catch prose — *"there is no way to
+> do X"* has no number in it. So the habit is the only instrument: **before writing "blocked", run the
+> smallest program that would prove it.** Five lines and one minute, against a row that would have sat
+> in a roadmap as a language-design question.
 
 **And writing the first counterpart found a crash in the original**, which is the argument for the whole
 exercise stated better than I could state it in advance. `let é: Int = ;` made stage-0 **panic** — a Rust
