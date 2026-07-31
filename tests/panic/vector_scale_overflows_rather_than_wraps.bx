@@ -1,0 +1,34 @@
+// The overflow WALL is a feature, so it is tested as one.
+//
+// A component of an embedding lives in [-1, 1], so at scale S its unscaled integer is at most 10^S and
+// a product lands at scale 2S. Summing D of them needs D × 10^(2S) < 2^63:
+//
+//     Decimal<7>  → products at 14  → ~92,000 dimensions      ← every real embedding size
+//     Decimal<8>  → products at 16  → ~920 dimensions         ← 1536 does NOT fit
+//
+// So this program asks for more exactness than an i64 can carry, and Burxt **stops**. Not a wrap, not
+// a saturate, not a quietly-wrong similarity score — which is the whole property `lib/vector.bx`
+// exists to offer. Every float-based store would have answered something plausible here.
+//
+// tests/pass/vectors_exactly.bx is the other side: the same 1536 dimensions at Decimal<7>, exact.
+function dot8(a: [Decimal<8>], b: [Decimal<8>]) -> Decimal<16>
+    requires len(a) == len(b)
+{
+    let mutable total: Decimal<16> = 0.0000000000000000;
+    let mutable i: Int = 0;
+    while i < len(a) {
+        total = total + a[i] * b[i];
+        i += 1;
+    }
+    return total;
+}
+
+let mutable x: [Decimal<8>] = [];
+let mutable y: [Decimal<8>] = [];
+let mutable i: Int = 0;
+while i < 1536 {
+    let p: Int = push(x, 0.99999999);
+    let q: Int = push(y, 0.99999999);
+    i += 1;
+}
+print(dot8(x, y));

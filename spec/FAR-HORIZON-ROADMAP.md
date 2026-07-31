@@ -290,6 +290,8 @@ defines what Burxt becomes.
 
 | Capability | Others | Burxt today | Verdict |
 |---|---|---|---|
+| A builtin takes a value a declared parameter would | n/a | **no.** `push` does not apply the contract widening that `storable` gives every declared position since v0.0.181 — so a `Decimal<7>` variable cannot be pushed into a `[Decimal<7, RoundHalfEven>]`, and `lib/vector.bx` cannot normalise. Builtins have their own path | Papercut, sharp — it blocked a library function |
+| Reach a Decimal's unscaled integer | n/a | **no.** `as scaled` is FFI-only, so an algorithm that needs the integer representation has to route around it. `vector_magnitude` binary-searches instead, which works and is exact | Papercut |
 | Set an exit code | trivial | **NOT DIRECTLY.** `external function exit` is refused — the runtime owns the symbol. A differently-named wrapper (`_exit`) works and answers 3 | **Blocking.** A CLI that cannot signal failure to a shell is not shippable |
 | Write to stderr | trivial | **no.** `print` is stdout only; nothing in `lib/` reaches stderr | Blocking |
 | Read an environment variable | trivial | **no.** `getenv` returns a pointer, so the wall blocks it | Blocking |

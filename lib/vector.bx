@@ -1,0 +1,190 @@
+// ============================================================================
+// lib/vector.bx — vector similarity, EXACTLY.
+//
+//     use "lib/vector.bx";
+//
+// The same query returns byte-identical scores on every CPU, every target and every run — and the
+// compiler stops rather than silently losing a digit. See spec/N9-VECTORS-EXACTLY.md.
+//
+// ---- Why that is not a claim any other vector store can make ----------------------------
+//
+// `f32` addition is **not associative**. `(a+b)+c` and `a+(b+c)` differ in the last bits, so a dot
+// product's answer depends on the order the SIMD lanes happened to reduce in — which depends on the
+// CPU, the compiler version and the thread count. Every production vector database therefore has
+// scores that wobble in the last digits between machines, and nobody treats it as a bug because no
+// alternative is available to them.
+//
+// Scaled-integer arithmetic IS associative and exact. The wobble is not reduced, it is absent.
+//
+// What that buys, and it is more than tidiness: a ranking that cannot silently reorder near-ties, a
+// retrieval test that asserts a SCORE rather than a range, and an audit trail you can re-verify on
+// different hardware a year later. Nobody can do the second one today, which is why RAG quality is
+// measured statistically rather than pinned.
+//
+// ---- The scale, and why it is 7 ---------------------------------------------------------
+//
+// A component of an embedding lives in [-1, 1], so at scale S its unscaled integer is at most 10^S. A
+// product of two lands at scale 2S. Summing D of them needs
+//
+//     D × 10^(2S)  <  2^63 ≈ 9.22 × 10^18
+//
+//     Decimal<6>  → products at 12  → ~9,200,000 dimensions
+//     Decimal<7>  → products at 14  → ~92,000 dimensions      ← every real embedding size
+//     Decimal<8>  → products at 16  → ~920 dimensions         ← 1536 OVERFLOWS
+//
+// So `Decimal<7>` in, `Decimal<14>` out, and the wall is a TRAP rather than a wrap: at scale 8 a
+// 1536-dimension dot product answers
+//
+//     burxt runtime error: arithmetic overflow — the exact result no longer fits in the value range
+//
+// which is the property. This library either answers exactly or refuses to answer. There is no third
+// outcome where it answers approximately without saying so.
+//
+// `Decimal<7>` also carries MORE component precision than `f32` does near 1.0 — f32's spacing there is
+// about 6×10⁻⁸ — so exactness is close to free rather than bought.
+//
+// ---- What is NOT here yet, and why ------------------------------------------------------
+//
+// **`vector_normalise` is absent**, and the reason is a type-system one worth stating rather than
+// working around. Dividing a `Decimal<7>` needs a rounding contract, so a normalised component is a
+// `Decimal<7, RoundHalfEven>` — and that cannot go back into a `[Decimal<7>]`, because dropping a
+// contract loses a stated intention. Making the whole API contracted does not work either: `push` is
+// a builtin and does not apply the contract widening that every declared position gained in v0.0.181,
+// so a plain `Decimal<7>` variable cannot be pushed into a contracted array.
+//
+// It is not blocking. `vector_dot` and `vector_squared_distance` need no normalisation at all, and the
+// major embedding providers already return unit-length vectors — so in the common case cosine IS the
+// dot product. `vector_magnitude` is here, exact, for checking that.
+// ============================================================================
+
+use "option.bx";
+
+// The dot product — the inner-product metric, and cosine similarity when both vectors are unit length.
+//
+// `requires len(a) == len(b)` is the dimension contract. It is not defensive: two vectors of different
+// length have no dot product, and answering one anyway by stopping at the shorter is the class of
+// quiet nonsense that a precondition exists to refuse.
+function vector_dot(a: [Decimal<7>], b: [Decimal<7>]) -> Decimal<14>
+    requires len(a) == len(b)
+{
+    let mutable total: Decimal<14> = 0.00000000000000;
+    let mutable i: Int = 0;
+    while i < len(a) {
+        total = total + a[i] * b[i];
+        i += 1;
+    }
+    return total;
+}
+
+// Squared Euclidean distance. **No square root**, and none needed: `√` is monotonic, so squared
+// distance ranks identically to distance. Every nearest-neighbour search that only needs an ORDER can
+// use this and stay exact.
+function vector_squared_distance(a: [Decimal<7>], b: [Decimal<7>]) -> Decimal<14>
+    requires len(a) == len(b)
+{
+    let mutable total: Decimal<14> = 0.00000000000000;
+    let mutable i: Int = 0;
+    while i < len(a) {
+        let gap: Decimal<7> = a[i] - b[i];
+        total = total + gap * gap;
+        i += 1;
+    }
+    return total;
+}
+
+function vector_magnitude_squared(a: [Decimal<7>]) -> Decimal<14> {
+    return vector_dot(a, a);
+}
+
+// The magnitude, floored to seven places — a stated contract rather than a hidden approximation, so
+// the same input gives the same answer forever.
+//
+// Found by BINARY SEARCH over the scaled count, comparing squares, which is the whole trick: nothing
+// here converts a Decimal to an Int, because Burxt has no way to do that (`as scaled` is FFI-only).
+// `tick * n` builds a `Decimal<7>` from a count of ten-millionths — the same penny-times-a-count shape
+// `lib/json.bx` uses one scale up — and `candidate * candidate` lands at scale 14, exactly where the
+// target already is. So the comparison is between two exact values of the same type.
+function vector_magnitude(a: [Decimal<7>]) -> Decimal<7> {
+    let squared: Decimal<14> = vector_magnitude_squared(a);
+    let tick: Decimal<7> = 0.0000001;
+    let mutable low: Int = 0;
+    // 100.0 at scale 7. A unit vector's magnitude is 1; a 92,000-dimension vector of all-ones is
+    // about 303, but such a thing is not an embedding. This bound is generous and keeps the search at
+    // thirty iterations.
+    let mutable high: Int = 1000000000;
+    while low < high {
+        let mid: Int = divide_floor(low + high + 1, 2);
+        let candidate: Decimal<7> = tick * mid;
+        if candidate * candidate <= squared {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    return tick * low;
+}
+
+// Is this vector unit length, to seven places? Worth asking rather than assuming, because "the
+// provider returns normalised vectors" is a claim about someone else's code.
+function vector_is_unit(a: [Decimal<7>]) -> Bool {
+    return vector_magnitude(a) == 1.0000000;
+}
+
+// ---- searching ---------------------------------------------------------------
+
+// One scored candidate. A class rather than two parallel arrays, because a score and the row it came
+// from travelling together is a thing worth naming.
+class Scored { at: Int, score: Decimal<14> }
+
+// The `count` best matches by DOT PRODUCT, highest first.
+//
+// Brute force, and that is deliberate for this slice: it is exact by construction and it is the
+// baseline any index has to be checked against. An approximate index may come later and may still
+// score exactly — approximate CANDIDATE selection, exact SCORING — which is the split that keeps the
+// claim while getting the speed.
+//
+// Insertion into a kept list rather than sort-then-take, so nothing needs a generic `sort` — and
+// `xs[i] = v` does not work through a `[T]` today, which is what a generic sort would need.
+function vector_top_dot(rows: [Row], query: [Decimal<7>], count: Int) -> [Scored]
+    requires count > 0
+{
+    let mutable best: [Scored] = [];
+    let mutable r: Int = 0;
+    while r < len(rows) {
+        let score: Decimal<14> = vector_dot(rows[r].values, query);
+        // Where this one belongs: the first place its score beats.
+        let mutable at: Int = 0;
+        while at < len(best) && best[at].score >= score {
+            at += 1;
+        }
+        if at < count {
+            // Shift down from the end, then write. Concrete types throughout, so no generic
+            // index assignment is involved.
+            let mutable grown: [Scored] = [];
+            let mutable k: Int = 0;
+            while k < len(best) {
+                let kept: Int = push(grown, best[k]);
+                k += 1;
+            }
+            if len(grown) < count {
+                let room: Int = push(grown, Scored { at: 0, score: 0.00000000000000 });
+            }
+            let mutable j: Int = len(grown) - 1;
+            while j > at {
+                grown[j] = grown[j - 1];
+                j -= 1;
+            }
+            grown[at] = Scored { at: r, score: score };
+            best = grown;
+        }
+        r += 1;
+    }
+    return best;
+}
+
+// A stored vector: an identifier and its components.
+//
+// Declared after the functions that use it on purpose — Burxt collects every declaration before
+// checking any body, so ordering is a matter of what reads best rather than a constraint. `Row` reads
+// best beside the store it belongs to.
+class Row { id: String, values: [Decimal<7>] }

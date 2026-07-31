@@ -1,7 +1,19 @@
 # Burxt — "Vectors, Exactly" (N9)
 
-> Status: **specified, nothing built. The ARITHMETIC is verified working today** — see §2, every
-> number in it came from running the compiler, not from reading it.
+> Status: **the exact core is BUILT (v0.0.192).** `lib/vector.bx`, with the dimension contract,
+> brute-force top-K, and the overflow wall as a panic fixture. Rows 1, 2, 3 and 5 of §3 are done;
+> rows 4, 6–9 remain. Every number in §2 came from running the compiler, not from reading it.
+>
+> **One row of §3 turned out to be blocked, and by the type system rather than by effort.**
+> `vector_normalise` is absent: dividing a `Decimal<7>` needs a rounding contract, so a normalised
+> component is a `Decimal<7, RoundHalfEven>`, and that cannot go back into a `[Decimal<7>]` because
+> dropping a contract loses a stated intention. Making the whole API contracted does not work either —
+> `push` is a builtin and does not apply the contract widening that every *declared* position gained
+> in v0.0.181, so a plain `Decimal<7>` variable cannot be pushed into a contracted array.
+>
+> Not blocking: `vector_dot` and `vector_squared_distance` need no normalisation, and the major
+> providers already return unit vectors. `vector_magnitude` is there, exact, for checking that. But
+> the builtin-versus-declared inconsistency is a real gap and belongs on the audit's list.
 >
 > This came out of the production-readiness audit
 > ([FAR-HORIZON-ROADMAP.md](FAR-HORIZON-ROADMAP.md#5-two-decisions-this-audit-says-should-be-re-opened)),
