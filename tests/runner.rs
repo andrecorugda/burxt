@@ -2466,30 +2466,85 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
         fs::write(&big, &wide).unwrap();
         fs::write(&small, &quarter).unwrap();
 
-        let time_of = |path: &PathBuf| {
+        // Two instruments, and the DETERMINISTIC one is the reason this stopped being flaky.
+        //
+        // v0.0.212: this test failed once at 7.2x and passed five times in a row afterwards. The
+        // cause was not the compiler — it was measuring 10 MILLISECONDS with a wall clock. One
+        // scheduler hiccup is a 7x outlier at that scale, and a ceiling that fires spuriously is
+        // worse than no ceiling, because it teaches the next person to re-run instead of to look.
+        //
+        // So: stage-1 already PRINTS the work it did — `find_function 9604 over 3200 functions` —
+        // and those counters are exactly the quadratic signal and are identical run to run. They are
+        // now the tight assertion. Wall clock stays as a loose backstop, because the counters count
+        // CALLS and cannot see the span-hash index being removed underneath them: the call count
+        // would not move while each call went back to scanning every declaration.
+        //
+        // Timing noise is also handled properly rather than tolerated: **the minimum of three runs**,
+        // because interference only ever ADDS time, so the smallest sample is the closest to the
+        // truth. The failing 0.072 s would have been discarded by that alone.
+        let run = |path: &PathBuf| -> (f64, u64) {
             let started = std::time::Instant::now();
             let ran = Command::new(&stage1).arg(path).output().expect("stage1");
+            let elapsed = started.elapsed().as_secs_f64();
+            let said = String::from_utf8_lossy(&ran.stdout);
             assert!(
-                String::from_utf8_lossy(&ran.stdout).contains("type errors: 0"),
+                said.contains("type errors: 0"),
                 "stage-1 did not accept a program of plain declarations:\n{}",
-                String::from_utf8_lossy(&ran.stdout)
+                said
             );
-            started.elapsed().as_secs_f64()
+            // `find_function N over M functions` — N is the deterministic part.
+            let lookups = said
+                .split("find_function ")
+                .nth(1)
+                .and_then(|rest| rest.split_whitespace().next())
+                .and_then(|n| n.parse::<u64>().ok())
+                .expect("stage-1 stopped reporting find_function, which this test measures");
+            (elapsed, lookups)
+        };
+        let best_of_three = |path: &PathBuf| -> (f64, u64) {
+            let mut best = f64::MAX;
+            let mut lookups = 0;
+            for _ in 0..3 {
+                let (t, n) = run(path);
+                best = best.min(t);
+                lookups = n;
+            }
+            (best, lookups)
         };
         // Warmed first: the first run pays for reading the binary off disk, and that lands
         // entirely in whichever measurement goes first.
-        let _ = time_of(&small);
-        let narrow = time_of(&small).max(0.001);
-        let broad = time_of(&big);
+        let _ = run(&small);
+        let (narrow_time, narrow_lookups) = best_of_three(&small);
+        let (broad_time, broad_lookups) = best_of_three(&big);
+
+        // The tight, deterministic one. Linear is 4.0x for 4x the declarations, and it measures
+        // 3.995x — so 4.2 is a real bound rather than a hopeful one.
+        let lookup_ratio = broad_lookups as f64 / narrow_lookups.max(1) as f64;
+        eprintln!(
+            "declaration lookups: {} for 3200, {} for 800 — {:.3}x (deterministic)",
+            broad_lookups, narrow_lookups, lookup_ratio
+        );
+        assert!(
+            lookup_ratio < 4.2,
+            "stage-1 now performs {:.3}x the declaration lookups for 4x the declarations ({} vs \
+             {}). Linear is 4.0x and it measures 3.995x. This counter is deterministic, so this is \
+             a real change in how many times the checker asks about a name — not noise.",
+            lookup_ratio,
+            broad_lookups,
+            narrow_lookups
+        );
+
+        let narrow = narrow_time.max(0.001);
+        let broad = broad_time;
         let ratio = broad / narrow;
         eprintln!(
             "3200 declarations took {:.3} s, 800 took {:.3} s — {:.1}x for 4x the input",
             broad, narrow, ratio
         );
         assert!(
-            ratio < 6.0,
+            ratio < 10.0,
             "declaring functions costs {:.1}x for 4x the declarations ({:.3} s vs {:.3} s). \
-             Linear is ~4x and it measured 3.4x at v0.0.121. Above 6x means either the name-span \
+             Linear is ~4x and it measured 3.4x at v0.0.121. Above 10x means either the name-span \
              index in check.bx is gone or a String has stopped carrying its length.",
             ratio,
             broad,
