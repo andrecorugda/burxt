@@ -347,6 +347,54 @@ pub enum StmtKind {
     /// `for` instead of about a `len` call the author never wrote.
     /// See spec/M10-ERGONOMICS.md §1b.
     For { name: String, iterable: Expr, body: Vec<Stmt> },
+    /// `for name in start..end { body }` — count up, end EXCLUSIVE.
+    ///
+    /// ---- the five decisions, and what each costs -----------------------------------
+    ///
+    /// 1. EXCLUSIVE, and there is no inclusive form at all. `0..3` is 0, 1, 2. Three
+    ///    reasons in order of weight: (a) the idiom this replaces is
+    ///    `while i < len(xs)`, and `0..len(xs)` is the same bound written the same way,
+    ///    where an inclusive range would need `0..=len(xs) - 1` and put an arithmetic
+    ///    correction into the most-written line in the language; (b) half-open ranges
+    ///    compose — `a..b` and `b..c` tile `a..c` with no overlap and no gap, which is
+    ///    why `substring(s, from, LENGTH)` and every slice API in the codebase are
+    ///    already half-open; (c) two forms differing by ONE character, where that
+    ///    character changes the number of iterations, is exactly the class of defect a
+    ///    reviewer's eye slides over. The cost is named: a loop that genuinely wants to
+    ///    touch `n` writes `0..n + 1`, which is one visible `+ 1` instead of an
+    ///    invisible `=`. `..=` and `...` are refused in the LEXER with that sentence.
+    ///
+    /// 2. A range is NOT a value. `let r = 0..3;` is refused. A range as a value wants
+    ///    an iterator protocol — that is roadmap A11 — and the half version buildable
+    ///    today would be a two-field record with no `next`, no laziness and no way to
+    ///    pass it anywhere useful. Then A11 would have to either keep it or break it.
+    ///    So the only place `..` may appear is between the bounds of a `for`, and the
+    ///    parser says so by name. The cost: no `for i in r`, no range parameter, and no
+    ///    `range(n)` replacement in `lib/` until A11.
+    ///
+    /// 3. A real statement kind, not a parser desugar into `while` — the same decision
+    ///    `StmtKind::For` records above, for the same reason. A desugar would make
+    ///    `for i in 0..xs` complain about comparing an Int with an array, in a `while`
+    ///    the author never wrote. Lowering happens in codegen, to exactly the shape of
+    ///    the hand-written `while i < n`: two stack slots, no allocation, no iterator.
+    ///
+    /// 4. The bounds are evaluated ONCE, before the loop. This is a real difference from
+    ///    `for x in xs`, which re-reads the array's length header every pass and so SEES
+    ///    a `push` from inside the body. `for i in 0..len(xs)` snapshots the length
+    ///    instead. Both are defensible; what is not defensible is leaving it unwritten.
+    ///    Once is the right answer here because the end may be any expression — a call,
+    ///    a field path, arithmetic — and re-evaluating a call per pass is the cost
+    ///    `StmtKind::For` refuses outright by demanding a name.
+    ///
+    /// 5. Reversed literal bounds are refused; reversed computed bounds run zero times.
+    ///    `for i in 3..0` can only be a mistake, both values are known at compile time,
+    ///    and refusing costs nothing. `for i in a..b` with `a > b` runs zero times,
+    ///    because the lowering is `i = a; while i < b`, which is what every count-up
+    ///    loop in `lib/` already does — and `for i in 0..len(xs)` over an empty array
+    ///    MUST run zero times rather than trap. The asymmetry is deliberate: a compiler
+    ///    refuses what it can see, and a range it cannot see is not an error.
+    ///    `0..0` is allowed and runs zero times; only strictly-decreasing is refused.
+    ForRange { name: String, start: Expr, end: Expr, body: Vec<Stmt> },
     /// `match value { Variant => { .. } .. }` — must cover every variant.
     Match { value: Expr, arms: Vec<MatchArm> },
     /// `while cond { ... }` — the condition must be a Bool; braces required.

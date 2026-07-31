@@ -1,0 +1,1 @@
+`i` is already declared — Burxt does not allow shadowing, and a `for` binding is a binding

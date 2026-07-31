@@ -1,0 +1,9 @@
+// A range is a `for` construct, not a value. `..` is legal in exactly one position — between
+// the two bounds of a `for` — and anywhere else it is refused by name.
+//
+// Not a limitation to be embarrassed about: a range VALUE wants an iterator protocol, so it
+// can be stored, passed, chained and consumed lazily. The half version buildable today would
+// be two fields with no `next`, and the real one would then have to either keep it or break
+// it. Waiting costs a `range(n)` helper in the library; not waiting costs the design.
+let r = 0..3;
+print(1);

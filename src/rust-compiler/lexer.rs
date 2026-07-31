@@ -92,6 +92,15 @@ pub enum Token {
     Semicolon,
     Comma,
     Dot,
+    /// `..` — the range in `for i in 0..n`, and nothing else. See `StmtKind::ForRange`
+    /// for why a range is a `for` construct rather than a value.
+    ///
+    /// A real token rather than two `Dot`s recognised by the parser, for three reasons:
+    /// a two-`Dot` reading would also accept `0 . . 3` and `x . . y`; a diagnostic can
+    /// then say `` `..` `` instead of `` `.` `` twice; and the editor support, the
+    /// language server and the site reference all enumerate the token set, so a lexeme
+    /// the lexer does not name is a lexeme they cannot highlight.
+    DotDot,
     Equals,
     Plus,
     Minus,
@@ -186,6 +195,7 @@ impl Token {
             Token::Semicolon => "`;`".to_string(),
             Token::Comma => "`,`".to_string(),
             Token::Dot => "`.`".to_string(),
+            Token::DotDot => "`..`".to_string(),
             Token::Equals => "`=`".to_string(),
             Token::Plus => "`+`".to_string(),
             Token::Minus => "`-`".to_string(),
@@ -301,8 +311,49 @@ impl<'a> Lexer<'a> {
             ';' => { self.bump(); return Ok(Token::Semicolon); }
             ',' => { self.bump(); return Ok(Token::Comma); }
             // a '.' between digits was already consumed by lex_number;
-            // a solitary '.' is field access
-            '.' => { self.bump(); return Ok(Token::Dot); }
+            // a solitary '.' is field access, and `..` is a range.
+            //
+            // THE ONE REAL AMBIGUITY IN A6, and it is settled entirely by the lookahead
+            // `lex_number` already had. `0..3` and `0.5` begin with the same two bytes.
+            // What resolves them is that `lex_number` claims a `.` only when a DIGIT
+            // follows it (see the "Is there a fractional part?" block below); in `0..3`
+            // the byte after the first `.` is another `.`, so the number ends at `0` and
+            // control reaches here with the two dots unconsumed. Nothing about decimal
+            // lexing had to change — the lookahead that already made `x.0` a field access
+            // is the same lookahead that makes `0..3` a range. Measured, not reasoned:
+            // `tests/fail/range_start_must_be_an_int.bx` contains `1.0..2.0`, which only
+            // lexes into three tokens if this is true.
+            //
+            // The cases that had to keep working, each with a fixture:
+            //   `0.5` and `$1.50` — claimed by lex_number, never reach here
+            //   `x.field`         — '.' then a letter, so one Dot
+            //   `1..2`            — Int, DotDot, Int
+            //   `1.0..2.0`        — Decimal, DotDot, Decimal; refused by the CHECKER,
+            //                       because a range counts and a Decimal is not a count
+            '.' => {
+                self.bump();
+                if self.peek_char() == Some(&'.') {
+                    self.bump();
+                    // `..=` and `...` are refused HERE, where they are read, rather than
+                    // left to fall apart in the parser as `..` followed by `=` or `.`.
+                    // Both are the spelling of an inclusive range in some other language,
+                    // so both arrive as an honest guess and deserve an answer instead of
+                    // "expected an expression, found `=`". Burxt has ONE range form: see
+                    // `StmtKind::ForRange` for why a second one differing by a single
+                    // character is a reading hazard in a language whose claim is that a
+                    // reviewer sees the bug.
+                    if matches!(self.peek_char(), Some('=') | Some('.')) {
+                        return Err(
+                            "a Burxt range is exclusive and spelled `..` — there is no \
+                             `..=` or `...`. `0..3` is 0, 1, 2; for 0 through 3 write \
+                             `0..4`."
+                                .to_string(),
+                        );
+                    }
+                    return Ok(Token::DotDot);
+                }
+                return Ok(Token::Dot);
+            }
             '=' => {
                 self.bump();
                 if self.peek_char() == Some(&'=') { self.bump(); return Ok(Token::EqEq); }

@@ -1,0 +1,6 @@
+// `a..b..c`. Answered here rather than left to "expected `{`, found `..`", because the author
+// plainly meant a range and the useful answer is that a range has two bounds — and that there
+// is no step form either. A loop that skips writes the skip in its body, where a reader sees it.
+for i in 0..1..2 {
+    print(i);
+}

@@ -2124,6 +2124,71 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int {
         return self.write_body("  br label %" + cond_label + "\n" + end_label + ":\n");
     }
 
+    if n.kind == 74 {                                // for i in a..b
+        // Exactly the hand-written idiom it replaces:
+        //
+        //     let end   = <n>;                  // once, before the loop
+        //     let count = <start>;              // once, before the loop
+        //     while count < end \{ let i = count; count = count + 1; <body> \}
+        //
+        // Two i64 stack slots and one `icmp slt`. No allocation, no iterator, no header read —
+        // the same machine code as `while i < len(xs)`, which is the entire reason this is a
+        // lowering and not a library.
+        //
+        // The end goes into a SLOT rather than being re-emitted in the condition, and that is
+        // the load-bearing difference from `for x in xs` above: that one re-reads the array's
+        // length header every pass, deliberately, so a `push` from the body is seen. A range's
+        // end may be any expression — `len(xs)`, a field path, arithmetic — so re-emitting it
+        // would run it once per pass, and `0..len(xs)` would not cost what a reader thinks.
+        // Neither slot is a named binding, so nothing in the program can refer to either.
+        let limit: String = self.scratch(1);
+        let end_value: String = self.emit_expr(src, n.c);
+        let bounded: Int = self.write_body("  store i64 " + end_value + ", ptr " + limit + "\n");
+        let counter: String = self.scratch(1);
+        let start_value: String = self.emit_expr(src, n.a);
+        let seeded: Int = self.write_body("  store i64 " + start_value + ", ptr " + counter
+                                 + "\n");
+        let name: Token = self.tokens[n.token];
+
+        let range_cond: String = self.fresh_label("range.cond");
+        let range_body: String = self.fresh_label("range.body");
+        let range_end: String = self.fresh_label("range.end");
+        let entered: Int = self.write_body("  br label %" + range_cond + "\n" + range_cond
+                                  + ":\n");
+        let i: String = self.fresh();
+        let read: Int = self.write_body("  " + i + " = load i64, ptr " + counter + "\n");
+        let stop: String = self.fresh();
+        let limited: Int = self.write_body("  " + stop + " = load i64, ptr " + limit + "\n");
+        // `slt`, not `sle`: the end is EXCLUSIVE, and this one instruction is where that
+        // decision actually lives. `0..0` and `3..0` both fail the test at entry and run zero
+        // times, so an empty or reversed range needed no guard and no code of its own.
+        let bit: String = self.fresh();
+        let tested: Int = self.write_body("  " + bit + " = icmp slt i64 " + i + ", " + stop
+                                 + "\n");
+        let branched: Int = self.write_body("  br i1 " + bit + ", label %" + range_body
+                                   + ", label %" + range_end + "\n" + range_body + ":\n");
+
+        // The counter is copied into the binding's own slot, because a binding owns what it
+        // holds — the same rule `let` follows, and what makes the counter immutable REAL rather
+        // than only checked: the body writes to a different word than the loop does.
+        let slot: Int = self.declare_slot(src, name.start, name.length, 1, 0);
+        let stored: Int = self.write_body("  store i64 " + i + ", ptr %v" + to_string(slot)
+                                 + "\n");
+        // The advance comes BEFORE the body. `continue` jumps to the condition, so an increment
+        // at the bottom would be skipped and the loop would never end. The counter is read into
+        // the binding first, so the body still sees the pass it is on.
+        let next: String = self.fresh();
+        let bumped: Int = self.write_body("  " + next + " = add i64 " + i + ", 1\n");
+        let advanced: Int = self.write_body("  store i64 " + next + ", ptr " + counter + "\n");
+
+        push(self.loop_condition_labels, range_cond);
+        push(self.loop_end_labels, range_end);
+        let walked: Int = self.emit_block(src, n.b);
+        let popped_cond: Int = truncate(self.loop_condition_labels, len(self.loop_condition_labels) - 1);
+        let popped_end: Int = truncate(self.loop_end_labels, len(self.loop_end_labels) - 1);
+        return self.write_body("  br label %" + range_cond + "\n" + range_end + ":\n");
+    }
+
     if n.kind == 67 || n.kind == 68 {                // break, continue
         let depth: Int = len(self.loop_end_labels);
         if depth == 0 {
@@ -3486,7 +3551,10 @@ function (mutable self: Unit) emit_module(src: String) -> Int {
     while i < len(self.items) {
         let index: Int = self.items[i];
         let item: Node = self.nodes[index];
-        if item.kind >= 60 && item.kind <= 72 {
+        // `|| == 74` rather than `<= 74`: 73 is `const`, an ITEM, which the comment on
+        // statement kind 73 in ast.bx says must stay outside this run. `<= 74` would compile
+        // and sweep it in.
+        if (item.kind >= 60 && item.kind <= 72) || item.kind == 74 {
             let emitted: Int = self.emit_stmt(src, index);
         }
         i += 1;

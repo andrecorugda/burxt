@@ -1,0 +1,18 @@
+// A range's counter is a binding, and a `const` is in scope in every function, so the counter
+// may not take a const's name. The same rule `let`, a parameter, a `match` arm and `for x in xs`
+// all follow.
+//
+// **This fixture exists because the check was missing and nothing noticed.** `const` (A2) added
+// `shadows_a_const` to the four places a name could enter scope; ranges (A6) added a FIFTH and
+// was written against a tree where `const` did not exist yet. The result was `for N in xs`
+// refused and `for N in 0..3` accepted — by the same compiler, one line apart — while the whole
+// suite stayed green, because no pass fixture happens to write both a `const` and a range over
+// the same name. Stage-1 was accidentally right, having copied its range arm from its array arm.
+//
+// A pass fixture cannot tell "supported" from "not examined", and neither can a green suite tell
+// "consistent" from "never combined". Found by running the two features together on purpose.
+const LIMIT: Int = 4;
+
+for LIMIT in 0..3 {
+    print(LIMIT);
+}

@@ -186,6 +186,9 @@ pub enum TypedStmt {
     /// `for name in iterable { body }`. The element type and whether the array is fixed
     /// or growable are settled by the checker, so codegen only has to walk it.
     For { name: String, elem: Type, iterable: TypedExpr, body: Vec<TypedStmt> },
+    /// `for name in start..end { body }`. Both bounds are Ints by the time this exists,
+    /// so codegen carries no type question at all. See `ast::StmtKind::ForRange`.
+    ForRange { name: String, start: TypedExpr, end: TypedExpr, body: Vec<TypedStmt> },
     /// `match` on an enum: arms in TAG order, each with the names bound to its
     /// payload slots. Exhaustiveness was proven by the typechecker.
     Match { value: TypedExpr, arms: Vec<TypedArm> },
@@ -465,6 +468,14 @@ pub struct TypeChecker {
     /// outside a loop have nothing to act on, and saying so beats generating a jump
     /// to nowhere.
     loop_depth: u32,
+    /// The names bound by an enclosing `for i in a..b`, innermost last. Only for the
+    /// MESSAGE: a loop counter is immutable like a `for` element, but the generic advice
+    /// ("declare it `let mutable i: Int`") names a `let` that does not exist and cannot
+    /// be written — the same defect `how_to_make_writable` was factored out to fix for
+    /// parameters. A Vec of names rather than a third state in `env`, because `env` is
+    /// `(Type, bool)` and read in dozens of places: one more state there would be a
+    /// refactor across the file to improve one sentence.
+    loop_counters: Vec<String>,
     /// True while checking an `ensures` clause specifically: only there does
     /// `old(...)` mean anything, and only there is `result` in scope.
     in_ensures: bool,
@@ -625,6 +636,7 @@ impl TypeChecker {
             in_pure: None,
             in_contract: false,
             loop_depth: 0,
+            loop_counters: Vec::new(),
             in_ensures: false,
             olds: RefCell::new(Vec::new()),
             in_caller_region: false,
@@ -1023,7 +1035,8 @@ impl TypeChecker {
                 }
                 StmtKind::While { body, .. }
                 | StmtKind::Region { body, .. }
-                | StmtKind::For { body, .. } => self.expand_block(body)?,
+                | StmtKind::For { body, .. }
+                | StmtKind::ForRange { body, .. } => self.expand_block(body)?,
                 StmtKind::If { then_block, else_block, .. } => {
                     self.expand_block(then_block)?;
                     if let Some(b) = else_block {
@@ -3054,7 +3067,8 @@ impl TypeChecker {
                 }
                 TypedStmt::While { body, .. }
                 | TypedStmt::Region { body, .. }
-                | TypedStmt::For { body, .. } => self.collect_allocations(body, into),
+                | TypedStmt::For { body, .. }
+                | TypedStmt::ForRange { body, .. } => self.collect_allocations(body, into),
                 TypedStmt::Match { arms, .. } => {
                     for arm in arms {
                         self.collect_allocations(&arm.body, into);
@@ -3080,6 +3094,8 @@ impl TypeChecker {
             TypedStmt::While { body, .. } => self.first_allocation(body),
             TypedStmt::Region { body, .. } => self.first_allocation(body),
             TypedStmt::For { body, .. } => self.first_allocation(body),
+            // The BOUNDS cannot allocate — both are Ints — so only the body is walked.
+            TypedStmt::ForRange { body, .. } => self.first_allocation(body),
             TypedStmt::Match { arms, .. } => {
                 arms.iter().find_map(|arm| self.first_allocation(&arm.body))
             }
@@ -4270,6 +4286,16 @@ impl TypeChecker {
                     ));
                 }
                 if !mutable {
+                    if self.loop_counters.iter().any(|c| c == name) {
+                        return Err(format!(
+                            "cannot assign to `{}`: it is the counter of a `for` range, and \
+                             the loop recomputes it on every pass — an assignment here would \
+                             be silently thrown away. Assigning to a loop variable is a bug, \
+                             not a feature. Change the range, or copy it: \
+                             `let mutable {}_at: Int = {};`",
+                            name, name, name
+                        ));
+                    }
                     return Err(format!(
                         "cannot assign to `{}`: it was declared immutable. {}",
                         name,
@@ -4623,6 +4649,92 @@ impl TypeChecker {
                     name: name.clone(),
                     elem,
                     iterable,
+                    body: body?,
+                })
+            }
+            StmtKind::ForRange { name, start, end, body } => {
+                // A range's counter is a binding, so it may not take a const's name either —
+                // the same check the array `for` above makes, and now the FIFTH place a name
+                // enters scope rather than the fourth.
+                //
+                // This line is here because it was MISSING and measured missing. A6 was written
+                // against a tree with no `const`; A2 added `shadows_a_const` to `let`, to a
+                // parameter, to a `match` arm and to the array `for`, and a new statement kind
+                // that binds a name is invisible to all four. The suite stayed green — no pass
+                // fixture writes `const N` and `for N in 0..3` — and stage-1 was STRICTER than
+                // stage-0, because its range arm was copied from an array arm that already had
+                // the check. Found by running the combination rather than by reading either
+                // side; the asymmetry is the tell, and `for N in 0..3` compiling while
+                // `for N in xs` was refused is not a difference anyone would defend.
+                if let Some(message) = self.shadows_a_const(name) {
+                    return Err(message);
+                }
+                if self.env.contains_key(name) {
+                    return Err(format!(
+                        "`{}` is already declared — Burxt does not allow shadowing, and \
+                         a `for` binding is a binding. Use a different name.",
+                        name
+                    ));
+                }
+                // Both bounds are counts, so both are Ints. A Decimal bound is refused
+                // rather than truncated: `1.0..2.0` lexes perfectly (see `lexer.rs`) and
+                // the only honest place to stop it is here, where the types are known.
+                // Naming the bound that is wrong matters — `0..total` where `total` is a
+                // `Decimal<2>` is the mistake this catches, and "one of the bounds" would
+                // send the reader to the wrong end of the line.
+                let start = self.check_expr(start, Some(&Type::Int))?;
+                let end = self.check_expr(end, Some(&Type::Int))?;
+                for (which, bound) in [("start", &start), ("end", &end)] {
+                    if bound.ty != Type::Int {
+                        return Err(format!(
+                            "a `for` range counts, so its {} must be an Int, and this is {} \
+                             {}. Ranges are Int-only on purpose: a Decimal range would have \
+                             to invent a step, and a String range an order.",
+                            which,
+                            bound.ty.article(),
+                            bound.ty
+                        ));
+                    }
+                }
+                // Decision 5: a range spelled with two literals that counts DOWN can only
+                // be a mistake, both values are in hand, and refusing costs nothing.
+                // `-3..3` is covered for free, because `check_expr` already folds a negated
+                // integer literal into an `IntLit` (see the "Fold negated literals" comment
+                // in `check_expr`) — so this needed no arithmetic of its own.
+                // `0..n - 1` where `n` is 0 is NOT caught and runs zero times, which is the
+                // named limit: a compiler refuses what it can SEE. A `const` bound is the
+                // one case A2 could widen this to, and deliberately does not yet: a `const`
+                // reaches here already substituted only if the checker folded it, and
+                // guessing about that would be the false `Some` `literal_int` refuses to give.
+                if let (Some(a), Some(b)) = (literal_int(&start), literal_int(&end)) {
+                    if a > b {
+                        return Err(format!(
+                            "`{}..{}` counts down, and a `for` range only counts up — it \
+                             would run zero times. Both bounds are literals here, so this \
+                             cannot be anything but a mistake. To walk backwards, count up \
+                             and subtract: `for k in 0..{} {{ let i = {} - 1 - k; ... }}`.",
+                            a,
+                            b,
+                            a - b,
+                            a
+                        ));
+                    }
+                }
+                // The counter is immutable — decision 4. It is a fresh Int each pass, so an
+                // assignment to it could only be thrown away, and a loop variable that can
+                // be written is how an off-by-one hides.
+                let saved = self.env.clone();
+                self.env.insert(name.clone(), (Type::Int, false));
+                self.loop_counters.push(name.clone());
+                self.loop_depth += 1;
+                let body = self.check_block(body);
+                self.loop_depth -= 1;
+                self.loop_counters.pop();
+                self.env = saved;
+                Ok(TypedStmt::ForRange {
+                    name: name.clone(),
+                    start,
+                    end,
                     body: body?,
                 })
             }
@@ -7284,6 +7396,9 @@ fn calls_itself(body: &[Stmt], name: &str) -> bool {
             }
             StmtKind::While { cond, body } => in_expr(cond, name) || block(body),
             StmtKind::For { iterable, body, .. } => in_expr(iterable, name) || block(body),
+            StmtKind::ForRange { start, end, body, .. } => {
+                in_expr(start, name) || in_expr(end, name) || block(body)
+            }
             StmtKind::Region { body, .. } => block(body),
             StmtKind::Match { value, arms } => {
                 in_expr(value, name) || arms.iter().any(|a| block(&a.body))
@@ -7341,7 +7456,9 @@ fn stmt_diverges(s: &TypedStmt) -> bool {
             !arms.is_empty() && arms.iter().all(|a| block_diverges(&a.body))
         }
         TypedStmt::Region { body, .. } => block_diverges(body),
-        TypedStmt::For { .. } => false,   // a `for` over an empty array runs zero times
+        // A `for` over an empty array — or an empty range, `0..0` — runs zero times, so
+        // neither form can be what makes control leave a block.
+        TypedStmt::For { .. } | TypedStmt::ForRange { .. } => false,
         other => stmt_returns(other),
     }
 }
@@ -7398,6 +7515,17 @@ fn stmt_returns(s: &TypedStmt) -> bool {
 /// refuses statements after one that always returns, so "last" is enough).
 fn block_returns(stmts: &[TypedStmt]) -> bool {
     stmts.last().is_some_and(stmt_returns)
+}
+
+/// The value of an expression that IS an integer literal, and nothing more. Deliberately
+/// not a constant folder: it answers `None` for `2 + 1`, for a binding, and for a call.
+/// Used only to catch `for i in 3..0`, where a wrong answer in either direction would be
+/// worse than no answer — a false `Some` would refuse a correct program.
+fn literal_int(e: &TypedExpr) -> Option<i64> {
+    match &e.kind {
+        TypedExprKind::IntLit(n) => Some(*n),
+        _ => None,
+    }
 }
 
 /// Rescale a decimal's unscaled integer from `from_scale` to `to_scale`,
@@ -7614,7 +7742,8 @@ fn substitute_in_block(stmts: &mut [Stmt], map: &HashMap<String, Type>) {
             }
             StmtKind::While { body, .. }
             | StmtKind::Region { body, .. }
-            | StmtKind::For { body, .. } => substitute_in_block(body, map),
+            | StmtKind::For { body, .. }
+            | StmtKind::ForRange { body, .. } => substitute_in_block(body, map),
             StmtKind::If { then_block, else_block, .. } => {
                 substitute_in_block(then_block, map);
                 if let Some(b) = else_block {

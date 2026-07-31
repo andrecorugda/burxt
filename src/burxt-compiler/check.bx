@@ -63,6 +63,45 @@ function is_unknown(t: Type) -> Bool {
     return t.kind == 0;
 }
 
+// Is this expression node an integer LITERAL — node kind 1, or a unary minus (kind 6) over
+// one? Deliberately not a constant folder: `2 + 1`, a binding and a `const` name all answer
+// false.
+//
+// Used for exactly one rule, `for i in 3..0`, where a wrong answer in either direction would
+// be worse than no answer at all: a false `true` refuses a correct program. Negation is
+// followed through because stage-0 folds `-3` into a literal in its checker, and the two
+// compilers refusing DIFFERENT programs is the failure mode the differential test exists for.
+function (self: Unit) is_literal_int(node: Int) -> Bool {
+    if node < 0 {
+        return false;
+    }
+    let n: Node = self.nodes[node];
+    if n.kind == 1 {
+        return true;
+    }
+    if n.kind == 6 && n.a >= 0 {
+        return self.nodes[n.a].kind == 1;
+    }
+    return false;
+}
+
+// The value of a node `is_literal_int` said yes to. Asking on anything else is a caller bug,
+// and answering 0 is the least surprising thing to do about one — it cannot be mistaken for a
+// real reading, because the caller was told to ask first.
+function (self: Unit) literal_int_value(node: Int) -> Int {
+    if node < 0 {
+        return 0;
+    }
+    let n: Node = self.nodes[node];
+    if n.kind == 1 {
+        return n.value;
+    }
+    if n.kind == 6 && n.a >= 0 {
+        return 0 - self.nodes[n.a].value;
+    }
+    return 0;
+}
+
 // An interface implementation: a pair of names, which is all `dynamic` dispatch needs to know.
 // The method table already knows what the type can do.
 class Implementation { trait_start: Int, trait_len: Int, type_start: Int, type_len: Int }
@@ -925,7 +964,9 @@ function (mutable self: Unit) refuse_immutable_write(src: String, target: Int) -
     }
     let base: Token = self.tokens[self.nodes[root].token];
     let found: Int = self.find_binding(src, base.start, base.length);
-    if found < 0 || self.bindings[found].writable != 0 {
+    // `== 1`, not `!= 0`: 1 is the only code that means writable, and `!= 0` here would read a
+    // `for` range's counter (code 2) as writable. See `Binding` in ast.bx.
+    if found < 0 || self.bindings[found].writable == 1 {
         return 0;
     }
     let named: String = substring(src, base.start, base.length);
@@ -2769,7 +2810,9 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             } else {
                 let base: Token = self.tokens[self.nodes[root].token];
                 let bound: Int = self.find_binding(src, base.start, base.length);
-                if bound >= 0 && self.bindings[bound].writable == 0 {
+                // `!= 1`: 1 is the only code that means writable, and `== 0` here would read a
+                // `for` range's counter (code 2) as writable. See `Binding` in ast.bx.
+                if bound >= 0 && self.bindings[bound].writable != 1 {
                     let named: String = substring(src, base.start, base.length);
                     let complained: Int = self.complain_at(src, n.token,
                         "cannot call the mutating method `" + substring(src, m.start, m.length)
@@ -3115,7 +3158,9 @@ function (mutable self: Unit) check_against_params(src: String, at: Int, list_no
             } else {
                 let base: Token = self.tokens[self.nodes[root].token];
                 let bound: Int = self.find_binding(src, base.start, base.length);
-                if bound >= 0 && self.bindings[bound].writable == 0 {
+                // `!= 1`: 1 is the only code that means writable, and `== 0` here would read a
+                // `for` range's counter (code 2) as writable. See `Binding` in ast.bx.
+                if bound >= 0 && self.bindings[bound].writable != 1 {
                     let named: String = substring(src, base.start, base.length);
                     let complained: Int = self.complain_at(src, at,
                         "argument " + to_string(i + 1) + " is declared `mutable`, so this call can "
@@ -3315,6 +3360,102 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
         return 1;
     }
 
+    if n.kind == 74 {                                // for i in a..b
+        // ---- the five A6 decisions, enforced here and stated once ------------------------
+        //
+        // 1. The end is EXCLUSIVE, and there is no inclusive form at all. `0..3` is 0, 1, 2.
+        //    (a) The idiom this replaces is `while i < len(xs)`, and `0..len(xs)` is the same
+        //    bound written the same way; an inclusive range would need `0..=len(xs) - 1`, which
+        //    puts an arithmetic correction into the most-written line in the language. (b)
+        //    Half-open ranges tile: `a..b` and `b..c` cover `a..c` with no overlap and no gap,
+        //    which is why `substring(s, from, LENGTH)` and every slice in `lib/` are already
+        //    half-open. (c) Two forms differing by ONE character, where that character changes
+        //    the number of iterations, is exactly the defect a reviewer's eye slides over —
+        //    and reviewability is what this language is FOR. The cost is named: a loop that
+        //    must touch `n` writes `0..n + 1`, a visible `+ 1` instead of an invisible `=`.
+        //    `..=` and `...` are refused in the lexer, with that sentence.
+        //
+        // 2. A range is not a VALUE — `let r = 0..3;` is refused in `parse_expr`. A range value
+        //    wants an iterator protocol; the half version buildable today would be two fields
+        //    with no `next` and no laziness, and the real one would then have to keep or break
+        //    it. Cost: no range parameter, no `for i in r`, and no `range(n)` in `lib/` yet.
+        //
+        // 3. Both bounds are Ints. A Decimal range would have to invent a step and a String
+        //    range an order, so `1.0..2.0` — which LEXES perfectly, see `scan_punct` — is
+        //    refused here, where the types are known, rather than truncated anywhere.
+        //
+        // 4. The counter is IMMUTABLE. It is a fresh value each pass, so an assignment to it
+        //    could only be discarded, and a writable loop variable is how an off-by-one hides.
+        //    Bound with `writable: 2` — see `Binding` in ast.bx for why a third code beats a
+        //    fourth field, and what it costs at every other `writable` test.
+        //
+        // 5. Reversed LITERAL bounds are refused; reversed computed bounds run zero times.
+        //    `for i in 3..0` can only be a mistake and both values are in hand. `for i in a..b`
+        //    with `a > b` runs zero times, because the lowering is `i = a; while i < b` — and
+        //    `for i in 0..len(xs)` over an empty array MUST run zero times rather than trap.
+        //    A compiler refuses what it can SEE; a range it cannot see is not an error.
+        //    `0..0` is allowed. Only strictly-decreasing literals are refused.
+        let name: Token = self.tokens[n.token];
+        let start_type: Type = self.type_of(src, n.a, simple_type(40));
+        let end_type: Type = self.type_of(src, n.c, simple_type(40));
+        if !is_unknown(start_type) && start_type.kind != 40 {
+            let complained: Int = self.complain_at(src, n.token,
+                "a `for` range counts, so its start must be an Int, and this is "
+                + self.show_type(src, start_type)
+                + ". Ranges are Int-only on purpose: a Decimal range would have to invent a "
+                + "step, and a String range an order");
+        }
+        if !is_unknown(end_type) && end_type.kind != 40 {
+            let complained: Int = self.complain_at(src, n.token,
+                "a `for` range counts, so its end must be an Int, and this is "
+                + self.show_type(src, end_type)
+                + ". Ranges are Int-only on purpose: a Decimal range would have to invent a "
+                + "step, and a String range an order");
+        }
+        // Two functions rather than one answering "the value, or absent", because Burxt has no
+        // tuples yet (roadmap A8) and no `Option<Int>` from a free function yet — so the
+        // one-function form would need a sentinel, and a sentinel that can also be a real bound
+        // is the bug this rule exists to catch.
+        if self.is_literal_int(n.a) && self.is_literal_int(n.c) {
+            let start_value: Int = self.literal_int_value(n.a);
+            let end_value: Int = self.literal_int_value(n.c);
+            if start_value > end_value {
+                let complained: Int = self.complain_at(src, n.token,
+                    "`" + to_string(start_value) + ".." + to_string(end_value)
+                    + "` counts down, and a `for` range only counts up — it would run zero "
+                    + "times. Both bounds are literals here, so this cannot be anything but a "
+                    + "mistake. To walk backwards, count up and subtract: `for k in 0.."
+                    + to_string(start_value - end_value) + " \{ let i = "
+                    + to_string(start_value) + " - 1 - k; ... \}`.");
+            }
+        }
+        if self.find_binding(src, name.start, name.length) >= 0 {
+            let complained: Int = self.complain_at(src, n.token,
+                "this name is already declared — Burxt does not shadow, and a `for` "
+                + "binding is a binding");
+        }
+        // A `const` is in scope in every function, so a counter may not take its name either.
+        // Copied from the array `for` above rather than invented: A2 added that check after A6
+        // was first written, and a second `for` form that forgot it would be a rule stage-0 has
+        // and stage-1 does not — which is exactly what the checker equality exists to catch.
+        if self.find_const(src, name.start, name.length) >= 0 {
+            let complained: Int = self.complain_at(src, n.token,
+                "this name is already declared as a `const`, which is in scope in every "
+                + "function — Burxt does not shadow");
+        }
+        let base: Int = len(self.bindings);
+        self.depth += 1;
+        push(self.bindings, Binding { start: name.start, length: name.length,
+                              bound_type: simple_type(40), writable: 2, depth: self.depth,
+                              in_region: 0, holds_region: 0 });
+        self.loop_depth += 1;
+        let body: Int = self.check_block_nodes(src, n.b, return_type);
+        self.loop_depth -= 1;
+        self.depth -= 1;
+        let dropped: Int = truncate(self.bindings, base);
+        return 1;
+    }
+
     if n.kind == 61 {                                // assignment
         let target: Node = self.nodes[n.a];
         let want: Type = self.type_of(src, n.a, unknown_type());
@@ -3333,6 +3474,24 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
         if target.kind == 5 {
             let name: Token = self.tokens[target.token];
             let found: Int = self.find_binding(src, name.start, name.length);
+            // Code 2 first, because a `for` range's counter is immutable AND cannot be made
+            // otherwise, so the ordinary advice ("declare it `let mutable`") would name a `let`
+            // that does not exist. The two branches test 2 and 0 by hand rather than sharing a
+            // `!= 1`, because they give DIFFERENT messages — the one place among the five where
+            // the codes have to be told apart rather than merely not confused.
+            //
+            // Word for word stage-0's message from "the counter of" on: the two compilers'
+            // messages ARE the language's instruction set, and two wordings for one rule is how
+            // a language starts feeling arbitrary. The opening differs only because
+            // `complain_at` quotes the name at the END — the same shape the "declared immutable"
+            // message below already has. See `Binding` in ast.bx for the codes.
+            if found >= 0 && self.bindings[found].writable == 2 {
+                let complained: Int = self.complain_at(src, target.token,
+                    "this is the counter of a `for` range, and the loop recomputes it on "
+                    + "every pass — an assignment here would be silently thrown away. "
+                    + "Assigning to a loop variable is a bug, not a feature. Change the "
+                    + "range, or copy it into a `let mutable`");
+            }
             if found >= 0 && self.bindings[found].writable == 0 {
                 let complained: Int = self.complain_at(src, target.token,
                     "this was declared immutable — declare it `let mutable` to allow it");
@@ -4620,7 +4779,10 @@ function (mutable self: Unit) check_bodies(src: String) -> Int {
                 k += 1;
             }
         }
-        if item.kind >= 60 && item.kind <= 72 {      // a top-level statement
+        // `|| == 74` rather than `<= 74`: 73 is `const`, an ITEM, and the comment on statement
+        // kind 73 in ast.bx says explicitly that it must stay outside this run. Widening the
+        // bound would have compiled and swept it in.
+        if (item.kind >= 60 && item.kind <= 72) || item.kind == 74 {  // a top-level statement
             let checked: Int = self.check_stmt_node(src, index, unknown_type());
         }
         i += 1;

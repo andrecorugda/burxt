@@ -43,6 +43,11 @@ pub struct Parser {
     /// `while count { ... }` must parse `{` as the loop body, not a literal.
     /// Parenthesizing re-enables them.
     allow_struct_lit: bool,
+    /// Non-zero while the bounds of a `for i in a..b` are being parsed, and only then.
+    /// A range is not a value (see `ast::StmtKind::ForRange` decision 2), so a `..`
+    /// reached with this at zero is refused by name rather than by a missing-semicolon
+    /// message about a token the author wrote on purpose.
+    range_bounds: u32,
     /// The type parameters of the generic being parsed, so `parse_type` can tell `T`
     /// from a struct called `T`. Cleared when the declaration ends.
     type_parameters: Vec<String>,
@@ -80,6 +85,7 @@ impl Parser {
             spans,
             pos: 0,
             allow_struct_lit: true,
+            range_bounds: 0,
             src: src.to_string(),
             type_parameters: Vec::new(),
             it_means: None,
@@ -1468,7 +1474,8 @@ impl Parser {
         Ok(StmtKind::Region { name, body })
     }
 
-    /// `for x in xs { body }`. See spec/M10-ERGONOMICS.md §1b.
+    /// `for x in xs { body }` and `for i in 0..n { body }`. See spec/M10-ERGONOMICS.md §1b
+    /// for the array form and `ast::StmtKind::ForRange` for the range form's five decisions.
     fn parse_for(&mut self) -> Result<StmtKind, String> {
         self.expect(&Token::For)?;
         let name = match self.bump() {
@@ -1481,7 +1488,34 @@ impl Parser {
             }
         };
         self.expect(&Token::In)?;
-        let iterable = self.parse_cond()?;
+        // `..` is legal only between the two bounds of a `for`, so the flag is raised
+        // only here and the check in `parse_expr` refuses it everywhere else BY NAME.
+        // A counter rather than a bool because a `for` can nest inside a bound's
+        // parentheses in principle, and a bool would be cleared by the inner one.
+        self.range_bounds += 1;
+        let first = self.parse_cond();
+        self.range_bounds -= 1;
+        let first = first?;
+        if self.at(&Token::DotDot) {
+            self.bump();
+            self.range_bounds += 1;
+            let end = self.parse_cond();
+            self.range_bounds -= 1;
+            let end = end?;
+            // `0..1..2`. Caught here rather than left to "expected `{`, found `..`",
+            // because the author plainly meant a range and the answer is that a range
+            // has two bounds, not that a brace is missing.
+            if self.at(&Token::DotDot) {
+                return Err(
+                    "a range has exactly two bounds — `0..n`. There is no `a..b..c`, and \
+                     no step: a loop that skips writes the skip in its body."
+                        .to_string(),
+                );
+            }
+            let body = self.parse_block()?;
+            return Ok(StmtKind::ForRange { name, start: first, end, body });
+        }
+        let iterable = first;
         // The loop reads the iterable once per element, so anything with a cost or an
         // effect would pay it per pass. A binding and a field path are free to re-read.
         if !matches!(iterable.kind, ExprKind::Var(_) | ExprKind::Field { .. }) {
@@ -1784,6 +1818,20 @@ impl Parser {
     fn parse_expr(&mut self) -> Result<Expr, String> {
         let start = self.span().start;
         let mut lhs = self.parse_and()?;
+        // A range is a `for` construct, never a value — one place in the grammar, and this
+        // is the check that keeps it there. Placed at the TOP of the expression chain
+        // rather than in `parse_primary`, because `..` follows a complete expression and
+        // the only way to see it is to have finished one. See `ast::StmtKind::ForRange`
+        // decision 2 for why waiting for A11 beats inventing half an iterator now.
+        if self.range_bounds == 0 && self.at(&Token::DotDot) {
+            return Err(
+                "`..` builds a range, and a range is only a `for` construct — there is no \
+                 range VALUE yet. Write `for i in 0..n { ... }`. A range that can be \
+                 stored, passed and chained needs an iterator protocol, which is a \
+                 separate piece of work; half of one would be worse than waiting."
+                    .to_string(),
+            );
+        }
         while self.at(&Token::PipePipe) {
             self.bump();
             let rhs = self.parse_and()?;

@@ -1,0 +1,10 @@
+// The loop counter is immutable, and its own message says why: the loop recomputes it every
+// pass, so an assignment here is discarded rather than obeyed. Assigning to a loop variable is
+// a bug, not a feature.
+//
+// A separate message from the ordinary "declared immutable" one, because that message's advice
+// — "declare it `let mutable`" — names a `let` that does not exist and cannot be written. The
+// same defect `how_to_make_writable` was factored out to fix for parameters.
+for i in 0..3 {
+    i = 5;
+}

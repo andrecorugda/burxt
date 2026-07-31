@@ -1,0 +1,10 @@
+// Two literal bounds counting down. Both values are in hand at compile time, a range only
+// counts up, so this program says one thing and would do another — refused.
+//
+// The asymmetry is deliberate and is in tests/pass/for_range.bx: `for i in a..b` with `a > b`
+// at RUNTIME runs zero times, because the lowering is `i = a; while i < b`, and because
+// `for i in 0..len(xs)` over an empty array is correct code that must not trap. A compiler
+// refuses what it can SEE; a range it cannot see is not an error.
+for i in 3..0 {
+    print(i);
+}

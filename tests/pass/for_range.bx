@@ -1,0 +1,163 @@
+// `for i in 0..n` — the count-up loop, end EXCLUSIVE. A real statement in both compilers,
+// lowered to exactly the `while i < n` it replaces: two stack slots, one `icmp slt`, no
+// allocation and no iterator. See ast::StmtKind::ForRange and statement kind 73 in
+// examples/burxt/types.bx for the five decisions and what each one costs.
+//
+// This fixture also carries the LEXER cases, because `0..3` and `0.5` begin with the same
+// two bytes and that conflict is the whole of A6's real work. Every line below that is not a
+// loop is here to prove one of them still reads the way it always did.
+
+class Point { x: Int, y: Int }
+class Tally { total: Int }
+
+// A `const` as a range bound — the combination A2 and A6 make possible, and the one that
+// exposed a missing check when it was first run: `for LIMIT in 0..3` where `LIMIT` is a const
+// was accepted while `for LIMIT in xs` was refused. See tests/fail/range_counter_cannot_shadow_a_const.bx.
+const PASSES: Int = 3;
+
+// A range inside a FUNCTION, not only at the top level: the counter and the end bound get
+// function-local storage, and the two compilers allocate slots by different mechanisms — so a
+// fixture that only ever loops at file scope proves half of what it looks like it proves.
+function sum_to(n: Int) -> Int {
+    let mutable total: Int = 0;
+    for i in 0..n {
+        total += i;
+    }
+    return total;
+}
+
+// A `return` out of the middle of a range loop. The loop's blocks must still be terminated,
+// and the function's obligation to return is not discharged by the loop body — see the
+// `stmt_returns` comment in src/typeck.rs for the module-verification failure that proves it.
+function first_square_over(n: Int, limit: Int) -> Int {
+    for i in 0..n {
+        if i * i > limit {
+            return i;
+        }
+    }
+    return 0 - 1;
+}
+
+// A range inside a METHOD, with the end read off `self`.
+function (self: Tally) doubled_sum() -> Int {
+    let mutable out: Int = 0;
+    for i in 0..self.total {
+        out += i * 2;
+    }
+    return out;
+}
+
+// A body that ALLOCATES, in the caller's region, driven by `0..len(xs)`.
+function joined(xs: [String]) -> String allocates {
+    let mutable out: String = "";
+    for i in 0..len(xs) {
+        out = out + xs[i] + "|";
+    }
+    return out;
+}
+
+region r {
+    // ---- exclusive, and that is the headline ----
+    for i in 0..3 {
+        print(i);
+    }
+
+    // ---- `0..0` runs zero times. No guard emitted: the condition is false at entry ----
+    for nothing in 0..0 {
+        print(999);
+    }
+
+    // ---- a REVERSED range with computed bounds also runs zero times ----
+    // Not an error, deliberately: `0..len(xs)` over an empty array is correct code, and a
+    // compiler that trapped here would refuse it. Only two LITERAL bounds counting down are
+    // refused, because only those can be seen — tests/fail/range_counts_down.bx.
+    let high: Int = 3;
+    let low: Int = 0;
+    for backwards in high..low {
+        print(888);
+    }
+
+    // ---- the idiom this replaces, `while i < len(xs)`, in one line ----
+    let mutable names: [String] = [];
+    let a = push(names, "widget");
+    let b = push(names, "gasket");
+    let c = push(names, "flange");
+    for i in 0..len(names) {
+        print(names[i]);
+    }
+
+    // ---- the bounds are evaluated ONCE, before the loop ----
+    // This is the real difference from `for x in xs`, which re-reads the array's length
+    // header every pass and so SEES a push from inside the body. A range snapshots it. Three
+    // elements at entry means three passes, even though the body makes it six.
+    let mutable passes: Int = 0;
+    for i in 0..len(names) {
+        let grown = push(names, "extra");
+        passes += 1;
+    }
+    print(passes);
+    print(len(names));
+
+    // ---- nesting, and `break` / `continue` ----
+    // `continue` jumps to the CONDITION, so the advance is emitted before the body — a loop
+    // whose increment sat at the bottom would never end.
+    let mutable total: Int = 0;
+    for q in 1..6 {
+        if q == 3 { continue; }
+        if q == 5 { break; }
+        total += q;
+    }
+    print(total);
+
+    for outer in 0..2 {
+        for inner in 0..2 {
+            print(outer * 10 + inner);
+        }
+    }
+
+    // ---- negative bounds. `-2` is a literal to the checker, which folds the minus ----
+    for signed in -2..1 {
+        print(signed);
+    }
+
+    // ---- the lexer cases that had to keep working ----
+    // A decimal literal: `lex_number` claims the `.` only when a DIGIT follows, which is the
+    // same lookahead that leaves both dots of `0..3` unread.
+    let half: Decimal<2> = 0.5;
+    print(half);
+    // A money literal takes the same path.
+    let price: Decimal<2> = $1.50;
+    print(price);
+    // A field access: one `.`, followed by a letter.
+    let here: Point = Point { x: 4, y: 9 };
+    print(here.x);
+    // Two adjacent one-digit bounds, so the dots touch digits on both sides.
+    for tight in 1..2 {
+        print(tight);
+    }
+    // A range whose bounds are arithmetic, so the parser's bound is a whole expression.
+    for computed in 1 + 1..2 * 3 {
+        print(computed);
+    }
+
+    // ---- and the same construct inside a function, a method and an allocating body ----
+    print(sum_to(5));
+    print(first_square_over(10, 20));
+    let counter: Tally = Tally { total: 4 };
+    print(counter.doubled_sum());
+    let mutable words: [String] = [];
+    let one = push(words, "one");
+    let two = push(words, "two");
+    print(joined(words));
+
+    // ---- a `const` as the end bound, and as both bounds ----
+    for step in 0..PASSES {
+        print(step * 100);
+    }
+    // `PASSES..PASSES` is empty, and NOT the literal-reversed refusal: a `const` name is not an
+    // integer literal to `literal_int`, deliberately, so this is the computed case and runs zero
+    // times. Named because it is the visible edge of that decision.
+    for empty in PASSES..PASSES {
+        print(777);
+    }
+}

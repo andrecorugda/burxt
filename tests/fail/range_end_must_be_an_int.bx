@@ -1,0 +1,10 @@
+// The same rule as range_start_must_be_an_int.bx, at the OTHER end. Its own fixture because
+// an implementation that checked one bound and not the other would pass that one, and because
+// the message has to name WHICH bound is wrong: `0..total` where `total` is a Decimal sends a
+// reader to the wrong half of the line if the message only says "a bound".
+region r {
+    let name: String = "hi";
+    for i in 0..name {
+        print(i);
+    }
+}

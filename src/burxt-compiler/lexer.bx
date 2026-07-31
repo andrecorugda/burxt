@@ -32,11 +32,9 @@ function (mutable self: Unit) install_keywords() -> Int {
     // Code 134: 125..129 are taken by contract-clause markers in the parser and 130..133 by
     // `is`, `in`, `private` and the pair below, so this is the next free number.
     //
-    // (This comment used to end by reporting that 133 was used TWICE, by `implements` and
-    // `print_error` — told apart by position, nothing broken, "a collision waiting for a third
-    // use". v0.0.244 moved `print_error` to 135 rather than leaving the report standing: a hazard
-    // named and left in place is a hazard, and the next person to need a free code would have had
-    // to rediscover the same thing.)
+    // Worth knowing while reading this table: 133 is used TWICE, by `implements` and
+    // `print_error`. They are told apart by position and nothing has broken, but it is a
+    // collision waiting for a third use — reported rather than silently worked around.
     n = self.add_word("const", 134);
     n = self.add_word("function", 102);
     n = self.add_word("return", 103);
@@ -61,15 +59,19 @@ function (mutable self: Unit) install_keywords() -> Int {
     // `print_error` writes to stderr. A separate keyword rather than a builtin function, because it
     // has to reach the SAME per-type formatter `print` uses — two formatters would print the same
     // value differently the first time one of them learned about a new type.
-    // **135, and it was 133 until v0.0.244 — the same code `implements` uses.** They were told
-    // apart by POSITION: `parser.bx` read 133 as `print_error` where a statement was expected and
-    // as `implements` where a class header was, and a class header cannot appear where a statement
-    // can. Correct, and correct for a reason that is nowhere near the two `add_word` calls.
+    // **135, and it was 133 until v0.0.244 — the same code `implements` uses.** They were told apart
+    // by POSITION: `parser.bx` read 133 as `print_error` where a statement was expected and as
+    // `implements` where a class header was, and a class header cannot appear where a statement can.
+    // Correct, and correct for a reason living nowhere near either `add_word` call.
     //
-    // Nothing was broken. What was broken was the NEXT change: a third word taking 133, or either
-    // of these moving, and the failure is a keyword silently parsing as another keyword — which no
-    // type error can catch because both are grammar. Found by the subagent adding `const`, which
-    // needed a free code and counted the table.
+    // Nothing was broken. What was broken was the NEXT change: a third word taking 133, or either of
+    // these moving, and a keyword silently parses as a different keyword — which no type error can
+    // catch, because both are grammar. Found by the subagent adding `const`, which needed a free code
+    // and counted the table.
+    //
+    // Re-applied by hand when the ranges work landed: that branch was cut before this fix and
+    // reverted it, which is the same "merges cleanly and is wrong" family its own report documents
+    // three times. A number moving is invisible to a diff that does not know the number matters.
     n = self.add_word("print_error", 135);
     n = self.add_word("self", 119);
     n = self.add_word("true", 120);
@@ -390,6 +392,38 @@ function (mutable self: Unit) scan_punct(src: String, from: Int, stop: Int) -> I
     let mutable two: Int = 0 - 1;
     if from + 1 < stop {
         two = byte_at(src, from + 1);
+    }
+    // `..` — the range in `for i in 0..n`, and its only legal position. Tried BEFORE the
+    // one-byte `.` below, like every other two-byte form here.
+    //
+    // **Code 42, and the number was checked rather than assumed.** A6 was first written where
+    // 41 was free; `?` took 41 before this landed, and two lexemes sharing one code is the
+    // silent-agreement failure that has bitten this project before — nothing would have
+    // complained, and whichever test ran first would have decided which lexeme won. 42 is the
+    // next free PUNCTUATION code, and it cannot collide with `const`'s keyword code 134
+    // either: punctuation lives in 10..49 and keywords in 100.., disjoint by construction
+    // (see the token-kind map at the top of ast.bx). Verified by grep, not by reading.
+    //
+    // The conflict with a decimal literal is settled entirely in `scan_number`, which claims
+    // a `.` only when a DIGIT follows it. So `0..3` leaves the number at `0` and control
+    // arrives here with both dots unread, while `0.5` never reaches this function at all.
+    // Nothing about decimal lexing had to change; the lookahead that already existed is the
+    // lookahead that resolves this. Measured against `1.0..2.0`, which must lex into three
+    // tokens and then be refused by the CHECKER, not here.
+    if one == 46 && two == 46 {
+        // `..=` and `...` are the two spellings of an inclusive range in other languages, so
+        // both arrive as an honest guess and both get an answer instead of a broken parse.
+        // Burxt has ONE range form: see the `for` range in check.bx for why a second form
+        // differing by a single character is a reading hazard rather than a convenience.
+        let three: Int = at_byte(src, from + 2, stop);
+        if three == 61 || three == 46 {              // '=' or '.'
+            print("error: a Burxt range is exclusive and spelled `..` — there is no `..=` or "
+                + "`...`. `0..3` is 0, 1, 2; for 0 through 3 write `0..4`.");
+            self.errors += 1;
+            return from + 3;
+        }
+        let n: Int = self.emit(42, from, 2);
+        return from + 2;
     }
     if one == 45 && two == 62 { let n: Int = self.emit(10, from, 2); return from + 2; }  // ->
     if one == 61 && two == 62 { let n: Int = self.emit(11, from, 2); return from + 2; }  // =>

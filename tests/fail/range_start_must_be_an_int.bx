@@ -1,0 +1,10 @@
+// `1.0..2.0` LEXES perfectly — Decimal, `..`, Decimal — which is the point of this fixture.
+// The lexer conflict between `0..3` and `0.5` is settled by a digit lookahead that does not
+// care whether the digits before the dots were a whole number, so a decimal range reaches the
+// checker intact and has to be refused there, by TYPE.
+//
+// Int-only on purpose: a Decimal range would have to invent a step (0.1? one tick of the
+// scale?), and every answer to that is a decision the program did not write down.
+for i in 1.0..2.0 {
+    print(i);
+}

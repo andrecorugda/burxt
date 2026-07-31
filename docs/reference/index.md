@@ -113,6 +113,7 @@ The whole list. Burxt has few on purpose, and each is sugar over something it al
 | `P { x: 1, }` | a trailing comma, anywhere a list is written, so adding an item is a one-line diff |
 | `let x = e;` | `let x: T = e;` where `T` is `e`'s type. Arrays are the exception — a literal does not say fixed or growable |
 | `for x in xs { }` | `let mutable i = 0; while i < len(xs) { let x = xs[i]; … }` — `xs` must be a name or a field path |
+| `for i in 0..n { }` | `let mutable i = 0; while i < n { … }` — the end is **exclusive**, `i` is immutable, and both bounds are Ints evaluated once. There is no `..=`, and a range is not a value |
 | `f(x)?` | `match f(x) { Error(e) => return Error(e), Ok(v) => v }` — the failure variant found by name, never converted |
 | `Int [> 0, <= n]` | `requires` clauses written on the value instead of under the signature |
 

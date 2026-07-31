@@ -79,6 +79,18 @@ class Keyword { word: String, code: Int }
 //     `check_bodies` and `emit_module` walk as top-level code. Nothing to check twice and
 //     nothing to emit: by the time either of them runs the value is in `consts`, and every
 //     use of the name emits the literal. Name token in `token`, type in `a`, value in `b`.
+//  74 for over a RANGE — `for i in a..b`: start in `a`, body in `b`, end in `c`.
+//     A separate kind from 72 rather than an `iterable` that might be a range, because the
+//     two have nothing in common after parsing: 72 reads an element out of a container and
+//     re-measures its length every pass, 74 counts between two Ints evaluated once. One kind
+//     would mean every rule about either testing which it was.
+//     **74, not 73, and the gap is load-bearing.** A6 was written against a tree where 73 was
+//     free; `const` took it first. So a range statement is NOT contiguous with the 60..72 run,
+//     and every walk over top-level code reads `(kind >= 60 && kind <= 72) || kind == 74` —
+//     widening the bound to `<= 74` would sweep `const` into a statement walk that the line
+//     above says explicitly must not see it. Three sites: check.bx, emit.bx, lsp.bx.
+//     The end is EXCLUSIVE and there is no inclusive form; the reasons are in check.bx where
+//     the rule is enforced, and the refusal for `..=` is in `scan_punct` in lexer.bx.
 class Node {
     kind: Int,
     // Child indices, or payload. Meaning depends on `kind`, documented above.
@@ -154,6 +166,24 @@ class Type {
 // would see a plain name and wave it through. Set only while a region is open, exactly as stage-0
 // only populates `region_locals` when `current_region.is_some()` — so an ordinary `let` outside a
 // region is untouched and the allocation inference does not move.
+// `writable` is a CODE, not a flag, and **1 is the only value that means writable**:
+//   0  immutable — an ordinary `let`, a `for` element, a match arm's payload
+//   1  writable — a `let mutable`, a `mutable` parameter, a mutating receiver
+//   2  the counter of a `for i in a..b`: immutable, AND impossible to make otherwise
+//
+// 2 exists for one reason — the message. The ordinary refusal advises "declare it
+// `let mutable`", which for a loop counter names a `let` that does not exist and cannot be
+// written; the same defect stage-0's `how_to_make_writable` was factored out to fix for
+// parameters. A third code rather than a fourth field, because the difference is one sentence
+// and a field would cost all six construction sites.
+//
+// **The price is paid at every `writable` TEST, and it is the dangerous half.** Five sites read
+// this field, and every one of them said `== 0` (or `!= 0`) before code 2 existed — which with
+// a counter present means *inverted*: `writable == 0` is FALSE for a counter, so a counter read
+// as WRITABLE. Adding the code without touching the tests would have compiled, passed, and let
+// `push(i, x)` and a mutating method through on a loop variable. So all five now say `== 1` or
+// `!= 1`, each with a one-line pointer back here: refuse_immutable_write and two sites in
+// check.bx, one in parser.bx, and the assignment rule that distinguishes 0 from 2 by hand.
 class Binding { start: Int, length: Int, bound_type: Type, writable: Int, depth: Int,
                 in_region: Int, holds_region: Int }
 
@@ -490,6 +520,11 @@ class Unit {
     // interpolation fragment appends its own, and the parser must not walk into them.
     token_end: Int,
     no_record_literal: Int,
+    // Non-zero while the BOUNDS of a `for i in a..b` are being parsed, and only then. A range
+    // is not a value — see statement kind 74 above — so a `..` reached with this at zero is
+    // refused by name instead of collapsing into "expected `;`" about a token the author meant.
+    // A counter rather than a flag, for the same reason `no_record_literal` above is one.
+    range_bounds: Int,
     // Set while typing the operands of `*`. Multiplication combines a quantity with a
     // rate, so its operand scales differ by nature: a literal that cannot narrow to
     // the result's scale keeps its own instead of being refused. Stage-0 reaches the

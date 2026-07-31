@@ -1,0 +1,7 @@
+// `...` is the other spelling an inclusive range arrives as, so it gets the same answer as
+// `..=` rather than a broken parse. Its own fixture because the lexer resolves it with a
+// separate byte test — three characters, not two — and a rule tested once for two spellings
+// is a rule that can silently stop covering one of them.
+for i in 0...3 {
+    print(i);
+}

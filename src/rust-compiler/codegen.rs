@@ -690,6 +690,83 @@ impl<'ctx> CodeGen<'ctx> {
                 self.vars = saved;
                 r
             }
+            TypedStmt::ForRange { name, start, end, body } => {
+                // Lowered to EXACTLY the hand-written idiom it replaces:
+                //
+                //     let for$N_end = <end>;              // once, before the loop
+                //     let for$N     = <start>;            // once, before the loop
+                //     while for$N < for$N_end {
+                //         let i = for$N;                  // a fresh, immutable copy
+                //         for$N = for$N + 1;
+                //         <body>
+                //     }
+                //
+                // Two i64 stack slots and an `icmp slt`. No allocation, no iterator, no
+                // heap object — the same machine code as `while i < len(xs)`, which is the
+                // whole reason A6 is worth doing as a lowering rather than as a library.
+                //
+                // The end is stored in a slot rather than re-emitted in the condition, and
+                // that is the load-bearing difference from the array `for` directly above:
+                // that one re-reads the array header every pass, deliberately, so a `push`
+                // from the body is seen. A range's end may be any expression — `len(xs)`,
+                // `a.b.c`, arithmetic — and re-emitting it would run it once per pass.
+                // Evaluated once is also the only answer that makes `0..len(xs)` cost what
+                // the reader thinks it costs. See ast::StmtKind::ForRange decision 4.
+                //
+                // `$` is not a byte an identifier may contain, so neither synthesized name
+                // can collide with a program's own, and the counter lets loops nest.
+                let index = format!("for${}", self.desugared_loops);
+                let limit = format!("for${}$end", self.desugared_loops);
+                self.desugared_loops += 1;
+                let int = |kind| TypedExpr { ty: Type::Int, kind };
+                let idx = || int(TypedExprKind::Var(index.clone()));
+
+                let saved = self.vars.clone();
+                self.gen_stmt(&TypedStmt::Let {
+                    name: limit.clone(),
+                    ty: Type::Int,
+                    value: end.clone(),
+                })?;
+                self.gen_stmt(&TypedStmt::Let {
+                    name: index.clone(),
+                    ty: Type::Int,
+                    value: start.clone(),
+                })?;
+                let mut inner = Vec::with_capacity(body.len() + 2);
+                inner.push(TypedStmt::Let {
+                    name: name.clone(),
+                    ty: Type::Int,
+                    value: idx(),
+                });
+                // The advance comes BEFORE the body, for the reason the array `for` above
+                // records: `continue` jumps to the CONDITION, so an increment at the bottom
+                // is skipped and the loop never ends. The counter is read into `name` first,
+                // so the body still sees the pass it is on.
+                inner.push(TypedStmt::Assign {
+                    name: index.clone(),
+                    value: int(TypedExprKind::Binary {
+                        op: BinOp::Add,
+                        lhs: Box::new(idx()),
+                        rhs: Box::new(int(TypedExprKind::IntLit(1))),
+                    }),
+                });
+                inner.extend(body.iter().cloned());
+                let cond = TypedExpr {
+                    ty: Type::Bool,
+                    kind: TypedExprKind::Compare {
+                        op: CmpOp::Lt,
+                        lhs: Box::new(idx()),
+                        rhs: Box::new(int(TypedExprKind::Var(limit.clone()))),
+                    },
+                };
+                // `<`, not `<=`: the end is exclusive, and this one character is where that
+                // decision actually lives. `0..0` and `3..0` both fail the test at entry and
+                // run zero times — no guard needed, which is why the empty range needed no
+                // code at all.
+                let r = self.gen_while(&cond, &inner);
+                self.vars = saved;
+                r
+            }
             TypedStmt::Region { name, body } => {
                 // Mark where the bump pointer stands, run the body, then reset
                 // to the mark — the whole region released in O(1), with no

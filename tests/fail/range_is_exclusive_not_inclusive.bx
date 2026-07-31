@@ -1,0 +1,10 @@
+// There is ONE range form in Burxt and it is exclusive. `..=` is refused in the LEXER, where
+// it is read, rather than left to fall apart in the parser as `..` followed by `=`.
+//
+// Two forms differing by a single character, where that character changes the number of
+// iterations, is exactly the defect a reviewer's eye slides over — and being reviewable is
+// what this language is for. The cost is named: a loop that must touch `n` writes `0..n + 1`,
+// which is a visible `+ 1` instead of an invisible `=`.
+for i in 0..=3 {
+    print(i);
+}

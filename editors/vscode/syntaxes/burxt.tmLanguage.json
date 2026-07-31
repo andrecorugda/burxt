@@ -498,6 +498,11 @@
     "operators": {
       "patterns": [
         {
+          "comment": "`..` is the range in `for i in 0..n`, and its only legal position. Listed before the numbers can be reached, because `0..3` and `0.5` begin with the same two bytes and the decimal pattern must not swallow the dots — it does not, since `\\d+\\.\\d+` needs a digit after the point, which is the same lookahead the lexer uses.",
+          "name": "keyword.operator.range.burxt",
+          "match": "\\.\\."
+        },
+        {
           "comment": "`=>` separates a match arm from its body.",
           "name": "keyword.operator.arrow.burxt",
           "match": "=>|->"

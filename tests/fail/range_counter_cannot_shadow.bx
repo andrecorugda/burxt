@@ -1,0 +1,7 @@
+// A `for` range's counter is a binding, and Burxt does not shadow. Its own fixture rather than
+// trusting the array form's: the range form is a separate statement kind in both compilers, so
+// every rule about it is a rule that had to be written twice and can be forgotten once.
+let i: Int = 1;
+for i in 0..3 {
+    print(i);
+}

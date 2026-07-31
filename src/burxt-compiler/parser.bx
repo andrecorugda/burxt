@@ -616,7 +616,9 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
                 let t: Token = self.tokens[base.token];
                 let found: Int = self.find_binding(src, t.start, t.length);
                 if found >= 0 {
-                    if self.bindings[found].writable == 0 {
+                    // `!= 1`: 1 is the only code that means writable, and a `== 0` here would
+                    // read a `for` range's counter (code 2) as writable. See `Binding` in ast.bx.
+                    if self.bindings[found].writable != 1 {
                         let complained: Int = self.complain_at(src, at,
                             "`" + called + "` changes the array in place, so `"
                             + substring(src, t.start, t.length)
@@ -1407,7 +1409,20 @@ function flag_associated(flags: Int) -> Int {
 // Precedence climbs the way the Rust parser's does: or, and, comparison, additive,
 // term, unary, postfix, primary.
 function (mutable self: Unit) parse_expr(src: String) -> Int {
-    return self.parse_or(src);
+    let result: Int = self.parse_or(src);
+    // A range is a `for` construct, never a value — statement kind 74 in ast.bx says why waiting
+    // for a real iterator protocol beats inventing half of one. Checked at the TOP of the
+    // expression chain rather than in `parse_primary`, because `..` FOLLOWS a complete
+    // expression: the only way to see it is to have finished one.
+    if result >= 0 && self.at(42) && self.range_bounds == 0 {
+        print("parse error: `..` builds a range, and a range is only a `for` construct — there "
+            + "is no range VALUE yet. Write `for i in 0..n \{ ... \}`. A range that can be "
+            + "stored, passed and chained needs an iterator protocol, which is a separate "
+            + "piece of work; half of one would be worse than waiting.");
+        self.errors += 1;
+        return -1;
+    }
+    return result;
 }
 
 function (mutable self: Unit) parse_or(src: String) -> Int {
@@ -1922,9 +1937,33 @@ function (mutable self: Unit) parse_stmt(src: String) -> Int {
         let name_tok: Int = self.position;
         let m: Int = self.advance();
         if !self.eat(src, 131, "`in` and the array to walk") { return -1; }
+        // `..` is legal only here, between the two bounds of a `for`, so the flag is raised
+        // only here and `parse_expr`'s check refuses it everywhere else by name.
         self.no_record_literal += 1;
+        self.range_bounds += 1;
         let iterable: Int = self.parse_expr(src);
+        self.range_bounds -= 1;
         self.no_record_literal -= 1;
+        if iterable >= 0 && self.at(42) {            // `..` — a RANGE, statement kind 74
+            let dots: Int = self.advance();
+            self.no_record_literal += 1;
+            self.range_bounds += 1;
+            let end: Int = self.parse_expr(src);
+            self.range_bounds -= 1;
+            self.no_record_literal -= 1;
+            if end < 0 { return -1; }
+            // `0..1..2`. Answered here rather than left to "expected `\{`", because the author
+            // plainly meant a range and the answer is that a range has two bounds.
+            if self.at(42) {
+                print("parse error: a range has exactly two bounds — `0..n`. There is no "
+                    + "`a..b..c`, and no step: a loop that skips writes the skip in its body.");
+                self.errors += 1;
+                return -1;
+            }
+            let range_body: Int = self.parse_block(src);
+            if range_body < 0 { return -1; }
+            return self.add(74, iterable, range_body, end, 0, name_tok);
+        }
         if iterable < 0 { return -1; }
         // The loop reads the iterable once per element, so a call would pay its cost per
         // pass. A name and a field path are free to re-read; nothing else is.
