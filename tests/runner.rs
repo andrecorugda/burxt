@@ -1247,6 +1247,17 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
         }
     }
 
+    // v0.0.209 added THREE fail fixtures and this floor did NOT move, which is exactly the case the
+    // paragraph above says to write down rather than leave to be rediscovered.
+    //
+    // `allocates nothing` is checked by stage-0 and deliberately not by stage-1: the allocation
+    // fixpoint is stage-0's alone, and stage-1 has always required the marker rather than deriving it
+    // — M14 slice 1 shipped stage-0 at v0.0.142 and stage-1 at v0.0.144, two versions apart, for the
+    // same reason. So stage-1 PARSES the claim and does not verify it. The two compilers still accept
+    // the same programs, which is what this test measures; the refusal lives where the inference does.
+    //
+    // When per-block release lands, the fixpoint arrives in stage-1 too and these three should start
+    // being caught. **If this floor is still 226 after that, that is the bug.**
     let _ = fs::remove_dir_all(&scratch);
     assert!(
         caught >= 226,

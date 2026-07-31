@@ -1,0 +1,7 @@
+// The claim, broken by the function's own body. `to_string` builds a String, and the message names it
+// rather than saying "something in here allocates" — a refusal that names the cause is a fix; one that
+// does not is a search.
+function label(n: Int) -> String allocates nothing {
+    return to_string(n);
+}
+print(label(7));

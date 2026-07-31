@@ -2582,6 +2582,92 @@ impl TypeChecker {
     /// Does evaluating this expression produce region-allocated storage? Needed
     /// because a concatenated String lives in a region while a literal lives in
     /// .rodata, and the two share one type — so the type alone cannot say.
+    /// The first thing in a body that allocates, described in a few words.
+    ///
+    /// Exists so `allocates nothing` can say WHY rather than only that it is wrong. A refusal that
+    /// names the offending call is a fix; one that says "it allocates somewhere" is a search.
+    ///
+    /// Best effort by design: it walks statements in order and answers the first cause it can name.
+    /// It never decides WHETHER the claim is broken — `allocates_fn` does that, from the fixpoint —
+    /// so a body this cannot describe still gets refused, just with a shorter message.
+    fn first_allocation(&self, body: &[TypedStmt]) -> Option<String> {
+        for stmt in body {
+            if let Some(found) = self.first_allocation_in_stmt(stmt) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    fn first_allocation_in_stmt(&self, stmt: &TypedStmt) -> Option<String> {
+        let describe = |e: &TypedExpr| -> Option<String> { self.describe_allocation(e) };
+        match stmt {
+            TypedStmt::Let { value, .. }
+            | TypedStmt::Assign { value, .. }
+            | TypedStmt::AssignField { value, .. }
+            | TypedStmt::ExprStmt(value)
+            | TypedStmt::Return(value)
+            | TypedStmt::Print { value, .. } => describe(value),
+            TypedStmt::If { cond, then_block, else_block } => describe(cond)
+                .or_else(|| self.first_allocation(then_block))
+                .or_else(|| else_block.as_ref().and_then(|b| self.first_allocation(b))),
+            TypedStmt::While { body, .. } => self.first_allocation(body),
+            TypedStmt::Region { body, .. } => self.first_allocation(body),
+            TypedStmt::For { body, .. } => self.first_allocation(body),
+            TypedStmt::Match { arms, .. } => {
+                arms.iter().find_map(|arm| self.first_allocation(&arm.body))
+            }
+            _ => None,
+        }
+    }
+
+    /// A few words for the thing that allocates, or None when it cannot be named simply.
+    fn describe_allocation(&self, e: &TypedExpr) -> Option<String> {
+        // The `dynamic` arm comes BEFORE the guard, because `expr_allocates` has no `DynCall` arm —
+        // the inference reaches a dyn call another way, through `has_region()` being asked at the
+        // call site when the interface method allocates. So the guard would answer false here and
+        // the message would lose the one path hardest to find by reading.
+        //
+        // Naming it is sound rather than a guess: this walk returns the FIRST nameable cause, so a
+        // dyn call is only reached when nothing before it allocated — and the claim has to hold for
+        // every implementation anyway, so the method is the actionable name even without knowing
+        // which one broke it.
+        if let TypedExprKind::DynCall { interface_name, method, .. } = &e.kind {
+            return Some(format!(
+                "`.{}(...)` through a `dynamic {}` allocates — and the claim has to hold for EVERY \
+                 implementation, so one that allocates is enough to break it",
+                method, interface_name
+            ));
+        }
+        if !self.expr_allocates(e) {
+            return None;
+        }
+        match &e.kind {
+            TypedExprKind::Call { name, .. } => {
+                Some(format!("`{}(...)` builds its answer in the caller's region", name))
+            }
+            TypedExprKind::MethodCall { receiver, method, .. } => Some(format!(
+                "`{}.{}(...)` builds its answer in the caller's region",
+                receiver, method
+            )),
+            TypedExprKind::Binary { op: BinOp::Add, lhs, .. } if lhs.ty == Type::String => {
+                Some("joining two Strings builds a new one".to_string())
+            }
+            TypedExprKind::Substring { .. } => Some("`substring(...)` builds a new String".to_string()),
+            TypedExprKind::ToString(_) => Some("`to_string(...)` builds a String".to_string()),
+            TypedExprKind::ReadFile(_) => Some("`read_file(...)` builds a String".to_string()),
+            TypedExprKind::CStringAt(_) => {
+                Some("`c_string_at(...)` copies C's bytes into a String".to_string())
+            }
+            TypedExprKind::CBytesAt { .. } => {
+                Some("`c_bytes_at(...)` copies C's bytes into an array".to_string())
+            }
+            TypedExprKind::SliceLit(_) => Some("a growable array is built here".to_string()),
+            TypedExprKind::Push { .. } => Some("`push(...)` may grow the array".to_string()),
+            _ => None,
+        }
+    }
+
     fn expr_allocates(&self, e: &TypedExpr) -> bool {
         match &e.kind {
             TypedExprKind::SliceLit(_)
@@ -3044,6 +3130,26 @@ impl TypeChecker {
         self.allowed_effects = outer_allowed;
         self.effects_owner = outer_effects_owner;
         let writable = f.parameters.iter().map(|p| p.writable).collect();
+        // `allocates nothing` — a CLAIM, checked here against the same inference every other
+        // question about allocation asks. Not a second source of truth: `allocates_fn` is the one
+        // answer, whether the programmer wrote the marker or the probe worked it out.
+        //
+        // Checked at the END of the body rather than the start, because the body is what decides,
+        // and checked against the TRANSITIVE answer, because a claim that stopped at the first call
+        // would be worth nothing — a function that calls something that allocates does allocate.
+        if f.allocates_nothing && self.allocates_fn(&f.name) {
+            self.blame(f.span);
+            return Err(format!(
+                "`function {}` claims `allocates nothing`, and it does allocate{}. \
+                 Either drop the claim, or move the building into a function that does not \
+                 make it.",
+                f.name,
+                match self.first_allocation(&body) {
+                    Some(why) => format!(" — {}", why),
+                    None => String::new(),
+                }
+            ));
+        }
         Ok(TypedFn { name: f.name.clone(), parameters, writable, ret: f.ret.clone(), body, requires, ensures, decreases, olds })
     }
 

@@ -765,10 +765,17 @@ impl Parser {
         self.expect(&Token::Fn)?;
         let (name, type_parameters, parameters, ret, bracket_requires, bracket_ensures) =
             self.parse_fn_signature()?;
-        // `-> T allocates` reads as what it is: returns a T, and allocates.
-        let allocates = self.at_word("allocates");
+        // `-> T allocates` reads as what it is: returns a T, and allocates. `-> T allocates nothing`
+        // is the opposite CLAIM, and the compiler holds the signature to it.
+        let mut allocates = self.at_word("allocates");
+        let mut allocates_nothing = false;
         if allocates {
             self.bump();
+            if self.at_word("nothing") {
+                self.bump();
+                allocates = false;
+                allocates_nothing = true;
+            }
         }
         // After `allocates`, before the clauses: a signature reads left to right as what it
         // answers, what it builds, what it reaches, and what it promises.
@@ -788,7 +795,7 @@ impl Parser {
         let body = self.parse_block()?;
         // The parameters are only in scope for this signature and body.
         self.type_parameters.clear();
-        Ok(FnDef { name, type_parameters, parameters, ret, allocates, touches, is_pure, requires, ensures, decreases, body, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok(FnDef { name, type_parameters, parameters, ret, allocates, allocates_nothing, touches, is_pure, requires, ensures, decreases, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `fn (self: Type) name(parameters) -> ret { body }`, or `fn (mut self: ...)`

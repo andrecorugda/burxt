@@ -68,7 +68,7 @@ Each was learned expensively and each has a version number behind it.
 | A9 | **Generic interfaces** — the cheap alternative to closures. `dynamic Trait` is already a function value in all but name; interfaces simply cannot take type parameters. **On no roadmap — needs an explicit yes/no, because YES may replace A10** | M | `sort_by` · predicates · visitors · most of `map`/`filter`, in a form consistent with the no-closures decision |
 | A10 | **Closures / function values** — or A9 instead of it | **L** | `map`/`filter`/`fold`/`any`/`all`/`retain`/`partition`/`position` across four libraries **at once** · `signal()`, so a server can shut down cleanly |
 | A11 | **An iterator protocol.** A4.4 deferred it with *"trigger: after growable collections make iteration general."* **That trigger has fired.** | L | Lazy chains · `for` over a Map without allocating an array and re-hashing every key |
-| **A12** | **M14 slice 3 — per-block release** (+ `allocates nothing`, `burxt explain memory`). ⚠ **NOW NEXT, not queued — the forcing function fired at v0.0.207** | L | Bounded memory in a loop (**5,280 → 1,408 KB** per 100k Strings) · the compiler's own ceiling, which **went red in CI at 544 MB against 540** while passing locally at 537 · **prerequisite for the freestanding/IoT target** |
+| **A12** | **M14 slice 3 — per-block release** (+ ~~`allocates nothing`~~ **DONE v0.0.209**, `burxt explain memory`). ⚠ **IN PROGRESS — the forcing function fired at v0.0.207** | L | Bounded memory in a loop (**5,280 → 1,408 KB** per 100k Strings) · the compiler's own ceiling, which **went red in CI at 544 MB against 540** while passing locally at 537 · **prerequisite for the freestanding/IoT target** |
 
 ### A1 in detail — why the smallest item is first
 
@@ -120,6 +120,7 @@ any other user on the machine can read it.
 | B11 | **M7: stage-1 compiles 101 of 102**; generic records in stage-1 | M |
 | B12 | **stage-1 backend gaps** — Decimals, `match`, `musttail`, contracts, FFI. Refused by name, never miscompiled, but it bounds what the differential can cover | L |
 | B13 | M11's **1.67× compile-time growth is unattributed**; the ratchet tightening is pending | S |
+| B15 | **stage-0 accepts a trailing `;` on an interface method signature and stage-1 refuses it.** Found by writing a fixture in v0.0.209 — no existing fixture used the `;` form, so the differential could not see it. A divergence in what is ACCEPTED, which is the direction that matters | S |
 | B14 | **Doc rot** — `lib/README.md` claims `Option`/`Result` do not exist · `map.bx` claims no bit ops · the module table omits 3 modules · `docs/reference/builtins.md` omits 9 builtins while claiming to be generated from that list | XS |
 
 ---

@@ -1,0 +1,21 @@
+// Through an interface object, and this is the path hardest to find by reading — the body says
+// `thing.name()` and nothing about it looks like an allocation.
+//
+// The claim has to hold for EVERY implementation, so one that allocates is enough to break it. That is
+// why the message names the method rather than a receiver type: the receiver is not known here, and
+// the fix is not "use a different implementation", it is "do not make this claim".
+interface Named {
+    function name(self) -> String
+}
+class Item { sku: String }
+implement Named for Item {
+    function (self) name() -> String { return "item " + self.sku; }
+}
+function describe(thing: dynamic Named) -> String allocates nothing {
+    return thing.name();
+}
+region main {
+    let i: Item = Item { sku: "A" };
+    let n: dynamic Named = i;
+    print(describe(n));
+}

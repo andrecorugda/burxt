@@ -1,0 +1,82 @@
+// `allocates nothing` — a CHECKED CLAIM. M14 slice 3, item A12 of spec/ROADMAP-1.0.md.
+//
+// The mirror image of `allocates`, and the two say opposite things about who is trusted. `allocates`
+// is the programmer telling the compiler something it will work out anyway — since v0.0.142 it is
+// INFERRED, so writing it adds nothing, which is why v0.0.144–147 stopped writing it. `allocates
+// nothing` is the programmer asking to be **held to it**, which is the useful direction: a function
+// that quietly starts allocating is how a constant-memory loop stops being one, and nothing else in
+// the language would notice.
+//
+// Transitive, because the inference is. A claim that stopped at the first call would be worth nothing.
+// See tests/fail/allocates_nothing_* for the three paths it refuses: directly, through a call, and
+// through a `dynamic`.
+//
+// One answer, not two: the check asks `allocates_fn`, the same question every other rule about
+// allocation asks, so the claim and the inference cannot disagree.
+
+// Arithmetic allocates nothing, and neither does reading a field or an element.
+function total(a: Int, b: Int) -> Int allocates nothing {
+    return a + b;
+}
+function tax(subtotal: Decimal<2>, rate: Decimal<4, RoundHalfEven>) -> Decimal<2, RoundHalfEven>
+    allocates nothing
+{
+    return subtotal * rate;
+}
+function widest(xs: [Int]) -> Int allocates nothing
+    requires len(xs) > 0
+{
+    let mutable best: Int = xs[0];
+    let mutable i: Int = 1;
+    while i < len(xs) {
+        if xs[i] > best {
+            best = xs[i];
+        }
+        i += 1;
+    }
+    return best;
+}
+// Comparing Strings allocates nothing — it reads bytes in place. Worth having a case, because
+// "touches a String" and "builds a String" are the distinction the whole rule turns on.
+function longer(a: String, b: String) -> Bool allocates nothing {
+    return len(a) > len(b);
+}
+function starts(text: String, byte: Int) -> Bool allocates nothing {
+    if len(text) == 0 {
+        return false;
+    }
+    return byte_at(text, 0) == byte;
+}
+// A call chain that allocates nothing at any depth.
+function double(n: Int) -> Int allocates nothing { return n * 2; }
+function quadruple(n: Int) -> Int allocates nothing { return double(double(n)); }
+
+// And a `dynamic` whose implementation allocates nothing — the case that proves the rule
+// DISCRIMINATES rather than refusing every interface call.
+interface Counted {
+    function count(self) -> Int
+}
+class Basket { items: Int }
+implement Counted for Basket {
+    function (self) count() -> Int { return self.items; }
+}
+function how_many(thing: dynamic Counted) -> Int allocates nothing {
+    return thing.count();
+}
+
+region main {
+    print(total(1, 2));
+    print(tax($59.97, 0.0825));
+    let mutable xs: [Int] = [];
+    let a: Int = push(xs, 3);
+    let b: Int = push(xs, 9);
+    let c: Int = push(xs, 4);
+    print(widest(xs));
+    print(longer("hello", "hi"));
+    print(starts("burxt", 98));
+    print(quadruple(5));
+
+    let basket: Basket = Basket { items: 7 };
+    let counted: dynamic Counted = basket;
+    print(how_many(counted));
+}

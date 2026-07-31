@@ -75,7 +75,11 @@
 > - ~~**§5's hole is still open.**~~ **CLOSED in v0.0.143**, and without the syntax §5 proposed —
 >   see the note added to §5 below. `tests/fail/allocates_through_a_trait_object_needs_a_region.bx`.
 > - ~~Slice 2~~ **DONE in both compilers (v0.0.146): a region is no longer REQUIRED.** See below.
-> - Slice 3 — per-block RELEASE, `allocates nothing`, `burxt explain memory`. Slice 2 delivered
+> - Slice 3 — per-block RELEASE and `burxt explain memory` remain. **`allocates nothing` shipped in
+>   v0.0.209** (stage-0 checks it; stage-1 parses it and does not, because the allocation fixpoint is
+>   stage-0's alone — the same staging slice 1 used two versions apart). Acceptance item 6 is met: a
+>   fail fixture per path, direct, through a call, and through a `dynamic`, each naming its cause.
+>   Slice 2 delivered
 >   half of §1: nothing needs a region in order to allocate. It did **not** deliver §3's
 >   constant-memory loop, and the numbers below say why that matters.
 >

@@ -445,6 +445,18 @@ pub struct FnDef {
     /// allocate without opening one and may return what it built. One bit, not a
     /// lifetime — there is no name and no scope relation to unify.
     pub allocates: bool,
+    /// Declared `allocates nothing` — a CHECKED CLAIM rather than a permission.
+    ///
+    /// The mirror image of `allocates`, and the reason it is worth having is that the two say
+    /// opposite things about who is trusted. `allocates` is the programmer telling the compiler
+    /// something it will verify anyway; since v0.0.142 it is inferred, so writing it adds nothing.
+    /// `allocates nothing` is the programmer asking the compiler to *hold them to it* — the useful
+    /// direction, because a function that quietly starts allocating is how a constant-memory loop
+    /// stops being one.
+    ///
+    /// Transitive, because the inference is: a function that calls something that allocates does
+    /// allocate, and a claim that stopped at the first call would be worth nothing.
+    pub allocates_nothing: bool,
     /// Declared `pure`: the result depends only on the arguments. No I/O, no FFI,
     /// and no calls to functions that do not make the same promise.
     pub is_pure: bool,

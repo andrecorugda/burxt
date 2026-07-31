@@ -1,0 +1,1 @@
+claims `allocates nothing`, and it does allocate — `to_string(...)` builds a String

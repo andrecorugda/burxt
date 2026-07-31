@@ -235,6 +235,49 @@ reader nothing, and a reader who learns to skip one annotation has learned to sk
 That is the opposite call from the one made for [`touches`](06-effects.md), and deliberately so:
 `allocates` carried no promise anyone needed, and `touches network` *is* the promise.
 
+### `allocates nothing` — the claim that runs the other way
+{: #allocates-nothing}
+
+There is a marker worth writing, and it is the mirror image of the one that stopped being worth it:
+
+```burxt
+function widest(xs: [Int]) -> Int allocates nothing
+    requires len(xs) > 0
+{
+    let mutable best: Int = xs[0];
+    let mutable i: Int = 1;
+    while i < len(xs) {
+        if xs[i] > best { best = xs[i]; }
+        i += 1;
+    }
+    return best;
+}
+```
+
+The difference is who is being trusted. `allocates` was you telling the compiler something it worked out
+anyway. **`allocates nothing` is you asking the compiler to hold you to it** — and that is the useful
+direction, because a function that quietly *starts* allocating is how a constant-memory loop stops being
+one, and nothing else in the language would notice.
+
+It is **transitive**, because the inference is. A function that calls something which allocates does
+allocate, and a claim that stopped at the first call would pass exactly when the allocation was one
+level away — which is where it usually is:
+
+```
+error: `function outer` claims `allocates nothing`, and it does allocate — `inner(...)` builds its
+       answer in the caller's region. Either drop the claim, or move the building into a function
+       that does not make it.
+```
+
+Three ways to break it, and the message names the cause in each: directly, through a call, and through
+a `dynamic`. The last is the one hardest to spot by reading — the body says `thing.name()` and nothing
+about it looks like an allocation — and there the claim has to hold for **every** implementation, so one
+that allocates is enough.
+
+**Where it earns its place:** the body of a hot loop, a comparison function, anything you intend to stay
+free of the region. Where it does not: everywhere. It is a claim about a promise you are making, so it
+belongs where the promise matters — the same rule `touches` follows.
+
 ### What cannot leave
 {: #what-cannot-leave}
 
@@ -331,6 +374,7 @@ The rule of thumb is one sentence: **a region per unit of work whose results you
 | a long-running server | `region request { ... }` around each request. That is the whole of keeping its memory flat |
 | a helper that formats or joins something | nothing. It builds in its caller's region |
 | an `external function` that allocates | `allocates` — required there, because there is no body to look at |
+| a helper you need to STAY free of the region | `allocates nothing` — a claim the compiler holds you to, transitively |
 | something you need to return from inside a region | move the region out, or return a scalar |
 
 </div>

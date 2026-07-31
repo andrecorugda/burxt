@@ -2096,9 +2096,28 @@ function (mutable self: Unit) parse_function(src: String, is_pure: Int, owner: I
         }
     }
     let mutable builds_in_caller: Int = 0;
+    let mutable claims_nothing: Int = 0;
     if self.at_word(src, "allocates") {              // contextual: only here does the
         builds_in_caller = 1;                        // word mean the marker.
         let a: Int = self.advance();
+        // `allocates nothing` is the opposite claim, and stage-1 PARSES it without checking it.
+        //
+        // That is a deliberate asymmetry rather than an oversight, and worth stating because the
+        // usual rule here is the reverse. Stage-0 checks the claim against its allocation fixpoint;
+        // stage-1 has no such fixpoint — the whole inference is stage-0's, and stage-1 has always
+        // required the marker rather than deriving it (M14 slice 1 shipped stage-0 v0.0.142 and
+        // stage-1 v0.0.144, two versions apart, for the same reason).
+        //
+        // Recognising the word costs nothing and keeps the two compilers accepting the same
+        // programs, which is what the differential measures. Checking it needs the fixpoint, and
+        // that is per-block release's other half. Until then a claim stage-1 cannot verify is one it
+        // does not pretend to: it reads the word and moves on, and stage-0 is where the refusal
+        // lives. `spec/M14-IMPLICIT-REGIONS.md` §8 predicted exactly this staging.
+        if self.at_word(src, "nothing") {
+            builds_in_caller = 0;
+            claims_nothing = 1;
+            let n: Int = self.advance();
+        }
     }
     // `touches files, commands` — what this function reaches outside itself, as a bitmask riding in
     // the flags. Parsed AND enforced since v0.0.183; before that it was read and thrown away, which

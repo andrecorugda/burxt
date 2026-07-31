@@ -1,0 +1,1 @@
+and it does allocate — `inner(...)` builds its answer in the caller's region

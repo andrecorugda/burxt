@@ -1,0 +1,10 @@
+// The claim is TRANSITIVE, because the inference is: a function that calls something that allocates
+// does allocate. A claim that stopped at the first call would be worth nothing — it would pass exactly
+// when the allocation was one level away, which is where it usually is.
+function inner(n: Int) -> String {
+    return to_string(n);
+}
+function outer(n: Int) -> String allocates nothing {
+    return inner(n);
+}
+print(outer(7));
