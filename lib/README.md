@@ -15,14 +15,19 @@ written **once, carefully**, instead of forty times.
 | [`string.bx`](string.bx) | `string_find`, `string_contains`, `string_starts_with`, `string_ends_with`, `string_trim`, `string_split`, `string_lines`, `string_join`, `string_repeat`, `string_to_int`, `string_parse_int` |
 | [`option.bx`](option.bx) | `Option<T>` — absence as a type. `option_or`, `option_is_some`, `option_is_none`. No `unwrap`, on purpose. |
 | [`result.bx`](result.bx) | `Result<T, E>` — failure as a type. `result_or`, `result_is_ok`. Both `match` arms always required. |
+| [`array.bx`](array.bx) | `array_contains`, `array_index_of`, `array_is_sorted`, `array_min`/`max`/`first`/`last`, `array_sum_int`/`sum_money`, and the changing half: `array_swap`, `array_reverse`, `array_sort`, `array_fill`, `array_extend`, `array_remove_at`. **`mutable xs: [T]` in the signature means the call changes YOUR array** |
+| [`math.bx`](math.bx) | `INT_MAX`/`INT_MIN`, `math_min`/`max`/`clamp` (generic over `Ordered`), `math_abs`, `math_sign`, `math_pow`, `math_isqrt`, `math_gcd`, `math_lcm`, and four families for overflow: `+` traps, `math_checked_*` answers `None`, `math_saturating_*` clamps to the bound, `math_wrapping_*` discards the carry |
 | [`map.bx`](map.bx) | `Map<K, V>` in insertion order, always. `map_new`, then methods: `set`, `get`, `find`, `has`, `remove`, `count`, `keys` |
 | [`json.bx`](json.bx) | `Json` and `Field`, `json_render`, `json_parse`, and the typed readers. **A JSON number is its digits, not a float** — see the header |
+| [`vector.bx`](vector.bx) | `vector_dot`, `vector_magnitude`, `vector_is_unit`, `vector_normalise`, `vector_top_dot`, and a store: `vector_store_render`/`parse`/`read`/`write`/`append`. Exact, never through a float |
+| [`test.bx`](test.bx) | `Tests`, `test_begin`, `check_int`/`money`/`decimal`/`string`/`bool`/`that`, `test_end`. Testing Burxt, in Burxt — no registration, because there are no function values |
 | [`files.bx`](files.bx) | `file_read`, `file_write`, `file_append`, `file_exists`, `file_delete`, `file_move`, `file_make_directory`, `file_list_directory` |
 | [`os.bx`](os.bx) | `os_args`, `os_arg`, `os_arg_count`, `os_now`, `os_run`, `os_capture`, `os_read_byte`, `os_read_all`, `os_byte_as_string` |
 
 The first two rows used to read `str.bx` and `fs.bx`, which have never been the filenames — so both
 links 404'd, and `map.bx` and `json.bx` were missing from a table whose whole job is saying what is
-here.
+here. **`array.bx`, `vector.bx` and `test.bx` were missing from it too**, and for longer — found the
+same way, by listing the directory instead of reading the table.
 
 ## Why it exists
 

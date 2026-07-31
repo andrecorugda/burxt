@@ -1,0 +1,235 @@
+// lib/math.bx — the module that could not be written until v0.0.243, and the blocker was not that it
+// would have been awkward.
+//
+// **A module cannot hold a statement.** `main.rs` refuses a top-level statement in any file reached by
+// `use` — "a module holds declarations, not statements: this would run when `math.bx` was used, and a
+// `use` is not a call" — and a top-level `let` is not in scope inside a function anyway. So `INT_MAX`
+// could not be NAMED in a library under any arrangement. `const` is an ITEM, so it is allowed where a
+// statement is not, and its FOLDING is what makes `INT_MIN` expressible at all:
+// `-9223372036854775808` lexes as a negation of an out-of-range literal.
+//
+// The one rule that organises the file: **`+ - *` TRAP on overflow.** So nothing here computes a result
+// and then asks whether it overflowed — the trap has already happened. Every checked, saturating and
+// wrapping function tests its OPERANDS first. Getting that order backwards is a dead process rather
+// than a wrong answer, which is what makes it worth a fixture.
+use "../../lib/math.bx";
+
+region main {
+    // ---- the two constants, and INT_MIN printing correctly ----
+    print(INT_MAX);
+    print(INT_MIN);
+    // The fold is exact: one below the smallest positive-side value, and one step apart.
+    print(INT_MIN + 1 == -9223372036854775807);
+    print(INT_MAX + INT_MIN == -1);
+
+    // ---- ordering, generic over `Ordered` rather than Int-only ----
+    print(math_min(3, 7));
+    print(math_max(3, 7));
+    print(math_min(INT_MIN, INT_MAX));
+    print(math_max(INT_MIN, INT_MAX));
+    // Money, which is what the generic is for: `array_min` over an array already worked, these are
+    // the two-argument pair and they take a Decimal without a second function.
+    print(math_min($19.99, $4.50));
+    print(math_max($19.99, $4.50));
+    // Strings compare by BYTE order, the same as `array_sort`: `Z` is 90 and `a` is 97.
+    print(math_min("apple", "Zebra"));
+    print(math_max("apple", "Zebra"));
+
+    print(math_clamp(5, 1, 3));
+    print(math_clamp(0, 1, 3));
+    print(math_clamp(2, 1, 3));
+    print(math_clamp($0.50, $1.00, $9.00));
+    // low == high is legal — the range holds exactly one value, and the contract says `low <= high`.
+    print(math_clamp(99, 4, 4));
+
+    // ---- magnitude and direction ----
+    print(math_abs(0 - 7));
+    print(math_abs(7));
+    print(math_abs(0));
+    // One above INT_MIN is the largest magnitude `abs` can answer. INT_MIN itself is the precondition:
+    // 2^63 is not an Int, and `requires x > INT_MIN` says so at the call rather than returning a
+    // negative number from a function that promises a non-negative one.
+    print(math_abs(INT_MIN + 1) == INT_MAX);
+
+    // `sign` needs no precondition, because nothing is negated.
+    print(math_sign(0 - 42));
+    print(math_sign(0));
+    print(math_sign(42));
+    print(math_sign(INT_MIN));
+    print(math_sign(INT_MAX));
+
+    // ---- the three overflow predicates, each written once and shared ----
+    print(math_add_overflows(INT_MAX, 1));
+    print(math_add_overflows(INT_MAX, 0));
+    print(math_add_overflows(INT_MIN, 0 - 1));
+    print(math_add_overflows(1, 2));
+    print(math_sub_overflows(INT_MIN, 1));
+    // Subtracting a NEGATIVE is what runs up against INT_MAX — and `b == INT_MIN` is the case where
+    // `-b` does not exist, so the test is written with `INT_MAX + b` rather than by negating.
+    print(math_sub_overflows(0, INT_MIN));
+    print(math_sub_overflows(0 - 1, INT_MIN));
+    print(math_mul_overflows(3037000500, 3037000500));
+    print(math_mul_overflows(3037000499, 3037000499));
+    print(math_mul_overflows(INT_MIN, 0 - 1));
+    print(math_mul_overflows(INT_MIN, 1));
+    print(math_mul_overflows(0, INT_MIN));
+
+    // ---- checked: None instead of a result ----
+    print(option_or(math_checked_add(2, 3), 0 - 1));
+    // The boundary. None, not a trap and not a wrapped number.
+    print(option_is_none(math_checked_add(INT_MAX, 1)));
+    print(option_is_some(math_checked_add(INT_MAX - 1, 1)));
+    print(option_or(math_checked_add(INT_MAX - 1, 1), 0) == INT_MAX);
+    print(option_is_none(math_checked_add(INT_MIN, 0 - 1)));
+    print(option_or(math_checked_add(INT_MIN + 1, 0 - 1), 0) == INT_MIN);
+
+    print(option_or(math_checked_sub(10, 3), 0));
+    print(option_is_none(math_checked_sub(INT_MIN, 1)));
+    print(option_is_none(math_checked_sub(0, INT_MIN)));
+    print(option_or(math_checked_sub(0 - 1, INT_MIN), 0) == INT_MAX);
+
+    print(option_or(math_checked_mul(6, 7), 0));
+    print(option_is_none(math_checked_mul(3037000500, 3037000500)));
+    print(option_or(math_checked_mul(3037000499, 3037000499), 0));
+    print(option_is_none(math_checked_mul(INT_MIN, 0 - 1)));
+    print(option_or(math_checked_mul(INT_MIN, 1), 0) == INT_MIN);
+    print(option_or(math_checked_mul(0, INT_MIN), 999));
+
+    // `checked_sub(0, x)` is the checked negation, which is why there is no separate `checked_abs`.
+    print(option_is_none(math_checked_sub(0, INT_MIN)));
+    print(option_or(math_checked_sub(0, INT_MAX), 0) == INT_MIN + 1);
+
+    // ---- saturating: the nearest representable answer ----
+    print(math_saturating_add(INT_MAX, 1) == INT_MAX);
+    print(math_saturating_add(INT_MAX, INT_MAX) == INT_MAX);
+    print(math_saturating_add(INT_MIN, 0 - 1) == INT_MIN);
+    print(math_saturating_add(2, 3));
+    print(math_saturating_sub(INT_MIN, 1) == INT_MIN);
+    print(math_saturating_sub(0, INT_MIN) == INT_MAX);
+    print(math_saturating_sub(10, 3));
+    // The end is the sign of the PRODUCT, read off the two operands without multiplying them.
+    print(math_saturating_mul(3037000500, 3037000500) == INT_MAX);
+    print(math_saturating_mul(0 - 3037000500, 3037000500) == INT_MIN);
+    print(math_saturating_mul(0 - 3037000500, 0 - 3037000500) == INT_MAX);
+    print(math_saturating_mul(INT_MIN, 0 - 1) == INT_MAX);
+    print(math_saturating_mul(6, 7));
+
+    // ---- wrapping: modular arithmetic, built from bit operations ----
+    // tests/pass/bits.bx built this half-adder and argued the language should NOT grow a second `+`
+    // for it. That argument was about a builtin; here the same construction is written once instead of
+    // in every checksum, and the discard is still visible in the body.
+    print(math_wrapping_add(1, 2));
+    print(math_wrapping_add(INT_MAX, 1) == INT_MIN);
+    print(math_wrapping_add(INT_MIN, 0 - 1) == INT_MAX);
+    print(math_wrapping_add(0 - 1, 1));
+    print(math_wrapping_neg(1));
+    // The asymmetric range, and here it is the right answer rather than a precondition: wrapping is
+    // what the caller asked for.
+    print(math_wrapping_neg(INT_MIN) == INT_MIN);
+    print(math_wrapping_sub(5, 3));
+    print(math_wrapping_sub(INT_MIN, 1) == INT_MAX);
+    // No case for `b == INT_MIN`, which is where a hand-written subtraction goes wrong: both halves
+    // already wrap.
+    print(math_wrapping_sub(0, INT_MIN) == INT_MIN);
+    print(math_wrapping_mul(6, 7));
+    print(math_wrapping_mul(0 - 6, 7));
+    print(math_wrapping_mul(0 - 6, 0 - 7));
+    print(math_wrapping_mul(INT_MAX, 2) == 0 - 2);
+    print(math_wrapping_mul(INT_MIN, 0 - 1) == INT_MIN);
+    // 3037000500^2 is 9223372037000250000, one step past the range: minus 2^64.
+    print(math_wrapping_mul(3037000500, 3037000500) == 0 - 9223372036709301616);
+    // And the two families agree wherever nothing overflows, which is the property worth checking.
+    print(math_wrapping_add(12345, 67890) == 12345 + 67890);
+    print(math_wrapping_mul(0 - 99, 101) == (0 - 99) * 101);
+
+    // ---- growing, which traps rather than wrapping ----
+    print(math_pow(2, 0));
+    print(math_pow(0, 0));                 // the empty product, 1 — what makes the exponent law hold
+    print(math_pow(2, 10));
+    print(math_pow(0 - 3, 3));
+    print(math_pow(0 - 3, 4));
+    print(math_pow(10, 18));
+    print(math_pow(2, 62) == 4611686018427387904);
+    // The three degenerate bases, which the loop cannot reach. Without these guards `math_pow(1, n)`
+    // runs n multiplications by one: the trap that bounds the loop for `|base| >= 2` never comes when
+    // the answer cannot overflow. This line is the measurement — a billion passes would not return.
+    print(math_pow(1, 1000000000));
+    print(math_pow(1, 62));
+    print(math_pow(0 - 1, 63));
+    print(math_pow(0 - 1, 64));
+    print(math_pow(0 - 1, 1000000001));
+    print(math_pow(0, 5));
+    print(math_pow(0, 1000000000));
+    // A negative exponent is a `requires`, not a rounded-to-zero answer, and so are the other five
+    // preconditions here. All six were verified to trap naming the function the CALLER called —
+    // `math_gcd(INT_MIN, 4)` reports `math_gcd`, not `math_abs` one frame down — but a runtime contract
+    // failure is a tests/panic/ fixture rather than a pass one, and there is no panic fixture for them
+    // yet. A named gap.
+
+    // ---- isqrt: exact, and the only square root in a language with no floats ----
+    print(math_isqrt(0));
+    print(math_isqrt(1));
+    print(math_isqrt(2));                  // the input Newton-from-`n` answers 2 for, if `n < 4` is not handled
+    print(math_isqrt(3));
+    print(math_isqrt(4));
+    print(math_isqrt(15));                 // a NON-square: 3, not 4 and not an approximation
+    print(math_isqrt(16));
+    print(math_isqrt(17));
+    print(math_isqrt(99));
+    print(math_isqrt(100));
+    print(math_isqrt(1000000));
+    print(math_isqrt(999999));
+    // The top of the range. 3037000499^2 fits; 3037000500^2 does not, which is why the comparison
+    // inside is a division rather than `r * r`.
+    print(math_isqrt(INT_MAX));
+    print(math_isqrt(INT_MAX) == 3037000499);
+    print(math_isqrt(9223372030926249001) == 3037000499);
+    // The defining property, checked rather than asserted: r*r <= n and (r+1)*(r+1) > n.
+    let r: Int = math_isqrt(123456789);
+    print(r);
+    print(r * r <= 123456789);
+    print((r + 1) * (r + 1) > 123456789);
+
+    // ---- number theory ----
+    print(math_gcd(12, 18));
+    print(math_gcd(0 - 12, 18));
+    print(math_gcd(12, 0 - 18));
+    print(math_gcd(0 - 12, 0 - 18));       // always non-negative
+    // Every integer divides 0, so the greatest divisor shared with 0 is n itself. The definition, not
+    // a special case bolted on.
+    print(math_gcd(0, 5));
+    print(math_gcd(5, 0));
+    print(math_gcd(0, 0));
+    print(math_gcd(17, 5));                // coprime
+    print(math_gcd(INT_MAX, 1));
+    print(math_gcd(INT_MIN + 1, INT_MIN + 1) == INT_MAX);
+
+    print(math_lcm(4, 6));
+    print(math_lcm(0 - 4, 6));
+    print(math_lcm(0, 5));
+    print(math_lcm(5, 0));
+    print(math_lcm(0, 0));
+    print(math_lcm(7, 1));
+    // Divided BEFORE multiplying, which is the only reason this is usable: the product of these two
+    // does not fit in an Int even though the answer does.
+    print(math_lcm(3037000499, 3037000498));
+    print(math_lcm(6, 6));
+
+    // ---- a real calculation, because that is what a library is for ----
+    // The largest power of ten that fits, found without ever overflowing: `checked_mul` answers None
+    // instead of trapping, so the loop can just ask.
+    let mutable power: Int = 1;
+    let mutable digits: Int = 0;
+    for step in 0..30 {
+        match math_checked_mul(power, 10) {
+            None => { }
+            Some(bigger) => {
+                power = bigger;
+                digits += 1;
+            }
+        }
+    }
+    print(digits);
+    print(power);
+    print(math_isqrt(power) == 1000000000);
+}
