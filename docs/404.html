@@ -1,0 +1,39 @@
+---
+# GitHub Pages serves this for any address it cannot find, and until now it served its own default —
+# a grey page with an octocat and none of this site on it.
+#
+# It shares the hero's mascot and the hero's rule — one play, then still. Shipping a second,
+# infinitely-looping copy of the same 121 KB for a page nobody should reach would be the wrong trade,
+# and a click replays it here exactly as it does on the front page.
+layout: default
+title: Not found
+description: That address does not exist. The guide, the reference and the examples do.
+sitemap: false
+---
+
+<div class="hero" markdown="1">
+
+<picture class="mascot">
+<source media="(prefers-reduced-motion: reduce)" srcset="{{ site.baseurl }}/assets/burxt-ember-still.png">
+<img src="{{ site.baseurl }}/assets/burxt-ember.gif" width="174" height="222" data-replay
+     alt="The Burxt mark — an ember hops out from behind the b, looks around, waves, and hops back in">
+</picture>
+
+# Nothing here
+
+<p class="line">The ember has had a look and there is no page at this address.</p>
+
+<p class="line" style="font-size:16px;">If you followed a link from somewhere, it was probably to
+the reference — that moved out of the guide and into its own section, and every old address should
+redirect. This one did not, which is a bug worth telling us about.</p>
+
+<div class="cta">
+  <a class="btn" href="{{ site.baseurl }}/guide/">Read the guide</a>
+  <a class="btn ghost" href="{{ site.baseurl }}/reference/">The reference</a>
+  <a class="btn ghost" href="{{ site.baseurl }}/examples/">Examples</a>
+</div>
+
+<p class="line" style="font-size:15px; margin-top:2.5rem;">Or
+<a href="https://github.com/andrecorugda/burxt/issues">say what you were looking for</a>.</p>
+
+</div>
