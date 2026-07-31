@@ -1249,8 +1249,8 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
 
     let _ = fs::remove_dir_all(&scratch);
     assert!(
-        caught >= 224,
-        "stage-1 rejected only {} of {} fail programs, down from 224",
+        caught >= 226,
+        "stage-1 rejected only {} of {} fail programs, down from 226",
         caught,
         total
     );

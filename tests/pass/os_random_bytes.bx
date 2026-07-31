@@ -1,0 +1,69 @@
+// The reason `c_bytes_at` is item A1: **a Burxt program can now generate a cryptographic key.**
+//
+// It could not before, and the workaround was worse than the gap. `/dev/urandom` is a character device,
+// so `read_file` sizes it with `ftell`, gets 0, and reads nothing. The only route to OS entropy was
+// `os_capture("head -c32 /dev/urandom | ...")` — which puts the key in the process table, where any
+// other user on the machine can read it.
+//
+// The chain that closes it, and worth reading because no single piece is new:
+//
+//   malloc      -> CPointer      legal since v0.0.196 (the pointer wall)
+//   getrandom   fills it          a CPointer is already an allowed extern PARAMETER
+//   c_bytes_at  reads it out      NEW — this is the missing link
+//   free        returns it        an ordinary extern the program calls in the open
+//
+// So A1 did not open this alone; it completed a chain three versions in the making. Worth stating
+// plainly, because the roadmap first claimed `c_bytes_at` unblocked the CSPRNG by itself and that was
+// more confident than the mechanism.
+external function malloc(size: Int) -> CPointer;
+external function free(p: CPointer) -> Int;
+external function getrandom(buffer: CPointer, length: Int, flags: Int) -> Int touches input;
+
+// Bytes from the operating system's entropy pool.
+//
+// `touches input` because the answer comes from outside the program — and note this is exactly what
+// makes it unusable from a `pure` function or a contract, which is correct: a clause that checked a
+// random number would answer differently every time it ran.
+function os_random_bytes(count: Int) -> [Int] touches input
+    requires count > 0
+{
+    let buffer: CPointer = malloc(count);
+    if c_is_null(buffer) {
+        // Out of memory. An empty array rather than a partly-filled one: half a key is not a key.
+        let nothing: [Int] = [];
+        return nothing;
+    }
+    let got: Int = getrandom(buffer, count, 0);
+    let bytes: [Int] = c_bytes_at(buffer, count);
+    let released: Int = free(buffer);
+    return bytes;
+}
+
+region main {
+    let key: [Int] = os_random_bytes(32);
+    print(len(key));
+
+    // Every byte in range — this is the zero-extension being checked, since a sign-extended 0xFF
+    // would answer -1 and fail here.
+    let mutable in_range: Bool = true;
+    let mutable i: Int = 0;
+    while i < len(key) {
+        if key[i] < 0 || key[i] > 255 {
+            in_range = false;
+        }
+        i += 1;
+    }
+    print(in_range);
+
+    // And it is actually random rather than a zeroed buffer. Not a statistical test — just enough to
+    // tell entropy from a `calloc`: 32 bytes that are all equal has probability 256^-31.
+    let mutable differing: Int = 0;
+    let mutable j: Int = 1;
+    while j < len(key) {
+        if key[j] != key[0] {
+            differing += 1;
+        }
+        j += 1;
+    }
+    print(differing > 20);
+}

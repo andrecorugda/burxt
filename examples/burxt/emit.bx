@@ -1668,6 +1668,12 @@ function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String)
             + " = call i64 @burxt.c_string_at(i64 " + first + ")\n");
         return answer;
     }
+    if called == "c_bytes_at" {
+        let answer: String = self.fresh();
+        let visited: Int = self.write_body("  " + answer
+            + " = call i64 @burxt.c_bytes_at(i64 " + first + ", i64 " + second + ")\n");
+        return answer;
+    }
     if called == "read_file" {
         let visited: Int = self.write_body("  " + reg + " = call i64 @burxt.read_file(i64 " + first
                                   + ")\n");
@@ -3772,7 +3778,13 @@ function runtime_ir() -> String {
         + "c\"burxt runtime error: cannot open file for writing\\0A\\00\"\n"
         + "@burxt.null_ptr_msg = private unnamed_addr constant [83 x i8] "
         + "c\"burxt runtime error: c_string_at was given a null pointer; "
-        + "ask c_is_null(p) first\\0A\\00\"\n\n"
+        + "ask c_is_null(p) first\\0A\\00\"\n"
+        + "@burxt.null_bytes_msg = private unnamed_addr constant [82 x i8] "
+        + "c\"burxt runtime error: c_bytes_at was given a null pointer; "
+        + "ask c_is_null(p) first\\0A\\00\"\n"
+        + "@burxt.neg_bytes_msg = private unnamed_addr constant [74 x i8] "
+        + "c\"burxt runtime error: c_bytes_at was asked for a negative "
+        + "number of bytes\\0A\\00\"\n\n"
         + "define i64 @burxt.argument_count() \{\n"
         + "entry:\n  %n = load i64, ptr @burxt.argc\n  ret i64 %n\n\}\n\n"
         + "define i64 @burxt.argument(i64 %i) \{\n"
@@ -3819,6 +3831,57 @@ function runtime_ir() -> String {
         + "  %cop = inttoptr i64 %cowned to ptr\n"
         + "  %cmoved = call ptr @memcpy(ptr %cop, ptr %cs, i64 %clen)\n"
         + "  ret i64 %cowned\n\}\n\n"
+        // `c_bytes_at(p, n)` — n bytes from C into a growable `[Int]`, one byte per element.
+        //
+        // The counterpart to `c_string_at`, and the same wall: the bytes are COPIED, so the pointer
+        // stops mattering the moment this returns. What differs is where the length comes from —
+        // `c_string_at` reads to a NUL, which is a fact in the data, while `n` here is the caller's
+        // CLAIM, and nothing in the type can check it. That is the pointer wall's one soft edge, and
+        // it is named in the documentation rather than hidden.
+        //
+        // ZERO-extended, not sign-extended: a byte is 0..=255, and 0xFF arriving as -1 would be a
+        // different number than C had. `write_bytes` truncates on the way out, so the two are inverses.
+        //
+        // Built on `burxt.new_array` and `burxt.push` rather than a fresh allocation loop, because
+        // those two already handle growth and the element width and are proven by every `[T]` in the
+        // language.
+        + "define i64 @burxt.c_bytes_at(i64 %p, i64 %n) \{\n"
+        + "entry:\n"
+        + "  %isnull = icmp eq i64 %p, 0\n"
+        + "  br i1 %isnull, label %nobytes, label %counted\n"
+        + "nobytes:\n"
+        + "  %berr = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %berr, ptr @burxt.null_bytes_msg)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n"
+        + "counted:\n"
+        + "  %negative = icmp slt i64 %n, 0\n"
+        + "  br i1 %negative, label %badcount, label %begin\n"
+        + "badcount:\n"
+        + "  %nerr2 = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %nerr2, ptr @burxt.neg_bytes_msg)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n"
+        + "begin:\n"
+        + "  %ip = alloca i64\n"
+        + "  store i64 0, ptr %ip\n"
+        + "  %xs = call i64 @burxt.new_array(i64 1)\n"
+        + "  br label %bloop\n"
+        + "bloop:\n"
+        + "  %i = load i64, ptr %ip\n"
+        + "  %more = icmp slt i64 %i, %n\n"
+        + "  br i1 %more, label %bbody, label %bdone\n"
+        + "bbody:\n"
+        + "  %bsrc = inttoptr i64 %p to ptr\n"
+        + "  %bat = getelementptr i8, ptr %bsrc, i64 %i\n"
+        + "  %bb = load i8, ptr %bat\n"
+        + "  %bw = zext i8 %bb to i64\n"
+        + "  %bpushed = call i64 @burxt.push(i64 %xs, i64 %bw)\n"
+        + "  %bnext = add i64 %i, 1\n"
+        + "  store i64 %bnext, ptr %ip\n"
+        + "  br label %bloop\n"
+        + "bdone:\n"
+        + "  ret i64 %xs\n\}\n\n"
         + "define i64 @burxt.read_file(i64 %path) \{\n"
         + "entry:\n"
         + "  %p = inttoptr i64 %path to ptr\n"

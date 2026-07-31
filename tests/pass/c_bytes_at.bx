@@ -1,0 +1,53 @@
+// `c_bytes_at(p, n)` — N bytes from C, copied into a Burxt `[Int]`. A1 of spec/ROADMAP-1.0.md.
+//
+// The counterpart to `c_string_at`, and the same wall: the bytes are COPIED, so the pointer never
+// becomes something the language must reason about the lifetime of.
+//
+// **What differs is where the length comes from**, and it is worth naming because it is the pointer
+// wall's one soft edge. `c_string_at` reads to a NUL, which is a fact in the data. Here `n` is the
+// CALLER's claim, and nothing in the type can check it — a length longer than the buffer reads past the
+// end. Declared rather than inferred, the same bargain `as scaled` makes at the same boundary. What IS
+// checked is the half that can be: a null pointer, and a negative count.
+//
+// Why it is first on the 1.0 roadmap despite being the smallest item: **it is what makes a
+// cryptographic key possible.** `/dev/urandom` is a character device, so `read_file` measures it with
+// `ftell`, gets zero, and reads nothing. Before this, the only route to OS entropy was shelling out —
+// which puts the key in the process table where any other user can read it. See
+// tests/pass/os_random_bytes.bx for the chain that closes.
+external function strstr(haystack: String, needle: String) -> CPointer;
+
+region main {
+    let found: CPointer = strstr("hello world", "world");
+    print(c_is_null(found));
+
+    // Five bytes of "world".
+    let five: [Int] = c_bytes_at(found, 5);
+    print(len(five));
+    print(to_string(five[0]) + " " + to_string(five[1]) + " " + to_string(five[4]));
+
+    // Zero bytes is legal and answers an empty array, not a refusal — asking for nothing is a
+    // question with an answer.
+    let none: [Int] = c_bytes_at(found, 0);
+    print(len(none));
+
+    // A byte above 127 must come back as 128..255. ZERO-extended, not sign-extended: 0xFF arriving as
+    // -1 would be a different number than C had, and `write_bytes` truncates on the way out, so the
+    // two are inverses. "é" is UTF-8 0xC3 0xA9.
+    let accented: CPointer = strstr("café", "é");
+    print(c_is_null(accented));
+    let two: [Int] = c_bytes_at(accented, 2);
+    print(to_string(two[0]) + " " + to_string(two[1]));
+
+    // It is an ordinary growable array afterwards — this is the whole point of copying.
+    let mutable copied: [Int] = c_bytes_at(found, 5);
+    let added: Int = push(copied, 33);
+    print(len(copied));
+    print(copied[5]);
+    let mutable total: Int = 0;
+    let mutable i: Int = 0;
+    while i < len(copied) {
+        total = total + copied[i];
+        i += 1;
+    }
+    print(total);
+}

@@ -80,10 +80,26 @@ any other user on the machine can read it.
 
 - Signature `c_bytes_at(p: CPointer, n: Int) -> [Int]`, copying `n` bytes into a region-allocated array.
 - **The one real decision: what happens when `n` lies.** The length is the caller's claim, not a fact
-  the type carries. **Recommend: trust it, name it in the documentation as the pointer wall's one soft
-  edge, and give it a fail fixture for a negative `n`.** That is consistent with `as scaled` and
-  `external function` — the boundary is declared, not inferred.
+  the type carries. **Resolved: trust it, name it in the documentation as the pointer wall's one soft
+  edge, and check the half that can be checked** — a null pointer and a negative count, refused as a
+  literal and trapped at runtime. Consistent with `as scaled` and `external function`: the boundary is
+  declared, not inferred.
 - Same shape as `c_string_at`, which already does the copy-at-the-boundary work. One extra argument.
+
+> **✅ DONE (v0.0.207) — and one claim above needed correcting.** This section said `c_bytes_at`
+> unblocks the CSPRNG. It does not do it alone. The chain is **`malloc` → `getrandom` → `c_bytes_at` →
+> `free`**, and it works only because `malloc` returning a `CPointer` was already legal (v0.0.196) and a
+> `CPointer` was already an allowed extern *parameter*. `c_bytes_at` is the last missing link, not the
+> only one — so A1 completed something three versions in the making rather than opening it single
+> handed. `tests/pass/os_random_bytes.bx` is the proof: 32 bytes of real OS entropy, in-process, in
+> both compilers.
+>
+> Also landed with it, because they were the same hazard: **ten builtins that were implemented and
+> never reserved** (roadmap B6) — `bit_*`, `shift_*`, `c_is_null`, `c_string_at`, `c_bytes_at` — so a
+> program could declare a function with the same name and collide. And **eleven that were never
+> documented** (B14), which is the same omission showing up twice, because
+> `docs/reference/builtins.md` claims to be generated from that list. Each new entry carries a probe
+> the generator **compiles**, so the page is verified rather than remembered.
 
 ---
 

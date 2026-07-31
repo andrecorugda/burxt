@@ -73,6 +73,7 @@ pub enum TypedExprKind {
     ReadFile(Box<TypedExpr>),
     CIsNull(Box<TypedExpr>),
     CStringAt(Box<TypedExpr>),
+    CBytesAt { pointer: Box<TypedExpr>, count: Box<TypedExpr> },
     /// `to_string(v)`: the value's exact display form, region-allocated.
     ToString(Box<TypedExpr>),
     /// `byte_at(s, i)`: the i-th byte as an Int, bounds-checked at runtime.
@@ -565,6 +566,13 @@ fn is_reserved_name(name: &str) -> bool {
             | "write_file" | "argument" | "argument_count" | "divide_floor"
             | "divide_toward_zero" | "remainder" | "write_bytes" | "hash"
             | "main" | "exit" | "result"
+            // Ten that were implemented and never reserved, so a program could declare a function
+            // with the same name and collide unpredictably — found by the 1.0 scan (roadmap B6).
+            // `docs/reference/builtins.md` claims to be generated from THIS list, so it was missing
+            // them too: one omission showing up twice, which is what a single source of truth is for.
+            | "bit_and" | "bit_or" | "bit_xor" | "bit_not"
+            | "shift_left" | "shift_right_zeros" | "shift_right_sign"
+            | "c_is_null" | "c_string_at" | "c_bytes_at"
     )
 }
 
@@ -2580,6 +2588,7 @@ impl TypeChecker {
             | TypedExprKind::Push { .. }
             | TypedExprKind::ReadFile(_)
             | TypedExprKind::CStringAt(_)
+            | TypedExprKind::CBytesAt { .. }
             | TypedExprKind::Substring { .. } => true,
             // A call to an `allocates` function or method built its result in OUR
             // region, so it is region storage here and the same escape rules apply.
@@ -4994,6 +5003,69 @@ impl TypeChecker {
                     return Ok(TypedExpr {
                         ty: Type::String,
                         kind: TypedExprKind::CStringAt(Box::new(p)),
+                    });
+                }
+                // `c_bytes_at(p, n)` — N bytes from C, copied into a Burxt `[Int]`.
+                //
+                // The counterpart to `c_string_at`, and the same wall: the bytes are COPIED, so the
+                // pointer never becomes something the language must reason about the lifetime of.
+                // What differs is where the length comes from. `c_string_at` reads to a NUL, which is
+                // a fact in the data; here the length is the CALLER's claim, and nothing in the type
+                // can check it.
+                //
+                // That makes this the pointer wall's one soft edge, and it is named rather than
+                // hidden: a caller who passes a length longer than the buffer reads past the end.
+                // Declared, not inferred — the same bargain `as scaled` and `external function`
+                // already make. What IS checked is the half that can be: a negative count is refused
+                // at compile time when it is a literal, and trapped at runtime otherwise, because
+                // "minus one bytes" is not a smaller read, it is an enormous one.
+                //
+                // `[Int]` rather than a Bytes type, because Burxt has no Bytes type yet (A4.4
+                // deferred it with the trigger "binary I/O", which this fires). Each element is one
+                // byte, 0..=255, which pairs with the `write_bytes` builtin that has had no inverse
+                // since it was added.
+                if name == "c_bytes_at" {
+                    if arguments.len() != 2 {
+                        return Err(
+                            "c_bytes_at(p, n) takes a CPointer and a count of bytes".to_string()
+                        );
+                    }
+                    let pointer = self.check_expr(&arguments[0], Some(&Type::CPointer))?;
+                    if pointer.ty != Type::CPointer {
+                        return Err(format!(
+                            "c_bytes_at(...) takes a CPointer, the thing an `external function` \
+                             handed back, but this has type {}",
+                            pointer.ty
+                        ));
+                    }
+                    let count = self.check_expr(&arguments[1], Some(&Type::Int))?;
+                    if count.ty != Type::Int {
+                        return Err(format!(
+                            "c_bytes_at(p, n) takes a count of bytes as an Int, but this has \
+                             type {}",
+                            count.ty
+                        ));
+                    }
+                    if let TypedExprKind::IntLit(n) = &count.kind {
+                        if *n < 0 {
+                            return Err(format!(
+                                "c_bytes_at(p, {}) asks for a negative number of bytes, which is \
+                                 not a smaller read — it is an enormous one. A count is 0 or more.",
+                                n
+                            ));
+                        }
+                    }
+                    if !self.has_region() {
+                        return Err(self.needs_region(
+                            "c_bytes_at(...) copies C's bytes into a Burxt array",
+                        ));
+                    }
+                    return Ok(TypedExpr {
+                        ty: Type::Slice(Box::new(Type::Int)),
+                        kind: TypedExprKind::CBytesAt {
+                            pointer: Box::new(pointer),
+                            count: Box::new(count),
+                        },
                     });
                 }
                 if name == "read_file" {

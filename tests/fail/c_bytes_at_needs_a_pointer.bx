@@ -1,0 +1,4 @@
+// An Int is not a pointer. Letting one become one by writing it down would hand the language exactly
+// the ability the pointer wall exists to withhold — and `c_bytes_at` would then read arbitrary memory
+// at an arbitrary length, which is the worst version of it.
+region main { let b: [Int] = c_bytes_at(140737488355328, 4); print(len(b)); }

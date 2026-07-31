@@ -1720,6 +1720,16 @@ impl<'ctx> CodeGen<'ctx> {
                     .map(Into::into)
                     .map_err(|e| e.to_string())
             }
+            // `c_bytes_at(p, n)` — n bytes from C into a Burxt `[Int]`, one byte per element.
+            //
+            // Zero-extended, not sign-extended: a byte is 0..=255, and a `[Int]` holding -1 for 0xFF
+            // would be a different number than the one C had. `write_bytes` truncates on the way out,
+            // so the two agree.
+            TypedExprKind::CBytesAt { pointer, count } => {
+                let ptr_val = self.gen_expr(pointer)?.into_pointer_value();
+                let n = self.gen_expr(count)?.into_int_value();
+                self.build_c_bytes_at(&e.ty, ptr_val, n)
+            }
             TypedExprKind::CStringAt(p) => {
                 let ptr = self.gen_expr(p)?.into_pointer_value();
                 self.build_c_string_at(ptr).map(Into::into)
@@ -2953,6 +2963,117 @@ impl<'ctx> CodeGen<'ctx> {
     /// A null pointer dies here rather than answering "". An unset value and an empty one are
     /// different facts, and one String for both is exactly the silent wrong answer this language
     /// exists to refuse — `c_is_null(p)` is how you ask.
+    /// Copy `n` bytes from a C pointer into a region-allocated Burxt `[Int]`.
+    ///
+    /// The counterpart to `build_c_string_at`, and the same wall: after this returns Burxt holds bytes
+    /// it owns and the pointer is not kept, so "who frees it" and "is it still valid" stop being
+    /// questions the compiler has to answer.
+    ///
+    /// **What differs is where the length comes from**, and it is the pointer wall's one soft edge.
+    /// `c_string_at` reads to a NUL, which is a fact in the data. Here `n` is the caller's CLAIM, and
+    /// nothing in the type can check it — a length longer than the buffer reads past the end. That is
+    /// declared rather than inferred, the same bargain `as scaled` makes at the same boundary.
+    ///
+    /// The half that CAN be checked is: a null pointer, and a negative count. A negative count is not
+    /// a smaller read — as an unsigned size it is an enormous one — so it dies here by name rather
+    /// than allocating whatever `-1` becomes.
+    fn build_c_bytes_at(
+        &mut self,
+        slice_ty: &Type,
+        p: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+        let i8t = self.ctx.i8_type();
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_parent())
+            .ok_or("codegen bug: c_bytes_at outside a function")?;
+
+        // A null pointer, first — the same refusal `c_string_at` makes, for the same reason: zero
+        // bytes from nowhere is indistinguishable from zero bytes that were really there.
+        let null_bb = self.ctx.append_basic_block(function, "c_bytes_null");
+        let checked_bb = self.ctx.append_basic_block(function, "c_bytes_checked");
+        let is_null = self.builder.build_is_null(p, "c_bytes_is_null").map_err(err)?;
+        self.builder.build_conditional_branch(is_null, null_bb, checked_bb).map_err(err)?;
+        self.builder.position_at_end(null_bb);
+        self.build_panic(
+            "burxt runtime error: c_bytes_at was given a null pointer; ask c_is_null(p) first\n",
+        )?;
+
+        // Then the count. A literal is refused by the checker; anything computed dies here.
+        self.builder.position_at_end(checked_bb);
+        let bad_bb = self.ctx.append_basic_block(function, "c_bytes_negative");
+        let ok_bb = self.ctx.append_basic_block(function, "c_bytes_ok");
+        let negative = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, n, i64t.const_zero(), "c_bytes_neg")
+            .map_err(err)?;
+        self.builder.build_conditional_branch(negative, bad_bb, ok_bb).map_err(err)?;
+        self.builder.position_at_end(bad_bb);
+        self.build_panic(
+            "burxt runtime error: c_bytes_at was asked for a negative number of bytes\n",
+        )?;
+
+        self.builder.position_at_end(ok_bb);
+        let elem_ty = match slice_ty {
+            Type::Slice(t) => t.as_ref().clone(),
+            other => return Err(format!("codegen bug: c_bytes_at answering {}", other)),
+        };
+        // At least one cell, so an empty read still has a home — the same rule the slice literal
+        // follows for `[]`.
+        let one = i64t.const_int(1, false);
+        let cap = self
+            .builder
+            .build_select(
+                self.builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, n, i64t.const_zero(), "any")
+                    .map_err(err)?,
+                n,
+                one,
+                "c_bytes_cap",
+            )
+            .map_err(err)?
+            .into_int_value();
+        let data = self.build_alloc_array(&elem_ty, cap)?;
+
+        // One byte per element, ZERO-extended: a byte is 0..=255, and sign-extending 0xFF to -1 would
+        // hand back a different number than C had. `write_bytes` truncates on the way out, so the two
+        // are inverses.
+        let loop_bb = self.ctx.append_basic_block(function, "c_bytes_loop");
+        let body_bb = self.ctx.append_basic_block(function, "c_bytes_body");
+        let done_bb = self.ctx.append_basic_block(function, "c_bytes_done");
+        let index = self.create_entry_alloca("c_bytes_i", &Type::Int)?;
+        self.builder.build_store(index, i64t.const_zero()).map_err(err)?;
+        self.builder.build_unconditional_branch(loop_bb).map_err(err)?;
+
+        self.builder.position_at_end(loop_bb);
+        let i = self.builder.build_load(i64t, index, "i").map_err(err)?.into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, i, n, "more")
+            .map_err(err)?;
+        self.builder.build_conditional_branch(more, body_bb, done_bb).map_err(err)?;
+
+        self.builder.position_at_end(body_bb);
+        let at = unsafe { self.builder.build_gep(i8t, p, &[i], "c_byte_at") }.map_err(err)?;
+        let byte = self.builder.build_load(i8t, at, "c_byte").map_err(err)?.into_int_value();
+        let widened = self.builder.build_int_z_extend(byte, i64t, "c_byte_wide").map_err(err)?;
+        let slot = unsafe { self.builder.build_gep(i64t, data, &[i], "c_byte_slot") }.map_err(err)?;
+        self.builder.build_store(slot, widened).map_err(err)?;
+        let next = self.builder.build_int_add(i, i64t.const_int(1, false), "next").map_err(err)?;
+        self.builder.build_store(index, next).map_err(err)?;
+        self.builder.build_unconditional_branch(loop_bb).map_err(err)?;
+
+        self.builder.position_at_end(done_bb);
+        let _ = ptr;
+        self.build_slice_value(slice_ty, data, n, cap)
+    }
+
     fn build_c_string_at(
         &mut self,
         p: PointerValue<'ctx>,

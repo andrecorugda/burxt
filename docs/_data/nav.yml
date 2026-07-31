@@ -283,6 +283,28 @@
     - name: "Builtins"
       url: /reference/builtins.html
       steps:
+        - name: "print_error"
+          id: print-error
+        - name: "bit_and"
+          id: bit-and
+        - name: "bit_or"
+          id: bit-or
+        - name: "bit_xor"
+          id: bit-xor
+        - name: "bit_not"
+          id: bit-not
+        - name: "shift_left"
+          id: shift-left
+        - name: "shift_right_zeros"
+          id: shift-right-zeros
+        - name: "shift_right_sign"
+          id: shift-right-sign
+        - name: "c_is_null"
+          id: c-is-null
+        - name: "c_string_at"
+          id: c-string-at
+        - name: "c_bytes_at"
+          id: c-bytes-at
         - name: "print"
           id: print
         - name: "len"

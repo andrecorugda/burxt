@@ -1,0 +1,3 @@
+// The count is a number of bytes. A String is not one, and there is no coercion.
+external function strstr(haystack: String, needle: String) -> CPointer;
+region main { let b: [Int] = c_bytes_at(strstr("ab", "b"), "four"); print(len(b)); }

@@ -1,6 +1,83 @@
 [
  {
   "kind": "builtin",
+  "name": "print_error",
+  "text": "nothing",
+  "url": "/reference/builtins.html#print-error",
+  "where": "print_error(value)"
+ },
+ {
+  "kind": "builtin",
+  "name": "bit_and",
+  "text": "`Int`",
+  "url": "/reference/builtins.html#bit-and",
+  "where": "bit_and(a: Int, b: Int)"
+ },
+ {
+  "kind": "builtin",
+  "name": "bit_or",
+  "text": "`Int`",
+  "url": "/reference/builtins.html#bit-or",
+  "where": "bit_or(a: Int, b: Int)"
+ },
+ {
+  "kind": "builtin",
+  "name": "bit_xor",
+  "text": "`Int`",
+  "url": "/reference/builtins.html#bit-xor",
+  "where": "bit_xor(a: Int, b: Int)"
+ },
+ {
+  "kind": "builtin",
+  "name": "bit_not",
+  "text": "`Int`",
+  "url": "/reference/builtins.html#bit-not",
+  "where": "bit_not(a: Int)"
+ },
+ {
+  "kind": "builtin",
+  "name": "shift_left",
+  "text": "`Int`",
+  "url": "/reference/builtins.html#shift-left",
+  "where": "shift_left(x: Int, n: Int)"
+ },
+ {
+  "kind": "builtin",
+  "name": "shift_right_zeros",
+  "text": "`Int`",
+  "url": "/reference/builtins.html#shift-right-zeros",
+  "where": "shift_right_zeros(x: Int, n: Int)"
+ },
+ {
+  "kind": "builtin",
+  "name": "shift_right_sign",
+  "text": "`Int`",
+  "url": "/reference/builtins.html#shift-right-sign",
+  "where": "shift_right_sign(x: Int, n: Int)"
+ },
+ {
+  "kind": "builtin",
+  "name": "c_is_null",
+  "text": "`Bool`",
+  "url": "/reference/builtins.html#c-is-null",
+  "where": "c_is_null(p: CPointer)"
+ },
+ {
+  "kind": "builtin",
+  "name": "c_string_at",
+  "text": "`String`",
+  "url": "/reference/builtins.html#c-string-at",
+  "where": "c_string_at(p: CPointer)"
+ },
+ {
+  "kind": "builtin",
+  "name": "c_bytes_at",
+  "text": "`[Int]`",
+  "url": "/reference/builtins.html#c-bytes-at",
+  "where": "c_bytes_at(p: CPointer, n: Int)"
+ },
+ {
+  "kind": "builtin",
   "name": "print",
   "text": "nothing",
   "url": "/reference/builtins.html#print",

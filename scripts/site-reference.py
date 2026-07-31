@@ -295,6 +295,122 @@ def module(name):
 # ---------------------------------------------------------------------------------------------
 
 BUILTINS = [
+    # ---- eleven that were implemented and never documented, added by the 1.0 scan (roadmap B14).
+    # The page claims to be generated from `is_reserved_name`, and nine of these were missing from
+    # THAT list too — one omission showing up twice, which is what a single source of truth is for.
+    {
+        "name": "print_error",
+        "signature": "print_error(value)",
+        "answers": "nothing",
+        "region": False,
+        "doc": "Writes one value and a newline to **standard error**. The same statement as `print` "
+               "with a different destination, so the per-type formatting cannot fork \u2014 two "
+               "statements would mean two formatters, and the first time one learned about a new "
+               "type the other would print something else.",
+        "probe": 'print_error("something went wrong");\n',
+    },
+    {
+        "name": "bit_and",
+        "signature": "bit_and(a: Int, b: Int)",
+        "answers": "`Int`",
+        "region": False,
+        "doc": "Bitwise AND. **Named rather than an operator**, because `a & b == c` means "
+               "`a & (b == c)` in C \u2014 a precedence table a reviewer has to remember is the "
+               "opposite of what this language is for.",
+        "probe": 'print(bit_and(12, 10));\n',
+    },
+    {
+        "name": "bit_or",
+        "signature": "bit_or(a: Int, b: Int)",
+        "answers": "`Int`",
+        "region": False,
+        "doc": "Bitwise OR.",
+        "probe": 'print(bit_or(12, 10));\n',
+    },
+    {
+        "name": "bit_xor",
+        "signature": "bit_xor(a: Int, b: Int)",
+        "answers": "`Int`",
+        "region": False,
+        "doc": "Bitwise XOR.",
+        "probe": 'print(bit_xor(12, 10));\n',
+    },
+    {
+        "name": "bit_not",
+        "signature": "bit_not(a: Int)",
+        "answers": "`Int`",
+        "region": False,
+        "doc": "Every bit flipped. `bit_not(0)` is `-1`, because an `Int` is signed and there is "
+               "nowhere else for the top bit to go.",
+        "probe": 'print(bit_not(0));\n',
+    },
+    {
+        "name": "shift_left",
+        "signature": "shift_left(x: Int, n: Int)",
+        "answers": "`Int`",
+        "region": False,
+        "doc": "Shifts left by `n`, which must be 0 to 63. Bits shifted past the top are "
+               "**discarded** \u2014 the one place in this language where losing information is not "
+               "an error, because it is what a shift is for. So it is **not** `x * 2^n`: "
+               "multiplication traps on overflow and this does not.",
+        "probe": 'print(shift_left(1, 10));\n',
+    },
+    {
+        "name": "shift_right_zeros",
+        "signature": "shift_right_zeros(x: Int, n: Int)",
+        "answers": "`Int`",
+        "region": False,
+        "doc": "Shifts right by `n`, filling with zeros \u2014 a logical shift. "
+               "`shift_right_zeros(-1, 63)` is `1`. Two right shifts exist because on a negative "
+               "value zero-fill and sign-fill give different answers, and one symbol cannot say "
+               "which.",
+        "probe": 'print(shift_right_zeros(0 - 1, 63));\n',
+    },
+    {
+        "name": "shift_right_sign",
+        "signature": "shift_right_sign(x: Int, n: Int)",
+        "answers": "`Int`",
+        "region": False,
+        "doc": "Shifts right by `n`, copying the sign bit \u2014 an arithmetic shift. "
+               "`shift_right_sign(-1, 63)` is `-1`, and `shift_right_sign(x, n)` equals "
+               "`divide_floor(x, 2^n)`.",
+        "probe": 'print(shift_right_sign(0 - 1, 63));\n',
+    },
+    {
+        "name": "c_is_null",
+        "signature": "c_is_null(p: CPointer)",
+        "answers": "`Bool`",
+        "region": False,
+        "doc": "Did the C call fail? One of only **two** things that may be done with a `CPointer`. "
+               "There is no `==` on one, no arithmetic and no printing \u2014 a pointer is a token "
+               "to hand back to C, not a value to reason about.",
+        "probe": 'external function strstr(a: String, b: String) -> CPointer;\nprint(c_is_null(strstr(\"ab\", \"b\")));\n',
+    },
+    {
+        "name": "c_string_at",
+        "signature": "c_string_at(p: CPointer)",
+        "answers": "`String`",
+        "region": True,
+        "doc": "Copies NUL-terminated bytes from C into a Burxt `String`. **The copy is the wall**: "
+               "afterwards Burxt owns the bytes and the pointer is not kept, so who frees it stops "
+               "being a question. A null pointer dies here rather than answering `\"\"` \u2014 "
+               "unset and empty are different facts.",
+        "probe": 'external function strstr(a: String, b: String) -> CPointer;\nprint(c_string_at(strstr(\"hello world\", \"world\")));\n',
+    },
+    {
+        "name": "c_bytes_at",
+        "signature": "c_bytes_at(p: CPointer, n: Int)",
+        "answers": "`[Int]`",
+        "region": True,
+        "doc": "Copies `n` bytes from C into a growable array, one byte per element, "
+               "zero-extended so `0xFF` arrives as `255` rather than `-1`. The counterpart to "
+               "`c_string_at`, and it is what makes OS entropy reachable: `/dev/urandom` is a "
+               "character device, so `read_file` measures it and gets nothing. **Where the length "
+               "comes from is the pointer wall's one soft edge** \u2014 `n` is your claim, and "
+               "nothing in the type can check it. A null pointer and a negative count are refused.",
+        "probe": 'external function strstr(a: String, b: String) -> CPointer;\nlet bytes: [Int] = c_bytes_at(strstr(\"hello\", \"llo\"), 3);\nprint(len(bytes));\n',
+    },
+
     {
         "name": "print",
         "signature": "print(value)",
@@ -531,7 +647,10 @@ def verify(work):
     an error, so adding a builtin to the language fails here until the reference knows about it.
     """
     described = {b["name"] for b in BUILTINS}
-    owned = set(reserved()) | {"print"}
+    # `print` and `print_error` are KEYWORDS, so the lexer already makes them unusable as
+    # identifiers and `is_reserved_name` has no reason to list them. They are still builtins a
+    # reader looks up, so they are described.
+    owned = set(reserved()) | {"print", "print_error"}
     unknown = sorted(owned - described)
     if unknown:
         sys.exit(

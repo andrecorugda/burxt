@@ -1,0 +1,9 @@
+// A negative count is not a smaller read. Read as an unsigned size it is an enormous one, so it is
+// refused rather than answered — a literal here, and a trap at runtime for anything computed
+// (tests/panic/c_bytes_at_refuses_a_negative_count.bx).
+//
+// This is the half of the length question that CAN be checked. The other half — a count longer than
+// the buffer — cannot be, and is named in the documentation as the pointer wall's one soft edge rather
+// than pretended away.
+external function strstr(haystack: String, needle: String) -> CPointer;
+region main { let b: [Int] = c_bytes_at(strstr("ab", "b"), -1); print(len(b)); }

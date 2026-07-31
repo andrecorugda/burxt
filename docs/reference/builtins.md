@@ -12,6 +12,17 @@ The names a program may not declare, because the language already means somethin
 
 | Call | Answers | Allocates? | Reaches |
 |---|---|---|---|
+| [`print_error`](#print-error) | nothing | no | — |
+| [`bit_and`](#bit-and) | `Int` | no | — |
+| [`bit_or`](#bit-or) | `Int` | no | — |
+| [`bit_xor`](#bit-xor) | `Int` | no | — |
+| [`bit_not`](#bit-not) | `Int` | no | — |
+| [`shift_left`](#shift-left) | `Int` | no | — |
+| [`shift_right_zeros`](#shift-right-zeros) | `Int` | no | — |
+| [`shift_right_sign`](#shift-right-sign) | `Int` | no | — |
+| [`c_is_null`](#c-is-null) | `Bool` | no | — |
+| [`c_string_at`](#c-string-at) | `String` | **yes** | — |
+| [`c_bytes_at`](#c-bytes-at) | `[Int]` | **yes** | — |
 | [`print`](#print) | nothing | no | — |
 | [`len`](#len) | how many elements, or how many BYTES of a `String` | no | — |
 | [`byte_at`](#byte-at) | the byte at `i` | no | — |
@@ -34,6 +45,127 @@ The names a program may not declare, because the language already means somethin
 | [`main`](#main) | nothing — it is not an entry point | no | — |
 
 *Allocates* means the call builds something, and a value has to be built somewhere. **It does not mean you write `region`.** Since v0.0.146 a program has one from the moment it starts and `allocates` is inferred, so every signature on this page compiles with no `region` in sight — the probes that verified them have none. You reach for `region` to release EARLY, around a loop body or a request, which is the whole of keeping a long-running program's memory flat. See [Memory](../guide/04-memory.html).
+
+## `print_error`
+{: #print-error}
+
+```burxt
+print_error(value)
+```
+
+Writes one value and a newline to **standard error**. The same statement as `print` with a different destination, so the per-type formatting cannot fork — two statements would mean two formatters, and the first time one learned about a new type the other would print something else.
+
+**Answers** nothing. **Allocates:** no.
+
+## `bit_and`
+{: #bit-and}
+
+```burxt
+bit_and(a: Int, b: Int)
+```
+
+Bitwise AND. **Named rather than an operator**, because `a & b == c` means `a & (b == c)` in C — a precedence table a reviewer has to remember is the opposite of what this language is for.
+
+**Answers** `Int`. **Allocates:** no.
+
+## `bit_or`
+{: #bit-or}
+
+```burxt
+bit_or(a: Int, b: Int)
+```
+
+Bitwise OR.
+
+**Answers** `Int`. **Allocates:** no.
+
+## `bit_xor`
+{: #bit-xor}
+
+```burxt
+bit_xor(a: Int, b: Int)
+```
+
+Bitwise XOR.
+
+**Answers** `Int`. **Allocates:** no.
+
+## `bit_not`
+{: #bit-not}
+
+```burxt
+bit_not(a: Int)
+```
+
+Every bit flipped. `bit_not(0)` is `-1`, because an `Int` is signed and there is nowhere else for the top bit to go.
+
+**Answers** `Int`. **Allocates:** no.
+
+## `shift_left`
+{: #shift-left}
+
+```burxt
+shift_left(x: Int, n: Int)
+```
+
+Shifts left by `n`, which must be 0 to 63. Bits shifted past the top are **discarded** — the one place in this language where losing information is not an error, because it is what a shift is for. So it is **not** `x * 2^n`: multiplication traps on overflow and this does not.
+
+**Answers** `Int`. **Allocates:** no.
+
+## `shift_right_zeros`
+{: #shift-right-zeros}
+
+```burxt
+shift_right_zeros(x: Int, n: Int)
+```
+
+Shifts right by `n`, filling with zeros — a logical shift. `shift_right_zeros(-1, 63)` is `1`. Two right shifts exist because on a negative value zero-fill and sign-fill give different answers, and one symbol cannot say which.
+
+**Answers** `Int`. **Allocates:** no.
+
+## `shift_right_sign`
+{: #shift-right-sign}
+
+```burxt
+shift_right_sign(x: Int, n: Int)
+```
+
+Shifts right by `n`, copying the sign bit — an arithmetic shift. `shift_right_sign(-1, 63)` is `-1`, and `shift_right_sign(x, n)` equals `divide_floor(x, 2^n)`.
+
+**Answers** `Int`. **Allocates:** no.
+
+## `c_is_null`
+{: #c-is-null}
+
+```burxt
+c_is_null(p: CPointer)
+```
+
+Did the C call fail? One of only **two** things that may be done with a `CPointer`. There is no `==` on one, no arithmetic and no printing — a pointer is a token to hand back to C, not a value to reason about.
+
+**Answers** `Bool`. **Allocates:** no.
+
+## `c_string_at`
+{: #c-string-at}
+
+```burxt
+c_string_at(p: CPointer)
+```
+
+Copies NUL-terminated bytes from C into a Burxt `String`. **The copy is the wall**: afterwards Burxt owns the bytes and the pointer is not kept, so who frees it stops being a question. A null pointer dies here rather than answering `""` — unset and empty are different facts.
+
+**Answers** `String`. **Allocates:** yes.
+
+## `c_bytes_at`
+{: #c-bytes-at}
+
+```burxt
+c_bytes_at(p: CPointer, n: Int)
+```
+
+Copies `n` bytes from C into a growable array, one byte per element, zero-extended so `0xFF` arrives as `255` rather than `-1`. The counterpart to `c_string_at`, and it is what makes OS entropy reachable: `/dev/urandom` is a character device, so `read_file` measures it and gets nothing. **Where the length comes from is the pointer wall's one soft edge** — `n` is your claim, and nothing in the type can check it. A null pointer and a negative count are refused.
+
+**Answers** `[Int]`. **Allocates:** yes.
 
 ## `print`
 {: #print}

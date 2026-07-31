@@ -1,0 +1,8 @@
+// A null pointer dies rather than answering an empty array: zero bytes from nowhere is
+// indistinguishable from zero bytes that were really there, and `c_is_null(p)` is how you ask.
+external function getenv(name: String) -> CPointer touches input;
+region main {
+    let missing: CPointer = getenv("BURXT_THIS_IS_NOT_SET_9f3a7c1e");
+    let bytes: [Int] = c_bytes_at(missing, 4);
+    print(len(bytes));
+}

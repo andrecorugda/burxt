@@ -402,6 +402,13 @@ class Unit {
     // threaded through the formatter's eight writes, because none of those has any other reason to
     // know. Saved and restored around each statement, so nothing leaks into the next one.
     print_to_stderr: Int,
+    // The node index of a synthetic `Int` type, created on demand so `c_bytes_at`'s `[Int]` result
+    // can be spelled. A slice Type carries its ELEMENT's node index in `scale`, so a builtin that
+    // answers `[Int]` needs a node to point at — and unlike a NAME, a node needs no source span:
+    // `declared_type` maps kind 40 to Int and never looks at the token. That is the distinction the
+    // four "needs a synthesized name" walls turned on, and it is why this is three lines rather than
+    // a buffer. -1 until first asked for.
+    int_type_node: Int,
     errors: Int,
     // M9: counters, so the hot path is measured rather than guessed at. The first attempt
     // at this milestone fixed the obvious quadratic and bought 1.5%, which is what a

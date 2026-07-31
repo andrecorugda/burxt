@@ -1,0 +1,9 @@
+// A count the checker cannot fold is checked at RUN time, with the same message. It has to be checked
+// somewhere: read as an unsigned size, -1 is not a smaller read but an enormous one.
+external function strstr(haystack: String, needle: String) -> CPointer;
+function how_many(n: Int) -> Int { return 0 - n; }
+region main {
+    print(c_is_null(strstr("ab", "b")));
+    let bytes: [Int] = c_bytes_at(strstr("ab", "b"), how_many(1));
+    print(len(bytes));
+}
