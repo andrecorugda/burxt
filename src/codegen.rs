@@ -4897,31 +4897,116 @@ impl<'ctx> CodeGen<'ctx> {
         self.module.print_to_file(path).map_err(|e| e.to_string())
     }
 
+    /// The MODULE has to say which target it is for, or LLVM lays out its types with whatever
+    /// default it was built with and the object disagrees with its own datalayout. Set from the
+    /// machine rather than from the string, so the two can never differ.
+    fn stamp_target(
+        &self,
+        triple: &inkwell::targets::TargetTriple,
+        tm: &inkwell::targets::TargetMachine,
+    ) {
+        self.module.set_triple(triple);
+        self.module.set_data_layout(&tm.get_target_data().get_data_layout());
+    }
+
+    /// Stamp the module for `triple` without emitting anything — what `emit-ir --target` needs, so
+    /// the IR a cross build would compile can be READ rather than inferred.
+    pub fn retarget(&self, triple: &str) -> Result<(), String> {
+        use inkwell::targets::{
+            CodeModel, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
+        };
+        use inkwell::OptimizationLevel;
+        Target::initialize_all(&InitializationConfig::default());
+        let triple = TargetTriple::create(triple);
+        let target = Target::from_triple(&triple).map_err(|e| {
+            format!(
+                "no backend for target `{}`: {}. `llc --version` lists the \
+                 architectures this LLVM can emit.",
+                triple.as_str().to_string_lossy(),
+                e
+            )
+        })?;
+        let tm = target
+            .create_target_machine(
+                &triple,
+                "generic",
+                "",
+                OptimizationLevel::Default,
+                RelocMode::PIC,
+                CodeModel::Default,
+            )
+            .ok_or("failed to create target machine")?;
+        self.stamp_target(&triple, &tm);
+        Ok(())
+    }
+
     /// Emit a native object file using the host target machine.
     pub fn write_object(&self, path: &str) -> Result<(), String> {
+        self.write_object_for(path, None)
+    }
+
+    /// Emit an object file for `triple`, or for the host when it is None.
+    ///
+    /// **The interesting property is what does NOT change with the triple.** Burxt has no float, so
+    /// no arithmetic here depends on a CPU's rounding; every scalar is an i64 and every layout
+    /// decision is made by TYPE rather than by size. So the IR this compiler produces is identical
+    /// for two 64-bit targets apart from the `target triple` and `target datalayout` lines — which
+    /// is the claim "the same money math on every target", made checkable instead of asserted.
+    /// `the_ir_is_the_same_for_every_64_bit_target` in tests/runner.rs is the check.
+    ///
+    /// A generic CPU and no features for a cross target, deliberately: `get_host_cpu_name` would
+    /// name THIS machine's CPU, which for a foreign triple is either meaningless or wrong, and
+    /// "wrong but it compiled" is the failure mode this whole language is arranged against.
+    pub fn write_object_for(&self, path: &str, triple: Option<&str>) -> Result<(), String> {
         use inkwell::passes::PassBuilderOptions;
         use inkwell::targets::{
             CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
         };
         use inkwell::OptimizationLevel;
 
-        Target::initialize_native(&InitializationConfig::default())
-            .map_err(|e| format!("failed to init native target: {}", e))?;
+        // Every target LLVM was built with, not just this machine's. `initialize_native` is what
+        // made `--target` impossible before v0.0.197: the backend for the requested triple was
+        // simply not registered, and `Target::from_triple` failed with "no available targets are
+        // compatible" — a message about the compiler's own initialisation, which is the least
+        // helpful thing it could have said about the user's triple.
+        inkwell::targets::Target::initialize_all(&InitializationConfig::default());
 
-        let triple = TargetMachine::get_default_triple();
-        let target = Target::from_triple(&triple).map_err(|e| e.to_string())?;
-        let cpu = TargetMachine::get_host_cpu_name();
-        let features = TargetMachine::get_host_cpu_features();
+        let triple = match triple {
+            Some(t) => inkwell::targets::TargetTriple::create(t),
+            None => TargetMachine::get_default_triple(),
+        };
+        let target = Target::from_triple(&triple).map_err(|e| {
+            format!(
+                "no backend for target `{}`: {}. `llc --version` lists the \
+                 architectures this LLVM can emit.",
+                triple.as_str().to_string_lossy(),
+                e
+            )
+        })?;
+        let host = TargetMachine::get_default_triple();
+        let is_host = triple.as_str() == host.as_str();
+        let cpu = if is_host {
+            TargetMachine::get_host_cpu_name().to_string_lossy().into_owned()
+        } else {
+            "generic".to_string()
+        };
+        let features = if is_host {
+            TargetMachine::get_host_cpu_features().to_string_lossy().into_owned()
+        } else {
+            String::new()
+        };
         let tm = target
             .create_target_machine(
                 &triple,
-                cpu.to_str().unwrap(),
-                features.to_str().unwrap(),
+                &cpu,
+                &features,
                 OptimizationLevel::Default,
                 RelocMode::PIC,
                 CodeModel::Default,
             )
             .ok_or("failed to create target machine")?;
+
+        self.stamp_target(&triple, &tm);
 
         // The optimisation level on a TargetMachine governs instruction selection and
         // scheduling — it does NOT run the mid-level IR pipeline, and `write_to_file`

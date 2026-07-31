@@ -67,13 +67,19 @@ fn compile_main() {
         eprintln!("                -                        ... reading the program from stdin");
         eprintln!("  burxt lsp                                language server over stdio");
         eprintln!("  burxt build   <file.bx> [link args...]   compile to a native executable");
+        eprintln!("                <file.bx> --target <triple> ... an object for another machine");
         eprintln!("  burxt run     <file.bx> [link args...]   compile then run");
-        eprintln!("  burxt emit-ir <file.bx>                  print LLVM IR");
+        eprintln!("  burxt emit-ir <file.bx> [--target ...]   print LLVM IR");
         eprintln!("  burxt layout  <file.bx>                  print class layouts");
         eprintln!("  burxt review  <old.bx> <new.bx>          what changed about what it PROMISES
   burxt mcp-schema <file.bx>               the MCP tool manifest, from the preconditions");
         eprintln!();
         eprintln!("  -o <path>     where to write the executable (default ./<name>)");
+        eprintln!("  --target <triple>  build for another machine, e.g. aarch64-apple-darwin.");
+        eprintln!("                Emits an OBJECT and stops: linking needs that target\'s libc");
+        eprintln!("                and linker, so it is left to that target\'s toolchain. The");
+        eprintln!("                emitted IR is identical for every target, which is what makes");
+        eprintln!("                the decimal answers identical too.");
         eprintln!();
         eprintln!("Arguments after the source file go to the linker unchanged,");
         eprintln!("e.g. `burxt run pay.bx cside.o -lm` to link the C you call.");
@@ -119,11 +125,28 @@ fn compile_main() {
     // the working directory, which is convenient for one program and a litter of
     // extensionless binaries for fifty — the repository root learned this the hard way.
     let mut out: Option<String> = None;
+    // `--target <triple>` says which machine the code is FOR. Absent means the host, which is what
+    // every build did before v0.0.197.
+    //
+    // Linking is deliberately not attempted for a foreign target: it needs that target's libc,
+    // sysroot and linker, and owning that is how a compiler grows a second job it is bad at. The
+    // roadmap's decision (M3) is to delegate linking and own only the triple and the object — so a
+    // cross build emits a `.o` and says so, and the caller links it with the toolchain that already
+    // knows about its platform.
+    let mut target: Option<String> = None;
     let mut link_args: Vec<String> = Vec::new();
     let mut i = 0;
     while i < rest.len() {
         match rest[i].as_str() {
             "--json" => {}
+            "--target" => {
+                if i + 1 >= rest.len() {
+                    eprintln!("error: --target needs a triple after it, e.g. aarch64-unknown-linux-gnu");
+                    std::process::exit(2);
+                }
+                target = Some(rest[i + 1].clone());
+                i += 1;
+            }
             "-o" => {
                 if i + 1 >= rest.len() {
                     eprintln!("error: -o needs a path after it");
@@ -137,7 +160,7 @@ fn compile_main() {
         i += 1;
     }
 
-    if let Err(e) = run(cmd, path, &link_args, json, out.as_deref()) {
+    if let Err(e) = run(cmd, path, &link_args, json, out.as_deref(), target.as_deref()) {
         match e {
             // Diagnostics know where they are, so they can be shown properly —
             // all of them, in the order a reader meets them.
@@ -335,6 +358,7 @@ fn run(
     link_args: &[String],
     json: bool,
     out: Option<&str>,
+    target: Option<&str>,
 ) -> Result<(), Failure> {
     // `-` means "the program is on stdin": what an editor has in its buffer is
     // not what is on disk, and checking the file would report yesterday's errors.
@@ -431,6 +455,11 @@ fn run(
             Ok(())
         }
         "emit-ir" => {
+            // `--target` here makes the cross-target claim inspectable: the IR a foreign build
+            // would compile can be READ, and compared against another target's.
+            if let Some(triple) = target {
+                cg.retarget(triple)?;
+            }
             // The text goes to stdout; the file is an intermediate, so it is written
             // where intermediates belong unless a path was asked for. Writing it beside
             // the source is how `t.ll` and `emitted.ll` ended up in this repository.
@@ -450,6 +479,31 @@ fn run(
             Ok(())
         }
         "build" | "run" => {
+            // A CROSS build stops at the object, and that is a decision rather than a shortfall:
+            // linking needs the target's libc, sysroot and linker, and owning that is how a compiler
+            // grows a second job it is bad at. spec/FAR-HORIZON-ROADMAP.md M3 says delegate linking
+            // and own only the triple and the object emission. So the object is named, kept, and the
+            // caller links it with the toolchain that already knows its platform.
+            if let Some(triple) = target {
+                if cmd == "run" {
+                    return Err("`run` builds for THIS machine, so it cannot take --target. \
+                                Use `build --target` and run the result where it belongs."
+                        .to_string()
+                        .into());
+                }
+                let obj = match out {
+                    Some(p) => p.to_string(),
+                    None => format!("./{}.o", stem),
+                };
+                cg.write_object_for(&obj, Some(triple))?;
+                eprintln!("compiled {} -> {} ({})", path, obj, triple);
+                eprintln!(
+                    "not linked: link it with that target's toolchain, e.g. \
+                     `{}-gcc {} -o {}`",
+                    triple, obj, stem
+                );
+                return Ok(());
+            }
             // The object is an intermediate, and it goes where intermediates belong: NOT
             // into the working directory, where two builds running at once collide on the
             // same name — which is exactly what happened when two tests built the

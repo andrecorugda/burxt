@@ -5485,3 +5485,287 @@ fn a_contract_widens_at_every_position_and_drops_at_none() {
 
     let _ = fs::remove_dir_all(&scratch);
 }
+
+/// The one Burxt program used by both cross-compilation invariants below. Money math, because that is
+/// the thing whose answer must not depend on the machine.
+const CROSS_PROGRAM: &str = "\
+function tax(subtotal: Decimal<2>, rate: Decimal<4, RoundHalfEven>) -> Decimal<2, RoundHalfEven> {
+    return subtotal * rate;
+}
+function total(unit: Decimal<2>, quantity: Int) -> Decimal<2> {
+    return unit * quantity;
+}
+let subtotal: Decimal<2> = total($19.99, 3);
+print(subtotal);
+print(tax(subtotal, 0.0825));
+";
+
+/// `--target <triple>` emits a real object file for that architecture — spec/FAR-HORIZON-ROADMAP M3.
+///
+/// The architecture is read out of the object's own header rather than trusted, and rather than shelled
+/// out to `file(1)`: what is being checked is that LLVM was handed the triple and acted on it, and a
+/// test that only checked the exit status would pass while every target silently emitted host code.
+///
+/// Four container formats on purpose — ELF, Mach-O, COFF and wasm — because those are Linux, macOS,
+/// Windows and the web, which are the three reach targets plus the one nobody expected to be free.
+#[test]
+fn cross_compilation_emits_a_real_object_for_every_target() {
+    let scratch = scratch_dir("cross-object");
+    fs::create_dir_all(&scratch).unwrap();
+    let source = scratch.join("money.bx");
+    fs::write(&source, CROSS_PROGRAM).unwrap();
+
+    // (triple, what its object header must say)
+    enum Shape {
+        /// ELF: magic, then e_machine as a little-endian u16 at offset 18.
+        Elf(u16),
+        /// Mach-O 64-bit little-endian: magic feedfacf, then cputype at offset 4.
+        MachO(u32),
+        /// COFF: machine as a little-endian u16 at offset 0.
+        Coff(u16),
+        /// WebAssembly: `\0asm` and version 1.
+        Wasm,
+    }
+    let targets: &[(&str, Shape)] = &[
+        ("aarch64-unknown-linux-gnu", Shape::Elf(183)),
+        ("x86_64-unknown-linux-gnu", Shape::Elf(62)),
+        ("riscv64-unknown-linux-gnu", Shape::Elf(243)),
+        ("armv7-unknown-linux-gnueabihf", Shape::Elf(40)),
+        ("x86_64-apple-darwin", Shape::MachO(0x0100_0007)),
+        ("aarch64-apple-darwin", Shape::MachO(0x0100_000C)),
+        ("x86_64-pc-windows-msvc", Shape::Coff(0x8664)),
+        ("wasm32-unknown-unknown", Shape::Wasm),
+    ];
+
+    let mut wrong = Vec::new();
+    for (triple, shape) in targets {
+        let obj = scratch.join(format!("{}.o", triple));
+        let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .args(["build"])
+            .arg(&source)
+            .args(["--target", triple, "-o"])
+            .arg(&obj)
+            .output()
+            .expect("burxt");
+        if !out.status.success() {
+            wrong.push(format!(
+                "{}: did not build\n{}",
+                triple,
+                String::from_utf8_lossy(&out.stderr)
+            ));
+            continue;
+        }
+        let bytes = match fs::read(&obj) {
+            Ok(b) => b,
+            Err(e) => {
+                wrong.push(format!("{}: no object written ({})", triple, e));
+                continue;
+            }
+        };
+        let u16_at = |i: usize| u16::from_le_bytes([bytes[i], bytes[i + 1]]);
+        let u32_at = |i: usize| {
+            u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]])
+        };
+        let verdict = match shape {
+            Shape::Elf(machine) => {
+                if bytes.len() < 20 || &bytes[0..4] != b"\x7fELF" {
+                    Err("not an ELF file".to_string())
+                } else if u16_at(18) != *machine {
+                    Err(format!("ELF e_machine is {}, wanted {}", u16_at(18), machine))
+                } else {
+                    Ok(())
+                }
+            }
+            Shape::MachO(cputype) => {
+                if bytes.len() < 8 || u32_at(0) != 0xfeed_facf {
+                    Err("not a 64-bit Mach-O file".to_string())
+                } else if u32_at(4) != *cputype {
+                    Err(format!("Mach-O cputype is {:#x}, wanted {:#x}", u32_at(4), cputype))
+                } else {
+                    Ok(())
+                }
+            }
+            Shape::Coff(machine) => {
+                if bytes.len() < 2 || u16_at(0) != *machine {
+                    Err(format!("COFF machine is {:#x}, wanted {:#x}", u16_at(0), machine))
+                } else {
+                    Ok(())
+                }
+            }
+            Shape::Wasm => {
+                if bytes.len() < 8 || &bytes[0..4] != b"\0asm" {
+                    Err("not a WebAssembly module".to_string())
+                } else {
+                    Ok(())
+                }
+            }
+        };
+        if let Err(why) = verdict {
+            wrong.push(format!("{}: {}", triple, why));
+        }
+
+        // And it must NOT have linked: linking a foreign object needs that target's libc and
+        // linker, and spec/M3's decision is to delegate that rather than own it. The message has to
+        // say so, or a caller reads "compiled" and looks for an executable that is not there.
+        let said = String::from_utf8_lossy(&out.stderr);
+        if !said.contains("not linked") {
+            wrong.push(format!("{}: did not say the object is unlinked:\n{}", triple, said));
+        }
+    }
+
+    // `run` builds for THIS machine, so it cannot honour a triple — and saying so is better than
+    // building something and then failing to execute it.
+    let ran = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .args(["run"])
+        .arg(&source)
+        .args(["--target", "aarch64-unknown-linux-gnu"])
+        .output()
+        .expect("burxt");
+    if ran.status.success() {
+        wrong.push("`run --target` was accepted; it cannot be".to_string());
+    }
+
+    // A triple LLVM has no backend for is named, with where to look. The old code called
+    // `initialize_native`, so EVERY foreign triple failed with "no available targets are
+    // compatible" — a message about the compiler's own initialisation rather than about the input.
+    let bad = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .args(["build"])
+        .arg(&source)
+        .args(["--target", "sparc9-unknown-nonesuch", "-o"])
+        .arg(scratch.join("bad.o"))
+        .output()
+        .expect("burxt");
+    let complaint = String::from_utf8_lossy(&bad.stderr);
+    if bad.status.success() || !complaint.contains("no backend for target") {
+        wrong.push(format!("an unknown triple was not named: {}", complaint));
+    }
+
+    assert!(
+        wrong.is_empty(),
+        "cross-compilation is wrong for {} target(s):\n\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+/// **The IR is IDENTICAL for every target, apart from the two lines that name the target.**
+///
+/// This is the cross-target claim in spec/FAR-HORIZON-ROADMAP M3 — "the same money math, provably
+/// identical on web, desktop and mobile" — turned into something that can fail. It holds for a reason
+/// worth stating rather than a coincidence:
+///
+/// - **No float.** Every arithmetic operation is on an i64, so nothing depends on a CPU's rounding
+///   mode, x87 excess precision, or fused-multiply-add. This is the whole no-float thesis paying a
+///   dividend nobody designed it for.
+/// - **Layout is decided by TYPE, never by size.** An enum's payload area is counted in 8-byte cells
+///   by the type of its variants, so it does not change with a pointer's width.
+/// - **Opaque pointers.** LLVM 15+ writes `ptr`, not `i8*`, so even pointer WIDTH never appears in the
+///   IR — which is why wasm32 and ARM32 are in the list below beside the 64-bit targets. That one was
+///   not predicted; the roadmap expected 64-bit agreement only.
+///
+/// What this does and does not prove: identical IR means nothing in the *arithmetic* can diverge, so
+/// a Decimal answer is the same everywhere. It does not prove identical *behaviour* — LLVM's own
+/// lowering and the platform's libc are still downstream. But that surface is very much smaller than
+/// float rounding, and it is the surface every language has.
+#[test]
+fn the_ir_is_the_same_for_every_target() {
+    let scratch = scratch_dir("cross-ir");
+    fs::create_dir_all(&scratch).unwrap();
+    let source = scratch.join("money.bx");
+    fs::write(&source, CROSS_PROGRAM).unwrap();
+
+    let ir_for = |triple: Option<&str>| -> String {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_burxt"));
+        cmd.arg("emit-ir").arg(&source);
+        if let Some(t) = triple {
+            cmd.args(["--target", t]);
+        }
+        let out = cmd.output().expect("burxt");
+        assert!(
+            out.status.success(),
+            "emit-ir failed for {:?}:\n{}",
+            triple,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // The two lines that are SUPPOSED to differ are the two being dropped.
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| !l.starts_with("target triple") && !l.starts_with("target datalayout"))
+            .map(|l| format!("{}\n", l))
+            .collect()
+    };
+
+    let host = ir_for(None);
+    assert!(host.contains("define"), "the host IR is empty:\n{}", host);
+
+    let mut differ = Vec::new();
+    for triple in [
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu",
+        "riscv64-unknown-linux-gnu",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+        "x86_64-pc-windows-msvc",
+        // Both 32-bit, and both identical — see the note above.
+        "armv7-unknown-linux-gnueabihf",
+        "wasm32-unknown-unknown",
+    ] {
+        let there = ir_for(Some(triple));
+        if there != host {
+            let first = there
+                .lines()
+                .zip(host.lines())
+                .position(|(a, b)| a != b)
+                .map(|i| {
+                    format!(
+                        "line {}:\n  {} says: {}\n  host says: {}",
+                        i + 1,
+                        triple,
+                        there.lines().nth(i).unwrap_or(""),
+                        host.lines().nth(i).unwrap_or("")
+                    )
+                })
+                .unwrap_or_else(|| "the IR is a different length".to_string());
+            differ.push(format!("{}\n{}", triple, first));
+        }
+    }
+
+    assert!(
+        differ.is_empty(),
+        "the IR is NOT target-independent for {} target(s), so the exact-arithmetic-everywhere \
+         claim is no longer true:\n\n{}",
+        differ.len(),
+        differ.join("\n\n")
+    );
+
+    // And the two dropped lines really do change, or the comparison above proves nothing: it would
+    // pass just as well if --target were ignored entirely.
+    let stamped = |triple: &str| -> String {
+        let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("emit-ir")
+            .arg(&source)
+            .args(["--target", triple])
+            .output()
+            .expect("burxt");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| l.starts_with("target "))
+            .map(|l| format!("{}\n", l))
+            .collect()
+    };
+    let arm = stamped("aarch64-unknown-linux-gnu");
+    let win = stamped("x86_64-pc-windows-msvc");
+    assert!(
+        arm.contains("aarch64-unknown-linux-gnu"),
+        "--target did not reach the module:\n{}",
+        arm
+    );
+    assert_ne!(
+        arm, win,
+        "two different triples produced the same target lines, so --target is being ignored"
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}

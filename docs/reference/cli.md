@@ -16,7 +16,7 @@ Read out of the usage block in `src/main.rs`, so this cannot list a command the 
 | `burxt lsp` | — | language server over stdio |
 | `burxt build` | `<file.bx> [link args...]` | compile to a native executable |
 | `burxt run` | `<file.bx> [link args...]` | compile then run |
-| `burxt emit-ir` | `<file.bx>` | print LLVM IR |
+| `burxt emit-ir` | `<file.bx> [--target ...]` | print LLVM IR |
 | `burxt layout` | `<file.bx>` | print class layouts |
 | `burxt review` | `<old.bx> <new.bx>          what changed about what it PROMISES` | burxt mcp-schema <file.bx>               the MCP tool manifest, from the preconditions |
 | `burxt mcp-schema` | `<file.bx>` | the MCP tool manifest, from the preconditions |

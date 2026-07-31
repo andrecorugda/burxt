@@ -170,7 +170,7 @@
  {
   "kind": "command",
   "name": "burxt emit-ir",
-  "text": "<file.bx>",
+  "text": "<file.bx> [--target ...]",
   "url": "/reference/cli.html",
   "where": "print LLVM IR"
  },

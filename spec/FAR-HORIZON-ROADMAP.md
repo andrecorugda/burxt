@@ -243,6 +243,70 @@ system tools (the `cc`/linker already used). Lean: delegate linking to system to
 per target; own only the triple selection and the object emission. Don't build a
 linker.
 
+---
+
+### Slice 1 — `--target` and the identical-IR result (v0.0.197)
+
+`burxt build --target <triple>` emits a real object file for that architecture. Verified by reading
+each object's own header rather than trusting the exit status — `the_ir_is_the_same_for_every_target`
+and `cross_compilation_emits_a_real_object_for_every_target` in `tests/runner.rs`:
+
+| triple | container | verified by |
+|---|---|---|
+| `aarch64-unknown-linux-gnu` | ELF | `e_machine == 183` |
+| `x86_64-unknown-linux-gnu` | ELF | `e_machine == 62` |
+| `riscv64-unknown-linux-gnu` | ELF | `e_machine == 243` |
+| `armv7-unknown-linux-gnueabihf` | ELF | `e_machine == 40` |
+| `x86_64-apple-darwin` | Mach-O | `cputype == 0x01000007` |
+| `aarch64-apple-darwin` | Mach-O | `cputype == 0x0100000C` |
+| `x86_64-pc-windows-msvc` | COFF | `machine == 0x8664` |
+| `wasm32-unknown-unknown` | wasm | magic `\0asm` |
+
+**Linking is delegated, on purpose**, which is the decision this section already recorded: a foreign
+link needs that target's libc, sysroot and linker, and owning that is how a compiler grows a second
+job it is bad at. So a cross build emits the `.o`, keeps it, and says `not linked:` with the command
+to finish it. `run --target` is refused rather than built-then-failed.
+
+Two small things that mattered more than they look:
+
+- The old code called `Target::initialize_native`, so **every** foreign triple failed with *"no
+  available targets are compatible"* — a message about the compiler's own initialisation rather than
+  about the input. Now `initialize_all`, and an unrecognised triple is named with where to look.
+- A cross target gets CPU `generic` and no features. `get_host_cpu_name` would name THIS machine's
+  CPU, which for a foreign triple is meaningless or wrong — and "wrong but it compiled" is the
+  failure mode this language is arranged against.
+
+#### The result that was better than predicted
+
+This section predicted byte-identical decimal semantics across targets. What is actually true is
+stronger: **the emitted LLVM IR is identical for every target above, apart from the two lines that
+name the target** — and that includes the 32-bit ones. The prediction was 64-bit agreement.
+
+Three reasons, and each is an earlier decision paying a dividend nobody designed it for:
+
+1. **No float.** Every arithmetic operation is on an i64, so nothing depends on a rounding mode, x87
+   excess precision, or fused multiply-add. The no-float thesis was argued for exact money; this is
+   the same property read sideways.
+2. **Layout is decided by TYPE, never by size.** An enum's payload area is counted in 8-byte cells
+   from the types of its variants, so it does not move when a pointer's width does.
+3. **Opaque pointers.** LLVM 15+ writes `ptr` rather than `i8*`, so pointer width never appears in
+   the IR at all — which is why wasm32 and ARM32 agree with x86-64.
+
+**What that does and does not prove.** Identical IR means nothing in the *arithmetic* can diverge, so
+a `Decimal` answer is the same on every target. It does not prove identical *behaviour*: LLVM's own
+lowering and the platform libc are still downstream. But that surface is far smaller than float
+rounding, and it is the surface every language has. The honest form of the claim is therefore:
+
+> The same money math, emitted identically for web, desktop and mobile — checked, not asserted.
+
+**Still to do for a runnable cross build:** per-target linking (item 2 in this section), which needs a
+sysroot per platform and is a packaging problem rather than a compiler one; and for wasm specifically,
+a host story — the emitted module calls `printf` and `malloc`, so it needs either wasi or JS glue.
+That is the next slice, and it is the one that turns an object into something a phone or a browser
+runs.
+
+---
+
 **Trigger:** after FFI (M2) — because a cross-compiled binary that can't do I/O isn't
 worth much. FFI + cross-compile together unlock real cross-platform programs.
 
@@ -342,7 +406,7 @@ defines what Burxt becomes.
 | TLS / crypto | crates | built in | built in | **none**, and gated on bitwise | Blocking |
 | Calling an existing C library | yes | yes (ext) | JNI | **open (v0.0.196).** `-> CPointer`, with `c_is_null` and `c_string_at`. Anything holding a handle or returning text is reachable; a C STRUCT still is not (needs widths) | Partly |
 | Dependency management | cargo | composer / pip | maven | **none.** Every program starts from `lib/` | Blocking |
-| Cross-compilation | `--target` | n/a | JVM | **none.** M3 unstarted; web/Android/iOS unreachable | Blocking |
+| Cross-compilation | `--target` | n/a | JVM | **objects, yes (v0.0.197)** — 8 triples, ELF/Mach-O/COFF/wasm, identical IR. Linking is delegated, so a runnable foreign binary needs that target's toolchain | Partly |
 | Closures / function values | yes | yes | yes | **none.** `map`/`filter` deferred on the memory question | Papercut |
 | Tuples | yes | arrays | records | **none** | Papercut |
 | Char type | yes | yes | yes | **none.** A String is bytes | Decision |
@@ -397,8 +461,10 @@ Counted rather than guessed, over §1 and §2:
    What it opened immediately: `getenv` (so `lib/os.bx` has `os_env` — one third of item 4 below),
    and any C API that hands back a handle or text. What it did NOT open: reading a C **struct**,
    which needs integer widths (item 3), and `mmap`'d bytes, which needs a length-taking read.
-2. **Cross-compilation, M3** (unblocks: web, Android, iOS — all three reach visions at once). The
-   roadmap above already says the hard architectural work is done.
+2. **Cross-compilation, M3** — **object emission DONE (v0.0.197)**, for ELF/Mach-O/COFF/wasm across
+   eight triples, and the IR turned out to be identical on all of them rather than merely equivalent.
+   What remains is per-target LINKING (a sysroot-and-packaging problem, not a compiler one) and a
+   wasm host story. See §M3 Slice 1.
 3. **Bitwise + integer widths** (unblocks: binary formats, hashing, checksums, compression, a
    database file format, crypto).
 4. **The small production trio — exit code, stderr, env** (unblocks: shipping *anything* as a CLI).
