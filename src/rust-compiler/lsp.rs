@@ -154,11 +154,11 @@ pub fn serve() -> Result<(), String> {
                     let result = msg
                         .path(&["params", "textDocument", "uri"])
                         .and_then(|v| v.as_str())
-                        .and_then(|uri| docs.get(uri))
-                        .and_then(|text| {
+                        .and_then(|uri| docs.get(uri).map(|text| (uri, text)))
+                        .and_then(|(uri, text)| {
                             let line = msg.path(&["params", "position", "line"])?;
                             let ch = msg.path(&["params", "position", "character"])?;
-                            hover(text, number(line)?, number(ch)?)
+                            hover_in_context(uri, text, number(line)?, number(ch)?)
                         })
                         .unwrap_or(Value::Null);
                     respond(&mut output, id, result)?;
@@ -216,6 +216,63 @@ fn number(v: &Value) -> Option<usize> {
 ///
 /// Smallest wins because expressions nest: in `price * qty`, the cursor on `qty`
 /// should say `Int`, not the type of the product it is part of.
+/// Hover, with the file's PROGRAM resolved around it — the same context `publish` checks in.
+///
+/// **Blanking the imports is not enough, and measuring is what showed it.** Doing only that got
+/// hover working on a file that imports something without USING it, and still answered nothing on
+/// `src/burxt-compiler/main.bx`: with `use "types.bx"` blanked, `Unit` and `Token` are unknown
+/// types, the checker gives up early, and there are almost no expression types left to report. The
+/// file that most needs hover is exactly the file where blanking is useless.
+///
+/// So this does what `check_in_context` does — load the program, splice the editor's buffer into it
+/// so unsaved text is authoritative, collect types over the whole thing, and keep the ones whose
+/// spans fall in this file. Positions come back relative to the file, because that is what the
+/// editor asked about.
+///
+/// Falls back to the buffer alone when the file belongs to no program on disk, which is the case a
+/// scratch buffer is in.
+fn hover_in_context(uri: &str, text: &str, line: usize, character: usize) -> Option<Value> {
+    let local = || hover(text, line, character);
+    let Some(path) = path_of(uri) else { return local() };
+    let (_, imports) = crate::strip_imports(text);
+    let root = if imports.is_empty() {
+        match program_using(&path) {
+            Some(r) => r,
+            None => return local(),
+        }
+    } else {
+        path.clone()
+    };
+    let Ok((buffer, files)) = crate::load_program(root.to_str()?) else { return local() };
+    let Ok(canonical) = std::fs::canonicalize(&path) else { return local() };
+    let Some(mine) = files.iter().find(|f| {
+        std::fs::canonicalize(&f.path).map(|c| c == canonical).unwrap_or(false)
+    }) else {
+        return local();
+    };
+    // The editor's text replaces what is on disk for this one file. `strip_imports` blanks the
+    // `use` lines with spaces and keeps every offset, so the splice is length-exact and no span
+    // needs adjusting — the same property `check_in_context` relies on.
+    let (blanked, _) = crate::strip_imports(text);
+    let mut whole = String::with_capacity(buffer.len() + blanked.len());
+    whole.push_str(&buffer[..mine.start]);
+    whole.push_str(&blanked);
+    whole.push_str(&buffer[mine.start + mine.len..]);
+    let start = mine.start as u32;
+    let end = start + blanked.len() as u32;
+
+    let index = LineIndex::new(&blanked);
+    let offset = index.offset_of(line, character) + start;
+    let types = collect_types_cached(&whole);
+    let (span, ty) = types
+        .into_iter()
+        .filter(|(s, _)| s.start >= start && s.start <= end)
+        .filter(|(s, _)| s.start <= offset && offset < s.end)
+        .min_by_key(|(s, _)| s.end - s.start)?;
+    let span = Span { start: span.start - start, end: span.end.min(end) - start };
+    Some(hover_value(&blanked, span, &ty))
+}
+
 fn hover(text: &str, line: usize, character: usize) -> Option<Value> {
     let index = LineIndex::new(text);
     let offset = index.offset_of(line, character);
@@ -224,9 +281,15 @@ fn hover(text: &str, line: usize, character: usize) -> Option<Value> {
         .into_iter()
         .filter(|(s, _)| s.start <= offset && offset < s.end)
         .min_by_key(|(s, _)| s.end - s.start)?;
+    Some(hover_value(text, span, &ty))
+}
 
+/// The reply itself: the type in a fenced block, any note that explains it, and the range to
+/// underline. Shared by both hover paths so they cannot answer differently for the same type.
+fn hover_value(text: &str, span: Span, ty: &Type) -> Value {
+    let index = LineIndex::new(text);
     let mut value = format!("```burxt\n{}\n```", ty);
-    if let Some(note) = explain(&ty) {
+    if let Some(note) = explain(ty) {
         value.push('\n');
         value.push_str(&note);
     }
@@ -238,7 +301,7 @@ fn hover(text: &str, line: usize, character: usize) -> Option<Value> {
             ("character", Value::num((c - 1) as f64)),
         ])
     };
-    Some(Value::obj(vec![
+    Value::obj(vec![
         (
             "contents",
             Value::obj(vec![("kind", Value::str("markdown")), ("value", Value::str(value))]),
@@ -250,7 +313,7 @@ fn hover(text: &str, line: usize, character: usize) -> Option<Value> {
                 ("end", position(end.line, end.col)),
             ]),
         ),
-    ]))
+    ])
 }
 
 /// One sentence about what the type GUARANTEES, where that is not obvious from
@@ -295,6 +358,61 @@ fn explain(ty: &Type) -> Option<String> {
 /// Types for every expression the checker got through, even if checking then
 /// failed: hover on the parts that are fine is more useful than nothing.
 fn collect_types(text: &str) -> Vec<(Span, Type)> {
+    // **The imports are blanked first, and without this `hover` was dead on every real
+    // program.** `use` is resolved by a pre-pass, so the parser has never seen the word — a
+    // `use` line reaches it as a syntax error, `parse()` returns `Err`, and this answered with
+    // an empty list. Every file that imports anything therefore had NO hover at all, silently:
+    // the reply was a well-formed `null`, which reads as "nothing here" rather than "this
+    // feature is broken."
+    //
+    // `strip_imports` replaces each import with spaces rather than removing it — its own comment
+    // says *"every offset after this line stays exactly where it was, which is why no span
+    // anywhere needs adjusting"* — so the spans returned still index the editor's buffer.
+    //
+    // This is the fallback path, for a buffer that belongs to no program on disk.
+    // `hover_in_context` is the real one: blanking alone leaves imported TYPES unknown, so on
+    // `main.bx` it still answered nothing.
+    //
+    // Found by a subagent writing `src/burxt-compiler/lsp.bx`, whose server answered 38
+    // positions on a file where this one answered none. Second time the second implementation
+    // has audited the first, after `diag.bx` found `diag.rs` panicking in v0.0.216. `publish`
+    // never had this bug, because it goes through `check_in_context` — and nothing compared the
+    // two paths.
+    let (blanked, _) = crate::strip_imports(text);
+    collect_types_raw(&blanked)
+}
+
+/// The collector, memoised on the exact text it was given.
+///
+/// **One entry, because the access pattern is one buffer at a time.** `hover_in_context` resolves
+/// the whole program around the file being edited — for `src/burxt-compiler/main.bx` that is about
+/// 14,000 lines — and typechecks it to find the type under one cursor. Measured at ~1.5 s. Without
+/// this, every hover paid that again, so holding the mouse still and jiggling it would queue
+/// full compiles.
+///
+/// A single entry is the right size rather than a compromise: a person hovers repeatedly in the
+/// file they are editing, and the key is the spliced text, so it invalidates itself the moment a
+/// keystroke changes the buffer. An LRU over several documents would add a policy nobody has asked
+/// for yet.
+fn collect_types_cached(text: &str) -> Vec<(Span, Type)> {
+    use std::cell::RefCell;
+    thread_local! {
+        static LAST: RefCell<Option<(String, Vec<(Span, Type)>)>> = const { RefCell::new(None) };
+    }
+    LAST.with(|last| {
+        if let Some((seen, types)) = last.borrow().as_ref() {
+            if seen == text {
+                return types.clone();
+            }
+        }
+        let types = collect_types_raw(text);
+        *last.borrow_mut() = Some((text.to_string(), types.clone()));
+        types
+    })
+}
+
+/// The collector itself, over text whose imports are already resolved or blanked.
+fn collect_types_raw(text: &str) -> Vec<(Span, Type)> {
     let Ok(tokens) = crate::lexer::Lexer::new(text).tokenize() else {
         return Vec::new();
     };

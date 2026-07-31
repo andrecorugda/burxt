@@ -4846,6 +4846,107 @@ fn no_document_claims_a_coverage_number_the_suite_refutes() {
     );
 }
 
+/// **Hover works on a file that imports something — it was dead on every real program.**
+///
+/// `use` is resolved by a pre-pass, so the parser has never seen the word: a `use` line reaches it
+/// as a syntax error, `parse()` returns `Err`, and `collect_types` answered with an empty list. So
+/// **hover returned `null` on every file that imports anything**, which is every real Burxt
+/// program including the compiler's own source. Silently — a well-formed `null` reads as "nothing
+/// here", not "this feature is broken", so nobody noticed for as long as hover has existed.
+///
+/// Measured A/B on the same session: **0 answers before, 2 after**, and the second one carries the
+/// note that `Decimal<2>` has no rounding contract, so the whole hover path is exercised and not
+/// just the type name.
+///
+/// Two fixes, because the first was not enough and only measuring showed it:
+/// 1. Blank the imports before collecting types. Enough for a file that imports something without
+///    USING it.
+/// 2. Resolve the whole PROGRAM around the file, as `publish` already did through
+///    `check_in_context`. Needed because with `use "types.bx"` merely blanked, `Unit` and `Token`
+///    are unknown, the checker gives up early, and almost no expression types survive — so the
+///    file that most needs hover is exactly the one where blanking alone does nothing.
+///
+/// `publish` never had this bug and `hover` did, because nothing compared the two paths. **Found by
+/// a subagent writing `src/burxt-compiler/lsp.bx`**, whose server answered where this one did not —
+/// the second time the second implementation has audited the first, after `diag.bx` found
+/// `diag.rs` panicking in v0.0.216.
+///
+/// The fix cost a full compile of the surrounding program per hover (~1.5 s on the compiler's own
+/// source), so `collect_types_cached` memoises one entry keyed on the spliced text: 25 hovers went
+/// from a two-minute timeout to 0.77 s, and a keystroke invalidates it by changing the key.
+#[test]
+fn hover_answers_on_a_file_that_imports_something() {
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+
+    let scratch = scratch_dir("hover-with-imports");
+    fs::create_dir_all(&scratch).unwrap();
+    // Real files on disk, because resolving the program is the whole point — a URI naming a file
+    // that does not exist falls back to the buffer alone, and an earlier version of this
+    // measurement fooled me for exactly that reason.
+    fs::write(scratch.join("dep.bx"), "let helper: Int = 1;\n").unwrap();
+    let source = "use \"dep.bx\";\n\nlet a: Int = 5;\nlet b: Decimal<2> = $1.50;\nprint(a);\nprint(b);\n";
+    let root = scratch.join("root.bx");
+    fs::write(&root, source).unwrap();
+    let uri = format!("file://{}", root.canonicalize().unwrap().display());
+
+    let frame = |body: &str| format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
+    let escaped = source.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+    let mut session = String::new();
+    session.push_str(&frame(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#,
+    ));
+    session.push_str(&frame(&format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{}","languageId":"burxt","version":1,"text":"{}"}}}}}}"#,
+        uri, escaped
+    )));
+    // Hover the USES of `a` and `b`, not their declarations: only expressions carry a type, so a
+    // `let`'s name answers nothing in either compiler and probing it proves nothing.
+    for (id, line) in [(2, 4), (3, 5)] {
+        session.push_str(&frame(&format!(
+            r#"{{"jsonrpc":"2.0","id":{},"method":"textDocument/hover","params":{{"textDocument":{{"uri":"{}"}},"position":{{"line":{},"character":6}}}}}}"#,
+            id, uri, line
+        )));
+    }
+    session.push_str(&frame(r#"{"jsonrpc":"2.0","id":9,"method":"shutdown","params":null}"#));
+    session.push_str(&frame(r#"{"jsonrpc":"2.0","method":"exit","params":null}"#));
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("lsp")
+        .current_dir(&scratch)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("burxt lsp");
+    child.stdin.as_mut().unwrap().write_all(session.as_bytes()).unwrap();
+    let mut out = String::new();
+    child.stdout.as_mut().unwrap().read_to_string(&mut out).unwrap();
+    let _ = child.wait();
+    let _ = fs::remove_dir_all(&scratch);
+
+    let answers = out.matches(r#""contents""#).count();
+    assert_eq!(
+        answers, 2,
+        "expected a hover on both `a` and `b` in a file with a `use` line, got {}. This was 0 \
+         until v0.0.223 — `use` is a pre-pass, so the parser sees it as a syntax error and the \
+         type collector returned nothing for EVERY importing file. The reply was a well-formed \
+         `null`, which is why it went unnoticed.\n\n{}",
+        answers, out
+    );
+    assert!(
+        out.contains("```burxt\\nInt\\n```"),
+        "hovering `a` should report Int:\n{}",
+        out
+    );
+    // The note as well as the name, so the whole hover value is exercised.
+    assert!(
+        out.contains("Decimal<2>") && out.contains("rounding contract"),
+        "hovering `b` should report Decimal<2> and explain that it has no rounding contract:\n{}",
+        out
+    );
+}
+
 /// **The two language servers answer the same session.**
 ///
 /// `src/burxt-compiler/lsp.bx` driven over a pipe beside `burxt lsp`, message for message. This is
