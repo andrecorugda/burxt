@@ -1,0 +1,5 @@
+// `exit` is real, but it is a STATEMENT: it ends the process, so there is nothing for it to answer
+// with. A builtin has to have a return type and this one never returns — typing it `Int` would be a
+// small lie in a language whose whole argument is that it does not tell them.
+let status: Int = exit(1);
+print(status);

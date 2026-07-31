@@ -1,0 +1,8 @@
+// A process status is 0 to 255, and POSIX hands the shell only the LOW EIGHT BITS — so `exit(256)`
+// arrives as 0: a program reporting SUCCESS while trying to report failure. That is the worst possible
+// direction for this particular mistake, which is why the literal is a compile error rather than a
+// note in the documentation.
+//
+// A computed status is checked at run time — tests/panic/exit_status_checked_at_runtime.bx.
+print("about to report a failure");
+exit(256);

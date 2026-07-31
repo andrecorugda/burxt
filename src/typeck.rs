@@ -162,6 +162,12 @@ pub enum TypedStmt {
     AssignField { name: String, indices: Vec<u32>, value: TypedExpr },
     /// A call kept for its side effect; the result is evaluated and discarded.
     ExprStmt(TypedExpr),
+    /// `exit(code)` — end the process with a status a shell can read.
+    ///
+    /// A statement rather than a builtin call, because a builtin has to answer with a type and this
+    /// one never answers. Typing it `Int` would be a small lie in a language whose argument is that
+    /// it does not tell them.
+    Exit(TypedExpr),
     /// Element assignment through a field path: walk `indices` to the array
     /// field, then a bounds-checked element store.
     AssignFieldIndex {
@@ -3661,6 +3667,45 @@ impl TypeChecker {
                 Ok(TypedStmt::AssignIndex { name: name.clone(), len, index, value: typed })
             }
             StmtKind::ExprStmt(e) => {
+                // `exit(code)` — a STATEMENT, handled here rather than as a builtin call, because a
+                // builtin has to answer with a type and this one never answers at all. Typing it
+                // `Int` would be a small lie in a language whose whole argument is that it does not
+                // tell them; refusing it in a value position costs one arm and says the truth.
+                if let ExprKind::Call { name, arguments, .. } = &e.kind {
+                    if name == "exit" {
+                        if let Some(why) = self.impure("exit") {
+                            return Err(why);
+                        }
+                        if arguments.len() != 1 {
+                            return Err(
+                                "exit(code) takes one Int — the status a shell reads".to_string()
+                            );
+                        }
+                        let code = self.check_expr(&arguments[0], Some(&Type::Int))?;
+                        if code.ty != Type::Int {
+                            return Err(format!(
+                                "exit(code) takes an Int, but this has type {}",
+                                code.ty
+                            ));
+                        }
+                        // 0..=255, because that is what a status IS. POSIX hands the shell the low
+                        // eight bits, so `exit(256)` arrives as 0 — a program reporting SUCCESS
+                        // while trying to report failure, which is the worst direction for this
+                        // particular mistake to go. A literal is refused now; anything else is
+                        // checked at runtime.
+                        if let TypedExprKind::IntLit(n) = &code.kind {
+                            if *n < 0 || *n > 255 {
+                                return Err(format!(
+                                    "exit({}) cannot be reported: a process status is 0 to 255, \
+                                     and a shell reads only the low eight bits — so {} would \
+                                     arrive as {}. Pick a status in range.",
+                                    n, n, n & 0xff
+                                ));
+                            }
+                        }
+                        return Ok(TypedStmt::Exit(code));
+                    }
+                }
                 let typed = self.check_expr(e, None)?;
                 Ok(TypedStmt::ExprStmt(typed))
             }
@@ -4960,7 +5005,18 @@ impl TypeChecker {
                 let (mut param_tys, mut ret) = self
                     .fns
                     .get(name)
-                    .ok_or_else(|| format!("unknown function: {}", name))?
+                    .ok_or_else(|| {
+                        // `exit` is real but is a STATEMENT, so reaching here means it was used
+                        // where a value is wanted — and "unknown function" would send the reader
+                        // looking for a spelling mistake.
+                        if name == "exit" {
+                            return "`exit(code)` ends the process, so it has no value to give — \
+                                    write it as its own statement, `exit(1);`, rather than inside \
+                                    an expression."
+                                .to_string();
+                        }
+                        format!("unknown function: {}", name)
+                    })?
                     .clone();
                 // A generic call: infer what each type parameter stands for from the
                 // arguments, then proceed as if the signature had been written that way.

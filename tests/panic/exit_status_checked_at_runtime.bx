@@ -1,0 +1,10 @@
+// A status the checker cannot see is checked at RUN time, with the same message. It has to be checked
+// somewhere: POSIX hands the shell only the low eight bits, so 300 would arrive as 44 — a plausible
+// failure code that is not the one the program meant.
+//
+// Both compilers report this byte for byte, which is the differential's job.
+function status(n: Int) -> Int {
+    return n * 100;
+}
+print("reporting");
+exit(status(3));

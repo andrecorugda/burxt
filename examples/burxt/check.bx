@@ -30,6 +30,21 @@ function as_burxt_sees(t: Type) -> Type {
     return t;
 }
 
+// Is this expression node the call `exit(...)`? Asked by name, because `exit` is a statement rather
+// than a builtin: the emitter has to recognise it in the same place the checker does, and a fact
+// stored twice is a fact that disagrees with itself eventually.
+function (self: Unit) is_exit_call(src: String, node: Int) -> Bool {
+    if node < 0 {
+        return false;
+    }
+    let call: Node = self.nodes[node];
+    if call.kind != 13 {
+        return false;
+    }
+    let named: Token = self.tokens[call.token];
+    return span_equal(src, named.start, named.length, "exit");
+}
+
 function decimal_type(scale: Int, contract: Int) -> Type {
     return Type { kind: 45, scale: scale, contract: contract, name_start: 0, name_length: 0 };
 }
@@ -2053,6 +2068,38 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
             let checked: Int = self.check_pieces(src, target);
             return 1;
         }
+    }
+    if n.kind == 70 && self.is_exit_call(src, n.a) {
+        // `exit(code)` — a STATEMENT, and not a builtin call, because a builtin has to answer with a
+        // type and this one never answers. Typing it `Int` would be a small lie in a language whose
+        // argument is that it does not tell them.
+        if self.in_pure == 1 {
+            let complained: Int = self.not_pure(src, n.token, "exit");
+        }
+        let call: Node = self.nodes[n.a];
+        let list: Node = self.nodes[call.a];
+        if list.b != 1 {
+            let complained: Int = self.complain_at(src, n.token,
+                "`exit(code)` takes one Int — the status a shell reads");
+            return 1;
+        }
+        let status: Type = self.type_of(src, self.children[list.a], simple_type(40));
+        if !is_unknown(status) && status.kind != 40 {
+            let complained: Int = self.complain_at(src, n.token,
+                "`exit(code)` takes an Int, but this is " + self.show_type(src, status));
+        }
+        // 0..=255, because that is what a status IS. POSIX hands the shell only the low eight bits,
+        // so `exit(256)` arrives as 0 — a program reporting SUCCESS while trying to report failure,
+        // which is the worst direction for this mistake to go.
+        let written: Node = self.nodes[self.children[list.a]];
+        if written.kind == 1 {
+            if written.value < 0 || written.value > 255 {
+                let complained: Int = self.complain_at(src, n.token,
+                    "`exit(" + to_string(written.value) + ")` cannot be reported: a process status "
+                    + "is 0 to 255, and a shell reads only the low eight bits");
+            }
+        }
+        return 1;
     }
     if n.kind == 62 || n.kind == 70 {                // print, expression statement
         let value: Type = self.type_of(src, n.a, unknown_type());

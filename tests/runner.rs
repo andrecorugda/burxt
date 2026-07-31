@@ -1249,8 +1249,8 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
 
     let _ = fs::remove_dir_all(&scratch);
     assert!(
-        caught >= 219,
-        "stage-1 rejected only {} of {} fail programs, down from 219",
+        caught >= 222,
+        "stage-1 rejected only {} of {} fail programs, down from 222",
         caught,
         total
     );
@@ -5777,6 +5777,150 @@ fn the_ir_is_the_same_for_every_target() {
     assert_ne!(
         arm, win,
         "two different triples produced the same target lines, so --target is being ignored"
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+/// A program reports its status to the shell, and the SAME status from both compilers.
+///
+/// Not a `tests/pass/` fixture, and the reason is structural: that harness compares stdout and
+/// requires success, so a program whose whole point is exiting 3 cannot live there. Which is also
+/// why this went unnoticed — nothing in the suite could express it.
+///
+/// The audit's row read: *"a CLI that cannot signal failure to a shell is not shippable."* It could
+/// not, because `external function exit` is refused — the runtime owns that symbol, since a contract
+/// failure is what calls it — so a Burxt program had no way to say it failed. v0.0.200 makes `exit` a
+/// statement.
+#[test]
+fn a_program_reports_its_status_to_the_shell() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("exit-status");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    let stage1 = scratch.join("stage1");
+    let have_stage1 = llc.exists()
+        && Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("build")
+            .arg(root.join("examples/stage1.bx"))
+            .arg("-o")
+            .arg(&stage1)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+    // (program, the status a shell must see)
+    let cases: &[(&str, i32)] = &[
+        // Failure, reported. This is the case that was impossible.
+        ("print(\"failing\");\nexit(3);\n", 3),
+        // Success, said explicitly.
+        ("print(\"fine\");\nexit(0);\n", 0),
+        // Falling off the end is still success — `exit` adds a way to say something, it does not
+        // change what silence means.
+        ("print(\"fine\");\n", 0),
+        // The boundary values of a status.
+        ("exit(255);\n", 255),
+        ("exit(1);\n", 1),
+        // Inside a function, and after a branch, because that is where a real CLI puts it.
+        (
+            "function main_or_die(ok: Bool) -> Int {\n\
+               if !ok { exit(4); }\n\
+               return 0;\n\
+             }\n\
+             print(main_or_die(false));\n",
+            4,
+        ),
+        // A status the checker cannot fold: 0..=255 is enforced at runtime, and that exits 70 —
+        // the runtime's own failure code — rather than the out-of-range status.
+        (
+            "function status(n: Int) -> Int { return n * 100; }\nexit(status(3));\n",
+            70,
+        ),
+    ];
+
+    let mut wrong = Vec::new();
+    for (i, (program, want)) in cases.iter().enumerate() {
+        let source = scratch.join(format!("case{}.bx", i));
+        fs::write(&source, program).unwrap();
+
+        // ---- stage-0 ----
+        let exe = scratch.join(format!("case{}", i));
+        let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("build")
+            .arg(&source)
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .expect("burxt");
+        if !built.status.success() {
+            wrong.push(format!(
+                "case {}: did not build\n{}",
+                i,
+                String::from_utf8_lossy(&built.stderr)
+            ));
+            continue;
+        }
+        let ran = Command::new(&exe).output().expect("the program");
+        if ran.status.code() != Some(*want) {
+            wrong.push(format!(
+                "case {}: stage-0 exited {:?}, wanted {}\n{}",
+                i,
+                ran.status.code(),
+                want,
+                program
+            ));
+        }
+
+        // ---- stage-1, the same program, the same status ----
+        if !have_stage1 {
+            continue;
+        }
+        let ll = scratch.join(format!("case{}.ll", i));
+        let emitted = Command::new(&stage1).arg(&source).arg(&ll).output().expect("stage-1");
+        if !String::from_utf8_lossy(&emitted.stdout).contains("bytes of IR") {
+            wrong.push(format!("case {}: stage-1 refused it\n{}", i, program));
+            continue;
+        }
+        let obj = scratch.join(format!("case{}.o", i));
+        let assembled = Command::new(llc)
+            .args(["-relocation-model=pic", "-filetype=obj", "-o"])
+            .arg(&obj)
+            .arg(&ll)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        let s1exe = scratch.join(format!("case{}-s1", i));
+        if !assembled
+            || !Command::new("cc")
+                .arg(&obj)
+                .args(["-o"])
+                .arg(&s1exe)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        {
+            wrong.push(format!("case {}: stage-1's object did not link", i));
+            continue;
+        }
+        let s1ran = Command::new(&s1exe).output().expect("the stage-1 program");
+        if s1ran.status.code() != Some(*want) {
+            wrong.push(format!(
+                "case {}: stage-1 exited {:?}, wanted {} — the two compilers disagree about a \
+                 status, which a shell can see\n{}",
+                i,
+                s1ran.status.code(),
+                want,
+                program
+            ));
+        }
+    }
+
+    assert!(
+        wrong.is_empty(),
+        "{} program(s) reported the wrong status:\n\n{}",
+        wrong.len(),
+        wrong.join("\n")
     );
 
     let _ = fs::remove_dir_all(&scratch);

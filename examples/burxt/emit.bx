@@ -1991,6 +1991,25 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int {
         return self.write_body("  br label %" + done + "\n" + done + ":\n");
     }
 
+    if n.kind == 70 && self.is_exit_call(src, n.a) {
+        // The status a shell reads. Not an `external function exit`, because the runtime owns that
+        // symbol — it is what a contract failure calls — so declaring it was refused and a CLI had
+        // no way to report failure at all.
+        let call: Node = self.nodes[n.a];
+        let list: Node = self.nodes[call.a];
+        let status: String = self.emit_expr(src, self.children[list.a]);
+        // One UNSIGNED comparison catches both ends: a negative status wraps to something enormous.
+        let refused: Int = self.check_or_die("ule", status, "255",
+            "burxt runtime error: a process status is 0 to 255 — a shell reads only the low eight bits\n");
+        let narrow: String = self.fresh();
+        let cast: Int = self.write_body("  " + narrow + " = trunc i64 " + status + " to i32\n");
+        let called: Int = self.write_body("  call void @exit(i32 " + narrow + ")\n");
+        // `exit` does not return, so the block has to end — and the walk needs somewhere to go.
+        let dead: Int = self.write_body("  unreachable\n");
+        let after: String = self.fresh_label("after.exit");
+        let opened: Int = self.write_body(after + ":\n");
+        return 1;
+    }
     if n.kind == 70 {                                // an expression, for its effect
         let value: String = self.emit_expr(src, n.a);
         return 1;

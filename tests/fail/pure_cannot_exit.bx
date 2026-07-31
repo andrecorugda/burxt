@@ -1,0 +1,10 @@
+// A `pure` function's answer depends on its arguments and nothing else. Ending the process is the
+// largest possible effect — there is no answer at all afterwards — so it is the clearest case of what
+// `pure` excludes.
+pure function checked(n: Int) -> Int {
+    if n < 0 {
+        exit(2);
+    }
+    return n;
+}
+print(checked(5));

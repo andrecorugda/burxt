@@ -416,6 +416,59 @@ impl<'ctx> CodeGen<'ctx> {
 
     fn gen_stmt(&mut self, stmt: &TypedStmt) -> Result<(), String> {
         match stmt {
+            // `exit(code)` — the status a shell reads, and the reason this is not an
+            // `external function exit`: the runtime owns that symbol (it is what a contract failure
+            // calls), so declaring it was refused and a CLI had no way to report failure at all.
+            //
+            // The range check is the interesting part. POSIX hands the shell only the LOW EIGHT
+            // BITS, so `exit(256)` arrives as 0 — a program reporting SUCCESS while trying to report
+            // failure, which is the worst possible direction for this particular mistake. A literal
+            // is refused by the checker; anything computed dies here, naming the range.
+            TypedStmt::Exit(code) => {
+                let value = self.gen_expr(code)?.into_int_value();
+                let i64t = self.ctx.i64_type();
+                let i32t = self.ctx.i32_type();
+                let err = |e: inkwell::builder::BuilderError| e.to_string();
+                // One unsigned comparison catches both ends: a negative status wraps to something
+                // enormous, so `code as u64 > 255` is `code < 0 || code > 255`.
+                let out_of_range = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::UGT,
+                        value,
+                        i64t.const_int(255, false),
+                        "status_out_of_range",
+                    )
+                    .map_err(err)?;
+                let function = self
+                    .builder
+                    .get_insert_block()
+                    .and_then(|b| b.get_parent())
+                    .ok_or("codegen bug: exit outside a function")?;
+                let bad = self.ctx.append_basic_block(function, "status_bad");
+                let ok = self.ctx.append_basic_block(function, "status_ok");
+                self.builder.build_conditional_branch(out_of_range, bad, ok).map_err(err)?;
+                self.builder.position_at_end(bad);
+                self.build_panic(
+                    "burxt runtime error: a process status is 0 to 255 — a shell reads only the \
+                     low eight bits\n",
+                )?;
+                self.builder.position_at_end(ok);
+                let (_, _, exit) = self.panic_deps();
+                let narrow = self
+                    .builder
+                    .build_int_truncate(value, i32t, "status")
+                    .map_err(err)?;
+                self.builder.build_call(exit, &[narrow.into()], "exit").map_err(err)?;
+                // `exit` does not return, and LLVM has to be told or it assumes the next block is
+                // reachable and the function falls off its end.
+                self.builder.build_unreachable().map_err(err)?;
+                // Anything after `exit(...)` is dead, but the emitter still walks it, so it needs a
+                // block to walk into.
+                let after = self.ctx.append_basic_block(function, "after_exit");
+                self.builder.position_at_end(after);
+                Ok(())
+            }
             TypedStmt::Let { name, ty, value } => {
                 // An array is built in place: alloca once, store per element.
                 if let TypedExprKind::ArrayLit(elems) = &value.kind {
