@@ -414,7 +414,7 @@
         },
         {
           "name": "keyword.declaration.burxt",
-          "match": "\\b(let|mutable|function|external|class|private|enum|interface|implement|implements|is|region|dynamic)\\b"
+          "match": "\\b(let|const|mutable|function|external|class|private|enum|interface|implement|implements|is|region|dynamic)\\b"
         },
         {
           "name": "keyword.operator.expression.as.burxt",

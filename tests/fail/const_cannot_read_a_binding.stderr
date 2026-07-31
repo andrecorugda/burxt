@@ -1,0 +1,1 @@
+`start` cannot be used in a `const`: an initializer may hold literals and consts declared ABOVE it, and nothing else. A `const` is folded at compile time, so there is no run-time value for it to read.

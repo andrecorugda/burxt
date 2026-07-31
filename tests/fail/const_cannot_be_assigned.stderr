@@ -1,0 +1,1 @@
+cannot assign to `LIMIT`: it is a `const LIMIT: Int`, which is a name for a literal rather than a place to store one. There is nothing to assign to — by the time the program runs, every use of `LIMIT` IS the literal.

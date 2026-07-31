@@ -123,18 +123,24 @@ use "emit.bx";
 
 // ---- the verdicts ---------------------------------------------------------------------
 //
-// `review.rs` makes these five `const &str`. Burxt has no `const` yet (`ROADMAP-1.0.md`
-// A2), so they are one-line functions — which buys the same thing the consts buy, namely
-// that a typo is a compile error at the thirteen sites that raise a finding rather than a
-// verdict that silently sorts last.
+// `review.rs` makes these five `const &str` and now so does this file. Until A2 they were
+// five one-line `pure` functions, with a comment here saying *"Burxt has no `const` yet"* —
+// a workaround that named its own blocker, which is why it was the first thing converted
+// when the blocker went away. A limitation left behind after it stops being true is worse
+// than a missing feature: nobody re-tests what the comments say does not work.
+//
+// They also carry their own weight as the dogfood for a STRING const specifically. The
+// `INT_MAX`/`INT_MIN` pair in `check.bx` proves the Int path through the fixpoint; these
+// five prove the String path, where the emitter interns the literal from the source rather
+// than reading a folded number.
 //
 // WEAKENED means "this promises LESS than it did", and it is the only verdict that should
 // stop a review. Everything else is information.
-pure function verdict_weakened() -> String { return "WEAKENED"; }
-pure function verdict_stricter() -> String { return "STRICTER"; }
-pure function verdict_added() -> String { return "ADDED"; }
-pure function verdict_removed() -> String { return "REMOVED"; }
-pure function verdict_changed() -> String { return "CHANGED"; }
+const WEAKENED: String = "WEAKENED";
+const STRICTER: String = "STRICTER";
+const ADDED: String = "ADDED";
+const REMOVED: String = "REMOVED";
+const CHANGED: String = "CHANGED";
 
 // Weakenings first. A reviewer reads the top of the output.
 pure function verdict_rank(verdict: String) -> Int {
@@ -163,7 +169,7 @@ pure function verdict_rank(verdict: String) -> Int {
 // version, namely a clause whose own text contains U+0001.
 class Promise {
     name: String,
-    // `function`, `method`, `constructor`, `class`, `field`, `interface`.
+    // `function`, `method`, `constructor`, `class`, `field`, `interface`, `const`.
     kind: String,
     // The parameter and return types, rendered. Not the body, and not the parameter NAMES —
     // renaming a parameter changes no promise, and reporting it would be noise that teaches
@@ -630,6 +636,28 @@ function (mutable self: Promises) collect(unit: Unit, src: String) -> Int {
                         requires_at: 0, requires_count: 0, ensures_at: 0, ensures_count: 0,
                         is_pure: 0, is_private: 0, touches: 0 });
         }
+        // A `const`, and its VALUE is part of the shape — which is unusual for this file and
+        // has a reason. Everywhere else the value is none of the tool's business: a body may
+        // change freely as long as the signature holds. A const has no body. It is folded at
+        // compile time and SUBSTITUTED into every dependent, so `const RETRIES: Int = 3;`
+        // becoming `= 30` changes what a caller's compiled code does with no signature
+        // anywhere altered — exactly the change this tool exists to surface.
+        //
+        // `params: -1`, so `promise_render` substitutes no positions and every name renders as
+        // itself. That is what a const initialiser wants: a reference to another const should
+        // read as that const's name.
+        //
+        // Rendered as WRITTEN rather than folded, matching `review.rs`, which reads
+        // declarations only and has no checker to fold with. `LIMIT * 2 -> LIMIT * 3` is
+        // reported, and so would a reformat of the same expression be — the one place this is
+        // noisier than the rest of the file, named rather than hidden.
+        if n.kind == 73 {
+            push(self.promises, Promise { name: unit.review_token_text(src, n.token), kind: "const",
+                        shape: unit.show_type(src, unit.declared_type(src, n.a)) + " = "
+                               + unit.promise_render(src, n.b, 0 - 1),
+                        requires_at: 0, requires_count: 0, ensures_at: 0, ensures_count: 0,
+                        is_pure: 0, is_private: 0, touches: 0 });
+        }
         i += 1;
     }
 
@@ -706,7 +734,7 @@ function review_unique_by_name(mutable promises: [Promise]) -> Int {
 // arrays moving behind something that can be. Reported rather than worked around.
 function promises_of(path: String, mutable into: Promises) -> Int touches files {
     let src: String = load_program(path);
-    let mutable unit: Unit = Unit { tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, current_method: 0 - 1, probing: 0, probe_changes: 0, type_bindings: [], measure_clause: 0 - 1, measure_slot: 0, measure_parameters: 0 - 1, measure_owner: "", old_nodes: [], old_slots: [], ensures_start: 0, ensures_count: 0, ensures_owner: "", bracket_clauses: [], clause_subjects: [], it_token: 0 - 1, it_is_result: 0, used_it: 0, it_seen: 0, result_type_node: 0 - 1, result_slot: 0 - 1, returns_node: 0 - 1, walked_types: [], type_binding_floor: 0, allowed_effects: 63, effects_owner: "", function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], in_function: 0, depth: 0, problems: 0, diagnose: 0, problem_start: 0 - 1, problem_length: 0, problem_message: "", position: 0, token_end: 0, no_record_literal: 0, in_multiply: 0, print_to_stderr: 0, int_type_node: 0 - 1, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
+    let mutable unit: Unit = Unit { tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], consts: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, current_method: 0 - 1, probing: 0, probe_changes: 0, type_bindings: [], measure_clause: 0 - 1, measure_slot: 0, measure_parameters: 0 - 1, measure_owner: "", old_nodes: [], old_slots: [], ensures_start: 0, ensures_count: 0, ensures_owner: "", bracket_clauses: [], clause_subjects: [], it_token: 0 - 1, it_is_result: 0, used_it: 0, it_seen: 0, result_type_node: 0 - 1, result_slot: 0 - 1, returns_node: 0 - 1, walked_types: [], type_binding_floor: 0, allowed_effects: 63, effects_owner: "", function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], in_function: 0, depth: 0, problems: 0, diagnose: 0, problem_start: 0 - 1, problem_length: 0, problem_message: "", position: 0, token_end: 0, no_record_literal: 0, in_multiply: 0, print_to_stderr: 0, int_type_node: 0 - 1, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
     let installed: Int = unit.install_keywords();
     let total: Int = unit.run(src);
     if unit.errors > 0 {
@@ -773,7 +801,7 @@ function compare_promises(was: Promise, before: Promises, now: Promise, after: P
     while i < was.requires_count {
         if !review_has_clause(after.shapes, now.requires_at, now.requires_count,
                        before.shapes[was.requires_at + i]) {
-            push(out, Finding { verdict: verdict_weakened(), name: was.name,
+            push(out, Finding { verdict: WEAKENED, name: was.name,
                         detail: "lost `requires " + before.texts[was.requires_at + i] + "`" });
         }
         i += 1;
@@ -782,7 +810,7 @@ function compare_promises(was: Promise, before: Promises, now: Promise, after: P
     while i < was.ensures_count {
         if !review_has_clause(after.shapes, now.ensures_at, now.ensures_count,
                        before.shapes[was.ensures_at + i]) {
-            push(out, Finding { verdict: verdict_weakened(), name: was.name,
+            push(out, Finding { verdict: WEAKENED, name: was.name,
                         detail: "lost `ensures " + before.texts[was.ensures_at + i] + "`" });
         }
         i += 1;
@@ -791,7 +819,7 @@ function compare_promises(was: Promise, before: Promises, now: Promise, after: P
     while i < now.requires_count {
         if !review_has_clause(before.shapes, was.requires_at, was.requires_count,
                        after.shapes[now.requires_at + i]) {
-            push(out, Finding { verdict: verdict_stricter(), name: was.name,
+            push(out, Finding { verdict: STRICTER, name: was.name,
                         detail: "gained `requires " + after.texts[now.requires_at + i] + "`" });
         }
         i += 1;
@@ -800,7 +828,7 @@ function compare_promises(was: Promise, before: Promises, now: Promise, after: P
     while i < now.ensures_count {
         if !review_has_clause(before.shapes, was.ensures_at, was.ensures_count,
                        after.shapes[now.ensures_at + i]) {
-            push(out, Finding { verdict: verdict_stricter(), name: was.name,
+            push(out, Finding { verdict: STRICTER, name: was.name,
                         detail: "gained `ensures " + after.texts[now.ensures_at + i] + "`" });
         }
         i += 1;
@@ -815,7 +843,7 @@ function compare_promises(was: Promise, before: Promises, now: Promise, after: P
     let mutable bit: Int = 1;
     while bit <= 32 {
         if bit_and(now.touches, bit) == bit && bit_and(was.touches, bit) == 0 {
-            push(out, Finding { verdict: verdict_weakened(), name: was.name,
+            push(out, Finding { verdict: WEAKENED, name: was.name,
                         detail: "now touches " + effect_name(bit) + " — it could not before" });
         }
         bit = bit * 2;
@@ -823,32 +851,32 @@ function compare_promises(was: Promise, before: Promises, now: Promise, after: P
     bit = 1;
     while bit <= 32 {
         if bit_and(was.touches, bit) == bit && bit_and(now.touches, bit) == 0 {
-            push(out, Finding { verdict: verdict_stricter(), name: was.name,
+            push(out, Finding { verdict: STRICTER, name: was.name,
                         detail: "no longer touches " + effect_name(bit) });
         }
         bit = bit * 2;
     }
     if was.is_pure == 1 && now.is_pure == 0 {
-        push(out, Finding { verdict: verdict_weakened(), name: was.name,
+        push(out, Finding { verdict: WEAKENED, name: was.name,
                     detail: "no longer `pure` — its answer may now depend on more than its "
                             + "arguments" });
     }
     if was.is_pure == 0 && now.is_pure == 1 {
-        push(out, Finding { verdict: verdict_stricter(), name: was.name,
+        push(out, Finding { verdict: STRICTER, name: was.name,
                     detail: "now `pure`" });
     }
     // Privacy is a promise about who may touch this. Opening it up is a weakening of exactly
     // the same kind as dropping a precondition: something that could not happen now can.
     if was.is_private == 1 && now.is_private == 0 {
-        push(out, Finding { verdict: verdict_weakened(), name: was.name,
+        push(out, Finding { verdict: WEAKENED, name: was.name,
                     detail: "no longer `private` — anything may now read it" });
     }
     if was.is_private == 0 && now.is_private == 1 {
-        push(out, Finding { verdict: verdict_stricter(), name: was.name,
+        push(out, Finding { verdict: STRICTER, name: was.name,
                     detail: "now `private`" });
     }
     if was.shape != now.shape {
-        push(out, Finding { verdict: verdict_changed(), name: was.name,
+        push(out, Finding { verdict: CHANGED, name: was.name,
                     detail: was.shape + " -> " + now.shape });
     }
     return len(out);
@@ -913,7 +941,7 @@ function review(old_path: String, new_path: String) -> Int touches files {
         if at < 0 {
             // A removed declaration is a weakening only if something still calls it, which
             // this cannot know — so it is reported plainly and left to the reviewer.
-            push(findings, Finding { verdict: verdict_removed(), name: was.name,
+            push(findings, Finding { verdict: REMOVED, name: was.name,
                         detail: was.kind + " is gone" });
         } else {
             let compared: Int = compare_promises(was, before, after.promises[at], after,
@@ -929,7 +957,7 @@ function review(old_path: String, new_path: String) -> Int touches files {
             if now.is_private == 1 {
                 detail = detail + ", private";
             }
-            push(findings, Finding { verdict: verdict_added(), name: now.name,
+            push(findings, Finding { verdict: ADDED, name: now.name,
                         detail: detail });
         }
         i += 1;
@@ -947,7 +975,7 @@ function review(old_path: String, new_path: String) -> Int touches files {
     let mutable weakened: Int = 0;
     i = 0;
     while i < len(findings) {
-        if findings[i].verdict == verdict_weakened() {
+        if findings[i].verdict == WEAKENED {
             weakened += 1;
         }
         i += 1;

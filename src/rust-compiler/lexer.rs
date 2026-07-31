@@ -26,6 +26,14 @@ pub enum Token {
     Ident(String),
     Let,
     Mut,
+    /// `const NAME: Type = <compile-time value>;` — a name for a literal.
+    ///
+    /// A separate token from `Let` rather than a flag on it, because the two are not
+    /// the same construct wearing different hats: a `const` is an ITEM (it may only
+    /// appear at the top level, and it is in scope inside every function), while a
+    /// `let` is a STATEMENT (it is in scope from its own line to the end of its
+    /// block, and a function body cannot see one). See `ast::ConstDef`.
+    Const,
     Print,
     Fn,
     Extern,
@@ -135,6 +143,7 @@ impl Token {
             Token::Ident(s) => format!("`{}`", s),
             Token::Let => "`let`".to_string(),
             Token::Mut => "`mutable`".to_string(),
+            Token::Const => "`const`".to_string(),
             Token::Print => "`print`".to_string(),
             Token::Fn => "`function`".to_string(),
             Token::Extern => "`external`".to_string(),
@@ -741,6 +750,12 @@ impl<'a> Lexer<'a> {
         Ok(match s.as_str() {
             "let" => Token::Let,
             "mutable" => Token::Mut,
+            // Spelled the way every comparison language spells it, which is the v0.0.98 test:
+            // `const` is not a clipping of a longer word the way `fn` was of `function`, so
+            // there is no fuller spelling to prefer. C, C++, C#, Rust, JavaScript, PHP and
+            // TypeScript all say `const`; Java says `static final` and Python says nothing at
+            // all. A reviewer reads this without decoding it, which is the whole rule.
+            "const" => Token::Const,
             "print" => Token::Print,
             "print_error" => Token::PrintError,
             "while" => Token::While,

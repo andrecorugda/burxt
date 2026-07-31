@@ -697,6 +697,82 @@ pub struct StructDef {
     pub span: Span,
 }
 
+/// `const NAME: Type = <compile-time value>;` — a name for a literal.
+///
+/// ## What `const` adds that `let` does not, measured rather than assumed
+///
+/// `let` without `mutable` is already immutable, so "immutable" is not the answer. The
+/// question was asked properly — by running the compiler — and there are three answers, of
+/// which the third on its own settles it:
+///
+/// 1. **A top-level `let` is not in scope inside a function.** Top-level statements ARE
+///    the body of `main`, so `let LIMIT: Int = 100;` followed by `function bump(x: Int)
+///    -> Int { return x + LIMIT; }` is rejected with `unknown variable: LIMIT`. Every
+///    magic number in `lib/` is inside a function, so a top-level `let` could not have
+///    named one. A `const` is an ITEM, and an item is visible to every body in the
+///    program.
+/// 2. **A `const` is a literal, not a load.** It is folded here at check time and reaches
+///    codegen already lowered to `TypedExprKind::IntLit`/`DecimalLit`/`BoolLit`/`StrLit`,
+///    so it costs nothing at run time, is legal inside a `pure` function, and needs no
+///    global storage and no initialization order. That is why `codegen.rs` learned
+///    nothing about `const` at all.
+/// 3. **A `let` cannot appear in a module AT ALL.** `main.rs` refuses a top-level statement
+///    in any file reached by `use` — *"a module holds declarations, not statements: this
+///    would run when `helper.bx` was used, and a `use` is not a call"* (spec/M6-MODULES.md
+///    §1.3). So the answer to "why not just use a top-level `let`?" for `lib/math.bx` is
+///    not that it would be awkward: it does not compile. A `const` is a declaration, so it
+///    is allowed there, which is the entire reason A2 unblocks a standard-library module.
+///
+/// ## What may be on the right-hand side
+///
+/// A literal, another `const` declared ABOVE this one, or `+ - *` and unary `-` over
+/// those — **for `Int` only**. Folding is done with checked arithmetic and a fold that
+/// overflows is a compile error, never a wrap.
+///
+/// `/` is absent and that was a correction, not a design: the first evaluator folded it with
+/// `checked_div` and shipped its own division-by-zero refusal, which made `const HALF: Int =
+/// LIMIT / 2;` legal in a language where `let half: Int = n / 2;` is not — Burxt refuses `/`
+/// on two Ints because one operator cannot say whether it rounds toward zero or down. Knowing
+/// the operands at compile time does not answer that question. So a const `/` is now refused
+/// by exactly the rule a `let` `/` is refused by, and gets the same sentence.
+///
+/// The arithmetic is not decoration and this was also measured: `INT_MIN` **cannot be
+/// written as a literal**. `-9223372036854775808` is lexed as a negation of
+/// `9223372036854775808`, which is `integer literal too large`, so the one constant A2
+/// exists to name needs `-9223372036854775807 - 1` — a fold. A literal-only `const`
+/// would have shipped without the flagship case.
+///
+/// **What it costs.** `Decimal`, `String` and `Bool` consts must be a single literal (or
+/// a copy of another const): no arithmetic. Deliberate, and the reasons differ per type.
+/// A `Decimal` `*` narrows and so needs a rounding contract, which would put a rounding
+/// mode somewhere other than a signature for the first time; `+` would then be the only
+/// Decimal operator allowed, and "one of them works" is a worse rule to remember than
+/// "none do". A `String` `+` folds perfectly well, but `+` on Strings MEANS allocate, and
+/// a reader meeting `const GREETING: String = A + B;` would rightly ask where it lives —
+/// so a String const stays exactly as expressive as a String literal. Every item A2 was
+/// filed to unblock (`INT_MAX`, `INT_MIN`, CRC and hash polynomials, buffer sizes) is an
+/// `Int`, so this is the smaller thing that is still the useful thing.
+///
+/// **Also not here, and named rather than discovered:** a `const` cannot appear in a TYPE
+/// (`[Int; SIZE]`, `Decimal<SCALE>`) or as a `match` pattern. Both are separate grammars
+/// in four files, neither is needed by anything on the A2 list, and a use site that is a
+/// value is the whole of what a named number is for.
+#[derive(Debug, Clone)]
+pub struct ConstDef {
+    pub name: String,
+    /// Required, never inferred — unlike `let`, where `let count = 0;` is legal.
+    ///
+    /// A `const` is a name the whole program can read, and the declaration is the only
+    /// place a reader will look to find out what it is. `let` can leave the annotation
+    /// off because the initializer is one line above the use; a `const` used 900 lines
+    /// away has no such consolation. It also settles a Decimal's scale where the reader
+    /// can see it: `const RATE = 8.25%;` would be asking them to know the lexer's rules.
+    pub declared: Type,
+    pub value: Expr,
+    /// Where this item was written, for errors about the item itself.
+    pub span: Span,
+}
+
 /// A whole program: struct and extern declarations, function definitions,
 /// and top-level statements (the implicit main). Declarations are hoisted —
 /// define them in any order.
@@ -709,5 +785,11 @@ pub struct Program {
     pub externs: Vec<ExternFn>,
     pub fns: Vec<FnDef>,
     pub methods: Vec<MethodDef>,
+    /// `const` declarations, in SOURCE ORDER — which matters, because a `const` may
+    /// only be built from consts declared above it. Everything else in this struct is
+    /// hoisted; this one deliberately is not. Folding needs an order, and "the order it
+    /// is written in" is the only one a reader can see. A hoisted const would let
+    /// `const A: Int = B; const B: Int = 1;` work, and then someone would write a cycle.
+    pub consts: Vec<ConstDef>,
     pub stmts: Vec<Stmt>,
 }

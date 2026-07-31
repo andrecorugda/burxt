@@ -1,0 +1,15 @@
+// `/` is not part of the const grammar, and this fixture exists to pin a CORRECTION rather
+// than a new rule.
+//
+// The first version of the constant folder handled `/` with checked division and shipped its
+// own division-by-zero refusal — which made `const HALF: Int = LIMIT / 2;` legal in a language
+// where `let half: Int = n / 2;` is not. Burxt refuses `/` on two Ints because one operator
+// cannot say whether it rounds toward zero or down, and knowing both operands at compile time
+// does not answer that question. Two rules for one operator, decided by where it was written.
+//
+// So a const `/` now gets the SAME sentence a `let` `/` gets, naming `divide_floor` and
+// `divide_toward_zero` — the two functions the author actually needs. Nothing about `const`
+// appears in it, which is the point.
+const LIMIT: Int = 100000;
+const HALF: Int = LIMIT / 2;
+print(HALF);

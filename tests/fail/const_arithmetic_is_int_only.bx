@@ -1,0 +1,9 @@
+// Arithmetic in a const is `+ - *` over Ints. A Decimal is refused, and not because folding
+// two scaled integers is hard — `+` at one scale is trivial. It is refused because `*` on
+// Decimals NARROWS and so needs a rounding contract, which would put a rounding mode somewhere
+// other than a signature for the first time in the language. `+` would then be the only
+// Decimal operator a const admits, and "one of them works" is a worse rule to remember than
+// "none do".
+const RATE: Decimal<4> = 8.25%;
+const DOUBLED: Decimal<4> = RATE + RATE;
+print(DOUBLED);

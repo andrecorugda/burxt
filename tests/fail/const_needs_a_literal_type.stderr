@@ -1,0 +1,1 @@
+a `const` may be an Int, a Decimal, a String or a Bool, not a CInt — a `const` is a literal with a name, and CInt has no literal to name. Use a `let`, or a function that builds one.

@@ -1,0 +1,9 @@
+// A parameter may not take a const's name either, and this is the shadowing that would hurt
+// most: the parameter wins inside the body, the const is invisible there, and a reader's eye
+// goes to the declaration at the top of the file and reads the wrong value. Nothing about the
+// call site would look wrong.
+const LIMIT: Int = 100000;
+function under(LIMIT: Int) -> Bool {
+    return LIMIT < 10;
+}
+print(under(5));

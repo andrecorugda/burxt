@@ -1,0 +1,7 @@
+// Consts are folded in SOURCE ORDER, so one may only be built from a const declared above it.
+// Everything else in a Burxt program is hoisted; this one deliberately is not. Folding needs
+// an order, "the order it is written in" is the only one a reader can see, and hoisting would
+// make this program legal — after which somebody would write a cycle.
+const DOUBLE: Int = LIMIT * 2;
+const LIMIT: Int = 100000;
+print(DOUBLE);

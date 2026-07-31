@@ -1,0 +1,1 @@
+this `const` overflows an Int while multiplying — a constant is folded at compile time, and folding cannot wrap: by the time the program runs there is no arithmetic left to trap on. An Int holds -9223372036854775808 to 9223372036854775807.

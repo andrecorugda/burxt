@@ -1,0 +1,8 @@
+// A const is folded at compile time, so a call cannot be on the right-hand side: there is no
+// run time yet in which to make one. The message names the RULE rather than the node kind,
+// because what the author needs to learn is that consts are folded.
+function five() -> Int {
+    return 5;
+}
+const LIMIT: Int = five();
+print(LIMIT);

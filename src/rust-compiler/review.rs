@@ -54,7 +54,7 @@ use std::fmt::Write as _;
 /// reading two runs is not also diffing the order.
 #[derive(PartialEq)]
 struct Promise {
-    /// `function`, `method`, `constructor`, `class`, `field`, `interface`.
+    /// `function`, `method`, `constructor`, `class`, `field`, `interface`, `const`.
     kind: &'static str,
     /// The parameter and return types, rendered. Not the body, and not the parameter NAMES —
     /// renaming a parameter changes no promise, and reporting it would be noise that teaches a
@@ -348,6 +348,38 @@ fn collect(prog: &Program) -> BTreeMap<String, Promise> {
             Promise {
                 kind: "interface",
                 shape: format!("{} method(s)", t.methods.len()),
+                requires: Vec::new(),
+                ensures: Vec::new(),
+                is_pure: false,
+                private: false,
+                touches: Vec::new(),
+            },
+        );
+    }
+    // A `const` is part of the surface, and its VALUE is part of it too — which is unusual
+    // enough to say why.
+    //
+    // Everywhere else in this file the value is none of the tool's business: a function body may
+    // change freely as long as the signature holds. A const has no body. It is folded at compile
+    // time and SUBSTITUTED into every dependent, so `const RETRIES: Int = 3;` becoming `= 30`
+    // changes what a caller's compiled code does with no signature anywhere altered — the exact
+    // shape of change this tool exists to make visible. So the value goes in `shape` and a change
+    // to it is reported as CHANGED, alongside a change of type.
+    //
+    // The initialiser is rendered as WRITTEN rather than folded, because `burxt review` reads
+    // declarations only: no typechecker, so no folding. `LIMIT * 2 -> LIMIT * 3` is reported and
+    // a reformat of the same expression would be too, which is the one place this is noisier than
+    // the rest of the file. Named rather than hidden; the fix is a folder in the parser, and that
+    // was refused for a better reason — see `Parser::parse_const`.
+    for c in &prog.consts {
+        out.insert(
+            c.name.clone(),
+            Promise {
+                kind: "const",
+                // No parameters, so `render`'s position-substitution does nothing here and every
+                // name renders as itself — which is what a const initialiser wants: a reference
+                // to another const should read as that const's name.
+                shape: format!("{} = {}", c.declared, render(&c.value, &[])),
                 requires: Vec::new(),
                 ensures: Vec::new(),
                 is_pure: false,

@@ -1,0 +1,5 @@
+// A `const` says its type. `let` may leave the annotation off — `let count = 0;` is legal,
+// because the initialiser is one line above the use. A const used 900 lines away has no such
+// consolation: this line is the only place a reader will look to find out what the name IS.
+const LIMIT = 100000;
+print(LIMIT);

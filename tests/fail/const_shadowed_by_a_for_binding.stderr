@@ -1,0 +1,1 @@
+`TOTAL` is already declared as a `const TOTAL: Int` — Burxt does not shadow, and a const is in scope in every function. Use a different name here.

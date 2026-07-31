@@ -1,0 +1,9 @@
+// A const's type is Int, Decimal, String or Bool, and that shortlist is not arbitrary: a const
+// IS a literal with a name, so a type with no literal form has nothing a const could hold.
+//
+// One rule covers CInt, CDouble, CPointer, arrays, classes and enums at once, which is better
+// for a reader than meeting six separate refusals and having to work out what they share. A
+// CInt in particular arrives from a marshaller at an `external function` boundary — there is
+// no way to write one down.
+const WIDTH: CInt = 1;
+print(1);

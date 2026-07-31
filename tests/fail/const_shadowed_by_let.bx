@@ -1,0 +1,4 @@
+// The same no-shadowing rule from the other direction: a `let` may not take a const's name.
+const LIMIT: Int = 100000;
+let LIMIT: Int = 5;
+print(LIMIT);

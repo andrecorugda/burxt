@@ -1,0 +1,11 @@
+// A `for` binding is a binding, so it may not take a const's name either.
+//
+// There are exactly four places a name enters scope in Burxt — a `let`, a parameter, a `for`
+// binding and a `match` arm's pattern — and all four ask this question. Three fixtures would
+// have looked like enough; the fourth was written because "we covered the obvious ones" is how
+// a rule ends up with a hole in it.
+const TOTAL: Int = 3;
+let xs: [Int; 2] = [1, 2];
+for TOTAL in xs {
+    print(TOTAL);
+}

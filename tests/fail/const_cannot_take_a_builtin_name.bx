@@ -1,0 +1,5 @@
+// The builtins are reserved against every declaration form, and `const` is a new one — so it
+// needs saying, or a program could declare `const len` and every `len(xs)` in the file would
+// become ambiguous to a reader who cannot see which one won.
+const len: Int = 1;
+print(len);

@@ -1,0 +1,1 @@
+arithmetic in a `const` is `+ - *` over Ints, and this is a String + a String. A Decimal `*` narrows and so would need a rounding contract, and `+` on Strings means allocate — neither belongs in a value folded at compile time. Write the literal, or compute it in a function.

@@ -1,0 +1,9 @@
+// A const is a name for a literal, not a place to store one. There is nothing to assign TO:
+// by the time the program runs, every use of `LIMIT` IS the number.
+//
+// Worth a fixture rather than an obvious case, because a const is not a binding — so the
+// existing "declared immutable" check does not see it, and in the self-hosted checker this
+// program was ACCEPTED until the const table was consulted here too.
+const LIMIT: Int = 100000;
+LIMIT = 5;
+print(LIMIT);

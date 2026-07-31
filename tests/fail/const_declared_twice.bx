@@ -1,0 +1,5 @@
+// Burxt does not shadow, and a const is in scope in every function — so a second `const
+// LIMIT` would silently change what every one of those functions reads.
+const LIMIT: Int = 100000;
+const LIMIT: Int = 5;
+print(LIMIT);

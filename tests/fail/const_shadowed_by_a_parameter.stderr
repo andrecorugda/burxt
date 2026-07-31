@@ -1,0 +1,1 @@
+`LIMIT` is already declared as a `const LIMIT: Int` — Burxt does not shadow, and a const is in scope in every function. Use a different name here.

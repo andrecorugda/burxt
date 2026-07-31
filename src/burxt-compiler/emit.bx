@@ -535,6 +535,25 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
         let t: Token = self.tokens[n.token];
         let slot: Int = self.find_slot(src, t.start, t.length);
         if slot < 0 {
+            // A const has no slot because it has no storage: it IS a literal, and this is the
+            // whole of the backend's part in the feature. No global, no initialisation order,
+            // and nothing to load — which is also why a const is legal inside a `pure`
+            // function and costs nothing at run time.
+            let named: Int = self.find_const(src, t.start, t.length);
+            if named >= 0 {
+                let held: ConstDecl = self.consts[named];
+                if held.bound_type.kind == 40 {
+                    // An Int is the only kind whose initialiser may be ARITHMETIC, so it is the
+                    // only kind whose value does not survive as a node: `LIMIT * 2` has no
+                    // literal node anywhere to point at. The checker computed it and stored it.
+                    return to_string(held.value);
+                }
+                // Decimal, String and Bool consts are a single literal or a copy of another
+                // const, so the initialiser's own node is still exactly the value — and the
+                // checker already typed that node at the declared scale, which is what the
+                // Decimal path below reads. Re-emitting it needs no new code at all.
+                return self.emit_expr(src, held.value_node);
+            }
             return "0";
         }
         let reg: String = self.fresh();

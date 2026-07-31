@@ -1420,6 +1420,287 @@ function (mutable self: Unit) collect_method(src: String, index: Int) -> Int {
     return 1;
 }
 
+// ---- const: a name for a compile-time value ---------------------------------
+//
+// The largest and smallest an Int can be, which is the pair this whole feature was filed to
+// make nameable — and the pair that proves the folding was not decoration. `INT_MIN` CANNOT
+// be written as a literal: `-9223372036854775808` lexes as a negation of
+// 9223372036854775808, which is `integer literal too large`, so the only spelling is a
+// subtraction the compiler folds. A literal-only `const` would have shipped without it.
+//
+// These two are also the dogfood: they are the compiler's own use of its own new feature, so
+// `burxt_compiles_burxt_and_reaches_the_fixpoint` exercises stage-1's const path — parse,
+// fold and EMIT — on every run. Nothing else could: the backend's fixture programs live
+// inside tests/runner.rs, which this work was not allowed to touch.
+const INT_MAX: Int = 9223372036854775807;
+const INT_MIN: Int = -9223372036854775807 - 1;
+
+// A const by name, or -1. Linear over a handful of entries, like every other table here.
+function (self: Unit) find_const(src: String, start: Int, length: Int) -> Int {
+    let mutable i: Int = 0;
+    while i < len(self.consts) {
+        if spans_equal(src, self.consts[i].start, self.consts[i].length, start, length) {
+            return i;
+        }
+        i += 1;
+    }
+    return -1;
+}
+
+// Fold every `const` down to a value, in the order they are written — which is the order in
+// which one may refer to another, and the only order a reader can see.
+//
+// Runs before any body is read, because a function 200 lines below may use a const and the
+// answer has to exist by then. The same argument `infer_allocates` makes for `allocates`.
+function (mutable self: Unit) fold_consts(src: String) -> Int {
+    let mutable i: Int = 0;
+    while i < len(self.items) {
+        let item: Node = self.nodes[self.items[i]];
+        if item.kind == 73 {
+            let folded: Int = self.fold_const(src, self.items[i]);
+        }
+        i += 1;
+    }
+    return len(self.consts);
+}
+
+// One `const`: its name checked, its type checked, its value folded.
+//
+// A refusal registers the const ANYWAY, at its declared type with a zero value. Without that
+// one bad `const` becomes an `unknown name` at every use site and the real error is the
+// smallest thing on screen — the same reason stage-0's `recover_from` binds an annotated
+// `let` whose initialiser failed.
+function (mutable self: Unit) fold_const(src: String, index: Int) -> Int {
+    let item: Node = self.nodes[index];
+    let name: Token = self.tokens[item.token];
+    let declared: Type = self.declared_type(src, item.a);
+    if is_reserved_name(src, name.start, name.length) {
+        let complained: Int = self.complain_at(src, item.token,
+            "this is a built-in name and cannot be declared as a `const`");
+    }
+    if self.find_const(src, name.start, name.length) >= 0 {
+        let complained: Int = self.complain_at(src, item.token,
+            "this name is already declared as a `const` — Burxt does not shadow");
+    }
+    // A const's type is one of the four that HAVE a literal, and that is not an arbitrary
+    // shortlist: a const IS a literal with a name, so a type with no literal form has
+    // nothing a const could hold. One rule covers CInt, CDouble, CPointer, arrays, classes
+    // and enums, which is better for a reader than six separate refusals.
+    let holdable: Bool = declared.kind == 40 || declared.kind == 41
+                      || declared.kind == 42 || declared.kind == 45;
+    if !holdable {
+        let complained: Int = self.complain_at(src, item.token,
+            "a `const` may be an Int, a Decimal, a String or a Bool: it is a literal with a "
+            + "name, and " + self.show_type(src, declared) + " has no literal to name");
+        push(self.consts, ConstDecl { start: name.start, length: name.length,
+                              bound_type: declared, value: 0, value_node: item.b });
+        return 1;
+    }
+    // SHAPE first, TYPE second. The order is not tidiness: `type_of` on a name that is not a
+    // const says "unknown name", and on a call to a function that does not exist says "unknown
+    // function" — both true, both about the wrong thing, and both reported IN ADDITION to the
+    // sentence the author needs. Gating on the shape means one mistake gets one message, which
+    // is what stage-0 does by returning early.
+    let shaped: Bool = self.const_shape_ok(src, item.b, declared);
+    if !shaped {
+        push(self.consts, ConstDecl { start: name.start, length: name.length,
+                              bound_type: declared, value: 0, value_node: item.b });
+        return 1;
+    }
+    // The value against the annotation, by the same rule `let` uses — and this call is also
+    // what settles a Decimal literal's scale and caches it, which is how the emitter later
+    // writes the const out with no scale question left to ask. It is also what refuses `/` on
+    // two Ints, which is why `/` needs no case of its own below.
+    let actual: Type = self.type_of(src, item.b, declared);
+    let mutable value: Int = 0;
+    if is_unknown(actual) {
+        // Already complained about, by `type_of`.
+        value = 0;
+    } else {
+        if !self.fits(src, actual, declared) {
+            let complained: Int = self.complain_at(src, item.token,
+                "declared " + self.show_type(src, declared) + ", but the value is "
+                + self.show_type(src, actual));
+        } else {
+            if declared.kind == 40 {
+                value = self.fold_const_int(src, item.b);
+            }
+        }
+    }
+    push(self.consts, ConstDecl { start: name.start, length: name.length,
+                          bound_type: declared, value: value, value_node: item.b });
+    return 1;
+}
+
+// Is this expression something a `const` may hold at all? One walk, before any typing.
+//
+// Arithmetic is Int-only, and the reasons differ per type. A Decimal `*` narrows and so would
+// need a rounding contract, which would put a rounding mode somewhere other than a signature
+// for the first time; `+` would then be the only Decimal operator allowed, and "one of them
+// works" is a worse rule to remember than "none do". A String `+` folds perfectly well, but
+// `+` on Strings MEANS allocate, and a reader meeting `const G: String = A + B;` would rightly
+// ask where it lives. Every item this feature was filed to unblock is an Int.
+function (mutable self: Unit) const_shape_ok(src: String, node: Int, declared: Type) -> Bool {
+    let n: Node = self.nodes[node];
+    if n.kind >= 1 && n.kind <= 4 {
+        return true;
+    }
+    if n.kind == 5 {
+        let t: Token = self.tokens[n.token];
+        if self.find_const(src, t.start, t.length) >= 0 {
+            return true;
+        }
+        let complained: Int = self.complain_at(src, n.token,
+            "this cannot be used in a `const`: an initialiser holds literals and consts "
+            + "declared ABOVE it, and nothing else");
+        return false;
+    }
+    if n.kind == 6 {                                 // -x
+        if declared.kind != 40 && declared.kind != 45 {
+            let complained: Int = self.complain_at(src, n.token, const_int_only());
+            return false;
+        }
+        return self.const_shape_ok(src, n.a, declared);
+    }
+    if n.kind == 8 {                                 // a + b, a - b, a * b, a / b
+        if declared.kind != 40 {
+            let complained: Int = self.complain_at(src, n.token, const_int_only());
+            return false;
+        }
+        if !self.const_shape_ok(src, n.a, declared) {
+            return false;
+        }
+        return self.const_shape_ok(src, n.b, declared);
+    }
+    let complained: Int = self.complain_at(src, n.token,
+        "a `const` is folded at compile time, so its value may only hold literals, consts "
+        + "declared above it, and `+ - *` over Ints");
+    return false;
+}
+
+function const_int_only() -> String {
+    return "arithmetic in a `const` is `+ - *` over Ints: a Decimal `*` would need a rounding "
+        + "contract, and `+` on Strings means allocate";
+}
+
+// Evaluate an Int const expression. CHECKED at every step: an overflow is a compile error.
+//
+// Only reached after `const_shape_ok` said yes and the type matched, so every node here is one
+// of the four it admits and nothing needs a fallback message.
+//
+// The overflow check has to happen HERE and nowhere else. By the time the program runs a folded
+// constant is a literal, so there is no `add` instruction left for the runtime's overflow trap
+// to fire on — a fold that wrapped would put a wrong number in the binary with nothing
+// downstream able to notice. And the check cannot be "compute it and look at the sign", because
+// Burxt's own `+` PANICS on overflow: this compiler would exit 70 instead of reporting the
+// mistake it was asked to report.
+function (mutable self: Unit) fold_const_int(src: String, node: Int) -> Int {
+    let n: Node = self.nodes[node];
+    if n.kind == 1 {
+        return n.value;
+    }
+    if n.kind == 5 {
+        let t: Token = self.tokens[n.token];
+        let found: Int = self.find_const(src, t.start, t.length);
+        if found < 0 {
+            return 0;
+        }
+        return self.consts[found].value;
+    }
+    if n.kind == 6 {                                 // -x
+        let inner: Int = self.fold_const_int(src, n.a);
+        if inner == INT_MIN {
+            let complained: Int = self.complain_at(src, n.token, const_overflow("negating"));
+            return 0;
+        }
+        return 0 - inner;
+    }
+    if n.kind == 8 {                                 // a + b, a - b, a * b
+        let left: Int = self.fold_const_int(src, n.a);
+        let right: Int = self.fold_const_int(src, n.b);
+        if n.value == 25 {
+            if !add_is_safe(left, right) {
+                let complained: Int = self.complain_at(src, n.token, const_overflow("adding"));
+                return 0;
+            }
+            return left + right;
+        }
+        if n.value == 26 {
+            if !sub_is_safe(left, right) {
+                let complained: Int = self.complain_at(src, n.token,
+                    const_overflow("subtracting"));
+                return 0;
+            }
+            return left - right;
+        }
+        if n.value == 27 {
+            if !mul_is_safe(left, right) {
+                let complained: Int = self.complain_at(src, n.token,
+                    const_overflow("multiplying"));
+                return 0;
+            }
+            return left * right;
+        }
+        // `/` reaches here only if Int division stops being refused. Silent rather than a
+        // wrong number: `type_of` already produced the "which rounding did you mean" message,
+        // and this file must not invent a second answer to a question the language refuses.
+        return 0;
+    }
+    return 0;
+}
+
+// Written once, and worded so a reader knows WHICH operation blew up: "arithmetic overflow"
+// in a folded constant is otherwise a hunt through the expression.
+function const_overflow(doing: String) -> String {
+    return "this `const` overflows an Int while " + doing
+        + " — a constant is folded at compile time, and folding cannot wrap: by the time the "
+        + "program runs there is no arithmetic left to trap on";
+}
+
+// The three overflow predicates, asked BEFORE the operation rather than after.
+//
+// `a + b` in Burxt panics on overflow, so "compute it and check the sign" — the trick C
+// programmers reach for — would take the compiler down instead of reporting the mistake. Each
+// of these divides or subtracts in the direction that cannot itself overflow, which is the
+// whole of the technique.
+function add_is_safe(a: Int, b: Int) -> Bool {
+    if b > 0 {
+        return a <= INT_MAX - b;
+    }
+    if b < 0 {
+        return a >= INT_MIN - b;
+    }
+    return true;
+}
+
+function sub_is_safe(a: Int, b: Int) -> Bool {
+    if b < 0 {
+        return a <= INT_MAX + b;
+    }
+    if b > 0 {
+        return a >= INT_MIN + b;
+    }
+    return true;
+}
+
+// Four quadrants, because the bound a product may not cross depends on both signs. Each
+// division is by the operand that cannot make it trap: never INT_MIN / -1.
+function mul_is_safe(a: Int, b: Int) -> Bool {
+    if a == 0 || b == 0 {
+        return true;
+    }
+    if a > 0 && b > 0 {
+        return a <= divide_toward_zero(INT_MAX, b);
+    }
+    if a < 0 && b < 0 {
+        return a >= divide_toward_zero(INT_MAX, b);
+    }
+    if a < 0 {
+        return a >= divide_toward_zero(INT_MIN, b);
+    }
+    return b >= divide_toward_zero(INT_MIN, a);
+}
+
 function (mutable self: Unit) collect_declarations(src: String) -> Int {
     let mutable i: Int = 0;
     while i < len(self.items) {
@@ -1725,6 +2006,14 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
         let t: Token = self.tokens[n.token];
         let found: Int = self.find_binding(src, t.start, t.length);
         if found < 0 {
+            // A const is looked for only after the bindings, so the common path pays one
+            // extra scan of an almost-always-empty array and no more. There is nothing to
+            // disambiguate: a `let`, a `for` binding, a parameter and a pattern binding are
+            // all refused if they reuse a const's name, so at most one table can hold it.
+            let named: Int = self.find_const(src, t.start, t.length);
+            if named >= 0 {
+                return self.consts[named].bound_type;
+            }
             let complained: Int = self.complain_at(src, n.token, "unknown name");
             return unknown_type();
         }
@@ -2782,6 +3071,11 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
             let complained: Int = self.complain_at(src, n.token,
                 "this name is already declared — Burxt does not shadow");
         }
+        if self.find_const(src, name.start, name.length) >= 0 {
+            let complained: Int = self.complain_at(src, n.token,
+                "this name is already declared as a `const`, which is in scope in every "
+                + "function — Burxt does not shadow");
+        }
         // `in_region`: declared while a `region` was open, so region storage may be assigned to it
         // — it dies with the region, which is correct. This is the ONLY site that marks, mirroring
         // stage-0, where `region_scope.insert` happens on `Let` and nowhere else. The other five
@@ -2829,6 +3123,11 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
                 "this name is already declared — Burxt does not shadow, and a `for` "
                 + "binding is a binding");
         }
+        if self.find_const(src, name.start, name.length) >= 0 {
+            let complained: Int = self.complain_at(src, n.token,
+                "this name is already declared as a `const`, which is in scope in every "
+                + "function — Burxt does not shadow");
+        }
         // The element is a COPY, and immutable: nothing may be written back through it.
         let element: Type = self.declared_type(src, holder.scale);
         let base: Int = len(self.bindings);
@@ -2864,6 +3163,15 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
             if found >= 0 && self.bindings[found].writable == 0 {
                 let complained: Int = self.complain_at(src, target.token,
                     "this was declared immutable — declare it `let mutable` to allow it");
+            }
+            // A const is not a binding, so without this the immutability check above simply
+            // did not fire and `LIMIT = 5;` was ACCEPTED. Exactly the shape the note on the
+            // rejection equality warns about: a rule that never runs looks like one that passes.
+            if found < 0 && self.find_const(src, name.start, name.length) >= 0 {
+                let complained: Int = self.complain_at(src, target.token,
+                    "this is a `const`: a name for a literal, not a place to store one. There "
+                    + "is nothing to assign to — by the time the program runs, every use of it "
+                    + "IS the literal");
             }
             // ---- M1: region storage cannot be assigned OUTWARD -----------------------------
             //
@@ -3369,6 +3677,15 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int {
                 + self.show_type(src, declared) + " is copied when it crosses — so there would be "
                 + "nothing for the caller to see. Take a copy where the copy is: `let mutable own: "
                 + self.show_type(src, declared) + " = ...;`");
+        }
+        // A parameter may not take a const's name. Without this the parameter would win the
+        // name inside one body and the const would be invisible there — a reader's eye goes to
+        // the declaration at the top of the file and reads the wrong value, which is the
+        // silent-wrongness this language exists to refuse.
+        if self.find_const(src, name.start, name.length) >= 0 {
+            let complained: Int = self.complain_at(src, param.token,
+                "this name is already declared as a `const`, which is in scope in every "
+                + "function — Burxt does not shadow");
         }
         push(self.bindings, Binding { start: name.start, length: name.length,
                               bound_type: declared, writable: param.b,
@@ -4101,6 +4418,9 @@ function (mutable self: Unit) infer_allocates(src: String) -> Int {
 }
 
 function (mutable self: Unit) check(src: String) -> Int {
+    // The consts first: a body anywhere may read one, so the value has to exist before the
+    // first name is resolved.
+    let folded: Int = self.fold_consts(src);
     let collected: Int = self.collect_declarations(src);
     let applications: Int = self.check_applications(src);
     // Before anything is refused: a body may call a function declared 200 lines below it, so

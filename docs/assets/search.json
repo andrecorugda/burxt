@@ -883,6 +883,13 @@
  },
  {
   "kind": "keyword",
+  "name": "const",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
   "name": "print",
   "text": "",
   "url": "/reference/#keywords",

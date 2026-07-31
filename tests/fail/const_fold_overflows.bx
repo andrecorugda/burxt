@@ -1,0 +1,13 @@
+// The refusal this feature could most easily have got wrong.
+//
+// A folded constant reaches the backend as a literal, so there is no `mul` instruction left
+// for the run-time overflow trap to fire on. If the fold wrapped, this program would compile
+// and put -2 in the binary, and nothing downstream could notice — the exact silent wrong
+// answer the language exists to refuse, produced BY the compiler rather than caught by it.
+//
+// So both compilers ask whether the multiply is safe BEFORE doing it. They have to: Burxt's
+// own `*` panics on overflow, so "compute it and look at the sign" would take the compiler
+// down instead of reporting the mistake.
+const MAX: Int = 9223372036854775807;
+const TWICE: Int = MAX * 2;
+print(TWICE);

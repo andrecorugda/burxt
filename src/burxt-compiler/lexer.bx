@@ -26,6 +26,16 @@ function (mutable self: Unit) install_keywords() -> Int {
     let mutable n: Int = 0;
     n = self.add_word("let", 100);
     n = self.add_word("mutable", 101);
+    // `const NAME: Type = <literal>;` — a name for a compile-time value. A keyword rather
+    // than a contextual word, because it opens an ITEM where a statement may also start and
+    // telling `const A: Int = 1;` from `const_of(x);` would take three tokens of lookahead.
+    // Code 134: 125..129 are taken by contract-clause markers in the parser and 130..133 by
+    // `is`, `in`, `private` and the pair below, so this is the next free number.
+    //
+    // Worth knowing while reading this table: 133 is used TWICE, by `implements` and
+    // `print_error`. They are told apart by position and nothing has broken, but it is a
+    // collision waiting for a third use — reported rather than silently worked around.
+    n = self.add_word("const", 134);
     n = self.add_word("function", 102);
     n = self.add_word("return", 103);
     n = self.add_word("if", 104);

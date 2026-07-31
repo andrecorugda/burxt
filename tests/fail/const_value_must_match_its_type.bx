@@ -1,0 +1,5 @@
+// The annotation is checked against the folded value by the same rule a `let` uses. A const
+// that quietly took its type from the initialiser would make the annotation decoration, and
+// the annotation is the only thing a reader 900 lines away has to go on.
+const LIMIT: Int = "100000";
+print(LIMIT);

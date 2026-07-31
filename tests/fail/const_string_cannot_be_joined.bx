@@ -1,0 +1,10 @@
+// A String const is exactly as expressive as a String literal, and no more.
+//
+// Joining two of them at compile time would work perfectly well — the answer is just a longer
+// literal. It is refused anyway, because `+` on Strings MEANS allocate everywhere else in
+// Burxt: it needs a region, and `region` is the word that tells a reader where memory lives.
+// A `const` that allocated nothing while spelled the same way as the operator that does would
+// teach the reader that `+` on Strings sometimes means nothing at all.
+const NAME: String = "burxt";
+const GREETING: String = "hello, " + NAME;
+print(GREETING);

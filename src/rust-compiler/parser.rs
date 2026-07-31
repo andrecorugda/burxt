@@ -147,9 +147,12 @@ impl Parser {
         let mut externs = Vec::new();
         let mut fns = Vec::new();
         let mut methods = Vec::new();
+        let mut consts = Vec::new();
         let mut stmts = Vec::new();
         while !self.at(&Token::Eof) {
-            if self.at(&Token::Class) {
+            if self.at(&Token::Const) {
+                consts.push(self.parse_const()?);
+            } else if self.at(&Token::Class) {
                 let (declared, its_methods, its_associated, its_impls) = self.parse_struct()?;
                 structs.push(declared);
                 fns.extend(its_associated);
@@ -196,7 +199,7 @@ impl Parser {
                 stmts.push(self.parse_stmt()?);
             }
         }
-        Ok(Program { structs, enums, interfaces, impls, externs, fns, methods, stmts })
+        Ok(Program { structs, enums, interfaces, impls, externs, fns, methods, consts, stmts })
     }
 
     // ---- helpers ----
@@ -1180,6 +1183,26 @@ impl Parser {
             Token::Match => self.parse_match(),
             Token::Region => self.parse_region(),
             Token::Ident(_) | Token::SelfKw => self.parse_assign(),
+            // A `const` inside a block, answered by name rather than by "expected statement".
+            //
+            // Top-level only, and the reason is that a function-local `const` would be a
+            // second spelling for something the language already has. `let` without
+            // `mutable` is immutable, it is folded nowhere and needs to be folded nowhere
+            // — the value is one line above the use — and its scope is exactly the block
+            // it is written in, which is what a local wants. The whole delta of `const`
+            // over `let` is program-wide scope plus literal substitution, and neither
+            // means anything inside one body.
+            //
+            // Cost, stated rather than hidden: a helper that wants a private magic number
+            // has to put it at the top of the file, where every other function can see it
+            // too. That is a real loss of locality, and the alternative — two constructs
+            // with the same semantics and different spellings — is worse for the reviewer
+            // this language is for.
+            Token::Const => Err("a `const` goes at the top level, not inside a block: it is \
+                                 a name for the whole program, and it is in scope inside \
+                                 every function. Move it above, or use `let` — which is \
+                                 already immutable without `mutable`."
+                .to_string()),
             other => Err(format!("expected statement, found {}", other.describe())),
         }
     }
@@ -1531,6 +1554,60 @@ impl Parser {
             None
         };
         Ok(StmtKind::If { cond, then_block, else_block })
+    }
+
+    /// `const NAME: Type = value;` — an ITEM, so it is parsed here beside the other
+    /// items rather than in `parse_stmt_kind`.
+    ///
+    /// The grammar is a `let` minus `mutable`, with the annotation REQUIRED rather than
+    /// optional: neither of those choices would mean anything on a name the whole program
+    /// shares. Nothing is evaluated here — the initializer is kept as an ordinary `Expr`
+    /// and folded by the typechecker, which is where a fold that OVERFLOWS has to be
+    /// reported.
+    ///
+    /// It could have been folded here instead, and that was the first design: the
+    /// parser knows the consts declared above and could substitute a literal on the
+    /// spot, leaving the typechecker and codegen untouched in BOTH compilers. It was
+    /// dropped for one reason, and it is a testing reason rather than a taste one. A
+    /// refusal reported by the parser is a parse error, and stage-1's agreement with
+    /// stage-0 is measured by counting `type errors:` — so every `const` refusal would
+    /// have been invisible to the ratchet, exactly as the five `bracket_*` fixtures were
+    /// for two versions when stage-1 could not parse a bracket at all. Folding in the
+    /// checker costs a name-resolution fallback in each compiler and buys a refusal both
+    /// of them are measured on.
+    fn parse_const(&mut self) -> Result<ConstDef, String> {
+        let start = self.span().start;
+        self.expect(&Token::Const)?;
+        let name = match self.bump() {
+            Token::Ident(s) => s,
+            other => {
+                return Err(format!(
+                    "expected a name after `const`, found {}",
+                    other.describe()
+                ))
+            }
+        };
+        // Required, unlike `let`. See `ast::ConstDef::declared` for why.
+        if !self.at(&Token::Colon) {
+            return Err(format!(
+                "`const {}` needs its type written out, as in `const {}: Int = 1;`. \
+                 A `const` is a name every function in the program can read, and this \
+                 line is the only place a reader will look to find out what it is — so \
+                 unlike `let`, the annotation is not optional.",
+                name, name
+            ));
+        }
+        self.bump();
+        let declared = self.parse_type()?;
+        self.expect(&Token::Equals)?;
+        let value = self.parse_expr()?;
+        self.expect(&Token::Semicolon)?;
+        Ok(ConstDef {
+            name,
+            declared,
+            value,
+            span: Span { start, end: self.prev_end().max(start + 1) },
+        })
     }
 
     fn parse_let(&mut self) -> Result<StmtKind, String> {

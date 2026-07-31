@@ -75,6 +75,10 @@ class Keyword { word: String, code: Int }
 //  65 if                66 while               67 break             68 continue
 //  69 region            70 expression statement
 //  71 match             72 for (name token in `token`, iterable in `a`, body in `b`)
+//  73 const — an ITEM, not a statement, so it sits outside the 60..72 run that
+//     `check_bodies` and `emit_module` walk as top-level code. Nothing to check twice and
+//     nothing to emit: by the time either of them runs the value is in `consts`, and every
+//     use of the name emits the literal. Name token in `token`, type in `a`, value in `b`.
 class Node {
     kind: Int,
     // Child indices, or payload. Meaning depends on `kind`, documented above.
@@ -152,6 +156,31 @@ class Type {
 // region is untouched and the allocation inference does not move.
 class Binding { start: Int, length: Int, bound_type: Type, writable: Int, depth: Int,
                 in_region: Int, holds_region: Int }
+
+// A folded `const`: a name for a literal, in scope everywhere in the program.
+//
+// Separate from `Binding` and not a Binding with `depth: 0`, which was the first attempt
+// and is wrong on two counts. `bindings` is TRUNCATED at every closing brace and replaced
+// per function body, because that is what a scope is — a const would have to be re-pushed
+// at the top of every body, and a `const` is not in scope "at depth 0", it is in scope with
+// no depth at all. And a Binding has no room for a VALUE, which is the only thing a const
+// has that a binding does not.
+class ConstDecl {
+    // The name, as a span into the source, like every other name in this compiler.
+    start: Int,
+    length: Int,
+    bound_type: Type,
+    // The folded integer — meaningful for an `Int` const and nothing else, because Int is the
+    // only kind whose initialiser may be ARITHMETIC. `LIMIT * 2` has no literal node anywhere
+    // in the arena to point at, so the value has to be carried; the other three kinds must be
+    // a single literal, which is a node that already exists.
+    value: Int,
+    // The initialiser's own node, which is how the emitter writes out a Decimal, String or
+    // Bool const: re-emitting that node produces exactly the literal, and the checker already
+    // typed it at the declared scale, so the Decimal path reads the right scale from
+    // `type_at`. Zero new emitter code for three of the four types.
+    value_node: Int,
+}
 // What a type parameter stands for, while a generic's call is being checked. Its name is a
 // SPAN, like every other name here, so a binding needs no synthesized identifier.
 //
@@ -223,6 +252,9 @@ class Unit {
     // Top-level items, in source order, for the checker to walk.
     items: [Int],
     bindings: [Binding],
+    // Every `const`, folded, in the order they were written — which is the order they may
+    // refer to each other in, and the only order a reader can see.
+    consts: [ConstDecl],
     functions: [DeclaredFunction],
     stack: [Int],
     methods: [Method],

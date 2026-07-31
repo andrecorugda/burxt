@@ -1,0 +1,1 @@
+`const LIMIT` needs its type written out, as in `const LIMIT: Int = 1;`. A `const` is a name every function in the program can read, and this line is the only place a reader will look to find out what it is — so unlike `let`, the annotation is not optional.

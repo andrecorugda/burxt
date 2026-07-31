@@ -321,6 +321,17 @@ pub struct TypedProgram {
 pub struct TypeChecker {
     /// variable name -> (type, is mutable)
     env: HashMap<String, (Type, bool)>,
+    /// `const` name -> the literal it folded to, with its declared type.
+    ///
+    /// Separate from `env` and NEVER cleared, which is the whole point: `env` is saved and
+    /// restored around every block and replaced outright for every function body, because a
+    /// binding's scope is its block. A const has no block — it is in scope in every body in
+    /// the program, including a `pure` one, because what it resolves to is a literal.
+    ///
+    /// The value is a `TypedExprKind` rather than an `i64` so that all four literal types
+    /// share one path, and so a use site can hand the already-lowered literal straight to
+    /// codegen. That is why `codegen.rs` has no idea `const` exists.
+    consts: HashMap<String, (Type, TypedExprKind)>,
     /// function name -> (parameter types, return type); collected up front so
     /// functions may be defined in any order and call each other.
     fns: HashMap<String, (Vec<Type>, Type)>,
@@ -587,6 +598,7 @@ impl TypeChecker {
     pub fn new() -> Self {
         TypeChecker {
             env: HashMap::new(),
+            consts: HashMap::new(),
             fns: HashMap::new(),
             generics: HashMap::new(),
             generic_enums: HashMap::new(),
@@ -1715,7 +1727,265 @@ impl TypeChecker {
         Ok(())
     }
 
+    /// Fold every `const` initializer down to one literal, in the order they are written.
+    ///
+    /// This runs before anything else is checked, because a body 200 lines below may read a
+    /// const and the answer has to exist by then — the same argument `infer_allocates` makes
+    /// for `allocates`.
+    ///
+    /// A failure here is RECORDED and the const is registered anyway, at its declared type
+    /// with a zero value. Without that, one bad `const` becomes an `unknown variable` at
+    /// every one of its use sites and the real error is the smallest thing on screen. The
+    /// same reason `recover_from` binds an annotated `let` whose initializer failed.
+    fn fold_consts(&mut self, prog: &Program) {
+        for c in &prog.consts {
+            self.current_span.set(c.span);
+            self.error_located.set(false);
+            let folded = self.fold_one_const(c);
+            let value = match folded {
+                Ok(value) => value,
+                Err(message) => {
+                    self.record(message);
+                    // Zero in the declared type's shape, so the use sites still type.
+                    match &c.declared {
+                        Type::Decimal { .. } => TypedExprKind::DecimalLit { unscaled: 0 },
+                        Type::Bool => TypedExprKind::BoolLit(false),
+                        Type::String => TypedExprKind::StrLit(String::new()),
+                        _ => TypedExprKind::IntLit(0),
+                    }
+                }
+            };
+            self.consts.insert(c.name.clone(), (c.declared.clone(), value));
+        }
+    }
+
+    /// One `const`: its name checked, its type checked, its initializer folded.
+    fn fold_one_const(&mut self, c: &ConstDef) -> Result<TypedExprKind, String> {
+        if is_reserved_name(&c.name) {
+            return Err(format!(
+                "`{}` is a built-in name and cannot be declared as a `const`",
+                c.name
+            ));
+        }
+        if self.consts.contains_key(&c.name) {
+            return Err(format!(
+                "`{}` is already declared as a `const` — Burxt does not shadow, and a second \
+                 `const {}` would silently hide the first",
+                c.name, c.name
+            ));
+        }
+        // A const's type is one of the four types that HAVE a literal, and that is not an
+        // arbitrary shortlist: a const IS a literal with a name, so a type with no literal
+        // form has nothing a const could hold. That single rule covers `CInt`, `CDouble`,
+        // `CPointer`, arrays, classes and enums at once, and says the same thing about all
+        // of them instead of six separate refusals a reader has to collect.
+        match &c.declared {
+            Type::Int | Type::Bool | Type::String | Type::Decimal { .. } => {}
+            other => {
+                return Err(format!(
+                    "a `const` may be an Int, a Decimal, a String or a Bool, not {} {} — a \
+                     `const` is a literal with a name, and {} has no literal to name. Use a \
+                     `let`, or a function that builds one.",
+                    other.article(),
+                    other,
+                    other
+                ))
+            }
+        }
+        let value = self.fold_const_expr(&c.value, &c.declared)?;
+        // The literal against the annotation, by the same rule `let` uses.
+        let ty = self.type_of_const_value(&value, &c.declared);
+        if !self.storable(&ty, &c.declared) {
+            self.blame(c.value.span);
+            return Err(format!(
+                "type mismatch in `const {}`: declared {}, but the value is {}",
+                c.name, c.declared, ty
+            ));
+        }
+        Ok(value)
+    }
+
+    /// The type a folded const value has. Only the four literal kinds reach here, and a
+    /// Decimal's scale is the DECLARED one because `fold_const_expr` normalized it there.
+    fn type_of_const_value(&self, value: &TypedExprKind, declared: &Type) -> Type {
+        match value {
+            TypedExprKind::IntLit(_) => Type::Int,
+            TypedExprKind::BoolLit(_) => Type::Bool,
+            TypedExprKind::StrLit(_) => Type::String,
+            TypedExprKind::DecimalLit { .. } => declared.clone(),
+            // Unreachable: `fold_const_expr` returns nothing else. Answering with the
+            // declaration rather than panicking, because a checker that aborts on its own
+            // invariant is worse than one that accepts a program it already validated.
+            _ => declared.clone(),
+        }
+    }
+
+    /// Evaluate a constant expression, or say why it is not one.
+    ///
+    /// The grammar is deliberately small — literals, consts declared above, and `+ - *`
+    /// with unary `-` over Ints. See `ast::ConstDef` for what that costs and why the cost
+    /// was chosen. Every arithmetic step is CHECKED: an overflow is a compile error, which
+    /// is the one thing this evaluator must not get wrong. A folded constant that wrapped
+    /// would put a wrong number in the binary with no run-time check left to catch it,
+    /// because by codegen it is a literal — so this is the only place the guarantee can be
+    /// made, and `checked_*` is how it is made.
+    fn fold_const_expr(&mut self, e: &Expr, declared: &Type) -> Result<TypedExprKind, String> {
+        match &e.kind {
+            // The four leaves go through `check_expr`, so a const literal is typed by
+            // exactly the code a `let` literal is typed by — including a Decimal taking
+            // its scale from the annotation and `8.25%` meaning what it means. Duplicating
+            // that here is how the two would drift.
+            ExprKind::IntLit(_)
+            | ExprKind::DecimalLit { .. }
+            | ExprKind::BoolLit(_)
+            | ExprKind::StrLit(_) => Ok(self.check_expr(e, Some(declared))?.kind),
+
+            ExprKind::Var(name) => match self.consts.get(name) {
+                Some((_, value)) => Ok(value.clone()),
+                None => {
+                    self.blame(e.span);
+                    Err(format!(
+                        "`{}` cannot be used in a `const`: an initializer may hold literals \
+                         and consts declared ABOVE it, and nothing else. A `const` is folded \
+                         at compile time, so there is no run-time value for it to read.",
+                        name
+                    ))
+                }
+            },
+
+            ExprKind::Neg(inner) => {
+                let folded = self.fold_const_expr(inner, declared)?;
+                match folded {
+                    TypedExprKind::IntLit(n) => Ok(TypedExprKind::IntLit(
+                        n.checked_neg().ok_or_else(|| self.const_overflow("negating"))?,
+                    )),
+                    // A negated Decimal literal, which stage-0 already folds for `let`.
+                    TypedExprKind::DecimalLit { unscaled } => Ok(TypedExprKind::DecimalLit {
+                        unscaled: unscaled
+                            .checked_neg()
+                            .ok_or_else(|| self.const_overflow("negating"))?,
+                    }),
+                    other => {
+                        self.blame(e.span);
+                        Err(format!(
+                            "`-` needs a number, and this is {}",
+                            self.const_kind_name(&other)
+                        ))
+                    }
+                }
+            }
+
+            ExprKind::Binary { op, lhs, rhs } => {
+                // `/` is not part of the const grammar, and NOT because folding it is hard —
+                // it is because `/` on two Ints is refused everywhere in Burxt: one operator
+                // cannot say whether it rounds toward zero or down. That rule does not stop
+                // applying because the operands are known at compile time, so the refusal is
+                // delegated to `check_expr` rather than reworded here. A const `/` gets the
+                // same sentence a `let` gets, which names `divide_floor` and
+                // `divide_toward_zero` — the two functions the author actually needs.
+                //
+                // This was found by MEASURING: the first version of this evaluator folded `/`
+                // with `checked_div` and even had its own division-by-zero refusal, which made
+                // `const HALF: Int = LIMIT / 2;` legal in a language where `let half: Int = n / 2;`
+                // is not. Two rules for one operator, decided by where it was written.
+                if matches!(op, BinOp::Div) {
+                    self.check_expr(e, Some(declared))?;
+                }
+                let left = self.fold_const_expr(lhs, declared)?;
+                let right = self.fold_const_expr(rhs, declared)?;
+                let (TypedExprKind::IntLit(a), TypedExprKind::IntLit(b)) = (&left, &right) else {
+                    self.blame(e.span);
+                    return Err(format!(
+                        "arithmetic in a `const` is `+ - *` over Ints, and this is {} {} {}. A \
+                         Decimal `*` narrows and so would need a rounding contract, and `+` on \
+                         Strings means allocate — neither belongs in a value folded at compile \
+                         time. Write the literal, or compute it in a function.",
+                        self.const_kind_name(&left),
+                        op,
+                        self.const_kind_name(&right)
+                    ));
+                };
+                let (a, b) = (*a, *b);
+                let answer = match op {
+                    BinOp::Add => a.checked_add(b),
+                    BinOp::Sub => a.checked_sub(b),
+                    BinOp::Mul => a.checked_mul(b),
+                    // Unreachable: `check_expr` above already returned the "which rounding did
+                    // you mean" refusal. Answering `None` rather than panicking, so a future
+                    // relaxation of Int `/` shows up as an overflow message rather than a crash.
+                    BinOp::Div => None,
+                };
+                match answer {
+                    Some(n) => Ok(TypedExprKind::IntLit(n)),
+                    None => {
+                        self.blame(e.span);
+                        Err(self.const_overflow(match op {
+                            BinOp::Add => "adding",
+                            BinOp::Sub => "subtracting",
+                            BinOp::Mul => "multiplying",
+                            BinOp::Div => "dividing",
+                        }))
+                    }
+                }
+            }
+
+            // Everything else: a call, a comparison, `&&`, an index, a class literal, an
+            // interpolated String. Refused by one message rather than a dozen, and the
+            // message names the rule instead of the shape — a reader who wrote
+            // `const N: Int = len(xs);` needs to know that consts are folded, not that
+            // `Call` is an unsupported node kind.
+            _ => {
+                self.blame(e.span);
+                Err("a `const` initializer is folded at compile time, so it may only hold \
+                     literals, consts declared above it, and `+ - *` over Ints. This is \
+                     none of those — compute it in a function, or bind it with `let`."
+                    .to_string())
+            }
+        }
+    }
+
+    /// The overflow message, written once. Named after the operation because "arithmetic
+    /// overflow" in a constant is otherwise a hunt through the expression.
+    fn const_overflow(&self, doing: &str) -> String {
+        format!(
+            "this `const` overflows an Int while {} — a constant is folded at compile time, \
+             and folding cannot wrap: by the time the program runs there is no arithmetic \
+             left to trap on. An Int holds -9223372036854775808 to 9223372036854775807.",
+            doing
+        )
+    }
+
+    /// What a folded value IS, for a message. Not `Type`, because the point of the sentence
+    /// is which literal the author wrote.
+    fn const_kind_name(&self, value: &TypedExprKind) -> &'static str {
+        match value {
+            TypedExprKind::IntLit(_) => "an Int",
+            TypedExprKind::DecimalLit { .. } => "a Decimal",
+            TypedExprKind::BoolLit(_) => "a Bool",
+            TypedExprKind::StrLit(_) => "a String",
+            _ => "not a literal",
+        }
+    }
+
+    /// The message for a name that a `const` already owns, or None when it is free.
+    ///
+    /// A parameter or a `let` may not reuse a const's name. Burxt refuses shadowing
+    /// everywhere else and this is the same rule: without it, a parameter would win the
+    /// name inside one body and the const would be invisible there — the reader's eye
+    /// would go to the declaration at the top of the file and read the wrong value.
+    fn shadows_a_const(&self, name: &str) -> Option<String> {
+        self.consts.get(name).map(|(ty, _)| {
+            format!(
+                "`{}` is already declared as a `const {}: {}` — Burxt does not shadow, and a \
+                 const is in scope in every function. Use a different name here.",
+                name, name, ty
+            )
+        })
+    }
+
     fn check_program_inner(&mut self, prog: &Program) -> Result<TypedProgram, String> {
+        // Pass -2: the consts, folded to literals before anything can read one.
+        self.fold_consts(prog);
         // Pass -1: collect the generic ENUM declarations, then rewrite every concrete
         // application of one — `Option<Int>` — into the nominal type of its instantiation.
         // After this pass no rule below has to know that generics exist.
@@ -3218,6 +3488,9 @@ impl TypeChecker {
                     p.name, p.ty, p.ty, p.name, p.ty
                 ));
             }
+            if let Some(message) = self.shadows_a_const(&p.name) {
+                return Err(message);
+            }
             self.current_params.insert(p.name.clone());
             if self.env.insert(p.name.clone(), (p.ty.clone(), p.writable)).is_some() {
                 return Err(format!(
@@ -3400,6 +3673,9 @@ impl TypeChecker {
                      cannot reuse the name",
                     m.receiver, m.name
                 ));
+            }
+            if let Some(message) = self.shadows_a_const(&p.name) {
+                return Err(message);
             }
             if self.env.insert(p.name.clone(), (p.ty.clone(), false)).is_some() {
                 return Err(format!(
@@ -3789,6 +4065,10 @@ impl TypeChecker {
                 let saved = self.env.clone();
                 let mut bindings = Vec::new();
                 for (name, ty) in arm.bindings.iter().zip(payload) {
+                    if let Some(message) = self.shadows_a_const(name) {
+                        self.env = saved;
+                        return Err(message);
+                    }
                     if self.env.contains_key(name) {
                         self.env = saved;
                         return Err(format!(
@@ -3885,6 +4165,9 @@ impl TypeChecker {
         self.error_located.set(false);
         match &s.kind {
             StmtKind::Let { name, mutable, declared, value } => {
+                if let Some(message) = self.shadows_a_const(name) {
+                    return Err(message);
+                }
                 if self.env.contains_key(name) {
                     return Err(format!(
                         "`{}` is already declared — Burxt does not allow shadowing; \
@@ -3963,6 +4246,17 @@ impl TypeChecker {
                 Ok(TypedStmt::Let { name: name.clone(), ty: bound, value: typed })
             }
             StmtKind::Assign { name, value } => {
+                // Before the env lookup, because a const is not in `env` and "unknown
+                // variable: LIMIT" is the wrong sentence for a name that is right there at
+                // the top of the file.
+                if let Some((ty, _)) = self.consts.get(name) {
+                    return Err(format!(
+                        "cannot assign to `{}`: it is a `const {}: {}`, which is a name for a \
+                         literal rather than a place to store one. There is nothing to assign \
+                         to — by the time the program runs, every use of `{}` IS the literal.",
+                        name, name, ty, name
+                    ));
+                }
                 let (declared, mutable) = self
                     .env
                     .get(name)
@@ -4282,6 +4576,14 @@ impl TypeChecker {
                 Ok(if word == "break" { TypedStmt::Break } else { TypedStmt::Continue })
             }
             StmtKind::For { name, iterable, body } => {
+                // A `for` binding is a binding, so it may not take a const's name either. The
+                // third of four places a name enters scope; `let`, a parameter and a `match`
+                // arm are the others, and all four ask this because a name that resolves to
+                // one thing in one body and another thing elsewhere is the silent wrongness
+                // no-shadowing exists to prevent.
+                if let Some(message) = self.shadows_a_const(name) {
+                    return Err(message);
+                }
                 if self.env.contains_key(name) {
                     return Err(format!(
                         "`{}` is already declared — Burxt does not allow shadowing, and \
@@ -4761,6 +5063,16 @@ impl TypeChecker {
             }
 
             ExprKind::Var(name) => {
+                // A const is looked for only after the bindings, so the common path costs one
+                // lookup in an almost-always-empty map. There is no ambiguity to resolve:
+                // `shadows_a_const` refuses a binding or a parameter that reuses the name, so
+                // at most one of the two tables can hold it.
+                if let Some((ty, value)) = self.consts.get(name) {
+                    // The whole of what a const costs at run time: nothing. It reaches codegen
+                    // as the literal it folded to, which is why `codegen.rs` needed no change
+                    // and why a const is legal inside a `pure` function.
+                    return Ok(TypedExpr { ty: ty.clone(), kind: value.clone() });
+                }
                 let (ty, _) = self
                     .env
                     .get(name)

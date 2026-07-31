@@ -1,0 +1,1 @@
+a `const` initializer is folded at compile time, so it may only hold literals, consts declared above it, and `+ - *` over Ints. This is none of those — compute it in a function, or bind it with `let`.

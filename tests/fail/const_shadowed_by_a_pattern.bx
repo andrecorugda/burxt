@@ -1,0 +1,11 @@
+// The fourth place a name enters scope, and the one where a silent shadow would read most
+// innocently: `Go(TOTAL)` looks like it is naming the variant's payload, not hiding a
+// program-wide constant. Every line inside the arm would then mean something other than what a
+// reader who scrolled up to the declaration would think.
+const TOTAL: Int = 3;
+enum Step { Go(Int), Stop }
+let s: Step = Step.Go(2);
+match s {
+    Go(TOTAL) => { print(TOTAL); }
+    Stop => { print(0); }
+}

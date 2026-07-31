@@ -1,0 +1,96 @@
+// `const` — a name for a compile-time value, and the four things that makes possible.
+//
+// What it adds over `let`, which is ALREADY immutable without `mutable`, is two things and
+// they were both measured rather than assumed:
+//
+//   1. A top-level `let` is not in scope inside a function. Top-level statements ARE main's
+//      body, so `let LIMIT: Int = 100;` above `function bump(x: Int) { return x + LIMIT; }`
+//      is refused with `unknown variable: LIMIT`. Every magic number in lib/ lives inside a
+//      function, so a top-level `let` could never have named one.
+//   2. A const is a LITERAL, not a load. It is folded at check time, so it costs nothing at
+//      run time and is legal inside a `pure` function — which a global variable would not be.
+//
+// The folding is not decoration either. INT_MIN cannot be written as a literal at all:
+// `-9223372036854775808` lexes as a negation of 9223372036854775808, which is `integer
+// literal too large`. The only spelling is a subtraction the compiler folds, so a
+// literal-only `const` would have shipped without the one constant this feature was filed for.
+
+const INT_MAX: Int = 9223372036854775807;
+const INT_MIN: Int = -9223372036854775807 - 1;
+
+const LIMIT: Int = 100000;
+// A const built from a const declared ABOVE it. Source order, not hoisting: folding needs an
+// order, "the order it is written in" is the only one a reader can see, and hoisting would
+// make `const A: Int = B;` legal and then somebody would write a cycle.
+const DOUBLE: Int = LIMIT * 2;
+const HEADROOM: Int = INT_MAX - DOUBLE;
+
+// The other three literal types. Each must be a single literal — arithmetic is Int-only, so
+// `RATE + RATE` and `TAG + TAG` are refused, each for its own reason. See
+// tests/fail/const_arithmetic_is_int_only.bx and const_string_cannot_be_joined.bx.
+const RATE: Decimal<4> = 8.25%;
+const TAG: String = "receipt";
+const READY: Bool = true;
+
+// In scope inside a function, which is the whole point.
+function headroom_from(n: Int) -> Int {
+    return LIMIT - n;
+}
+
+// And inside a `pure` one. A const resolves to a literal, so it introduces no dependency on
+// anything but the arguments — a global variable could not be read here.
+pure function is_big(n: Int) -> Bool {
+    return n > DOUBLE;
+}
+
+// And inside a contract clause, for the same reason: a clause must be pure.
+pure function capped(n: Int) -> Int
+    requires n <= LIMIT
+{
+    return n;
+}
+
+class Order { total: Decimal<2> }
+
+function (self: Order) taxed() -> Decimal<2, RoundHalfEven> {
+    return self.total * RATE;
+}
+
+function labelled() -> String allocates {
+    return TAG + ": ok";
+}
+
+print(INT_MAX);
+print(INT_MIN);
+print(LIMIT);
+print(DOUBLE);
+print(HEADROOM);
+print(RATE);
+print(TAG);
+print(READY);
+print(headroom_from(1));
+print(is_big(5));
+print(is_big(200001));
+print(capped(7));
+
+let o: Order = Order { total: $19.99 };
+print(o.taxed());
+
+// A const wherever a literal may go: an array literal, a loop bound, a `match` subject.
+let xs: [Int; 3] = [LIMIT, DOUBLE, 0];
+print(xs[0] + xs[1]);
+
+let mutable i: Int = 0;
+while i < 2 {
+    print(LIMIT + i);
+    i += 1;
+}
+
+match LIMIT {
+    100000 => { print("the limit"); }
+    _ => { print("something else"); }
+}
+
+region r {
+    print(labelled());
+}

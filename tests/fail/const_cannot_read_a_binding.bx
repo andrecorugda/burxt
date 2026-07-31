@@ -1,0 +1,6 @@
+// A `let` is a run-time value even at the top level, so a const cannot be built from one —
+// there is nothing to read at the moment the const is folded. The reverse direction is fine
+// and is what consts are for: `let n: Int = LIMIT;`.
+let start: Int = 5;
+const LIMIT: Int = start;
+print(LIMIT);

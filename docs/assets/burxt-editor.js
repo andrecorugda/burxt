@@ -38,7 +38,7 @@
 
   // The declaration and statement keywords, plus the literals.
   var KEYWORD = words(
-    'let mutable function external return as tail break continue if else while class private ' +
+    'let const mutable function external return as tail break continue if else while class private ' +
     'region enum match interface is implement implements for in dynamic print print_error true false pure'
   );
 

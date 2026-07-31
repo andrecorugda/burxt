@@ -943,6 +943,20 @@ function (mutable self: Unit) bind_arm(src: String, holder: Type, arm: Node) -> 
             let mutable p: Int = 0;
             while p < arm.c && p < variant.c {
                 let name: Token = self.tokens[self.nested_children[arm.b + p]];
+                // A pattern binding is the fourth and last place a name enters scope, so it
+                // asks the const question too — and it is the one where a silent shadow would
+                // read most innocently, because `Some(LIMIT)` looks like it is naming the
+                // payload rather than hiding a program-wide constant.
+                //
+                // Note while reading this: stage-1 does NOT check a pattern binding against an
+                // ordinary `let` here, which stage-0 does. A pre-existing gap, found by adding
+                // this line beside where that check should be, and reported rather than
+                // widened silently.
+                if self.find_const(src, name.start, name.length) >= 0 {
+                    let complained: Int = self.complain_at(src, arm.token,
+                        "this name is already declared as a `const`, which is in scope in "
+                        + "every function — Burxt does not shadow");
+                }
                 let stated: Type = self.declared_type(src, self.nested_children[variant.b + p]);
                 let payload_type: Type = self.resolve_deep(src, stated, arm.token);
                 push(self.bindings, Binding { start: name.start, length: name.length,
@@ -1772,9 +1786,48 @@ function (mutable self: Unit) parse_block(src: String) -> Int {
     let start: Int = self.commit(base);
     return self.add(16, start, count, 0, 0, here);
 }
+// `const NAME: Type = <literal>;` — an item, so `parse_item` reaches this and `parse_stmt`
+// refuses it. The grammar is a `let` minus `mutable`, and with the annotation REQUIRED rather
+// than optional: `mutable` means nothing on a name the whole program shares, and this line is
+// the only place a reader will look to find out what that name IS.
+//
+// Nothing is evaluated here. The initialiser is left as an ordinary expression node and
+// `fold_consts` in check.bx reduces it — which is where an overflowing fold has to be
+// reported, because stage-1's agreement with stage-0 is measured by counting `type errors:`
+// and a parse error would not be counted. That is the same trap the five `bracket_*` fixtures
+// fell into in v0.0.167, when stage-1 "caught" them by failing to parse a bracket at all.
+function (mutable self: Unit) parse_const(src: String) -> Int {
+    let n: Int = self.advance();
+    if !self.at(1) { return self.complain(src, "a name after `const`"); }
+    let name_tok: Int = self.position;
+    let m: Int = self.advance();
+    if !self.at(20) {
+        return self.complain(src, "`:` and a type — a `const` says its type, unlike `let`");
+    }
+    let colon: Int = self.advance();
+    let type_node: Int = self.parse_type(src);
+    if type_node < 0 { return -1; }
+    if !self.eat(src, 24, "`=` and a value") { return -1; }
+    let value: Int = self.parse_expr(src);
+    if value < 0 { return -1; }
+    if !self.eat(src, 21, "`;`") { return -1; }
+    return self.add(73, type_node, value, 0, 0, name_tok);
+}
+
 function (mutable self: Unit) parse_stmt(src: String) -> Int {
     let here: Int = self.position;
     let k: Int = self.kind_at(0);
+
+    // Top level only. A function-local `const` would be a second spelling for `let`, which
+    // is already immutable without `mutable` and already scoped to its block — the whole
+    // delta of `const` is program-wide scope plus literal substitution, and neither means
+    // anything inside one body. Refused by name so the message says that rather than
+    // "expected a statement".
+    if k == 134 {
+        return self.complain(src, "a `const` at the top level, not inside a block — it is a "
+                                  + "name for the whole program. Use `let`, which is already "
+                                  + "immutable");
+    }
 
     if k == 100 {                                    // let
         let n: Int = self.advance();
@@ -2635,6 +2688,7 @@ function (mutable self: Unit) parse_item(src: String) -> Int {
         let n: Int = self.advance();
         return self.parse_function(src, 1, 0 - 1);
     }
+    if k == 134 { return self.parse_const(src); }
     if k == 102 { return self.parse_function(src, 0, 0 - 1); }
     if k == 109 { return self.parse_record(src); }
     if k == 110 { return self.parse_enum(src); }

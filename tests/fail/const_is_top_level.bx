@@ -1,0 +1,9 @@
+// A `const` goes at the top level. Inside a body it would be a second spelling for `let`,
+// which is already immutable without `mutable` and already scoped to its block — the whole
+// delta of `const` is program-wide scope plus literal substitution, and neither means
+// anything inside one function.
+function limit() -> Int {
+    const LIMIT: Int = 100000;
+    return LIMIT;
+}
+print(limit());
