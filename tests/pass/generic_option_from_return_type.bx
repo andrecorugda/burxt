@@ -1,0 +1,47 @@
+// A free GENERIC function may answer `Option<T>` — roadmap A3, and it is the fixture for a
+// limitation three library headers stated as a fact.
+//
+// `Option.None` carries no payload, so the only thing that can say what `T` is, is the context
+// it lands in. Until v0.0.240 stage-0 read that context only when it had already been made
+// concrete, so this function was refused with `` `Option.None` does not say what `T` is, and
+// nothing here does `` — while its own signature said it, one line up. `lib/array.bx` recorded
+// the consequence flatly: *"an Option-returning GENERIC is not writable at all."*
+//
+// Two things are being checked here and they failed for different reasons:
+//
+//   * `return Option.None;` had a context and the checker was not looking at it.
+//   * `return Option.Some(xs[0]);` had a context, used it, and then tried to INSTANTIATE
+//     `Option<T>` while `T` was still a parameter — which answered the user
+//     `codegen bug: an instantiation is not a named type`. A generic call already knew not to
+//     do that; a generic variant did not.
+//
+// Both instantiations appear on purpose. One would prove the abstract body checks; two prove
+// each copy gets its own layout, which is where a shared-`T` bug would show.
+use "../../lib/option.bx";
+
+function first_of<T>(xs: [T]) -> Option<T> {
+    if len(xs) == 0 {
+        return Option.None;
+    }
+    return Option.Some(xs[0]);
+}
+
+// The annotated `let` inside a generic, which `lib/array.bx` also claimed was refused. It is the
+// same question with the answer written in a different place, so it is worth holding here too.
+function nothing_of<T>(xs: [T]) -> Option<T> {
+    let nothing: Option<T> = Option.None;
+    return nothing;
+}
+
+region r {
+    let numbers: [Int] = [7, 8];
+    let empty: [Int] = [];
+    let words: [String] = ["left", "right"];
+
+    print(option_or(first_of(numbers), 0));
+    print(option_or(first_of(empty), 0));
+    print(option_or(first_of(words), "none"));
+    print(option_or(nothing_of(numbers), 99));
+    print(option_is_some(first_of(numbers)));
+    print(option_is_some(nothing_of(words)));
+}

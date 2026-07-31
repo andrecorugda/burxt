@@ -1,0 +1,24 @@
+// `Option.None` where genuinely NOTHING says what `T` is. This must stay refused, and it is the
+// other half of `tests/pass/generic_option_from_return_type.bx`.
+//
+// Roadmap A3 taught the checker to read `T` from the context a variant lands in — a declared
+// return type, an annotation, a parameter it is passed to. This program gives it none of the
+// three: the value goes into a `let` with no annotation, inside a function that answers `Int`,
+// so there is no `Option<...>` anywhere for `T` to come from. Nothing can infer it, and
+// guessing would mean picking a layout on the author's behalf.
+//
+// The fixture exists because the fix could have gone too far. An inference that reached for the
+// enclosing function's type parameter *whatever the context* would "work" here by binding `T` to
+// `T` — and would then have made `Option.None` legal everywhere inside any generic, which is a
+// different language from the one A3 asked for.
+use "../../lib/option.bx";
+
+function loose<T>(xs: [T]) -> Int {
+    let nothing = Option.None;
+    return len(xs);
+}
+
+region r {
+    let numbers: [Int] = [1];
+    print(loose(numbers));
+}

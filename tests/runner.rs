@@ -1182,6 +1182,29 @@ fn the_burxt_front_end_accepts_every_burxt_source() {
     }
 }
 
+/// **The blind spot this pair CANNOT see, found in v0.0.241 and worth writing down.**
+///
+/// Two directions are covered. `tests/fail/` is an EQUALITY — both compilers refuse the same 271 of
+/// 274. Direction 1 below requires stage-1 to be silent on everything stage-0 accepts. Between them
+/// they catch a rule stage-1 lacks, and a rule stage-1 invented.
+///
+/// They cannot catch **a valid program stage-0 refuses and stage-1 accepts**, and A3 was exactly that:
+/// `function first_of<T>(xs: [T]) -> Option<T> { return Option.None; }` was refused by stage-0 and
+/// accepted by `check.bx`, which needed NO change to fix the item. Such a program lives nowhere the
+/// suite looks — it cannot be a `tests/pass/` fixture, because stage-0 refuses it and so it has no
+/// `.stdout`; and it is not a `tests/fail/` fixture, because it is not meant to fail.
+///
+/// **The reason is structural rather than an oversight: this suite defines "valid" as "stage-0 accepts
+/// it".** So stage-0 wrongly refusing something is invisible by construction, and the only instrument
+/// is a person writing the program and being surprised — which is how A3 was found, by probing the
+/// roadmap's claim rather than reading it.
+///
+/// What would close it: a directory of programs asserted VALID independently of either compiler, which
+/// is `examples/` in spirit — and `the_burxt_front_end_accepts_every_burxt_source` now reads the
+/// checker's verdict over all of it, so a program that lands there is covered in both directions. The
+/// gap is that nothing forces a newly-discovered valid program to land there. Left named rather than
+/// solved.
+///
 /// The stage-1 TYPECHECKER, written in Burxt, must refuse what stage-0 refuses and
 /// accept what stage-0 accepts — over the subset it covers so far.
 ///

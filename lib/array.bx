@@ -39,9 +39,15 @@
 // `pure` checker cannot see through enum construction. A real gap, recorded rather than worked around
 // by returning -1.
 //
-// **An Option-returning GENERIC is not writable at all.** `Option.None` cannot be built where `T` is a
-// type parameter, even when the type is written down. So `min` and `max` take a precondition instead —
-// which is the better design anyway, and the note above them says why.
+// ~~**An Option-returning GENERIC is not writable at all.**~~ **Fixed in v0.0.241.** `Option.None` and
+// `Option.Some` now resolve their type argument from the enclosing signature, so `array_pop<T> -> Option<T>`
+// compiles and runs in both compilers — measured.
+//
+// `min` and `max` still take a precondition, and that stays: *"the largest of nothing"* is not a
+// question with a wrong answer, it is a question that should not have been asked, which is what
+// `requires` says. **The limitation was never the reason for that design and the note claimed it
+// was** — a real reason and a convenient excuse for it had been written down together, and only one
+// of them was load-bearing.
 // ============================================================================
 
 use "option.bx";
@@ -93,10 +99,15 @@ pure function array_is_sorted<T: Ordered>(xs: [T]) -> Bool {
 // `vector_normalise` makes about the zero vector.
 //
 // (There is also a language reason, and it is worth recording because it is a real gap rather than a
-// preference: `Option.None` cannot be built where `T` is a type PARAMETER. Even
-// `let nothing: Option<T> = Option.None;` is refused — the checker cannot resolve the variant's type
-// argument from a parameter. So an Option-returning generic is not currently writable at all, and
-// `array_index_of` only works because its answer is `Option<Int>`, where `Int` is concrete.)
+// preference: `Option.None` could not be built where `T` was a type PARAMETER, and even
+// `let nothing: Option<T> = Option.None;` was refused. **Both work as of v0.0.241** — the claim about
+// the `let` was TRUE when written and was verified before being retired rather than assumed stale.
+//
+// The cause turned out to be inverted from how it read: it was not that methods had this inference and
+// free functions lacked it. **A free generic function's body is checked ABSTRACTLY, and a generic
+// method's body never is** — `lib/map.bx`'s `find -> Option<V>` has shipped since v0.0.118 not because
+// methods resolve it correctly but because they never enter the state that broke free functions. There
+// was no working path to copy.)
 function array_min<T: Ordered>(xs: [T]) -> T
     requires len(xs) > 0
 {

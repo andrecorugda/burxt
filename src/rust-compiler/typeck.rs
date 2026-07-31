@@ -1333,6 +1333,23 @@ impl TypeChecker {
                 }
             }
         }
+        // The same question, asked of an expectation that has NOT been monomorphised —
+        // `Option<T>` rather than `Option$Int`. This is the A3 fix, and the arm above could not
+        // answer it: `instance_of` is keyed by an instantiation's SYMBOL, so it only ever knows
+        // about a type some caller already made concrete.
+        //
+        // Inside `function first_of<T>(xs: [T]) -> Option<T>`, the declared return type is a
+        // `Type::Generic` whose argument is still `Param("T")`, so `return Option.None;` fell
+        // through both this map and the payload loop below and reported that nothing says what
+        // `T` is — while the signature said it, three lines up. The enclosing return type IS the
+        // context; it just had not been looked at in the one state where it is not yet a name.
+        if let Some(Type::Generic { name, arguments }) = expected {
+            if name == enum_name {
+                for (p, a) in parameters.iter().zip(arguments) {
+                    map.insert(p.name.clone(), a.clone());
+                }
+            }
+        }
         for (i, (declared, argument)) in payload.iter().zip(arguments).enumerate() {
             if !mentions_param(declared) {
                 continue;
@@ -1353,14 +1370,65 @@ impl TypeChecker {
                     } else {
                         format!("{}.{}(...)", enum_name, variant)
                     };
+                    // The advice names the RETURN TYPE first, because since A3 that is the
+                    // commonest way to answer this and it used not to work: a `return` inside
+                    // `-> Option<T>` now reads `T` from the signature. The old message offered
+                    // only an annotated `let` and said "nothing here does" to programs whose
+                    // signature said it three lines up — true about what the checker looked at,
+                    // false about the program, which is the worst kind of accurate message.
                     return Err(format!(
-                        "`{}.{}` does not say what `{}` is, and nothing here does. Write \
-                         the type where the value lands — `let x: {}<...> = {};` — or \
-                         pass it somewhere that names it.",
-                        enum_name, variant, p.name, enum_name, call
+                        "`{}.{}` does not say what `{}` is, and nothing here does. Give it a \
+                         context that names `{}`: return it from a function declared \
+                         `-> {}<{}>`, annotate where it lands — `let x: {}<...> = {};` — or \
+                         pass it to something whose parameter says.",
+                        enum_name, variant, p.name, p.name, enum_name, p.name, enum_name, call
                     ))
                 }
             }
+        }
+        // If a type argument is still a parameter, this construction is inside a generic being
+        // checked GENERICALLY, and there is nothing to instantiate yet: the copy appears when the
+        // enclosing generic is instantiated, and its body then names a concrete type here. The
+        // same rule a generic CALL already follows — see `mentions_param` at the call site — and
+        // the same reason: `Option<T>` has no layout until a caller says what `T` is.
+        //
+        // Without this, `Option.Some(xs[0])` inside `first_of<T>` reached `expand` with
+        // `[Param("T")]`, could not produce a name, and reported **"codegen bug: an instantiation
+        // is not a named type"** — an internal message, to a user, about their perfectly good
+        // program. So A3 was two bugs behind one symptom: `None` had no context to read, and
+        // `Some` had context and could not use it.
+        //
+        // Answering an abstract type is safe because the abstract body is never emitted —
+        // `check` deliberately holds it back ("the generic itself is CHECKED and never EMITTED:
+        // there is no layout for a `T` until a caller says what it is"). Nothing downstream ever
+        // sees this node; the specialised copy is what codegen gets.
+        if type_args.iter().any(mentions_param) {
+            let mut typed_args = Vec::new();
+            for (i, (argument, declared)) in arguments.iter().zip(payload).enumerate() {
+                // The payload type with what IS known substituted in, so a wrong argument is
+                // still caught here rather than surviving to every instantiation.
+                let want = substitute(declared, &map);
+                let t = self.check_expr(argument, Some(&want))?;
+                if !self.storable(&t.ty, &want) {
+                    return Err(format!(
+                        "in `{}.{}`, payload {} must be {}, but it has type {}",
+                        enum_name,
+                        variant,
+                        i + 1,
+                        want,
+                        t.ty
+                    ));
+                }
+                typed_args.push(t);
+            }
+            return Ok(TypedExpr {
+                ty: Type::Generic { name: enum_name.to_string(), arguments: type_args },
+                kind: TypedExprKind::VariantLit {
+                    enum_name: enum_name.to_string(),
+                    tag: tag as u32,
+                    arguments: typed_args,
+                },
+            });
         }
         let concrete = self.expand(&Type::Generic {
             name: enum_name.to_string(),

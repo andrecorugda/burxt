@@ -361,7 +361,7 @@ v0.0.214 wrote: *"stage-1 is a SUBSET. Its backend does not emit Decimals and th
 was written, and **is now false.** Nothing updated §3b as each feature landed, and this document
 believed it and re-published it a version later.
 
-**Measured, in v0.0.215:** stage-1 compiles **143 of 143** pass programs, **0 refused** — including
+**Measured as of v0.0.215:** stage-1 compiles **143 of 143** pass programs, **0 refused** — including
 `match`, `Decimal` with rounding contracts, `requires`/`ensures`, `external function`, `decreases`,
 `return tail`, the generic-heavy `lib/array.bx`, the exact-vector library, `lib/test.bx` and the pointer
 wall. Their binaries run and match stage-0's output. It also compiles **itself**, 2.6 MB of IR, to a
