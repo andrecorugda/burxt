@@ -505,6 +505,158 @@ function (mutable self: Unit) unify(src: String, declared: Type, actual: Type) -
     return self.same_type(src, declared, actual);
 }
 
+// A TYPE NODE for a type that was inferred rather than written, or -1 when there can be none.
+//
+// This is the whole difficulty of A3's fourth shape, and it is a representation problem rather than
+// an inference one. Stage-1 spells a generic application as `kind 46` with `scale` = a start into
+// `nested_children` and `contract` = a count — and those entries are NODE INDICES. A type nobody
+// wrote down has no node, so `Option` with `T = Int` inferred from a `5` cannot be said at all.
+//
+// Except for the kinds `declared_type` reads WITHOUT looking at the token, which is exactly the
+// trick `int_type_node` in `ast.bx` already uses for `c_bytes_at`'s `[Int]`: a scalar node carries
+// its whole meaning in its KIND, so one can be created with no span and nothing will ever ask where
+// it was written. A Decimal carries scale and rounding in `a` and `b`. A slice or an array already
+// holds its element as a node index, so it recurses onto something real.
+//
+// A NAMED type cannot: `declared_type` reads `self.tokens[n.token]` to get the name's span, and
+// there is no token whose bytes spell `Point` at the point of inference. So this answers -1 there,
+// the caller settles nothing, and the program stays REFUSED.
+//
+// **Refused, and that is the conservative half on purpose.** Binding the parameter without a node
+// the EMITTER can read looked like it worked — the checker was happy and `match Option.Some(p)`
+// type-checked — and then the compiled program SEGFAULTED, because the binding lived in the
+// checker's table and the emitter runs long after it is gone, so the payload's width was read off
+// an unresolved `T`. A refusal is safe and a miscompile is not, and that trade is the reason this
+// function exists instead of a `unify` call on its own.
+function (mutable self: Unit) inferred_type_node(src: String, t: Type) -> Int {
+    if t.kind == 40 || t.kind == 41 || t.kind == 42 || t.kind == 43 || t.kind == 44
+       || t.kind == 51 {
+        return self.add(t.kind, 0, 0, 0, 0, 0);
+    }
+    if t.kind == 45 {                                // Decimal<scale, rounding>
+        return self.add(45, t.scale, t.contract, 0, 0, 0);
+    }
+    if t.kind == 47 || t.kind == 48 {
+        // A slice or an array already points at its element's real node, so this needs no new one
+        // for the element — only for the wrapper.
+        return self.add(t.kind, t.scale, t.contract, 0, 0, 0);
+    }
+    return 0 - 1;                                    // named, interface, or still a parameter
+}
+
+// Bind a generic enum's type parameters from the ARGUMENTS of a variant being constructed, and
+// answer where the resulting type arguments start in `nested_children` — or -1 if they cannot be
+// spelled.
+//
+// The fourth way a variant learns what its parameter is, and the one stage-1 was missing. The other
+// three all put the answer somewhere a Type could already be read from — a declared return type, an
+// annotation, a concrete instantiation — and `type_of`'s constructor branch took the whole answer
+// from `expected` because of it. `match Option.Some(5) { ... }` writes the answer nowhere: the only
+// thing that knows `T` is `Int` is the `5`.
+//
+// `unify` is what reads it, which is why the inference itself is four lines: walk the variant's
+// declared payload types against the actual argument types and let `unify` push a binding for every
+// parameter it meets. `Pair2.Both(4, "four")` settles `A = Int` and `B = String` in one pass,
+// because `unify` is structural and does not care which position it is in.
+//
+// The bindings are then READ BACK and turned into nodes, and dropped before this returns. Nothing
+// leaks, and the answer is a real application — which matters because the EMITTER has to resolve
+// the payload's width later, with no binding table of its own. See `inferred_type_node` for why
+// that is possible for some argument types and not others, and what happened when it was skipped.
+function (mutable self: Unit) infer_variant_arguments(src: String, declared: Int,
+                                                     call: Node) -> Int {
+    if call.kind != 14 || call.b < 0 {
+        return 0 - 1;                                // `Option.None`: no argument to read
+    }
+    let holder_name: Token = self.tokens[self.nodes[call.a].token];
+    let generic: Int = self.generic_named(src, holder_name.start, holder_name.length);
+    if generic < 0 {
+        return 0 - 1;                                // not generic: nothing to settle
+    }
+    let item: Node = self.nodes[self.types[declared].node];
+    let wanted: Token = self.tokens[call.token];
+    let list: Node = self.nodes[call.b];
+    let base: Int = len(self.type_bindings);
+    let mutable i: Int = 0;
+    while i < item.b {
+        let variant: Node = self.nodes[self.children[item.a + i]];
+        let named: Token = self.tokens[variant.token];
+        if spans_equal(src, named.start, named.length, wanted.start, wanted.length) {
+            let mutable p: Int = 0;
+            while p < variant.c && p < list.b {
+                let stated: Type = self.declared_type(src, self.nested_children[variant.b + p]);
+                // Only a payload that MENTIONS a parameter can settle one. Asking the others would
+                // type an argument twice — here and again in `check_construction` — and double
+                // every complaint the argument itself deserves.
+                if self.mentions_parameter(src, stated) {
+                    let actual: Type = self.type_of(src, self.children[list.a + p],
+                                                   unknown_type());
+                    if !is_unknown(actual) {
+                        let matched: Bool = self.unify(src, stated, actual);
+                    }
+                }
+                p += 1;
+            }
+        }
+        i += 1;
+    }
+    // Every parameter the declaration has, in order, read back out of the bindings and turned into
+    // a node. All or nothing: a partly-spelled application would be worse than none, because the
+    // emitter would resolve some arguments and guess at the rest.
+    let declaration: Generic = self.generics[generic];
+    let mutable nodes: [Int] = [];
+    let mutable settled: Bool = declaration.type_param_count > 0;
+    let mutable q: Int = 0;
+    while q < declaration.type_param_count {
+        let parameter: Token = self.tokens[self.type_parameters[declaration.type_param_start + q]];
+        let stands_for: Type = self.resolve_shallow(src,
+            Type { kind: 50, scale: 0, contract: 0,
+                   name_start: parameter.start, name_length: parameter.length });
+        let made: Int = self.inferred_type_node(src, stands_for);
+        if made < 0 {
+            settled = false;
+        } else {
+            push(nodes, made);
+        }
+        q += 1;
+    }
+    let dropped: Int = truncate(self.type_bindings, base);
+    if !settled {
+        return 0 - 1;
+    }
+    let start: Int = len(self.nested_children);
+    let mutable k: Int = 0;
+    while k < len(nodes) {
+        push(self.nested_children, nodes[k]);
+        k += 1;
+    }
+    return start;
+}
+
+// Does this type mention a type PARAMETER anywhere inside it? `T` does, `[T]` does, `Option<T>`
+// does, `Int` does not. The same question `mentions_param` asks in `typeck.rs`, and it is asked for
+// the same reason: a payload with no parameter in it can settle nothing, so reading the argument
+// would be work with no answer in it.
+function (self: Unit) mentions_parameter(src: String, t: Type) -> Bool {
+    if t.kind == 50 {
+        return true;
+    }
+    if t.kind == 47 || t.kind == 48 {
+        return self.mentions_parameter(src, self.declared_type(src, t.scale));
+    }
+    if t.kind == 46 || t.kind == 49 {
+        let mutable i: Int = 0;
+        while i < t.contract {
+            if self.mentions_parameter(src, self.declared_type(src,
+                                           self.nested_children[t.scale + i])) {
+                return true;
+            }
+            i += 1;
+        }
+    }
+    return false;
+}
+
 // The generic declaration this name belongs to, or -1.
 // ---- `?`: the four questions it asks about an enum ---------------------------------------
 
@@ -2298,6 +2450,27 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
                        && spans_equal(src, expected.name_start, expected.name_length,
                                       base_name.start, base_name.length) {
                         holder = expected;
+                    } else {
+                        // ...and when the context says NOTHING, the ARGUMENT says it.
+                        // `match Option.Some(5) { ... }` names no type anywhere — no annotation, no
+                        // declared return type, no parameter it is passed to — and the `5` settles
+                        // `T` on its own. Stage-0 has always read it, because it works out the
+                        // arguments from the payload FIRST and asks the context second; stage-1
+                        // only ever asked the context, so it compared `T` against `Int` and refused
+                        // a program stage-0 accepts.
+                        //
+                        // This is the FOURTH shape of one question, and the three before it all
+                        // went through the branch above — a declared return type, an annotated
+                        // `let`, and a concrete instantiation. Passing those three was taken as
+                        // evidence the whole question was answered. It was not, and the standing
+                        // note applies: a checker that agrees may have stopped asking.
+                        let arguments: Int = self.infer_variant_arguments(src, declared, n);
+                        if arguments >= 0 {
+                            let count: Int = len(self.nested_children) - arguments;
+                            holder = Type { kind: 46, scale: arguments, contract: count,
+                                          name_start: base_name.start,
+                                          name_length: base_name.length };
+                        }
                     }
                     let checked: Int = self.check_construction(src, holder, n);
                     return holder;

@@ -1,0 +1,55 @@
+// A generic variant built INLINE, where nothing but its own argument says what `T` is.
+//
+// `match Option.Some(5) { ... }` names no type anywhere: no annotation, no declared return type, no
+// parameter it is passed to. The `5` is the only thing that knows `T` is `Int`. Stage-0 has always
+// read it — it works the arguments out from the payload first and asks the context second — and
+// stage-1 asked only the context, so it compared `T` against `Int` and refused a program stage-0
+// accepts.
+//
+// **This is a PASS fixture on purpose.** A valid program the Burxt checker refuses is only visible
+// where `the_burxt_front_end_accepts_every_burxt_source` reads, which is `tests/pass/` and
+// `examples/` — nothing else forces a newly-found valid program to land somewhere the second checker
+// has to accept it. That is the blind spot recorded on the differential: its Direction 1 asks
+// whether stage-1 is silent on what stage-0 accepts, and a program nobody adds is a question nobody
+// asks.
+//
+// It is the FOURTH shape of one question, and the three before it are here too, so a regression in
+// any of them fails this fixture rather than going unnoticed:
+//
+//   * `Option.Some(5)` inline — the argument settles it, and only the argument.
+//   * `first_of(empty)` — a declared return type settles it (roadmap A3, v0.0.241).
+//   * `let chosen: Option<Int>` — an annotation settles it, which always worked.
+//
+// Written after the same question was answered three times and pronounced closed. The standing note
+// earned its place again: three passing probes are not a proof, and a checker that agrees may have
+// stopped asking.
+use "../../lib/option.bx";
+
+function first_of<T>(xs: [T]) -> Option<T> {
+    if len(xs) == 0 {
+        return Option.None;
+    }
+    return Option.Some(xs[0]);
+}
+
+region r {
+    // The argument, and nothing else.
+    match Option.Some(5) {
+        None => { print(0); }
+        Some(v) => { print(v); }
+    }
+
+    // A declared return type, through an empty array so the `None` arm is the one that runs.
+    let empty: [Int] = [];
+    match first_of(empty) {
+        None => { print(0 - 1); }
+        Some(v) => { print(v); }
+    }
+
+    // An annotation.
+    let chosen: Option<Int> = Option.Some(7);
+    match chosen {
+        None => { print(0); }
+        Some(v) => { print(v); }
+    }
+}

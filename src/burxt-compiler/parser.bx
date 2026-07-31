@@ -1854,11 +1854,11 @@ function (mutable self: Unit) parse_stmt(src: String) -> Int {
         if !self.eat(src, 21, "`;`") { return -1; }
         return self.add(60, type_node, value, 0, writable, name_tok);
     }
-    if k == 118 || k == 133 {                        // print, print_error
+    if k == 118 || k == 135 {                        // print, print_error
         // One statement kind with a DESTINATION in `b`, not two kinds: the per-type formatting is
         // the part that must never fork.
         let mutable to_stderr: Int = 0;
-        if k == 133 {
+        if k == 135 {
             to_stderr = 1;
         }
         let n: Int = self.advance();
