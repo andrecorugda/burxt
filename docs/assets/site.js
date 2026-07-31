@@ -4,7 +4,7 @@
  *   1. Wrap markdown tables in a scroll container, so a wide one cannot make the page scroll
  *      sideways. Done here rather than in the markdown because kramdown emits a bare <table>.
  *   2. Give every h2/h3 a copyable anchor.
- *   3. Drive the sidebar drawer below 900px.
+ *   3. Drive the sidebar drawer below 900px, and replay the mascot when it is clicked.
  *   4. Build the "on this page" rail from the headings actually rendered.
  *   5. Highlight the section you are reading, in the sidebar and that rail.
  *   6. The ⌘K search palette.
@@ -97,6 +97,26 @@
   // drawer still over it.
   if (side) side.addEventListener('click', function (e) {
     if (e.target.closest('a[href]')) closeDrawer();
+  });
+
+  /* ---- 3b. the mascot, on request -------------------------------------------------------------
+   *
+   * The hero's mark plays once and then rests, which is the point — but a visitor who arrived mid-
+   * animation, or who simply liked it, should be able to see it again. A GIF has no play() method, so
+   * the replay is a refetch of the same bytes: clearing `src` and setting it back restarts the
+   * animation from frame one, and the browser serves it from cache.
+   *
+   * Not wired up for a reader who asked for less motion: for them the <picture> resolved to a still
+   * frame, and turning a still into an animation on a click is exactly what they asked not to happen. */
+
+  var calm = matchMedia('(prefers-reduced-motion: reduce)');
+  document.querySelectorAll('[data-replay]').forEach(function (img) {
+    if (calm.matches) return;
+    img.addEventListener('click', function () {
+      var src = img.src;
+      img.src = '';
+      img.src = src;
+    });
   });
 
   /* ---- 4. on this page ------------------------------------------------------------------------

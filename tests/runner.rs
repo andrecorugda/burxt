@@ -3989,6 +3989,84 @@ fn the_web_highlighter_knows_every_keyword_the_compiler_does() {
     );
 }
 
+/// The mascot on the front page plays ONCE, and a reader who asked for less motion gets a still.
+///
+/// The ember's choreography starts and ends with it hidden inside the bowl of the `b`, so one play
+/// leaves a clean, static logo — a moment of warmth on arrival and then quiet. Looping it forever
+/// would put a perpetually hopping mark on the landing page of a site whose stylesheet says "nothing
+/// here glows", and the difference between the two is **one byte**: the loop count in the GIF's
+/// NETSCAPE extension, which is 0 for forever and 1 for once.
+///
+/// One byte, invisible in a diff, and re-exporting the animation from any tool defaults it back to 0.
+/// So it is asserted rather than remembered.
+///
+/// The `<picture>` is the other half. A GIF cannot be paused by CSS, so honouring
+/// `prefers-reduced-motion` means offering a different file — and the still has to show the ember out
+/// and waving, because a poster of the hidden state means that reader never learns there is a mascot.
+#[test]
+fn the_mascot_plays_once() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    for copy in ["assets/burxt-ember.gif", "docs/assets/burxt-ember.gif"] {
+        let gif = fs::read(root.join(copy)).unwrap_or_else(|_| panic!("{} is missing", copy));
+        assert_eq!(&gif[..6], b"GIF89a", "{} is not an animated GIF", copy);
+
+        // 'NETSCAPE2.0' then 0x03 0x01 then the loop count, little-endian.
+        let marker = b"NETSCAPE2.0";
+        let at = gif
+            .windows(marker.len())
+            .position(|w| w == marker)
+            .unwrap_or_else(|| panic!("{} has no NETSCAPE extension, so it has no loop count", copy))
+            + marker.len()
+            + 2;
+        let loops = u16::from_le_bytes([gif[at], gif[at + 1]]);
+        assert_eq!(
+            loops, 1,
+            "{} is set to loop {} times ({}). The hero's mark must play ONCE and rest: the animation \
+             ends with the ember hidden, so one play leaves a still logo. Patch the two bytes after \
+             `NETSCAPE2.0\\x03\\x01` to 1 rather than re-encoding, which would also recompress every \
+             frame.",
+            copy,
+            loops,
+            if loops == 0 { "forever" } else { "more than once" }
+        );
+    }
+
+    // Both copies are the same file. `docs/assets/` exists because Pages serves only that directory,
+    // and a divergence between them means the site is showing something the brand folder does not.
+    let a = fs::read(root.join("assets/burxt-ember.gif")).unwrap();
+    let b = fs::read(root.join("docs/assets/burxt-ember.gif")).unwrap();
+    assert_eq!(a, b, "assets/ and docs/assets/ hold different copies of the mascot");
+
+    // Every page that shows it offers a still to a reader who asked for less motion, and points at a
+    // poster that exists.
+    let still = "assets/burxt-ember-still.png";
+    assert!(root.join(still).exists() && root.join("docs").join(still).exists(),
+            "the reduced-motion poster is missing from assets/ or docs/assets/");
+
+    let mut wrong = Vec::new();
+    for page in ["docs/index.md", "docs/404.html"] {
+        let text = fs::read_to_string(root.join(page)).unwrap_or_else(|_| panic!("{}", page));
+        if !text.contains("burxt-ember.gif") {
+            continue;                       // this page does not show the mascot
+        }
+        if !text.contains("prefers-reduced-motion: reduce") || !text.contains("burxt-ember-still.png")
+        {
+            wrong.push(format!(
+                "{} shows the mascot with no `<source media=\"(prefers-reduced-motion: reduce)\">` \
+                 offering burxt-ember-still.png. A GIF cannot be paused by CSS, so the only way to \
+                 honour that preference is to hand over a different file.",
+                page
+            ));
+        }
+        // Width and height, or the page reflows when 121 KB finishes arriving.
+        if !text.contains("width=\"174\" height=\"222\"") {
+            wrong.push(format!("{} does not give the mascot its intrinsic size, so it will shift the layout as it loads", page));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 /// No text on the site is too faint to read, and the grey that was cannot come back.
 ///
 /// The site shipped with `--ink-soft: #6e6e73` carrying the navigation, the hero subtitle, every

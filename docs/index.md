@@ -7,7 +7,16 @@ width: wide
 
 <div class="hero" markdown="1">
 
-<img class="lockup" src="{{ site.baseurl }}/assets/burxt-lockup-light.png" alt="Burxt">
+<h1 class="vh">Burxt</h1>
+
+<div class="lockup-live">
+<picture class="mascot">
+<source media="(prefers-reduced-motion: reduce)" srcset="{{ site.baseurl }}/assets/burxt-ember-still.png">
+<img class="mark" src="{{ site.baseurl }}/assets/burxt-ember.gif" width="174" height="222" data-replay
+     alt="The Burxt mark — an ember hops out from behind the b, looks around, waves, and hops back in">
+</picture>
+<img class="word" src="{{ site.baseurl }}/assets/burxt-wordmark.png" width="823" height="217" alt="burxt">
+</div>
 
 <p class="line"><strong>Strict enough that an agent cannot make a costly mistake.<br>
 Plain enough that you can see that it didn't.</strong></p>

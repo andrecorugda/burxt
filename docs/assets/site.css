@@ -235,6 +235,71 @@ main { padding: 0 var(--gap) 6rem; }
 
 .hero { text-align: center; padding: clamp(3.5rem, 9vw, 7rem) 0 4rem; }
 .hero img.lockup { width: min(340px, 72vw); height: auto; }
+
+/* The mascot — the mark, alive.
+ *
+ * It replaces the static lockup in the hero rather than sitting beside it, because the animation
+ * CONTAINS the `b`: two of them on one screen is not a flourish, it is a mistake. Nothing is lost by
+ * dropping the wordmark here, because the sticky bar carries the lockup on every page including this
+ * one, two centimetres above.
+ *
+ * And it plays ONCE. The choreography starts and ends with the ember hidden inside the bowl of the
+ * b, so a single play leaves a clean, still logo — a moment of warmth on arrival and then quiet,
+ * which is the only way a mascot belongs on a page whose stylesheet says "nothing here glows". The
+ * loop count is set in the GIF itself; `the_mascot_plays_once` holds it there.
+ *
+ * A reader who has asked for less motion gets a still frame instead, chosen so the ember is out and
+ * waving — the poster has to show the mascot, or that reader never learns there is one. */
+/* The animated lockup: the mark, alive, beside the real wordmark.
+ *
+ * Two elements rather than one composited GIF, for two reasons. Compositing the wordmark into all 46
+ * frames took the file from 110 KB to 440 KB, because a GIF encoder re-encodes the static pixels on
+ * every frame. And the wordmark stays a crisp PNG at any pixel density this way, where a composited
+ * copy would be rasterised once at one size.
+ *
+ * The cost is that the alignment is arithmetic rather than a picture, so here is where every number
+ * comes from. The GIF is 174x222 and its `b` ink occupies x 6..113, y 40..183 — measured across all
+ * 46 frames, because the ember hops above the letter and the frame has to hold that. The wordmark is
+ * cropped to its own ink, 823x217, from the official 1311px lockup, so the typeface is the brand's
+ * and not a system font pretending.
+ *
+ * Everything is expressed against `--mark`, the GIF's rendered height, so one number scales the pair:
+ *   the wordmark's height   135/222 = 0.608   (135px beside a 144px-tall b, the lockup's own ratio)
+ *   the lift off the bottom  38/222 + 5/222 = 0.194
+ *                            38px of the GIF sits below the b's baseline, and the wordmark's baseline
+ *                            is 5px above the b's at this scale — both from the lockup's geometry
+ *   the gap                  48/222 = 0.216
+ *                            the brand gap is 108px in these units and the GIF already carries 60px
+ *                            of transparent space to the right of the b, so only 48 is added */
+.hero .lockup-live {
+  --mark: clamp(104px, 24vw, 152px);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: calc(var(--mark) * 0.216);
+}
+.hero .lockup-live img.mark { height: var(--mark); width: auto; max-width: none; }
+.hero .lockup-live img.word {
+  height: calc(var(--mark) * 0.608);
+  width: auto;
+  margin-bottom: calc(var(--mark) * 0.194);
+}
+
+.hero .mascot { display: block; }
+.hero .mascot img {
+  /* On the 404 page the mascot stands alone, with no wordmark to size against. The delivered frame
+   * was 480x360 with the artwork filling 34% of its width, so a 300px element showed a 100px mark —
+   * cropped to its own bounding box, the number here is the size of the thing you see. */
+  width: min(190px, 44vw);
+  height: auto;
+  margin: 0 auto;
+  display: block;
+  /* Tapping or clicking replays it. The cursor says so; site.js does it. */
+  cursor: pointer;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero .mascot img { cursor: default; }
+}
 .hero p.line {
   margin: 2rem auto 0;
   max-width: 34rem;
@@ -899,8 +964,15 @@ footer a { color: var(--accent); }
   .code-file { max-width: 9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 
-/* A phone in landscape, or any short viewport: the sticky rails would eat the whole screen. */
-@media (max-height: 560px) {
+/* A short window: the sticky rails would eat the screen, so they scroll with the page instead.
+ *
+ * `min-width: 901px` is load-bearing and was missing. Below that the sidebar is a fixed DRAWER, and
+ * this rule — later in the file, same specificity — was turning it back into a static block that
+ * pushed the whole page down by its own height. A phone in landscape is 844x390, which is exactly a
+ * short viewport, so the menu appeared as a 400px slab above the content on every page.
+ *
+ * Found by taking a 390x420 screenshot, which is the only reason the height ever went under 560. */
+@media (min-width: 901px) and (max-height: 560px) {
   .side, .toc { position: static; max-height: none; }
 }
 
