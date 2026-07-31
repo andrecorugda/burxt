@@ -125,17 +125,13 @@ Money is counted in whole units — never converted at a rate nobody wrote down.
 
 <svg viewBox="0 0 640 252" role="img" aria-label="A Decimal crosses to C as its exact integer; as a double it does not cross at all" style="max-width:100%;height:auto;margin:1.5rem 0;">
   <style>
-    .b { fill: #fff; stroke: #111; stroke-width: 1.5; }
-    .wall { stroke: #111; stroke-width: 2.5; }
-    .t { font: 13px ui-monospace, monospace; fill: #111; }
-    .g { font: 11px ui-monospace, monospace; fill: #888; }
-    .s { font: 11px ui-monospace, monospace; fill: #b00; }
-    .a { stroke: #111; stroke-width: 1.5; fill: none; marker-end: url(#a7); }
-    .x { stroke: #b00; stroke-width: 2; }
-    @media (prefers-color-scheme: dark) {
-      .b { fill: #1b1b1b; stroke: #ddd; } .wall { stroke: #ddd; } .t { fill: #eee; }
-      .s { fill: #ff8080; } .a { stroke: #ddd; } .g { fill: #999; } .x { stroke: #ff8080; }
-    }
+    .b { fill: #fff; stroke: #1d1d1f; stroke-width: 1.5; }
+    .wall { stroke: #1d1d1f; stroke-width: 2.5; }
+    .t { font: 13px ui-monospace, monospace; fill: #1d1d1f; }
+    .g { font: 11px ui-monospace, monospace; fill: #3a3a3e; }
+    .s { font: 11px ui-monospace, monospace; fill: #c8102e; }
+    .a { stroke: #1d1d1f; stroke-width: 1.5; fill: none; marker-end: url(#a7); }
+    .x { stroke: #c8102e; stroke-width: 2; }
   </style>
   <defs>
     <marker id="a7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">

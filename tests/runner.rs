@@ -4756,6 +4756,74 @@ fn the_site_text_is_readable() {
          `--ink-2` for chrome:\n  {}",
         ghosts.join("\n  ")
     );
+
+    // ---- and the diagrams, which have stylesheets of their own -----------------------------------
+    //
+    // Every analogy figure and schematic in the guide is an inline <svg> with its own <style> block,
+    // and none of the above sees a single one of them. That gap shipped twice over.
+    //
+    // Four diagrams still carried `@media (prefers-color-scheme: dark)` from before the white-only
+    // brief. On a reader whose OS is dark those rules fired and repainted the figure for a dark
+    // background it is never on — `fill: #eee` text and `#1b1b1b` boxes, on white. Near-invisible
+    // labels and black slabs, on a page that is white for everyone.
+    //
+    // And four used `#888` for their small labels, which is 3.5:1 — the same faintness `--ink-soft`
+    // was deleted for, in the one place the deletion could not reach.
+    let mut faint_svg = Vec::new();
+    for entry in walk(&root.join("docs")) {
+        let interesting = entry
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e == "md" || e == "html");
+        if !interesting {
+            continue;
+        }
+        let text = match fs::read_to_string(&entry) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let shown = entry.strip_prefix(root).unwrap().to_string_lossy().to_string();
+        for svg in text.split("<svg").skip(1) {
+            let svg = svg.split("</svg>").next().unwrap_or("");
+            if svg.contains("prefers-color-scheme") {
+                faint_svg.push(format!(
+                    "{} — a diagram carries a `prefers-color-scheme: dark` block. This site is white \
+                     for everyone, so on a dark-OS reader those rules paint pale text and dark boxes \
+                     onto a white page. Delete the block.",
+                    shown
+                ));
+            }
+            // The colours a diagram gives its TEXT, held to the same floor as the page's.
+            for rule in svg.split('}') {
+                let Some((_, body)) = rule.split_once('{') else { continue };
+                if !body.contains("font") {
+                    continue;                 // a shape's fill, not a label's
+                }
+                let Some((_, tail)) = body.split_once("fill:") else { continue };
+                let hex = tail.trim().trim_start_matches('#');
+                let hex: String = hex.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+                let full = match hex.len() {
+                    3 => hex.chars().flat_map(|c| [c, c]).collect::<String>(),
+                    6 => hex.clone(),
+                    _ => continue,
+                };
+                let got = ratio(&full.to_ascii_lowercase(), &paper);
+                if got < 4.5 {
+                    faint_svg.push(format!(
+                        "{} — diagram text is #{} on white, {:.2}:1, and text needs 4.5:1",
+                        shown, hex, got
+                    ));
+                }
+            }
+        }
+    }
+    faint_svg.sort();
+    faint_svg.dedup();
+    assert!(
+        faint_svg.is_empty(),
+        "the guide's diagrams are not readable:\n  {}",
+        faint_svg.join("\n  ")
+    );
 }
 
 /// Every file under a directory, so a test can sweep the site without listing it.

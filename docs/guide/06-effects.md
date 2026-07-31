@@ -126,15 +126,11 @@ If you call something with a stamp, you need that stamp. All the way up.
 
 <svg viewBox="0 0 620 190" role="img" aria-label="Effects travelling up a call chain" style="max-width:100%;height:auto;margin:1.5rem 0;">
   <style>
-    .b { fill: #fff; stroke: #111; stroke-width: 1.5; }
-    .t { font: 13px ui-monospace, monospace; fill: #111; }
-    .s { font: 11px ui-monospace, monospace; fill: #b00; }
-    .g { font: 11px ui-monospace, monospace; fill: #888; }
-    .a { stroke: #111; stroke-width: 1.5; fill: none; marker-end: url(#h); }
-    @media (prefers-color-scheme: dark) {
-      .b { fill: #1b1b1b; stroke: #ddd; } .t { fill: #eee; } .s { fill: #ff8080; }
-      .a { stroke: #ddd; } .g { fill: #999; }
-    }
+    .b { fill: #fff; stroke: #1d1d1f; stroke-width: 1.5; }
+    .t { font: 13px ui-monospace, monospace; fill: #1d1d1f; }
+    .s { font: 11px ui-monospace, monospace; fill: #c8102e; }
+    .g { font: 11px ui-monospace, monospace; fill: #3a3a3e; }
+    .a { stroke: #1d1d1f; stroke-width: 1.5; fill: none; marker-end: url(#h); }
   </style>
   <defs>
     <marker id="h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">

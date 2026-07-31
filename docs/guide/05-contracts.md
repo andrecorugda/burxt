@@ -114,16 +114,12 @@ way **in**; `ensures` on the way **out**.
 
 <svg viewBox="0 0 640 216" role="img" aria-label="requires is checked on the way in, ensures on the way out" style="max-width:100%;height:auto;margin:1.5rem 0;">
   <style>
-    .b { fill: #fff; stroke: #111; stroke-width: 1.5; }
-    .gate { fill: none; stroke: #b00; stroke-width: 2.5; }
-    .t { font: 12px ui-monospace, monospace; fill: #111; }
-    .g { font: 11px ui-monospace, monospace; fill: #888; }
-    .s { font: 11px ui-monospace, monospace; fill: #b00; }
-    .a { stroke: #111; stroke-width: 1.5; fill: none; marker-end: url(#a5); }
-    @media (prefers-color-scheme: dark) {
-      .b { fill: #1b1b1b; stroke: #ddd; } .t { fill: #eee; } .s { fill: #ff8080; }
-      .gate { stroke: #ff8080; } .a { stroke: #ddd; } .g { fill: #999; }
-    }
+    .b { fill: #fff; stroke: #1d1d1f; stroke-width: 1.5; }
+    .gate { fill: none; stroke: #c8102e; stroke-width: 2.5; }
+    .t { font: 12px ui-monospace, monospace; fill: #1d1d1f; }
+    .g { font: 11px ui-monospace, monospace; fill: #3a3a3e; }
+    .s { font: 11px ui-monospace, monospace; fill: #c8102e; }
+    .a { stroke: #1d1d1f; stroke-width: 1.5; fill: none; marker-end: url(#a5); }
   </style>
   <defs>
     <marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
