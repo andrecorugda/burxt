@@ -1,0 +1,13 @@
+// The zero vector has no direction, so there is no unit vector in that direction. A precondition
+// rather than a returned Option, because "which way does nothing point" is not a question with a
+// wrong answer — it is a question that should not have been asked, and that is what `requires` says.
+//
+// `vector_magnitude_squared` and not `vector_magnitude`: one dot product against thirty binary-search
+// steps, and it is exactly the right condition. A vector is normalisable iff its squared magnitude
+// is nonzero.
+use "../../lib/vector.bx";
+
+let mutable origin: [Decimal<7>] = [];
+let a: Int = push(origin, 0.0000000);
+let b: Int = push(origin, 0.0000000);
+print(len(vector_normalise(origin)));

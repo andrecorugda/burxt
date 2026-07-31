@@ -1,0 +1,72 @@
+// Normalising a vector to seven places, with NO division anywhere — spec/N9-VECTORS-EXACTLY.md §1.
+//
+// The condition `tick*n <= |c|/mag` is asked as `(tick*n) * mag <= |c|`, which needs no quotient, so
+// the answer is a plain `[Decimal<7>]` that composes with `vector_dot` above it. A contracted return
+// type would have split the whole API in two.
+//
+// The interesting number is at the bottom. A first version divided by the magnitude directly and was
+// wrong by 4e-5 on short vectors, because the magnitude is floored to seven places and dividing by it
+// turns a 1e-7 ABSOLUTE error into a relative one. Scaling a vector by ten does not change its
+// direction and is exact, so the fix is to measure the magnitude where it is large. Same precision,
+// 400x less error.
+use "../../lib/vector.bx";
+
+function vec3(a: Decimal<7>, b: Decimal<7>, c: Decimal<7>) -> [Decimal<7>] {
+    let mutable v: [Decimal<7>] = [];
+    let p: Int = push(v, a);
+    let q: Int = push(v, b);
+    let r: Int = push(v, c);
+    return v;
+}
+
+let tick: Decimal<7> = 0.0000001;
+
+// The 3-4-5 triangle: EXACTLY 0.6 and 0.8, which f32 gives as 0.59999999 and 0.80000001.
+let t: [Decimal<7>] = vector_normalise(vec3(3.0000000, 4.0000000, 0.0000000));
+print(to_string(t[0]) + " " + to_string(t[1]) + " " + to_string(t[2]));
+print(vector_is_unit(t));
+
+// Negation is symmetric, because the rounding is applied to the SIZE and the sign put back after.
+// Embedding components are half negative, so an asymmetric rule would bias every stored vector.
+let n: [Decimal<7>] = vector_normalise(vec3(tick * (0 - 30000000), 4.0000000, 0.0000000));
+print(to_string(n[0]) + " " + to_string(n[1]));
+
+// Already unit: unchanged, not merely close.
+let e: [Decimal<7>] = vector_normalise(vec3(1.0000000, 0.0000000, 0.0000000));
+print(to_string(e[0]) + " " + to_string(e[1]) + " " + to_string(e[2]));
+
+// 1/sqrt(3) = 0.57735026918..., nearest at seven places.
+let u: [Decimal<7>] = vector_normalise(vec3(1.0000000, 1.0000000, 1.0000000));
+print(to_string(u[0]) + " " + to_string(u[1]) + " " + to_string(u[2]));
+
+// Determinism, which is the whole claim: the same input, twice, identical.
+print(vector_dot(u, vector_normalise(vec3(1.0000000, 1.0000000, 1.0000000))) == vector_dot(u, u));
+
+// A vector 3000x shorter than the first one, in the same direction. Same answer — direction is scale
+// invariant, and it is the boost that makes that true here rather than approximately true.
+let short: [Decimal<7>] = vector_normalise(vec3(0.0010000, 0.0013333, 0.0000000));
+let long: [Decimal<7>] = vector_normalise(vec3(3.0000000, 3.9999000, 0.0000000));
+print(to_string(short[0]) + " " + to_string(short[1]));
+print(to_string(long[0]) + " " + to_string(long[1]));
+
+// ---- the measurement, in the fixture, so it cannot quietly regress ----
+// Every normalised vector's magnitude must read 1 to within ONE grid step. The first version failed
+// this at 411 steps.
+let mutable worst: Int = 0;
+let mutable k: Int = 1;
+while k < 400 {
+    let mutable v: [Decimal<7>] = [];
+    let a: Int = push(v, tick * (k * 9973));
+    let b: Int = push(v, tick * (k * 4001 + 7));
+    let m: Decimal<7> = vector_magnitude(vector_normalise(v));
+    // How many ticks away from 1, either side, without ever leaving Decimal<7>.
+    let mutable off: Int = 0;
+    while off < 400 {
+        if m == 1.0000000 + tick * off { break; }
+        if m == 1.0000000 - tick * off { break; }
+        off += 1;
+    }
+    if off > worst { worst = off; }
+    k += 1;
+}
+print("worst magnitude error over 399 vectors, in ticks: " + to_string(worst));

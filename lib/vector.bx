@@ -72,7 +72,7 @@ use "files.bx";
 // `requires len(a) == len(b)` is the dimension contract. It is not defensive: two vectors of different
 // length have no dot product, and answering one anyway by stopping at the shorter is the class of
 // quiet nonsense that a precondition exists to refuse.
-function vector_dot(a: [Decimal<7>], b: [Decimal<7>]) -> Decimal<14>
+pure function vector_dot(a: [Decimal<7>], b: [Decimal<7>]) -> Decimal<14>
     requires len(a) == len(b)
 {
     let mutable total: Decimal<14> = 0.00000000000000;
@@ -87,7 +87,7 @@ function vector_dot(a: [Decimal<7>], b: [Decimal<7>]) -> Decimal<14>
 // Squared Euclidean distance. **No square root**, and none needed: `√` is monotonic, so squared
 // distance ranks identically to distance. Every nearest-neighbour search that only needs an ORDER can
 // use this and stay exact.
-function vector_squared_distance(a: [Decimal<7>], b: [Decimal<7>]) -> Decimal<14>
+pure function vector_squared_distance(a: [Decimal<7>], b: [Decimal<7>]) -> Decimal<14>
     requires len(a) == len(b)
 {
     let mutable total: Decimal<14> = 0.00000000000000;
@@ -100,7 +100,7 @@ function vector_squared_distance(a: [Decimal<7>], b: [Decimal<7>]) -> Decimal<14
     return total;
 }
 
-function vector_magnitude_squared(a: [Decimal<7>]) -> Decimal<14> {
+pure function vector_magnitude_squared(a: [Decimal<7>]) -> Decimal<14> {
     return vector_dot(a, a);
 }
 
@@ -112,13 +112,15 @@ function vector_magnitude_squared(a: [Decimal<7>]) -> Decimal<14> {
 // `tick * n` builds a `Decimal<7>` from a count of ten-millionths — the same penny-times-a-count shape
 // `lib/json.bx` uses one scale up — and `candidate * candidate` lands at scale 14, exactly where the
 // target already is. So the comparison is between two exact values of the same type.
-function vector_magnitude(a: [Decimal<7>]) -> Decimal<7> {
-    let squared: Decimal<14> = vector_magnitude_squared(a);
+pure function vector_magnitude(a: [Decimal<7>]) -> Decimal<7> {
+    return magnitude_of_squared(vector_magnitude_squared(a));
+}
+
+// The same search, asked about a squared value rather than an array — because `vector_normalise`
+// needs the magnitude of a vector it never builds.
+pure function magnitude_of_squared(squared: Decimal<14>) -> Decimal<7> {
     let tick: Decimal<7> = 0.0000001;
     let mutable low: Int = 0;
-    // 100.0 at scale 7. A unit vector's magnitude is 1; a 92,000-dimension vector of all-ones is
-    // about 303, but such a thing is not an embedding. This bound is generous and keeps the search at
-    // thirty iterations.
     let mutable high: Int = 1000000000;
     while low < high {
         let mid: Int = divide_floor(low + high + 1, 2);
@@ -134,8 +136,130 @@ function vector_magnitude(a: [Decimal<7>]) -> Decimal<7> {
 
 // Is this vector unit length, to seven places? Worth asking rather than assuming, because "the
 // provider returns normalised vectors" is a claim about someone else's code.
-function vector_is_unit(a: [Decimal<7>]) -> Bool {
+pure function vector_is_unit(a: [Decimal<7>]) -> Bool {
     return vector_magnitude(a) == 1.0000000;
+}
+
+// The unit vector in the same direction, at seven places — and **no division anywhere**.
+//
+// This is the function spec/N9 spent two versions calling blocked. The block was real but it was in
+// the wrong place: dividing a `Decimal<7>` needs a rounding contract, so the obvious version answers
+// `[Decimal<7, RoundHalfEven>]` — and that cannot be handed back to `vector_dot`, because dropping a
+// contract at a slice's element type is refused. Rightly so: a slice is aliasable, and the callee
+// could write a rounded value back into the caller's array. A contracted return type would have split
+// this API in two, with every function needing a twin.
+//
+// So the same trick as `vector_magnitude` one level out: find each component's scaled COUNT by binary
+// search, comparing products instead of forming a quotient. The condition
+//
+//     tick*n  <=  |c| / mag        is the same question as        (tick*n) * mag  <=  |c|
+//
+// and the right-hand form needs no division. Both sides land at scale 14 — `(tick*n) * mag` is a
+// product of two `Decimal<7>`, and `|c| * 1.0000000` lifts the component to meet it — so the
+// comparison is between two exact values of the same type.
+//
+// ---- the boost, which is the part that took a measurement to find --------------------
+//
+// The first version divided by `vector_magnitude(a)` directly and was wrong by 4e-5 on short vectors —
+// 400 times worse than the scale suggests. The reason is that the magnitude is FLOORED to seven
+// places, so its error is 1e-7 ABSOLUTE, and dividing by it makes that error RELATIVE to the
+// magnitude: a vector of length 0.001 gets a 1e-4 error, and one of length 1 gets 1e-7.
+//
+// The fix needs no new precision, because **scaling a vector by ten does not change its direction**
+// and is exact. So multiply until the magnitude is at least 1, measure it there, and divide the
+// boosted components by the boosted magnitude — both boosted by the same factor, so the quotient is
+// unchanged and the floor now costs 1e-7 relative instead of 1e-7 absolute.
+//
+// Nothing is built to do it: `squared * (boost * boost)` is the squared magnitude of the boosted
+// vector, exactly, and `magnitude_of_squared` will measure a vector that was never assembled.
+//
+// ---- the rounding rule, stated because it is a promise ------------------------------
+//
+// Each component is the NEAREST seven-place value, with a tie going down (toward zero). It is applied
+// to `|c|` and the sign restored afterwards, so a component and its negation round symmetrically —
+// which flooring toward negative infinity would not do, and which matters because embedding
+// components are half negative.
+//
+// ---- where the error is, honestly ---------------------------------------------------
+//
+// About 1.5e-7 per component: 1e-7 from the floored magnitude and up to 5e-8 from landing on the grid.
+// Deterministic, which is the claim — the same input gives the same unit vector on every machine and
+// every run, and a deterministic 1.5e-7 is a different kind of thing from f32's nondeterministic one.
+//
+// Measured over 399 two-dimensional vectors spanning three orders of magnitude, the boost is the
+// difference between a worst case of **1.0000411** and one of **1.0000001** — and between 75 of them
+// reading exactly unit and 290 of them doing so.
+//
+// A consequence worth knowing before it surprises you: **`vector_is_unit` sometimes answers false on a
+// freshly normalised vector — about a quarter of the time — and that is the right answer.** It asks
+// whether the magnitude reads exactly 1 at seven places, which is a window one grid step wide, and
+// rounding components onto that same grid moves the magnitude by about one step. It is not a defect in
+// either function; it is what "unit length on a finite grid" means, and no amount of care removes it.
+// Use the result for `vector_dot`, which is what it is for; do not use `vector_is_unit` as an
+// acceptance test after normalising.
+//
+// The precondition is the zero vector, which has no direction to point in. `vector_magnitude_squared`
+// rather than `vector_magnitude` because it is one dot product against thirty binary-search steps,
+// and it is exactly the right question: a vector is normalisable iff its squared magnitude is nonzero.
+pure function vector_normalise(a: [Decimal<7>]) -> [Decimal<7>]
+    requires vector_magnitude_squared(a) > 0.00000000000000
+{
+    let squared: Decimal<14> = vector_magnitude_squared(a);
+
+    // Boost until the magnitude is at least 1, so that flooring it costs 1e-7 relative rather than
+    // 1e-7 absolute. Ten million is the ceiling: the smallest nonzero squared magnitude is one unit
+    // at scale 14, and 10^7 squared lifts exactly that to 1.
+    let mutable boost: Int = 1;
+    let mutable lifted: Decimal<14> = squared;
+    while lifted < 1.00000000000000 && boost < 10000000 {
+        boost = boost * 10;
+        lifted = squared * (boost * boost);          // exact — recomputed, never compounded
+    }
+
+    let mag: Decimal<7> = magnitude_of_squared(lifted);
+    let tick: Decimal<7> = 0.0000001;
+    let one: Decimal<7> = 1.0000000;
+    let zero: Decimal<7> = 0.0000000;
+    let mutable out: [Decimal<7>] = [];
+    let mutable i: Int = 0;
+    while i < len(a) {
+        let component: Decimal<7> = a[i];
+        let negative: Bool = component < zero;
+        let mutable size: Decimal<7> = component;
+        if negative {
+            size = zero - component;                 // subtraction never rounds
+        }
+        // The same boost on this side of the quotient, so the ratio is untouched.
+        let target: Decimal<14> = (size * boost) * one;
+        // A normalised component is at most 1, so ten million ticks is the whole range.
+        let mutable low: Int = 0;
+        let mutable high: Int = 10000000;
+        while low < high {
+            let mid: Int = divide_floor(low + high + 1, 2);
+            if (tick * mid) * mag <= target {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        // `low` is the floor. Take the neighbour if it is strictly closer — a tie stays at the floor,
+        // which is toward zero, because the sign is not back on yet.
+        let mutable count: Int = low;
+        if low < 10000000 {
+            let below: Decimal<14> = target - (tick * low) * mag;
+            let above: Decimal<14> = (tick * (low + 1)) * mag - target;
+            if above < below {
+                count = low + 1;
+            }
+        }
+        if negative {
+            let added: Int = push(out, tick * (0 - count));
+        } else {
+            let added: Int = push(out, tick * count);
+        }
+        i += 1;
+    }
+    return out;
 }
 
 // ---- searching ---------------------------------------------------------------

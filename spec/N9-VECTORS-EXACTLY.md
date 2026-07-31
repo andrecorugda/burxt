@@ -1,24 +1,35 @@
 # Burxt — "Vectors, Exactly" (N9)
 
-> Status: **the exact core and the store are BUILT (v0.0.193).** `lib/vector.bx`, with the dimension
-> contract, brute-force top-K, the overflow wall as a panic fixture, and a JSONL store that survives a
-> real file. Rows 1, 2, 3, 4 and 5 of §3 are done; rows 6–9 remain. Every number in §2 came from
-> running the compiler, not from reading it.
+> Status: **rows 1–5 are BUILT (v0.0.195).** `lib/vector.bx`, with the dimension contract,
+> brute-force top-K, `vector_normalise`, the overflow wall as a panic fixture, and a JSONL store that
+> survives a real file. Rows 6–9 remain, and every one of them needs the language to grow. Every number
+> in §2 and §3 came from running the compiler, not from reading it.
 >
-> **One row of §3 looked blocked by the type system. It was a bug, and it is fixed (v0.0.194).**
+> **One row of §3 looked blocked by the type system. It was not, twice over, and both answers are
+> worth keeping.**
+>
 > `vector_normalise` was absent because dividing a `Decimal<7>` needs a rounding contract, so a
 > normalised component is a `Decimal<7, RoundHalfEven>` — and `push` would not accept a plain
 > `Decimal<7>` into a contracted array, so the contracted API could not be built either.
 >
-> That second half was not a design constraint, it was seven positions in stage-0 still comparing
-> types with `==` while a comment claimed the widening applied everywhere. `return` was one of them,
-> and the comment's own list named `return`. Fixed at every site, in both compilers, with the rule now
-> checked by `a_contract_widens_at_every_position_and_drops_at_none` rather than asserted in prose.
+> **First answer (v0.0.194): the second half was a bug.** Seven positions in stage-0 still compared
+> types with `==` while a comment on `storable` claimed the widening applied everywhere. `return` was
+> one of them, and the comment's own list named `return`. Fixed at every site, in both compilers, and
+> the rule is now checked by `a_contract_widens_at_every_position_and_drops_at_none` rather than
+> asserted in prose — a comment cannot be run.
 >
-> **Worth recording as a pattern**, because this is the fifth time: a wall that looked like the type
-> system holding a line turned out to be an inconsistency in how one rule was applied. The question
-> to ask first is not "how do I work around this rule" but "does this rule actually apply here, and
-> does it apply everywhere else too.
+> **Second answer (v0.0.195): the contract was never needed.** With the bug fixed the division-based
+> version compiled, but it answered `[Decimal<7, RoundHalfEven>]`, which cannot be handed back to
+> `vector_dot` — dropping a contract at a slice's element type is refused, and rightly, since a slice
+> is aliasable and the callee could write a rounded value back. That would have split the API in two.
+> Asking `(tick*n) * mag <= |c|` instead of `tick*n <= |c|/mag` removes the division entirely, so the
+> answer is a plain `[Decimal<7>]` that composes with everything above it.
+>
+> **Worth recording as a pattern**, because this is the fifth and sixth time: a wall that looked like
+> the type system holding a line was one rule applied inconsistently, and then a quotient that did not
+> need to be formed. The questions to ask first are whether the rule applies here at all, whether it
+> applies everywhere else too, and whether the operation the type system is objecting to is one the
+> problem actually requires.
 >
 > This came out of the production-readiness audit
 > ([FAR-HORIZON-ROADMAP.md](FAR-HORIZON-ROADMAP.md#5-two-decisions-this-audit-says-should-be-re-opened)),
@@ -71,17 +82,42 @@ Cosine is exact too, on one condition: **store vectors normalised.** That is wha
 do anyway, and the major embedding providers already return unit-length vectors — so in the common
 case there is nothing to normalise and cosine *is* the dot product.
 
-When normalisation is needed, it is an **integer square root**, exact to the floor, in pure Burxt with
-no language change. Verified working:
+When normalisation is needed, it needs **no square root and no division** — which is not what this
+spec originally predicted, and the correction is the interesting part.
 
-```burxt
-function isqrt(n: Int) -> Int requires n >= 0 { ... }   // Newton, on Ints
-isqrt(999999999999)  →  999999
+The prediction was an integer square root plus a division with a rounding contract. What `vector_dot`
+already showed is the better move: a comparison beats a quotient. Finding each component's scaled count
+by binary search asks
+
+```
+tick*n  <=  |c| / mag        as        (tick*n) * mag  <=  |c|
 ```
 
-Normalisation is therefore a **stated contract** rather than a hidden approximation: *"scaled to
-`Decimal<7>`, rounded half-even"* is a promise in a signature, and the same input gives the same unit
-vector forever.
+and the right-hand form is two multiplications of `Decimal<7>` landing at scale 14, where `|c|` also
+lands once lifted by `1.0000000`. Both sides exact, same type, no quotient, and the answer is a plain
+`Decimal<7>` rather than a contracted one — so it composes with `vector_dot` instead of needing a twin
+of every function.
+
+**One measurement changed the design, and it is worth stating because the naive version looks fine.**
+Dividing by `vector_magnitude(a)` directly is wrong by **4.1e-5** on a short vector — 400× worse than
+the scale suggests — because the magnitude is floored to seven places, so its 1e-7 *absolute* error
+becomes *relative* to a small magnitude. The fix costs no precision at all: **scaling a vector by ten
+does not change its direction, and is exact.** Boost until the magnitude is at least 1, measure it
+there, and divide boosted by boosted. Worst case over 399 vectors spanning three orders of magnitude:
+
+| | worst magnitude | reading exactly unit |
+|---|---|---|
+| dividing by the floored magnitude | 1.0000411 | 75 of 399 |
+| **boosting first** | **1.0000001** | **290 of 399** |
+
+Normalisation is therefore a **stated rule** rather than a hidden approximation: *nearest seven-place
+value, ties toward zero, applied to the size with the sign restored after* — so a component and its
+negation round symmetrically, which matters because embedding components are half negative.
+
+One consequence to know before it surprises you: `vector_is_unit` answers false on about a quarter of
+freshly normalised vectors, and that is correct. It asks whether the magnitude reads exactly 1 at seven
+places — a window one grid step wide — and rounding components onto that same grid moves the magnitude
+by about one step. It is what "unit length on a finite grid" means, not a defect in either function.
 
 ## 2. The scale arithmetic — verified, not estimated
 
@@ -132,7 +168,7 @@ storage and ingestion.
 
 | # | Piece | What it is | Needs from the language | Size |
 |---|---|---|---|---|
-| 1 | **`lib/vector.bx`** | `dot`, `squared_distance`, `magnitude_squared`, `isqrt`, `normalise`, `cosine_prenormalised`. All at `Decimal<7>` in, `Decimal<14>` out | **nothing.** Verified working today | small |
+| 1 | **`lib/vector.bx`** ✅ | **done (v0.0.192, `normalise` v0.0.195).** `dot`, `squared_distance`, `magnitude_squared`, `magnitude`, `is_unit`, `normalise`, `top_dot`. `Decimal<7>` in, `Decimal<14>` out, and no division anywhere | **nothing** | small |
 | 2 | **A dimension contract** | `requires len(a) == len(b)`, and a stated max dimension per scale so the overflow is a compile-time-documented limit rather than a surprise | nothing — this is what `requires` is for | small |
 | 3 | **Brute-force search** | scan N vectors, keep the top K. Exact, and correct by construction — the baseline every index is checked against | `lib/array.bx` for the top-K (partial sort) | small |
 | 4 | **A text-format store** ✅ | **done (v0.0.193).** JSONL — one JSON object per line, via `lib/json.bx`. `vector_store_render`/`_parse` are pure; `_write`/`_read`/`_append` declare `touches files` | nothing. `lib/json.bx` existed | small |
@@ -176,8 +212,10 @@ wobble the arithmetic was built to remove).
 
 **Rows 1–5 are buildable today, need no language change, and deliver the claim.** A slow, exact,
 reproducible vector store with a JSON-file backend is a working demonstration of something nobody
-else has — and it is a week of work, not a year. **As of v0.0.193 all five are built**, and the count
-of language changes it took was zero.
+else has — and it is a week of work, not a year. **As of v0.0.195 all five are built**, and the count
+of language changes it took was zero. One bug was found on the way (v0.0.194) and one prediction in §1
+turned out wrong in the useful direction — normalisation needed neither the square root nor the
+division this spec expected.
 
 Rows 6–9 make it *fast*. Row 8 makes it *convenient*. None of them make it more correct.
 
@@ -220,8 +258,10 @@ missing is the rule and a fail fixture per path.
 1. `lib/vector.bx`, with a fixture per function, in **both compilers** — the fixpoint holds.
 2. The 1536-dimension worst case is a fixture, answering `1535.99969280001536` **exactly**.
 3. The scale-8 overflow is a **panic fixture**. The wall is a feature and has to be tested as one.
-4. `isqrt` is checked against a table of known values including 0, 1, a perfect square, and a value
-   near `i64`'s limit.
+4. ~~`isqrt`~~ — not needed. `magnitude_of_squared` binary-searches the scaled count and compares
+   squares, so no integer square root appears in the library at all. Checked at 0.6/0.8 exactly, at
+   √2, and against a 399-vector sweep asserting the magnitude of every normalised vector reads 1 to
+   within ONE tick (`tests/pass/vector_normalise.bx`). The zero vector is a panic fixture.
 5. Brute-force top-K over a small corpus, with the ranking asserted — not a range, an ordering.
 6. **The reproducibility test**: the same corpus and query scored twice, byte-identical. On one target
    now; across targets when M3 lands.

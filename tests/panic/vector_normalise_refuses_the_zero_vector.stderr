@@ -1,0 +1,1 @@
+`requires vector_magnitude_squared(a) > 0.00000000000000` failed in `vector_normalise`
