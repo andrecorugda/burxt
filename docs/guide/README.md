@@ -19,8 +19,8 @@ what the language refuses is usually the interesting part.
 | 12 | [Tools and agents](12-tools-and-agents.md) | `burxt mcp-schema`, `burxt review` — the contract IS the tool schema |
 
 The reference moved out of this directory and is now **generated**: `scripts/site-reference.py`
-reads the keyword table out of `src/lexer.rs`, the reserved names out of `src/typeck.rs`, the
-commands out of `src/main.rs` and every standard-library entry out of the `//` prose in `lib/*.bx`.
+reads the keyword table out of `src/rust-compiler/lexer.rs`, the reserved names out of `src/rust-compiler/typeck.rs`, the
+commands out of `src/rust-compiler/main.rs` and every standard-library entry out of the `//` prose in `lib/*.bx`.
 It lives in [`docs/reference/`](../reference/index.md). The hand-written page it replaces had gone
 stale — it still listed `record`, renamed to `class` eleven versions earlier.
 

@@ -387,8 +387,8 @@ fn money_and_integers_cross_into_c_exactly() {
 #[test]
 fn editor_grammar_knows_every_keyword_the_compiler_does() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let lexer = fs::read_to_string(root.join("src/lexer.rs")).unwrap();
-    let typeck = fs::read_to_string(root.join("src/typeck.rs")).unwrap();
+    let lexer = fs::read_to_string(root.join("src/rust-compiler/lexer.rs")).unwrap();
+    let typeck = fs::read_to_string(root.join("src/rust-compiler/typeck.rs")).unwrap();
     let grammar =
         fs::read_to_string(root.join("editors/vscode/syntaxes/burxt.tmLanguage.json")).unwrap();
 
@@ -404,7 +404,7 @@ fn editor_grammar_knows_every_keyword_the_compiler_does() {
         .collect();
     assert!(
         words.len() > 20,
-        "failed to read the keyword table out of src/lexer.rs (found {:?})",
+        "failed to read the keyword table out of src/rust-compiler/lexer.rs (found {:?})",
         words
     );
 
@@ -424,7 +424,7 @@ fn editor_grammar_knows_every_keyword_the_compiler_does() {
         .split_once("fn is_reserved_name")
         .and_then(|(_, rest)| rest.split_once('}'))
         .map(|(body, _)| body)
-        .expect("`fn is_reserved_name` in src/typeck.rs — the built-in name list");
+        .expect("`fn is_reserved_name` in src/rust-compiler/typeck.rs — the built-in name list");
     let builtins: Vec<String> = reserved
         .split('"')
         .skip(1)
@@ -434,7 +434,7 @@ fn editor_grammar_knows_every_keyword_the_compiler_does() {
         .collect();
     assert!(
         builtins.len() > 10,
-        "failed to read the built-in names out of src/typeck.rs (found {:?}). They moved — find \
+        "failed to read the built-in names out of src/rust-compiler/typeck.rs (found {:?}). They moved — find \
          them and fix this scrape rather than deleting it: an empty list makes this test pass by \
          checking nothing, which is how `exit` stayed missing from the grammar.",
         builtins
@@ -962,7 +962,7 @@ fn the_burxt_front_end_accepts_every_burxt_source() {
     // Build it once with the Rust compiler, then run it over everything.
     let build = Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("examples/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/stage1.bx"))
         .current_dir(&scratch)
         .output()
         .expect("failed to spawn burxt");
@@ -973,7 +973,7 @@ fn the_burxt_front_end_accepts_every_burxt_source() {
     );
 
     let mut sources: Vec<PathBuf> = vec![
-        root.join("examples/stage1.bx"),
+        root.join("src/burxt-compiler/stage1.bx"),
         root.join("examples/checker.bx"),
         root.join("examples/symbols.bx"),
         root.join("examples/lexer.bx"),
@@ -1037,7 +1037,7 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     fs::create_dir_all(&scratch).unwrap();
     let build = Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("examples/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/stage1.bx"))
         .current_dir(&scratch)
         .output()
         .expect("failed to spawn burxt");
@@ -1061,7 +1061,7 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     // lines of the language. A false positive here means the two implementations
     // disagree about what Burxt IS.
     let mut noisy = Vec::new();
-    for name in ["examples/stage1.bx", "examples/tour.bx", "examples/money.bx"] {
+    for name in ["src/burxt-compiler/stage1.bx", "examples/tour.bx", "examples/money.bx"] {
         if errors_reported(&root.join(name)) != 0 {
             noisy.push(name.to_string());
         }
@@ -1303,7 +1303,7 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
     fs::create_dir_all(&scratch).unwrap();
     let build = Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("examples/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/stage1.bx"))
         .current_dir(&scratch)
         .output()
         .expect("failed to spawn burxt");
@@ -1470,7 +1470,7 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
 /// **Burxt compiles Burxt, and the result is fixed.** The self-hosting certificate, run
 /// end to end on every `cargo test`:
 ///
-/// 1. stage-0 (this Rust compiler) builds **stage-1** from `examples/stage1.bx`.
+/// 1. stage-0 (this Rust compiler) builds **stage-1** from `src/burxt-compiler/stage1.bx`.
 /// 2. stage-1 emits LLVM IR for **its own source**, with no construct refused.
 /// 3. That IR is assembled and linked into **stage-2** — a Burxt compiler built by a
 ///    Burxt compiler.
@@ -1496,7 +1496,7 @@ fn burxt_compiles_burxt_and_reaches_the_fixpoint() {
     let stage1 = scratch.join("stage1");
     assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("examples/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/stage1.bx"))
         .arg("-o")
         .arg(&stage1)
         .status()
@@ -1506,7 +1506,7 @@ fn burxt_compiles_burxt_and_reaches_the_fixpoint() {
     // A Burxt program from a Burxt compiler: source -> IR text -> object -> program.
     let build_stage = |compiler: &Path, ir: &PathBuf, exe: &PathBuf| -> String {
         let emitted = Command::new(compiler)
-            .arg(root.join("examples/stage1.bx"))
+            .arg(root.join("src/burxt-compiler/stage1.bx"))
             .arg(ir)
             .output()
             .expect("a compiler");
@@ -1868,7 +1868,7 @@ fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
     let stage1 = scratch.join("stage1");
     assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("examples/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/stage1.bx"))
         .arg("-o")
         .arg(&stage1)
         .status()
@@ -2009,7 +2009,7 @@ fn the_suite_also_runs_on_burxt() {
         let stage1 = scratch.join("stage1");
         assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
             .arg("build")
-            .arg(root.join("examples/stage1.bx"))
+            .arg(root.join("src/burxt-compiler/stage1.bx"))
             .arg("-o")
             .arg(&stage1)
             .status()
@@ -2389,7 +2389,7 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
     let stage1 = scratch.join("stage1");
     assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("examples/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/stage1.bx"))
         .arg("-o")
         .arg(&stage1)
         .status()
@@ -2428,7 +2428,7 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
 
     let started = std::time::Instant::now();
     let emitted = Command::new(&stage1)
-        .arg(root.join("examples/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/stage1.bx"))
         .arg(scratch.join("self.ll"))
         .output()
         .expect("stage1 on its own source");
@@ -2566,7 +2566,7 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
             .arg("-f")
             .arg("%M")
             .arg(&stage1)
-            .arg(root.join("examples/stage1.bx"))
+            .arg(root.join("src/burxt-compiler/stage1.bx"))
             .arg(scratch.join("self-memory.ll"))
             .output()
             .expect("time on stage1");
@@ -2971,7 +2971,7 @@ fn the_packaged_extension_matches_the_grammar_in_the_repository() {
 
 /// The editor must check the PROGRAM, not the file.
 ///
-/// `examples/burxt/check.bx` is one of five modules `examples/stage1.bx` assembles. Checked on
+/// `src/burxt-compiler/check.bx` is one of five modules `src/burxt-compiler/stage1.bx` assembles. Checked on
 /// its own it reports every type declared in a sibling as unknown — so opening the compiler in
 /// an editor showed five files of squiggles that were not mistakes. And `stage1.bx` itself
 /// reported a parse error on its own `use` lines, because the language server never resolved
@@ -3088,7 +3088,7 @@ fn the_burxt_compiler_reads_and_emits_every_generic_form() {
     let stage1 = scratch.join("stage1");
     assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("examples/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/stage1.bx"))
         .arg("-o")
         .arg(&stage1)
         .status()
@@ -3184,8 +3184,8 @@ fn the_burxt_compiler_reads_and_emits_every_generic_form() {
 fn one_word_per_concept_in_the_burxt_compiler() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut sources: Vec<PathBuf> = Vec::new();
-    collect_bx(&root.join("examples/burxt"), &mut sources);
-    sources.push(root.join("examples/stage1.bx"));
+    collect_bx(&root.join("src/burxt-compiler"), &mut sources);
+    sources.push(root.join("src/burxt-compiler/stage1.bx"));
     let mut text = String::new();
     for p in &sources {
         text.push_str(&fs::read_to_string(p).unwrap());
@@ -3244,7 +3244,7 @@ fn one_word_per_concept_in_the_burxt_compiler() {
         "attr", "ctx", "cfg", "sig", "dest", "pos", "prev", "curr", "iter", "acc", "tok", "toks",
         "fn", "fns", "mut", "recv", "len",
     ];
-    let types_bx = fs::read_to_string(root.join("examples/burxt/types.bx")).unwrap();
+    let types_bx = fs::read_to_string(root.join("src/burxt-compiler/types.bx")).unwrap();
     for line in types_bx.lines() {
         let line = match line.find("//") {
             Some(at) => &line[..at],
@@ -3266,7 +3266,7 @@ fn one_word_per_concept_in_the_burxt_compiler() {
             let last = name.rsplit('_').next().unwrap_or(name);
             if clipped.contains(&name) || (name.contains('_') && clipped.contains(&last)) {
                 problems.push(format!(
-                    "field `{}` in examples/burxt/types.bx is clipped. A field crosses files, so \
+                    "field `{}` in src/burxt-compiler/types.bx is clipped. A field crosses files, so \
                      write the word: `length` not `len`, `parameters` not `params`, `position` \
                      not `pos`",
                     name
@@ -3977,8 +3977,8 @@ fn the_reference_is_not_stale() {
 #[test]
 fn the_web_highlighter_knows_every_keyword_the_compiler_does() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let lexer = fs::read_to_string(root.join("src/lexer.rs")).unwrap();
-    let typeck = fs::read_to_string(root.join("src/typeck.rs")).unwrap();
+    let lexer = fs::read_to_string(root.join("src/rust-compiler/lexer.rs")).unwrap();
+    let typeck = fs::read_to_string(root.join("src/rust-compiler/typeck.rs")).unwrap();
     let js = fs::read_to_string(root.join("docs/assets/burxt-editor.js"))
         .expect("docs/assets/burxt-editor.js — the site's highlighter");
 
@@ -3994,7 +3994,7 @@ fn the_web_highlighter_knows_every_keyword_the_compiler_does() {
         .collect();
     assert!(
         want.len() > 20,
-        "failed to read the keyword table out of src/lexer.rs (found {:?})",
+        "failed to read the keyword table out of src/rust-compiler/lexer.rs (found {:?})",
         want
     );
 
@@ -4004,7 +4004,7 @@ fn the_web_highlighter_knows_every_keyword_the_compiler_does() {
         .split_once("fn is_reserved_name")
         .and_then(|(_, rest)| rest.split_once('}'))
         .map(|(body, _)| body)
-        .expect("`fn is_reserved_name` in src/typeck.rs");
+        .expect("`fn is_reserved_name` in src/rust-compiler/typeck.rs");
     let builtins: Vec<String> = reserved
         .split('"')
         .skip(1)
@@ -4022,7 +4022,7 @@ fn the_web_highlighter_knows_every_keyword_the_compiler_does() {
         .split_once("fn renamed_keyword")
         .and_then(|(_, rest)| rest.split_once("_ => return None"))
         .map(|(body, _)| body)
-        .expect("`fn renamed_keyword` in src/lexer.rs");
+        .expect("`fn renamed_keyword` in src/rust-compiler/lexer.rs");
     let old: Vec<String> = renamed
         .lines()
         .filter_map(|l| {
@@ -4034,7 +4034,7 @@ fn the_web_highlighter_knows_every_keyword_the_compiler_does() {
         .collect();
     assert!(
         old.len() >= 6,
-        "failed to read the renamed spellings out of src/lexer.rs (found {:?})",
+        "failed to read the renamed spellings out of src/rust-compiler/lexer.rs (found {:?})",
         old
     );
     want.extend(old);
@@ -4411,7 +4411,7 @@ fn the_burxt_backend_keeps_every_runtime_guarantee() {
     let stage1 = scratch.join("stage1");
     assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("examples/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/stage1.bx"))
         .arg("-o")
         .arg(&stage1)
         .status()
@@ -4604,7 +4604,7 @@ fn every_source_and_document_is_in_version_control() {
 #[test]
 fn every_call_site_mirrors_the_declared_abi() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let src = fs::read_to_string(root.join("src/codegen.rs")).unwrap();
+    let src = fs::read_to_string(root.join("src/rust-compiler/codegen.rs")).unwrap();
     let lines: Vec<&str> = src.lines().collect();
 
     let mut sites = 0;
@@ -4629,7 +4629,7 @@ fn every_call_site_mirrors_the_declared_abi() {
         sites += 1;
         let after = lines[i..(i + 45).min(lines.len())].join("\n");
         if !after.contains("\"byval\"") {
-            missing.push(format!("  src/codegen.rs:{} — {}", i + 1, line.trim()));
+            missing.push(format!("  src/rust-compiler/codegen.rs:{} — {}", i + 1, line.trim()));
         }
     }
 
@@ -5106,7 +5106,7 @@ fn the_guide_reads_in_order() {
 ///
 /// spec/M13-CONTRACT-SYNTAX.md opens by claiming exactly this, and says the desugaring is
 /// "observable rather than asserted". It was neither: the bracket form shipped in v0.0.135 with no
-/// fixture anywhere in the suite, and `src/parser.rs` carried a comment citing a
+/// fixture anywhere in the suite, and `src/rust-compiler/parser.rs` carried a comment citing a
 /// `tests/pass/contract_brackets.bx` that had never existed. Fourteen versions of a syntax nobody
 /// tested — found in v0.0.166 while deciding how stage-1 should render the message.
 ///
@@ -5631,7 +5631,7 @@ fn a_contract_widens_at_every_position_and_drops_at_none() {
     let stage1 = scratch.join("stage1");
     let have_stage1 = Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("examples/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/stage1.bx"))
         .arg("-o")
         .arg(&stage1)
         .status()
@@ -6040,7 +6040,7 @@ fn a_program_reports_its_status_to_the_shell() {
     let have_stage1 = llc.exists()
         && Command::new(env!("CARGO_BIN_EXE_burxt"))
             .arg("build")
-            .arg(root.join("examples/stage1.bx"))
+            .arg(root.join("src/burxt-compiler/stage1.bx"))
             .arg("-o")
             .arg(&stage1)
             .status()
@@ -6222,7 +6222,7 @@ fn print_error_writes_to_stderr() {
     let stage1 = scratch.join("stage1");
     assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("examples/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/stage1.bx"))
         .arg("-o")
         .arg(&stage1)
         .status()
@@ -6346,7 +6346,7 @@ FAIL deliberately broken / my own: because I said so
     let stage1 = scratch.join("stage1");
     assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("examples/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/stage1.bx"))
         .arg("-o")
         .arg(&stage1)
         .status()

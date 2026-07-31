@@ -455,10 +455,10 @@ Rules committed now:
 
 ```text
 Source (.bx)
-  -> Lexer      (src/lexer.rs)      : text -> tokens
-  -> Parser     (src/parser.rs)     : tokens -> AST (src/ast.rs)
-  -> Typecheck  (src/typeck.rs)     : AST -> typed AST + errors
-  -> Codegen    (src/codegen.rs)    : typed AST -> LLVM IR -> native object
+  -> Lexer      (src/rust-compiler/lexer.rs)      : text -> tokens
+  -> Parser     (src/rust-compiler/parser.rs)     : tokens -> AST (src/rust-compiler/ast.rs)
+  -> Typecheck  (src/rust-compiler/typeck.rs)     : AST -> typed AST + errors
+  -> Codegen    (src/rust-compiler/codegen.rs)    : typed AST -> LLVM IR -> native object
   -> link       (cc)                : object -> executable
 ```
 

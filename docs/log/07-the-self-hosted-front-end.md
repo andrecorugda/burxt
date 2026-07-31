@@ -78,7 +78,7 @@ and the compiler said so, naming the fix, in a file it had never seen before.
 
 ### v0.0.53: the stage-1 parser — types, expressions, statements
 
-M4 phase 3a. `examples/stage1_lexer.bx` became `examples/stage1.bx`, because it is no
+M4 phase 3a. `examples/stage1_lexer.bx` became `src/burxt-compiler/stage1.bx`, because it is no
 longer a lexer: it is the stage-1 compiler, growing a phase at a time in one file, which
 is the shape the plan predicted while Burxt has no modules.
 

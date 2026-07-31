@@ -8,7 +8,7 @@ description: Every keyword, builtin, operator and standard-library function — 
 
 # Reference
 
-Everything the language has. **Read out of the compiler**, not from memory: the keyword table below comes from `src/lexer.rs`, the reserved names from `src/typeck.rs`, the commands from `src/main.rs`, and every standard-library entry from the `//` prose written above the declaration itself. `scripts/site-reference.py` regenerates these pages and a test diffs them, so this cannot fall behind the language again — which it had: the page this replaces still listed `record`, a keyword renamed eleven versions earlier.
+Everything the language has. **Read out of the compiler**, not from memory: the keyword table below comes from `src/rust-compiler/lexer.rs`, the reserved names from `src/rust-compiler/typeck.rs`, the commands from `src/rust-compiler/main.rs`, and every standard-library entry from the `//` prose written above the declaration itself. `scripts/site-reference.py` regenerates these pages and a test diffs them, so this cannot fall behind the language again — which it had: the page this replaces still listed `record`, a keyword renamed eleven versions earlier.
 
 <ul class="pages">
 <li><a href="builtins.html"><span>Builtins</span> <span class="what">31 calls the language owns, and what each needs</span></a></li>

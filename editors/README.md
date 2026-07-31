@@ -25,9 +25,9 @@ directory holds that half of the project.
 | TextMate grammar (highlighting) | **DONE** (v0.0.31) | `vscode/syntaxes/burxt.tmLanguage.json` |
 | Language configuration (comments, brackets, indent) | **DONE** (v0.0.31) | `vscode/language-configuration.json` |
 | VS Code extension | **DONE** (v0.0.31), live diagnostics (v0.0.34) — still no build step | `vscode/` |
-| `burxt check` — front end only, for editors and CI | **DONE** (v0.0.31) | `src/main.rs` |
-| Diagnostics with line/column | **DONE** (v0.0.32) | `src/diag.rs`, `burxt check --json` |
-| Language server (`burxt lsp`) | **DONE** (v0.0.33) — diagnostics on change, hover (v0.0.35) | `src/lsp.rs` |
+| `burxt check` — front end only, for editors and CI | **DONE** (v0.0.31) | `src/rust-compiler/main.rs` |
+| Diagnostics with line/column | **DONE** (v0.0.32) | `src/rust-compiler/diag.rs`, `burxt check --json` |
+| Language server (`burxt lsp`) | **DONE** (v0.0.33) — diagnostics on change, hover (v0.0.35) | `src/rust-compiler/lsp.rs` |
 | VS Code diagnostics + hover | **DONE** (v0.0.36) — hand-written LSP client, still no npm | `vscode/extension.js` |
 | VS Code problem matcher (for tasks and CI) | **DONE** (v0.0.33) | `vscode/package.json`, `.vscode/tasks.json` |
 | Neovim / Helix configs | **DONE** (v0.0.33) — diagnostics, no highlighting yet | `nvim/`, `helix/` |

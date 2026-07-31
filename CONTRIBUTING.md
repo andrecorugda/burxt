@@ -18,12 +18,12 @@ Two consequences for contributors:
 
 The compiler is written in Rust with a strict front-end / back-end split:
 
-- `src/lexer.rs` — source text → tokens
-- `src/parser.rs` — tokens → AST
-- `src/ast.rs` — the AST and type definitions
-- `src/typeck.rs` — typechecking; **this is where the language's correctness thesis is enforced**
-- `src/codegen.rs` — typed AST → LLVM IR → native object. **The only file that touches LLVM.**
-- `src/main.rs` — the `burxt` CLI driver
+- `src/rust-compiler/lexer.rs` — source text → tokens
+- `src/rust-compiler/parser.rs` — tokens → AST
+- `src/rust-compiler/ast.rs` — the AST and type definitions
+- `src/rust-compiler/typeck.rs` — typechecking; **this is where the language's correctness thesis is enforced**
+- `src/rust-compiler/codegen.rs` — typed AST → LLVM IR → native object. **The only file that touches LLVM.**
+- `src/rust-compiler/main.rs` — the `burxt` CLI driver
 
 **Keep the front end platform-independent.** Only `codegen.rs` may know about LLVM or any target detail. This separation is what makes cross-platform support a configuration problem rather than a rewrite; please preserve it.
 

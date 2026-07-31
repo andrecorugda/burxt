@@ -201,7 +201,7 @@ than on somebody's machine.
 
 ## Building the compiler
 
-Burxt's compiler (the bootstrap/stage-0 compiler) is written in Rust and emits native code via LLVM 18. The Burxt-written compiler in `examples/stage1.bx` is built by it — see [self-hosting](#status).
+Burxt's compiler (the bootstrap/stage-0 compiler) is written in Rust and emits native code via LLVM 18. The Burxt-written compiler in `src/burxt-compiler/stage1.bx` is built by it — see [self-hosting](#status).
 
 Requirements:
 - Rust (via [rustup](https://rustup.rs))

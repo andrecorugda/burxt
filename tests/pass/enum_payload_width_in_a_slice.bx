@@ -15,7 +15,7 @@
 // block. It printed a WRONG ANSWER — a field's value silently empty — and then exhausted a 1 GB
 // region, in that order.
 //
-// It is also the SECOND time this exact bug was fixed. The note above `enum_types` in src/codegen.rs
+// It is also the SECOND time this exact bug was fixed. The note above `enum_types` in src/rust-compiler/codegen.rs
 // records `Line(Point, Point)` giving each Point one cell; that fix built `payload_cells` and
 // `payload_area` and taught `set_body` to use them, and left `layout_of` counting. One source of
 // truth now — a third size computation appearing is this bug again.

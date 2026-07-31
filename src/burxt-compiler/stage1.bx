@@ -14,18 +14,18 @@
 //
 // Build and run it with:
 //
-//     burxt build examples/stage1.bx -o /tmp/stage1
+//     burxt build src/burxt-compiler/stage1.bx -o /tmp/stage1
 //     /tmp/stage1 <program.bx> [out.ll]
 //
 // Given a second argument it emits LLVM IR for the program; given one it lexes,
 // parses and checks it, and reports what it found.
 // ============================================================================
 
-use "burxt/types.bx";
-use "burxt/parser.bx";
-use "burxt/check.bx";
-use "burxt/modules.bx";
-use "burxt/emit.bx";
+use "types.bx";
+use "parser.bx";
+use "check.bx";
+use "modules.bx";
+use "emit.bx";
 
 // The file to lex: whatever was asked for, or the tour as a default.
 let mutable path: String = "examples/tour.bx";

@@ -352,7 +352,7 @@ fn respond(output: &mut impl Write, id: Value, result: Value) -> Result<(), Stri
 
 /// Typecheck the buffer and publish what came back — every problem, or none.
 fn publish(output: &mut impl Write, uri: &str, text: &str) -> Result<(), String> {
-    // A file is not always a program. `examples/burxt/check.bx` is one of five modules
+    // A file is not always a program. `src/burxt-compiler/check.bx` is one of five modules
     // another file `use`s, and checking it alone reports every type declared in a sibling
     // as unknown — five files of squiggles that are not mistakes. So: if this file is used
     // by a program, check THE PROGRAM, and keep only the diagnostics that landed here.
@@ -381,7 +381,7 @@ fn check_in_context(uri: &str, text: &str) -> Option<Vec<Value>> {
     let path = path_of(uri)?;
     // Two ways a file belongs to a program. It may BE one — a root with `use` lines, whose
     // imports have to be resolved or every `use` is a parse error, which is what the editor
-    // used to show on `examples/stage1.bx`. Or it may be one of the modules a root assembles,
+    // used to show on `src/burxt-compiler/stage1.bx`. Or it may be one of the modules a root assembles,
     // in which case the root is what has to be checked.
     let (_, imports) = crate::strip_imports(text);
     let root = if imports.is_empty() { program_using(&path)? } else { path.clone() };
@@ -426,8 +426,8 @@ fn path_of(uri: &str) -> Option<std::path::PathBuf> {
 }
 
 /// A `.bx` file whose `use` closure reaches `target`. Searched in the file's own directory
-/// and its ancestors up to three levels, which covers `examples/burxt/check.bx` being
-/// assembled by `examples/stage1.bx` without walking a whole disk on every keystroke.
+/// and its ancestors up to three levels, which covers `src/burxt-compiler/check.bx` being
+/// assembled by `src/burxt-compiler/stage1.bx` without walking a whole disk on every keystroke.
 fn program_using(target: &std::path::Path) -> Option<std::path::PathBuf> {
     let canonical = std::fs::canonicalize(target).ok()?;
     let mut dir = target.parent()?.to_path_buf();

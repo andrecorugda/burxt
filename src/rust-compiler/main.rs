@@ -126,7 +126,7 @@ fn compile_main() {
     }
     if cmd == "mcp-schema" {
         // The manifest for an MCP server, derived from the preconditions the tools already carry.
-        // See src/schema.rs — the schema and the check are one sentence, so they cannot drift.
+        // See src/rust-compiler/schema.rs — the schema and the check are one sentence, so they cannot drift.
         match schema::emit(path) {
             Ok(code) => std::process::exit(code),
             Err(message) => {

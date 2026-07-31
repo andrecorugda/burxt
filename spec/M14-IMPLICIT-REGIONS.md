@@ -6,9 +6,9 @@
 > | | |
 > |---|---|
 > | `examples/pos/` with every `allocates` deleted | **compiles, same receipt** |
-> | Fixpoint rounds, `examples/stage1.bx` (8.3k lines, ~500 functions) | **2** |
+> | Fixpoint rounds, `src/burxt-compiler/stage1.bx` (8.3k lines, ~500 functions) | **2** |
 > | Fixpoint rounds, a 4-deep forwarding chain | **5** — one per link, plus one to confirm |
-> | `burxt check examples/stage1.bx` | **0.06 s** (3 typecheck passes: 2 probe + 1 real) |
+> | `burxt check src/burxt-compiler/stage1.bx` | **0.06 s** (3 typecheck passes: 2 probe + 1 real) |
 > | stage-1 compiling its own source | **0.14 s** |
 > | Suite | 37 invariants, fixpoint intact, stage-1 110 of 110 |
 >
@@ -97,7 +97,7 @@
 > The design in §1–§2 assumed this needed escape analysis and destination-passing. It did not,
 > because **`burxt.alloc` is a global bump pointer with no region state at all**. Allocation never
 > needed a region; a `region` block is purely a RELEASE mechanism — a saved mark and one store to
-> put the cursor back. `src/codegen.rs` has **zero** references to `allocates`. So the whole "there
+> put the cursor back. `src/rust-compiler/codegen.rs` has **zero** references to `allocates`. So the whole "there
 > is no region open here" family of refusals was never protecting memory: it was asking the
 > programmer to name a scope so the compiler could decide where to release.
 >

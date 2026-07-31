@@ -12,11 +12,11 @@ and of no afternoon since.
 
 So this reads the compiler. Four sources, none of them a list kept here:
 
-  * `src/lexer.rs` — the keyword table (`"word" => Token::…`) and `renamed_keyword`, which is where
+  * `src/rust-compiler/lexer.rs` — the keyword table (`"word" => Token::…`) and `renamed_keyword`, which is where
     the eight spellings that no longer compile live along with what each became.
-  * `src/typeck.rs` — `is_reserved_name` for the names a program may not declare, and the
+  * `src/rust-compiler/typeck.rs` — `is_reserved_name` for the names a program may not declare, and the
     builtin→effect table for which of them reach the world.
-  * `src/main.rs` — the usage block, which is the whole command-line surface. Two of those commands,
+  * `src/rust-compiler/main.rs` — the usage block, which is the whole command-line surface. Two of those commands,
     `review` and `mcp-schema`, are the most distinctive things in the language and were documented
     nowhere on the site.
   * `lib/*.bx` — every standard-library declaration, with the `//` prose already written above it.
@@ -86,53 +86,53 @@ def read(*parts):
 # ---------------------------------------------------------------------------------------------
 
 def keywords():
-    """The keyword table, from `"word" => Token::Variant` in src/lexer.rs."""
+    """The keyword table, from `"word" => Token::Variant` in src/rust-compiler/lexer.rs."""
     found = []
-    for line in read("src", "lexer.rs").splitlines():
+    for line in read("src", "rust-compiler", "lexer.rs").splitlines():
         m = re.match(r'^\s*"([A-Za-z_]+)"\s*=>\s*Token::', line)
         if m:
             found.append(m.group(1))
     if len(found) < 20:
-        sys.exit("could not read the keyword table out of src/lexer.rs — it moved")
+        sys.exit("could not read the keyword table out of src/rust-compiler/lexer.rs — it moved")
     return found
 
 
 def renamed():
     """The spellings that no longer compile, and what each became, from `renamed_keyword`."""
-    body = read("src", "lexer.rs").split("fn renamed_keyword", 1)[1].split("_ => return None", 1)[0]
+    body = read("src", "rust-compiler", "lexer.rs").split("fn renamed_keyword", 1)[1].split("_ => return None", 1)[0]
     pairs = []
     # `"fn" => ("function", "…")` on one line, and the multi-line form where the tuple wraps.
     for m in re.finditer(r'"([a-z]+)"\s*=>\s*\(\s*\n?\s*"([a-z]+)"', body):
         pairs.append((m.group(1), m.group(2)))
     if len(pairs) < 6:
-        sys.exit("could not read `renamed_keyword` out of src/lexer.rs — it moved")
+        sys.exit("could not read `renamed_keyword` out of src/rust-compiler/lexer.rs — it moved")
     return pairs
 
 
 def reserved():
-    """The names a program may not declare, from `is_reserved_name` in src/typeck.rs."""
-    body = read("src", "typeck.rs").split("fn is_reserved_name", 1)[1].split("}", 1)[0]
+    """The names a program may not declare, from `is_reserved_name` in src/rust-compiler/typeck.rs."""
+    body = read("src", "rust-compiler", "typeck.rs").split("fn is_reserved_name", 1)[1].split("}", 1)[0]
     found = [w for w in re.findall(r'"([a-z_]+)"', body)]
     if len(found) < 10:
-        sys.exit("could not read `is_reserved_name` out of src/typeck.rs — it moved")
+        sys.exit("could not read `is_reserved_name` out of src/rust-compiler/typeck.rs — it moved")
     return found
 
 
 def builtin_effects():
-    """Which builtins reach the world, from the effect table in src/typeck.rs."""
-    text = read("src", "typeck.rs")
+    """Which builtins reach the world, from the effect table in src/rust-compiler/typeck.rs."""
+    text = read("src", "rust-compiler", "typeck.rs")
     block = text.split("for (builtin, effect) in [", 1)[1].split("]", 1)[0]
     out = {}
     for m in re.finditer(r'\("([a-z_]+)",\s*Effect::([A-Za-z]+)\)', block):
         out[m.group(1)] = m.group(2).lower()
     if not out:
-        sys.exit("could not read the builtin effect table out of src/typeck.rs — it moved")
+        sys.exit("could not read the builtin effect table out of src/rust-compiler/typeck.rs — it moved")
     return out
 
 
 def commands():
-    """The command line, from the usage block in src/main.rs."""
-    text = read("src", "main.rs")
+    """The command line, from the usage block in src/rust-compiler/main.rs."""
+    text = read("src", "rust-compiler", "main.rs")
     lines = []
     for m in re.finditer(r'eprintln!\("(  burxt [^"]*)"\)', text):
         lines.append(m.group(1))
@@ -154,7 +154,7 @@ def commands():
     for must in ("check", "build", "run", "review", "mcp-schema", "lsp"):
         if must not in names:
             sys.exit(
-                "the usage block in src/main.rs no longer lists `%s`, or this scrape stopped "
+                "the usage block in src/rust-compiler/main.rs no longer lists `%s`, or this scrape stopped "
                 "reading it. Fix the scrape rather than dropping the command: two of these are the "
                 "most distinctive features in the language." % must
             )
@@ -811,8 +811,8 @@ def render_index(kw, ren, cmds):
     out.append("# Reference\n")
     out.append(
         "Everything the language has. **Read out of the compiler**, not from memory: the keyword "
-        "table below comes from `src/lexer.rs`, the reserved names from `src/typeck.rs`, the "
-        "commands from `src/main.rs`, and every standard-library entry from the `//` prose written "
+        "table below comes from `src/rust-compiler/lexer.rs`, the reserved names from `src/rust-compiler/typeck.rs`, the "
+        "commands from `src/rust-compiler/main.rs`, and every standard-library entry from the `//` prose written "
         "above the declaration itself. `scripts/site-reference.py` regenerates these pages and a "
         "test diffs them, so this cannot fall behind the language again — which it had: the page "
         "this replaces still listed `record`, a keyword renamed eleven versions earlier.\n"
@@ -883,7 +883,7 @@ def render_builtins(effects):
     out.append("# Builtins\n")
     out.append(
         "The names a program may not declare, because the language already means something by "
-        "them. The list comes from `is_reserved_name` in `src/typeck.rs`; every signature below "
+        "them. The list comes from `is_reserved_name` in `src/rust-compiler/typeck.rs`; every signature below "
         "was **compiled** while this page was generated, so none of them is a signature the "
         "compiler would reject.\n"
     )
@@ -928,7 +928,7 @@ def render_cli(cmds):
     out = [FRONT % ("The command line", "Every burxt command, including review and mcp-schema.")]
     out.append("# The command line\n")
     out.append(
-        "Read out of the usage block in `src/main.rs`, so this cannot list a command the compiler "
+        "Read out of the usage block in `src/rust-compiler/main.rs`, so this cannot list a command the compiler "
         "does not have. Two of them exist nowhere else in programming: `burxt review`, which "
         "answers what a change did to what a program **promises**, and `burxt mcp-schema`, which "
         "derives an MCP tool schema from the preconditions so the two cannot drift. Both are "

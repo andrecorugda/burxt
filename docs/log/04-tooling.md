@@ -29,7 +29,7 @@ one of `.bx` files being coloured on github.com.
 (`vscode-textmate` + Oniguruma) over a program exercising every construct, and
 the token scopes were read back. A dependency-free test then locks the invariant
 permanently: **every keyword and builtin the compiler knows must appear in the
-grammar's patterns** — extracted from `src/lexer.rs` and `src/typeck.rs` at test
+grammar's patterns** — extracted from `src/rust-compiler/lexer.rs` and `src/rust-compiler/typeck.rs` at test
 time rather than duplicated, because a duplicated list is the thing that drifts.
 The test searches the grammar's *patterns* and not its prose, which was found by
 mutation: the looser first version passed after the `tail` rule was deleted,
@@ -151,7 +151,7 @@ dependency (LLVM) and that restraint is worth keeping. The alternative people
 reach for at this size — finding fields with string search — is wrong the moment a
 document contains a quote or a backslash, which Burxt source does constantly. A
 language server that mangles the buffer it was sent is worse than none. So
-`src/json.rs` is a small, correct reader and writer, including surrogate pairs
+`src/rust-compiler/json.rs` is a small, correct reader and writer, including surrogate pairs
 (that is how an emoji in a document arrives) and integers that do not serialize as
 `1.0` (some clients are strict). Its tests cover the malformed inputs too, because
 a server that panics takes the editor's language support down with it.

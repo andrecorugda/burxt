@@ -53,6 +53,34 @@ Each was learned expensively and each has a version number behind it.
 
 ---
 
+## A0 — DONE (v0.0.214): the Burxt compiler stopped living in `examples/`
+
+Andre, on reading the layout: *"these are not examples but a working compiler, priority number 1."*
+Correct, and it had been wrong since the compiler was first split out. The self-hosted compiler is this
+project's **capability certificate** — stage-1 compiles its own source and stage-2 emits byte-identical
+IR for it — and it was filed under a directory whose name says "sample code."
+
+`A7.0-NAMING.md` exists to stop exactly this, and its own rule is *"a name that reads as the wrong thing
+is worse than a name that is merely short."* That rule had been applied to keywords and to functions, and
+never to directories.
+
+Both compilers now sit under `src/`, each named by the language it is written in:
+
+| | Language | Lines | Role |
+|---|---|---|---|
+| `src/rust-compiler/` | Rust | 18,974 | **stage-0** — the bootstrap, the trust anchor, and the differential |
+| `src/burxt-compiler/` | **Burxt** | 10,981 | **stage-1** — the compiler written in itself |
+
+**Why the Rust one is larger, since the numbers invite the question.** About 2,632 lines are things
+stage-1 does not have at all — the language server, `burxt review`, the JSON emitter, `mcp-schema`,
+diagnostics rendering, the CLI. The rest is M4 §3b: **stage-1 is a SUBSET.** Its backend does not emit
+Decimals and their rounding, `match`, `musttail`, contracts, or the FFI boundary. Comparing overlapping
+roles only it is 16,342 against 10,981, and comment density is nearly identical (21% against 20%) — so
+the gap is missing features rather than a more expressive language.
+
+That gap is **B12**, and its real cost is stated there: the differential test is this project's best
+bug-finder, and it is blind wherever stage-1 refuses.
+
 ## A — Compiler fixes, ranked by leverage ÷ cost
 
 | # | Fix | Size | Unblocks |

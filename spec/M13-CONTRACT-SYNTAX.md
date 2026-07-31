@@ -5,7 +5,7 @@
 > **The bracket form had NO test coverage for fourteen versions**, and writing the first fixture in
 > v0.0.166 found that **Decision 2 — `it` — had never been implemented**: `[it * 2 > 0]` answered
 > `unknown variable: it`, because the parser deferred to a checker binding nobody built.
-> `src/parser.rs` cited a `tests/pass/contract_brackets.bx` that had never existed, and the claim
+> `src/rust-compiler/parser.rs` cited a `tests/pass/contract_brackets.bx` that had never existed, and the claim
 > below that the desugaring is "observable rather than asserted" was true of neither — nothing
 > observed it and nothing asserted it.
 >

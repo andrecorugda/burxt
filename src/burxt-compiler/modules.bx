@@ -3,7 +3,7 @@
 //
 // `use "path";`, resolved before lexing and blanked out afterwards.
 //
-// Assembled by examples/stage1.bx, which is the program; everything here is
+// Assembled by src/burxt-compiler/stage1.bx, which is the program; everything here is
 // declarations, which is what a module may hold.
 // ============================================================================
 

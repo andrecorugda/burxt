@@ -8,7 +8,7 @@ description: Every burxt command, including review and mcp-schema.
 
 # The command line
 
-Read out of the usage block in `src/main.rs`, so this cannot list a command the compiler does not have. Two of them exist nowhere else in programming: `burxt review`, which answers what a change did to what a program **promises**, and `burxt mcp-schema`, which derives an MCP tool schema from the preconditions so the two cannot drift. Both are explained in [Tools and agents](../guide/12-tools-and-agents.html).
+Read out of the usage block in `src/rust-compiler/main.rs`, so this cannot list a command the compiler does not have. Two of them exist nowhere else in programming: `burxt review`, which answers what a change did to what a program **promises**, and `burxt mcp-schema`, which derives an MCP tool schema from the preconditions so the two cannot drift. Both are explained in [Tools and agents](../guide/12-tools-and-agents.html).
 
 | Command | Takes | What it does |
 |---|---|---|

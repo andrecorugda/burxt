@@ -8,7 +8,7 @@ description: Every call the language owns: what it answers, whether it allocates
 
 # Builtins
 
-The names a program may not declare, because the language already means something by them. The list comes from `is_reserved_name` in `src/typeck.rs`; every signature below was **compiled** while this page was generated, so none of them is a signature the compiler would reject.
+The names a program may not declare, because the language already means something by them. The list comes from `is_reserved_name` in `src/rust-compiler/typeck.rs`; every signature below was **compiled** while this page was generated, so none of them is a signature the compiler would reject.
 
 | Call | Answers | Allocates? | Reaches |
 |---|---|---|---|
