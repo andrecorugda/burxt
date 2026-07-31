@@ -161,20 +161,44 @@ about **tooling** was a claim about what Rust can do with a Burxt AST.
 and a new `.rs` with no row fails the suite — so the decision is forced when the file is written rather
 than in an audit a hundred versions later. That timing is the entire lesson of §3b.
 
-| | Counterpart | State |
-|---|---|---|
-| `main.rs` | `main.bx` | mapped; the Burxt one has no SUBCOMMANDS yet (`review`, `mcp-schema`, `explain`, `layout`, `--json`) |
-| `lexer.rs` · `ast.rs` | `types.bx` | mapped |
-| `parser.rs` | `parser.bx` | mapped |
-| `typeck.rs` | `check.bx` | mapped |
-| `codegen.rs` | `emit.bx` | mapped |
-| `json.rs` | `lib/json.bx` | mapped — the Burxt one lives in `lib/` because it is useful to any program |
-| **`diag.rs`** | **`diag.bx`** | **DONE v0.0.216**, held byte-for-byte by `the_two_compilers_render_a_problem_identically` |
-| `schema.rs` | — | **writable today.** `burxt mcp-schema`; stage-1 already parses the bracket clauses it reads |
-| `review.rs` | — | **writable today.** Also the mechanical semver rule C2 depends on, so Burxt cannot enforce its own compatibility promise until this exists |
-| `lsp.rs` | — | **BLOCKED, not merely missing.** See below |
+| Rust module | Counterpart | Strength | Note |
+|---|---|---|---|
+| `diag.rs` | `diag.bx` | **VERIFIED** | held byte-for-byte by `the_two_compilers_render_a_problem_identically` |
+| `parser.rs` | `parser.bx` | Role | held *indirectly*: the front-end sweep and the 142-of-142 backend sweep both fail if the parsers disagree |
+| `typeck.rs` | `check.bx` | Role | held indirectly over 269 fail programs, 227 of which stage-1 refuses too |
+| `codegen.rs` | `emit.bx` | Role | held indirectly, and byte-for-byte, by the fixpoint |
+| `lexer.rs` | `types.bx` | Role | shares one file with `ast.rs` |
+| `ast.rs` | `types.bx` | Role | the same file answers both rows |
+| `main.rs` | `main.bx` + `modules.bx` | **Partial** | 572 lines with ten subcommands, against a `main.bx` with none |
+| `json.rs` | `lib/json.bx` | **Partial** | the standard library, which the Burxt compiler does not itself use |
+| `schema.rs` | — | Missing | writable today |
+| `review.rs` | — | Missing | writable today, and C2 depends on it |
+| `lsp.rs` | — | **Blocked** | see below |
 
-**8 of 11.** Two rows are ordinary work. The third is a real finding:
+### The count, since Andre asked *"7 over 11?"*
+
+The scrutiny was deserved and the first number was flattering. **8 of 11 rows are answered — but only
+1 is VERIFIED**, and the difference is the whole point:
+
+- **`lexer.rs` and `ast.rs` point at the same `types.bx`**, so one Burxt file earned two points. Eight
+  rows are answered by eight distinct files only because `main.rs` answers to two.
+- **`main.rs` → `main.bx` is generous.** 572 lines carrying ten subcommands against 118 with none. Same
+  entry point, not the same job — so it is recorded `Partial`, not `Role`.
+- **`json.rs` → `lib/json.bx` is generous.** That is the standard library; the Burxt compiler does not
+  use it, and `diag.bx` hand-writes its own escaping exactly as `diag.rs` does. The capability exists
+  in Burxt; the compiler-internal counterpart does not.
+
+So the test now counts three ways and ratchets on two — `answered >= 8` **and `verified >= 1`** — and
+`verified` is the one to raise, because a direct comparison is the only thing that turns *"a file with
+that job exists"* into *"the two agree."* Four `Role` rows are held hard but indirectly: the fixpoint
+and the two sweeps fail if those pairs diverge on anything in the suite, which is real evidence and is
+not a comparison.
+
+**It also found a hole in its own map.** Keying on `.rs` files meant a Burxt file no row mentions was
+invisible — and `modules.bx` was exactly that, because its Rust counterpart is `load_program` *inside*
+`main.rs`. It could have been deleted without failing anything. The test now walks both directions.
+
+Two rows are ordinary work. The third is a real finding:
 
 > **`lsp.bx` is unwritable, not unwritten.** A language server frames messages over **stdin**, and Burxt
 > cannot read stdin. No builtin does it, and `fread` is out of reach because a caller cannot produce a

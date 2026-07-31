@@ -5083,62 +5083,104 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
 
     // The map. `Some(path)` is a counterpart that must EXIST on disk; `None` is a gap, with the
     // reason in the third column so it is read by whoever next wonders why.
-    let expected: &[(&str, Option<&str>, &str)] = &[
+    // The map. Each row is a Rust module, the Burxt file(s) that answer it, **how strongly**,
+    // and why — and the strength column is the honest part.
+    //
+    // Andre asked "7 over 11?" and the counting deserved the scrutiny. A flat count of rows with
+    // a counterpart reads as more parity than exists, three ways: `lexer.rs` and `ast.rs` both
+    // point at the SAME `types.bx`, so one Burxt file earned two points; `main.rs` is 572 lines
+    // with ten subcommands against a `main.bx` with none; and `json.rs` maps to the standard
+    // library, which the Burxt compiler does not itself use. So the strength is recorded per row
+    // and reported separately, because **the number that matters is how many are HELD BY A TEST**,
+    // and that is a much smaller number than "has a counterpart".
+    let expected: &[(&str, &[&str], Strength, &str)] = &[
         (
             "main.rs",
-            Some("src/burxt-compiler/main.bx"),
-            "the entry point. Burxt's drives lexing, parsing, checking and IR emission; it does \
-             not yet have the SUBCOMMANDS (review, mcp-schema, explain, layout, --json), which \
-             arrive with the modules below",
+            &["src/burxt-compiler/main.bx", "src/burxt-compiler/modules.bx"],
+            Strength::Partial,
+            "the entry point, and `use` resolution — `load_program` is inside `main.rs` on the \
+             Rust side and its own `modules.bx` on the Burxt side. PARTIAL and not Role, because \
+             `main.rs` is 572 lines carrying ten SUBCOMMANDS (review, mcp-schema, explain, \
+             layout, --json, lsp) and `main.bx` has none. Same entry point, not the same job",
         ),
-        ("lexer.rs", Some("src/burxt-compiler/types.bx"), "the lexer, with the shapes it fills"),
-        ("ast.rs", Some("src/burxt-compiler/types.bx"), "the node kinds and the arena"),
-        ("parser.rs", Some("src/burxt-compiler/parser.bx"), "tokens in, arena AST out"),
+        (
+            "lexer.rs",
+            &["src/burxt-compiler/types.bx"],
+            Strength::Role,
+            "the lexer, with the shapes it fills. Shares `types.bx` with `ast.rs` — the split is \
+             drawn differently on the two sides, which is fine, but it means these two rows are \
+             answered by ONE file and a flat count would double-count it",
+        ),
+        (
+            "ast.rs",
+            &["src/burxt-compiler/types.bx"],
+            Strength::Role,
+            "the node kinds and the arena. See `lexer.rs`: same file answers both",
+        ),
+        (
+            "parser.rs",
+            &["src/burxt-compiler/parser.bx"],
+            Strength::Role,
+            "tokens in, arena AST out. Not held by a direct comparison, but held INDIRECTLY and \
+             hard: `the_burxt_front_end_accepts_every_burxt_source` and the 142-of-142 backend \
+             sweep both fail if the two parsers disagree about any program in the suite",
+        ),
         (
             "typeck.rs",
-            Some("src/burxt-compiler/check.bx"),
-            "scales, regions, purity, contracts, exhaustiveness",
+            &["src/burxt-compiler/check.bx"],
+            Strength::Role,
+            "scales, regions, purity, contracts, exhaustiveness. Held indirectly by \
+             `the_burxt_typechecker_agrees_with_the_rust_one` over 269 fail programs — 227 of \
+             which stage-1 refuses too",
         ),
         (
             "codegen.rs",
-            Some("src/burxt-compiler/emit.bx"),
+            &["src/burxt-compiler/emit.bx"],
+            Strength::Role,
             "LLVM IR. Rust drives LLVM's C API through inkwell; Burxt writes the IR as text, \
-             which M4 calls string formatting instead of an API, not a workaround",
+             which M4 calls string formatting instead of an API, not a workaround. Held \
+             indirectly and byte-for-byte by the fixpoint",
         ),
         (
             "json.rs",
-            Some("lib/json.bx"),
-            "a JSON reader and writer. The Burxt one lives in `lib/` rather than the compiler \
-             directory because it is useful to any program, which is the better home for it",
+            &["lib/json.bx"],
+            Strength::Partial,
+            "a JSON reader and writer. PARTIAL on purpose: `lib/json.bx` is the STANDARD LIBRARY, \
+             not part of the Burxt compiler, and the Burxt compiler does not use it — `diag.bx` \
+             hand-writes its own escaping exactly as `diag.rs` does. So the capability exists in \
+             Burxt while the compiler-internal counterpart does not",
         ),
         (
             "diag.rs",
-            Some("src/burxt-compiler/diag.bx"),
-            "the caret rendering and the JSON rendering of a problem, held byte-for-byte against \
-             the Rust one by `the_two_compilers_render_a_problem_identically`. Written in \
-             v0.0.216, and writing it found a CRASH in `diag.rs`: a span ending mid-character \
+            &["src/burxt-compiler/diag.bx"],
+            Strength::Verified,
+            "the caret rendering and the JSON rendering of a problem. VERIFIED — \
+             `the_two_compilers_render_a_problem_identically` compares both outputs byte for byte \
+             over seven cases. Writing it found a CRASH in `diag.rs`: a span ending mid-character \
              made the Rust renderer panic, while the Burxt one — which counts bytes, so it is \
              total — rendered it correctly. The second implementation auditing the first",
-
         ),
         (
             "schema.rs",
-            None,
-            "MISSING — `burxt mcp-schema`, the MCP manifest derived from preconditions. Writable \
-             today; stage-1 already parses the bracket clauses this reads. The row with the most \
-             to prove, because it is the thing no other language can do",
+            &[],
+            Strength::Missing,
+            "`burxt mcp-schema`, the MCP manifest derived from preconditions. Writable today; \
+             stage-1 already parses the bracket clauses it reads. The row with the most to prove, \
+             because it is the thing no other language can do",
         ),
         (
             "review.rs",
-            None,
-            "MISSING — `burxt review old.bx new.bx`, what changed about what the program PROMISES. \
-             Writable today: two parses and a comparison of signatures and contracts. Also the \
-             mechanical semver rule 1.0 depends on (ROADMAP C2), so Burxt cannot enforce its own \
+            &[],
+            Strength::Missing,
+            "`burxt review old.bx new.bx`, what changed about what the program PROMISES. Writable \
+             today: two parses and a comparison of signatures and contracts. Also the mechanical \
+             semver rule 1.0 depends on (ROADMAP C2), so Burxt cannot enforce its own \
              compatibility promise until this exists",
         ),
         (
             "lsp.rs",
-            None,
+            &[],
+            Strength::Missing,
             "BLOCKED, not merely missing — the language server frames LSP messages over STDIN, \
              and Burxt has no stdin. No builtin reads it, and `fread` is unreachable because a \
              caller cannot make a pointer to writable memory (CPointer is opaque by design). \
@@ -5154,7 +5196,7 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
             continue;
         }
         let name = path.file_name().unwrap().to_string_lossy().to_string();
-        if !expected.iter().any(|(rs, _, _)| *rs == name) {
+        if !expected.iter().any(|(rs, _, _, _)| *rs == name) {
             unlisted.push(name.clone());
         }
         on_disk.push(name);
@@ -5162,58 +5204,125 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
 
     assert!(
         unlisted.is_empty(),
-        "`src/rust-compiler/` gained {:?} and this map says nothing about it. Add a row: either \
-         the Burxt file that answers it, or `None` with the reason there is none. The decision \
-         belongs here, on the day the file is written — M4 §3b went stale for a hundred versions \
-         because nothing forced it to be revisited.",
+        "`src/rust-compiler/` gained {:?} and this map says nothing about it. Add a row: the \
+         Burxt file(s) that answer it and how strongly, or `&[]` with the reason there is none. \
+         The decision belongs here, on the day the file is written — M4 §3b went stale for a \
+         hundred versions because nothing forced it to be revisited.",
         unlisted
     );
 
-    // Every mapped counterpart must actually exist. A map that cites a missing file is the
-    // rot this whole version is about, one level up.
+    // Every cited counterpart must exist, and every row must cite a `.rs` that exists. A map
+    // pointing at a file that is not there is the rot this whole stretch of work is about.
     let mut broken: Vec<String> = Vec::new();
-    let mut mapped = 0;
-    for (rs, counterpart, _) in expected {
-        // A row for a `.rs` file that no longer exists is also rot — in the other direction.
+    for (rs, counterparts, strength, _) in expected {
         assert!(
             on_disk.iter().any(|n| n == rs),
             "this map has a row for `src/rust-compiler/{}`, which does not exist. Renamed or \
              deleted? Update the row.",
             rs
         );
-        if let Some(path) = counterpart {
-            if root.join(path).exists() {
-                mapped += 1;
-            } else {
+        for path in counterparts.iter() {
+            if !root.join(path).exists() {
                 broken.push(format!("{} -> {} (which does not exist)", rs, path));
             }
         }
+        // The strength and the list must agree: a row with no counterpart is Missing, and a row
+        // with one is not. Two facts about the same thing drift apart unless something checks.
+        let named = !counterparts.is_empty();
+        assert_eq!(
+            named,
+            *strength != Strength::Missing,
+            "the row for `{}` says {:?} but cites {} counterpart(s) — one of the two is wrong",
+            rs,
+            strength,
+            counterparts.len()
+        );
     }
     assert!(broken.is_empty(), "a counterpart is cited but absent:\n  {}", broken.join("\n  "));
 
+    // **The reverse direction**, which the first version of this test did not have: a Burxt file
+    // that no row mentions is invisible to it. `modules.bx` was exactly that — its Rust
+    // counterpart is `load_program` INSIDE `main.rs`, so keying the map on `.rs` files alone left
+    // it out, and it could have been deleted or orphaned without failing anything. A map that
+    // only walks one way measures one way.
+    let mut orphans: Vec<String> = Vec::new();
+    for entry in fs::read_dir(root.join("src/burxt-compiler")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("bx") {
+            continue;
+        }
+        let rel = format!("src/burxt-compiler/{}", path.file_name().unwrap().to_string_lossy());
+        if !expected.iter().any(|(_, cs, _, _)| cs.contains(&rel.as_str())) {
+            orphans.push(rel);
+        }
+    }
+    assert!(
+        orphans.is_empty(),
+        "these Burxt compiler files answer to no row in the map: {:?}. Add them to the row of the \
+         Rust module they correspond to — or if they correspond to none, that is worth saying out \
+         loud, because it means the two compilers are organised differently in a way nobody wrote \
+         down.",
+        orphans
+    );
+
+    // Counted three ways, because one number was flattering. `verified` is the only one that
+    // means "a test compares them"; `answered` means a file exists with that job.
+    let verified = expected.iter().filter(|(_, _, s, _)| *s == Strength::Verified).count();
+    let answered = expected.iter().filter(|(_, cs, _, _)| !cs.is_empty()).count();
     let missing: Vec<&str> = expected
         .iter()
-        .filter(|(_, c, _)| c.is_none())
-        .map(|(rs, _, _)| *rs)
+        .filter(|(_, cs, _, _)| cs.is_empty())
+        .map(|(rs, _, _, _)| *rs)
         .collect();
+    // Distinct Burxt files doing the answering — lower than `answered`, because `lexer.rs` and
+    // `ast.rs` share `types.bx`.
+    let distinct: std::collections::BTreeSet<&str> =
+        expected.iter().flat_map(|(_, cs, _, _)| cs.iter().copied()).collect();
+
     eprintln!(
-        "{} of {} Rust modules have a Burxt counterpart; still Rust-only: {}",
-        mapped,
+        "Rust modules: {} of {} answered by {} distinct Burxt file(s); {} held byte-for-byte by a \
+         test; still Rust-only: {}",
+        answered,
         expected.len(),
+        distinct.len(),
+        verified,
         missing.join(", ")
     );
 
-    // The ratchet. 8 of 11 once `diag.bx` landed in v0.0.216. Raise it with each module written, and never lower it:
-    // the number falling means a Burxt counterpart was deleted or a Rust module was split in a
-    // way that left the Burxt side behind, and both deserve to fail loudly.
+    // Two ratchets, and the second is the one to be proud of. 8 answered / 1 verified at v0.0.216.
+    // Neither may fall: `answered` falling means a counterpart was lost or a Rust module was split
+    // without one, and `verified` falling means a direct comparison was deleted, which is the more
+    // serious of the two because it is the only thing that turns "exists" into "agrees".
     assert!(
-        mapped >= 8,
-        "{} of {} Rust modules have a Burxt counterpart, and it was 8 at v0.0.216. A counterpart \
-         was lost, or a Rust module was split without one. Still Rust-only: {}",
-        mapped,
+        answered >= 8,
+        "{} of {} Rust modules are answered, and it was 8 at v0.0.216. Still Rust-only: {}",
+        answered,
         expected.len(),
         missing.join(", ")
     );
+    assert!(
+        verified >= 1,
+        "{} counterparts are held byte-for-byte by a test, and it was 1 at v0.0.216. A direct \
+         comparison was deleted — and that comparison is the only thing separating `a file with \
+         that job exists` from `the two agree`.",
+        verified
+    );
+}
+
+/// How strongly a Rust module's Burxt counterpart is held. The distinction exists because a flat
+/// count of "has a counterpart" reads as more parity than there is.
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+enum Strength {
+    /// A test compares the two implementations' output directly. The only level that proves
+    /// agreement rather than existence.
+    Verified,
+    /// The same job, in both compilers, held only INDIRECTLY — by the fixpoint, or by the two
+    /// compilers accepting and refusing the same programs. Strong evidence, not a comparison.
+    Role,
+    /// A counterpart exists but does less, or lives somewhere that is not really the counterpart.
+    Partial,
+    /// Rust only.
+    Missing,
 }
 
 /// Every source and documentation file must be IN version control.
