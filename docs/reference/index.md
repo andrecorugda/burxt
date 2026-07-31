@@ -12,7 +12,7 @@ Everything the language has. **Read out of the compiler**, not from memory: the 
 
 <ul class="pages">
 <li><a href="builtins.html"><span>Builtins</span> <span class="what">31 calls the language owns, and what each needs</span></a></li>
-<li><a href="cli.html"><span>The command line</span> <span class="what">8 commands, including <code>review</code> and <code>mcp-schema</code></span></a></li>
+<li><a href="cli.html"><span>The command line</span> <span class="what">9 commands, including <code>review</code> and <code>mcp-schema</code></span></a></li>
 <li><a href="option.html"><span><code>lib/option.bx</code></span> <span class="what">absence, made explicit</span></a></li>
 <li><a href="result.html"><span><code>lib/result.bx</code></span> <span class="what">failure, made explicit</span></a></li>
 <li><a href="string.html"><span><code>lib/string.bx</code></span> <span class="what">Strings, beyond the four builtins</span></a></li>

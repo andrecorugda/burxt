@@ -278,6 +278,30 @@ that allocates is enough.
 free of the region. Where it does not: everywhere. It is a claim about a promise you are making, so it
 belongs where the promise matters — the same rule `touches` follows.
 
+### Asking, instead of annotating
+{: #explain-memory}
+
+The honest cost of inferring `allocates` is that the memory story left the source. The answer is not to
+put the annotation back — it is to make the fact **queryable**, because it is wanted occasionally rather
+than always:
+
+```
+$ burxt explain memory examples/pos/receipt.bx
+   33  Line.subtotal()      nothing
+   95  line_tax()           nothing
+  122  money_column()       `to_string(...)` builds a String
+                            joining two Strings builds a new one
+  133  line_text()          joining two Strings builds a new one
+```
+
+That is strictly more than `allocates` ever said: **whether and what**, not just whether. It answers
+from the same inference the compiler uses, so it cannot disagree with `allocates nothing` — a test holds
+the two against each other function by function.
+
+What it does not yet say is **where** the value lands, and which block releases it. That is per-block
+release, which is not built, and the command says so at the bottom of its own output rather than leaving
+you to assume the table is complete.
+
 ### What cannot leave
 {: #what-cannot-leave}
 

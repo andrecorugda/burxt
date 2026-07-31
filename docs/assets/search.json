@@ -260,6 +260,13 @@
  },
  {
   "kind": "command",
+  "name": "burxt explain",
+  "text": "memory <file.bx>",
+  "url": "/reference/cli.html",
+  "where": "what each function builds"
+ },
+ {
+  "kind": "command",
   "name": "burxt review",
   "text": "<old.bx> <new.bx>          what changed about what it PROMISES",
   "url": "/reference/cli.html",

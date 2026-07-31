@@ -2582,6 +2582,82 @@ impl TypeChecker {
     /// Does evaluating this expression produce region-allocated storage? Needed
     /// because a concatenated String lives in a region while a literal lives in
     /// .rodata, and the two share one type — so the type alone cannot say.
+    /// `burxt explain memory` — what each function builds, from the same inference every rule uses.
+    ///
+    /// M14 §7's argument for this: the honest cost of inferring `allocates` is that the memory story
+    /// leaves the source, and the answer is not to put the annotation back but to make the fact
+    /// **queryable** — wanted occasionally rather than stated always.
+    ///
+    /// **What it reports today is WHETHER and WHAT, not WHERE.** §7's sketch has a third column —
+    /// the destination block, "released per iteration" — and that column is per-block release, which
+    /// is the other half of slice 3 and is not built. Printing a guess there would be worse than
+    /// leaving it out, so the footer says what is missing rather than the table implying it is
+    /// complete.
+    pub fn memory_report(&self, prog: &Program, typed: &TypedProgram, source: &str) -> String {
+        let lines = crate::diag::LineIndex::new(source);
+        let mut out = String::new();
+        let mut rows: Vec<(usize, String, Vec<String>)> = Vec::new();
+
+        for (declared, checked) in prog.fns.iter().zip(typed.fns.iter()) {
+            let line = lines.locate(declared.span.start).line;
+            let causes = if self.allocates_fn(&checked.name) {
+                let found = self.all_allocations(&checked.body);
+                if found.is_empty() {
+                    // Flagged by the fixpoint but nothing nameable in the body — a `dynamic` call is
+                    // the usual reason. Say so rather than printing an empty cell.
+                    vec!["allocates, through a call this report cannot name".to_string()]
+                } else {
+                    found
+                }
+            } else {
+                Vec::new()
+            };
+            rows.push((line, format!("{}()", checked.name), causes));
+        }
+        for (declared, checked) in prog.methods.iter().zip(typed.methods.iter()) {
+            let line = lines.locate(declared.span.start).line;
+            let causes = if self.allocates_method(&checked.receiver, &checked.name) {
+                let found = self.all_allocations(&checked.body);
+                if found.is_empty() {
+                    vec!["allocates, through a call this report cannot name".to_string()]
+                } else {
+                    found
+                }
+            } else {
+                Vec::new()
+            };
+            rows.push((line, format!("{}.{}()", checked.receiver, checked.name), causes));
+        }
+        rows.sort_by_key(|(line, _, _)| *line);
+
+        let widest = rows.iter().map(|(_, name, _)| name.len()).max().unwrap_or(0);
+        for (line, name, causes) in &rows {
+            if causes.is_empty() {
+                out.push_str(&format!("{:>5}  {:<width$}  nothing\n", line, name, width = widest));
+                continue;
+            }
+            out.push_str(&format!(
+                "{:>5}  {:<width$}  {}\n",
+                line,
+                name,
+                causes[0],
+                width = widest
+            ));
+            for extra in &causes[1..] {
+                out.push_str(&format!("{:>5}  {:<width$}  {}\n", "", "", extra, width = widest));
+            }
+        }
+        if rows.is_empty() {
+            out.push_str("this program declares no functions\n");
+        }
+        out.push_str(
+            "\nwhether and what, from the same inference `allocates` is derived from. WHERE it \
+             lands\nis per-block release, which is not built — see spec/M14-IMPLICIT-REGIONS.md \
+             slice 3.\n",
+        );
+        out
+    }
+
     /// The first thing in a body that allocates, described in a few words.
     ///
     /// Exists so `allocates nothing` can say WHY rather than only that it is wrong. A refusal that
@@ -2597,6 +2673,50 @@ impl TypeChecker {
             }
         }
         None
+    }
+
+    /// Every nameable allocation in a body, in source order, with duplicates collapsed.
+    ///
+    /// `burxt explain memory` wants all of them where `allocates nothing` wants the first. Same walk,
+    /// asked a different question — so a body cannot be described one way by the refusal and another
+    /// way by the report.
+    pub fn all_allocations(&self, body: &[TypedStmt]) -> Vec<String> {
+        let mut found = Vec::new();
+        self.collect_allocations(body, &mut found);
+        let mut seen: Vec<String> = Vec::new();
+        for one in found {
+            if !seen.contains(&one) {
+                seen.push(one);
+            }
+        }
+        seen
+    }
+
+    fn collect_allocations(&self, body: &[TypedStmt], into: &mut Vec<String>) {
+        for stmt in body {
+            // The single-statement walk already knows every shape; asking it per statement and then
+            // recursing into blocks keeps one description of a body's structure rather than two.
+            if let Some(found) = self.first_allocation_in_stmt(stmt) {
+                into.push(found);
+            }
+            match stmt {
+                TypedStmt::If { then_block, else_block, .. } => {
+                    self.collect_allocations(then_block, into);
+                    if let Some(other) = else_block {
+                        self.collect_allocations(other, into);
+                    }
+                }
+                TypedStmt::While { body, .. }
+                | TypedStmt::Region { body, .. }
+                | TypedStmt::For { body, .. } => self.collect_allocations(body, into),
+                TypedStmt::Match { arms, .. } => {
+                    for arm in arms {
+                        self.collect_allocations(&arm.body, into);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn first_allocation_in_stmt(&self, stmt: &TypedStmt) -> Option<String> {

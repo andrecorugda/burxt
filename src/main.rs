@@ -71,6 +71,7 @@ fn compile_main() {
         eprintln!("  burxt run     <file.bx> [link args...]   compile then run");
         eprintln!("  burxt emit-ir <file.bx> [--target ...]   print LLVM IR");
         eprintln!("  burxt layout  <file.bx>                  print class layouts");
+        eprintln!("  burxt explain memory <file.bx>           what each function builds");
         eprintln!("  burxt review  <old.bx> <new.bx>          what changed about what it PROMISES
   burxt mcp-schema <file.bx>               the MCP tool manifest, from the preconditions");
         eprintln!();
@@ -84,6 +85,23 @@ fn compile_main() {
         eprintln!("Arguments after the source file go to the linker unchanged,");
         eprintln!("e.g. `burxt run pay.bx cside.o -lm` to link the C you call.");
         std::process::exit(2);
+    }
+    let cmd = &arguments[1];
+    // `burxt explain memory <file>` — the subject is written out, per M14 §7's spelling, because
+    // memory is not the only thing a program could be asked to explain and a bare `explain` would
+    // have to be guessed at later. Refused rather than defaulted: guessing which subject was meant
+    // is the shape of thing this language does not do.
+    let mut arguments = arguments.clone();
+    if cmd == "explain" {
+        if arguments.len() < 4 || arguments[2] != "memory" {
+            eprintln!("usage: burxt explain memory <file.bx>");
+            eprintln!();
+            eprintln!("Answers what each function builds, from the same inference `allocates` is");
+            eprintln!("derived from. `memory` is written out because it is not the only thing a");
+            eprintln!("program could be asked to explain.");
+            std::process::exit(2);
+        }
+        arguments.remove(2);
     }
     let cmd = &arguments[1];
     let path = &arguments[2];
@@ -427,7 +445,10 @@ fn run(
             }
         }
     }
-    let typed = typeck::TypeChecker::new().check(&program).map_err(all)?;
+    // Kept alive past `check`, because `explain memory` asks it what it inferred — the same
+    // question every allocation rule asks, rather than a second pass with its own answer.
+    let mut checker = typeck::TypeChecker::new();
+    let typed = checker.check(&program).map_err(all)?;
 
     // `check` is the front end and nothing more: no LLVM context, no object
     // file, no linker. This is what an editor or a CI gate calls, so it must
@@ -450,6 +471,13 @@ fn run(
     cg.compile(&typed)?;
 
     match cmd {
+        // `burxt explain memory <file>` — M14 §7. A query rather than an annotation: the fact is
+        // wanted occasionally, and putting it on every signature forever taught nothing (the word
+        // landed on three functions out of three in `examples/pos/receipt.bx`).
+        "explain" => {
+            print!("{}", checker.memory_report(&program, &typed, &src));
+            Ok(())
+        }
         "layout" => {
             print!("{}", cg.layout_report(&typed));
             Ok(())
