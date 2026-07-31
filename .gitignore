@@ -50,6 +50,19 @@
 # never committed — a binary in a repository is a binary nobody can reproduce
 /dist/
 
+# **The harness's own directory, and the accident above cuts BOTH ways.**
+#
+# That comment explains how `!/*.*` re-admits `.github` by accident, because a leading dot satisfies
+# `*.*`, and warns that TIGHTENING it would silently unversion a new workflow. The inverse happened
+# in v0.0.240: `.claude/` — where the agent harness puts git worktrees — matched the same accident,
+# so it was untracked and NOT ignored. `git add -A` would have committed a worktree of the repository
+# into the repository.
+#
+# Ignored explicitly rather than by tightening the pattern, because tightening is the change the
+# comment above says not to make. Same category as `/target` and `/dist`: tool output, not ours to
+# name, and not reproducible from source.
+/.claude/
+
 # editor tooling scratch
 node_modules/
 *.vsix

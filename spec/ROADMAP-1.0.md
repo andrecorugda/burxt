@@ -478,7 +478,7 @@ A5, nothing named as a limit.
 
 | # | Fix | Size | Unblocks |
 |---|---|---|---|
-| A1 | **`c_bytes_at(p, n)`** — one builtin, mirroring `c_string_at` | **S** | **Every key, token, session and UUID v4** — `/dev/urandom` is a character device, so `read_file` sizes it with `ftell` and gets 0 · `file_read_bytes` · streaming reads · `mmap` → N9 row 6 · buffer-filling syscalls (`getrandom`, `clock_gettime`) |
+| ~~A1~~ | ~~**`c_bytes_at(p, n)`**~~ **DONE, and the ☐ was stale** — shipped with `tests/pass/c_bytes_at.bx`, three fail fixtures and two panic fixtures. Found by MEASURING before scheduling it, which is the rule this roadmap keeps re-learning: a status line saying NOT DONE is not evidence either | — | **Every key, token, session and UUID v4** — `/dev/urandom` is a character device, so `read_file` sizes it with `ftell` and gets 0 · `file_read_bytes` · streaming reads · `mmap` → N9 row 6 · buffer-filling syscalls (`getrandom`, `clock_gettime`) |
 | A2 | **`const` / named constants** — none exist at all | **S** | All of `lib/math.bx` (`INT_MAX` cannot be *named* today) · CRC and hash polynomials · every magic number in the new modules |
 | A3 | **`Option.None` in a free generic function.** ⚠ **Verify first.** `map.find` already returns `Option<V>` from a METHOD, so the limit is narrower than three library headers claim | **S–M** | `array_pop<T>` · a generic `Set` · `map.take` · `option_ok_or` · retires a limitation cited in `array.bx`, `option.bx` and the audit |
 | A4 | **`pure` on a method / `pure` returning an Option** | M | ~15 new stdlib functions get the right signature rather than the wrong one by accident. `pure` is also what a **contract clause** may call |

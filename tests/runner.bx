@@ -388,6 +388,13 @@ function allowed_at_root(name: String) -> Bool {
     if name == ".gitignore" { return true; }
     if name == ".gitattributes" { return true; }
     if name == ".vscode" { return true; }
+    // The agent harness's worktree directory, added in v0.0.240 — and adding it HERE as well as in
+    // `runner.rs` is the point rather than a chore. The moment a rule lives in both runners, a change
+    // to one is a change to both, and the Burxt runner caught this: `runner.rs` went green and
+    // `the_suite_also_runs_on_burxt` printed `not ok invariant/... : .claude`. **That is the parity
+    // discipline working on the SUITE rather than on the compiler**, and it is the first time the
+    // Burxt runner has disagreed with the Rust one about anything.
+    if name == ".claude" { return true; }
     if name == "target" { return true; }
     if name == "README.md" { return true; }
     if name == "DESIGN.md" { return true; }

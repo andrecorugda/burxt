@@ -1823,7 +1823,7 @@ fn burxt_compiles_burxt_and_reaches_the_fixpoint() {
 #[test]
 fn the_repository_root_holds_only_what_belongs_there() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    const ALLOWED: [&str; 15] = [
+    const ALLOWED: [&str; 16] = [
         // build system and metadata
         "Cargo.toml",
         "Cargo.lock",
@@ -1833,6 +1833,11 @@ fn the_repository_root_holds_only_what_belongs_there() {
         ".gitattributes",
         ".vscode",
         "target",
+        // The agent harness's worktrees. Tool output in the same category as `target/` — and it is
+        // listed here as well as in `.gitignore` because these two guards catch different failures:
+        // git ignoring it stops it being COMMITTED, and this stops the suite calling it a stray. The
+        // first version of this had only the gitignore, and this test went red immediately.
+        ".claude",
         // the documents a reader looks for first
         "README.md",
         "DESIGN.md",
