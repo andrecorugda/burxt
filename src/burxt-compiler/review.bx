@@ -1,0 +1,931 @@
+// ============================================================================
+// review.bx — `burxt review old.bx new.bx`, written in Burxt. The counterpart of
+// `src/rust-compiler/review.rs`.
+//
+// **Why this file has to exist at all**, and it is not "for symmetry".
+// `spec/ROADMAP-1.0.md` THE GATE states the rule this whole directory serves:
+//
+//   > Rust may BUILD Burxt. Burxt may not USE Rust.
+//
+// and then names this row as the sharpest case of it. §C2 makes `burxt review` the
+// **mechanical semver rule** for the 1.0 compatibility promise — the tool that decides
+// whether a release may call itself compatible. While it lives only in Rust, *Burxt
+// cannot enforce its own compatibility promise without Rust*, which is exactly what the
+// rule forbids. Every other Rust-only module is a capability Burxt has not written yet;
+// this one was a dependency in the release process.
+//
+// ---- what it reports -------------------------------------------------------------------
+//
+// Not a diff. A diff shows every line that moved; this shows only the lines that changed a
+// GUARANTEE, and names which guarantee. The claim is narrow and checkable:
+//
+//   > A change that alters no signature cannot alter what the program promises.
+//
+// Declarations only — the lexer and the parser, and **deliberately not the checker**. Three
+// consequences, all wanted: it is fast; it does not care whether the bodies are finished;
+// and it cannot be confused by a reformat, because it compares meanings rather than text.
+//
+// Not running the checker is also what keeps this byte-identical with `review.rs`, which is
+// a coincidence worth writing down rather than relying on silently. `declared_type` turns a
+// bare interface name into `dynamic Priced` — but only by asking `self.types`, which
+// `check` is what fills in. So an unchecked Unit renders `Priced`, and stage-0's parser,
+// which learns the same fact in its own typechecker, renders `Priced` too. Calling `check`
+// here to be "more informative" would break the agreement in one line.
+//
+// ---- exit codes, because this is meant to be a gate -----------------------------------
+//
+// `0` nothing weakened · `1` something weakened · `2` a file could not be read or parsed.
+// So `burxt review a.bx b.bx` in CI needs no output parsing.
+//
+// ---- where this does NOT yet agree with `review.rs`, stated plainly -------------------
+//
+// 1. **A file that does not parse.** stage-1's lexer and parser report through `print`,
+//    which is stdout; `review.rs` fails with a `Result` and `main.rs` prints one line to
+//    stderr. Both exit 2, and the exit code is what a gate reads — but the TEXT on a
+//    malformed input is not the same, and cannot be without changing how `types.bx` and
+//    `parser.bx` report. Named here rather than hidden, because the agreement claim is
+//    about programs that parse.
+// 2. **A string literal inside a contract clause.** `review.rs` renders one with Rust's
+//    `{:?}`, which decodes the escapes and re-escapes them Rust's way; this renders the
+//    source span verbatim. Identical for every literal whose escapes Rust spells the same
+//    way, and different for Burxt's own `\{` and `\}` — which decode to `{` and `}` and
+//    would come back out unescaped. A clause containing a braced string literal is the
+//    only program that can tell the two apart.
+//
+// Both are FALSE POSITIVES in the direction that matters: they can make a comparison
+// report a change that changed nothing, never hide one. `review.rs` records the same
+// preference for the same reason — "a false positive is noise, but a false negative is a
+// weakened contract nobody was told about."
+//
+// ---- what it depends on, and one dependency that is a surprise ------------------------
+//
+// This file was written meaning NOT to use `emit.bx`: a review reads two signatures and
+// emits nothing, so pulling in four thousand lines of code generator looked like exactly the
+// wrong layering — `parser.bx` and `check.bx` do not depend on the backend either.
+//
+// **That is not a choice this file gets to make.** `Unit` has a field `slots: [Slot]`, and
+// `Slot` is declared in `emit.bx` — so anything that can spell `Unit` already depends on the
+// backend, and `use "types.bx"` alone does not compile. Reported rather than worked around:
+// `Slot` belongs in `types.bx` with every other shape, and moving it is a one-line change
+// that would let `review.bx`, `schema.bx` and any future tool read an AST without linking a
+// code generator. Until then the dependency is real and pretending otherwise in a comment
+// would be the worse of the two.
+//
+// Having lost that argument, the right answer is to USE what is now in scope, and two things
+// here are better for it: `clause_text` and `replace_whole_word` in `emit.bx` are the clause
+// spelling the RUNTIME message uses, so quoting a clause through them means a contract's
+// failure message and its review name the same bytes by construction rather than by two
+// implementations staying in step. All this file adds is stripping the keyword back off —
+// see `without_clause_keyword`.
+//
+// `lib/` is still not a dependency, like every other compiler module. `lib/string.bx` has
+// `string_find` and friends, and the compiler deliberately does not use the standard library,
+// so the three small string helpers here are written locally.
+// ============================================================================
+
+use "types.bx";
+use "parser.bx";
+use "check.bx";
+use "modules.bx";
+use "emit.bx";
+
+// ---- the verdicts ---------------------------------------------------------------------
+//
+// `review.rs` makes these five `const &str`. Burxt has no `const` yet (`ROADMAP-1.0.md`
+// A2), so they are one-line functions — which buys the same thing the consts buy, namely
+// that a typo is a compile error at the eleven sites that raise a finding rather than a
+// verdict that silently sorts last.
+//
+// WEAKENED means "this promises LESS than it did", and it is the only verdict that should
+// stop a review. Everything else is information.
+pure function verdict_weakened() -> String { return "WEAKENED"; }
+pure function verdict_stricter() -> String { return "STRICTER"; }
+pure function verdict_added() -> String { return "ADDED"; }
+pure function verdict_removed() -> String { return "REMOVED"; }
+pure function verdict_changed() -> String { return "CHANGED"; }
+
+// Weakenings first. A reviewer reads the top of the output.
+pure function verdict_rank(verdict: String) -> Int {
+    if verdict == "WEAKENED" { return 0; }
+    if verdict == "CHANGED" { return 1; }
+    if verdict == "REMOVED" { return 2; }
+    if verdict == "STRICTER" { return 3; }
+    return 4;
+}
+
+// ---- what one declaration promises ----------------------------------------------------
+
+// Everything one declaration promises, flattened into something comparable.
+//
+// `review.rs` keeps a `BTreeMap<String, Promise>` keyed by qualified name — `Account`,
+// `Account.balance`, `Account.withdraw`. Burxt has no map, so this is an array sorted by
+// `name` once collection is done, which delivers the same two things the BTreeMap was
+// there for: a lookup, and a STABLE output order, so a reviewer reading two runs is not
+// also diffing the order.
+//
+// The clauses are not fields here, and that is the one place this is not a transcription.
+// `review.rs` stores `Vec<String>` per promise, each entry being the comparable shape and
+// the display text joined by U+0001 and split apart again at every use. Two side arrays
+// with a start and a count say the same thing with no separator — the shape stage-1's own
+// arena uses for every child list — and it removes the one input that could break the Rust
+// version, namely a clause whose own text contains U+0001.
+class Promise {
+    name: String,
+    // `function`, `method`, `constructor`, `class`, `field`, `interface`.
+    kind: String,
+    // The parameter and return types, rendered. Not the body, and not the parameter NAMES —
+    // renaming a parameter changes no promise, and reporting it would be noise that teaches
+    // a reviewer to stop reading.
+    shape: String,
+    requires_at: Int,
+    requires_count: Int,
+    ensures_at: Int,
+    ensures_count: Int,
+    is_pure: Int,
+    // `private` is a KEYWORD here — it appears where a field name is expected, in
+    // `private balance: Decimal<2>`, so the lexer reserves it and a field cannot be called
+    // that. `review.rs` names this field `private`; this one cannot, and being unable to
+    // spell it is the language keeping its own rule rather than an inconvenience.
+    is_private: Int,
+    // What this reaches outside itself, as the bitmask `parse_touches` already built: bit 1
+    // files, 2 commands, 4 clock, 8 input, 16 network, 32 model.
+    //
+    // GAINING one is the second half of what a reviewer needs — "this function now talks to
+    // the network" is a change in what the program can DO, and since v0.0.159 it cannot
+    // happen without the signature changing.
+    //
+    // A mask where `review.rs` has a `Vec<Effect>`, and the two orders agree for a reason
+    // rather than by luck: `parse_touches` in `parser.rs` ends with `effects.sort()`, and
+    // `Effect`'s derived `Ord` is its declaration order, which is the order the bits are
+    // numbered in. So iterating bits low to high visits the effects in exactly the order
+    // the Rust `Vec` holds them, and the findings come out in the same order. It also
+    // refuses a duplicate, so nothing is lost by a set.
+    touches: Int,
+}
+
+// Every promise a file makes, plus the clause tables the promises index into.
+//
+// `failed` is how a Burxt function says what `Result<_, String>` says in Rust. There is no
+// generic `Result` yet (`ROADMAP-1.0.md` A3), and inventing a one-off enum for a value that
+// is consumed three lines later would be worse than a flag that is checked at both call
+// sites.
+class Promises {
+    entries: [Promise],
+    // Parallel: the comparable SHAPE of each clause, and the text to SHOW. Two arrays and
+    // not an array of pairs, because a pair would be a class copied at every comparison.
+    shapes: [String],
+    texts: [String],
+    failed: Int,
+}
+
+// One thing worth telling a reviewer, and how much it should worry them.
+class Finding { verdict: String, name: String, detail: String }
+
+// ---- string helpers, written here for the reason the header gives ---------------------
+
+// `{:<width}` from `review.rs`'s `println!`: pad on the right, and never truncate.
+//
+// Rust's formatter counts CHARACTERS and this counts bytes, and they cannot disagree here:
+// the two padded columns are a verdict from the closed list above and a declaration's
+// qualified name, and `is_alpha` in `types.bx` admits only ASCII into an identifier. A
+// non-ASCII name is unspellable, so there is no input that separates the two counts.
+pure function review_pad(text: String, width: Int) -> String {
+    let mutable out: String = text;
+    let mutable i: Int = len(text);
+    while i < width {
+        out = out + " ";
+        i += 1;
+    }
+    return out;
+}
+
+// The clause text with its leading `requires`/`ensures`/`decreases` word taken back off.
+//
+// `clause_text` in `emit.bx` is what quotes a clause, and it is reused here on purpose — see
+// the header: the runtime failure message and the review then name the same bytes because
+// they came from the same function, not because two implementations agree today. But that
+// function is building a message that has to say `requires`, and a finding here reads
+// `` lost `requires amount <= self.balance` `` and puts the word back itself. So the word
+// comes off, and this is the whole of the difference between the two callers.
+//
+// Stripping is by shape rather than by measuring one of three keyword lengths: the first run
+// of letters, then the trivia after it. That is also what makes it right for BOTH clause
+// spellings — a longhand clause's span begins at the keyword the programmer wrote, and a
+// bracket clause has had `requires ` prepended by `clause_text` because a bracket writes no
+// keyword at all. `skip_trivia` and not a whitespace loop, because `requires // why` with the
+// condition on the next line is legal and a hand-rolled skip would stop on the slashes.
+function without_clause_keyword(text: String) -> String {
+    let stop: Int = len(text);
+    let mutable at: Int = 0;
+    while at < stop && is_alpha(byte_at(text, at)) {
+        at += 1;
+    }
+    at = skip_trivia(text, at, stop);
+    return substring(text, at, stop - at);
+}
+
+// A stable insertion sort over the rendered fields of a record literal.
+//
+// `review.rs` calls `inner.sort()` before joining them, so that `P { a: 1, b: 2 }` and
+// `P { b: 2, a: 1 }` compare EQUAL — they build the same value, so they promise the same
+// thing, and a reviewer told otherwise would be reading noise. Insertion sort because the
+// list is a record's fields: a handful, already nearly always in order.
+function review_sort_texts(mutable xs: [String]) -> Int {
+    let mutable i: Int = 1;
+    while i < len(xs) {
+        let held: String = xs[i];
+        let mutable j: Int = i;
+        while j > 0 && held < xs[j - 1] {
+            xs[j] = xs[j - 1];
+            j -= 1;
+        }
+        xs[j] = held;
+        i += 1;
+    }
+    return len(xs);
+}
+
+// ---- reading a declaration ------------------------------------------------------------
+
+// A token's text. Every name in this compiler is a SPAN, and a promise's name is a String
+// because it is compared against another FILE's spans, where an offset means nothing.
+function (self: Unit) review_token_text(src: String, token: Int) -> String {
+    let t: Token = self.tokens[token];
+    return substring(src, t.start, t.length);
+}
+
+// The operator, spelled as `ast.rs`'s `Display` spells it. The values are the TOKEN kinds
+// `scan_punct` emitted, which is what the parser stored in the node.
+pure function review_binary_op(op: Int) -> String {
+    if op == 25 { return "+"; }
+    if op == 26 { return "-"; }
+    if op == 27 { return "*"; }
+    return "/";
+}
+
+pure function review_compare_op(op: Int) -> String {
+    if op == 12 { return "=="; }
+    if op == 13 { return "!="; }
+    if op == 14 { return "<="; }
+    if op == 15 { return ">="; }
+    if op == 35 { return "<"; }
+    return ">";
+}
+
+pure function review_logical_op(op: Int) -> String {
+    if op == 16 { return "&&"; }
+    return "||";
+}
+
+// Parameter TYPES and the return type — never the parameter names, for the reason on
+// `Promise.shape`.
+function (self: Unit) promise_shape(src: String, params: Int, ret: Int) -> String {
+    let mutable out: String = "(";
+    if params >= 0 {
+        let list: Node = self.nodes[params];
+        let mutable i: Int = 0;
+        while i < list.b {
+            if i > 0 {
+                out = out + ", ";
+            }
+            let p: Node = self.nodes[self.children[list.a + i]];
+            out = out + self.show_type(src, self.declared_type(src, p.a));
+            i += 1;
+        }
+    }
+    return out + ") -> " + self.show_type(src, self.declared_type(src, ret));
+}
+
+// Render an expression canonically, with parameters as POSITIONS.
+//
+// This is the difference between a tool a reviewer reads and one they mute. Comparing the
+// clause TEXT reported `requires a <= b` as lost and `requires amount <= balance` as
+// gained when a parameter was renamed — two WEAKENED lines for a change that weakened
+// nothing. A tool that cries wolf on a rename teaches you to skim past the line that
+// mattered.
+//
+// So a parameter renders by its position: `a <= b` becomes `#0 <= #1`, and the rename
+// vanishes. Everything else — `self`, a field, a literal, a call — renders by name, because
+// changing any of those genuinely changes the promise.
+//
+// A node kind this does not know about falls back to its DISCRIMINANT rather than to a
+// constant, so a construct added to the language later still compares as itself. It is
+// reachable only if `parse_primary` grows a kind and nobody adds a line here — the fallback
+// is what keeps that a false positive instead of a contract deletion nobody was told about.
+function (self: Unit) promise_render(src: String, node: Int, params: Int) -> String {
+    if node < 0 {
+        return "?";
+    }
+    let n: Node = self.nodes[node];
+    if n.kind == 1 { return to_string(n.value); }
+    // The unscaled integer and the scale, exactly as `review.rs` writes it: `$0.00` is
+    // `0e-2`. Not a rendering of the decimal, because two spellings of the same money
+    // value must compare equal and `0.10` and `0.1` do not have the same scale.
+    if n.kind == 2 { return to_string(n.value) + "e-" + to_string(n.a); }
+    if n.kind == 3 {
+        // The source span, quotes included. See the header for where this parts company
+        // with Rust's `{:?}`.
+        let t: Token = self.tokens[n.token];
+        return substring(src, t.start, t.length);
+    }
+    if n.kind == 4 {
+        if n.value == 1 { return "true"; }
+        return "false";
+    }
+    if n.kind == 5 {
+        let named: Token = self.tokens[n.token];
+        if params >= 0 {
+            let list: Node = self.nodes[params];
+            let mutable i: Int = 0;
+            while i < list.b {
+                let p: Node = self.nodes[self.children[list.a + i]];
+                let pname: Token = self.tokens[p.token];
+                if spans_equal(src, named.start, named.length, pname.start, pname.length) {
+                    return "#" + to_string(i);
+                }
+                i += 1;
+            }
+        }
+        return substring(src, named.start, named.length);
+    }
+    if n.kind == 6 { return "-(" + self.promise_render(src, n.a, params) + ")"; }
+    if n.kind == 7 { return "!(" + self.promise_render(src, n.a, params) + ")"; }
+    if n.kind == 8 {
+        return "(" + self.promise_render(src, n.a, params) + " " + review_binary_op(n.value)
+               + " " + self.promise_render(src, n.b, params) + ")";
+    }
+    if n.kind == 9 {
+        return "(" + self.promise_render(src, n.a, params) + " " + review_compare_op(n.value)
+               + " " + self.promise_render(src, n.b, params) + ")";
+    }
+    if n.kind == 10 {
+        return "(" + self.promise_render(src, n.a, params) + " " + review_logical_op(n.value)
+               + " " + self.promise_render(src, n.b, params) + ")";
+    }
+    if n.kind == 11 {
+        return self.promise_render(src, n.a, params) + "." + self.review_token_text(src, n.token);
+    }
+    if n.kind == 12 {
+        return self.promise_render(src, n.a, params) + "["
+               + self.promise_render(src, n.b, params) + "]";
+    }
+    if n.kind == 13 {
+        return self.review_token_text(src, n.token) + "("
+               + self.promise_render_args(src, n.a, params) + ")";
+    }
+    if n.kind == 14 {
+        return self.promise_render(src, n.a, params) + "." + self.review_token_text(src, n.token)
+               + "(" + self.promise_render_args(src, n.b, params) + ")";
+    }
+    if n.kind == 17 {
+        return "[" + self.promise_render_items(src, n.a, n.b, params) + "]";
+    }
+    // An interpolated string. `review.rs` renders every one as the word `interp` and so does
+    // this: the pieces are expressions, so rendering them would be rendering a program, and a
+    // contract clause that interpolates is not a thing anybody writes.
+    if n.kind == 18 { return "interp"; }
+    if n.kind == 19 {
+        // A record literal, its fields SORTED — see `review_sort_texts`.
+        let mutable fields: [String] = [];
+        let mutable i: Int = 0;
+        while i < n.b {
+            let pair: Node = self.nodes[self.children[n.a + i]];
+            push(fields, self.review_token_text(src, pair.token) + ": "
+                         + self.promise_render(src, pair.a, params));
+            i += 1;
+        }
+        let ordered: Int = review_sort_texts(fields);
+        let mutable out: String = self.review_token_text(src, n.token) + " \{";
+        i = 0;
+        while i < len(fields) {
+            if i > 0 {
+                out = out + ", ";
+            }
+            out = out + fields[i];
+            i += 1;
+        }
+        return out + "\}";
+    }
+    // Kind 21: the value being returned, which a bracket on the return type is about. It is
+    // written nowhere in the source — that is why the node kind exists — and `parser.rs`
+    // synthesizes the name `result` for the same clause, so `result` is what both render.
+    if n.kind == 21 { return "result"; }
+    return "node" + to_string(n.kind);
+}
+
+function (self: Unit) promise_render_args(src: String, list: Int, params: Int) -> String {
+    if list < 0 {
+        return "";
+    }
+    let n: Node = self.nodes[list];
+    return self.promise_render_items(src, n.a, n.b, params);
+}
+
+function (self: Unit) promise_render_items(src: String, start: Int, count: Int,
+                                          params: Int) -> String {
+    let mutable out: String = "";
+    let mutable i: Int = 0;
+    while i < count {
+        if i > 0 {
+            out = out + ", ";
+        }
+        out = out + self.promise_render(src, self.children[start + i], params);
+        i += 1;
+    }
+    return out;
+}
+
+// The clause as the programmer wrote it, and WITHOUT the `requires` or `ensures` word.
+//
+// One line, because `emit.bx` already holds the hard half: a BRACKET clause is not one span —
+// `balance: Decimal<2> [> $0.00]` has the type sitting between the subject and the clause, so
+// the subject comes out of the `clause_subjects` side table and the text is two pieces joined,
+// with a third case for a clause that said `it`. Reproducing that here would have been a
+// second chance to get it wrong.
+//
+// `parser.rs` measures a longhand clause from the token AFTER the keyword and `parse_clauses`
+// measures from the keyword itself, which is the only reason anything has to be stripped.
+function (self: Unit) promise_clause_text(src: String, clause: Node) -> String {
+    return without_clause_keyword(self.clause_text(src, clause));
+}
+
+// ---- collecting every promise a file makes --------------------------------------------
+
+// A Unit with nothing in it, which is what parsing a second file needs.
+//
+// **This literal is duplicated from `main.bx`**, and that is a defect rather than a design:
+// `Unit` has a hundred and twelve fields, so a field added to `types.bx` has to be added in
+// two places or one of them stops compiling. `main.bx` is off limits to this change, so the
+// duplication is reported instead of fixed — the right end state is that `main.bx` calls
+// this, and then a review is not a second spelling of the compiler's own state.
+//
+// The reason a second Unit is needed at all: a review parses TWO programs, and a Unit holds
+// one program's tokens, arena and side tables. Reusing one would compare a file against
+// itself with the other file's nodes appended to it.
+function review_unit() -> Unit {
+    return Unit { tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, current_method: 0 - 1, probing: 0, probe_changes: 0, type_bindings: [], measure_clause: 0 - 1, measure_slot: 0, measure_parameters: 0 - 1, measure_owner: "", old_nodes: [], old_slots: [], ensures_start: 0, ensures_count: 0, ensures_owner: "", bracket_clauses: [], clause_subjects: [], it_token: 0 - 1, it_is_result: 0, used_it: 0, it_seen: 0, result_type_node: 0 - 1, result_slot: 0 - 1, returns_node: 0 - 1, walked_types: [], type_binding_floor: 0, allowed_effects: 63, effects_owner: "", function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], in_function: 0, depth: 0, problems: 0, position: 0, token_end: 0, no_record_literal: 0, in_multiply: 0, print_to_stderr: 0, int_type_node: 0 - 1, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
+}
+
+// One clause list, rendered into the two parallel tables — the comparable shape and the
+// text to show — and answering how many landed.
+//
+// `which` is 126 for the `requires` clauses and 127 for the `ensures`. A `decreases`
+// measure (128) is skipped, exactly as `review.rs` skips it: it promises that an answer
+// ARRIVES rather than what the answer is, and losing one is a termination question that a
+// signature comparison has nothing useful to say about.
+function (self: Unit) review_gather_clauses(src: String, clauses: Int, params: Int, which: Int,
+                                    mutable shapes: [String],
+                                    mutable texts: [String]) -> Int {
+    if clauses < 0 {
+        return 0;
+    }
+    let list: Node = self.nodes[clauses];
+    let mutable found: Int = 0;
+    let mutable i: Int = 0;
+    while i < list.b {
+        let clause: Node = self.nodes[self.children[list.a + i]];
+        if clause.value == which {
+            push(shapes, self.promise_render(src, clause.a, params));
+            push(texts, self.promise_clause_text(src, clause));
+            found += 1;
+        }
+        i += 1;
+    }
+    return found;
+}
+
+// Every promise this Unit's items make.
+//
+// Three passes, and the shape is what `collect` in `review.rs` does with its five `for`
+// loops over a `Program`'s separate vectors. stage-1 has ONE item list instead, in source
+// order, so the flattening is explicit:
+//
+//   1. every CALLABLE's item node, in one list. A free function and a method are node kinds
+//      80 and 81, and an `implement` block (85) holds its methods as children — so the
+//      block is opened here rather than in the loop that reads a signature, which is the
+//      only reason pass 2 has no special case in it.
+//   2. one Promise per callable.
+//   3. the classes, their fields, and the interfaces.
+//
+// **Enums and `external function`s are deliberately absent**, because `review.rs` collects
+// neither. An enum's promise is its variants and nothing reads them; an extern is a claim
+// about a C symbol, and its `touches` is where an effect ENTERS the program rather than
+// something a Burxt signature guarantees. Worth naming, because a reader who checked the
+// item kinds against `parse_item` would otherwise find two missing and assume an oversight.
+function (self: Unit) collect_promises(src: String) -> Promises {
+    let mutable entries: [Promise] = [];
+    let mutable shapes: [String] = [];
+    let mutable texts: [String] = [];
+
+    let mutable callables: [Int] = [];
+    let mutable i: Int = 0;
+    while i < len(self.items) {
+        let item: Int = self.items[i];
+        let n: Node = self.nodes[item];
+        if n.kind == 80 || n.kind == 81 {
+            push(callables, item);
+        }
+        if n.kind == 85 {
+            // `class X implements Y` produces one of these with NO methods — the class's own
+            // methods are what satisfy the interface — so this loop runs zero times for it,
+            // and the methods are already in `self.items` in their own right.
+            let mutable j: Int = 0;
+            while j < n.b {
+                push(callables, self.children[n.a + j]);
+                j += 1;
+            }
+        }
+        i += 1;
+    }
+
+    i = 0;
+    while i < len(callables) {
+        let n: Node = self.nodes[callables[i]];
+        // The clause node carries the return type in `c` and the receiver's token in
+        // `value`, because a method item has five slots and six things to say. So a
+        // function and a method are read by the same four lines.
+        let clauses: Node = self.nodes[n.c];
+        let mutable name: String = self.review_token_text(src, n.token);
+        let mutable kind: String = "function";
+        let mutable is_pure: Int = flag_pure(n.value);
+        let mutable is_private: Int = 0;
+        if n.kind == 81 {
+            name = self.review_token_text(src, clauses.value) + "." + name;
+            if flag_associated(n.value) == 1 {
+                // An associated function — `function open(...)` inside a class body, which is
+                // how a class gets a constructor. `review.rs` finds these in `Program.fns`
+                // under the qualified name `Account.open` and calls them constructors; stage-1
+                // stores one as a method on the class with bit 5 set, which is the same fact
+                // in two spans instead of one string.
+                kind = "constructor";
+            } else {
+                kind = "method";
+                // `review.rs` hardcodes `is_pure: false` for every method, because
+                // `parse_record` refuses `pure` on one — the marker goes on a free function
+                // for now. Read from the flags anyway rather than written as 0, so that the
+                // day a method may be `pure` this file does not quietly under-report it.
+                is_private = flag_private(n.value);
+            }
+        }
+        let requires_at: Int = len(shapes);
+        let requires_count: Int = self.review_gather_clauses(src, n.c, n.a, 126, shapes, texts);
+        let ensures_at: Int = len(shapes);
+        let ensures_count: Int = self.review_gather_clauses(src, n.c, n.a, 127, shapes, texts);
+        push(entries, Promise { name: name, kind: kind,
+                    shape: self.promise_shape(src, n.a, clauses.c),
+                    requires_at: requires_at, requires_count: requires_count,
+                    ensures_at: ensures_at, ensures_count: ensures_count,
+                    is_pure: is_pure, is_private: is_private, touches: flag_effects(n.value) });
+        i += 1;
+    }
+
+    i = 0;
+    while i < len(self.items) {
+        let item: Int = self.items[i];
+        let n: Node = self.nodes[item];
+        if n.kind == 82 {
+            let name: String = self.review_token_text(src, n.token);
+            // The field COUNT rather than the field types, matching `review.rs`. A field's own
+            // type is its own promise, one entry below, so saying it twice would double every
+            // finding about a class.
+            push(entries, Promise { name: name, kind: "class",
+                        shape: to_string(n.b) + " field(s)",
+                        requires_at: 0, requires_count: 0, ensures_at: 0, ensures_count: 0,
+                        is_pure: 0, is_private: 0, touches: 0 });
+            let mutable j: Int = 0;
+            while j < n.b {
+                let field: Node = self.nodes[self.children[n.a + j]];
+                push(entries, Promise { name: name + "." + self.review_token_text(src, field.token),
+                            kind: "field",
+                            shape: self.show_type(src, self.declared_type(src, field.a)),
+                            requires_at: 0, requires_count: 0, ensures_at: 0, ensures_count: 0,
+                            is_pure: 0, is_private: field.value, touches: 0 });
+                j += 1;
+            }
+        }
+        if n.kind == 84 {
+            push(entries, Promise { name: self.review_token_text(src, n.token), kind: "interface",
+                        shape: to_string(n.b) + " method(s)",
+                        requires_at: 0, requires_count: 0, ensures_at: 0, ensures_count: 0,
+                        is_pure: 0, is_private: 0, touches: 0 });
+        }
+        i += 1;
+    }
+
+    return Promises { entries: entries, shapes: shapes, texts: texts, failed: 0 };
+}
+
+// Sort by name, then drop all but the LAST entry of each repeated name.
+//
+// Both halves are what `BTreeMap::insert` did for free on the Rust side, and both are
+// needed. The sort is the output order — a reviewer reading two runs should not also be
+// diffing the order. Keeping the last of a run is `insert`'s replace: the same key inserted
+// twice leaves one value, the later one. The sort is INSERTION sort and therefore stable,
+// which is what makes "the last of the run" mean "the last one collected".
+//
+// A program with two declarations of one name is refused by the checker, which a review
+// does not run — so this is reachable only on a program that would not compile, and the
+// answer it gives there is the same answer `review.rs` gives.
+function review_unique_by_name(mutable entries: [Promise]) -> Int {
+    let mutable i: Int = 1;
+    while i < len(entries) {
+        let held: Promise = entries[i];
+        let mutable j: Int = i;
+        while j > 0 && held.name < entries[j - 1].name {
+            entries[j] = entries[j - 1];
+            j -= 1;
+        }
+        entries[j] = held;
+        i += 1;
+    }
+    // Compact in place, then cut the tail off: `truncate` is the only way to shorten a
+    // growable array, and writing the survivors forward means one pass and no second array.
+    let mutable kept: Int = 0;
+    i = 0;
+    while i < len(entries) {
+        let last_of_run: Bool = i + 1 >= len(entries) || entries[i].name != entries[i + 1].name;
+        if last_of_run {
+            entries[kept] = entries[i];
+            kept += 1;
+        }
+        i += 1;
+    }
+    let dropped: Int = truncate(entries, kept);
+    return kept;
+}
+
+// A file's promises: the module loader, then the lexer, then the parser, then the walk.
+//
+// `load_program` and not `read_file`, so `use "..."` is followed exactly as a compile would
+// follow it. A review that read only the named file would miss a contract deleted in
+// another one, which is the failure mode a semver gate can least afford.
+//
+// No typechecker — see the header for why that is what keeps this agreeing with `review.rs`
+// rather than merely being cheap.
+function promises_of(path: String) -> Promises touches files {
+    let src: String = load_program(path);
+    let mutable unit: Unit = review_unit();
+    let installed: Int = unit.install_keywords();
+    let total: Int = unit.run(src);
+    let mutable broken: Promises = Promises { entries: [], shapes: [], texts: [], failed: 1 };
+    if unit.errors > 0 {
+        return broken;
+    }
+    while !unit.done() {
+        let item: Int = unit.parse_item(src);
+        if item < 0 {
+            return broken;
+        }
+        push(unit.items, item);
+    }
+    if unit.errors > 0 {
+        return broken;
+    }
+    let mutable found: Promises = unit.collect_promises(src);
+    let unique: Int = review_unique_by_name(found.entries);
+    return found;
+}
+
+// ---- comparing ------------------------------------------------------------------------
+
+// Where `name` is, or -1. Linear, over a list that is sorted — a binary search is the
+// obvious improvement and it is not taken, for the reason every other lookup in this
+// compiler is a scan: a program has tens of declarations, the scan is what the sort is
+// already paying for, and `find_binding` and `find_type` set the precedent. If a review of
+// something enormous ever measures slow, `function_buckets` in `types.bx` is the pattern to
+// copy.
+function review_find_promise(among: Promises, name: String) -> Int {
+    let mutable i: Int = 0;
+    while i < len(among.entries) {
+        if among.entries[i].name == name {
+            return i;
+        }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+// Does this clause list still hold a clause with the same comparable shape?
+//
+// The SHAPE and not the text, which is the whole of the rename fix — see `promise_render`.
+function review_has_clause(shapes: [String], at: Int, count: Int, shape: String) -> Bool {
+    let mutable i: Int = 0;
+    while i < count {
+        if shapes[at + i] == shape {
+            return true;
+        }
+        i += 1;
+    }
+    return false;
+}
+
+// Everything two versions of one declaration disagree about.
+//
+// The ORDER the findings are raised in is part of the output, because the final sort is by
+// verdict and name only — so two WEAKENED findings about one declaration come out in
+// exactly the order they are pushed here. It is `review.rs`'s order, deliberately: lost
+// clauses, gained clauses, gained effects, lost effects, purity, privacy, shape.
+function compare_promises(was: Promise, before: Promises, now: Promise, after: Promises,
+                          mutable out: [Finding]) -> Int {
+    // A contract that was there and is not is THE finding this tool exists for.
+    let mutable i: Int = 0;
+    while i < was.requires_count {
+        if !review_has_clause(after.shapes, now.requires_at, now.requires_count,
+                       before.shapes[was.requires_at + i]) {
+            push(out, Finding { verdict: verdict_weakened(), name: was.name,
+                        detail: "lost `requires " + before.texts[was.requires_at + i] + "`" });
+        }
+        i += 1;
+    }
+    i = 0;
+    while i < was.ensures_count {
+        if !review_has_clause(after.shapes, now.ensures_at, now.ensures_count,
+                       before.shapes[was.ensures_at + i]) {
+            push(out, Finding { verdict: verdict_weakened(), name: was.name,
+                        detail: "lost `ensures " + before.texts[was.ensures_at + i] + "`" });
+        }
+        i += 1;
+    }
+    i = 0;
+    while i < now.requires_count {
+        if !review_has_clause(before.shapes, was.requires_at, was.requires_count,
+                       after.shapes[now.requires_at + i]) {
+            push(out, Finding { verdict: verdict_stricter(), name: was.name,
+                        detail: "gained `requires " + after.texts[now.requires_at + i] + "`" });
+        }
+        i += 1;
+    }
+    i = 0;
+    while i < now.ensures_count {
+        if !review_has_clause(before.shapes, was.ensures_at, was.ensures_count,
+                       after.shapes[now.ensures_at + i]) {
+            push(out, Finding { verdict: verdict_stricter(), name: was.name,
+                        detail: "gained `ensures " + after.texts[now.ensures_at + i] + "`" });
+        }
+        i += 1;
+    }
+    // An effect GAINED is the change a reviewer most wants surfaced: this function can now
+    // reach something it could not. Because effects are DECLARED rather than inferred
+    // (v0.0.159), an agent cannot add one without changing a signature — which is what
+    // makes this reportable at all.
+    //
+    // Bit order, low to high, is `Effect`'s `Ord` order in `ast.rs` and therefore the order
+    // the sorted Rust `Vec` is walked in. See `Promise.touches`.
+    let mutable bit: Int = 1;
+    while bit <= 32 {
+        if bit_and(now.touches, bit) == bit && bit_and(was.touches, bit) == 0 {
+            push(out, Finding { verdict: verdict_weakened(), name: was.name,
+                        detail: "now touches " + effect_name(bit) + " — it could not before" });
+        }
+        bit = bit * 2;
+    }
+    bit = 1;
+    while bit <= 32 {
+        if bit_and(was.touches, bit) == bit && bit_and(now.touches, bit) == 0 {
+            push(out, Finding { verdict: verdict_stricter(), name: was.name,
+                        detail: "no longer touches " + effect_name(bit) });
+        }
+        bit = bit * 2;
+    }
+    if was.is_pure == 1 && now.is_pure == 0 {
+        push(out, Finding { verdict: verdict_weakened(), name: was.name,
+                    detail: "no longer `pure` — its answer may now depend on more than its "
+                            + "arguments" });
+    }
+    if was.is_pure == 0 && now.is_pure == 1 {
+        push(out, Finding { verdict: verdict_stricter(), name: was.name,
+                    detail: "now `pure`" });
+    }
+    // Privacy is a promise about who may touch this. Opening it up is a weakening of exactly
+    // the same kind as dropping a precondition: something that could not happen now can.
+    if was.is_private == 1 && now.is_private == 0 {
+        push(out, Finding { verdict: verdict_weakened(), name: was.name,
+                    detail: "no longer `private` — anything may now read it" });
+    }
+    if was.is_private == 0 && now.is_private == 1 {
+        push(out, Finding { verdict: verdict_stricter(), name: was.name,
+                    detail: "now `private`" });
+    }
+    if was.shape != now.shape {
+        push(out, Finding { verdict: verdict_changed(), name: was.name,
+                    detail: was.shape + " -> " + now.shape });
+    }
+    return len(out);
+}
+
+// Weakenings first, then by name — and STABLE, so that the findings about one declaration
+// keep the order `compare_promises` raised them in. `review.rs` relies on the same property
+// of `sort_by`; an unstable sort would reorder two WEAKENED lines about one function and the
+// two implementations would stop agreeing on a program where nothing is wrong.
+function review_sort_findings(mutable xs: [Finding]) -> Int {
+    let mutable i: Int = 1;
+    while i < len(xs) {
+        let held: Finding = xs[i];
+        let held_rank: Int = verdict_rank(held.verdict);
+        let mutable j: Int = i;
+        // `while` and not a `for`, and the condition is spelled out rather than folded into a
+        // comparison helper, because Burxt has no function values: a comparator would have to
+        // be a name this file could not pass anywhere.
+        let mutable moving: Bool = true;
+        while moving && j > 0 {
+            let ahead: Finding = xs[j - 1];
+            let ahead_rank: Int = verdict_rank(ahead.verdict);
+            if ahead_rank > held_rank || (ahead_rank == held_rank && ahead.name > held.name) {
+                xs[j] = ahead;
+                j -= 1;
+            } else {
+                moving = false;
+            }
+        }
+        xs[j] = held;
+        i += 1;
+    }
+    return len(xs);
+}
+
+// ---- the tool -------------------------------------------------------------------------
+
+// What changed about what these two programs PROMISE. Answers the exit code, so a caller is
+// a two-line CLI branch: `0` nothing weakened, `1` something weakened, `2` unreadable.
+//
+// The exit code is part of the contract and not a convenience. It is what makes this usable
+// as a CI gate with no output parsing, which is what `ROADMAP-1.0.md` §C2 asks of it.
+function review(old_path: String, new_path: String) -> Int touches files {
+    let before: Promises = promises_of(old_path);
+    if before.failed == 1 {
+        print_error("error: " + old_path + " could not be read or parsed");
+        return 2;
+    }
+    let after: Promises = promises_of(new_path);
+    if after.failed == 1 {
+        print_error("error: " + new_path + " could not be read or parsed");
+        return 2;
+    }
+
+    let mutable findings: [Finding] = [];
+    let mutable i: Int = 0;
+    while i < len(before.entries) {
+        let was: Promise = before.entries[i];
+        let at: Int = review_find_promise(after, was.name);
+        if at < 0 {
+            // A removed declaration is a weakening only if something still calls it, which
+            // this cannot know — so it is reported plainly and left to the reviewer.
+            push(findings, Finding { verdict: verdict_removed(), name: was.name,
+                        detail: was.kind + " is gone" });
+        } else {
+            let compared: Int = compare_promises(was, before, after.entries[at], after,
+                                                findings);
+        }
+        i += 1;
+    }
+    i = 0;
+    while i < len(after.entries) {
+        let now: Promise = after.entries[i];
+        if review_find_promise(before, now.name) < 0 {
+            let mutable detail: String = "new " + now.kind;
+            if now.is_private == 1 {
+                detail = detail + ", private";
+            }
+            push(findings, Finding { verdict: verdict_added(), name: now.name,
+                        detail: detail });
+        }
+        i += 1;
+    }
+    let ordered: Int = review_sort_findings(findings);
+
+    if len(findings) == 0 {
+        print("no promise changed.");
+        print("");
+        print("Every signature is identical, so whatever moved in the bodies, this program");
+        print("guarantees exactly what it guaranteed before.");
+        return 0;
+    }
+
+    let mutable weakened: Int = 0;
+    i = 0;
+    while i < len(findings) {
+        if findings[i].verdict == verdict_weakened() {
+            weakened += 1;
+        }
+        i += 1;
+    }
+    i = 0;
+    while i < len(findings) {
+        let f: Finding = findings[i];
+        // `{:<9} {:<34} {}` in `review.rs`. Three columns and two literal spaces, so a
+        // verdict longer than nine or a name longer than thirty-four pushes its neighbour
+        // right rather than being cut — a truncated qualified name would be a lie about
+        // which declaration changed.
+        print(review_pad(f.verdict, 9) + " " + review_pad(f.name, 34) + " " + f.detail);
+        i += 1;
+    }
+    print("");
+    if weakened > 0 {
+        print(to_string(weakened) + " weakened promise(s). A weakened contract is the one "
+              + "change that passes every test — the tests were failing BECAUSE of it.");
+        // Non-zero, so this is usable as a gate in CI without parsing the output.
+        return 1;
+    }
+    print(to_string(len(findings)) + " change(s), none weakening.");
+    return 0;
+}

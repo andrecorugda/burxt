@@ -4754,12 +4754,27 @@ fn the_burxt_compiler_builds_and_runs_a_program_and_itself() {
         )
     };
 
-    let (ok, version, _) = bxc_run(&["--version"]);
-    assert!(ok && version.contains("burxt"), "`--version` answered: {:?}", version);
+    // **Status on STDERR, product on STDOUT** — the Rust build's discipline, and it is checked
+    // rather than assumed because the first version of this got it wrong in the least likely
+    // place: the two compilers disagreed on a program with NO errors, because one announced
+    // success on stdout and the other on stderr. `eprintln!` in `main.rs` is the authority.
+    //
+    // Keeping it deliberately is what makes `burxt emit-ir x.bx > x.ll` write IR rather than a
+    // progress report.
+    let (ok, out, err) = bxc_run(&["--version"]);
+    assert!(ok, "`--version` failed");
+    assert!(err.contains("burxt"), "`--version` should answer on stderr, said: {:?}", err);
+    assert!(out.is_empty(), "`--version` wrote to stdout: {:?}", out);
 
-    let (ok, said, _) = bxc_run(&["check", "money.bx"]);
-    assert!(ok, "`check` on a good program failed: {}", said);
-    assert!(said.contains("no errors"), "`check` should be quiet on success, said: {:?}", said);
+    let (ok, out, err) = bxc_run(&["check", "money.bx"]);
+    assert!(ok, "`check` on a good program failed: {} {}", out, err);
+    assert!(
+        err.contains("no errors"),
+        "`check` should report success on stderr, stdout={:?} stderr={:?}",
+        out,
+        err
+    );
+    assert!(out.is_empty(), "`check` wrote to stdout: {:?}", out);
 
     let (ok, said, cried) = bxc_run(&["check", "broken.bx"]);
     assert!(!ok, "`check` accepted a program with a syntax error");
@@ -4782,8 +4797,14 @@ fn the_burxt_compiler_builds_and_runs_a_program_and_itself() {
         "the program built by the Burxt compiler printed the wrong total"
     );
 
+    // `run` puts the PROGRAM's output on stdout and nothing else — a program's answer must not
+    // arrive mixed with the compiler's progress.
     let (ok, said, _) = bxc_run(&["run", "money.bx"]);
     assert!(ok && said.trim() == "59.97", "`run` printed: {:?}", said);
+
+    // `emit-ir` is the one subcommand whose answer IS its stdout, so it can be redirected.
+    let (ok, ir, _) = bxc_run(&["emit-ir", "money.bx"]);
+    assert!(ok && ir.contains("LLVM IR written by the Burxt compiler"), "`emit-ir` gave: {:.120}", ir);
 
     // The one that matters. The Burxt compiler compiles its own source into a working
     // compiler, through its own `build`, and that compiler compiles a program.
@@ -4801,6 +4822,85 @@ fn the_burxt_compiler_builds_and_runs_a_program_and_itself() {
         "the compiler built BY the Burxt compiler could not compile and run a program:\n{}",
         String::from_utf8_lossy(&second.stderr)
     );
+
+    // `check -` reads the program from stdin, and is held to the RUST build's exact answer
+    // rather than to something plausible: both must print `-: no errors` and exit 0. The name
+    // matters — a diagnostic that calls the file `-` in one compiler and `./burxt-stdin.bx` in
+    // the other is a diagnostic a tool cannot rely on, and the first version of this did the
+    // latter (and left that file in the current directory, which the root-cleanliness invariant
+    // would have caught the first time anyone ran it from the repository root).
+    let piped = |exe: &Path, program: &str| -> (bool, String) {
+        let mut child = Command::new(exe)
+            .args(["check", "-"])
+            .current_dir(&scratch)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("check -");
+        {
+            use std::io::Write;
+            child.stdin.as_mut().unwrap().write_all(program.as_bytes()).unwrap();
+        }
+        let out = child.wait_with_output().expect("check -");
+        // Both streams, because WHICH stream a compiler answers on is part of the answer.
+        (
+            out.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout).trim(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
+        )
+    };
+    let program = "let a: Decimal<2> = $5.00;\nprint(a * 2);\n";
+    let rust_says = piped(Path::new(env!("CARGO_BIN_EXE_burxt")), program);
+    let burxt_says = piped(&bxc, program);
+    assert_eq!(
+        rust_says, burxt_says,
+        "`check -` must answer identically in both compilers. Rust said {:?}, Burxt said {:?}",
+        rust_says, burxt_says
+    );
+    assert_eq!(burxt_says.1, "-: no errors", "`check -` should name the source `-`");
+    // Neither may resolve `use` from stdin — there is no directory to resolve against, and the
+    // Rust build treats a `use` line piped in as a syntax error. Checked because making the
+    // Burxt one MORE capable here would be a divergence, which under the parity gate is a
+    // defect and not a feature.
+    assert!(
+        !piped(&bxc, "use \"lib/option.bx\";\nprint(1);\n").0
+            && !piped(Path::new(env!("CARGO_BIN_EXE_burxt")), "use \"lib/option.bx\";\nprint(1);\n").0,
+        "one of the two compilers resolved `use` from stdin and the other did not"
+    );
+    // And nothing was left behind by reading stdin.
+    assert!(
+        !scratch.join("burxt-stdin.bx").exists(),
+        "`check -` wrote a temporary source file into the current directory"
+    );
+
+    // `--target` produces an object for another machine and STOPS, because linking needs that
+    // target's libc and linker. The IR is identical for every target — which is what makes the
+    // decimal answers identical too — so the triple only ever reaches `llc`.
+    fs::write(scratch.join("small.bx"), "print(42);\n").unwrap();
+    let (ok, said, cried) = bxc_run(&["build", "small.bx", "--target", "aarch64-apple-darwin"]);
+    assert!(ok, "cross-compiling failed: {} {}", said, cried);
+    assert!(
+        scratch.join("small.o").exists(),
+        "`--target` produced no object. It said: {}",
+        said
+    );
+    assert!(
+        !scratch.join("small").exists(),
+        "`--target` linked an executable for a foreign machine — it must stop at the object"
+    );
+    let kind = Command::new("file").arg(scratch.join("small.o")).output();
+    if let Ok(kind) = kind {
+        let kind = String::from_utf8_lossy(&kind.stdout).to_string();
+        assert!(
+            kind.contains("arm64") || kind.contains("aarch64"),
+            "the object the Burxt compiler cross-compiled is not arm64: {}",
+            kind
+        );
+    }
 
     // And the legacy report, which three other invariants in this file parse.
     let (_, report, _) = bxc_run(&["money.bx"]);
@@ -5318,8 +5418,11 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
              exit status. It compiles a program to a native binary and it BUILDS ITSELF through \
              its own `build` — `the_burxt_compiler_builds_and_runs_a_program_and_itself`. \
              Still PARTIAL, and here is exactly what is missing rather than a vague gap: \
-             `layout`, `explain memory`, `review`, `mcp-schema`, `lsp`, `--json`, `--target`, and \
-             `check -` reading stdin. Also `check` prints its diagnostics WITHOUT the caret block \
+             `layout`, `explain memory`, `review`, `mcp-schema`, `lsp`, and `--json`. **v0.0.220 \
+             closed `check -` and `--target`** — both held to the Rust build's exact answer, \
+             including the STREAM it answers on: status to stderr, product to stdout, which is \
+             how the two were found disagreeing on a program with no errors at all. Also `check` \
+             prints its diagnostics WITHOUT the caret block \
              the Rust one renders, because `check.bx` reports a message and a token but nothing \
              yet hands that token to `diag.bx` — so the two are not byte-identical on a refusal",
         ),

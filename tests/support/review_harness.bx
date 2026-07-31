@@ -1,0 +1,31 @@
+// ============================================================================
+// tests/support/review_harness.bx — runs `src/burxt-compiler/review.bx` from the outside, so
+// a test can hold its output against `burxt review`'s byte for byte.
+//
+// A HARNESS rather than a fixture, which is why it lives here and not in `tests/pass/`: a
+// fixture's answer is a checked-in `.stdout`, and this program's answer depends on the two
+// files it is handed. `tests/support/diag_harness.bx` is the precedent and reads the same way.
+//
+// It exists because `main.bx` has no `review` subcommand yet — that is task 1 of THE GATE and
+// somebody else's change. The moment it does, this harness becomes redundant and
+// `the_two_compilers_review_the_same_promises` should invoke the stage-1 compiler directly
+// instead; deleting it then is the point, not a loss.
+//
+//     review_harness <old.bx> <new.bx>
+//
+// Prints exactly what `burxt review` prints, and exits with exactly the code it exits with:
+// 0 nothing weakened, 1 something weakened, 2 a file could not be read or parsed. The exit
+// code is the half a CI gate reads, so a harness that swallowed it would test the easier
+// half of the claim.
+// ============================================================================
+
+use "../../src/burxt-compiler/review.bx";
+
+region main {
+    if argument_count() < 3 {
+        print_error("usage: review_harness <old.bx> <new.bx>");
+        exit(2);
+    }
+    let code: Int = review(argument(1), argument(2));
+    exit(code);
+}

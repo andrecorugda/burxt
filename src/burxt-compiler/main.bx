@@ -71,6 +71,48 @@ use "diag.bx";
 // modules do not depend on `lib/`, so the declaration is repeated here rather than imported.
 external function system(command: String) -> CInt touches commands;
 
+// Standard input, one byte at a time, for `check -`. `getchar` answers -1 at end of file.
+//
+// It was already declared in `lib/os.bx` and already in use, which is why v0.0.218's claim that
+// this was BLOCKED was wrong. The compiler modules do not depend on `lib/`, so the declaration
+// is repeated here rather than imported.
+external function getchar() -> CInt touches input;
+
+// One byte as a one-byte String, for rebuilding text read from a pipe.
+//
+// It REFUSES a byte it cannot name rather than substituting `?`, which is the bug `lib/os.bx`'s
+// `os_byte_as_string` has (ROADMAP B2: every byte >= 127 becomes a question mark, silently). A
+// compiler that quietly corrupted the program it was handed would be the worst possible place
+// for that. Bytes >= 128 are UTF-8 continuation and lead bytes, so they are passed through by
+// index — the table only covers what a lookup can name.
+function byte_as_string(b: Int) -> String
+    requires b >= 0
+    requires b < 256
+{
+    if b == 9 {
+        return "\t";
+    }
+    if b == 10 {
+        return "\n";
+    }
+    if b == 13 {
+        return "\r";
+    }
+    if b >= 32 && b < 127 {
+        let printable: String = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz\{|\}~";
+        return substring(printable, b - 32, 1);
+    }
+    // A byte outside the printable range and not one of the three whitespace ones. Building it
+    // as a String needs a way to make an arbitrary byte, which this language does not have
+    // (ROADMAP D1p's `from_byte`, gated on A5). So it is REFUSED by name rather than guessed —
+    // and the practical consequence is stated where a caller will read it: `check -` accepts
+    // ASCII source today, and non-ASCII in a string literal must come from a file.
+    print_error("burxt check -: byte " + to_string(b) + " cannot be read from stdin yet — "
+                + "non-ASCII source must come from a file. See ROADMAP D1p.");
+    exit(2);
+    return "";
+}
+
 // ---- the pipeline, once ----------------------------------------------------------------
 //
 // **A `Unit` cannot be RETURNED from a function, and that is not a bug.** The first version of
@@ -134,11 +176,28 @@ return "; LLVM IR written by the Burxt compiler, in Burxt.\n"
 // is a function and not two copies.
 //
 // Answers the number of problems found: 0 means it worked.
+// Given a PATH: the program and everything it uses, in one buffer. The same design stage-0
+// uses, for the same reason — a Span stays a byte range, and only a renderer needs to know
+// which file an offset fell in. See spec/M6-MODULES.md §1.5.
 function drive(path: String, out_ll: String, loud: Int) -> Int touches files {
-    // The program AND everything it uses, in one buffer. The same design stage-0 uses, for
-    // the same reason: a Span stays a byte range, and only a renderer needs to know which
-    // file an offset fell in. See spec/M6-MODULES.md §1.5.
-    let src: String = load_program(path);
+    return drive_source(load_program(path), path, out_ll, loud);
+}
+
+// Given the TEXT, which is what `check -` has: there is no file, so there is nothing to
+// resolve `use` against.
+//
+// **That matches the Rust build exactly, and I checked rather than assumed.** `burxt check -`
+// in Rust bypasses the module pre-pass entirely — `use "lib/option.bx"` piped into it is a
+// SYNTAX ERROR, not a resolved import. So this split is not a shortcut; resolving `use` here
+// would make the Burxt compiler MORE capable than the Rust one and therefore divergent, which
+// under the parity gate is a defect rather than a feature. If stdin should resolve imports, it
+// should start doing so in both compilers in the same version, against a directory someone
+// chose on purpose.
+//
+// It also removes a temp file the first version wrote into the current directory — which
+// `the_repository_root_holds_only_what_belongs_there` would have failed on the first time
+// anyone ran `check -` from the repository root.
+function drive_source(src: String, path: String, out_ll: String, loud: Int) -> Int touches files {
     let mutable unit: Unit = Unit { tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, current_method: 0 - 1, probing: 0, probe_changes: 0, type_bindings: [], measure_clause: 0 - 1, measure_slot: 0, measure_parameters: 0 - 1, measure_owner: "", old_nodes: [], old_slots: [], ensures_start: 0, ensures_count: 0, ensures_owner: "", bracket_clauses: [], clause_subjects: [], it_token: 0 - 1, it_is_result: 0, used_it: 0, it_seen: 0, result_type_node: 0 - 1, result_slot: 0 - 1, returns_node: 0 - 1, walked_types: [], type_binding_floor: 0, allowed_effects: 63, effects_owner: "", function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], in_function: 0, depth: 0, problems: 0, position: 0, token_end: 0, no_record_literal: 0, in_multiply: 0, print_to_stderr: 0, int_type_node: 0 - 1, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
     let installed: Int = unit.install_keywords();
     let total: Int = unit.run(src);
@@ -261,18 +320,32 @@ function is_subcommand(word: String) -> Bool {
     return false;
 }
 
+// Everything here goes to STDERR, and so does every other status line in this file.
+//
+// That is not a style choice, it is what the Rust build does — `eprintln!` for the version, the
+// usage, `compiled X -> Y`, and `<file>: no errors` — and a byte-for-byte comparison is the only
+// reason I know it. The first version of `check` printed its answer to stdout and the two
+// compilers disagreed on a program with no errors at all, which is the least likely place to
+// look for a divergence.
+//
+// The discipline underneath it is the Unix one and it is worth keeping deliberately: **status to
+// stderr, product to stdout.** So `burxt emit-ir x.bx > x.ll` writes IR and not a progress
+// report, and a CI log shows what went wrong on the stream built for it.
 function usage() -> Int {
-    print("burxt 0.0.219 — the Burxt compiler, written in Burxt");
-    print("usage:");
-    print("  burxt check   <file.bx>                  parse and typecheck only");
-    print("  burxt build   <file.bx> [-o <path>]      compile to a native executable");
-    print("  burxt run     <file.bx>                  compile then run");
-    print("  burxt emit-ir <file.bx>                  print LLVM IR");
-    print("  burxt <file.bx> [out.ll]                 the phase report, and IR if asked");
-    print("");
-    print("Not here yet, and named rather than silently missing:");
-    print("  layout, explain memory, review, mcp-schema, lsp, --json, --target");
-    print("They exist in the Rust build. spec/ROADMAP-1.0.md THE GATE tracks the rest.");
+    print_error("burxt 0.0.220 — the Burxt compiler, written in Burxt");
+    print_error("usage:");
+    print_error("  burxt check   <file.bx>                  parse and typecheck only");
+    print_error("  burxt build   <file.bx> [-o <path>]      compile to a native executable");
+    print_error("  burxt run     <file.bx>                  compile then run");
+    print_error("  burxt emit-ir <file.bx>                  print LLVM IR");
+    print_error("  burxt <file.bx> [out.ll]                 the phase report, and IR if asked");
+    print_error("");
+    print_error("  burxt check   -                          ... reading the program from stdin");
+    print_error("  burxt build   <file.bx> --target <triple> an object for another machine");
+    print_error("");
+    print_error("Not here yet, and named rather than silently missing:");
+    print_error("  layout, explain memory, review, mcp-schema, lsp, --json");
+    print_error("They exist in the Rust build. spec/ROADMAP-1.0.md THE GATE tracks the rest.");
     return 0;
 }
 
@@ -284,7 +357,7 @@ if argument_count() > 1 {
 }
 
 if command == "--version" || command == "-V" {
-    print("burxt 0.0.219 — the Burxt compiler, written in Burxt");
+    print_error("burxt 0.0.220 — the Burxt compiler, written in Burxt");
     exit(0);
 }
 
@@ -299,9 +372,35 @@ if is_subcommand(command) && argument_count() < 3 {
 }
 
 if command == "check" {
+    // `check -` reads the program from standard input, which is what an editor's
+    // check-on-type does: the buffer has not been saved, so there is no file to name.
+    //
+    // Reachable because `getchar` is, which was the correction of v0.0.218 — this row was
+    // called BLOCKED on the reasoning that Burxt has no stdin, and `external function
+    // getchar()` had been sitting in `lib/os.bx` the whole time. Writing the bytes to a
+    // temporary file and compiling that is the honest shape: `load_program` resolves `use`
+    // against a DIRECTORY, so a program read from a pipe has to be given one to resolve
+    // against, and the current directory is the only defensible choice.
+    if argument(2) == "-" {
+        let mutable text: String = "";
+        let mutable b: Int = getchar();
+        while b != 0 - 1 {
+            text = text + byte_as_string(b);
+            b = getchar();
+        }
+        // Named `-`, because that is what the Rust build calls it in every message it prints,
+        // and a diagnostic that names the file differently in the two compilers is a diagnostic
+        // a tool cannot rely on.
+        let piped: Int = drive_source(text, "-", "", 0);
+        if piped == 0 {
+            print_error("-: no errors");
+            exit(0);
+        }
+        exit(1);
+    }
     let problems: Int = drive(argument(2), "", 0);
     if problems == 0 {
-        print(argument(2) + ": no errors");
+        print_error(argument(2) + ": no errors");
         exit(0);
     }
     exit(1);
@@ -337,11 +436,32 @@ if command == "build" || command == "run" {
     // llc then cc, the same two steps the Rust build makes — it just makes them through
     // LLVM's C API instead of through a shell. The IR is textual either way, which is what
     // makes the two paths comparable at all.
-    let assembled: Int = system("/usr/lib/llvm-18/bin/llc -relocation-model=pic -filetype=obj -o "
-                                + object + " " + ll);
+    // `--target <triple>` says which machine the code is FOR, and it stops after the object for
+    // the reason the Rust build states: linking needs that target's libc and linker, so it is
+    // left to that target's toolchain. The IR is identical for every target, which is what makes
+    // the decimal answers identical too — so here the triple only ever reaches `llc`.
+    let mutable triple: String = "";
+    let mutable a: Int = 3;
+    while a < argument_count() {
+        if argument(a) == "--target" && a + 1 < argument_count() {
+            triple = argument(a + 1);
+        }
+        a += 1;
+    }
+    let mutable machine: String = "";
+    if len(triple) > 0 {
+        machine = " -mtriple=" + triple;
+    }
+    let assembled: Int = system("/usr/lib/llvm-18/bin/llc -relocation-model=pic -filetype=obj"
+                                + machine + " -o " + object + " " + ll);
     if assembled != 0 {
         print_error("burxt: llc could not assemble " + ll);
         exit(1);
+    }
+    if len(triple) > 0 {
+        print_error("wrote " + object + " for " + triple
+                    + " — linking needs that target's libc and linker");
+        exit(0);
     }
     let linked: Int = system("cc -o " + output + " " + object);
     if linked != 0 {
@@ -349,7 +469,7 @@ if command == "build" || command == "run" {
         exit(1);
     }
     if command == "build" {
-        print("compiled " + source + " -> " + output);
+        print_error("compiled " + source + " -> " + output);
         exit(0);
     }
     // `run` hands the program's own exit status back to the shell, because a test suite
