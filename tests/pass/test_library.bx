@@ -1,0 +1,50 @@
+// lib/test.bx — testing Burxt in Burxt, which a USER could not do at all until now.
+//
+// This repository tests the compiler with a Rust harness and a second one written in Burxt. A user had
+// neither, which is a strange gap for a language whose whole argument is that you can trust what it
+// compiles: one you cannot write tests in is not one anyone should ship on.
+//
+// Two things had to exist first, and neither did a week ago:
+//   * `mutable t: Tests` (v0.0.201) — a function could not change anything it was passed, so a tally
+//     could not be threaded through one.
+//   * `exit(code)` (v0.0.200) — a suite could not tell a shell it failed, so it could not fail a build.
+//
+// **A Burxt test asserts a VALUE, not a range.** There is no `check_close` and there will not be one:
+// no float means no last-digit wobble, so `$59.97` is `$59.97` on every machine and run. Elsewhere a
+// money test either compares with a tolerance — hiding the bug it was written to catch — or is flaky.
+//
+// The failure output goes to STDERR and is checked by `the_test_library_reports_failures` in
+// tests/runner.rs. What is asserted here is the stdout half: the summary line, and that a passing suite
+// says nothing else.
+use "../../lib/test.bx";
+
+// Something to test, so the fixture is a real suite rather than a demonstration.
+function line_total(unit: Decimal<2>, quantity: Int) -> Decimal<2> {
+    return unit * quantity;
+}
+function tax_on(subtotal: Decimal<2>, rate: Decimal<4, RoundHalfEven>) -> Decimal<2, RoundHalfEven> {
+    return subtotal * rate;
+}
+
+region main {
+    let mutable t: Tests = test_begin("invoicing");
+
+    // Money, exactly. No tolerance, because there is nothing to be close about.
+    let a: Bool = check_money(t, "three at 19.99", line_total($19.99, 3), $59.97);
+    let b: Bool = check_money_half_even(t, "tax at 8.25%", tax_on($59.97, 0.0825), $4.95);
+    let c: Bool = check_money(t, "nothing costs nothing", line_total($0.00, 9), $0.00);
+
+    let d: Bool = check_int(t, "byte of a digit", byte_at("7", 0), 55);
+    let e: Bool = check_string(t, "joining", "in" + "voice", "invoice");
+    let f: Bool = check_bool(t, "ordering by bytes", "Zebra" < "apple", true);
+    let g: Bool = check_that(t, "a decimal keeps its scale", to_string($1.50) == "1.50");
+    let h: Bool = check_decimal7(t, "a tick", 0.0000001 * 6000000, 0.6000000);
+
+    // The checks answer a Bool, so a suite can branch on one — useful when a later check would
+    // not make sense after an earlier failure.
+    if a {
+        let i: Bool = check_money(t, "and twice three", line_total($19.99, 6), $119.94);
+    }
+
+    exit(test_end(t));
+}

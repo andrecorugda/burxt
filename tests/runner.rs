@@ -6029,3 +6029,116 @@ fn print_error_writes_to_stderr() {
 
     let _ = fs::remove_dir_all(&scratch);
 }
+
+/// lib/test.bx reports a failure the way a test library has to: named, valued, on stderr, and with a
+/// non-zero status so a build actually fails.
+///
+/// The failing path is what a test library is judged on, and it cannot live in `tests/pass/` — that
+/// harness requires success and compares stdout only. So the suite lives in `tests/support/` and is
+/// run here, with both streams and the exit code read separately.
+///
+/// Both compilers, because a test library that reported differently under the two would undermine the
+/// thing it exists to establish.
+#[test]
+fn the_test_library_reports_failures() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("test-library");
+    fs::create_dir_all(&scratch).unwrap();
+    let source = root.join("tests/support/failing_suite.bx");
+
+    // Seven checks, six of them wrong. Every message names WHAT was expected and what arrived —
+    // "expected 5, got 4" is most of the value of a failing test, and it is why the checks are
+    // per-type rather than one generic that cannot print a bare `T`.
+    let want_out = "deliberately broken: 7 checks, 6 failed\n";
+    let want_err = "\
+FAIL deliberately broken / wrong money: expected 20.00, got 19.99
+FAIL deliberately broken / wrong int: expected 5, got 4
+FAIL deliberately broken / wrong text: expected \"want\", got \"got\"
+FAIL deliberately broken / wrong bool: expected false, got true
+FAIL deliberately broken / a claim that fails: expected this to hold, and it did not
+FAIL deliberately broken / my own: because I said so
+";
+
+    let check = |label: &str, out: &std::process::Output| {
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want_out,
+            "{}: the summary is wrong",
+            label
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr),
+            want_err,
+            "{}: the failure report is wrong",
+            label
+        );
+        // The status is the point: without it a failing suite cannot fail a build, which is what
+        // `exit(code)` was added for in v0.0.200.
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "{}: a suite with failures must exit 1, not {:?}",
+            label,
+            out.status.code()
+        );
+    };
+
+    // ---- stage-0 ----
+    let exe = scratch.join("suite");
+    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(&source)
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("burxt");
+    assert!(
+        built.status.success(),
+        "the failing suite did not build:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    check("stage-0", &Command::new(&exe).output().expect("the suite"));
+
+    // ---- stage-1 ----
+    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    if !llc.exists() {
+        eprintln!("skipping the stage-1 half: {} is not installed", llc.display());
+        let _ = fs::remove_dir_all(&scratch);
+        return;
+    }
+    let stage1 = scratch.join("stage1");
+    assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("examples/stage1.bx"))
+        .arg("-o")
+        .arg(&stage1)
+        .status()
+        .expect("burxt")
+        .success());
+    let ll = scratch.join("suite.ll");
+    let emitted = Command::new(&stage1).arg(&source).arg(&ll).output().expect("stage-1");
+    assert!(
+        String::from_utf8_lossy(&emitted.stdout).contains("bytes of IR"),
+        "stage-1 refused the failing suite:\n{}",
+        String::from_utf8_lossy(&emitted.stdout)
+    );
+    let obj = scratch.join("suite.o");
+    assert!(Command::new(llc)
+        .args(["-relocation-model=pic", "-filetype=obj", "-o"])
+        .arg(&obj)
+        .arg(&ll)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false));
+    let s1exe = scratch.join("suite-s1");
+    assert!(Command::new("cc")
+        .arg(&obj)
+        .args(["-o"])
+        .arg(&s1exe)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false));
+    check("stage-1", &Command::new(&s1exe).output().expect("the stage-1 suite"));
+
+    let _ = fs::remove_dir_all(&scratch);
+}

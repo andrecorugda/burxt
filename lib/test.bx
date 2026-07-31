@@ -1,0 +1,168 @@
+// ============================================================================
+// lib/test.bx — testing Burxt, in Burxt.
+//
+//     use "lib/test.bx";
+//
+// This repository tests the compiler with a Rust harness and a second one written in Burxt. A USER has
+// neither: until now there was no way to write a test for a Burxt program at all, which is a strange
+// thing for a language whose entire argument is that you can trust what it compiles. A language you
+// cannot write tests in is not one anyone should ship on.
+//
+// ---- the shape, and why it is this one -------------------------------------------------
+//
+// No registration and no `test("name", some_function)`, because **Burxt has no function values**. So a
+// suite is a program that runs its checks in order and carries a tally:
+//
+//     use "lib/test.bx";
+//
+//     region main {
+//         let mutable t: Tests = test_begin("invoicing");
+//         let a: Bool = check_money(t, "three at 19.99", line_total($19.99, 3), $59.97);
+//         let b: Bool = check_int(t, "empty basket", item_count(empty), 0);
+//         exit(test_end(t));
+//     }
+//
+// `mutable t: Tests` is what makes it work, and it did not exist before v0.0.201: a function could not
+// change anything it was passed, so a tally could not be threaded through one. And `exit(...)` did not
+// exist before v0.0.200, so a suite could not tell a shell it failed — which means it could not fail a
+// build. Those two are why this file is dated where it is rather than earlier.
+//
+// ---- what a Burxt test can do that others cannot ---------------------------------------
+//
+// **It asserts a VALUE, not a range.** There is no `check_close` and there will not be one, because
+// there is nothing to be close about: no float means no last-digit wobble, so `$59.97` is `$59.97` on
+// every machine, every target and every run. In a language with floats a money test either compares
+// with a tolerance — which hides the bug it was written to catch — or is flaky. Here the tolerance
+// would be a lie about the arithmetic.
+//
+// ---- why the checks are per-type -------------------------------------------------------
+//
+// A generic `check<T: Equatable>` is writable, and it cannot REPORT: printing a bare `T` is refused,
+// because nothing said how wide it is or how to render it. "expected 5, got 4" is most of the value of
+// a failing test, so the checks are named per type — the same call `array_sum_int` and
+// `array_sum_money` make, for the same reason.
+//
+// For anything else, `check_that` takes a Bool you computed and `fail_with` takes your own message. Two
+// primitives, so the module extends without needing generics it cannot have.
+// ============================================================================
+
+use "os.bx";
+
+// The tally. A class rather than three loose variables so it can be threaded through one `mutable`
+// parameter — which is the whole reason this design is possible.
+class Tests {
+    suite: String,
+    passed: Int,
+    failed: Int,
+}
+
+function test_begin(suite: String) -> Tests {
+    return Tests { suite: suite, passed: 0, failed: 0 };
+}
+
+// ---- the two primitives ---------------------------------------------------------------
+
+// A check that passed. Silent on purpose: a passing suite should print nothing but its summary, so
+// that a failure is the only thing a reader has to look at.
+function test_passed(mutable t: Tests, what: String) -> Bool {
+    t.passed = t.passed + 1;
+    return true;
+}
+
+// A check that failed, with a message you wrote. To STDERR, which is what stderr is for — so a suite's
+// stdout stays the summary and a CI log shows failures where a CI log looks for them.
+function fail_with(mutable t: Tests, what: String, why: String) -> Bool {
+    t.failed = t.failed + 1;
+    print_error("FAIL " + t.suite + " / " + what + ": " + why);
+    return false;
+}
+
+// A Bool you computed yourself. The escape hatch that keeps this module small: anything with no
+// `check_` of its own can still be tested, and the message says what was expected.
+function check_that(mutable t: Tests, what: String, held: Bool) -> Bool {
+    if held {
+        return test_passed(t, what);
+    }
+    return fail_with(t, what, "expected this to hold, and it did not");
+}
+
+// ---- the per-type checks --------------------------------------------------------------
+
+function check_int(mutable t: Tests, what: String, got: Int, want: Int) -> Bool {
+    if got == want {
+        return test_passed(t, what);
+    }
+    return fail_with(t, what, "expected " + to_string(want) + ", got " + to_string(got));
+}
+
+// Money, at two places. **Exactly** — see the note at the top about why there is no tolerance.
+function check_money(mutable t: Tests, what: String, got: Decimal<2>, want: Decimal<2>) -> Bool {
+    if got == want {
+        return test_passed(t, what);
+    }
+    return fail_with(t, what, "expected " + to_string(want) + ", got " + to_string(got));
+}
+
+// The same, for money that carries a ROUNDING CONTRACT — the result of anything that divided.
+//
+// Two functions rather than one, and the reason is a rule worth meeting here rather than in a
+// confusing error: **a contract may be ADDED to a value that has none, but never dropped.** So a
+// parameter typed `Decimal<2>` cannot accept a `Decimal<2, RoundHalfEven>` — that would lose a stated
+// intention — and a parameter typed `Decimal<2, RoundHalfEven>` would accept a plain one but then be
+// claiming, in its own signature, that this test cares how the value rounds. It does not.
+//
+// So: `check_money` for money, `check_money_half_even` for money that came out of a division. A value
+// with a DIFFERENT contract — `RoundHalfUp` — has neither, and uses `check_that` with its own `==`,
+// which is allowed because comparing never rounds.
+function check_money_half_even(mutable t: Tests, what: String, got: Decimal<2, RoundHalfEven>,
+                               want: Decimal<2, RoundHalfEven>) -> Bool {
+    if got == want {
+        return test_passed(t, what);
+    }
+    return fail_with(t, what, "expected " + to_string(want) + ", got " + to_string(got));
+}
+
+// A scale is part of a type and cannot be a type parameter, so a check exists per scale that needs
+// one. Seven places is what `lib/vector.bx` works in; add a wrapper for any other, since `to_string`
+// already renders every scale.
+function check_decimal7(mutable t: Tests, what: String, got: Decimal<7>,
+                        want: Decimal<7>) -> Bool {
+    if got == want {
+        return test_passed(t, what);
+    }
+    return fail_with(t, what, "expected " + to_string(want) + ", got " + to_string(got));
+}
+
+function check_string(mutable t: Tests, what: String, got: String, want: String) -> Bool {
+    if got == want {
+        return test_passed(t, what);
+    }
+    return fail_with(t, what, "expected \"" + want + "\", got \"" + got + "\"");
+}
+
+function check_bool(mutable t: Tests, what: String, got: Bool, want: Bool) -> Bool {
+    if got == want {
+        return test_passed(t, what);
+    }
+    return fail_with(t, what, "expected " + to_string(want) + ", got " + to_string(got));
+}
+
+// ---- finishing ------------------------------------------------------------------------
+
+// The summary, and the status a shell should see: 0 when everything passed, 1 otherwise.
+//
+// It does not exit by itself. `exit(test_end(t))` is one more word and it puts the process's ending
+// where a reader can see it — the same reason `exit` is a statement rather than something a library
+// can do behind your back.
+//
+// The summary goes to STDOUT and the failures went to stderr, which is the Unix shape: a passing run
+// says one line and a failing run says what went wrong on the stream built for it.
+function test_end(t: Tests) -> Int {
+    let total: Int = t.passed + t.failed;
+    if t.failed == 0 {
+        print(t.suite + ": " + to_string(total) + " checks, all passed");
+        return 0;
+    }
+    print(t.suite + ": " + to_string(total) + " checks, " + to_string(t.failed) + " failed");
+    return 1;
+}

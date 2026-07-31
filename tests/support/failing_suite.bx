@@ -1,0 +1,19 @@
+// A suite that is MEANT to fail, used by `the_test_library_reports_failures` in tests/runner.rs.
+//
+// Not in tests/pass/ — that harness requires success and compares stdout, and the thing being checked
+// here is the stderr and the EXIT STATUS. A test library is judged on what it does when a check fails,
+// so the failing path needs a fixture of its own rather than a hope.
+use "../../lib/test.bx";
+
+region main {
+    let mutable t: Tests = test_begin("deliberately broken");
+    let a: Bool = check_money(t, "wrong money", $19.99, $20.00);
+    let b: Bool = check_int(t, "wrong int", 4, 5);
+    let c: Bool = check_string(t, "wrong text", "got", "want");
+    let d: Bool = check_bool(t, "wrong bool", true, false);
+    let e: Bool = check_that(t, "a claim that fails", 1 > 2);
+    let f: Bool = fail_with(t, "my own", "because I said so");
+    // One that passes, so the tally is not just a count of calls.
+    let g: Bool = check_money(t, "this one is right", $19.99, $19.99);
+    exit(test_end(t));
+}

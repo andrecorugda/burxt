@@ -481,8 +481,16 @@ Counted rather than guessed, over §1 and §2:
    `printf` and only the newline through the shared helper, so `print_error($19.99)` split across both
    streams. One formatter with one exit made that a one-line fix instead of a divergence to hunt.
 5. **Concurrency** (unblocks: serving, using a second core).
-6. **A test framework in the language** (unblocks: anyone else trusting their own Burxt code — this
-   repo tests Burxt with Rust, which a user cannot do).
+6. ~~**A test framework in the language**~~ — **DONE (v0.0.204).** `lib/test.bx`: a tally threaded
+   through a `mutable` parameter, per-type checks that report the values, failures on stderr, and a
+   status a build can fail on. It could not have been written a week earlier — `mutable` parameters
+   (v0.0.201) are what let a tally be threaded, and `exit(code)` (v0.0.200) is what lets a suite fail
+   a build.
+
+   **What a Burxt test can do that others cannot: it asserts a VALUE, not a range.** There is no
+   `check_close` and there will not be one — no float means no last-digit wobble, so `$59.97` is
+   `$59.97` on every machine, target and run. Elsewhere a money test either compares with a tolerance,
+   which hides the bug it was written to catch, or is flaky.
 7. **Time and randomness** (unblocks: most ordinary applications).
 8. **DWARF** (unblocks: debugging without `print`, which is the trap that costs correctness).
 
