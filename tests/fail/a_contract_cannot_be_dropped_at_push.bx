@@ -1,0 +1,10 @@
+// The other half of tests/pass/a_contract_may_be_added.bx, and the half that matters.
+//
+// A contract may be ADDED to a value that has none, because that is strictly more information.
+// Taking one away loses a declared intention — someone wrote down which way this rounds — and
+// losing that silently is what this language exists to refuse. So the widening is one-directional
+// at every position, `push` included.
+let carried: Decimal<7, RoundHalfEven> = 0.6000000;
+let mutable plain: [Decimal<7>] = [];
+let appended: Int = push(plain, carried);
+print(len(plain));

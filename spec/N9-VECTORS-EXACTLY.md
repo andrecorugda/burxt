@@ -5,16 +5,20 @@
 > real file. Rows 1, 2, 3, 4 and 5 of §3 are done; rows 6–9 remain. Every number in §2 came from
 > running the compiler, not from reading it.
 >
-> **One row of §3 turned out to be blocked, and by the type system rather than by effort.**
-> `vector_normalise` is absent: dividing a `Decimal<7>` needs a rounding contract, so a normalised
-> component is a `Decimal<7, RoundHalfEven>`, and that cannot go back into a `[Decimal<7>]` because
-> dropping a contract loses a stated intention. Making the whole API contracted does not work either —
-> `push` is a builtin and does not apply the contract widening that every *declared* position gained
-> in v0.0.181, so a plain `Decimal<7>` variable cannot be pushed into a contracted array.
+> **One row of §3 looked blocked by the type system. It was a bug, and it is fixed (v0.0.194).**
+> `vector_normalise` was absent because dividing a `Decimal<7>` needs a rounding contract, so a
+> normalised component is a `Decimal<7, RoundHalfEven>` — and `push` would not accept a plain
+> `Decimal<7>` into a contracted array, so the contracted API could not be built either.
 >
-> Not blocking: `vector_dot` and `vector_squared_distance` need no normalisation, and the major
-> providers already return unit vectors. `vector_magnitude` is there, exact, for checking that. But
-> the builtin-versus-declared inconsistency is a real gap and belongs on the audit's list.
+> That second half was not a design constraint, it was seven positions in stage-0 still comparing
+> types with `==` while a comment claimed the widening applied everywhere. `return` was one of them,
+> and the comment's own list named `return`. Fixed at every site, in both compilers, with the rule now
+> checked by `a_contract_widens_at_every_position_and_drops_at_none` rather than asserted in prose.
+>
+> **Worth recording as a pattern**, because this is the fifth time: a wall that looked like the type
+> system holding a line turned out to be an inconsistency in how one rule was applied. The question
+> to ask first is not "how do I work around this rule" but "does this rule actually apply here, and
+> does it apply everywhere else too.
 >
 > This came out of the production-readiness audit
 > ([FAR-HORIZON-ROADMAP.md](FAR-HORIZON-ROADMAP.md#5-two-decisions-this-audit-says-should-be-re-opened)),

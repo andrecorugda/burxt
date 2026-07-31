@@ -466,7 +466,12 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
         }
         if called == "push" && !is_unknown(first) {
             let want: Type = self.declared_type(src, first.scale);
-            if !is_unknown(second) && !self.same_type(src, second, want) {
+            // `fits`, not `same_type` — an element is a DECLARED position, so a rounding contract
+            // may be added to a value that has none, exactly as at a `let` or a field. This said
+            // `same_type` until v0.0.194, which made `push` the one place in either compiler where
+            // the widening did not apply, and it is what kept `vector_normalise` out of
+            // lib/vector.bx: a plain Decimal<7> could not be pushed into a contracted array.
+            if !is_unknown(second) && !self.fits(src, second, want) {
                 let complained: Int = self.complain_at(src, at,
                     "this array holds " + self.show_type(src, want) + ", but the value is "
                     + self.show_type(src, second));

@@ -1,0 +1,67 @@
+// A rounding contract may be ADDED to a value that has none — at EVERY position where a declared
+// type meets a value. This fixture exists because a comment claiming that was wrong for thirteen
+// versions.
+//
+// The rule and why it is safe: both types are a scaled i64 holding the same integer, so the
+// representation is byte-identical. A contract does not reinterpret the value, it constrains what
+// future operations may do to it — strictly more information, not different information.
+//
+// v0.0.86 allowed it at a `let`. v0.0.181 extended it and left a comment saying "every position"
+// while SEVEN positions still compared types with `==`: `return`, a field assignment, an index
+// assignment on either path, `push`, a method argument, and an array literal's elements — growable
+// or fixed. The comment even named `return`, and `return` was one of the seven. v0.0.194 fixed them
+// and wrote this file, because a comment cannot be run.
+//
+// The half that matters more is at the bottom: DROPPING a contract is still refused everywhere, and
+// so is swapping one for a different one. See tests/fail/a_contract_cannot_be_dropped_anywhere.bx.
+class Holder {
+    amount: Decimal<7, RoundHalfEven>,
+
+    function (self) take(x: Decimal<7, RoundHalfEven>) -> Decimal<7, RoundHalfEven> {
+        return x;
+    }
+}
+
+// 1. a `return`
+function widen_on_return(p: Decimal<7>) -> Decimal<7, RoundHalfEven> {
+    return p;
+}
+
+// 2. a declared parameter (this one has worked since v0.0.181)
+function widen_on_parameter(p: Decimal<7, RoundHalfEven>) -> Decimal<7, RoundHalfEven> {
+    return p;
+}
+
+let plain: Decimal<7> = 0.6000000;
+
+// 3. a `let`  (v0.0.86 — the only one that worked for a long time)
+let bound: Decimal<7, RoundHalfEven> = plain;
+print(bound);
+print(widen_on_return(plain));
+print(widen_on_parameter(plain));
+
+// 4. a field initializer, and 5. a field assignment
+let mutable h: Holder = Holder { amount: plain };
+h.amount = plain;
+print(h.amount);
+
+// 6. a method argument
+print(h.take(plain));
+
+// 7. a growable array literal's elements, and 8. push
+let mutable growable: [Decimal<7, RoundHalfEven>] = [plain, plain];
+let appended: Int = push(growable, plain);
+print(len(growable));
+print(growable[2]);
+
+// 9. a fixed array literal's elements, and 10. an index assignment
+let mutable fixed: [Decimal<7, RoundHalfEven>; 2] = [plain, plain];
+fixed[0] = plain;
+print(fixed[0]);
+
+// And the contract is not decoration once it is there: this divides, which a plain Decimal<7>
+// cannot do without one. 0.6 / 3 is exact; 0.6 / 7 is not, and half-even decides it.
+let third: Decimal<7, RoundHalfEven> = bound / 3;
+print(third);
+let seventh: Decimal<7, RoundHalfEven> = bound / 7;
+print(seventh);

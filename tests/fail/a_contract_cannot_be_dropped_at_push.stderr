@@ -1,0 +1,1 @@
+push(...) appends Decimal<7> to a [Decimal<7>], but the value has type Decimal<7, RoundHalfEven>

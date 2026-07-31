@@ -45,16 +45,20 @@
 //
 // ---- What is NOT here yet, and why ------------------------------------------------------
 //
-// **`vector_normalise` is absent**, and the reason is a type-system one worth stating rather than
-// working around. Dividing a `Decimal<7>` needs a rounding contract, so a normalised component is a
-// `Decimal<7, RoundHalfEven>` — and that cannot go back into a `[Decimal<7>]`, because dropping a
-// contract loses a stated intention. Making the whole API contracted does not work either: `push` is
-// a builtin and does not apply the contract widening that every declared position gained in v0.0.181,
-// so a plain `Decimal<7>` variable cannot be pushed into a contracted array.
+// **`vector_normalise` is absent, but no longer blocked.** It used to be: dividing a `Decimal<7>`
+// needs a rounding contract, so a normalised component is a `Decimal<7, RoundHalfEven>`, and `push`
+// would not take a plain `Decimal<7>` into a contracted array — so neither the plain API nor the
+// contracted one could be written. That second half turned out to be a bug rather than a rule, fixed
+// at all eight declared positions in v0.0.194, and the division-based version now compiles.
 //
-// It is not blocking. `vector_dot` and `vector_squared_distance` need no normalisation at all, and the
-// major embedding providers already return unit-length vectors — so in the common case cosine IS the
-// dot product. `vector_magnitude` is here, exact, for checking that.
+// It is still not urgent. `vector_dot` and `vector_squared_distance` need no normalisation at all, and
+// the major embedding providers already return unit-length vectors — so in the common case cosine IS
+// the dot product. `vector_magnitude` is here, exact, for checking that.
+//
+// The open question is which TYPE it should answer, and it is a real one rather than a gap: a
+// `[Decimal<7, RoundHalfEven>]` cannot be handed to `vector_dot` above, because dropping the contract
+// at the element type of a whole slice is refused — and rightly, since a slice is aliasable and the
+// callee could write a rounded value back. So a contracted return type would split this API in two.
 // ============================================================================
 
 use "option.bx";

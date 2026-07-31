@@ -3545,7 +3545,7 @@ impl TypeChecker {
                     cur_ty = field_ty;
                 }
                 let typed = self.check_expr(value, Some(&cur_ty))?;
-                if typed.ty != cur_ty {
+                if !self.storable(&typed.ty, &cur_ty) {
                     return Err(format!(
                         "cannot assign {} {} to `{}`, which was declared {}",
                         typed.ty.article(), typed.ty, lvalue, cur_ty
@@ -3588,7 +3588,7 @@ impl TypeChecker {
                 };
                 let index = self.check_index(&format!("{}", cur_ty), len, index)?;
                 let typed = self.check_expr(value, Some(&elem))?;
-                if typed.ty != elem {
+                if !self.storable(&typed.ty, &elem) {
                     return Err(format!(
                         "cannot assign {} {} to `{}[...]`, which holds {}",
                         typed.ty.article(),
@@ -3634,7 +3634,7 @@ impl TypeChecker {
                 }
                 let index = self.check_index(&format!("{}", declared), len, index)?;
                 let typed = self.check_expr(value, Some(&elem))?;
-                if typed.ty != elem {
+                if !self.storable(&typed.ty, &elem) {
                     return Err(format!(
                         "cannot assign {} {} to `{}[...]`, which holds {}",
                         typed.ty.article(), typed.ty, name, elem
@@ -3873,7 +3873,7 @@ impl TypeChecker {
                     "`return` only makes sense inside a function".to_string()
                 })?;
                 let typed = self.check_expr(e, Some(&ret))?;
-                if typed.ty != ret {
+                if !self.storable(&typed.ty, &ret) {
                     self.blame(e.span);
                     return Err(format!(
                         "this function returns {}, but the `return` expression has type {}",
@@ -4406,7 +4406,7 @@ impl TypeChecker {
                     };
                     self.require_mutable_place(&arguments[0])?;
                     let value = self.check_expr(&arguments[1], Some(&elem))?;
-                    if value.ty != elem {
+                    if !self.storable(&value.ty, &elem) {
                         return Err(format!(
                             "push(...) appends {} to a {}, but the value has type {}",
                             elem,
@@ -5418,7 +5418,7 @@ impl TypeChecker {
                 let mut typed_args = Vec::new();
                 for (i, (argument, param_ty)) in arguments.iter().zip(&param_tys).enumerate() {
                     let typed = self.check_expr(argument, Some(param_ty))?;
-                    if &typed.ty != param_ty {
+                    if !self.storable(&typed.ty, param_ty) {
                         return Err(format!(
                             "in the call to `{}.{}`, argument {} must be {}, \
                              but it has type {}",
@@ -5449,7 +5449,7 @@ impl TypeChecker {
                     let mut typed = Vec::new();
                     for (i, e) in elems.iter().enumerate() {
                         let t = self.check_expr(e, Some(&elem_ty))?;
-                        if t.ty != elem_ty {
+                        if !self.storable(&t.ty, &elem_ty) {
                             return Err(format!(
                                 "in this growable array, element {} must be {}, but it \
                                  has type {}",
@@ -5493,7 +5493,7 @@ impl TypeChecker {
                 let mut typed = Vec::new();
                 for (i, e) in elems.iter().enumerate() {
                     let t = self.check_expr(e, Some(&elem_ty))?;
-                    if t.ty != elem_ty {
+                    if !self.storable(&t.ty, &elem_ty) {
                         return Err(format!(
                             "in this array literal, element {} must be {}, but it \
                              has type {}",
@@ -6019,13 +6019,25 @@ impl TypeChecker {
     /// to the binding of `price` and change that. Dropping a contract stays refused: that
     /// loses a declared intention, and losing one silently is what this language is for.
     ///
-    /// **Used at every position, since v0.0.181.** It had one call site — the `let` — so
-    /// `json_money(tax)` was refused where `let m: Decimal<2, RoundHalfEven> = tax;` was fine, and the
-    /// rule read as arbitrary because it WAS arbitrary: a relaxation implemented in one place. That is
-    /// the same shape as the `dynamic` coercion gap closed in v0.0.175, where the binding path coerced
-    /// and the argument path did not. Worth stating as a rule for this codebase: a relaxation that
-    /// applies at a binding applies wherever a declared type meets a value, and finding it at one
-    /// site means the others were not checked.
+    /// **Used at every position, since v0.0.194.** The history is worth keeping, because the same
+    /// mistake was made twice and the second time was hidden by the note about the first.
+    ///
+    /// Until v0.0.181 this had ONE call site — the `let` — so `json_money(tax)` was refused where
+    /// `let m: Decimal<2, RoundHalfEven> = tax;` was fine, and the rule read as arbitrary because it
+    /// WAS arbitrary: a relaxation implemented in one place. v0.0.181 extended it, and this comment
+    /// then claimed "every position" while **seven positions still compared types with `==`**:
+    /// `return`, a field assignment, an index assignment on either path, `push`, a method argument,
+    /// and an array literal's elements — growable or fixed. The list two paragraphs up even *names*
+    /// `return`, and `return` was one of the seven.
+    ///
+    /// So the rule for this codebase, restated, because stating it once did not make it true:
+    /// **a relaxation that applies at a binding applies wherever a declared type meets a value, and
+    /// finding it at one site means the others were not checked.** The way to know it holds is a
+    /// fixture that exercises every position in one program — `tests/pass/a_contract_may_be_added.bx`
+    /// — and not a comment claiming it does. A comment cannot be run.
+    ///
+    /// Same shape as the `dynamic` coercion gap closed in v0.0.175, where the binding path coerced and
+    /// the argument path did not.
     fn storable(&self, have: &Type, want: &Type) -> bool {
         if have == want {
             return true;

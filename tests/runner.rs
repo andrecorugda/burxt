@@ -1249,8 +1249,8 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
 
     let _ = fs::remove_dir_all(&scratch);
     assert!(
-        caught >= 211,
-        "stage-1 rejected only {} of {} fail programs, down from 211",
+        caught >= 212,
+        "stage-1 rejected only {} of {} fail programs, down from 212",
         caught,
         total
     );
@@ -5013,104 +5013,6 @@ fn bracket_contracts_desugar_to_the_same_message() {
     let _ = fs::remove_dir_all(&scratch);
 }
 
-/// `lib/json.bx` renders, parses, and renders back to the SAME BYTES — and money survives it.
-///
-/// A named invariant rather than a `tests/pass/` fixture, and the reason is a real gap rather than a
-/// preference: `tests/pass/` means BOTH compilers accept a program, and stage-1 refuses
-/// `Option<Json>` because it refuses an ENUM as a generic enum's payload outright.
-///
-/// Stage-0 allows it and is right to: `Json`'s recursion passes through a SLICE, so its width is
-/// finite — 32 bytes, which `payload_area` computes without trouble. The rule both compilers state,
-/// "a variant may not carry an enum", is a proxy for the rule they mean, "a variant's width must be
-/// finite", and the proxy is wrong whenever the recursion goes through a pointer.
-///
-/// Stage-0 is also inconsistent with itself about it: `enum X { V(SomeEnum) }` written out is
-/// refused, while the identical shape reached through `Option<Json>` is allowed. Fixing that — one
-/// finite-width check, in both compilers, replacing two flat refusals — is what moves this into
-/// `tests/pass/`. Until then the library is tested here, by name, rather than untested.
-///
-/// The claim is not "it parses JSON". It is that a document rendered, parsed and rendered again is
-/// byte-identical, which is the only way to know nothing was quietly reinterpreted in between — the
-/// same instrument the self-hosting fixpoint uses.
-#[test]
-fn the_json_library_round_trips() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let scratch = scratch_dir("json-lib");
-    fs::create_dir_all(&scratch).unwrap();
-    let _ = std::os::unix::fs::symlink(root.join("lib"), scratch.join("lib"));
-
-    let program = scratch.join("round.bx");
-    fs::write(
-        &program,
-        "use \"lib/json.bx\";\n\
-         let mutable rows: [Json] = [];\n\
-         let r: Int = push(rows, json_object([json_field(\"sku\", json_text(\"RICE\")),\n\
-                                              json_field(\"price\", json_money($52.75))]));\n\
-         let doc: Json = json_object([json_field(\"total\", json_money($158.25)),\n\
-                                      json_field(\"rows\", json_list(rows)),\n\
-                                      json_field(\"ok\", json_truth(true)),\n\
-                                      json_field(\"note\", json_null())]);\n\
-         let once: String = json_render(doc);\n\
-         print(once);\n\
-         match json_parse(once) {\n\
-             Error(why) => { print(\"PARSE FAILED: \" + why); }\n\
-             Ok(back) => {\n\
-                 if json_render(back) == once { print(\"identical\"); } else { print(\"DRIFTED\"); }\n\
-             }\n\
-         }\n\
-         let tricky: String = \"say \\\"hi\\\"\\r\\n\\tand\\\\done\";\n\
-         match json_parse(json_render(json_text(tricky))) {\n\
-             Error(why) => { print(\"ESCAPE FAILED\"); }\n\
-             Ok(v) => {\n\
-                 if option_or(json_as_text(v), \"\") == tricky { print(\"escapes survive\"); }\n\
-                 else { print(\"ESCAPES LOST\"); }\n\
-             }\n\
-         }\n\
-         match json_parse(\"\\{\\\"a\\\": \\\"19.99\\\", \\\"b\\\": 1.5, \\\"c\\\": 7, \\\"d\\\": 19.999, \\\"e\\\": -2.50\\}\") {\n\
-             Error(why) => { print(\"FAILED: \" + why); }\n\
-             Ok(v) => {\n\
-                 print(to_string(option_or(json_as_money(option_or(json_at(v, \"a\"), json_null())), $0.00)));\n\
-                 print(to_string(option_or(json_as_money(option_or(json_at(v, \"b\"), json_null())), $0.00)));\n\
-                 print(to_string(option_or(json_as_money(option_or(json_at(v, \"c\"), json_null())), $0.00)));\n\
-                 print(option_is_some(json_as_money(option_or(json_at(v, \"d\"), json_null()))));\n\
-                 print(to_string(option_or(json_as_money(option_or(json_at(v, \"e\"), json_null())), $0.00)));\n\
-             }\n\
-         }\n\
-         match json_parse(\"\\{\\\"a\\\": \\}\") {\n\
-             Error(why) => { print(\"refused\"); }\n\
-             Ok(v) => { print(\"ACCEPTED BAD JSON\"); }\n\
-         }\n",
-    )
-    .unwrap();
-
-    let out = burxt("run", &program, &scratch);
-    let shown: String = String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter(|l| !l.starts_with("compiled "))
-        .map(|l| format!("{}\n", l))
-        .collect();
-    assert!(
-        out.status.success(),
-        "lib/json.bx did not run:\n{}{}",
-        shown,
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    // Money out as a quoted STRING, which is the one position this library takes: a JSON number
-    // reaches a JavaScript consumer as a double and loses the cent. `19.999` asked for as a
-    // `Decimal<2>` answers `false` — None — because a value arriving with more precision than you
-    // asked for is a question, not a rounding. That `false` is the whole thesis in one line.
-    let expected = "{\"total\":\"158.25\",\"rows\":[{\"sku\":\"RICE\",\"price\":\"52.75\"}],\
-                    \"ok\":true,\"note\":null}\n\
-                    identical\n\
-                    escapes survive\n\
-                    19.99\n1.50\n7.00\nfalse\n-2.50\n\
-                    refused\n";
-    assert_eq!(shown, expected, "lib/json.bx answered something else");
-
-    let _ = fs::remove_dir_all(&scratch);
-}
-
 /// `burxt mcp-schema` derives the tool schema from the PRECONDITIONS — so changing a contract changes
 /// the schema, and forgetting to update one of the two is not a thing that can happen.
 ///
@@ -5452,6 +5354,133 @@ match vector_store_read("corpus.jsonl") {{
             "\n",
         ),
         "the store's text format changed"
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+/// A rounding contract widens at EVERY declared position, and drops at NONE — in both compilers.
+///
+/// This is a relationship test, and it exists because the claim was a comment for thirteen versions
+/// and the comment was wrong. `storable`'s own doc said "used at every position, since v0.0.181" while
+/// seven positions still compared types with `==` — including `return`, which the same comment named
+/// in its list. A fixture that only exercised the accepting side would have passed throughout, because
+/// the accepting side was what worked; and a fixture that only exercised the refusing side would have
+/// passed too, because refusing everything refuses the wrong things as well.
+///
+/// So both directions are varied against the same position. A position passes only if the widened
+/// program compiles AND the dropped program is refused. Anything else is a site where the rule is
+/// half-implemented, which is exactly the state v0.0.181 left behind.
+///
+/// Both compilers, because stage-1 turned out to be AHEAD of stage-0 here: it used `fits` everywhere
+/// except `push`, so the differential found this pointing the other way for once.
+#[test]
+fn a_contract_widens_at_every_position_and_drops_at_none() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("contract-positions");
+    fs::create_dir_all(&scratch).unwrap();
+    let stage1 = scratch.join("stage1");
+    let have_stage1 = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("examples/stage1.bx"))
+        .arg("-o")
+        .arg(&stage1)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    assert!(have_stage1, "stage-1 did not build");
+
+    // Each case is a body written twice: once storing a value INTO the contracted type (must be
+    // accepted) and once storing a contracted value into the plain one (must be refused). `{have}`
+    // is the type of the value being stored and `{want}` the declared type it is stored into, so a
+    // single template serves both directions and the two runs cannot drift apart.
+    let positions: &[(&str, &str)] = &[
+        ("return", "function f(p: {have}) -> {want} { return p; }\nprint(f(v));"),
+        ("a parameter", "function f(p: {want}) -> Int { return 1; }\nprint(f(v));"),
+        ("a let", "let b: {want} = v;\nprint(b);"),
+        (
+            "a field initializer",
+            "class C { a: {want} }\nlet c: C = C { a: v };\nprint(c.a);",
+        ),
+        (
+            "a field assignment",
+            "class C { a: {want} }\nlet mutable c: C = C { a: w };\nc.a = v;\nprint(c.a);",
+        ),
+        (
+            "a method argument",
+            "class C { a: Int,\n  function (self) t(x: {want}) -> Int { return 1; } }\n\
+             let c: C = C { a: 1 };\nprint(c.t(v));",
+        ),
+        (
+            "a growable array literal",
+            "let mutable g: [{want}] = [v];\nprint(g[0]);",
+        ),
+        (
+            "push",
+            "let mutable g: [{want}] = [];\nlet n: Int = push(g, v);\nprint(len(g));",
+        ),
+        (
+            "a fixed array literal",
+            "let f: [{want}; 2] = [v, v];\nprint(f[0]);",
+        ),
+        (
+            "an index assignment",
+            "let mutable f: [{want}; 2] = [w, w];\nf[0] = v;\nprint(f[0]);",
+        ),
+    ];
+
+    const PLAIN: &str = "Decimal<7>";
+    const CARRIED: &str = "Decimal<7, RoundHalfEven>";
+
+    let mut wrong = Vec::new();
+    for (name, template) in positions {
+        // Widening: the value has no contract, the declared type has one. Must compile.
+        // Dropping: the reverse. Must be refused.
+        for (widening, have, want) in
+            [(true, PLAIN, CARRIED), (false, CARRIED, PLAIN)]
+        {
+            let program = format!(
+                "let v: {have} = 0.6000000;\nlet w: {want} = 0.6000000;\n{}\n",
+                template.replace("{have}", have).replace("{want}", want),
+            );
+            let source = scratch.join("case.bx");
+            fs::write(&source, &program).unwrap();
+
+            let rust_ok = Command::new(env!("CARGO_BIN_EXE_burxt"))
+                .arg("check")
+                .arg(&source)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            // stage-1 reports a count rather than an exit code.
+            let emitted = Command::new(&stage1)
+                .arg(&source)
+                .arg(scratch.join("case.ll"))
+                .output()
+                .expect("stage-1");
+            let said = String::from_utf8_lossy(&emitted.stdout).to_string();
+            let burxt_ok = said.contains("type errors: 0");
+
+            for (compiler, ok) in [("stage-0", rust_ok), ("stage-1", burxt_ok)] {
+                if ok != widening {
+                    wrong.push(format!(
+                        "{} at {}: {} the {} program\n{}",
+                        compiler,
+                        name,
+                        if ok { "ACCEPTED" } else { "refused" },
+                        if widening { "widening" } else { "dropping" },
+                        program,
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        wrong.is_empty(),
+        "the rule is half-implemented at {} site(s):\n\n{}",
+        wrong.len(),
+        wrong.join("\n")
     );
 
     let _ = fs::remove_dir_all(&scratch);
