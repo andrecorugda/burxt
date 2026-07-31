@@ -4913,7 +4913,7 @@ impl<'ctx> CodeGen<'ctx> {
     /// the IR a cross build would compile can be READ rather than inferred.
     pub fn retarget(&self, triple: &str) -> Result<(), String> {
         use inkwell::targets::{
-            CodeModel, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
+            CodeModel, InitializationConfig, RelocMode, Target, TargetTriple,
         };
         use inkwell::OptimizationLevel;
         Target::initialize_all(&InitializationConfig::default());
