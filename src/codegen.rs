@@ -94,6 +94,12 @@ pub struct CodeGen<'ctx> {
     /// version of `mutable` parameters silently kept copying. The declaration said pointer, the call
     /// said `byval`, and the caller saw nothing change.
     fn_writable: HashMap<String, Vec<bool>>,
+    /// Which stream the print statement being emitted goes to.
+    ///
+    /// A flag rather than a parameter threaded through seven call sites, because every one of those
+    /// sites is inside the per-type formatter and none of them has any other reason to know. Saved
+    /// and restored around each statement, so nothing leaks into the next one.
+    print_to_stderr: bool,
     /// (receiver, method name) -> its LLVM function (mangled `bx.<Recv>.<method>`)
     methods: HashMap<(String, String), FunctionValue<'ctx>>,
     /// (trait, concrete) -> its static vtable global
@@ -169,6 +175,7 @@ impl<'ctx> CodeGen<'ctx> {
             str_eq_fn: None,
             fn_sigs: HashMap::new(),
             fn_writable: HashMap::new(),
+            print_to_stderr: false,
             methods: HashMap::new(),
             vtables: HashMap::new(),
             interface_slots: HashMap::new(),
@@ -823,26 +830,37 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(())
             }
             TypedStmt::While { cond, body } => self.gen_while(cond, body),
-            TypedStmt::Print(e) => self.gen_print(e),
-            TypedStmt::PrintInterp(parts) => {
+            // One statement, two destinations. `to_stderr` is set for the whole statement and read
+            // by `emit_print_call`, so every arm of the per-type formatter below serves both — which
+            // is the point of not having a second statement: the first time one formatter learned
+            // about a new type, the other would print something different for the same value.
+            TypedStmt::Print { value, to_stderr } => {
+                let outer = std::mem::replace(&mut self.print_to_stderr, *to_stderr);
+                let r = self.gen_print(value);
+                self.print_to_stderr = outer;
+                r
+            }
+            TypedStmt::PrintInterp { parts, to_stderr } => {
                 // Emit each piece in order — no intermediate String is built,
                 // so this needs no allocation.
-                let printf = self.printf.ok_or("codegen bug: printf not declared")?;
-                for p in parts {
-                    match p {
-                        crate::typeck::TypedInterpPart::Lit(text) => {
-                            // Literal text is an ARGUMENT to %s, never the
-                            // format string — a `%` in it must stay harmless.
-                            let s = self.global_str(text, "interp_lit");
-                            let fmt = self.global_str("%s", "fmt_interp");
-                            self.builder
-                                .build_call(printf, &[fmt.into(), s.into()], "printf_lit")
-                                .map_err(|e| e.to_string())?;
+                let outer = std::mem::replace(&mut self.print_to_stderr, *to_stderr);
+                let r = (|| -> Result<(), String> {
+                    for p in parts {
+                        match p {
+                            crate::typeck::TypedInterpPart::Lit(text) => {
+                                // Literal text is an ARGUMENT to %s, never the
+                                // format string — a `%` in it must stay harmless.
+                                let s = self.global_str(&text.clone(), "interp_lit");
+                                let fmt = self.global_str("%s", "fmt_interp");
+                                self.emit_print_call(&[fmt.into(), s.into()], "printf_lit")?;
+                            }
+                            crate::typeck::TypedInterpPart::Expr(e) => self.gen_print_value(e)?,
                         }
-                        crate::typeck::TypedInterpPart::Expr(e) => self.gen_print_value(e)?,
                     }
-                }
-                self.gen_newline()
+                    self.gen_newline()
+                })();
+                self.print_to_stderr = outer;
+                r
             }
             TypedStmt::Return(e) => {
                 if let Some(sret) = self.current_sret {
@@ -1427,18 +1445,43 @@ impl<'ctx> CodeGen<'ctx> {
 
     /// Print a single trailing newline.
     fn gen_newline(&mut self) -> Result<(), String> {
-        let printf = self.printf.ok_or("codegen bug: printf not declared")?;
         let fmt = self.global_str("\n", "fmt_nl");
-        self.builder
-            .build_call(printf, &[fmt.into()], "printf_nl")
-            .map_err(|e| e.to_string())?;
+        self.emit_print_call(&[fmt.into()], "printf_nl")?;
+        Ok(())
+    }
+
+    /// Emit one formatted write, to whichever stream the current print statement names.
+    ///
+    /// `printf(fmt, ...)` for stdout and `fprintf(stderr, fmt, ...)` for stderr — the SAME format
+    /// strings and the same arguments either way, which is the whole reason `print` and `print_error`
+    /// are one statement rather than two. A second statement would have grown a second formatter, and
+    /// the first time one of them learned about a new type the other would print something else.
+    fn emit_print_call(
+        &mut self,
+        arguments: &[BasicMetadataValueEnum<'ctx>],
+        name: &str,
+    ) -> Result<(), String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        if !self.print_to_stderr {
+            let printf = self.printf.ok_or("codegen bug: printf not declared")?;
+            self.builder.build_call(printf, arguments, name).map_err(err)?;
+            return Ok(());
+        }
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+        let i32t = self.ctx.i32_type();
+        let fprintf = self.libc("fprintf", i32t.fn_type(&[ptr.into(), ptr.into()], true));
+        let (stderr_g, _, _) = self.panic_deps();
+        let stream = self.load_stderr(stderr_g)?;
+        let mut all: Vec<BasicMetadataValueEnum<'ctx>> = Vec::with_capacity(arguments.len() + 1);
+        all.push(stream.into());
+        all.extend_from_slice(arguments);
+        self.builder.build_call(fprintf, &all, name).map_err(err)?;
         Ok(())
     }
 
     /// Print one value with NO trailing newline. `print` adds the newline
     /// itself, and interpolation must not put one between pieces.
     fn gen_print_value(&mut self, e: &TypedExpr) -> Result<(), String> {
-        let printf = self.printf.ok_or("codegen bug: printf not declared")?;
         let val = self.gen_expr(e)?;
         match &e.ty {
             // Substituted before codegen, so this is unreachable by construction.
@@ -1456,16 +1499,12 @@ impl<'ctx> CodeGen<'ctx> {
             }
             Type::Int => {
                 let fmt = self.global_str("%lld", "fmt_int");
-                self.builder
-                    .build_call(printf, &[fmt.into(), val.into()], "printf_int")
-                    .map_err(|e| e.to_string())?;
+                self.emit_print_call(&[fmt.into(), val.into()], "printf_int")?;
             }
             Type::String => {
                 // User bytes are always an ARGUMENT, never the format string.
                 let fmt = self.global_str("%s", "fmt_str");
-                self.builder
-                    .build_call(printf, &[fmt.into(), val.into()], "printf_str")
-                    .map_err(|e| e.to_string())?;
+                self.emit_print_call(&[fmt.into(), val.into()], "printf_str")?;
             }
             Type::Bool => {
                 let is_true = self
@@ -1485,9 +1524,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(|e| e.to_string())?;
                 let fmt = self.global_str("%s", "fmt_bool");
                 let arguments: Vec<BasicMetadataValueEnum> = vec![fmt.into(), s.into()];
-                self.builder
-                    .build_call(printf, &arguments, "printf_bool")
-                    .map_err(|e| e.to_string())?;
+                self.emit_print_call(&arguments, "printf_bool")?;
             }
             Type::Named(_) | Type::CInt | Type::CDouble | Type::Array { .. }
             | Type::Dyn(_) | Type::Slice(_) => {
@@ -1533,9 +1570,7 @@ impl<'ctx> CodeGen<'ctx> {
                     let fmt = self.global_str("%s%llu", "fmt_dec0");
                     let arguments: Vec<BasicMetadataValueEnum> =
                         vec![fmt.into(), sign.into(), int_part.into()];
-                    self.builder
-                        .build_call(printf, &arguments, "printf_dec")
-                        .map_err(|e| e.to_string())?;
+                    self.emit_print_call(&arguments, "printf_dec")?;
                 } else {
                     let pow = self.pow10_i128(*scale);
                     let int_wide = self
@@ -1555,9 +1590,7 @@ impl<'ctx> CodeGen<'ctx> {
                     let fmt = self.global_str(&fmt_str, "fmt_dec");
                     let arguments: Vec<BasicMetadataValueEnum> =
                         vec![fmt.into(), sign.into(), int_part.into(), frac_part.into()];
-                    self.builder
-                        .build_call(printf, &arguments, "printf_dec")
-                        .map_err(|e| e.to_string())?;
+                    self.emit_print_call(&arguments, "printf_dec")?;
                 }
             }
         }

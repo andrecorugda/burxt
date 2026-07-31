@@ -24,20 +24,20 @@ Everything the language has. **Read out of the compiler**, not from memory: the 
 
 ## Keywords
 
-The 38 words the lexer knows. Every one of them is the word it means: `function`, not `fn`; `mutable`, not `mut`.
+The 39 words the lexer knows. Every one of them is the word it means: `function`, not `fn`; `mutable`, not `mut`.
 
 | | | | |
 |---|---|---|---|
-| `let` | `mutable` | `print` | `while` |
-| `function` | `external` | `return` | `as` |
-| `tail` | `pure` | `break` | `continue` |
-| `if` | `else` | `true` | `false` |
-| `class` | `private` | `region` | `enum` |
-| `match` | `interface` | `is` | `self` |
-| `implement` | `implements` | `for` | `in` |
-| `dynamic` | `Int` | `Bool` | `String` |
-| `CInt` | `CPointer` | `CDouble` | `Decimal` |
-| `RoundHalfEven` | `RoundHalfUp` |  |  |
+| `let` | `mutable` | `print` | `print_error` |
+| `while` | `function` | `external` | `return` |
+| `as` | `tail` | `pure` | `break` |
+| `continue` | `if` | `else` | `true` |
+| `false` | `class` | `private` | `region` |
+| `enum` | `match` | `interface` | `is` |
+| `self` | `implement` | `implements` | `for` |
+| `in` | `dynamic` | `Int` | `Bool` |
+| `String` | `CInt` | `CPointer` | `CDouble` |
+| `Decimal` | `RoundHalfEven` | `RoundHalfUp` |  |
 
 ## Contextual markers
 

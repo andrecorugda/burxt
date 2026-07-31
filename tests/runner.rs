@@ -5925,3 +5925,107 @@ fn a_program_reports_its_status_to_the_shell() {
 
     let _ = fs::remove_dir_all(&scratch);
 }
+
+/// `print_error` writes to stderr, and `print` does not — in both compilers, byte for byte.
+///
+/// A named invariant rather than a `tests/pass/` fixture, because that harness compares stdout only.
+/// `tests/pass/print_error.bx` covers the stdout half (that nothing leaks into it); the interesting
+/// half is that everything arrives on the OTHER stream, correctly formatted, and nothing in the suite
+/// could express that before v0.0.203.
+///
+/// Why both streams have to be read separately: the first build of this had stage-1's Decimal path
+/// writing its DIGITS with its own `printf` and only the newline through the shared helper — so
+/// `print_error($19.99)` put `19.99` on stdout and the newline on stderr. A test that concatenated the
+/// two streams would have passed.
+#[test]
+fn print_error_writes_to_stderr() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("print-error");
+    fs::create_dir_all(&scratch).unwrap();
+    let source = root.join("tests/pass/print_error.bx");
+
+    // Every type the formatter knows, so a stream that is right for Ints and wrong for Decimals
+    // cannot hide.
+    let want_out = "one\ntwo\nthree\n";
+    let want_err = "this must not appear in stdout\n42\n19.99\ntrue\ninterpolated 7\n";
+
+    // ---- stage-0 ----
+    let exe = scratch.join("pe");
+    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(&source)
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("burxt");
+    assert!(
+        built.status.success(),
+        "print_error.bx did not build:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let ran = Command::new(&exe).output().expect("the program");
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout),
+        want_out,
+        "stage-0 wrote the wrong thing to STDOUT — something printed with `print_error` leaked into it"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stderr),
+        want_err,
+        "stage-0 wrote the wrong thing to STDERR"
+    );
+
+    // ---- stage-1, the same program, the same two streams ----
+    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    if !llc.exists() {
+        eprintln!("skipping the stage-1 half: {} is not installed", llc.display());
+        let _ = fs::remove_dir_all(&scratch);
+        return;
+    }
+    let stage1 = scratch.join("stage1");
+    assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("examples/stage1.bx"))
+        .arg("-o")
+        .arg(&stage1)
+        .status()
+        .expect("burxt")
+        .success());
+    let ll = scratch.join("pe.ll");
+    let emitted = Command::new(&stage1).arg(&source).arg(&ll).output().expect("stage-1");
+    assert!(
+        String::from_utf8_lossy(&emitted.stdout).contains("bytes of IR"),
+        "stage-1 refused print_error.bx:\n{}",
+        String::from_utf8_lossy(&emitted.stdout)
+    );
+    let obj = scratch.join("pe.o");
+    assert!(Command::new(llc)
+        .args(["-relocation-model=pic", "-filetype=obj", "-o"])
+        .arg(&obj)
+        .arg(&ll)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false));
+    let s1exe = scratch.join("pe-s1");
+    assert!(Command::new("cc")
+        .arg(&obj)
+        .args(["-o"])
+        .arg(&s1exe)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false));
+    let s1ran = Command::new(&s1exe).output().expect("the stage-1 program");
+    assert_eq!(
+        String::from_utf8_lossy(&s1ran.stdout),
+        want_out,
+        "stage-1 wrote the wrong thing to STDOUT"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&s1ran.stderr),
+        want_err,
+        "stage-1 wrote the wrong thing to STDERR — the two compilers disagree about which stream a \
+         value goes to, or about how it is formatted on the way"
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}

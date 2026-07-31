@@ -1,0 +1,29 @@
+// `print_error` writes to stderr — v0.0.203, the last third of the production trio.
+//
+// ONE STATEMENT WITH A DESTINATION, not two statements, and that is the whole design decision. The
+// per-type formatting is the part that must never fork: two statements would mean two formatters, and
+// the first time one of them learned about a new type the other would print something different for
+// the same value. So `print` and `print_error` are the same statement kind with a flag, and every arm
+// of the formatter serves both streams. In stage-1 it is `print_call`; in stage-0, `emit_print_call`.
+//
+// That decision paid for itself immediately: the Decimal path in stage-1 wrote its DIGITS with its own
+// `printf` and only the newline through the shared helper, so `print_error($19.99)` put the number on
+// stdout and the newline on stderr. One formatter with one exit is what made that a one-line fix rather
+// than a divergence to hunt.
+//
+// This fixture's job is the STDOUT side — that nothing written with `print_error` appears here, and
+// nothing written with `print` goes missing. The stderr side is checked by
+// `print_error_writes_to_stderr` in tests/runner.rs, which reads both streams and needs a harness that
+// tests/pass does not have.
+
+region main {
+    print("one");
+    print_error("this must not appear in stdout");
+    print("two");
+    print_error(42);
+    print_error($19.99);
+    print_error(true);
+    let n: Int = 7;
+    print_error("interpolated {n}");
+    print("three");
+}

@@ -73,6 +73,7 @@ pub enum Token {
     /// C's 32-bit int — only meaningful in extern fn signatures.
     TyCInt,
     TyCPointer,
+    PrintError,
     /// C's `double` — an FFI-only type, so a lossy crossing can be NAMED and
     /// therefore refused. Burxt itself still has no float type.
     TyCDouble,
@@ -167,6 +168,7 @@ impl Token {
             Token::TyString => "`String`".to_string(),
             Token::TyCInt => "`CInt`".to_string(),
             Token::TyCPointer => "`CPointer`".to_string(),
+            Token::PrintError => "`print_error`".to_string(),
             Token::TyCDouble => "`CDouble`".to_string(),
             Token::TyDecimal => "`Decimal`".to_string(),
             Token::RoundHalfEven => "`RoundHalfEven`".to_string(),
@@ -724,6 +726,7 @@ impl<'a> Lexer<'a> {
             "let" => Token::Let,
             "mutable" => Token::Mut,
             "print" => Token::Print,
+            "print_error" => Token::PrintError,
             "while" => Token::While,
             "function" => Token::Fn,
             "external" => Token::Extern,

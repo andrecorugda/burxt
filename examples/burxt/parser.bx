@@ -1544,14 +1544,20 @@ function (mutable self: Unit) parse_stmt(src: String) -> Int {
         if !self.eat(src, 21, "`;`") { return -1; }
         return self.add(60, type_node, value, 0, writable, name_tok);
     }
-    if k == 118 {                                    // print
+    if k == 118 || k == 133 {                        // print, print_error
+        // One statement kind with a DESTINATION in `b`, not two kinds: the per-type formatting is
+        // the part that must never fork.
+        let mutable to_stderr: Int = 0;
+        if k == 133 {
+            to_stderr = 1;
+        }
         let n: Int = self.advance();
         if !self.eat(src, 29, "`(` after `print`") { return -1; }
         let value: Int = self.parse_expr(src);
         if value < 0 { return -1; }
         if !self.eat(src, 30, "`)`") { return -1; }
         if !self.eat(src, 21, "`;`") { return -1; }
-        return self.add(62, value, 0, 0, 0, here);
+        return self.add(62, value, to_stderr, 0, 0, here);
     }
     if k == 103 {                                    // return
         let n: Int = self.advance();

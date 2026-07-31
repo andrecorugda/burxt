@@ -352,7 +352,12 @@ pub enum StmtKind {
     /// `while cond { ... }` — the condition must be a Bool; braces required.
     While { cond: Expr, body: Vec<Stmt> },
     /// `print(expr);`
-    Print(Expr),
+    /// `print(x)` and `print_error(x)` — one statement with a destination, not two statements.
+    ///
+    /// One variant on purpose: the per-type formatting is the part that must never fork. Two
+    /// statements would mean two formatters, and the first time one of them learned about a new type
+    /// the other would print something different for the same value.
+    Print { value: Expr, to_stderr: bool },
     /// `return expr;` — only valid inside a function.
     Return(Expr),
     /// `break;` — leave the enclosing loop.

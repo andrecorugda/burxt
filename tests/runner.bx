@@ -40,6 +40,19 @@ function run_capturing(command: String, output: String) -> Int {
     return divide_floor(status, 256);
 }
 
+// The same, but keeping the two streams APART: only stdout is captured, and stderr is discarded.
+//
+// Needed once `print_error` existed (v0.0.203). A pass fixture is compared against its `.stdout`, so
+// merging the streams made anything written to stderr look like a difference — this runner reported
+// `tests/pass/print_error.bx` as failing while the Rust runner, which reads the two separately, passed
+// it. The merge was invisible for as long as nothing could write to stderr on purpose.
+//
+// Compiling still uses the merged form: there the diagnostics ARE the output being checked.
+function run_capturing_stdout(command: String, output: String) -> Int {
+    let status: Int = system(command + " > " + output + " 2>/dev/null");
+    return divide_floor(status, 256);
+}
+
 // ---- reading the listing ----------------------------------------------------
 
 function line_end(text: String, from: Int) -> Int {
@@ -129,7 +142,7 @@ function (mutable self: Outcome) check_pass(compiler: String, name: String, work
         return 0;
     }
     // In the fixture directory, because a program may read a file next to it.
-    let ran: Int = run_capturing("cd tests/pass && " + binary, log);
+    let ran: Int = run_capturing_stdout("cd tests/pass && " + binary, log);
     let printed: String = trimmed(read_file(log));
     if ran != 0 {
         let noted: Int = self.note(false, name, "exited " + to_string(ran));

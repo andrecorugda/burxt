@@ -1154,7 +1154,8 @@ impl Parser {
     fn parse_stmt_kind(&mut self) -> Result<StmtKind, String> {
         match self.peek() {
             Token::Let => self.parse_let(),
-            Token::Print => self.parse_print(),
+            Token::Print => self.parse_print(false),
+            Token::PrintError => self.parse_print(true),
             Token::Break => {
                 self.bump();
                 self.expect(&Token::Semicolon)?;
@@ -1551,13 +1552,14 @@ impl Parser {
         Ok(StmtKind::Let { name, mutable, declared, value })
     }
 
-    fn parse_print(&mut self) -> Result<StmtKind, String> {
-        self.expect(&Token::Print)?;
+    /// `print(x);` and `print_error(x);` — the same statement with a different destination.
+    fn parse_print(&mut self, to_stderr: bool) -> Result<StmtKind, String> {
+        self.expect(if to_stderr { &Token::PrintError } else { &Token::Print })?;
         self.expect(&Token::LParen)?;
         let e = self.parse_expr()?;
         self.expect(&Token::RParen)?;
         self.expect(&Token::Semicolon)?;
-        Ok(StmtKind::Print(e))
+        Ok(StmtKind::Print { value: e, to_stderr })
     }
 
     // ---- types ----

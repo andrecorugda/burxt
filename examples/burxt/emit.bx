@@ -1363,6 +1363,67 @@ function method_symbol(src: String, holder: Type, name: Token) -> String {
         + substring(src, name.start, name.length);
 }
 
+// One formatted write, to whichever stream the print statement being emitted names.
+//
+// `printf(fmt, ...)` for stdout and `fprintf(stderr, fmt, ...)` for stderr — the SAME format strings
+// and arguments either way, which is why `print` and `print_error` are one statement rather than two.
+// A second statement would have grown a second formatter, and the first time one of them learned
+// about a new type the other would print something else for the same value.
+//
+// `arguments` is everything after the format, already rendered, so a caller does not have to know
+// which stream it is writing to.
+// The per-type formatter. One of these, serving both streams — see `print_call`.
+function (mutable self: Unit) emit_print_body(src: String, n: Node) -> Int {
+    let printed_node: Node = self.nodes[n.a];
+    if printed_node.kind == 18 {
+        // Pieces in order, then one newline. No join means no allocation, which is why
+        // `print("a {b}")` needs no region while `let s = "a {b}"` does.
+        let mutable piece_index: Int = 0;
+        while piece_index < printed_node.b {
+            let piece: String = self.emit_piece(src, self.children[printed_node.a + piece_index]);
+            let as_ptr: String = self.fresh();
+            let cast: Int = self.write_body("  " + as_ptr + " = inttoptr i64 " + piece
+                                   + " to ptr\n");
+            let out: Int = self.print_call("@burxt.fmt_str", ", ptr " + as_ptr);
+            piece_index += 1;
+        }
+        return self.print_call("@burxt.fmt_nl", "");
+    }
+    let shown: Type = self.type_at(n.a);
+    let value: String = self.emit_expr(src, n.a);
+    if shown.kind == 41 {                            // a Bool renders as a word
+        let bit: String = self.fresh();
+        let visited: Int = self.write_body("  " + bit + " = icmp ne i64 " + value + ", 0\n");
+        let text: String = self.fresh();
+        let chosen: Int = self.write_body("  " + text + " = select i1 " + bit
+                                 + ", ptr getelementptr inbounds (\{ i64, [5 x i8] \}, ptr @burxt.string_true, i32 0, i32 1), ptr getelementptr inbounds (\{ i64, [6 x i8] \}, ptr @burxt.string_false, i32 0, i32 1)\n");
+        let printed: Int = self.print_call("@burxt.fmt_str", ", ptr " + text);
+        return self.print_call("@burxt.fmt_nl", "");
+    }
+    if shown.kind == 45 {                            // a Decimal
+        let rendered: Int = self.emit_decimal_print(value, shown.scale);
+        return self.print_call("@burxt.fmt_nl", "");
+    }
+    if shown.kind == 42 {                            // a String
+        let as_ptr: String = self.fresh();
+        let cast: Int = self.write_body("  " + as_ptr + " = inttoptr i64 " + value + " to ptr\n");
+        let printed: Int = self.print_call("@burxt.fmt_str", ", ptr " + as_ptr);
+        return self.print_call("@burxt.fmt_nl", "");
+    }
+    let printed: Int = self.print_call("@burxt.fmt_int", ", i64 " + value);
+    return self.print_call("@burxt.fmt_nl", "");
+}
+
+function (mutable self: Unit) print_call(format: String, arguments: String) -> Int {
+    if self.print_to_stderr == 1 {
+        let stream: String = self.fresh();
+        let loaded: Int = self.write_body("  " + stream + " = load ptr, ptr @stderr\n");
+        return self.write_body("  call i32 (ptr, ptr, ...) @fprintf(ptr " + stream + ", ptr "
+                      + format + arguments + ")\n");
+    }
+    return self.write_body("  call i32 (ptr, ...) @printf(ptr " + format + arguments + ")\n");
+}
+
 function (mutable self: Unit) copy_cells(src: String, destination: String, source: String,
                                cells: Int) -> Int {
     let from: String = self.fresh();
@@ -1492,8 +1553,10 @@ function (mutable self: Unit) emit_decimal_print(value: String, scale: Int) -> I
         let whole: String = self.fresh();
         let narrowed: Int = self.write_body("  " + whole + " = trunc i128 " + magnitude + " to i64\n");
         let format: String = self.decimal_format(0);
-        return self.write_body("  call i32 (ptr, ...) @printf(ptr " + format + ", ptr " + sign
-                      + ", i64 " + whole + ")\n");
+        // Through `print_call`, like every other write in the formatter — otherwise the DIGITS go to
+        // stdout and only the newline reaches stderr, which is what `print_error($19.99)` did for
+        // exactly one build of v0.0.203.
+        return self.print_call(format, ", ptr " + sign + ", i64 " + whole);
     }
 
     let power: String = to_string(power_of_ten(scale));
@@ -1508,8 +1571,7 @@ function (mutable self: Unit) emit_decimal_print(value: String, scale: Int) -> I
     let frac: String = self.fresh();
     let n2: Int = self.write_body("  " + frac + " = trunc i128 " + frac_wide + " to i64\n");
     let format: String = self.decimal_format(scale);
-    return self.write_body("  call i32 (ptr, ...) @printf(ptr " + format + ", ptr " + sign
-                  + ", i64 " + whole + ", i64 " + frac + ")\n");
+    return self.print_call(format, ", ptr " + sign + ", i64 " + whole + ", i64 " + frac);
 }
 
 function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String) -> String {
@@ -1742,49 +1804,14 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int {
         return self.write_body("  store i64 " + value + ", ptr " + at + "\n");
     }
 
-    if n.kind == 62 {                                // print
-        let printed_node: Node = self.nodes[n.a];
-        if printed_node.kind == 18 {
-            // Pieces in order, then one newline. No join means no allocation, which is
-            // why `print("a {b}")` needs no region while `let s = "a {b}"` does.
-            let mutable piece_index: Int = 0;
-            while piece_index < printed_node.b {
-                let piece: String = self.emit_piece(src, self.children[printed_node.a + piece_index]);
-                let as_ptr: String = self.fresh();
-                let cast: Int = self.write_body("  " + as_ptr + " = inttoptr i64 " + piece
-                                       + " to ptr\n");
-                let out: Int = self.write_body("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_str, "
-                                      + "ptr " + as_ptr + ")\n");
-                piece_index += 1;
-            }
-            return self.write_body("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_nl)\n");
-        }
-        let shown: Type = self.type_at(n.a);
-        let value: String = self.emit_expr(src, n.a);
-        if shown.kind == 41 {                        // a Bool renders as a word
-            let bit: String = self.fresh();
-            let visited: Int = self.write_body("  " + bit + " = icmp ne i64 " + value + ", 0\n");
-            let text: String = self.fresh();
-            let chosen: Int = self.write_body("  " + text + " = select i1 " + bit
-                                     + ", ptr getelementptr inbounds (\{ i64, [5 x i8] \}, ptr @burxt.string_true, i32 0, i32 1), ptr getelementptr inbounds (\{ i64, [6 x i8] \}, ptr @burxt.string_false, i32 0, i32 1)\n");
-            let printed: Int = self.write_body("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_str, ptr "
-                                      + text + ")\n");
-            return self.write_body("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_nl)\n");
-        }
-        if shown.kind == 45 {                        // a Decimal
-            let rendered: Int = self.emit_decimal_print(value, shown.scale);
-            return self.write_body("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_nl)\n");
-        }
-        if shown.kind == 42 {                        // a String
-            let as_ptr: String = self.fresh();
-            let cast: Int = self.write_body("  " + as_ptr + " = inttoptr i64 " + value + " to ptr\n");
-            let printed: Int = self.write_body("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_str, ptr "
-                                      + as_ptr + ")\n");
-            return self.write_body("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_nl)\n");
-        }
-        let printed: Int = self.write_body("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_int, i64 "
-                                  + value + ")\n");
-        return self.write_body("  call i32 (ptr, ...) @printf(ptr @burxt.fmt_nl)\n");
+    if n.kind == 62 {                                // print, print_error
+        // `b` is the destination the parser read. Set for the whole statement and restored after, so
+        // nothing leaks into the next one — and every arm below serves both streams.
+        let outer_stream: Int = self.print_to_stderr;
+        self.print_to_stderr = n.b;
+        let done: Int = self.emit_print_body(src, n);
+        self.print_to_stderr = outer_stream;
+        return done;
     }
 
     if n.kind == 64 {                                // return tail

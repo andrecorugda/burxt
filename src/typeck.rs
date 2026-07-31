@@ -179,7 +179,7 @@ pub enum TypedStmt {
     },
     /// Bounds-checked element assignment.
     AssignIndex { name: String, len: u32, index: TypedExpr, value: TypedExpr },
-    Print(TypedExpr),
+    Print { value: TypedExpr, to_stderr: bool },
     /// `region name { .. }`: open a region, run the body, release as a unit.
     Region { name: String, body: Vec<TypedStmt> },
     /// `for name in iterable { body }`. The element type and whether the array is fixed
@@ -189,7 +189,7 @@ pub enum TypedStmt {
     /// payload slots. Exhaustiveness was proven by the typechecker.
     Match { value: TypedExpr, arms: Vec<TypedArm> },
     /// `print` of an interpolated string: emit each piece in order.
-    PrintInterp(Vec<TypedInterpPart>),
+    PrintInterp { parts: Vec<TypedInterpPart>, to_stderr: bool },
     /// Leave the enclosing loop, or jump to its next test.
     Break,
     Continue,
@@ -3992,7 +3992,7 @@ impl TypeChecker {
                 self.loop_depth -= 1;
                 Ok(TypedStmt::While { cond, body: body? })
             }
-            StmtKind::Print(e) => {
+            StmtKind::Print { value: e, to_stderr } => {
                 if let Some(why) = self.impure("print") {
                     // Output is an effect: a pure function computes its result and
                     // does nothing else.
@@ -4042,7 +4042,7 @@ impl TypeChecker {
                             }
                         }
                     }
-                    return Ok(TypedStmt::PrintInterp(typed_parts));
+                    return Ok(TypedStmt::PrintInterp { parts: typed_parts, to_stderr: *to_stderr });
                 }
                 let typed = self.check_expr(e, None)?;
                 match &typed.ty {
@@ -4090,7 +4090,7 @@ impl TypeChecker {
                     }
                     _ => {}
                 }
-                Ok(TypedStmt::Print(typed))
+                Ok(TypedStmt::Print { value: typed, to_stderr: *to_stderr })
             }
             StmtKind::Return(e) => {
                 let ret = self.current_ret.clone().ok_or_else(|| {
@@ -6544,7 +6544,7 @@ fn calls_itself(body: &[Stmt], name: &str) -> bool {
         let block = |b: &[Stmt]| b.iter().any(|x| in_stmt(x, name));
         match &s.kind {
             StmtKind::Let { value, .. }
-            | StmtKind::Print(value)
+            | StmtKind::Print { value, .. }
             | StmtKind::Return(value)
             | StmtKind::ExprStmt(value)
             | StmtKind::Assign { value, .. } => in_expr(value, name),

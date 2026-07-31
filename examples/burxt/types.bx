@@ -398,6 +398,10 @@ class Unit {
     // the result's scale keeps its own instead of being refused. Stage-0 reaches the
     // same answer by re-checking both operands with no expected type.
     in_multiply: Int,
+    // Which stream the print statement being emitted goes to. A flag rather than a parameter
+    // threaded through the formatter's eight writes, because none of those has any other reason to
+    // know. Saved and restored around each statement, so nothing leaks into the next one.
+    print_to_stderr: Int,
     errors: Int,
     // M9: counters, so the hot path is measured rather than guessed at. The first attempt
     // at this milestone fixed the obvious quadratic and bought 1.5%, which is what a
@@ -506,6 +510,10 @@ function (mutable self: Unit) install_keywords() -> Int {
     n = self.add_word("external", 116);
     n = self.add_word("region", 117);
     n = self.add_word("print", 118);
+    // `print_error` writes to stderr. A separate keyword rather than a builtin function, because it
+    // has to reach the SAME per-type formatter `print` uses — two formatters would print the same
+    // value differently the first time one of them learned about a new type.
+    n = self.add_word("print_error", 133);
     n = self.add_word("self", 119);
     n = self.add_word("true", 120);
     n = self.add_word("false", 121);

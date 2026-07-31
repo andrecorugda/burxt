@@ -422,7 +422,7 @@ defines what Burxt becomes.
 | A builtin takes a value a declared parameter would | n/a | **yes (v0.0.194).** It was a bug, not a design: SEVEN positions still compared types with `==` while a comment claimed otherwise. `vector_normalise` shipped in v0.0.195 | Done |
 | Reach a Decimal's unscaled integer | n/a | **no.** `as scaled` is FFI-only, so an algorithm that needs the integer representation has to route around it. `vector_magnitude` binary-searches instead, which works and is exact | Papercut |
 | Set an exit code | trivial | **yes (v0.0.200).** `exit(code)` is a statement, not a builtin — it never returns, so it has no type to answer with. 0..=255 enforced: a literal is a compile error, a computed status traps, because POSIX hands the shell only the low eight bits and `exit(256)` would report SUCCESS | Done |
-| Write to stderr | trivial | **no.** `print` is stdout only; nothing in `lib/` reaches stderr | Blocking |
+| Write to stderr | trivial | **yes (v0.0.203).** `print_error(x)` — the SAME statement as `print` with a destination flag, so the per-type formatter cannot fork. Every type and interpolation | Done |
 | Read an environment variable | trivial | **yes (v0.0.196).** `os_env(name) -> Option<String>` — Option, because unset and empty are different facts | Done |
 | Structured logging | crates/libs | **none.** `print` is the whole story, and it only reaches stdout | Blocking |
 | Sort or order Strings | trivial | **yes (v0.0.202).** `<` on String is BYTE order — locale collation is a decision nobody wrote down, byte order needs none and is identical everywhere. `T: Ordered` includes String, so `array_sort` sorts names | Done |
@@ -472,12 +472,14 @@ Counted rather than guessed, over §1 and §2:
 3. **Bitwise + integer widths** — **bitwise DONE (v0.0.199)**, as seven named builtins plus hex
    literals, with CRC-32 checked against the standard's published values. Integer widths (`i32`,
    unsigned) remain, and they are what a C *struct* layout and a fixed-width record need. See §5.
-4. **The small production trio — exit code, stderr, env.** **Two of three DONE**: `os_env`
-   (v0.0.196) and `exit(code)` (v0.0.200). **stderr remains**, and it is the one with real work in it:
-   `print` is a lexer KEYWORD with its own statement and its own per-type formatter, so a second
-   destination means either a parallel formatter — which would drift — or threading a stream through
-   the one that exists, in both compilers. Worth doing properly rather than as a `write_error`
-   builtin that cannot interpolate.
+4. ~~**The small production trio — exit code, stderr, env**~~ — **DONE.** `os_env` (v0.0.196),
+   `exit(code)` (v0.0.200), `print_error(x)` (v0.0.203). A Burxt program can now behave like a Unix
+   citizen: read its configuration, say what went wrong on the right stream, and tell the shell.
+
+   stderr was built as ONE statement with a destination rather than two statements, and that decision
+   paid for itself inside the same version: stage-1's Decimal path was writing its digits with its own
+   `printf` and only the newline through the shared helper, so `print_error($19.99)` split across both
+   streams. One formatter with one exit made that a one-line fix instead of a divergence to hunt.
 5. **Concurrency** (unblocks: serving, using a second core).
 6. **A test framework in the language** (unblocks: anyone else trusting their own Burxt code — this
    repo tests Burxt with Rust, which a user cannot do).
