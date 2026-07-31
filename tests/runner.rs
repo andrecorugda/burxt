@@ -960,9 +960,19 @@ fn the_burxt_front_end_accepts_every_burxt_source() {
     fs::create_dir_all(&scratch).unwrap();
 
     // Build it once with the Rust compiler, then run it over everything.
+    //
+    // **`-o` explicitly, and that is the point of this line rather than a style choice.** Until
+    // v0.0.215 these builds passed no `-o`, so the binary's name was DERIVED by `burxt build`
+    // from the source filename — `stage1.bx` produced `stage1`, and the tests below then ran
+    // `scratch.join("stage1")`. Renaming the source to `main.bx` broke three tests, and grep
+    // could not have warned: the string `"stage1"` in those lines reads as an arbitrary scratch
+    // name, with nothing to say it was a *filename* being restated. A derived name is a
+    // reference no sweep can see. `spec/A7.0-NAMING.md` §9.
     let build = Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("src/burxt-compiler/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/main.bx"))
+        .arg("-o")
+        .arg(scratch.join("stage1"))
         .current_dir(&scratch)
         .output()
         .expect("failed to spawn burxt");
@@ -973,7 +983,7 @@ fn the_burxt_front_end_accepts_every_burxt_source() {
     );
 
     let mut sources: Vec<PathBuf> = vec![
-        root.join("src/burxt-compiler/stage1.bx"),
+        root.join("src/burxt-compiler/main.bx"),
         root.join("examples/checker.bx"),
         root.join("examples/symbols.bx"),
         root.join("examples/lexer.bx"),
@@ -1035,9 +1045,13 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let scratch = scratch_dir("stage1-check");
     fs::create_dir_all(&scratch).unwrap();
+    // `-o` explicitly: the name is written down, never derived from the filename. See the
+    // note on the same call in `the_burxt_front_end_accepts_every_burxt_source`.
     let build = Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("src/burxt-compiler/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/main.bx"))
+        .arg("-o")
+        .arg(scratch.join("stage1"))
         .current_dir(&scratch)
         .output()
         .expect("failed to spawn burxt");
@@ -1061,7 +1075,7 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     // lines of the language. A false positive here means the two implementations
     // disagree about what Burxt IS.
     let mut noisy = Vec::new();
-    for name in ["src/burxt-compiler/stage1.bx", "examples/tour.bx", "examples/money.bx"] {
+    for name in ["src/burxt-compiler/main.bx", "examples/tour.bx", "examples/money.bx"] {
         if errors_reported(&root.join(name)) != 0 {
             noisy.push(name.to_string());
         }
@@ -1301,9 +1315,13 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
     }
     let scratch = scratch_dir("stage1-backend");
     fs::create_dir_all(&scratch).unwrap();
+    // `-o` explicitly: the name is written down, never derived from the filename. See the
+    // note on the same call in `the_burxt_front_end_accepts_every_burxt_source`.
     let build = Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("src/burxt-compiler/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/main.bx"))
+        .arg("-o")
+        .arg(scratch.join("stage1"))
         .current_dir(&scratch)
         .output()
         .expect("failed to spawn burxt");
@@ -1470,7 +1488,7 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
 /// **Burxt compiles Burxt, and the result is fixed.** The self-hosting certificate, run
 /// end to end on every `cargo test`:
 ///
-/// 1. stage-0 (this Rust compiler) builds **stage-1** from `src/burxt-compiler/stage1.bx`.
+/// 1. stage-0 (this Rust compiler) builds **stage-1** from `src/burxt-compiler/main.bx`.
 /// 2. stage-1 emits LLVM IR for **its own source**, with no construct refused.
 /// 3. That IR is assembled and linked into **stage-2** — a Burxt compiler built by a
 ///    Burxt compiler.
@@ -1496,7 +1514,7 @@ fn burxt_compiles_burxt_and_reaches_the_fixpoint() {
     let stage1 = scratch.join("stage1");
     assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("src/burxt-compiler/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/main.bx"))
         .arg("-o")
         .arg(&stage1)
         .status()
@@ -1506,7 +1524,7 @@ fn burxt_compiles_burxt_and_reaches_the_fixpoint() {
     // A Burxt program from a Burxt compiler: source -> IR text -> object -> program.
     let build_stage = |compiler: &Path, ir: &PathBuf, exe: &PathBuf| -> String {
         let emitted = Command::new(compiler)
-            .arg(root.join("src/burxt-compiler/stage1.bx"))
+            .arg(root.join("src/burxt-compiler/main.bx"))
             .arg(ir)
             .output()
             .expect("a compiler");
@@ -1868,7 +1886,7 @@ fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
     let stage1 = scratch.join("stage1");
     assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("src/burxt-compiler/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/main.bx"))
         .arg("-o")
         .arg(&stage1)
         .status()
@@ -2009,7 +2027,7 @@ fn the_suite_also_runs_on_burxt() {
         let stage1 = scratch.join("stage1");
         assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
             .arg("build")
-            .arg(root.join("src/burxt-compiler/stage1.bx"))
+            .arg(root.join("src/burxt-compiler/main.bx"))
             .arg("-o")
             .arg(&stage1)
             .status()
@@ -2389,7 +2407,7 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
     let stage1 = scratch.join("stage1");
     assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("src/burxt-compiler/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/main.bx"))
         .arg("-o")
         .arg(&stage1)
         .status()
@@ -2428,7 +2446,7 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
 
     let started = std::time::Instant::now();
     let emitted = Command::new(&stage1)
-        .arg(root.join("src/burxt-compiler/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/main.bx"))
         .arg(scratch.join("self.ll"))
         .output()
         .expect("stage1 on its own source");
@@ -2566,7 +2584,7 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
             .arg("-f")
             .arg("%M")
             .arg(&stage1)
-            .arg(root.join("src/burxt-compiler/stage1.bx"))
+            .arg(root.join("src/burxt-compiler/main.bx"))
             .arg(scratch.join("self-memory.ll"))
             .output()
             .expect("time on stage1");
@@ -2971,9 +2989,9 @@ fn the_packaged_extension_matches_the_grammar_in_the_repository() {
 
 /// The editor must check the PROGRAM, not the file.
 ///
-/// `src/burxt-compiler/check.bx` is one of five modules `src/burxt-compiler/stage1.bx` assembles. Checked on
+/// `src/burxt-compiler/check.bx` is one of five modules `src/burxt-compiler/main.bx` assembles. Checked on
 /// its own it reports every type declared in a sibling as unknown — so opening the compiler in
-/// an editor showed five files of squiggles that were not mistakes. And `stage1.bx` itself
+/// an editor showed five files of squiggles that were not mistakes. And `main.bx` itself
 /// reported a parse error on its own `use` lines, because the language server never resolved
 /// imports at all.
 ///
@@ -3088,7 +3106,7 @@ fn the_burxt_compiler_reads_and_emits_every_generic_form() {
     let stage1 = scratch.join("stage1");
     assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("src/burxt-compiler/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/main.bx"))
         .arg("-o")
         .arg(&stage1)
         .status()
@@ -3185,7 +3203,7 @@ fn one_word_per_concept_in_the_burxt_compiler() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut sources: Vec<PathBuf> = Vec::new();
     collect_bx(&root.join("src/burxt-compiler"), &mut sources);
-    sources.push(root.join("src/burxt-compiler/stage1.bx"));
+    sources.push(root.join("src/burxt-compiler/main.bx"));
     let mut text = String::new();
     for p in &sources {
         text.push_str(&fs::read_to_string(p).unwrap());
@@ -4411,7 +4429,7 @@ fn the_burxt_backend_keeps_every_runtime_guarantee() {
     let stage1 = scratch.join("stage1");
     assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("src/burxt-compiler/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/main.bx"))
         .arg("-o")
         .arg(&stage1)
         .status()
@@ -4494,6 +4512,165 @@ fn the_burxt_backend_keeps_every_runtime_guarantee() {
         kept,
         total,
         lost.join("\n  ")
+    );
+}
+
+/// **A document may not claim a coverage number the suite refutes.**
+///
+/// `spec/M4-SELF-HOSTING.md` §3b said, for a hundred versions: *"stage-1 cannot compile every
+/// Burxt program. Its backend does not emit Decimals and their rounding, `match`, `tail` with
+/// `musttail`, contracts, or the FFI boundary."* Every clause of that was false by v0.0.215 —
+/// `the_burxt_backend_compiles_a_growing_share_of_the_suite` had been printing **142 of 142, 0
+/// refused** the whole time, four lines of `eprintln!` away from the sentence denying it.
+///
+/// It was true when written. Nothing updated it as each feature landed, and then the worse thing
+/// happened: **it was believed and re-published.** `spec/ROADMAP-1.0.md` §A0 copied it forward as
+/// the explanation for stage-0 being 8,000 lines larger, and the real explanation — tooling, and
+/// LLVM's C API against textual IR — went unwritten because a stale sentence had already answered
+/// the question.
+///
+/// This file's governing rule is *"a status line saying DONE is not evidence. The suite is."*
+/// **The correction is that a status line saying NOT DONE is not evidence either**, and it is the
+/// more dangerous direction, because nobody re-tests a claim that something does not work. A
+/// DONE that is wrong gets found the moment someone tries the feature. A NOT-DONE that is wrong
+/// is never tried at all — it silently removes work from the plan.
+///
+/// So the two measures that reached full coverage and became equalities are now also **claims the
+/// prose is held to**. A sentence of the form `compiles N of M` or `keeps N of M` must either
+/// state the measured number, or be **marked on its own line** — `~~struck through~~`, or stamped
+/// `as of v0.0.NNN`.
+///
+/// Deliberate limits, so the next reader knows what this does NOT check:
+///
+/// - **The marker must be on the claim's own line**, not nearby. A rule a reader can apply by eye
+///   is worth more than one that scans a window, and `spec/M7-GENERICS.md` is why: its stale
+///   number sat under a heading reading *"Where it stood (v0.0.110)"* and still said
+///   *"stage-1 **now** compiles 100 of the 101"*. The dated heading did not save it. The word
+///   "now" is how a record starts reading as a claim, and only a mark on the line itself stops it.
+/// - **`docs/log/` is exempt.** A log entry is a record of a moment and is supposed to hold the
+///   number that was true then; rewriting it would destroy the only account of how the number
+///   moved. A spec makes a claim about *now*. Different jobs, different rules.
+/// - **Fail-fixture counts are out of scope.** Those are a ratchet, so `N of M` with `N < M` is
+///   their normal state and carries no gap claim. This test guards the two *equalities*.
+#[test]
+fn no_document_claims_a_coverage_number_the_suite_refutes() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    // The measurements, taken the same way the two coverage tests take them, so this cannot
+    // drift from them: a pass program is a `.bx` with an expected `.stdout` beside it.
+    let count = |dir: &str, need_stdout: bool| -> usize {
+        fs::read_dir(root.join(dir))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("bx"))
+            .filter(|p| !need_stdout || p.with_extension("stdout").exists())
+            .count()
+    };
+    let pass = count("tests/pass", true);
+    let guarantees = count("tests/panic", false);
+
+    // `compiles N of M` and `keeps N of M`, with the markdown bold and `the` that really occur.
+    // A hand parser rather than a regex because this crate has no regex dependency and adding
+    // one for four lines of scanning is the wrong trade.
+    fn claim_after(line: &str, verb: &str) -> Option<(usize, usize)> {
+        let mut rest = line;
+        while let Some(at) = rest.find(verb) {
+            let after = &rest[at + verb.len()..];
+            rest = after;
+            let mut words = after.split_whitespace().peekable();
+            let first = match words.next() {
+                Some(w) => w,
+                None => continue,
+            };
+            let n: usize = match first.trim_start_matches('*').trim_end_matches('*').parse() {
+                Ok(n) => n,
+                Err(_) => continue,
+            };
+            if words.next() != Some("of") {
+                continue;
+            }
+            if words.peek() == Some(&"the") {
+                words.next();
+            }
+            let second = match words.next() {
+                Some(w) => w,
+                None => continue,
+            };
+            let cleaned: String =
+                second.chars().take_while(|c| c.is_ascii_digit() || *c == '*').collect();
+            if let Ok(m) = cleaned.trim_matches('*').parse::<usize>() {
+                return Some((n, m));
+            }
+        }
+        None
+    }
+
+    // Every tracked document and source outside the log. Via `git ls-files` so a new spec is
+    // covered the day it is added — the failure mode `every_source_and_document_is_in_version_control`
+    // exists for, met here by asking git rather than walking a whitelist of directories.
+    let listed = Command::new("git")
+        .args(["ls-files"])
+        .current_dir(root)
+        .output()
+        .expect("git ls-files");
+    assert!(listed.status.success(), "git ls-files failed — is this a git checkout?");
+
+    let mut wrong: Vec<String> = Vec::new();
+    for file in String::from_utf8_lossy(&listed.stdout).lines() {
+        if file.starts_with("docs/log/") {
+            continue;
+        }
+        if !(file.ends_with(".md") || file.ends_with(".bx") || file.ends_with(".rs")) {
+            continue;
+        }
+        // This test's own prose quotes the numbers it checks, so reading itself would be
+        // circular — and the quotes are what make the reason legible.
+        if file == "tests/runner.rs" {
+            continue;
+        }
+        let text = match fs::read_to_string(root.join(file)) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        for (i, line) in text.lines().enumerate() {
+            // Marked as history: struck through, or stamped with the version it was true at.
+            if line.contains("~~") || line.contains("as of v0.0.") {
+                continue;
+            }
+            for (verb, measured, what) in [
+                ("compiles ", pass, "pass programs"),
+                ("compile ", pass, "pass programs"),
+                ("keeps ", guarantees, "runtime guarantees"),
+                ("keep ", guarantees, "runtime guarantees"),
+            ] {
+                if let Some((n, m)) = claim_after(line, verb) {
+                    if n != m || m != measured {
+                        wrong.push(format!(
+                            "{}:{} claims `{}{} of {}` — the suite measures {} of {} {}.\n    {}",
+                            file,
+                            i + 1,
+                            verb,
+                            n,
+                            m,
+                            measured,
+                            measured,
+                            what,
+                            line.trim()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        wrong.is_empty(),
+        "a document claims a coverage number the suite refutes.\n\n{}\n\nEither correct the \
+         number, or — if the line is a RECORD of what was once true — mark it on its own line \
+         with `~~strikethrough~~` or `as of v0.0.NNN`. Do not simply overwrite it: M4 §3b was \
+         wrong for a hundred versions and the correction is worth more than the tidy number.",
+        wrong.join("\n\n")
     );
 }
 
@@ -5631,7 +5808,7 @@ fn a_contract_widens_at_every_position_and_drops_at_none() {
     let stage1 = scratch.join("stage1");
     let have_stage1 = Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("src/burxt-compiler/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/main.bx"))
         .arg("-o")
         .arg(&stage1)
         .status()
@@ -6040,7 +6217,7 @@ fn a_program_reports_its_status_to_the_shell() {
     let have_stage1 = llc.exists()
         && Command::new(env!("CARGO_BIN_EXE_burxt"))
             .arg("build")
-            .arg(root.join("src/burxt-compiler/stage1.bx"))
+            .arg(root.join("src/burxt-compiler/main.bx"))
             .arg("-o")
             .arg(&stage1)
             .status()
@@ -6222,7 +6399,7 @@ fn print_error_writes_to_stderr() {
     let stage1 = scratch.join("stage1");
     assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("src/burxt-compiler/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/main.bx"))
         .arg("-o")
         .arg(&stage1)
         .status()
@@ -6346,7 +6523,7 @@ FAIL deliberately broken / my own: because I said so
     let stage1 = scratch.join("stage1");
     assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
         .arg("build")
-        .arg(root.join("src/burxt-compiler/stage1.bx"))
+        .arg(root.join("src/burxt-compiler/main.bx"))
         .arg("-o")
         .arg(&stage1)
         .status()

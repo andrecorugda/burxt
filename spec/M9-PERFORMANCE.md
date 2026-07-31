@@ -13,7 +13,7 @@
 
 | | Before (v0.0.89) | After (v0.0.90) |
 |---|---|---|
-| `stage1 src/burxt-compiler/stage1.bx out.ll` | **190 s** | **1.17 s** |
+| `stage1 src/burxt-compiler/main.bx out.ll` | **190 s** | **1.17 s** |
 | Peak RSS for that run | ~1 GB (region exhaustion imminent) | **196 MB** |
 | 800 generated functions (175 KB) | 446 s | 0.97 s |
 | 133 KB of comments and one statement | 36 s | 0.014 s |
@@ -27,7 +27,7 @@ nobody knows the truth of:
 | | v0.0.90 | v0.0.110 | ratio |
 |---|---|---|---|
 | The compiler's own source | 283 KB | 365 KB | **1.29×** |
-| `stage1 src/burxt-compiler/stage1.bx` | 1.17 s | 1.96 s | **1.67×** |
+| `stage1 src/burxt-compiler/main.bx` | 1.17 s | 1.96 s | **1.67×** |
 | Peak RSS for that run | 196 MB | 239 MB | **1.22×** |
 
 **Memory grew slightly LESS than the source did** — linear, which is what §3's note about a

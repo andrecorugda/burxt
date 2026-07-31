@@ -2,8 +2,11 @@
 
 > Status: **DONE (v0.0.111).** Generic **functions**, **records**, **enums**, **bounds** and
 > **methods on a generic type**, in **both** compilers, with type arguments inferred at the call
-> site and no turbofish anywhere. Stage-1 compiles 101 of the 102 pass programs; the one left
-> needs `write_bytes`. `Option<T>` and `Result<T, E>` live in `lib/`, written in Burxt, needing no
+> site and no turbofish anywhere. ~~Stage-1 compiles 101 of the 102 pass programs; the one left
+> needs `write_bytes`.~~ **That was true at v0.0.111 and stopped being true almost immediately:
+> it is 142 of 142, 0 refused, as of v0.0.215.** Left visible rather than overwritten because a
+> status line that silently updates teaches nobody; this one was believed for a hundred versions
+> and the correction is the lesson. `Option<T>` and `Result<T, E>` live in `lib/`, written in Burxt, needing no
 > compiler support beyond this milestone.
 >
 > The tests live in `tests/pass/`, which is the claim that matters: a fixture there is held
@@ -272,8 +275,12 @@ So the design has to differ, and the shape that fits stage-1's representation is
 ### Where it actually stands (v0.0.111) — **M7 IS DONE**
 
 **Both compilers now check and emit every generic form the language has**: functions, bounded
-functions, records, enums, and methods on a generic type. Stage-1 compiles **101 of the 102 pass
-programs**, and the one left needs `write_bytes` — nothing to do with generics.
+functions, records, enums, and methods on a generic type. ~~Stage-1 compiles **101 of the 102 pass
+programs**~~ — **142 of 142 as of v0.0.215**, and the one that was left needed `write_bytes`, nothing
+to do with generics.
+
+> **Measured again at v0.0.215: 142 of 142, 0 refused.** This paragraph is dated and stays as
+> written; the number above it is what a reader takes away, so it is corrected there.
 
 The last piece was methods, and it is the one case where **the copy is chosen by the RECEIVER
 rather than by the arguments**. `Pair<Point>.left` needs no unification at all: the call site
@@ -303,8 +310,10 @@ milestone and are not obviously wanted; if they arrive they arrive with a progra
 
 ### Where it stood (v0.0.110)
 
-**Generic functions are emitted by both compilers, and stage-1 now compiles 100 of the 101 pass
-programs** (the one left needs `write_bytes`, nothing to do with generics). This is the piece
+**Generic functions are emitted by both compilers, and stage-1 ~~now~~ compiles 100 of the 101 pass
+programs** as of v0.0.110 (the one left needs `write_bytes`, nothing to do with generics). The word
+was **"now"**, under a heading that says *"where it stood"* — which is how a dated record starts
+reading as a current claim. It is 142 of 142 today. This is the piece
 that genuinely needed monomorphisation, and it is worth being precise about why, because the
 rest of generics did not:
 

@@ -4,7 +4,7 @@
 // Textual LLVM IR. The runtime is emitted into every module, so a Burxt program needs
 // nothing on the machine but a C library.
 //
-// Assembled by src/burxt-compiler/stage1.bx, which is the program; everything here is
+// Assembled by src/burxt-compiler/main.bx, which is the program; everything here is
 // declarations, which is what a module may hold.
 // ============================================================================
 
@@ -1860,7 +1860,7 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int {
         // answering `-> Priced` with a concrete value has to hand back a fat pointer.
         //
         // The NODE rather than a resolved Type, for the same reason `result_type_node` is a node —
-        // a Type field would need a value in stage1.bx's Unit literal, and `declared_type` already
+        // a Type field would need a value in main.bx's Unit literal, and `declared_type` already
         // turns one into the other.
         let want: Type = self.declared_type(src, self.returns_node);
         let value: String = self.emit_value_for(src, want, n.a);

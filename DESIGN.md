@@ -472,9 +472,12 @@ to Cranelift or add an interpreter, only codegen.rs changes.
 - Stage 1: **DONE (v0.0.73)** — the Burxt compiler rewritten in Burxt,
   compiled by stage 0, and then compiled by *itself*: stage-2's IR is
   byte-identical to stage-1's, which is the fixpoint. "Burxt compiles Burxt" is
-  true, with the scope stated honestly in `spec/M4-SELF-HOSTING.md` §3b — the
-  Burxt backend does not emit every construct yet, and stage 0 stays as the
-  trust anchor and the differential test.
+  true without an asterisk: measured at v0.0.215, the Burxt backend compiles
+  **142 of 142** pass programs with **0 refused**, and each binary prints what
+  stage 0's build of it prints. (This paragraph said *"the Burxt backend does not
+  emit every construct yet"* until v0.0.215, citing a `spec/M4-SELF-HOSTING.md`
+  §3b that had gone stale under it. See §3b for what that cost.) Stage 0 stays,
+  and its job is now only the second one: **trust anchor and differential test.**
 
 ## Milestone log
 

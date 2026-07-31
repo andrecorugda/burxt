@@ -68,18 +68,83 @@ Both compilers now sit under `src/`, each named by the language it is written in
 
 | | Language | Lines | Role |
 |---|---|---|---|
-| `src/rust-compiler/` | Rust | 18,974 | **stage-0** — the bootstrap, the trust anchor, and the differential |
-| `src/burxt-compiler/` | **Burxt** | 10,981 | **stage-1** — the compiler written in itself |
+| `src/rust-compiler/` | Rust | 18,974 | the trust anchor and the **differential test** — no longer a bootstrap |
+| `src/burxt-compiler/` | **Burxt** | 10,981 | the compiler written in itself, and the one that compiles itself |
 
-**Why the Rust one is larger, since the numbers invite the question.** About 2,632 lines are things
-stage-1 does not have at all — the language server, `burxt review`, the JSON emitter, `mcp-schema`,
-diagnostics rendering, the CLI. The rest is M4 §3b: **stage-1 is a SUBSET.** Its backend does not emit
-Decimals and their rounding, `match`, `musttail`, contracts, or the FFI boundary. Comparing overlapping
-roles only it is 16,342 against 10,981, and comment density is nearly identical (21% against 20%) — so
-the gap is missing features rather than a more expressive language.
+### A0b — DONE (v0.0.215): and then the entry point was still called `stage1.bx`
 
-That gap is **B12**, and its real cost is stated there: the differential test is this project's best
-bug-finder, and it is blind wherever stage-1 refuses.
+Andre, on reading the fixed directory: *"the rust compiler is well named and categorized, while the burxt
+is almost ok but has stage1 — what is stage1 if the maintainer is a human?"*
+
+Right, and it is the same defect one level down. Every neighbour is named for **what it does** —
+`parser.bx`, `check.bx`, `emit.bx`, `types.bx`, `modules.bx` — and the entry point alone was named for
+**its position in a bootstrap sequence.** "Stage 1" answers *which step of building something else is
+this*, a question only whoever built it ever asks. A maintainer asks *where does the program start*, and
+that is spelled `main` in every language there is — including in `src/rust-compiler/main.rs`, sitting in
+the other compiler at the same place doing the same job.
+
+It had also stopped being **true**. A stage is a step toward a destination not yet reached; this compiles
+itself to a byte-identical fixpoint, so it is not on the way to a compiler, it **is** one. The filename
+outlived what it described — the identical rot to §3b above, in the same version, which is why both are
+recorded rather than quietly fixed.
+
+So `src/burxt-compiler/stage1.bx` → **`main.bx`**, and the two directories now read as the same program
+twice:
+
+| `src/burxt-compiler/` | | `src/rust-compiler/` |
+|---|---|---|
+| `main.bx` | the entry point | `main.rs` (+ the CLI) |
+| `types.bx` | shapes, lexer | `ast.rs` + `lexer.rs` |
+| `parser.bx` | tokens in, arena AST out | `parser.rs` |
+| `check.bx` | scales, regions, purity, contracts, exhaustiveness | `typeck.rs` |
+| `emit.bx` | textual LLVM IR + the runtime | `codegen.rs` (LLVM's C API via inkwell) |
+| — | **the tooling, and nothing on the Burxt side yet** | `lsp.rs` · `review.rs` · `schema.rs` · `json.rs` · `diag.rs` |
+
+That last row is the whole asymmetry, and B12 is now pointed at it.
+
+**"stage-0" and "stage-1" survive as PROSE**, in the specs, where the subject really is the bootstrap:
+which compiler built which, and why two of them must agree. That is a defined term doing work in a
+sentence about history. A filename is not a sentence.
+
+**The rename cost three broken tests and produced a ninth naming failure mode** — `burxt build` with no
+`-o` *derives* the binary's name from the filename, so `scratch.join("stage1")` was a reference no sweep
+could see. `spec/A7.0-NAMING.md` §9 has it; the fix was to stop deriving rather than to sweep harder.
+
+**Why the Rust one is larger — and the first answer here was WRONG, which is worth keeping.**
+
+v0.0.214 wrote: *"stage-1 is a SUBSET. Its backend does not emit Decimals and their rounding, `match`,
+`musttail`, contracts, or the FFI boundary."* That came from `M4-SELF-HOSTING.md` §3b, was true when §3b
+was written, and **is now false.** Nothing updated §3b as each feature landed, and this document
+believed it and re-published it a version later.
+
+**Measured, in v0.0.215:** stage-1 compiles **142 of 142** pass programs, **0 refused** — including
+`match`, `Decimal` with rounding contracts, `requires`/`ensures`, `external function`, `decreases`,
+`return tail`, the generic-heavy `lib/array.bx`, the exact-vector library, `lib/test.bx` and the pointer
+wall. Their binaries run and match stage-0's output. It also compiles **itself**, 2.6 MB of IR, to a
+byte-identical fixpoint.
+
+> This project's rule is *"a status line saying DONE is not evidence. The suite is."* The correction is
+> that **a status line saying NOT DONE is not evidence either** — and this one had a test printing
+> `142 of 142` beside it the whole time.
+
+So the ~8,000-line gap is **not capability**. It is:
+
+| | |
+|---|---|
+| ~2,632 lines | tooling stage-1 does not have — LSP, `burxt review`, `mcp-schema`, the JSON emitter, diagnostics rendering, the CLI |
+| ~5,400 lines | stage-0 drives **LLVM's C API** through inkwell; stage-1 **writes textual IR**, which M4 calls *"not a workaround — string formatting instead of an API"* |
+
+Neither is Burxt failing to express something.
+
+**What this changes about stage-0's role.** It is no longer a bootstrap — Burxt builds Burxt. Its
+remaining job is a **test oracle**, and that job earns its keep empirically: five silent wrong answers in
+one week were found because two implementations disagreed. The cost is equally real — every feature needs
+stage-1 parity, roughly doubling the work — and `M4` §5's *"retired or kept as reference"* was always a
+choice. Keeping it as an oracle while dropping the bootstrap framing is the honest position.
+
+**And it re-points B12.** The gap worth closing is not the language, it is the TOOLCHAIN: stage-1 has no
+LSP, no `review`, no `mcp-schema`. That is where all the interesting non-compiler work still lives in
+Rust, and moving it is a real capability claim — unlike the subset claim, which was false.
 
 ## A — Compiler fixes, ranked by leverage ÷ cost
 
@@ -145,8 +210,8 @@ any other user on the machine can read it.
 | B8 | A bare **`it` inside a string literal** in a bracket clause is wrong | S |
 | B9 | **`lib/json.bx` rejects valid JSON** (`\b`, `\f`, `\uXXXX`). Refuses rather than corrupts, but Burxt cannot read real-world JSON. Needs A5 | S–M |
 | B10 | **Iterative AST walkers** — 512 MB stack, ~30k-node ceiling | M |
-| B11 | **M7: stage-1 compiles 101 of 102**; generic records in stage-1 | M |
-| B12 | **stage-1 backend gaps** — Decimals, `match`, `musttail`, contracts, FFI. Refused by name, never miscompiled, but it bounds what the differential can cover | L |
+| B11 | ~~**M7: stage-1 compiles 101 of 102**; generic records in stage-1~~ **CLOSED, v0.0.215 — and it had been closed for a hundred versions without anyone writing it down.** 142 of 142; the one holdout needed `write_bytes`, which landed. Generic records emit in both compilers | — |
+| B12 | ~~**stage-1 backend gaps**~~ — **there are none, measured v0.0.215: 142 of 142 pass programs, 0 refused.** The claim came from a stale `M4` §3b. **Re-pointed:** the real gap is the TOOLCHAIN — stage-1 has no LSP, no `burxt review`, no `mcp-schema`, so every non-compiler tool lives only in Rust. Moving one is a genuine capability claim | L |
 | B13 | M11's **1.67× compile-time growth is unattributed**; the ratchet tightening is pending | S |
 | B15 | **stage-0 accepts a trailing `;` on an interface method signature and stage-1 refuses it.** Found by writing a fixture in v0.0.209 — no existing fixture used the `;` form, so the differential could not see it. A divergence in what is ACCEPTED, which is the direction that matters | S |
 | B14 | **Doc rot** — `lib/README.md` claims `Option`/`Result` do not exist · `map.bx` claims no bit ops · the module table omits 3 modules · `docs/reference/builtins.md` omits 9 builtins while claiming to be generated from that list | XS |

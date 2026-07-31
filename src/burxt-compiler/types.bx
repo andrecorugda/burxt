@@ -5,7 +5,7 @@
 // and the Unit that holds a whole compile. Also the lexer, because a token is what the
 // rest of the compiler reads and the two are one idea.
 //
-// Assembled by src/burxt-compiler/stage1.bx, which is the program; everything here is
+// Assembled by src/burxt-compiler/main.bx, which is the program; everything here is
 // declarations, which is what a module may hold.
 // ============================================================================
 
@@ -293,7 +293,7 @@ class Unit {
     it_seen: Int,
     // The return type's NODE while a signature's clauses are being checked, or -1 outside one. Node
     // kind 21 — `it` or the elided subject on a return bracket, meaning "the value being returned" —
-    // answers this. A node rather than a Type, because a Type field would need a value in stage1.bx's
+    // answers this. A node rather than a Type, because a Type field would need a value in main.bx's
     // Unit literal and `declared_type` already turns a node into one.
     result_type_node: Int,
     // The slot holding the value being returned, while `ensures` clauses are emitted. Kind 21 loads

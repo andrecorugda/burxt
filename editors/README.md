@@ -15,7 +15,7 @@ directory holds that half of the project.
 > | `editor_grammar_knows_every_keyword_the_compiler_does` | a keyword the grammar had never heard of |
 > | `editor_grammar_highlights_every_declaration_the_examples_write` | `function (self)` — shipped v0.0.95, uncoloured until v0.0.99, because **a keyword list is not a grammar** |
 > | `the_packaged_extension_matches_the_grammar_in_the_repository` | a `.vsix` built before a rename, so the editor coloured yesterday's language |
-> | `the_language_server_checks_the_program_a_file_belongs_to` | five compiler modules squiggled as broken, and `stage1.bx` failing on its own `use` lines |
+> | `the_language_server_checks_the_program_a_file_belongs_to` | five compiler modules squiggled as broken, and `main.bx` failing on its own `use` lines |
 >
 > After touching the grammar, run `python3 vscode/pack.py` and bump the version in
 > `vscode/package.json` — an installed extension does not upgrade to the same version number.

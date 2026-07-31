@@ -1,5 +1,38 @@
 // ============================================================================
-// STAGE-1: the Burxt compiler, written in Burxt.
+// main.bx — the entry point of the Burxt compiler, written in Burxt.
+//
+// **This file was called `stage1.bx` until v0.0.215, and the rename is the point.**
+// Every one of its neighbours is named for what it DOES — `parser.bx`, `check.bx`,
+// `emit.bx` — and then the entry point was named for its position in a bootstrap
+// sequence. "Stage 1" answers *which step of building something else is this*, which is
+// a question only whoever built it ever asks. A maintainer opening this directory asks
+// *where does the program start*, and the answer is spelled `main` in every language
+// there is — including in `src/rust-compiler/main.rs`, sitting in the other compiler at
+// the same place doing the same job.
+//
+// It is also no longer TRUE in the way the name implied. A stage is a step toward a
+// destination you have not reached yet; Burxt compiles Burxt to a byte-identical
+// fixpoint, so this is not on the way to a compiler, it IS one. The name outlived what
+// it described — the same rot that `spec/M4-SELF-HOSTING.md` §3b was corrected for in
+// this same version, and worth recording twice because it happened twice.
+//
+// (**"stage-0" and "stage-1" survive as PROSE**, in the specs, where the subject really
+// is the bootstrap: which compiler built which, and why two of them must agree. That is
+// a defined term doing work in a sentence about history. A filename is not a sentence.)
+//
+// ---- the two compilers, side by side ---------------------------------------------
+//
+//   src/burxt-compiler/            src/rust-compiler/
+//   main.bx     the entry point    main.rs      the entry point and CLI
+//   types.bx    shapes, lexer      ast.rs + lexer.rs
+//   parser.bx   tokens in, arena AST out        parser.rs
+//   check.bx    scales, regions, purity, contracts, exhaustiveness    typeck.rs
+//   emit.bx     textual LLVM IR + the runtime   codegen.rs (LLVM's C API, via inkwell)
+//               — and nothing here yet for     diag.rs · lsp.rs · review.rs ·
+//                 the tooling                    schema.rs · json.rs
+//
+// The last row is the honest asymmetry and the only one: the LANGUAGE is covered on both
+// sides, the TOOLING is not. See `spec/ROADMAP-1.0.md` §A0.
 //
 // The program is this file; the compiler is the modules it uses. It was one file of
 // nearly six thousand lines until v0.0.82, because Burxt had no module system — and
@@ -14,8 +47,8 @@
 //
 // Build and run it with:
 //
-//     burxt build src/burxt-compiler/stage1.bx -o /tmp/stage1
-//     /tmp/stage1 <program.bx> [out.ll]
+//     burxt build src/burxt-compiler/main.bx -o /tmp/burxt-in-burxt
+//     /tmp/burxt-in-burxt <program.bx> [out.ll]
 //
 // Given a second argument it emits LLVM IR for the program; given one it lexes,
 // parses and checks it, and reports what it found.

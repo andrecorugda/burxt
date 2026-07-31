@@ -1,11 +1,11 @@
 # Burxt — Modules (M6)
 
 > Status: **DONE (v0.0.81–v0.0.82).** Both compilers resolve `use`, and the acceptance test
-> that matters passed: `src/burxt-compiler/stage1.bx` is now 105 lines that `use` five modules, and the
+> that matters passed: `src/burxt-compiler/main.bx` is now 105 lines that `use` five modules, and the
 > fixpoint still holds — the compiler compiles its split self byte-identically.
 >
 > Original status: **specified, implementing.** The blocker for everyone who is not the author:
-> `src/burxt-compiler/stage1.bx` is 4,996 lines in one file because it has no choice, and nothing
+> `src/burxt-compiler/main.bx` is 4,996 lines in one file because it has no choice, and nothing
 > multi-file, multi-author or reusable is possible until this exists.
 
 ## 0. What has to become possible
@@ -135,7 +135,7 @@ ever becomes one the answer is a per-file arena rather than a span redesign.
 5. Two files that use each other compile, and each may call the other's functions.
 6. A used file containing a top-level statement is refused with Decision 3's message.
 7. A missing path is refused, naming the file that asked for it.
-8. **`src/burxt-compiler/stage1.bx` splits into `lexer.bx`, `parser.bx`, `check.bx`, `emit.bx` and
+8. **`src/burxt-compiler/main.bx` splits into `lexer.bx`, `parser.bx`, `check.bx`, `emit.bx` and
    `main.bx`, and the fixpoint still holds.** This is the real acceptance test: if the
    compiler cannot be split, modules are not done.
 9. Both compilers implement it, and the differential test still passes — which means

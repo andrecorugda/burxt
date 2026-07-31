@@ -378,8 +378,8 @@ language can be read. `editor_grammar_highlights_every_declaration_the_examples_
 every declaration line out of the real examples and requires some pattern to match it.
 
 **3. A file is not always a program.** `src/burxt-compiler/check.bx` is one of five modules
-`src/burxt-compiler/stage1.bx` assembles, and checking it alone reports every type declared in a sibling as
-unknown — five files of squiggles that were not mistakes. Worse, `stage1.bx` itself reported a
+`src/burxt-compiler/main.bx` assembles, and checking it alone reports every type declared in a sibling as
+unknown — five files of squiggles that were not mistakes. Worse, `main.bx` itself reported a
 parse error **on its own `use` lines**, because the language server never resolved imports at
 all: a bug that had been there since modules shipped in v0.0.81 and that no test could see,
 because `burxt check` resolves them and only the editor did not.

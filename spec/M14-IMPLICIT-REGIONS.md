@@ -6,9 +6,9 @@
 > | | |
 > |---|---|
 > | `examples/pos/` with every `allocates` deleted | **compiles, same receipt** |
-> | Fixpoint rounds, `src/burxt-compiler/stage1.bx` (8.3k lines, ~500 functions) | **2** |
+> | Fixpoint rounds, `src/burxt-compiler/main.bx` (8.3k lines, ~500 functions) | **2** |
 > | Fixpoint rounds, a 4-deep forwarding chain | **5** — one per link, plus one to confirm |
-> | `burxt check src/burxt-compiler/stage1.bx` | **0.06 s** (3 typecheck passes: 2 probe + 1 real) |
+> | `burxt check src/burxt-compiler/main.bx` | **0.06 s** (3 typecheck passes: 2 probe + 1 real) |
 > | stage-1 compiling its own source | **0.14 s** |
 > | Suite | 37 invariants, fixpoint intact, stage-1 110 of 110 |
 >

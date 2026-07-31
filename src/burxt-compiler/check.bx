@@ -4,7 +4,7 @@
 // The rules. Types, scales, rounding contracts, regions, purity, contracts, exhaustiveness
 // — the same refusals stage-0 makes, which is what the differential test compares.
 //
-// Assembled by src/burxt-compiler/stage1.bx, which is the program; everything here is
+// Assembled by src/burxt-compiler/main.bx, which is the program; everything here is
 // declarations, which is what a module may hold.
 // ============================================================================
 

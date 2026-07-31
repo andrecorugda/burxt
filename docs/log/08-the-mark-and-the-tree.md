@@ -121,7 +121,7 @@ What the move preserved, and what it cost:
 
 ### v0.0.73: Burxt compiles Burxt
 
-The fixpoint. stage-0 builds stage-1 from `src/burxt-compiler/stage1.bx`; stage-1 emits 1,208,254
+The fixpoint. stage-0 builds stage-1 from `src/burxt-compiler/main.bx`; stage-1 emits 1,208,254
 bytes of LLVM IR for **its own source** with nothing refused; that becomes stage-2; and
 stage-2 emits **the same 1,208,254 bytes**. stage-3, built from those, matches stage-2's
 machine code, and stage-2 answers exactly what stage-1 answers for all 88 programs in the
@@ -414,7 +414,7 @@ and the measuring loop ran programs in a scratch directory without bringing the 
 along. Worth recording because the first instinct was to look at the compiler, and the
 compiler was right.
 
-What this means, precisely: `burxt` the Rust program and `stage1.bx` the Burxt program now
+What this means, precisely: `burxt` the Rust program and `main.bx` the Burxt program now
 produce the same behaviour for every program either can compile. Rust remains the trust
 anchor and the differential test — that was never the thing to remove.
 
@@ -461,7 +461,7 @@ tomorrow without being edited. That was the point of having two implementations.
 ### v0.0.81: modules — `use "path"`, and one buffer with a map
 
 Phase 3 begins. The blocker for everyone who is not Andre: a program was one file, and
-`src/burxt-compiler/stage1.bx` is 4,996 lines because it had no choice.
+`src/burxt-compiler/main.bx` is 4,996 lines because it had no choice.
 
 ```burxt
 use "lexer.bx";
@@ -526,7 +526,7 @@ The acceptance test for modules, and the reason M6 was written the way it was: *
 compiler cannot be split, modules are not done.** It can.
 
 ```
-src/burxt-compiler/stage1.bx        105 lines — the program, and five `use` lines
+src/burxt-compiler/main.bx        105 lines — the program, and five `use` lines
 src/burxt-compiler/types.bx   504 — the shapes, and the lexer
 src/burxt-compiler/parser.bx  1,573 — tokens in, arena AST out
 src/burxt-compiler/check.bx   1,583 — the rules
@@ -1567,10 +1567,10 @@ test that reads the grammar next to the language it checks should be readable it
 #### 3. A file is not always a program
 
 The one I would not have found without being told. `src/burxt-compiler/check.bx` is one of five
-modules `src/burxt-compiler/stage1.bx` assembles, and the language server checked **the file**, so every
+modules `src/burxt-compiler/main.bx` assembles, and the language server checked **the file**, so every
 type declared in a sibling read as unknown: five files of squiggles that were not mistakes.
 
-And underneath it, worse: `stage1.bx` itself reported a parse error **on its own `use` lines**.
+And underneath it, worse: `main.bx` itself reported a parse error **on its own `use` lines**.
 The language server had never resolved imports — not since modules shipped in v0.0.81, eighteen
 versions ago. No test could see it, because `burxt check` resolves them properly and only the
 editor did not. The one path nobody exercised was the one every reader uses first.

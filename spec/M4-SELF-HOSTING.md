@@ -1,6 +1,6 @@
 # Burxt — Self-Hosting: The Staging
 
-> Status: **ACHIEVED (v0.0.73).** stage-1 compiles its own source, stage-2 emits
+> Status: **ACHIEVED (v0.0.73), and BROADER than §3b claimed** — see the correction there (v0.0.215). stage-1 compiles its own source, stage-2 emits
 > byte-identical IR for it, and stage-2 answers exactly what stage-1 answers for all 88
 > programs in the pass suite. Checked on every `cargo test` by
 > `burxt_compiles_burxt_and_reaches_the_fixpoint`. What it does not claim is in §3b.
@@ -377,13 +377,36 @@ each one invisible until a program ran.
 
 Stated plainly, because the honest scope is the interesting part:
 
-- **stage-1 cannot compile every Burxt program.** Its backend does not emit Decimals and
-  their rounding, `match`, `tail` with `musttail`, contracts, or the FFI boundary. Its own
-  source uses none of them, which is exactly why the certificate arrives before they do.
-  Anything it cannot lower is **refused by name**, never emitted wrongly.
+- ~~**stage-1 cannot compile every Burxt program.**~~ **STALE, and corrected in v0.0.215 by
+  measuring instead of reading.** This said the backend does not emit Decimals and their rounding,
+  `match`, `tail` with `musttail`, contracts, or the FFI boundary. **It emits all five.** Measured:
+  **142 of 142** pass programs compile correctly, **0 refused**, including the generic-heavy
+  `lib/array.bx`, the exact-vector library at `Decimal<7>`/`Decimal<14>`, `lib/test.bx`, and the
+  pointer wall — and their binaries run and produce the same output as stage-0's.
+
+  The claim was true when written and nothing updated it as each feature landed. Worse, it was
+  **believed and re-published**: `spec/ROADMAP-1.0.md` §A0 repeated it a version before this
+  correction, as the explanation for stage-0 being ~8,000 lines larger. That is this project's own
+  warning — *"a status line saying DONE is not evidence"* — running the other way: **a status line
+  saying NOT DONE is not evidence either.** The suite is. `the_burxt_backend_compiles_a_growing_share_of_the_suite`
+  had been printing `142 of 142` the whole time.
+
+  Anything it cannot lower is still **refused by name**, never emitted wrongly. There is simply
+  nothing in the suite left for it to refuse.
 - **stage-0 is not retired**, and §5 says why: it is the trust anchor and the differential
   test. Two implementations that must agree turn a language change into a failing test
   rather than a bug report.
+
+  **But it is no longer a BOOTSTRAP, and calling it one is misleading.** Burxt builds Burxt. Its
+  remaining job is to be a **test oracle**, and that job is earning its keep empirically rather than
+  theoretically: five silent wrong answers in one week were found because two implementations
+  disagreed — stage-1 comparing Strings with `strcmp(a, b) == 0`, generic comparisons sorting by
+  allocation address, an enum payload sized by counting, a `dynamic` argument miscompile, and a
+  contract widening applied at one position out of eight.
+
+  The cost is equally real and should be stated beside the benefit: **every feature needs stage-1
+  parity, which roughly doubles the work.** Both facts are true, and §5's "retired or kept as
+  reference" was always a choice rather than a foregone conclusion.
 - **The front end is complete; the backend is a slice.** stage-1 accepts every program
   stage-0 accepts — 0 false positives across 88 — and rejects 154 of the 190 it should.
 

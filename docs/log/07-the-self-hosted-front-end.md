@@ -78,7 +78,7 @@ and the compiler said so, naming the fix, in a file it had never seen before.
 
 ### v0.0.53: the stage-1 parser — types, expressions, statements
 
-M4 phase 3a. `examples/stage1_lexer.bx` became `src/burxt-compiler/stage1.bx`, because it is no
+M4 phase 3a. `examples/stage1_lexer.bx` became `src/burxt-compiler/main.bx`, because it is no
 longer a lexer: it is the stage-1 compiler, growing a phase at a time in one file, which
 is the shape the plan predicted while Burxt has no modules.
 
@@ -134,7 +134,7 @@ contract clauses that make a Burxt signature say what it promises: `allocates`,
 
 ```text
 parsed 55 items and statements into 6610 nodes, 2263 child slots
-  parse errors: 0            <- stage1.bx, parsing its own 1,300 lines
+  parse errors: 0            <- main.bx, parsing its own 1,300 lines
 ```
 
 Every function, every method, every struct, every contract clause in the stage-1
@@ -250,7 +250,7 @@ error: unknown name (at `nobody_declared_this`)
 ```
 
 **The thesis, enforced by a Burxt program, over a real AST.** And the strongest single
-case: `stage1.bx` typechecks **its own 1,894 lines with zero complaints.** A test holds
+case: `main.bx` typechecks **its own 1,894 lines with zero complaints.** A test holds
 it to both directions — silent on what stage-0 accepts, and catching all seven mistakes
 in a program written to break every rule this phase implements, inventing none.
 
@@ -301,7 +301,7 @@ false positives became 26, because a checker that types more things has more cha
 be wrong. Handling constructors brought it to **24 of 88**. Reporting the number that
 went up is the point: the alternative is a checker that stays silent and scores well.
 
-`stage1.bx` still typechecks **its own 2,000 lines with zero complaints**, which is the
+`main.bx` still typechecks **its own 2,000 lines with zero complaints**, which is the
 case that matters most.
 
 What remains for 4b: methods (`x.m()` where the base is a value), match bindings against
