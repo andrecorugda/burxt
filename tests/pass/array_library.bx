@@ -1,0 +1,82 @@
+// lib/array.bx — the module that could not be written until v0.0.201.
+//
+// What blocked it was misdiagnosed for six versions: not generics, and not `xs[i] = v`. **No function
+// could modify an array it was passed at all** — a parameter was always a copy, and `mutable` on one
+// was a parse error. So `sort`, `reverse`, `swap` and `fill`, every operation whose whole job is to
+// change what it was given, were unwritable.
+//
+// The signature is what a reader checks: `mutable xs: [T]` means the call changes YOUR array, and a
+// function without it cannot touch what you passed — enforced, not documented.
+use "../../lib/array.bx";
+
+region main {
+    // ---- asking, which never changes anything ----
+    let mutable xs: [Int] = [];
+    let a: Int = push(xs, 5);
+    let b: Int = push(xs, 3);
+    let c: Int = push(xs, 9);
+    let d: Int = push(xs, 3);
+
+    print(array_contains(xs, 9));
+    print(array_contains(xs, 4));
+    print(option_or(array_index_of(xs, 3), 0 - 1));          // 1 — the FIRST one
+    print(option_is_some(array_index_of(xs, 4)));
+    print(array_sum_int(xs));
+    print(array_min(xs));
+    print(array_max(xs));
+    print(array_first(xs));
+    print(array_last(xs));
+    print(array_is_sorted(xs));
+
+    // ---- changing, which says so in the signature ----
+    let n: Int = array_sort(xs);
+    print(to_string(xs[0]) + " " + to_string(xs[1]) + " " + to_string(xs[2]) + " "
+          + to_string(xs[3]));
+    print(array_is_sorted(xs));
+
+    let r: Int = array_reverse(xs);
+    print(to_string(xs[0]) + " " + to_string(xs[3]));
+
+    let s: Int = array_swap(xs, 0, 3);
+    print(to_string(xs[0]) + " " + to_string(xs[3]));
+
+    // An array literal cannot be an argument — it does not say whether it is fixed or growable — so
+    // the thing being appended is named. Worth knowing before reaching for it.
+    let mutable more: [Int] = [];
+    let m1: Int = push(more, 1);
+    let m2: Int = push(more, 2);
+    let e: Int = array_extend(xs, more);
+    print(len(xs));
+    print(array_sum_int(xs));
+
+    let rem: Int = array_remove_at(xs, 0);
+    print(len(xs));
+    print(xs[0]);
+
+    let f: Int = array_fill(xs, 7);
+    print(array_sum_int(xs));
+    print(array_min(xs));
+
+    // ---- money, because that is what this language is for ----
+    let mutable prices: [Decimal<2>] = [];
+    let p1: Int = push(prices, $19.99);
+    let p2: Int = push(prices, $4.50);
+    let p3: Int = push(prices, $19.99);
+    print(array_sum_money(prices));
+    let ps: Int = array_sort(prices);
+    print(to_string(prices[0]) + " " + to_string(prices[1]) + " " + to_string(prices[2]));
+    print(array_max(prices));
+    // Exact, and the same on every machine — sorting did not go through a float.
+    print(array_sum_money(prices) == $44.48);
+
+    // ---- stability, which is why insertion sort was chosen ----
+    // Equal elements keep the order they were written in. A sort that reshuffled equals would make a
+    // listing change between runs for no reason a reader could see.
+    let mutable pairs: [Int] = [];
+    let q1: Int = push(pairs, 2);
+    let q2: Int = push(pairs, 1);
+    let q3: Int = push(pairs, 2);
+    let q4: Int = push(pairs, 1);
+    let qs: Int = array_sort(pairs);
+    print(to_string(pairs[0]) + to_string(pairs[1]) + to_string(pairs[2]) + to_string(pairs[3]));
+}

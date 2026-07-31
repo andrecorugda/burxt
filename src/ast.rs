@@ -377,6 +377,19 @@ pub enum StmtKind {
 pub struct Param {
     pub name: String,
     pub ty: Type,
+    /// `mutable xs: [Int]` — the callee may modify the CALLER's value, and the signature says so.
+    ///
+    /// The mechanism is the one `mutable self` has always used: an aggregate parameter is normally
+    /// `byval`, so LLVM copies it and a callee writing to it changes its own copy. A `mutable` one is
+    /// a plain pointer to the caller's storage instead — same ABI decision, same soundness argument,
+    /// already proven by every method that mutates.
+    ///
+    /// Only aggregates may be `mutable`, and that is a rule about MEANING rather than a limitation.
+    /// On a scalar the word would have to mean "you get your own copy to change", which is a fact
+    /// about the body and not about the call — so one word would mean two different things depending
+    /// on the type, decided silently. A local copy is written `let mutable n: Int = parameter;`,
+    /// which says where the copy is.
+    pub writable: bool,
     /// How this value is encoded to cross a foreign boundary, when it is not
     /// something C can hold directly. Only ever `Some` on an `extern fn`
     /// parameter: a Burxt-to-Burxt call has no encoding question.

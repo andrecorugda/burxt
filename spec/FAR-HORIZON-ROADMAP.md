@@ -418,12 +418,16 @@ defines what Burxt becomes.
 
 | Capability | Others | Burxt today | Verdict |
 |---|---|---|---|
+| Modify an array a function was passed | `&mut` | **yes (v0.0.201).** `mutable xs: [T]` — the callee gets a pointer to the caller's storage instead of LLVM `byval`, which is what `mutable self` always did. Only aggregates; refused on a method parameter and on `pure`. This is what `lib/array.bx` was waiting for | Done |
 | A builtin takes a value a declared parameter would | n/a | **yes (v0.0.194).** It was a bug, not a design: SEVEN positions still compared types with `==` while a comment claimed otherwise. `vector_normalise` shipped in v0.0.195 | Done |
 | Reach a Decimal's unscaled integer | n/a | **no.** `as scaled` is FFI-only, so an algorithm that needs the integer representation has to route around it. `vector_magnitude` binary-searches instead, which works and is exact | Papercut |
 | Set an exit code | trivial | **yes (v0.0.200).** `exit(code)` is a statement, not a builtin — it never returns, so it has no type to answer with. 0..=255 enforced: a literal is a compile error, a computed status traps, because POSIX hands the shell only the low eight bits and `exit(256)` would report SUCCESS | Done |
 | Write to stderr | trivial | **no.** `print` is stdout only; nothing in `lib/` reaches stderr | Blocking |
 | Read an environment variable | trivial | **yes (v0.0.196).** `os_env(name) -> Option<String>` — Option, because unset and empty are different facts | Done |
-| Structured logging | crates/libs | **none.** `print` is the whole story | Blocking |
+| Structured logging | crates/libs | **none.** `print` is the whole story, and it only reaches stdout | Blocking |
+| Sort or order Strings | trivial | **no.** `T: Ordered` is Int and Decimal; String has no `<`, so `lib/array.bx` cannot sort names. Byte ordering is the fix and it is small | Blocking, and cheap |
+| An Option-returning GENERIC | `Option<T>` | **no.** `Option.None` cannot be built where `T` is a type parameter, even written out — so `array_min<T>` takes a precondition instead (which is better, but the gap is real) | Papercut, sharp |
+| A `pure` function that builds an Option | n/a | **no.** `Option.Some(x)` reads as a method call, and a method cannot be `pure` yet — so a function that only reads its arguments is refused the word saying so | Papercut |
 | Catch a failure / recover | `catch_unwind`, exceptions | **no.** A contract or bounds failure exits 70. There is no handler | Decision worth stating |
 | Stack trace on failure | yes | **no.** The message names the clause and the function, and nothing below it | Papercut, sharp |
 | Debugger / breakpoints | yes | **no DWARF.** An agent that cannot debug inserts `print`, which MOVES THE STACK and changes the answer — exactly the v0.0.141 trap | Blocking |

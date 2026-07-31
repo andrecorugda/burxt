@@ -45,6 +45,13 @@ function (self: Unit) is_exit_call(src: String, node: Int) -> Bool {
     return span_equal(src, named.start, named.length, "exit");
 }
 
+// The types that cross as a POINTER rather than in a register: a class, a slice, a fixed array, an
+// interface object. Only these may be `mutable` parameters, because only these have a caller-side
+// home the callee can reach.
+function is_aggregate_type(t: Type) -> Bool {
+    return t.kind == 46 || t.kind == 47 || t.kind == 48 || t.kind == 49;
+}
+
 function decimal_type(scale: Int, contract: Int) -> Type {
     return Type { kind: 45, scale: scale, contract: contract, name_start: 0, name_length: 0 };
 }
@@ -2429,8 +2436,31 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int {
     while p < params.b {
         let param: Node = self.nodes[self.children[params.a + p]];
         let name: Token = self.tokens[param.token];
+        let declared: Type = self.declared_type(src, param.a);
+        // `pure` and `mutable` are a contradiction: `pure` promises the answer depends on the
+        // arguments and nothing else, which is the same promise as changing nothing. It matters more
+        // than it looks — a contract clause may call a `pure` function, so without this a
+        // precondition could rewrite the data it was checking.
+        if param.b == 1 && flag_pure(item.value) == 1 {
+            let complained: Int = self.complain_at(src, param.token,
+                "a `pure function` cannot take a `mutable` parameter: `pure` means the answer "
+                + "depends on the arguments and nothing else, which is the same thing as changing "
+                + "nothing — and `mutable` says this call changes what the caller passed");
+        }
+        // `b` holds the `mutable` flag the parser read. Only an AGGREGATE may carry it: a scalar is
+        // copied when it crosses, so the word could only mean "you get your own copy to change" —
+        // a fact about the body rather than the call, and one word meaning two things decided by the
+        // type is what this language is arranged against.
+        if param.b == 1 && !is_aggregate_type(declared) {
+            let complained: Int = self.complain_at(src, param.token,
+                "`mutable " + substring(src, name.start, name.length) + ": "
+                + self.show_type(src, declared) + "` says the caller's value may change, and a "
+                + self.show_type(src, declared) + " is copied when it crosses — so there would be "
+                + "nothing for the caller to see. Take a copy where the copy is: `let mutable own: "
+                + self.show_type(src, declared) + " = ...;`");
+        }
         push(self.bindings, Binding { start: name.start, length: name.length,
-                              bound_type: self.declared_type(src, param.a), writable: 0,
+                              bound_type: declared, writable: param.b,
                               depth: self.depth });
         p += 1;
     }

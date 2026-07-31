@@ -1,0 +1,14 @@
+// A `mutable` parameter changes the caller's value, so the caller has to be holding one that MAY
+// change. Handing over a `let` binding would change it behind a reader who was told it could not —
+// and `let` versus `let mutable` is one of the few things a reviewer can check by looking.
+function reverse(mutable xs: [Int]) -> Int {
+    let held: Int = xs[0];
+    xs[0] = xs[1];
+    xs[1] = held;
+    return 0;
+}
+region main {
+    let frozen: [Int] = [1, 2];
+    let n: Int = reverse(frozen);
+    print(frozen[0]);
+}

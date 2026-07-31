@@ -1,0 +1,11 @@
+// Only aggregates may be `mutable`, and that is a rule about MEANING rather than a limitation.
+//
+// A scalar is copied when it crosses, so `mutable n: Int` could only mean "you get your own copy to
+// change" — a fact about the body, not about the call. One word would then mean two different things
+// depending on the type, decided silently, which is precisely what this language is arranged against.
+// A local copy is written where the copy is: `let mutable own: Int = n;`.
+function counted(mutable n: Int) -> Int {
+    n = n + 1;
+    return n;
+}
+print(counted(1));

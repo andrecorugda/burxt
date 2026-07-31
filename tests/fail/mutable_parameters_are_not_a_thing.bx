@@ -1,5 +1,0 @@
-class T { n: Int }
-function fill(mutable t: T, v: Int) -> Int {
-    return v;
-}
-print(1);

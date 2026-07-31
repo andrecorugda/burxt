@@ -3094,8 +3094,17 @@ function (mutable self: Unit) emit_function(src: String, index: Int, suffix: Str
         let param: Node = self.nodes[self.children[params.a + p]];
         let pname: Token = self.tokens[param.token];
         let declared: Type = self.resolve_shallow(src, self.declared_type(src, param.a));
-        if self.is_aggregate_written(src, declared) {
-            // By value across a call too: the callee copies what it was handed, so
+        // `mutable xs: [Int]` — the SAME mechanism `mutable self` uses eight lines up, for the same
+        // reason. An aggregate arrives as an address either way; keeping it means writes reach the
+        // caller's value, and copying it means they cannot. So a `mutable` parameter stores the
+        // incoming address in a one-cell slot marked NOT-aggregate, because that flag means "the
+        // alloca is the storage" rather than "this is a class" — and here the alloca holds an address.
+        if param.b == 1 && self.is_aggregate_written(src, declared) {
+            let slot: Int = self.declare_slot(src, pname.start, pname.length, 1, 0);
+            let stored: Int = self.write_body("  store i64 %a" + to_string(p + first) + ", ptr %v"
+                                     + to_string(slot) + "\n");
+        } else if self.is_aggregate_written(src, declared) {
+            // By value across a call otherwise: the callee copies what it was handed, so
             // writing to a parameter cannot reach back into the caller.
             let cells: Int = self.cells_of(src, declared);
             let slot: Int = self.declare_slot(src, pname.start, pname.length, cells, 1);

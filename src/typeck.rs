@@ -232,6 +232,15 @@ pub enum TypedInterpPart {
 pub struct TypedFn {
     pub name: String,
     pub parameters: Vec<(String, Type)>,
+    /// Which parameters were declared `mutable` — parallel to `parameters`.
+    ///
+    /// A separate vector rather than a third tuple element, because `parameters` is read in a dozen
+    /// places that do not care, and widening it would touch all of them to say nothing.
+    ///
+    /// Codegen is the consumer: a `mutable` aggregate parameter must NOT get LLVM's `byval`, so the
+    /// callee receives a pointer to the CALLER's storage rather than to a copy. That is the same ABI
+    /// decision `mutable self` has always made, and the same soundness argument.
+    pub writable: Vec<bool>,
     pub ret: Type,
     pub body: Vec<TypedStmt>,
     /// Preconditions, in the order written: checked on entry.
@@ -381,6 +390,18 @@ pub struct TypeChecker {
     /// `fns` holds what Burxt code must pass; this holds what C receives, which
     /// is what boundary-exactness errors have to talk about.
     extern_parameters: HashMap<String, Vec<(Type, Option<Marshal>)>>,
+    /// Which of each function's parameters were declared `mutable`, by function name.
+    ///
+    /// Read at the CALL site, because that is where the caller's obligation is: a `mutable`
+    /// parameter changes the caller's value, so the caller has to be holding one that may change.
+    fn_writable: HashMap<String, Vec<bool>>,
+    /// The names bound as PARAMETERS of the function being checked.
+    ///
+    /// Only used to give followable advice. `cannot modify x` used to suggest `let mutable x`, which
+    /// for a parameter is impossible — there is no `let` to change. Since v0.0.201 there is a real
+    /// answer (`mutable x: T` in the signature), and a message that names the wrong one is worse than
+    /// a short one, because a reader trusts it and loses time.
+    current_params: std::collections::HashSet<String>,
     /// struct name -> fields (name, type) in declaration order; hoisted first.
     structs: HashMap<String, Vec<(String, Type)>>,
     /// enum name -> variants (name, payload types) in declaration order, which
@@ -582,6 +603,8 @@ impl TypeChecker {
             in_caller_region: false,
             extern_names: HashSet::new(),
             extern_parameters: HashMap::new(),
+            fn_writable: HashMap::new(),
+            current_params: std::collections::HashSet::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
             methods: HashMap::new(),
@@ -1985,6 +2008,8 @@ impl TypeChecker {
             }
             let param_tys = f.parameters.iter().map(|p| p.ty.clone()).collect();
             self.fns.insert(f.name.clone(), (param_tys, f.ret.clone()));
+            self.fn_writable
+                .insert(f.name.clone(), f.parameters.iter().map(|p| p.writable).collect());
             if !f.type_parameters.is_empty() {
                 self.generics.insert(f.name.clone(), f.type_parameters.clone());
             }
@@ -2204,6 +2229,10 @@ impl TypeChecker {
                 self.current_span.set(concrete.span);
                 // Registered under its mangled name so a recursive generic call inside
                 // the body resolves, and so `allocates`/`pure` carry over.
+                self.fn_writable.insert(
+                    concrete.name.clone(),
+                    concrete.parameters.iter().map(|p| p.writable).collect(),
+                );
                 let param_tys = concrete.parameters.iter().map(|p| p.ty.clone()).collect();
                 self.fns
                     .insert(concrete.name.clone(), (param_tys, concrete.ret.clone()));
@@ -2456,6 +2485,61 @@ impl TypeChecker {
     }
 
     /// The place a mutation targets must bottom out in a `let mut` binding.
+    /// How to make `name` writable — the advice half of every "declared immutable" message.
+    ///
+    /// One function because there are FIVE of those messages (a reassignment, a field, an element on
+    /// two paths, and `push`/`truncate`), and four of them told a reader to write `let mutable` on a
+    /// PARAMETER, which is impossible: there is no `let` to change. A message a reader trusts and
+    /// cannot follow costs more than a short one, so the advice is computed in one place from the one
+    /// fact that decides it — whether this name is a parameter.
+    fn how_to_make_writable(&self, name: &str, ty: &Type) -> String {
+        if !self.current_params.contains(name) {
+            return format!("Declare it `let mutable {}: {}` to allow it.", name, ty);
+        }
+        if crate::codegen::is_aggregate(ty) {
+            return format!(
+                "It is a PARAMETER, and a parameter is a copy unless the signature says otherwise: \
+                 declare it `mutable {}: {}`, which also tells every caller that this call changes \
+                 what they passed.",
+                name, ty
+            );
+        }
+        format!(
+            "It is a PARAMETER, and {} {} is copied when it crosses — so changing it here could not \
+             reach the caller anyway. Take a copy you own: `let mutable own: {} = {};`",
+            ty.article(),
+            ty,
+            ty,
+            name
+        )
+    }
+
+    /// The argument for a `mutable` parameter has to be a place the caller may change.
+    ///
+    /// Separate from `require_mutable_place` because the message has to name the CALL: the reader is
+    /// looking at `sort(xs)` and the reason is in `sort`'s signature, which is somewhere else.
+    fn require_mutable_argument(&self, callee: &str, i: usize, e: &Expr) -> Result<(), String> {
+        match &e.kind {
+            ExprKind::Var(_) | ExprKind::Field { .. } | ExprKind::Index { .. } => {
+                self.require_mutable_place(e).map_err(|why| {
+                    format!(
+                        "argument {} of `{}` is declared `mutable`, so this call can change it — {}",
+                        i + 1,
+                        callee,
+                        why
+                    )
+                })
+            }
+            _ => Err(format!(
+                "argument {} of `{}` is declared `mutable`, so the call changes what it is given \
+                 — and this is not something that can be changed. Pass a `let mutable` binding, \
+                 so the change has somewhere to land and a reader can see where.",
+                i + 1,
+                callee
+            )),
+        }
+    }
+
     fn require_mutable_place(&self, e: &Expr) -> Result<(), String> {
         let mut cur = e;
         loop {
@@ -2467,9 +2551,9 @@ impl TypeChecker {
                         .ok_or_else(|| self.unknown_name(name))?;
                     if !*mutable {
                         return Err(format!(
-                            "cannot modify `{}`: it was declared immutable. Declare \
-                             it `let mutable {}: {}` to allow it.",
-                            name, name, ty
+                            "cannot modify `{}`: it was declared immutable. {}",
+                            name,
+                            self.how_to_make_writable(name, ty)
                         ));
                     }
                     return Ok(());
@@ -2800,6 +2884,7 @@ impl TypeChecker {
         // to. That is what lets a constructor build a value with private fields.
         self.current_receiver = f.name.split_once('.').map(|(holder, _)| holder.to_string());
         self.env.clear();
+        self.current_params.clear();
         self.region_locals.clear();
         let mut parameters = Vec::new();
         for p in &f.parameters {
@@ -2812,7 +2897,38 @@ impl TypeChecker {
                     f.name, p.name, m, m
                 ));
             }
-            if self.env.insert(p.name.clone(), (p.ty.clone(), false)).is_some() {
+            // `mutable` only on aggregates, and that is a rule about MEANING rather than a
+            // limitation. On a scalar the word would have to mean "you get your own copy to change",
+            // which is a fact about the body and not about the call — so one word would mean two
+            // different things depending on the type, decided silently. That is the shape of thing
+            // this language exists to refuse.
+            // A `pure` function may not take a `mutable` parameter, and this is not a technicality:
+            // `pure` promises the answer depends on the arguments and NOTHING ELSE, which is the same
+            // promise as changing nothing. A pure function that rewrites its caller's array is a
+            // contradiction the signature would be asserting in both directions at once — and worse,
+            // `pure` is what a CONTRACT is allowed to call, so a precondition could have quietly
+            // rearranged the data it was checking.
+            if p.writable && f.is_pure {
+                return Err(format!(
+                    "`pure function {}` cannot take `mutable {}: {}`: `pure` means the answer \
+                     depends on the arguments and nothing else, which is the same thing as changing \
+                     nothing — and `mutable` says this call changes what the caller passed. Drop one \
+                     of the two. (It matters more than it looks: a contract clause may call a `pure` \
+                     function, so this would let a precondition rewrite the data it is checking.)",
+                    f.name, p.name, p.ty
+                ));
+            }
+            if p.writable && !crate::codegen::is_aggregate(&p.ty) {
+                return Err(format!(
+                    "`mutable {}: {}` says the caller's value may change, and a {} is copied when \
+                     it crosses — so there would be nothing for the caller to see. If you want a \
+                     copy to modify inside the body, say so where the copy is: \
+                     `let mutable {}: {} = ...;`",
+                    p.name, p.ty, p.ty, p.name, p.ty
+                ));
+            }
+            self.current_params.insert(p.name.clone());
+            if self.env.insert(p.name.clone(), (p.ty.clone(), p.writable)).is_some() {
                 return Err(format!(
                     "function `{}` has two parameters named `{}`",
                     f.name, p.name
@@ -2918,7 +3034,8 @@ impl TypeChecker {
         let olds = std::mem::take(&mut *self.olds.borrow_mut());
         self.allowed_effects = outer_allowed;
         self.effects_owner = outer_effects_owner;
-        Ok(TypedFn { name: f.name.clone(), parameters, ret: f.ret.clone(), body, requires, ensures, decreases, olds })
+        let writable = f.parameters.iter().map(|p| p.writable).collect();
+        Ok(TypedFn { name: f.name.clone(), parameters, writable, ret: f.ret.clone(), body, requires, ensures, decreases, olds })
     }
 
     /// Check a method body. `self` is bound like any parameter, with its
@@ -2940,6 +3057,24 @@ impl TypeChecker {
         );
         let mut parameters = Vec::new();
         for p in &m.parameters {
+            // `mutable` on a METHOD parameter is refused rather than half-supported, and the reason
+            // is which failure each choice produces. Supporting it means threading writability
+            // through two more `byval` sites — the method declaration and the method call — and
+            // missing either one gives a callee that writes to a copy while the caller sees nothing.
+            // That is a silent wrong answer, and a refusal is never one.
+            //
+            // `mutable self` already covers the case that actually comes up: a method changing its
+            // own receiver. A method that must change something ELSE it was handed can be a free
+            // function today, and this becomes additive when it is worth doing.
+            if p.writable {
+                return Err(format!(
+                    "in `{}.{}`, parameter `{}` is declared `mutable`, which is not available on a \
+                     METHOD yet — only on a free function. If the method should change its own \
+                     receiver, write `function (mutable self) {}(...)`; otherwise make it a \
+                     function, where `mutable {}: {}` works today.",
+                    m.receiver, m.name, p.name, m.name, p.name, p.ty
+                ));
+            }
             if let Some(mar) = p.marshal {
                 return Err(format!(
                     "in `{}.{}`, parameter `{}` is marked `as {}`, but marshalling \
@@ -3528,9 +3663,9 @@ impl TypeChecker {
                 }
                 if !mutable {
                     return Err(format!(
-                        "cannot assign to `{}`: it was declared immutable. \
-                         Declare it `let mutable {}: {}` to allow reassignment.",
-                        name, name, declared
+                        "cannot assign to `{}`: it was declared immutable. {}",
+                        name,
+                        self.how_to_make_writable(name, &declared)
                     ));
                 }
                 let typed = self.check_expr(value, Some(&declared))?;
@@ -3557,9 +3692,10 @@ impl TypeChecker {
                     .clone();
                 if !mutable {
                     return Err(format!(
-                        "cannot assign to `{}`: `{}` was declared immutable. \
-                         Declare it `let mutable {}: {}` to allow it.",
-                        lvalue, name, name, cur_ty
+                        "cannot assign to `{}`: `{}` was declared immutable. {}",
+                        lvalue,
+                        name,
+                        self.how_to_make_writable(name, &cur_ty)
                     ));
                 }
                 let mut indices = Vec::new();
@@ -3586,9 +3722,10 @@ impl TypeChecker {
                     .clone();
                 if !mutable {
                     return Err(format!(
-                        "cannot assign to `{}[...]`: `{}` was declared immutable. \
-                         Declare it `let mutable {}: {}` to allow it.",
-                        lvalue, name, name, cur_ty
+                        "cannot assign to `{}[...]`: `{}` was declared immutable. {}",
+                        lvalue,
+                        name,
+                        self.how_to_make_writable(name, &cur_ty)
                     ));
                 }
                 let mut indices = Vec::new();
@@ -3651,9 +3788,10 @@ impl TypeChecker {
                 };
                 if !mutable {
                     return Err(format!(
-                        "cannot assign to `{}[...]`: `{}` was declared immutable. \
-                         Declare it `let mutable {}: {}` to allow it.",
-                        name, name, name, declared
+                        "cannot assign to `{}[...]`: `{}` was declared immutable. {}",
+                        name,
+                        name,
+                        self.how_to_make_writable(name, &declared)
                     ));
                 }
                 let index = self.check_index(&format!("{}", declared), len, index)?;
@@ -5174,8 +5312,19 @@ impl TypeChecker {
                     ));
                 }
                 let declared = self.extern_parameters.get(name).cloned();
+                // Which parameters were declared `mutable`. Empty for an extern, which has none.
+                let writable = self.fn_writable.get(name).cloned().unwrap_or_default();
                 let mut typed_args = Vec::new();
                 for (i, (argument, param_ty)) in arguments.iter().zip(&param_tys).enumerate() {
+                    // A `mutable` parameter changes the CALLER's value, so the caller must have one
+                    // that may change. Two things are refused here and both are silent otherwise:
+                    // handing over a `let` binding, which would change behind a reader who was told
+                    // it could not; and handing over a literal or a computed value, which has no
+                    // home for the change to land in — the callee would modify a temporary and the
+                    // program would look like it worked.
+                    if writable.get(i).copied().unwrap_or(false) {
+                        self.require_mutable_argument(name, i, argument)?;
+                    }
                     let typed = self.check_expr(argument, Some(param_ty))?;
                     if !self.storable(&typed.ty, param_ty) {
                         // Point at the argument, not at the whole call.

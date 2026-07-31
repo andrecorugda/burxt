@@ -324,7 +324,7 @@ impl Parser {
             if is_private {
                 private_fields.push(fname.clone());
             }
-            fields.push(Param { name: fname, ty, marshal });
+            fields.push(Param { name: fname, ty, marshal, writable: false });
             if self.at(&Token::Comma) {
                 self.bump(); // trailing comma allowed, and required before a method follows
             }
@@ -487,6 +487,12 @@ impl Parser {
         let mut parameters = Vec::new();
         while self.at(&Token::Comma) {
             self.bump();
+            let writable = if self.at(&Token::Mut) {
+                self.bump();
+                true
+            } else {
+                false
+            };
             let pname = match self.bump() {
                 Token::Ident(s) => s,
                 other => {
@@ -495,7 +501,7 @@ impl Parser {
             };
             self.expect(&Token::Colon)?;
             let ty = self.parse_type()?;
-            parameters.push(Param { name: pname, ty, marshal: None });
+            parameters.push(Param { name: pname, ty, marshal: None, writable });
         }
         self.expect(&Token::RParen)?;
         if !self.at(&Token::Arrow) {
@@ -1016,6 +1022,15 @@ impl Parser {
         self.it_seen = false;
         if !self.at(&Token::RParen) {
             loop {
+                // `mutable xs: [Int]` — the callee may modify the caller's value. Read here rather
+                // than as part of the type, because it is a fact about the CROSSING and not about
+                // what the value is: two parameters of the same type can differ in it.
+                let writable = if self.at(&Token::Mut) {
+                    self.bump();
+                    true
+                } else {
+                    false
+                };
                 let pname = match self.bump() {
                     Token::Ident(s) => s,
                     other => return Err(format!("expected a parameter name, found {}", other.describe())),
@@ -1026,7 +1041,7 @@ impl Parser {
                 // Brackets AFTER the marshaller, so `as scaled` still reads as part of the type
                 // and the contract reads as a statement about the value.
                 bracket_requires.extend(self.parse_value_contracts(&pname)?);
-                parameters.push(Param { name: pname, ty, marshal });
+                parameters.push(Param { name: pname, ty, marshal, writable });
                 if !self.more_in_list(&Token::RParen) {
                     break;
                 }

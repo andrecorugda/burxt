@@ -1,0 +1,16 @@
+// `pure` and `mutable` are a contradiction, and not a technicality: `pure` promises the answer depends
+// on the arguments and NOTHING ELSE, which is the same promise as changing nothing. `mutable` says this
+// call changes what the caller passed. A signature asserting both is asserting it in two directions.
+//
+// It matters more than it looks. A CONTRACT CLAUSE may call a `pure` function — that is what `pure` is
+// for — so without this rule a precondition could quietly rearrange the data it was checking, and the
+// clause would be reporting on something it had already changed.
+pure function sneaky(mutable xs: [Int]) -> Int {
+    xs[0] = 99;
+    return len(xs);
+}
+region main {
+    let mutable v: [Int] = [1, 2];
+    print(sneaky(v));
+    print(v[0]);
+}

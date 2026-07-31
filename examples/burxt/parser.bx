@@ -1744,6 +1744,14 @@ function (mutable self: Unit) parse_params(src: String) -> Int {
     let base: Int = len(self.stack);
     let mutable count: Int = 0;
     while !self.at(30) {                             // until ')'
+        // `mutable xs: [Int]` — the callee may change the CALLER's value, and the signature says so.
+        // Read here rather than as part of the type, because it is a fact about the CROSSING and not
+        // about what the value is: two parameters of the same type can differ in it.
+        let mutable writable: Int = 0;
+        if self.at(101) {                            // mutable
+            let m: Int = self.advance();
+            writable = 1;
+        }
         if !self.at(1) {
             return self.complain(src, "a parameter name");
         }
@@ -1766,7 +1774,7 @@ function (mutable self: Unit) parse_params(src: String) -> Int {
         // reads as a statement about the value.
         let bracketed: Int = self.parse_value_contracts(src, name_tok, 0, 126);
         if bracketed < 0 { return -1; }
-        let param: Int = self.add(90, type_node, 0, 0, marshalled, name_tok);
+        let param: Int = self.add(90, type_node, writable, 0, marshalled, name_tok);
         push(self.stack, param);
         count += 1;
         if self.more_in_list(30) {                   // ',' — a trailing one is allowed

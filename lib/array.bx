@@ -1,0 +1,261 @@
+// ============================================================================
+// lib/array.bx — the operations on a growable array that every program reaches for.
+//
+//     use "lib/array.bx";
+//
+// This file could not be written until v0.0.201, and the reason is worth stating because it was
+// misdiagnosed for a long time: **no function could modify an array it was passed.** Not in place, not
+// by `push`. My own notes blamed generic `xs[i] = v`; that was wrong, and generics were never involved.
+// A parameter was simply always a copy, and `mutable` on one was a parse error.
+//
+// So `sort`, `reverse`, `swap` and `fill` — every operation whose whole job is to change what it was
+// given — were unwritable, and this module was a line in a plan for six versions.
+//
+// ---- how to read a signature here ------------------------------------------------------
+//
+// **`mutable xs: [T]` means the call changes YOUR array.** That is the only thing you need to check,
+// and it is in the signature rather than at the call site on purpose: the same rule `mutable self`
+// follows, and the reason both follow it is that a promise belongs where it is made once, not at every
+// place it is used. A function without `mutable` cannot touch what you passed, and the compiler
+// enforces that rather than the documentation asking nicely.
+//
+//     sort(mutable xs)      changes xs
+//     index_of(xs, of)      cannot
+//
+// ---- what is NOT here, and why ---------------------------------------------------------
+//
+// **No `sort` for `[String]`.** `T: Ordered` is Int and Decimal today — Strings have no `<` yet, so a
+// bound that promised one would be a lie. Sorting names is a common thing to want, so this is a real
+// gap rather than a decision; it belongs to whatever adds byte ordering to String.
+//
+// **No `map` or `filter`.** Those need function values, which the language does not have. Write the
+// loop; it is three lines and a reader can see what it does.
+//
+// **`array_index_of` is not `pure`, and it should be.** `Option.Some(i)` reads as a method call on the
+// enum, and a method cannot be declared `pure` yet — so a function that only reads its argument and
+// builds an answer is refused the word that says exactly that. Nothing is wrong with the code; the
+// `pure` checker cannot see through enum construction. A real gap, recorded rather than worked around
+// by returning -1.
+//
+// **An Option-returning GENERIC is not writable at all.** `Option.None` cannot be built where `T` is a
+// type parameter, even when the type is written down. So `min` and `max` take a precondition instead —
+// which is the better design anyway, and the note above them says why.
+// ============================================================================
+
+use "option.bx";
+
+// ---- asking ----------------------------------------------------------------------------
+
+// Is this value in the array? `T: Equatable` because that is exactly the promise `==` needs.
+pure function array_contains<T: Equatable>(xs: [T], of: T) -> Bool {
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        if xs[i] == of {
+            return true;
+        }
+        i += 1;
+    }
+    return false;
+}
+
+// Where it first appears, or None.
+//
+// `Option<Int>` rather than -1, and the difference is the whole habit this language is built on: -1 is
+// a valid Int, so a caller who forgets to check gets an index rather than a mistake. None cannot be
+// used as an index by accident.
+function array_index_of<T: Equatable>(xs: [T], of: T) -> Option<Int> {
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        if xs[i] == of {
+            return Option.Some(i);
+        }
+        i += 1;
+    }
+    return Option.None;
+}
+
+pure function array_is_sorted<T: Ordered>(xs: [T]) -> Bool {
+    let mutable i: Int = 1;
+    while i < len(xs) {
+        if xs[i] < xs[i - 1] {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+// The smallest and largest. A PRECONDITION rather than an Option, and the reason is the better one
+// rather than the convenient one: "the largest of nothing" is not a question with a wrong answer, it
+// is a question that should not have been asked — which is exactly what `requires` says. The same call
+// `vector_normalise` makes about the zero vector.
+//
+// (There is also a language reason, and it is worth recording because it is a real gap rather than a
+// preference: `Option.None` cannot be built where `T` is a type PARAMETER. Even
+// `let nothing: Option<T> = Option.None;` is refused — the checker cannot resolve the variant's type
+// argument from a parameter. So an Option-returning generic is not currently writable at all, and
+// `array_index_of` only works because its answer is `Option<Int>`, where `Int` is concrete.)
+function array_min<T: Ordered>(xs: [T]) -> T
+    requires len(xs) > 0
+{
+    let mutable best: T = xs[0];
+    let mutable i: Int = 1;
+    while i < len(xs) {
+        if xs[i] < best {
+            best = xs[i];
+        }
+        i += 1;
+    }
+    return best;
+}
+
+function array_max<T: Ordered>(xs: [T]) -> T
+    requires len(xs) > 0
+{
+    let mutable best: T = xs[0];
+    let mutable i: Int = 1;
+    while i < len(xs) {
+        if best < xs[i] {
+            best = xs[i];
+        }
+        i += 1;
+    }
+    return best;
+}
+
+function array_first<T>(xs: [T]) -> T
+    requires len(xs) > 0
+{
+    return xs[0];
+}
+
+function array_last<T>(xs: [T]) -> T
+    requires len(xs) > 0
+{
+    return xs[len(xs) - 1];
+}
+
+// A total, and it TRAPS on overflow rather than wrapping — which is the same promise `+` makes, kept
+// here rather than quietly relaxed because this is a loop. A total that silently wrapped would be the
+// exact wrong answer this language exists to refuse, and a sum is where money lives.
+//
+// Two of them rather than one generic, because `0` and `$0.00` are different values and a generic has
+// no way to name "the zero of T" — there is no `Default`, deliberately.
+pure function array_sum_int(xs: [Int]) -> Int {
+    let mutable total: Int = 0;
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        total = total + xs[i];
+        i += 1;
+    }
+    return total;
+}
+
+pure function array_sum_money(xs: [Decimal<2>]) -> Decimal<2> {
+    let mutable total: Decimal<2> = $0.00;
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        total = total + xs[i];
+        i += 1;
+    }
+    return total;
+}
+
+// ---- changing --------------------------------------------------------------------------
+//
+// Everything below takes `mutable xs`, so a reader of the CALL knows the array changes. That is what
+// this module was waiting for.
+
+// Exchange two elements. The one operation `sort` and `reverse` are both built from, so it is worth
+// having by name — and the precondition is not defensive: an index outside the array has no element
+// to exchange, and answering anyway is how a swap silently corrupts a neighbour.
+function array_swap<T>(mutable xs: [T], i: Int, j: Int) -> Int
+    requires i >= 0
+    requires i < len(xs)
+    requires j >= 0
+    requires j < len(xs)
+{
+    let held: T = xs[i];
+    xs[i] = xs[j];
+    xs[j] = held;
+    return len(xs);
+}
+
+function array_reverse<T>(mutable xs: [T]) -> Int {
+    let mutable i: Int = 0;
+    let mutable j: Int = len(xs) - 1;
+    while i < j {
+        let held: T = xs[i];
+        xs[i] = xs[j];
+        xs[j] = held;
+        i += 1;
+        j -= 1;
+    }
+    return len(xs);
+}
+
+// Insertion sort, and the choice is deliberate rather than lazy.
+//
+// It is **stable** — equal elements keep the order they were written in — which for records sorted by
+// one field is the difference between a reproducible listing and one that reshuffles between runs. It
+// needs **no extra storage**, so it does not allocate and can be called from a function that declares
+// `allocates nothing`. And it is **O(n) on an already-sorted array**, which is what a program that
+// sorts after every append actually does.
+//
+// It is O(n²) on reversed input, and that is the honest cost. A merge sort would need a scratch array
+// and a way to allocate one; a quicksort would lose stability and need a pivot choice nobody wrote
+// down. When a corpus arrives that this is too slow for, the answer is a second named function rather
+// than quietly changing this one, because a caller may be depending on the stability.
+function array_sort<T: Ordered>(mutable xs: [T]) -> Int {
+    let mutable i: Int = 1;
+    while i < len(xs) {
+        let mutable j: Int = i;
+        // `xs[j] < xs[j - 1]` and not `<=`: on EQUAL elements the loop stops, which is what makes
+        // this stable. Swapping equals would reverse their original order for no reason.
+        while j > 0 && xs[j] < xs[j - 1] {
+            let held: T = xs[j];
+            xs[j] = xs[j - 1];
+            xs[j - 1] = held;
+            j -= 1;
+        }
+        i += 1;
+    }
+    return len(xs);
+}
+
+// Every element set to one value. Keeps the length: this fills what is there rather than growing.
+function array_fill<T>(mutable xs: [T], with: T) -> Int {
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        xs[i] = with;
+        i += 1;
+    }
+    return len(xs);
+}
+
+// Append every element of `from` to `xs`. `from` is NOT mutable, and the asymmetry is the point: one
+// of these two arrays changes, and the signature says which.
+function array_extend<T>(mutable xs: [T], from: [T]) -> Int {
+    let mutable i: Int = 0;
+    while i < len(from) {
+        let added: Int = push(xs, from[i]);
+        i += 1;
+    }
+    return len(xs);
+}
+
+// Remove the element at `at`, closing the gap. Order is preserved, which is why this shifts rather
+// than swapping the last element into the hole — a faster removal that reorders is a different
+// function and would need a different name to say so.
+function array_remove_at<T>(mutable xs: [T], at: Int) -> Int
+    requires at >= 0
+    requires at < len(xs)
+{
+    let mutable i: Int = at;
+    while i < len(xs) - 1 {
+        xs[i] = xs[i + 1];
+        i += 1;
+    }
+    let shorter: Int = truncate(xs, len(xs) - 1);
+    return len(xs);
+}

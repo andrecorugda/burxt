@@ -1,0 +1,92 @@
+// `mutable xs: [Int]` — the callee may change the CALLER's value, and the signature says so.
+//
+// v0.0.201. Until then no function could modify anything it was passed: not in place, not by `push`.
+// `tests/fail/mutable_parameters_are_not_a_thing.bx` recorded that as a fact, and it is what kept
+// `lib/array.bx` from existing at all — `sort`, `reverse`, `swap`, `fill`, every in-place operation,
+// is unwritable without this. The old diagnosis in my notes said generic `xs[i] = v` was the blocker;
+// that was wrong, and generics are not involved.
+//
+// THE MECHANISM IS NOT NEW, which is why the soundness argument is not either. An aggregate parameter
+// is normally LLVM `byval` — a pointer to a copy — so a callee writing to it changes its own copy. A
+// `mutable` one drops that attribute and receives a pointer to the caller's storage instead. That is
+// exactly what `mutable self` has always done, and every method that mutates already proved it.
+//
+// AND WHAT THE CALLER HAS TO SAY: nothing at the call, on purpose. The precedent is `mutable self` —
+// `b.set(0, 42)` changes `b` with no marker at the call — and the rule behind both is that the
+// SIGNATURE is where a promise lives. What the caller must have is a binding that MAY change; handing
+// over a `let` is refused (tests/fail/mutable_argument_must_be_mutable.bx), and so is handing over a
+// literal, which has no home for the change to land in.
+//
+// Only aggregates may be `mutable`. On a scalar the word would have to mean "you get your own copy",
+// which is a fact about the body rather than the call — one word meaning two things decided by the
+// type. See tests/fail/mutable_scalar_parameter.bx.
+
+// ---- a growable array: elements AND length ----
+function push_twice(mutable xs: [Int], a: Int, b: Int) -> Int {
+    let one: Int = push(xs, a);
+    let two: Int = push(xs, b);
+    return two;
+}
+// In place, which is the operation `lib/array.bx` is built out of.
+function reverse(mutable xs: [Int]) -> Int {
+    let mutable i: Int = 0;
+    let mutable j: Int = len(xs) - 1;
+    while i < j {
+        let held: Int = xs[i];
+        xs[i] = xs[j];
+        xs[j] = held;
+        i += 1;
+        j -= 1;
+    }
+    return len(xs);
+}
+
+// ---- a fixed array: no header, so nothing but the elements can travel ----
+function zero_first(mutable xs: [Int; 3]) -> Int {
+    xs[0] = 0;
+    return xs[0];
+}
+
+// ---- a class ----
+class Counter { n: Int, label: String }
+function bump(mutable c: Counter, by: Int) -> Int {
+    c.n = c.n + by;
+    return c.n;
+}
+
+// ---- and a parameter WITHOUT `mutable` is still a copy the caller cannot see ----
+// This is the half that makes the feature meaningful: the default did not change.
+function tries(xs: [Int; 3]) -> Int {
+    let mutable own: [Int; 3] = [0, 0, 0];
+    let mutable i: Int = 0;
+    while i < 3 {
+        own[i] = xs[i];
+        i += 1;
+    }
+    own[0] = 777;
+    return own[0];
+}
+
+region main {
+    let mutable g: [Int] = [1, 2];
+    let n: Int = push_twice(g, 3, 4);
+    print(n);
+    print(len(g));                 // 4 — the LENGTH travelled, which is the hard half
+    print(g[3]);
+
+    let m: Int = reverse(g);
+    print(g[0]);
+    print(g[3]);
+
+    let mutable f: [Int; 3] = [5, 6, 7];
+    let z: Int = zero_first(f);
+    print(f[0]);                   // 0
+
+    print(tries(f));               // 777 in the callee's own copy
+    print(f[0]);                   // still 0 — the copy did not leak back
+
+    let mutable c: Counter = Counter { n: 1, label: "hits" };
+    print(bump(c, 41));
+    print(c.n);                    // 42
+    print(c.label);                // untouched fields stay untouched
+}

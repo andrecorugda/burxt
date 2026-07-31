@@ -1,0 +1,19 @@
+// `mutable` on a METHOD parameter is refused rather than half-supported, and the reason is which
+// failure each choice produces. Supporting it means threading writability through two more `byval`
+// sites — the method declaration and the method call — and missing either gives a callee that writes
+// to a copy while the caller sees nothing. That is a silent wrong answer; a refusal is never one.
+//
+// `mutable self` already covers the case that comes up: a method changing its own receiver.
+class Box {
+    n: Int,
+
+    function (self) fill(mutable xs: [Int]) -> Int {
+        xs[0] = self.n;
+        return 0;
+    }
+}
+region main {
+    let b: Box = Box { n: 7 };
+    let mutable xs: [Int] = [0];
+    print(b.fill(xs));
+}

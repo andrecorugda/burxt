@@ -87,6 +87,13 @@ pub struct CodeGen<'ctx> {
     str_eq_fn: Option<FunctionValue<'ctx>>,
     /// user fn name -> (param types, return type), for aggregate call lowering
     fn_sigs: HashMap<String, (Vec<Type>, Type)>,
+    /// Which of each function's parameters were declared `mutable`, by name.
+    ///
+    /// Needed at the CALL SITE and not only at the declaration, because LLVM requires `byval` on
+    /// both — and mirroring it from `fn_sigs`, which carries only types, is exactly how the first
+    /// version of `mutable` parameters silently kept copying. The declaration said pointer, the call
+    /// said `byval`, and the caller saw nothing change.
+    fn_writable: HashMap<String, Vec<bool>>,
     /// (receiver, method name) -> its LLVM function (mangled `bx.<Recv>.<method>`)
     methods: HashMap<(String, String), FunctionValue<'ctx>>,
     /// (trait, concrete) -> its static vtable global
@@ -161,6 +168,7 @@ impl<'ctx> CodeGen<'ctx> {
             byte_index_check_fn: None,
             str_eq_fn: None,
             fn_sigs: HashMap::new(),
+            fn_writable: HashMap::new(),
             methods: HashMap::new(),
             vtables: HashMap::new(),
             interface_slots: HashMap::new(),
@@ -253,9 +261,15 @@ impl<'ctx> CodeGen<'ctx> {
         // Declare every user function up front (mutual recursion, any order).
         for f in &prog.fns {
             let param_tys: Vec<Type> = f.parameters.iter().map(|(_, t)| t.clone()).collect();
-            let llf = self.declare_fn(&format!("bx.{}", f.name), &param_tys, &f.ret);
+            let llf = self.declare_fn(
+                &format!("bx.{}", f.name),
+                &param_tys,
+                &f.ret,
+                &f.writable,
+            );
             self.user_fns.insert(f.name.clone(), llf);
             self.fn_sigs.insert(f.name.clone(), (param_tys, f.ret.clone()));
+            self.fn_writable.insert(f.name.clone(), f.writable.clone());
         }
 
         // Methods: namespaced by (receiver, name), mangled `bx.<Recv>.<name>`.
@@ -1022,7 +1036,22 @@ impl<'ctx> CodeGen<'ctx> {
     ///     bugs live);
     ///   * aggregate RETURNS use an `sret(T)` hidden first pointer — one code
     ///     path on every target, and the only shape wasm can express.
-    fn declare_fn(&self, name: &str, parameters: &[Type], ret: &Type) -> FunctionValue<'ctx> {
+    /// Plus which parameters were declared `mutable`.
+    ///
+    /// A `mutable` aggregate parameter does NOT get `byval`, so the callee receives a pointer to the
+    /// CALLER's storage. Dropping the attribute is the whole mechanism, because the call site already
+    /// passes an address — `byval` was what turned that address into a copy.
+    ///
+    /// This is exactly what `mutable self` has always done (see `declare_method`), which is why the
+    /// soundness argument is not a new one: a value the callee may write is passed by pointer, and a
+    /// value it may not is passed as a copy, so the mechanism is invisible either way.
+    fn declare_fn(
+        &self,
+        name: &str,
+        parameters: &[Type],
+        ret: &Type,
+        writable: &[bool],
+    ) -> FunctionValue<'ctx> {
         let ptr = self.ctx.ptr_type(AddressSpace::default());
         let mut ll_params: Vec<BasicMetadataTypeEnum> = Vec::new();
         let ret_is_agg = is_aggregate(ret);
@@ -1054,7 +1083,10 @@ impl<'ctx> CodeGen<'ctx> {
         }
         let offset = if ret_is_agg { 1 } else { 0 };
         for (i, p) in parameters.iter().enumerate() {
-            if is_aggregate(p) {
+            // `byval` is what makes the copy. A `mutable` parameter must not have it, or the callee
+            // writes to a copy and the caller sees nothing — which is the silent wrong answer this
+            // feature was built to avoid rather than to introduce.
+            if is_aggregate(p) && !writable.get(i).copied().unwrap_or(false) {
                 let attr = self.ctx.create_type_attribute(
                     inkwell::attributes::Attribute::get_named_enum_kind_id("byval"),
                     self.llvm_type(p).as_any_type_enum(),
@@ -1972,8 +2004,13 @@ impl<'ctx> CodeGen<'ctx> {
                 }
                 if let Some((ptys, ret)) = &user_sig {
                     let offset = if is_aggregate(ret) { 1 } else { 0 };
+                    let writable = self.fn_writable.get(name).cloned().unwrap_or_default();
                     for (i, p) in ptys.iter().enumerate() {
-                        if is_aggregate(p) {
+                        // The `mutable` check has to be HERE as well as on the declaration: LLVM
+                        // wants `byval` on both, and mirroring it from types alone is how the first
+                        // version of this feature silently kept copying — the declaration said
+                        // pointer, the call said `byval`, and the caller saw nothing change.
+                        if is_aggregate(p) && !writable.get(i).copied().unwrap_or(false) {
                             let attr = self.ctx.create_type_attribute(
                                 Attribute::get_named_enum_kind_id("byval"),
                                 self.llvm_type(p).as_any_type_enum(),
