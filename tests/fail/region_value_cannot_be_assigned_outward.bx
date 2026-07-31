@@ -1,0 +1,36 @@
+// A value built inside a `region` assigned to a binding declared OUTSIDE it. Refused since
+// v0.0.222, and before that it **compiled clean and printed the wrong answer**.
+//
+// The measured behaviour, which is why this fixture exists rather than a note in a spec:
+//
+//     after turn 0: after turn 0
+//     after turn 1: after turn 1
+//     after turn 2: after turn 2
+//
+// where every line should have read `turn 0`, `turn 1`, `turn 2`. `kept` came back as the
+// print statement's own concatenation buffer, because the region released its bytes at the
+// closing brace and handed the same address out for the next allocation. A use-after-free, no
+// diagnostic, and a plausible-looking output — the exact shape this language exists to refuse,
+// occurring inside the feature built to prevent it.
+//
+// The checker already knew about this case and did half the job: it MARKED `kept` as region
+// storage so that `return kept` would be refused. But `region_locals` is cleared when the region
+// closes, so the mark evaporated and the read afterwards was unguarded. **Marking a hazard is not
+// the same as refusing it**, and one line of code away from a rule is not the rule.
+//
+// Assigning to a name declared INSIDE the region stays legal — it dies with the region, which is
+// correct, and `tests/pass/` keeps that case.
+//
+// Found by a subagent writing `src/burxt-compiler/lsp.bx`, which needed a fresh arena per
+// keystroke and hit this building one. The third defect found by writing the second
+// implementation, after `diag.rs`'s panic and the missing `?`.
+let mutable kept: String = "";
+let mutable turn: Int = 0;
+while turn < 3 {
+    region one_turn {
+        let made: String = "turn " + to_string(turn);
+        kept = made;
+    }
+    print("after turn " + to_string(turn) + ": " + kept);
+    turn += 1;
+}

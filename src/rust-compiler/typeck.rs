@@ -502,6 +502,13 @@ pub struct TypeChecker {
     /// storage, but it is the CALLER's, and the caller's region outlives the call — so
     /// returning a parameter is safe and must keep working.
     region_locals: HashSet<String>,
+    /// Names DECLARED inside the currently open `region`, whether or not they hold region
+    /// storage. `region_locals` cannot answer this: it holds only the names that were
+    /// *found to allocate*, so a binding declared inside a region holding a literal is
+    /// absent from it — and telling those two apart is exactly what the assignment rule
+    /// needs. Assigning region storage to a name declared INSIDE the region is fine, it
+    /// dies with the region; assigning it to one declared OUTSIDE is a use-after-free.
+    region_scope: HashSet<String>,
 
     /// Per class, the field names declared `private`, and per (class, method) the private
     /// methods. The class is the SCOPE: a private member is reachable only from that class's
@@ -627,6 +634,7 @@ impl TypeChecker {
             current_signature: None,
             current_region: None,
             region_locals: HashSet::new(),
+            region_scope: HashSet::new(),
             private_fields: HashMap::new(),
             private_methods: HashSet::new(),
             current_receiver: None,
@@ -3880,6 +3888,9 @@ impl TypeChecker {
                 if self.current_region.is_some() && self.expr_allocates(&typed) {
                     self.region_locals.insert(name.clone());
                 }
+                if self.current_region.is_some() {
+                    self.region_scope.insert(name.clone());
+                }
                 self.env.insert(name.clone(), (bound.clone(), *mutable));
                 Ok(TypedStmt::Let { name: name.clone(), ty: bound, value: typed })
             }
@@ -3913,7 +3924,37 @@ impl TypeChecker {
                 // Assignment can put region storage into a binding that did not hold any:
                 // `let mutable s: String = "x"; region r { s = "a" + "b"; }`. The `let`
                 // saw a literal, so only this can know.
+                //
+                // **And until v0.0.222 it only MARKED it, which was a silent use-after-free.**
+                // The mark taints the name so `return s` is refused, but `region_locals` is
+                // cleared when the region closes, so the taint evaporated and the dangling
+                // binding was read afterwards with no complaint at all. Measured:
+                //
+                //     let mutable kept: String = "";
+                //     region one_turn { kept = "turn " + to_string(turn); }
+                //     print("after turn " + to_string(turn) + ": " + kept);
+                //
+                // printed `after turn 0: after turn 0` — `kept` reading back as the print's own
+                // concatenation buffer, because the region's bytes had been handed out again.
+                // Compiled clean, wrong answer, no diagnostic. That is the precise failure this
+                // language exists to refuse, in the feature built to prevent it.
+                //
+                // The rule: region storage may be assigned to a name declared INSIDE the region
+                // (it dies with the region, which is correct) but never to one declared outside
+                // it. Reported by a subagent writing the Burxt language server, which hit it
+                // building a per-turn arena — the third defect found by writing the second
+                // implementation.
                 if self.current_region.is_some() && self.expr_allocates(&typed) {
+                    if !self.region_scope.contains(name) {
+                        let open = self.current_region.clone().unwrap_or_default();
+                        return Err(format!(
+                            "`{}` was declared outside `region {}`, so it cannot be assigned a \
+                             value built inside it — the bytes are released at the closing brace \
+                             and `{}` would read whatever the region hands out next. Declare `{}` \
+                             inside the region, or build the value outside it.",
+                            name, open, name, name
+                        ));
+                    }
                     self.region_locals.insert(name.clone());
                 }
                 Ok(TypedStmt::Assign { name: name.clone(), value: typed })
@@ -4101,7 +4142,9 @@ impl TypeChecker {
                     ));
                 }
                 self.current_region = Some(name.clone());
+                let outer_scope = std::mem::take(&mut self.region_scope);
                 let checked = self.check_block(body);
+                self.region_scope = outer_scope;
                 self.current_region = None;
                 Ok(TypedStmt::Region { name: name.clone(), body: checked? })
             }

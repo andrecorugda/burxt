@@ -61,6 +61,7 @@ use "modules.bx";
 use "emit.bx";
 use "diag.bx";
 use "schema.bx";
+use "lsp.bx";
 
 // The shell, for `build` and `run`. Those two have to invoke `llc` and `cc`, and until
 // v0.0.219 the Burxt compiler could not: it emitted IR to a file and a human ran the rest
@@ -336,7 +337,7 @@ function is_subcommand(word: String) -> Bool {
 // stderr, product to stdout.** So `burxt emit-ir x.bx > x.ll` writes IR and not a progress
 // report, and a CI log shows what went wrong on the stream built for it.
 function usage() -> Int {
-    print_error("burxt 0.0.221 — the Burxt compiler, written in Burxt");
+    print_error("burxt 0.0.222 — the Burxt compiler, written in Burxt");
     print_error("usage:");
     print_error("  burxt check   <file.bx>                  parse and typecheck only");
     print_error("  burxt build   <file.bx> [-o <path>]      compile to a native executable");
@@ -349,8 +350,10 @@ function usage() -> Int {
     print_error("");
     print_error("  burxt mcp-schema <file.bx>               the MCP manifest, from the preconditions");
     print_error("");
+    print_error("  burxt lsp                                language server over stdio");
+    print_error("");
     print_error("Not here yet, and named rather than silently missing:");
-    print_error("  layout, explain memory, review, lsp, --json");
+    print_error("  layout, explain memory, review, --json");
     print_error("They exist in the Rust build. spec/ROADMAP-1.0.md THE GATE tracks the rest.");
     return 0;
 }
@@ -363,13 +366,31 @@ if argument_count() > 1 {
 }
 
 if command == "--version" || command == "-V" {
-    print_error("burxt 0.0.221 — the Burxt compiler, written in Burxt");
+    print_error("burxt 0.0.222 — the Burxt compiler, written in Burxt");
     exit(0);
 }
 
 if command == "--help" || command == "-h" || command == "help" {
     let helped: Int = usage();
     exit(0);
+}
+
+if command == "lsp" {
+    // A language server over stdio. It takes no file: the client sends the buffer, which is why
+    // this branch sits above the "needs a file" guard and `lsp` is not in `is_subcommand`.
+    //
+    // **The protocol owns stdout completely**, so nothing here prints — no banner, no version, no
+    // progress. `lsp_serve` writes framed replies with `write(2)` rather than `print`, which is
+    // both exact (no trailing newline) and UNBUFFERED: measured replying in 1 ms with the client
+    // still holding stdin open, which is the difference between a server and a batch job. The
+    // front end's own diagnostics are captured away from fd 1 for the duration of each check.
+    //
+    // **It must not be wrapped in a `region` block.** `lsp_serve` opens a region per turn, and an
+    // inner region inside an outer one hands out the outer arena without ever resetting it — which
+    // compiles, and then leaks a compiler's working set per keystroke. That is a real defect and it
+    // is written down rather than worked around: see the note in `spec/ROADMAP-1.0.md`.
+    let served: Int = lsp_serve();
+    exit(served);
 }
 
 if is_subcommand(command) && argument_count() < 3 {

@@ -4329,7 +4329,25 @@ impl<'ctx> CodeGen<'ctx> {
         // The cost is virtual, not resident: `malloc` of this size hands back lazily
         // mapped pages, so a program that touches a kilobyte pays for a kilobyte.
         // Exhaustion is still a named error rather than an overrun.
-        const CHUNK: u64 = 1024 * 1024 * 1024;
+        // **4 GB since v0.0.222, and the raise is nearly free — which took measuring to believe.**
+        //
+        // The compiler's own peak RSS reached 732 MB of this 1 GB reservation while the parity work
+        // added `diag.bx`, `schema.bx` and `lsp.bx`, and the ceiling test's note said the answer had
+        // to be per-block release (A12) rather than a bigger number. That conflated two different
+        // walls:
+        //
+        //   1. **The RESERVATION** — 1 GB, and hitting it is `region memory exhausted`. Virtual, so
+        //      raising it costs nothing resident. This paragraph's own first sentence said so all
+        //      along: *"a program that touches a kilobyte pays for a kilobyte."*
+        //   2. **Resident usage** — 732 MB actually touched, ~52 KB per line of compiler. That is
+        //      real, it is what a user's machine has to hold, and only A12 fixes it.
+        //
+        // Only (1) was about to stop the compiler from growing, and (1) is a constant. So the
+        // constant moves and A12 stays exactly as urgent as it was for the reason that actually
+        // matters. Another wall that looked like a design constraint and was a number — the ninth
+        // time on this project, and the lesson each time is the same: measure the wall before
+        // planning around it.
+        const CHUNK: u64 = 4 * 1024 * 1024 * 1024;
         let err = |e: inkwell::builder::BuilderError| e.to_string();
         let saved = self.builder.get_insert_block();
         let (base, next) = self.heap_globals();

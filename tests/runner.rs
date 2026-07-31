@@ -2753,16 +2753,35 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
         // a number moved more than the change explains, and the honest next step is an experiment,
         // not another guess.
         //
-        // The absolute number still earns its place because the arena is a hard 1 GB wall, and
-        // **662 of 1024 is two thirds spent** — that is what makes A12 (per-block release) urgent
-        // rather than merely next. At 53 KB/line the wall arrives near 19,000 lines, and three
-        // modules are still to be written.
+        // ---- v0.0.222: and "the arena is a hard 1 GB wall" was ALSO wrong ----
         //
-        // 700 is set against CI, per the lesson above: CI measured 1.3% high last time (544 vs
-        // 537), so 662 here is ~671 there. That leaves ~29 MB, deliberately thin.
+        // With `lsp.bx` added the compiler reached 737 MB of a 1 GB reservation, and the note here
+        // said the answer had to be per-block release rather than a bigger number. That conflated
+        // two different walls, and only one of them was a wall:
+        //
+        //   1. **The RESERVATION.** 1 GB, and hitting it is `region memory exhausted`. It is
+        //      VIRTUAL — `codegen.rs`'s own comment says *"a program that touches a kilobyte pays
+        //      for a kilobyte"* — so raising it costs nothing resident. Measured: after raising it
+        //      to 4 GB, `print(1);` still peaks at 59 MB. **A constant, not a constraint.**
+        //   2. **Resident usage.** 737 MB actually touched, and that is real: it is what a user's
+        //      machine must hold to compile this. Only A12 fixes that, and it is exactly as urgent
+        //      as before.
+        //
+        // Only (1) was about to stop the compiler from growing, and it was one constant. Ninth time
+        // on this project that a wall turned out to be a number — and the reason it was believed
+        // for eight versions is that the sentence explaining it was virtual sat two paragraphs above
+        // the sentence calling it a hard wall, in the same file.
+        //
+        // So the rate below is the instrument that matters, and it says the growth is honest:
+        // 50.1 KB/line at v0.0.214, 53.2 at v0.0.221, **52.3 at v0.0.222** with 1,628 lines of
+        // language server added. The 39 MB of unattributed excess from v0.0.221 is still
+        // unattributed and still wants an experiment.
+        //
+        // 800 is set against CI, per the lesson above: CI measured 1.3% high last time (544 vs
+        // 537), so 737 here is ~747 there.
         assert!(
-            kb < 700 * 1024,
-            "the compiler's peak RSS on its own source is {} MB; the ceiling is 700 MB, and \
+            kb < 800 * 1024,
+            "the compiler's peak RSS on its own source is {} MB; the ceiling is 800 MB, and \
              the region it reserves is 1 GB (196 MB at v0.0.90, 239 MB at v0.0.110, 335 MB at \
              v0.0.121, 400 MB at v0.0.169, 440 MB at v0.0.183, 480 MB at v0.0.190, 497 MB at \
              v0.0.199, 544 MB at v0.0.207 ON CI and 537 here — roughly 40 KB per line of compiler, \
@@ -2784,8 +2803,11 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
         // Unlike the ceiling this does not move when the compiler legitimately grows, so it can be
         // TIGHTENED as the 39 MB is found and removed. That is the point of measuring the rate
         // separately: the ceiling hides the trend inside a total that has a good reason to rise.
-        let compiler_lines: usize = ["main.bx", "types.bx", "parser.bx", "check.bx", "modules.bx",
-                                     "emit.bx", "diag.bx", "schema.bx"]
+        let compiler_lines: usize = // Every module `main.bx` actually `use`s — and ONLY those. Getting this list wrong is
+        // how v0.0.221 first reported a 12% improvement that was a 6% regression: counting
+        // every `.bx` in the directory included two that were written and not yet imported.
+        ["main.bx", "types.bx", "parser.bx", "check.bx", "modules.bx",
+                                     "emit.bx", "diag.bx", "schema.bx", "lsp.bx"]
             .iter()
             .filter_map(|f| fs::read_to_string(root.join("src/burxt-compiler").join(f)).ok())
             .map(|t| t.lines().count())
@@ -4824,6 +4846,198 @@ fn no_document_claims_a_coverage_number_the_suite_refutes() {
     );
 }
 
+/// **The two language servers answer the same session.**
+///
+/// `src/burxt-compiler/lsp.bx` driven over a pipe beside `burxt lsp`, message for message. This is
+/// the row `spec/ROADMAP-1.0.md` §THE GATE counts as *verified* rather than merely *answered*.
+///
+/// **What it holds is narrower than `diag.bx`'s byte-for-byte claim, for a reason that is not the
+/// language server's.** The two compilers do not word their diagnostics alike and do not point at
+/// the same token: for `let b: Bool = 2;` stage-0 says *"type mismatch in `let b`: declared Bool,
+/// but expression has type Int"* at the `2`, and the Burxt compiler says *"declared Bool, but the
+/// value is Int"* at the `b`. That divergence lives in `check.bx`'s messages and is older than
+/// `lsp.bx`. So the wording and the column are deliberately NOT asserted — hiding them behind a
+/// translation table inside `lsp.bx` is exactly what this test exists to prevent. Everything a
+/// client's BEHAVIOUR depends on is asserted: the framing, the capabilities, the diagnostic count
+/// and LINE, the severity and source, the CLEARING of a squiggle, the hover contents byte for byte,
+/// the MethodNotFound reply byte for byte, and the exit codes.
+///
+/// Written and measured by a subagent, then re-verified here. Its wider measurements, kept because
+/// they say what this narrow session cannot: over 411 fixtures both servers publish the same count
+/// on every file their own compiler agrees about, and **all 142 pass fixtures publish `[]` on both**
+/// — no invented diagnostics in files that compile. Over 67,663 cursor positions both answer at
+/// 6,963 and 99.1% of the contents are identical. Memory flat at 11 MB over 4,000 keystrokes.
+#[test]
+fn the_two_language_servers_answer_the_same_session() {
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("two-language-servers");
+    fs::create_dir_all(&scratch).unwrap();
+    // The real path a user takes — `burxt lsp` on the Burxt-built compiler — rather than the
+    // standalone harness. The subagent measured the two producing identical bytes, so this is the
+    // stronger of two equivalent choices: it also proves the subcommand is wired up.
+    let bxc = scratch.join("bxc");
+    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("src/burxt-compiler/main.bx"))
+        .arg("-o")
+        .arg(&bxc)
+        .output()
+        .expect("burxt");
+    assert!(
+        built.status.success(),
+        "the Burxt compiler did not build:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let frame = |body: &str| format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
+    let uri = "file:///tmp/burxt-lsp-probe.bx";
+    let good = "let a: Int = 1;\\nprint(a);\\n";
+    let bad = "let a: Int = 1;\\nlet b: Bool = 2;\\nprint(a);\\n";
+
+    let mut session = String::new();
+    session.push_str(&frame(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#,
+    ));
+    session.push_str(&frame(r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#));
+    session.push_str(&frame(&format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{}","languageId":"burxt","version":1,"text":"{}"}}}}}}"#,
+        uri, good
+    )));
+    session.push_str(&frame(&format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didChange","params":{{"textDocument":{{"uri":"{}","version":2}},"contentChanges":[{{"text":"{}"}}]}}}}"#,
+        uri, bad
+    )));
+    session.push_str(&frame(&format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didChange","params":{{"textDocument":{{"uri":"{}","version":3}},"contentChanges":[{{"text":"{}"}}]}}}}"#,
+        uri, good
+    )));
+    session.push_str(&frame(&format!(
+        r#"{{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{{"textDocument":{{"uri":"{}"}},"position":{{"line":1,"character":6}}}}}}"#,
+        uri
+    )));
+    session.push_str(&frame(
+        r#"{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{}}"#,
+    ));
+    session.push_str(&frame(r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":null}"#));
+    session.push_str(&frame(r#"{"jsonrpc":"2.0","method":"exit","params":null}"#));
+
+    let run = |mut command: Command| -> (bool, Vec<String>, usize) {
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn a language server");
+        child.stdin.as_mut().unwrap().write_all(session.as_bytes()).unwrap();
+        let mut out = String::new();
+        child.stdout.as_mut().unwrap().read_to_string(&mut out).unwrap();
+        let mut cried = String::new();
+        child.stderr.as_mut().unwrap().read_to_string(&mut cried).unwrap();
+        let ok = child.wait().unwrap().success();
+        let bodies = out
+            .split("Content-Length: ")
+            .filter_map(|chunk| chunk.split_once("\r\n\r\n"))
+            .map(|(header, rest)| {
+                let n: usize = header.trim().parse().expect("a numeric Content-Length");
+                rest[..n].to_string()
+            })
+            .collect();
+        (ok, bodies, cried.len())
+    };
+
+    let mut rust = Command::new(env!("CARGO_BIN_EXE_burxt"));
+    rust.arg("lsp");
+    let (rust_ok, rs, rust_noise) = run(rust);
+    let mut burxt = Command::new(&bxc);
+    burxt.arg("lsp");
+    let (burxt_ok, bx, burxt_noise) = run(burxt);
+
+    assert!(rust_ok && burxt_ok, "both servers must exit cleanly after shutdown/exit");
+    // **The protocol owns stdout, so a stray byte on it corrupts the framing and the client
+    // disconnects.** Checked on stderr too: a server that logs to stdout looks fine in a unit test
+    // and fails in an editor.
+    assert_eq!(rust_noise, 0, "the Rust server wrote {} bytes to stderr", rust_noise);
+    assert_eq!(burxt_noise, 0, "the Burxt server wrote {} bytes to stderr", burxt_noise);
+    assert_eq!(rs.len(), bx.len(), "reply COUNT:\n  rust {:?}\n  burxt {:?}", rs, bx);
+
+    for (which, body) in [("rust", &rs[0]), ("burxt", &bx[0])] {
+        assert!(body.contains(r#""textDocumentSync":1"#), "{} initialize: {}", which, body);
+        assert!(body.contains(r#""hoverProvider":true"#), "{} initialize: {}", which, body);
+        assert!(body.contains("burxt-lsp"), "{} initialize should name the server", which);
+    }
+
+    // Three publishes each: open (valid) -> empty, change (broken) -> one error, change back ->
+    // empty. **Publishing an empty array is what CLEARS the squiggle**, so a server that only ever
+    // reports errors passes a naive test and leaves stale underlines in the editor.
+    let published = |bodies: &[String]| -> Vec<String> {
+        bodies.iter().filter(|b| b.contains("publishDiagnostics")).cloned().collect()
+    };
+    let (pr, pb) = (published(&rs), published(&bx));
+    assert_eq!(pr.len(), pb.len(), "publish counts:\n  rust {:?}\n  burxt {:?}", pr, pb);
+    assert_eq!(pr.len(), 3, "expected three publishes, got {:?}", pr);
+    for i in [0, 2] {
+        assert!(pr[i].contains(r#""diagnostics":[]"#), "rust publish {}: {}", i, pr[i]);
+        assert!(pb[i].contains(r#""diagnostics":[]"#), "burxt publish {}: {}", i, pb[i]);
+    }
+    for (which, body) in [("rust", &pr[1]), ("burxt", &pb[1])] {
+        assert_eq!(
+            body.matches(r#""severity":1"#).count(),
+            1,
+            "{}: expected exactly one diagnostic: {}",
+            which,
+            body
+        );
+        assert!(body.contains(r#""source":"burxt""#), "{}: {}", which, body);
+        assert!(body.contains(r#""line":1"#), "{}: line 2 is line 1 to the protocol: {}", which, body);
+        assert!(body.contains("Bool"), "{}: should name the declared type: {}", which, body);
+    }
+
+    // Hover, byte for byte — the strongest claim here, and it holds because `show_type` in
+    // `check.bx` and `Display for Type` in `ast.rs` were written to the same text.
+    let hover = |bodies: &[String]| -> String {
+        bodies.iter().find(|b| b.contains(r#""contents""#)).expect("a hover reply").clone()
+    };
+    let contents = "\"contents\":{\"kind\":\"markdown\",\"value\":\"```burxt\\nInt\\n```\"}";
+    for (which, body) in [("rust", hover(&rs)), ("burxt", hover(&bx))] {
+        assert!(body.contains(contents), "{} hover: {}", which, body);
+    }
+
+    // An unknown REQUEST must be answered or a real client waits forever.
+    let refusal = "\"code\":-32601,\"message\":\"unsupported method `textDocument/definition`\"";
+    assert!(rs.iter().any(|b| b.contains(refusal)), "rust: {:?}", rs);
+    assert!(bx.iter().any(|b| b.contains(refusal)), "burxt: {:?}", bx);
+
+    assert!(rs.last().unwrap().contains(r#""result":null"#), "rust shutdown: {:?}", rs.last());
+    assert!(bx.last().unwrap().contains(r#""result":null"#), "burxt shutdown: {:?}", bx.last());
+
+    // Per the protocol, `exit` WITHOUT `shutdown` is an error exit. Both must say so.
+    let bare = frame(r#"{"jsonrpc":"2.0","method":"exit","params":null}"#);
+    let mut both: Vec<(&str, Command)> = Vec::new();
+    let mut r2 = Command::new(env!("CARGO_BIN_EXE_burxt"));
+    r2.arg("lsp");
+    both.push(("rust", r2));
+    let mut b2 = Command::new(&bxc);
+    b2.arg("lsp");
+    both.push(("burxt", b2));
+    for (which, mut command) in both {
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.as_mut().unwrap().write_all(bare.as_bytes()).unwrap();
+        let status = child.wait().unwrap();
+        assert!(!status.success(), "{}: `exit` without `shutdown` must fail", which);
+    }
+
+    let _ = fs::remove_dir_all(&scratch);
+    eprintln!("both language servers answered {} replies identically where it matters", rs.len());
+}
+
 /// **Both compilers derive the same MCP manifest from the same preconditions.**
 ///
 /// `src/burxt-compiler/schema.bx` is the Burxt counterpart of `src/rust-compiler/schema.rs`, and
@@ -5768,17 +5982,20 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
         ),
         (
             "lsp.rs",
-            &["src/burxt-compiler/lsp.bx"],
-            Strength::Delivered,
+            &["src/burxt-compiler/lsp.bx", "tests/support/lsp_harness.bx"],
+            Strength::Verified,
             "the language server. **v0.0.216 called this row BLOCKED and that was WRONG** — it \
              said Burxt has no stdin and `fread` is unreachable, so a stdin primitive had to be \
              designed first. `external function getchar() -> CInt touches input` was already \
              declared in `lib/os.bx` and already in use, and a Burxt program was measured reading \
              a framed LSP message off stdin in v0.0.218. I reasoned about the wall instead of \
              walking up to it — two versions after adding the test that exists to stop exactly \
-             that. **The file is written (78 KB) and NOT yet verified**: it compiles under both \
-             compilers, but no test drives the two servers through the same session, so it does \
-             not count as answered",
+             that. **DONE and VERIFIED v0.0.222** — `the_two_language_servers_answer_the_same_session` \
+             drives `burxt lsp` and the Burxt-built one through the same JSON-RPC session and holds \
+             the framing, capabilities, diagnostic count and line, the CLEARING of a squiggle, the \
+             hover contents byte for byte, MethodNotFound byte for byte, and both exit codes. \
+             Wording and column are deliberately not asserted: the two compilers word diagnostics \
+             differently and a translation table inside `lsp.bx` would hide that",
         ),
     ];
 
@@ -5894,20 +6111,20 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
         if missing.is_empty() { "none".to_string() } else { missing.join(", ") }
     );
 
-    // Two ratchets, and the second is the one to be proud of. 9 answered / 2 verified at v0.0.221.
+    // Two ratchets, and the second is the one to be proud of. 10 answered / 3 verified at v0.0.222.
     // Neither may fall: `answered` falling means a counterpart was lost or a Rust module was split
     // without one, and `verified` falling means a direct comparison was deleted, which is the more
     // serious of the two because it is the only thing that turns "exists" into "agrees".
     assert!(
-        answered >= 9,
-        "{} of {} Rust modules are answered, and it was 9 at v0.0.221. Still Rust-only: {}",
+        answered >= 10,
+        "{} of {} Rust modules are answered, and it was 10 at v0.0.222. Still Rust-only: {}",
         answered,
         expected.len(),
         missing.join(", ")
     );
     assert!(
-        verified >= 2,
-        "{} counterparts are held byte-for-byte by a test, and it was 2 at v0.0.221. A direct \
+        verified >= 3,
+        "{} counterparts are held byte-for-byte by a test, and it was 3 at v0.0.222. A direct \
          comparison was deleted — and that comparison is the only thing separating `a file with \
          that job exists` from `the two agree`.",
         verified

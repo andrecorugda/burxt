@@ -1,0 +1,1 @@
+`kept` was declared outside `region one_turn`, so it cannot be assigned a value built inside it — the bytes are released at the closing brace and `kept` would read whatever the region hands out next. Declare `kept` inside the region, or build the value outside it.
