@@ -349,18 +349,16 @@ recomputed on every pass, and the compiler refuses it rather than doing that qui
 ```burxt
 use "lib/map.bx";
 
-region r {
-    let mutable counts: Map<String, Int> = map_new();
-    let a: Int = counts.set("pear", 2);
-    let b: Int = counts.set("apple", 5);
-    let c: Int = counts.set("fig", 1);
-    let d: Int = counts.set("apple", 6);
+let mutable counts: Map<String, Int> = map_new();
+let a: Int = counts.set("pear", 2);
+let b: Int = counts.set("apple", 5);
+let c: Int = counts.set("fig", 1);
+let d: Int = counts.set("apple", 6);
 
-    print(counts.count());
-    let names: [String] = counts.keys();
-    for key in names {
-        print(key + " " + to_string(counts.get(key, 0)));
-    }
+print(counts.count());
+let names: [String] = counts.keys();
+for key in names {
+    print(key + " " + to_string(counts.get(key, 0)));
 }
 ```
 
@@ -379,21 +377,19 @@ behaviour you would have assumed, and the one most languages do not give you.
 ```burxt
 use "lib/map.bx";
 
-region r {
-    let mutable counts: Map<String, Int> = map_new();
-    let a: Int = counts.set("pear", 2);
-    for key in counts.keys() {
-        print(key);
-    }
+let mutable counts: Map<String, Int> = map_new();
+let a: Int = counts.set("pear", 2);
+for key in counts.keys() {
+    print(key);
 }
 ```
 
 ```
 error: `for` iterates a named array, and this is a method call: its result would be recomputed on every pass. Bind it first — `let items = ...;` — and iterate that.
-  --> counts.bx:6:30
-   |
-6  |     for key in counts.keys() {
-   |                              ^
+ --> counts.bx:5:26
+  |
+5 | for key in counts.keys() {
+  |                          ^
 ```
 
 ## Next

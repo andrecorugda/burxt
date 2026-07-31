@@ -349,11 +349,9 @@ function audit(entry: String) -> Int touches files {
     return write_file("/dev/null", entry);
 }
 
-region r {
-    let lines: [Decimal<2>] = [$19.99, $36.80, $12.00];
-    print(net_total(lines));
-    print(audit("totalled"));
-}
+let lines: [Decimal<2>] = [$19.99, $36.80, $12.00];
+print(net_total(lines));
+print(audit("totalled"));
 ```
 
 ```

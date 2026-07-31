@@ -321,10 +321,8 @@ function port_of(text: String, fallback: Int) -> Int {
     }
 }
 
-region r {
-    print(port_of("8080", 80));
-    print(port_of("not a number", 80));
-}
+print(port_of("8080", 80));
+print(port_of("not a number", 80));
 ```
 
 ```

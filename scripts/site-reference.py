@@ -330,7 +330,7 @@ BUILTINS = [
         "answers": "`count` bytes of `s`, starting at `from`",
         "region": True,
         "doc": "Builds a new String, so it needs somewhere to put it.",
-        "probe": 'region r {\n    print(substring("hello", 1, 3));\n}\n',
+        "probe": 'print(substring("hello", 1, 3));\n',
     },
     {
         "name": "to_string",
@@ -338,15 +338,13 @@ BUILTINS = [
         "answers": "the value, written out",
         "region": True,
         "doc": "Takes an `Int`, a `Bool` or a `Decimal<S>`. It shares its formatter with `print`, so "
-               "the two can never disagree about what a number looks like. A `Bool` needs no region "
-               "because both answers are constants.\n\n"
+               "the two can never disagree about what a number looks like. A `Bool` allocates "
+               "nothing, because both answers are constants.\n\n"
                "There is no way for a class of yours to have one: `to_string` is a builtin rather "
                "than an interface a type can implement, so a user type has no display form. That "
                "is a real gap rather than a decision.",
-        "probe": 'region r {\n    print(to_string(42));\n    print(to_string($19.99));\n}\n'
-                 'print(to_string(true));\n',
-        "refuses": 'region r {\n    let s: String = "already text";\n'
-                   '    print(to_string(s));\n}\n',
+        "probe": 'print(to_string(42));\nprint(to_string($19.99));\nprint(to_string(true));\n',
+        "refuses": 'let s: String = "already text";\nprint(to_string(s));\n',
     },
     {
         "name": "push",
@@ -355,7 +353,7 @@ BUILTINS = [
         "region": True,
         "doc": "Appends to a growable array. The array lives in a region, which is what makes "
                "growing it a bump rather than a reallocation someone has to own.",
-        "probe": 'region r {\n    let mutable xs: [Int] = [];\n    print(push(xs, 1));\n}\n',
+        "probe": 'let mutable xs: [Int] = [];\nprint(push(xs, 1));\n',
     },
     {
         "name": "truncate",
@@ -364,8 +362,7 @@ BUILTINS = [
         "region": False,
         "doc": "Shortens a growable array to `n`. Nothing is freed — the region owns the storage, "
                "and it goes when the region does.",
-        "probe": 'region r {\n    let mutable xs: [Int] = [];\n    push(xs, 1);\n'
-                 '    print(truncate(xs, 0));\n}\n',
+        "probe": 'let mutable xs: [Int] = [];\npush(xs, 1);\nprint(truncate(xs, 0));\n',
     },
     {
         "name": "read_file",
@@ -762,8 +759,8 @@ def render_index(kw, ren, cmds):
 
 
 def render_builtins(effects):
-    out = [FRONT % ("Builtins", "Every call the language owns: what it answers, whether it needs a "
-                                "region, and what it refuses.")]
+    out = [FRONT % ("Builtins", "Every call the language owns: what it answers, whether it "
+                                "allocates, and what it refuses.")]
     out.append("# Builtins\n")
     out.append(
         "The names a program may not declare, because the language already means something by "
@@ -771,7 +768,7 @@ def render_builtins(effects):
         "was **compiled** while this page was generated, so none of them is a signature the "
         "compiler would reject.\n"
     )
-    rows = ["| Call | Answers | Needs a region? | Reaches |", "|---|---|---|---|"]
+    rows = ["| Call | Answers | Allocates? | Reaches |", "|---|---|---|---|"]
     for b in BUILTINS:
         eff = effects.get(b["name"])
         rows.append("| [`%s`](#%s) | %s | %s | %s |" % (
@@ -781,9 +778,12 @@ def render_builtins(effects):
         ))
     out.append("\n".join(rows) + "\n")
     out.append(
-        "*Needs a region* means the call builds something, and a value has to be built somewhere. "
-        "You almost never write `region` for it — since v0.0.146 a program has one from the moment "
-        "it starts, and `allocates` is inferred. See [Memory](../guide/04-memory.html).\n"
+        "*Allocates* means the call builds something, and a value has to be built somewhere. **It "
+        "does not mean you write `region`.** Since v0.0.146 a program has one from the moment it "
+        "starts and `allocates` is inferred, so every signature on this page compiles with no "
+        "`region` in sight — the probes that verified them have none. You reach for `region` to "
+        "release EARLY, around a loop body or a request, which is the whole of keeping a long-"
+        "running program's memory flat. See [Memory](../guide/04-memory.html).\n"
     )
 
     for b in BUILTINS:
@@ -793,7 +793,7 @@ def render_builtins(effects):
         out.append(b["doc"] + "\n")
         facts = []
         facts.append("**Answers** %s." % b["answers"])
-        facts.append("**Needs a region:** %s." % ("yes" if b["region"] else "no"))
+        facts.append("**Allocates:** %s." % ("yes" if b["region"] else "no"))
         if effects.get(b["name"]):
             facts.append("**Carries** `touches %s`, so a caller must declare it."
                          % effects[b["name"]])

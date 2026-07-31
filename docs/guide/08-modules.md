@@ -332,10 +332,8 @@ function shown(item: Item) -> String {
 ```burxt
 use "shapes.bx";
 
-region r {
-    let rice: Item = Item { sku: "RICE", price: $52.75 };
-    print(shown(rice));
-}
+let rice: Item = Item { sku: "RICE", price: $52.75 };
+print(shown(rice));
 ```
 
 ```
