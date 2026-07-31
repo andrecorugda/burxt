@@ -764,6 +764,20 @@
  },
  {
   "kind": "function",
+  "name": "os_env",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-env",
+  "where": "function os_env(name: String) -> Option<String> touches input"
+ },
+ {
+  "kind": "function",
+  "name": "os_env_or",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-env-or",
+  "where": "function os_env_or(name: String, fallback: String) -> String touches input"
+ },
+ {
+  "kind": "function",
   "name": "os_byte_as_string",
   "text": "lib/os.bx",
   "url": "/reference/os.html#os-byte-as-string",
@@ -996,6 +1010,13 @@
  {
   "kind": "keyword",
   "name": "CInt",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
+  "name": "CPointer",
   "text": "",
   "url": "/reference/#keywords",
   "where": "keyword"

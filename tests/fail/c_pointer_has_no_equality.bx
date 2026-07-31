@@ -1,0 +1,9 @@
+// Two pointers being equal says nothing a program can act on, and comparing them is almost always the
+// wrong question. The right one has a name: `c_is_null(p)`.
+external function strstr(haystack: String, needle: String) -> CPointer;
+region main {
+    let a: CPointer = strstr("abc", "b");
+    let b: CPointer = strstr("abc", "b");
+    print(c_is_null(a) == c_is_null(b));
+    print(a == b);
+}

@@ -14,6 +14,9 @@ use "option.bx";
 external function system(command: String) -> CInt touches commands;
 external function time(unused: Int) -> Int touches clock;
 external function getchar() -> CInt touches input;
+// The pointer wall's first customer (v0.0.196). `getenv` hands back a `char*` that C owns for the
+// life of the process, so Burxt copies the bytes and never keeps the pointer — see `os_env`.
+external function getenv(name: String) -> CPointer touches input;
 
 // The arguments the program was started with. Index 0 is the program's own path,
 // as it is everywhere else.
@@ -123,6 +126,32 @@ function os_read_all() -> String touches input {
 
 // A single byte as a one-character String. Burxt has no character type and
 // `to_string` of an Int gives digits, so the only way through is a table.
+// An environment variable, or a stated absence.
+//
+// `Option<String>` and not `String`, because **unset and empty are different facts.** `FOO=` sets FOO
+// to the empty string; not mentioning FOO at all is a different thing, and a library that answered ""
+// for both would make "is this configured" unanswerable. `getenv` distinguishes them by returning
+// NULL, and this is where that distinction is preserved rather than flattened.
+//
+// `touches input` because the value came from outside the program. Whether reading the environment
+// deserves an effect of its own is an open question — see spec/FAR-HORIZON-ROADMAP.md M2 — but
+// `input` is honest today: it is a value the process was started with.
+function os_env(name: String) -> Option<String> touches input {
+    let found: CPointer = getenv(name);
+    if c_is_null(found) {
+        return Option.None;
+    }
+    // The copy is the pointer wall: after this line Burxt owns these bytes and the pointer is gone.
+    return Option.Some(c_string_at(found));
+}
+
+// The same question with a stated fallback, for the common case where a missing setting has a
+// sensible default. Separate from `os_env` rather than a parameter with a default, because Burxt has
+// no default arguments — and because the two really are different questions.
+function os_env_or(name: String, fallback: String) -> String touches input {
+    return option_or(os_env(name), fallback);
+}
+
 function os_byte_as_string(byte: Int) -> String {
     let printable: String = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz\{|\}~";
     if byte == 10 {

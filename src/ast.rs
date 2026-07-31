@@ -50,6 +50,17 @@ pub enum Type {
     /// runtime (a value that doesn't fit is a loud error, never a silent wrap).
     /// In Burxt code the value is always an Int.
     CInt,
+    /// An opaque pointer C handed back: a `FILE*`, a `DIR*`, a socket, a `char*`.
+    ///
+    /// Burxt treats it as a value it may MOVE but never look inside. Exactly two things can be
+    /// done with one — `c_is_null(p)` asks whether the call failed, and `c_string_at(p)` copies
+    /// NUL-terminated bytes into a Burxt String. No arithmetic, no indexing, no printing, not even
+    /// `==`. So the pointer never becomes something the language has to reason about the lifetime
+    /// of: it is a token to hand back to C, and the only way through the wall is a COPY.
+    ///
+    /// Printing is refused for a reason that is the thesis rather than caution: an address differs
+    /// between runs, so a program that printed one would not be reproducible.
+    CPointer,
     /// C's `double`, at the FFI boundary only. It exists so that a crossing
     /// which would LOSE exactness can be named, and therefore refused —
     /// "a Decimal may not bind to a float" is unspellable without it. Burxt has
@@ -105,6 +116,7 @@ impl std::fmt::Display for Type {
             Type::Bool => write!(f, "Bool"),
             Type::String => write!(f, "String"),
             Type::CInt => write!(f, "CInt"),
+            Type::CPointer => write!(f, "CPointer"),
             Type::CDouble => write!(f, "CDouble"),
             Type::Decimal { scale, rounding: None } => write!(f, "Decimal<{}>", scale),
             Type::Decimal { scale, rounding: Some(r) } => write!(f, "Decimal<{}, {}>", scale, r),

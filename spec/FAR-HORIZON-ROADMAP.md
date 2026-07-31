@@ -151,6 +151,70 @@ interop. Earn generality with a program that needs it.
 
 ---
 
+### Slice 1 — the pointer wall, opened (v0.0.196)
+
+For one line, `external function` could return only `Int` or `CInt`, and the reason given was
+*"Burxt cannot yet track who owns memory a C function returns."* That single restriction was the
+largest gap in the language: every C library, every socket, every platform API and every `getenv`
+sat behind it.
+
+**What opened it was not a lifetime system.** It is a smaller idea, and worth stating as the design
+rather than as an implementation note:
+
+> **Burxt never holds the pointer as anything it can act on.**
+
+A `CPointer` is a token. Exactly two things may be done with one —
+
+```burxt
+external function getenv(name: String) -> CPointer touches input;
+
+function os_env(name: String) -> Option<String> touches input {
+    let found: CPointer = getenv(name);
+    if c_is_null(found) { return Option.None; }     // did the call fail?
+    return Option.Some(c_string_at(found));         // copy the bytes out
+}
+```
+
+— and there is no third. No arithmetic, no indexing, no printing, **not even `==`**. So "who frees
+this" and "is it still valid later" stop being questions the compiler has to answer, because nothing
+will look again. **The copy is the wall.** If C wants its memory freed, the program calls an
+`external function free` itself, in the open, visible in a signature.
+
+Every refusal has a fail fixture (`tests/fail/c_pointer_*.bx`) and a stated reason:
+
+| refused | why, and it is not caution |
+|---|---|
+| `print(p)` and `"{p}"` | **an address differs between runs**, so a program printing one would not be reproducible — and reproducible output is the property everything else here protects |
+| `p == q` | two pointers being equal says nothing a program can act on. The question people mean is `c_is_null(p)` |
+| `p + 1` | pointer arithmetic is the operation that turns a token into a way to read arbitrary memory |
+| `c_string_at(140737488355328)` | an Int is not a pointer. There is no cast, and that is the feature |
+| `-> String` from an extern | a String is a Burxt value with an OWNER, so accepting one is a claim about whose memory it is that C cannot make. `-> CPointer` says the same thing and says who copied |
+
+A null pointer **traps** in `c_string_at` rather than answering `""`: unset and empty are different
+facts, and one String for both is exactly the silent wrong answer this language exists to refuse.
+Byte-identical message in both compilers (`tests/panic/c_string_at_refuses_null.bx`).
+
+**One bug found on the way, and it is the instructive kind.** Stage-1's `declared_type` maps type
+node kinds 40–48 and returns UNKNOWN for anything else — and an unknown type *silences every rule
+downstream*. So stage-1 accepted every `CPointer` program, including the four it was supposed to
+refuse, while emitting correct code (everything is an i64 there anyway). It looked like agreement.
+**A checker that agrees because it stopped asking is the failure mode the differential test exists
+to catch**, and this is the shape of it: the pass fixture went green immediately and only the FAIL
+fixtures revealed that nothing was being checked.
+
+**Still closed, deliberately:**
+
+- **Reading a C struct.** Needs integer widths (`i32`, unsigned) to describe a layout — roadmap item
+  3. Until then `readdir` is reachable but `dirent.d_name` is not.
+- **`mmap`'d bytes.** `c_string_at` reads to a NUL; a length-taking `c_bytes_at(p, n)` is the missing
+  piece, and it wants a decision about what happens when `n` is a lie.
+- **Callbacks into Burxt.** C calling Burxt is the opposite direction and a separate design.
+- **An effect for the environment.** `os_env` declares `touches input`, which is honest — a value the
+  process was started with — but whether reading the environment deserves its own effect is open. The
+  vocabulary is closed on purpose, so adding to it is a decision and not a convenience.
+
+---
+
 ## M3 — Cross-compilation & `--target` (platform reach)
 
 **Why it's mostly mechanical:** the hard architectural work was done at A4.5 (target-
@@ -276,7 +340,7 @@ defines what Burxt becomes.
 | Concurrency | threads, async | threads-ish, async | threads, virtual threads | **none.** No thread, no async, no scheduler | Blocking |
 | Network / sockets | std + crates | built in | built in | **nothing wrapped.** A fd is an int so it is reachable, but no library | Blocking |
 | TLS / crypto | crates | built in | built in | **none**, and gated on bitwise | Blocking |
-| Calling an existing C library | yes | yes (ext) | JNI | **the pointer wall** — anything returning a pointer is out of reach | Blocking |
+| Calling an existing C library | yes | yes (ext) | JNI | **open (v0.0.196).** `-> CPointer`, with `c_is_null` and `c_string_at`. Anything holding a handle or returning text is reachable; a C STRUCT still is not (needs widths) | Partly |
 | Dependency management | cargo | composer / pip | maven | **none.** Every program starts from `lib/` | Blocking |
 | Cross-compilation | `--target` | n/a | JVM | **none.** M3 unstarted; web/Android/iOS unreachable | Blocking |
 | Closures / function values | yes | yes | yes | **none.** `map`/`filter` deferred on the memory question | Papercut |
@@ -325,9 +389,14 @@ Worth keeping in view, because the gap list above is long and one-sided by const
 
 Counted rather than guessed, over §1 and §2:
 
-1. **The pointer wall** (unblocks: every C library, sockets, TLS, env vars, platform APIs, `mmap`,
-   the database idea). It is the only entry that appears in every one of Andre's three targets, and
-   the prediction recorded in the plan before the count was that it would rank first. It does.
+1. ~~**The pointer wall**~~ — **DONE (v0.0.196).** The count said it would rank first because it is
+   the only entry appearing in all three of Andre's targets, and the prediction recorded before the
+   count was the same. See §M2 below for what it turned out to cost, which was far less than the
+   ranking implied: no lifetime system, no ownership tracking, one new type and two builtins.
+
+   What it opened immediately: `getenv` (so `lib/os.bx` has `os_env` — one third of item 4 below),
+   and any C API that hands back a handle or text. What it did NOT open: reading a C **struct**,
+   which needs integer widths (item 3), and `mmap`'d bytes, which needs a length-taking read.
 2. **Cross-compilation, M3** (unblocks: web, Android, iOS — all three reach visions at once). The
    roadmap above already says the hard architectural work is done.
 3. **Bitwise + integer widths** (unblocks: binary formats, hashing, checksums, compression, a

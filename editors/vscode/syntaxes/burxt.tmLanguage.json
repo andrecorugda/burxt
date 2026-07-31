@@ -331,9 +331,9 @@
           }
         },
         {
-          "comment": "Built-in scalar types. CInt and CDouble exist only at the C boundary.",
+          "comment": "Built-in scalar types. CInt, CDouble and CPointer exist only at the C boundary.",
           "name": "support.type.primitive.burxt",
-          "match": "\\b(Int|Bool|String|CInt|CDouble|Decimal)\\b"
+          "match": "\\b(Int|Bool|String|CInt|CDouble|CPointer|Decimal)\\b"
         },
         {
           "comment": "`dynamic Trait` is the only syntax that asks for runtime dispatch.",

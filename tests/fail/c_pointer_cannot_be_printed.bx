@@ -1,0 +1,5 @@
+// Refused for a reason that IS the thesis rather than caution: an address differs between runs, so a
+// program that printed one would not be reproducible — and a Burxt program's output being the same
+// every time is the property everything else here is built to protect.
+external function strstr(haystack: String, needle: String) -> CPointer;
+region main { print(strstr("abc", "b")); }

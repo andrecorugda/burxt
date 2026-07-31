@@ -1,0 +1,11 @@
+// `c_string_at` on a null pointer DIES rather than answering "". An unset value and an empty one are
+// different facts, and returning the same String for both is exactly the silent wrong answer this
+// language exists to refuse — so the check is not defensive, it is the thesis at the C boundary.
+//
+// `c_is_null(p)` is how you ask, and tests/pass/c_pointer_wall.bx is what asking looks like.
+external function getenv(name: String) -> CPointer touches input;
+
+region main {
+    let missing: CPointer = getenv("BURXT_THIS_IS_NOT_SET_9f3a7c1e");
+    print(c_string_at(missing));
+}

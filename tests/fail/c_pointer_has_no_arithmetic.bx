@@ -1,0 +1,9 @@
+// No pointer arithmetic, which is the operation that turns a pointer from a token into a way to read
+// arbitrary memory. `c_string_at` is the only way through, and it copies.
+external function strstr(haystack: String, needle: String) -> CPointer;
+region main {
+    let p: CPointer = strstr("abc", "b");
+    print(c_is_null(p));
+    let q: CPointer = p + 1;
+    print(c_is_null(q));
+}

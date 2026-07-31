@@ -1,2 +1,8 @@
+// A String return stays refused after the pointer wall opened in v0.0.196, and that is the same
+// rule rather than an omission: a String is a Burxt value with an OWNER, so accepting one here
+// would be a claim about whose memory it is that C has no way to make.
+//
+// `-> CPointer` plus `c_string_at(p)` says the same thing and says who copied. See
+// tests/pass/c_pointer_wall.bx.
 external function getenv_like() -> String;
 print(getenv_like());

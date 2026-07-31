@@ -275,6 +275,10 @@ fn explain(ty: &Type) -> Option<String> {
             if *scale == 1 { "" } else { "s" }
         )),
         Type::CInt => Some("C's 32-bit `int`, at the FFI boundary only.".to_string()),
+        Type::CPointer => Some(
+            "An opaque pointer from C. Only `c_is_null(p)` and `c_string_at(p)` may look at it."
+                .to_string(),
+        ),
         Type::CDouble => {
             Some("C's `double`. A Decimal may not cross as one — it would lose \
                   exactness.".to_string())

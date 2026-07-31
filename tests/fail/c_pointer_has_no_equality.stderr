@@ -1,0 +1,1 @@
+a CPointer has no `==`: it is a token to hand back to C, not a value to compare

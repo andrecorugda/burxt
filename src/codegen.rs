@@ -1219,7 +1219,7 @@ impl<'ctx> CodeGen<'ctx> {
     fn payload_cells(&self, ty: &Type) -> u32 {
         match ty {
             Type::Int | Type::Bool | Type::Decimal { .. } | Type::String => 1,
-            Type::CInt | Type::CDouble => 1,
+            Type::CInt | Type::CDouble | Type::CPointer => 1,
             Type::Param(_) | Type::Generic { .. } => 1,
             Type::Slice(_) => 3,
             Type::Array { elem, len } => self.payload_cells(elem) * (*len as u32),
@@ -1270,6 +1270,11 @@ impl<'ctx> CodeGen<'ctx> {
             Type::Int | Type::Bool | Type::Decimal { .. } => self.ctx.i64_type().into(),
             Type::String => self.ctx.ptr_type(AddressSpace::default()).into(),
             Type::CInt => self.ctx.i32_type().into(),
+            // An opaque pointer, the same LLVM type a String uses — the TARGET decides the width,
+            // never this code. What keeps it opaque is the checker, not the representation: nothing
+            // in Burxt can load through it, and the only way to read what it points at is
+            // `c_string_at`, which copies.
+            Type::CPointer => self.ctx.ptr_type(AddressSpace::default()).into(),
             // FFI-only, so it appears in extern signatures and nowhere else.
             Type::CDouble => self.ctx.f64_type().into(),
             Type::Named(name) => match self.struct_types.get(name) {
@@ -1357,6 +1362,12 @@ impl<'ctx> CodeGen<'ctx> {
             }
             Type::Generic { name, .. } => {
                 return Err(format!("codegen bug: `{}<...>` was never instantiated", name))
+            }
+            // The checker refuses this, and for a reason worth restating here: an address differs
+            // between runs, so printing one would make a program's output non-reproducible. Reaching
+            // this arm means the refusal was lost.
+            Type::CPointer => {
+                return Err("codegen bug: a CPointer reached print".to_string())
             }
             Type::Int => {
                 let fmt = self.global_str("%lld", "fmt_int");
@@ -1570,6 +1581,22 @@ impl<'ctx> CodeGen<'ctx> {
             TypedExprKind::ReadFile(path) => {
                 let p = self.gen_expr(path)?.into_pointer_value();
                 self.build_read_file(p).map(Into::into)
+            }
+            // `c_is_null(p)` — one pointer comparison, widened to Burxt's i64 Bool.
+            TypedExprKind::CIsNull(p) => {
+                let ptr = self.gen_expr(p)?.into_pointer_value();
+                let is_null = self
+                    .builder
+                    .build_is_null(ptr, "c_is_null")
+                    .map_err(|e| e.to_string())?;
+                self.builder
+                    .build_int_z_extend(is_null, i64t, "c_is_null_i64")
+                    .map(Into::into)
+                    .map_err(|e| e.to_string())
+            }
+            TypedExprKind::CStringAt(p) => {
+                let ptr = self.gen_expr(p)?.into_pointer_value();
+                self.build_c_string_at(ptr).map(Into::into)
             }
             TypedExprKind::ToString(v) => {
                 let val = self.gen_expr(v)?;
@@ -2670,6 +2697,60 @@ impl<'ctx> CodeGen<'ctx> {
             .map_err(err)?;
         self.builder.build_call(fclose, &[fh.into()], "close").map_err(err)?;
         let end = unsafe { self.builder.build_gep(i8t, buf, &[size], "end") }.map_err(err)?;
+        self.builder.build_store(end, i8t.const_zero()).map_err(err)?;
+        Ok(buf)
+    }
+
+    /// Copy the NUL-terminated bytes at a C pointer into a region-allocated Burxt String.
+    ///
+    /// **The copy is the pointer wall.** After this returns, Burxt holds bytes it owns and the C
+    /// pointer is not kept anywhere — so "who frees that memory" and "is it still valid" stop being
+    /// questions the compiler has to answer, because nothing will look again. If C wants the memory
+    /// freed, the program calls an `external function free` itself, in the open.
+    ///
+    /// A null pointer dies here rather than answering "". An unset value and an empty one are
+    /// different facts, and one String for both is exactly the silent wrong answer this language
+    /// exists to refuse — `c_is_null(p)` is how you ask.
+    fn build_c_string_at(
+        &mut self,
+        p: PointerValue<'ctx>,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+        let i8t = self.ctx.i8_type();
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_parent())
+            .ok_or("codegen bug: c_string_at outside a function")?;
+        let null_bb = self.ctx.append_basic_block(function, "c_str_null");
+        let ok_bb = self.ctx.append_basic_block(function, "c_str_ok");
+        let is_null = self.builder.build_is_null(p, "c_str_is_null").map_err(err)?;
+        self.builder.build_conditional_branch(is_null, null_bb, ok_bb).map_err(err)?;
+
+        self.builder.position_at_end(null_bb);
+        self.build_panic(
+            "burxt runtime error: c_string_at was given a null pointer; ask c_is_null(p) first\n",
+        )?;
+
+        self.builder.position_at_end(ok_bb);
+        let strlen = self.libc("strlen", i64t.fn_type(&[ptr.into()], false));
+        let len_call = self.builder.build_call(strlen, &[p.into()], "c_len").map_err(err)?;
+        let len = match len_call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => v.into_int_value(),
+            _ => return Err("strlen returned void".to_string()),
+        };
+        let buf = self.build_alloc_string(len)?;
+        let memcpy = self.libc(
+            "memcpy",
+            ptr.fn_type(&[ptr.into(), ptr.into(), i64t.into()], false),
+        );
+        self.builder
+            .build_call(memcpy, &[buf.into(), p.into(), len.into()], "c_copy")
+            .map_err(err)?;
+        let end = unsafe { self.builder.build_gep(i8t, buf, &[len], "c_end") }.map_err(err)?;
         self.builder.build_store(end, i8t.const_zero()).map_err(err)?;
         Ok(buf)
     }

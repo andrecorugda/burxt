@@ -1569,6 +1569,7 @@ impl Parser {
             Token::TyBool => Ok(Type::Bool),
             Token::TyString => Ok(Type::String),
             Token::TyCInt => Ok(Type::CInt),
+            Token::TyCPointer => Ok(Type::CPointer),
             Token::TyCDouble => Ok(Type::CDouble),
             Token::TyDecimal => {
                 self.expect(&Token::Lt)?;

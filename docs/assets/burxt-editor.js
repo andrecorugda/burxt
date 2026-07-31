@@ -43,7 +43,7 @@
   );
 
   // Types the language owns. Anything else Capitalised is a type the program declared.
-  var TYPE = words('Int Bool String CInt CDouble Decimal RoundHalfEven RoundHalfUp');
+  var TYPE = words('Int Bool String CInt CDouble CPointer Decimal RoundHalfEven RoundHalfUp');
 
   // The contract vocabulary. Contextual in the parser — legal as ordinary names elsewhere — but on
   // a signature they are the whole reason this language exists, so they get their own colour.

@@ -79,6 +79,7 @@ function (self: Unit) show_type(src: String, t: Type) -> String {
     if t.kind == 41 { return "Bool"; }
     if t.kind == 42 { return "String"; }
     if t.kind == 43 { return "CInt"; }
+    if t.kind == 51 { return "CPointer"; }
     if t.kind == 44 { return "CDouble"; }
     if t.kind == 45 {
         if t.contract == 1 {
@@ -578,7 +579,14 @@ function (self: Unit) declared_type(src: String, node: Int) -> Type {
         return Type { kind: n.kind, scale: n.a, contract: n.b,
                     name_start: 0, name_length: 0 };
     }
-    if n.kind >= 40 && n.kind <= 48 {
+    // 51 is CPointer, which sits outside the 40..48 run because the scalar kinds were numbered
+    // before it existed. Getting this wrong was instructive rather than merely wrong: a type node
+    // this function does not recognise becomes UNKNOWN, and an unknown type SILENCES every rule
+    // downstream — so stage-1 accepted every CPointer program for one version, including the ones
+    // it was supposed to refuse, and looked like it agreed with stage-0. It emitted correct code
+    // too, because everything here is an i64 anyway. A checker that agrees because it stopped
+    // asking is the failure mode the differential test exists to catch, and this is the shape of it.
+    if (n.kind >= 40 && n.kind <= 48) || n.kind == 51 {
         return simple_type(n.kind);
     }
     return unknown_type();
@@ -848,6 +856,8 @@ function is_reserved_name(src: String, start: Int, length: Int) -> Bool {
         || span_equal(src, start, length, "substring")
         || span_equal(src, start, length, "to_string")
         || span_equal(src, start, length, "read_file")
+        || span_equal(src, start, length, "c_is_null")
+        || span_equal(src, start, length, "c_string_at")
         || span_equal(src, start, length, "write_file")
         || span_equal(src, start, length, "write_bytes")
         || span_equal(src, start, length, "argument")
@@ -1200,6 +1210,14 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
         if is_unknown(left) || is_unknown(right) {
             return unknown_type();
         }
+        // No pointer arithmetic. This is the operation that turns a pointer from a token into a way
+        // to read arbitrary memory, so refusing it is most of what makes a CPointer safe to hold.
+        if left.kind == 51 || right.kind == 51 {
+            let complained: Int = self.complain_at(src, n.token,
+                "a CPointer has no arithmetic: it is a token to hand back to C, not an address to "
+                + "walk. `c_string_at(p)` copies what it points at, and that is the only way in");
+            return unknown_type();
+        }
         // `*` combines a quantity with a rate, so the scales may differ — but the
         // product's scale is their SUM, and landing it needs a declared contract.
         if n.value == 27 {
@@ -1317,6 +1335,15 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
     if n.kind == 9 {                                 // a comparison
         let left: Type = self.type_of(src, n.a, unknown_type());
         let right: Type = self.type_of(src, n.b, left);
+        // A CPointer is a token to hand back to C, not a value to compare — and pointer ORDERING
+        // says even less than pointer equality. The question people mean has a name.
+        if left.kind == 51 || right.kind == 51 {
+            let complained: Int = self.complain_at(src, n.token,
+                "a CPointer has no comparison: it is a token to hand back to C, not a value to "
+                + "compare. To test whether the call failed, use `c_is_null(p)`; to read what it "
+                + "points at, `c_string_at(p)`, which copies");
+            return simple_type(41);
+        }
         if !is_unknown(left) && !is_unknown(right) && !self.same_type(src, left, right) {
             let complained: Int = self.complain_at(src, n.token,
                 "cannot compare " + self.show_type(src, left) + " with " + self.show_type(src, right)
@@ -2010,6 +2037,14 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
                 "`print` renders a number, a Bool, a Decimal or a String — "
                 + self.show_type(src, shown) + " has no one rendering the language can choose "
                 + "for it");
+        }
+        // Not "not yet" — never. An address differs between runs, so a program that printed one
+        // would not be reproducible, and that is the property everything else here protects.
+        if shown.kind == 51 {
+            let complained: Int = self.complain_at(src, n.token,
+                "print does not show a CPointer, and never will: an address differs between runs, "
+                + "so printing one would make this program's output different every time. Ask "
+                + "`c_is_null(p)` whether the call failed, or `c_string_at(p)` for what it points at");
         }
         let target: Node = self.nodes[n.a];
         if target.kind == 18 {

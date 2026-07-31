@@ -24,7 +24,7 @@ Everything the language has. **Read out of the compiler**, not from memory: the 
 
 ## Keywords
 
-The 37 words the lexer knows. Every one of them is the word it means: `function`, not `fn`; `mutable`, not `mut`.
+The 38 words the lexer knows. Every one of them is the word it means: `function`, not `fn`; `mutable`, not `mut`.
 
 | | | | |
 |---|---|---|---|
@@ -36,8 +36,8 @@ The 37 words the lexer knows. Every one of them is the word it means: `function`
 | `match` | `interface` | `is` | `self` |
 | `implement` | `implements` | `for` | `in` |
 | `dynamic` | `Int` | `Bool` | `String` |
-| `CInt` | `CDouble` | `Decimal` | `RoundHalfEven` |
-| `RoundHalfUp` |  |  |  |
+| `CInt` | `CPointer` | `CDouble` | `Decimal` |
+| `RoundHalfEven` | `RoundHalfUp` |  |  |
 
 ## Contextual markers
 

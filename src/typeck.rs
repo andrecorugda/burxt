@@ -70,6 +70,8 @@ pub enum TypedExprKind {
     Old(usize),
     /// `read_file(path)`: the file's bytes as a region-allocated String.
     ReadFile(Box<TypedExpr>),
+    CIsNull(Box<TypedExpr>),
+    CStringAt(Box<TypedExpr>),
     /// `to_string(v)`: the value's exact display form, region-allocated.
     ToString(Box<TypedExpr>),
     /// `byte_at(s, i)`: the i-th byte as an Int, bounds-checked at runtime.
@@ -2486,6 +2488,7 @@ impl TypeChecker {
             TypedExprKind::SliceLit(_)
             | TypedExprKind::Push { .. }
             | TypedExprKind::ReadFile(_)
+            | TypedExprKind::CStringAt(_)
             | TypedExprKind::Substring { .. } => true,
             // A call to an `allocates` function or method built its result in OUR
             // region, so it is region storage here and the same escape rules apply.
@@ -2731,7 +2734,10 @@ impl TypeChecker {
                         e.name, p.name, other, m
                     ))
                 }
-                (Type::Int | Type::String | Type::CInt | Type::CDouble, None) => {}
+                (
+                    Type::Int | Type::String | Type::CInt | Type::CDouble | Type::CPointer,
+                    None,
+                ) => {}
                 (other, None) => {
                     return Err(format!(
                         "in external function `{}`, parameter `{}` has type {}, but only \
@@ -2755,13 +2761,24 @@ impl TypeChecker {
                 e.name
             ));
         }
-        if !matches!(e.ret, Type::Int | Type::CInt) {
+        // A CPointer return is how the pointer wall opens, and the reason it can open safely is
+        // that Burxt never has to answer the ownership question. It does not hold the pointer as
+        // anything it can act on: `c_is_null` asks whether the call failed and `c_string_at`
+        // COPIES the bytes out. Freeing, if C wants freeing, is an `external function free` the
+        // program calls in the open — visible in a signature rather than inferred by the compiler.
+        //
+        // A String return stays refused, and that is the same rule rather than an omission: a
+        // String is a Burxt value with an owner, so accepting one here would be a claim about
+        // whose memory it is. `-> CPointer` plus `c_string_at` says the same thing and says who
+        // copied.
+        if !matches!(e.ret, Type::Int | Type::CInt | Type::CPointer) {
             return Err(format!(
-                "external function `{}` returns {}, but only Int or CInt may cross the C \
-                 boundary as a return for now — Burxt cannot yet track who owns \
-                 memory a C function returns. (If the C function returns a 32-bit \
-                 `int`, declare `-> CInt` so the sign survives.)",
-                e.name, e.ret
+                "external function `{}` returns {}, but only Int, CInt or CPointer may cross \
+                 the C boundary as a return — a {} is a Burxt value with an owner, and C \
+                 cannot say whose it is. If the C function returns a pointer, declare \
+                 `-> CPointer` and read it with `c_string_at`, which copies. (If it returns a \
+                 32-bit `int`, declare `-> CInt` so the sign survives.)",
+                e.name, e.ret, e.ret
             ));
         }
         Ok(())
@@ -3817,6 +3834,16 @@ impl TypeChecker {
                                     Type::Param(p) => {
                                         return Err(unbounded(p, "interpolated"))
                                     }
+                                    // Not "not yet" — never. An address differs between runs.
+                                    Type::CPointer => {
+                                        return Err(
+                                            "a CPointer has no display form and will not get \
+                                             one: an address differs between runs, so printing \
+                                             it would make this program's output different \
+                                             every time. Interpolate `c_string_at(p)` instead."
+                                                .to_string(),
+                                        )
+                                    }
                                     other => {
                                         return Err(format!(
                                             "cannot interpolate {} {} — only Int, \
@@ -3836,6 +3863,19 @@ impl TypeChecker {
                 let typed = self.check_expr(e, None)?;
                 match &typed.ty {
                     Type::Param(p) => return Err(unbounded(p, "printed")),
+                    // Refused for a reason that IS the thesis rather than caution: an address
+                    // differs between runs, so a program that printed one would not be
+                    // reproducible — and a Burxt program's output being the same every time is
+                    // the property everything else here is built to protect.
+                    Type::CPointer => {
+                        return Err(
+                            "print does not show a CPointer, and never will: an address differs \
+                             between runs, so printing one would make this program's output \
+                             different every time. Ask `c_is_null(p)` whether the call failed, \
+                             or `c_string_at(p)` for what it points at."
+                                .to_string(),
+                        )
+                    }
                     Type::Named(n) if self.is_enum(n) => {
                         return Err(format!(
                             "print does not know how to show a {} — `match` on it and \
@@ -4638,6 +4678,58 @@ impl TypeChecker {
                     let mut olds = self.olds.borrow_mut();
                     olds.push(inner);
                     return Ok(TypedExpr { ty, kind: TypedExprKind::Old(olds.len() - 1) });
+                }
+                // ---- the two things that may be done with a CPointer ----
+                //
+                // Together these are the whole pointer wall. `c_is_null` asks whether the C call
+                // failed; `c_string_at` copies NUL-terminated bytes into a Burxt String. There is
+                // no third operation, which is what makes a CPointer safe to hold: the pointer
+                // never becomes a value the language must reason about the lifetime of, because
+                // nothing in the language can follow it except a copy.
+                if name == "c_is_null" {
+                    if arguments.len() != 1 {
+                        return Err("c_is_null(p) takes one CPointer".to_string());
+                    }
+                    let p = self.check_expr(&arguments[0], Some(&Type::CPointer))?;
+                    if p.ty != Type::CPointer {
+                        return Err(format!(
+                            "c_is_null(...) takes a CPointer — the thing an `external function` \
+                             handed back — but this has type {}",
+                            p.ty
+                        ));
+                    }
+                    return Ok(TypedExpr {
+                        ty: Type::Bool,
+                        kind: TypedExprKind::CIsNull(Box::new(p)),
+                    });
+                }
+                // The copy is the wall. C's bytes become Burxt's bytes here and the pointer is
+                // not kept, so who owns the C memory stops being a question Burxt has to answer —
+                // and the answer to "is it still valid later" is that Burxt never looks again.
+                //
+                // A null pointer traps rather than answering "": an unset value and an empty one
+                // are different facts, and returning the same String for both is the silent wrong
+                // answer this language exists to refuse. Ask `c_is_null` first.
+                if name == "c_string_at" {
+                    if arguments.len() != 1 {
+                        return Err("c_string_at(p) takes one CPointer".to_string());
+                    }
+                    let p = self.check_expr(&arguments[0], Some(&Type::CPointer))?;
+                    if p.ty != Type::CPointer {
+                        return Err(format!(
+                            "c_string_at(...) takes a CPointer, but this has type {}",
+                            p.ty
+                        ));
+                    }
+                    if !self.has_region() {
+                        return Err(self.needs_region(
+                            "c_string_at(...) copies C's bytes into a Burxt String",
+                        ));
+                    }
+                    return Ok(TypedExpr {
+                        ty: Type::String,
+                        kind: TypedExprKind::CStringAt(Box::new(p)),
+                    });
                 }
                 if name == "read_file" {
                     if let Some(why) = self.impure("read a file") {
@@ -5826,6 +5918,15 @@ impl TypeChecker {
                         .to_string(),
                 ),
             },
+            // Two pointers being equal says nothing a program can act on, and pointer ORDERING
+            // says even less. The question people actually mean is "did the call fail", and that
+            // has a name.
+            (CPointer, _) | (_, CPointer) => Err(format!(
+                "a CPointer has no `{}`: it is a token to hand back to C, not a value to \
+                 compare. To test whether the call failed, use `c_is_null(p)`; to read what \
+                 it points at, `c_string_at(p)`, which copies.",
+                op
+            )),
             (Bool, Bool) => match op {
                 CmpOp::Eq | CmpOp::Ne => Ok(()),
                 _ => Err(format!(

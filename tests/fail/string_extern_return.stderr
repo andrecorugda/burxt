@@ -1,1 +1,1 @@
-Burxt cannot yet track who owns memory a C function returns
+a String is a Burxt value with an owner, and C cannot say whose it is

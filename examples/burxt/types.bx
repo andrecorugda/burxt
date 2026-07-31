@@ -51,7 +51,7 @@ class Keyword { word: String, code: Int }
 //  10 logical            11 field access        12 index
 //  13 call               14 method call
 // Type kinds:
-//  40 Int  41 Bool  42 String  43 CInt  44 CDouble
+//  40 Int  41 Bool  42 String  43 CInt  44 CDouble  51 CPointer
 //  45 Decimal (scale in `a`, contract in `b`)   46 named   47 slice   48 array
 //  49 dynamic   50 type parameter
 //  A named type may be a generic APPLICATION: `a` is the start of its type-argument
@@ -89,7 +89,7 @@ class Node {
 // A class rather than an enum, because it is compared and copied constantly and a
 // payload enum would need a match at every use.
 class Type {
-    // The node kinds the parser produces: 40 Int, 41 Bool, 42 String, 43 CInt,
+    // The node kinds the parser produces: 40 Int, 41 Bool, 42 String, 43 CInt, 51 CPointer,
     // 44 CDouble, 45 Decimal, 46 named, 47 slice, 48 array, 49 dynamic,
     // 50 type PARAMETER. 0 is unknown, which never equals anything — including
     // another unknown.
@@ -531,6 +531,9 @@ function (mutable self: Unit) install_keywords() -> Int {
     n = self.add_word("String", 142);
     n = self.add_word("CInt", 143);
     n = self.add_word("CDouble", 144);
+    // An opaque pointer from C. A type keyword rather than a library name, because the checker
+    // has to refuse `==`, `print` and arithmetic on it — and a library cannot refuse anything.
+    n = self.add_word("CPointer", 148);
     n = self.add_word("Decimal", 145);
     n = self.add_word("RoundHalfEven", 146);
     n = self.add_word("RoundHalfUp", 147);

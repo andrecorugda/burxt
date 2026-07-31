@@ -1,0 +1,4 @@
+false
+the stated fallback
+unset, which is a fact and not an empty string
+true

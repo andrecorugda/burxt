@@ -1032,6 +1032,15 @@ function (mutable self: Unit) emit_c_call(src: String, n: Node, signature: Decla
         let ext: Int = self.write_body("  " + widened + " = sext i32 " + answer + " to i64\n");
         return widened;
     }
+    // A CPointer comes back as a real `ptr` and every Burxt value here is an i64, so it is carried
+    // as an integer — which costs nothing, because Burxt can do nothing with it either way. This
+    // arm was unreachable until v0.0.196: before the pointer wall opened, no external could return
+    // one.
+    if shape == "ptr" {
+        let as_int: String = self.fresh();
+        let cast: Int = self.write_body("  " + as_int + " = ptrtoint ptr " + answer + " to i64\n");
+        return as_int;
+    }
     return answer;
 }
 
@@ -1556,6 +1565,21 @@ function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String)
     if called == "argument" {
         let visited: Int = self.write_body("  " + reg + " = call i64 @burxt.argument(i64 " + first + ")\n");
         return reg;
+    }
+    // `c_is_null(p)` is one integer comparison: a Bool is an i64 0/1 here, so the zext is the
+    // whole conversion.
+    if called == "c_is_null" {
+        let flag: String = self.fresh();
+        let compared: Int = self.write_body("  " + flag + " = icmp eq i64 " + first + ", 0\n");
+        let widened: String = self.fresh();
+        let ext: Int = self.write_body("  " + widened + " = zext i1 " + flag + " to i64\n");
+        return widened;
+    }
+    if called == "c_string_at" {
+        let answer: String = self.fresh();
+        let visited: Int = self.write_body("  " + answer
+            + " = call i64 @burxt.c_string_at(i64 " + first + ")\n");
+        return answer;
     }
     if called == "read_file" {
         let visited: Int = self.write_body("  " + reg + " = call i64 @burxt.read_file(i64 " + first
@@ -2242,6 +2266,12 @@ function c_type_of(bound_type: Type) -> String {
     }
     if bound_type.kind == 43 {
         return "i32";
+    }
+    // An opaque pointer, both ways: C receives and returns a real `ptr`, and the emitter casts at
+    // the boundary just as it does for a String. What keeps it opaque is the CHECKER — nothing in
+    // Burxt can follow it — so the representation needs no protection of its own.
+    if bound_type.kind == 51 {
+        return "ptr";
     }
     if bound_type.kind == 44 {
         return "double";
@@ -3620,7 +3650,10 @@ function runtime_ir() -> String {
         + "@burxt.no_read_msg = private unnamed_addr constant [51 x i8] "
         + "c\"burxt runtime error: cannot open file for reading\\0A\\00\"\n"
         + "@burxt.no_write_msg = private unnamed_addr constant [51 x i8] "
-        + "c\"burxt runtime error: cannot open file for writing\\0A\\00\"\n\n"
+        + "c\"burxt runtime error: cannot open file for writing\\0A\\00\"\n"
+        + "@burxt.null_ptr_msg = private unnamed_addr constant [83 x i8] "
+        + "c\"burxt runtime error: c_string_at was given a null pointer; "
+        + "ask c_is_null(p) first\\0A\\00\"\n\n"
         + "define i64 @burxt.argument_count() \{\n"
         + "entry:\n  %n = load i64, ptr @burxt.argc\n  ret i64 %n\n\}\n\n"
         + "define i64 @burxt.argument(i64 %i) \{\n"
@@ -3640,6 +3673,33 @@ function runtime_ir() -> String {
         + "  %op = inttoptr i64 %owned to ptr\n"
         + "  %moved = call ptr @memcpy(ptr %op, ptr %s, i64 %borrowed)\n"
         + "  ret i64 %owned\n\}\n\n"
+        // `c_string_at(p)` — the SECOND place a foreign string enters a Burxt program, and the
+        // general one. The comment above says `argument` is the only place; as of v0.0.196 that is
+        // no longer true, and the reason is the pointer wall: an `external function` may hand back
+        // a CPointer, and this is the only way to look at what it points at.
+        //
+        // The copy IS the wall. After this returns, Burxt holds bytes it owns and the pointer is
+        // not kept, so "who frees it" and "is it still valid" stop being questions the compiler has
+        // to answer — nothing will look again.
+        //
+        // A null pointer dies here rather than answering "": unset and empty are different facts,
+        // and one String for both is the silent wrong answer this language exists to refuse.
+        + "define i64 @burxt.c_string_at(i64 %p) \{\n"
+        + "entry:\n"
+        + "  %isnull = icmp eq i64 %p, 0\n"
+        + "  br i1 %isnull, label %nothing, label %copy\n"
+        + "nothing:\n"
+        + "  %nerr = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %nerr, ptr @burxt.null_ptr_msg)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n"
+        + "copy:\n"
+        + "  %cs = inttoptr i64 %p to ptr\n"
+        + "  %clen = call i64 @strlen(ptr %cs)\n"
+        + "  %cowned = call i64 @burxt.alloc_string(i64 %clen)\n"
+        + "  %cop = inttoptr i64 %cowned to ptr\n"
+        + "  %cmoved = call ptr @memcpy(ptr %cop, ptr %cs, i64 %clen)\n"
+        + "  ret i64 %cowned\n\}\n\n"
         + "define i64 @burxt.read_file(i64 %path) \{\n"
         + "entry:\n"
         + "  %p = inttoptr i64 %path to ptr\n"

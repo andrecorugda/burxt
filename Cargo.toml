@@ -1,6 +1,6 @@
 [package]
 name = "burxt"
-version = "0.0.195"
+version = "0.0.196"
 edition = "2021"
 description = "The Burxt programming language: typed, compiled, native, exact decimals by default."
 license = "MIT OR Apache-2.0"

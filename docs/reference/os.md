@@ -30,7 +30,9 @@ Arguments, the clock, running a command, and exiting with a code. Each one wraps
 | [`os_read_byte`](#os-read-byte) | function | One byte of standard input, or -1 at the end. The whole of the input, a byte at a time, is what a program can do today — |
 | [`os_read_line`](#os-read-line) | function | One line of standard input, without its newline, or None at end of input. |
 | [`os_read_all`](#os-read-all) | function | — |
-| [`os_byte_as_string`](#os-byte-as-string) | function | A single byte as a one-character String. Burxt has no character type and `to_string` of an Int gives digits, so the only |
+| [`os_env`](#os-env) | function | A single byte as a one-character String. Burxt has no character type and `to_string` of an Int gives digits, so the only |
+| [`os_env_or`](#os-env-or) | function | The same question with a stated fallback, for the common case where a missing setting has a sensible default. Separate f |
+| [`os_byte_as_string`](#os-byte-as-string) | function | — |
 
 ## Functions
 {: #functions}
@@ -44,7 +46,7 @@ function os_arg_count() -> Int touches input
 
 The arguments the program was started with. Index 0 is the program's own path, as it is everywhere else.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L20)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L23)
 
 ### `os_arg`
 {: #os-arg}
@@ -53,7 +55,7 @@ The arguments the program was started with. Index 0 is the program's own path, a
 function os_arg(index: Int) -> String touches input
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L24)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L27)
 
 ### `os_args`
 {: #os-args}
@@ -64,7 +66,7 @@ function os_args() -> [String] touches input
 
 Every argument after the program's own name.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L29)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L32)
 
 ### `os_now`
 {: #os-now}
@@ -75,7 +77,7 @@ function os_now() -> Int touches clock
 
 Seconds since 1970. Whole seconds, because that is what `time` answers — a finer clock needs `clock_gettime`, which fills a class through a pointer, and that is exactly what Burxt will not let C do yet.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L42)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L45)
 
 ### `os_run`
 {: #os-run}
@@ -86,7 +88,7 @@ function os_run(command: String) -> Int touches commands
 
 Run a command through the shell and answer its exit code. `system` reports a wait status; the exit code is its high byte.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L48)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L51)
 
 ### `os_capture`
 {: #os-capture}
@@ -97,7 +99,7 @@ function os_capture(command: String) -> String touches commands, files
 
 Run a command and answer what it printed. The output travels through a file because a pipe would mean `popen`, which answers a pointer.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L54)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L57)
 
 ### `os_read_byte`
 {: #os-read-byte}
@@ -108,7 +110,7 @@ function os_read_byte() -> Int touches input
 
 One byte of standard input, or -1 at the end. The whole of the input, a byte at a time, is what a program can do today — `fgets` needs a buffer it does not own.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L62)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L65)
 
 ### `os_read_line`
 {: #os-read-line}
@@ -125,7 +127,7 @@ A bare `\r` before the newline is dropped, so a CRLF client and an LF client are
 
 `None` at end of input rather than an empty String, because an empty LINE is a real thing a client can send and the two must be distinguishable. That is the same reason `string_parse_int` exists beside `string_to_int`.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L79)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L82)
 
 ### `os_read_all`
 {: #os-read-all}
@@ -134,7 +136,33 @@ A bare `\r` before the newline is dropped, so a CRLF client and an LF client are
 function os_read_all() -> String touches input
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L106)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L109)
+
+### `os_env`
+{: #os-env}
+
+```burxt
+function os_env(name: String) -> Option<String> touches input
+```
+
+A single byte as a one-character String. Burxt has no character type and `to_string` of an Int gives digits, so the only way through is a table. An environment variable, or a stated absence.
+
+`Option<String>` and not `String`, because **unset and empty are different facts.** `FOO=` sets FOO to the empty string; not mentioning FOO at all is a different thing, and a library that answered "" for both would make "is this configured" unanswerable. `getenv` distinguishes them by returning NULL, and this is where that distinction is preserved rather than flattened.
+
+`touches input` because the value came from outside the program. Whether reading the environment deserves an effect of its own is an open question — see spec/FAR-HORIZON-ROADMAP.md M2 — but `input` is honest today: it is a value the process was started with.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L139)
+
+### `os_env_or`
+{: #os-env-or}
+
+```burxt
+function os_env_or(name: String, fallback: String) -> String touches input
+```
+
+The same question with a stated fallback, for the common case where a missing setting has a sensible default. Separate from `os_env` rather than a parameter with a default, because Burxt has no default arguments — and because the two really are different questions.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L151)
 
 ### `os_byte_as_string`
 {: #os-byte-as-string}
@@ -143,7 +171,5 @@ function os_read_all() -> String touches input
 function os_byte_as_string(byte: Int) -> String
 ```
 
-A single byte as a one-character String. Burxt has no character type and `to_string` of an Int gives digits, so the only way through is a table.
-
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L126)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L155)
 

@@ -1,0 +1,59 @@
+// The pointer wall, opened — v0.0.196, spec/FAR-HORIZON-ROADMAP.md M2.
+//
+// Before this, an `external function` could return only an Int or a CInt, because Burxt could not say
+// who owned memory C handed back. That one line was the single largest gap in the language: every C
+// library, every socket, every platform API and every `getenv` sat behind it.
+//
+// What opens it is not a lifetime system. It is a smaller idea: **Burxt never holds the pointer as
+// anything it can act on.** A `CPointer` is a token, and exactly two things may be done with one —
+//
+//     c_is_null(p)      did the call fail?
+//     c_string_at(p)    copy the NUL-terminated bytes into a Burxt String
+//
+// and there is no third. No arithmetic, no indexing, no printing, not even `==`. So "who frees this"
+// and "is it still valid" stop being questions the compiler has to answer, because nothing will look
+// again. The COPY is the wall. See tests/fail/c_pointer_*.bx for each refusal.
+//
+// `strstr` is used here rather than `getenv` because both of its outcomes are reproducible, and
+// because it makes the borrowing visible: it returns a pointer INTO its own argument — memory C never
+// allocated and will never free.
+external function strstr(haystack: String, needle: String) -> CPointer;
+external function getenv(name: String) -> CPointer touches input;
+
+// A found suffix, or a stated absence. This is the shape every C-returning call takes in Burxt: ask
+// whether it failed, then copy. The Option is written in Burxt, not built into the boundary — the
+// compiler's job was only to make the two cases distinguishable.
+function after(text: String, mark: String) -> String {
+    let found: CPointer = strstr(text, mark);
+    if c_is_null(found) {
+        return "<not found>";
+    }
+    return c_string_at(found);
+}
+
+region main {
+    print(after("burxt runtime error: nothing", "error"));
+    print(after("burxt runtime error: nothing", "warning"));
+
+    // The copy is a real Burxt String: it has a length, it can be sliced, it outlives nothing.
+    let rest: String = after("scale=7 rounding=half-even", "rounding");
+    print(len(rest));
+    print(substring(rest, 0, 8));
+    print(rest == "rounding=half-even");
+
+    // A pointer into a value that is itself the result of a call. If `c_string_at` did not copy,
+    // this is where it would show — the haystack's storage is the region's, not C's.
+    print(after(after("a:b:c", "b"), "c"));
+
+    // The failure path, deterministic because no environment sets this.
+    let missing: CPointer = getenv("BURXT_THIS_IS_NOT_SET_9f3a7c1e");
+    print(c_is_null(missing));
+    // And `getenv` of something every process has. The VALUE is not printed — that would differ
+    // between machines — only the fact that a pointer came back and copying it produced bytes.
+    let path: CPointer = getenv("PATH");
+    if c_is_null(path) {
+        print("no PATH, which is not a thing that happens");
+    } else {
+        print(len(c_string_at(path)) > 0);
+    }
+}

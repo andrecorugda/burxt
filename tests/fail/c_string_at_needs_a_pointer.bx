@@ -1,0 +1,3 @@
+// An Int is not a pointer, and letting one become one by writing it down would hand the language
+// exactly the ability the wall exists to withhold. There is no cast, and that is the feature.
+region main { print(c_string_at(140737488355328)); }

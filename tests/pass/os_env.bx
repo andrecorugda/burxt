@@ -1,0 +1,25 @@
+// Reading the environment — lib/os.bx, the pointer wall's first customer (v0.0.196).
+//
+// The point being pinned is the DISTINCTION: `Option<String>`, not `String`, because unset and empty
+// are different facts. `FOO=` sets FOO to the empty string; not mentioning FOO is something else, and
+// a library answering "" for both would make "is this configured" unanswerable.
+//
+// Only the unset path is asserted here, because a fixture's output has to be the same on every
+// machine — and what an environment variable holds is exactly the kind of thing that is not. The
+// found path is exercised by tests/pass/c_pointer_wall.bx, which reads PATH and asserts only that
+// copying it produced bytes.
+use "../../lib/os.bx";
+
+region main {
+    // A name no environment sets, so this is the same answer everywhere.
+    print(option_is_some(os_env("BURXT_THIS_IS_NOT_SET_9f3a7c1e")));
+    print(os_env_or("BURXT_THIS_IS_NOT_SET_9f3a7c1e", "the stated fallback"));
+
+    match os_env("BURXT_THIS_IS_NOT_SET_9f3a7c1e") {
+        None => { print("unset, which is a fact and not an empty string"); }
+        Some(value) => { print("SET, which this test does not expect: " + value); }
+    }
+
+    // PATH exists in every environment a test runs in, and the VALUE is never printed.
+    print(option_is_some(os_env("PATH")));
+}
