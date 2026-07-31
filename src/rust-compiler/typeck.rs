@@ -7058,7 +7058,26 @@ fn stmt_returns(s: &TypedStmt) -> bool {
         // there was no way to write a function that returns from inside a
         // region.
         TypedStmt::Region { body, .. } => block_returns(body),
-        TypedStmt::For { body, .. } => block_returns(body),
+        // **`For` used to answer `block_returns(body)` here, and that was a CRASH.** A `for` whose
+        // body returns was treated as returning on every path — but a `for` over an EMPTY array runs
+        // zero times, so the path that skips the loop falls out of the function with no `return`.
+        //
+        // Measured at v0.0.241, and the shape is the worst one available:
+        //
+        //     function f(xs: [Int]) -> Int { for x in xs { return x; } }
+        //     ...typechecks, then: error: LLVM module verification failed:
+        //                          Basic Block in function 'bx.f' does not have terminator!
+        //
+        // The checker said yes and LLVM said no, so the user is told the COMPILER is broken rather
+        // than that their program is missing a `return`. `stmt_diverges`, two functions above, had
+        // already said the true thing out loud about the same construct — the two disagreed and
+        // nothing compared them.
+        //
+        // `while` was always `_ => false` for exactly this reason; `For` is now the same. Found by a
+        // subagent implementing ranges, because deciding what a RANGE should answer here made the
+        // inconsistency worth measuring — it did not want to write `false` for one loop form and
+        // `true` for the other. A question about new work exposing old work is the cheapest kind of
+        // audit there is.
         _ => false,
     }
 }
