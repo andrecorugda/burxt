@@ -1393,10 +1393,10 @@ impl TypeChecker {
         }
         match bound {
             "Ordered" => match argument {
-                Type::Int | Type::Decimal { .. } => Ok(()),
+                Type::Int | Type::Decimal { .. } | Type::String => Ok(()),
                 _ => Err(format!(
-                    "`{}` needs `{}: Ordered`, and {} has no order. Ordered is Int and \
-                     Decimal — the types `<` works on.",
+                    "`{}` needs `{}: Ordered`, and {} has no order. Ordered is Int, \
+                     Decimal and String — the types `<` works on.",
                     callee, param, shown
                 )),
             },
@@ -6197,14 +6197,20 @@ impl TypeChecker {
             // path — so a cross-type comparison involving a String falls
             // through to the shared catch-all below and reads identically to
             // any other type mismatch.
-            (String, String) => match op {
-                CmpOp::Eq | CmpOp::Ne => Ok(()),
-                _ => Err(
-                    "Strings have no ordering yet — byte ordering arrives with \
-                     collections. (For C's ordering, call strcmp through FFI.)"
-                        .to_string(),
-                ),
-            },
+            // Strings compare by BYTES, for equality and for order alike (v0.0.202).
+            //
+            // **Byte order, and the documentation says so rather than implying it.** This is not
+            // alphabetical order in any language: "Zebra" sorts before "apple" because 'Z' is 90 and
+            // 'a' is 97, and "ä" sorts after both because it is two bytes. Locale collation is a
+            // real thing people want and it is a DECISION — which language, which of that language's
+            // several orders — so a `<` that quietly picked one would be exactly the silent choice
+            // this language refuses. Byte order is the one ordering that needs no decision, is the
+            // same on every machine, and is what a sort needs to be reproducible.
+            //
+            // It was refused until now with "byte ordering arrives with collections". Collections
+            // arrived; `lib/array.bx` could sort numbers and not names, which is the more common
+            // want.
+            (String, String) => Ok(()),
             // Two pointers being equal says nothing a program can act on, and pointer ORDERING
             // says even less. The question people actually mean is "did the call fail", and that
             // has a name.

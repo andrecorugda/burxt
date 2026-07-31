@@ -731,6 +731,17 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
     if n.kind == 9 {                                 // a comparison
         let left: String = self.emit_expr(src, n.a);
         let right: String = self.emit_expr(src, n.b);
+        // RESOLVED, not raw. Inside a generic copy the operand's recorded type is still the type
+        // PARAMETER, so `self.type_at` answers kind 50 and both special paths below are skipped —
+        // and the comparison falls through to the integer one, which for a String compares the
+        // ADDRESS. `array_sort` over `[String]` therefore sorted by where the bytes happened to be
+        // allocated: a plausible-looking order that is not an order. Found in v0.0.202 by sorting
+        // four names and reading the answer.
+        //
+        // The class arm below is covered too, though nothing can reach it today: `Equatable` does not
+        // include classes, so `T: Equatable` cannot be instantiated with one. Written this way
+        // because the moment it can be, the address comparison would be waiting.
+        let subject: Type = self.resolve_shallow(src, self.type_at(n.a));
         // A CLASS compares field by field. Before v0.0.184 this fell through to the integer path,
         // which compared the two ADDRESSES — so `a == b` on two identical Points answered false, and
         // the checker accepted it. A silent wrong answer, for as long as classes have existed,
@@ -738,8 +749,8 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
         //
         // Not memcmp either: a String field holds a POINTER, and two equal strings need not live at
         // the same address, so comparing the cells would be the same bug one level down.
-        if self.type_at(n.a).kind == 46 {
-            let bit: String = self.class_equal(src, self.type_at(n.a), left, right);
+        if subject.kind == 46 {
+            let bit: String = self.class_equal(src, subject, left, right);
             if n.value == 13 {                       // `!=`
                 let flipped: String = self.fresh();
                 let inverted: Int = self.write_body("  " + flipped + " = sub i64 1, " + bit + "\n");
@@ -747,7 +758,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
             }
             return bit;
         }
-        if self.type_at(n.a).kind == 42 {
+        if subject.kind == 42 {
             // Strings compare by BYTES. Comparing the i64s would compare pointers, which
             // is true only when two Strings are the same object — a bug that reads as a
             // working program right up until two equal Strings were built separately.
@@ -755,8 +766,22 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
             let compared: Int = self.write_body("  " + order + " = call i64 @burxt.strcmp(i64 "
                                        + left + ", i64 " + right + ")\n");
             let bit: String = self.fresh();
+            // ALL SIX operators, not two. This mapped only `==` and `!=` until v0.0.202 and
+            // defaulted everything else to `eq` — so `"apple" < "banana"` emitted
+            // `strcmp(...) == 0` and answered FALSE. Nothing could reach it, because stage-0
+            // refused ordering on Strings entirely, so the miscompile sat behind a gate in the
+            // other compiler. The moment ordering was allowed it would have shipped, and the
+            // differential is what found it inside one version.
+            //
+            // Worth keeping as a pattern: where one compiler REFUSES something, the other's
+            // handling of it is untested by construction. A refusal in stage-0 is not coverage
+            // for stage-1.
             let mutable op: String = "eq";
             if n.value == 13 { op = "ne"; }
+            if n.value == 14 { op = "sle"; }
+            if n.value == 15 { op = "sge"; }
+            if n.value == 35 { op = "slt"; }
+            if n.value == 36 { op = "sgt"; }
             let tested: Int = self.write_body("  " + bit + " = icmp " + op + " i64 " + order
                                      + ", 0\n");
             let reg: String = self.fresh();

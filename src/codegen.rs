@@ -1863,19 +1863,55 @@ impl<'ctx> CodeGen<'ctx> {
                 if lhs.ty == Type::String {
                     let a = self.gen_expr(lhs)?.into_pointer_value();
                     let b = self.gen_expr(rhs)?.into_pointer_value();
-                    let eq = self.build_str_eq(a, b)?;
-                    return match op {
-                        CmpOp::Eq => Ok(eq.into()),
-                        CmpOp::Ne => self
-                            .builder
-                            .build_int_sub(i64t.const_int(1, false), eq, "str_ne")
-                            .map(Into::into)
-                            .map_err(|e| e.to_string()),
-                        other => Err(format!(
-                            "codegen bug: `{}` on String should have been refused",
-                            other
-                        )),
+                    // Equality keeps its own path: `build_str_eq` stops at the first differing byte
+                    // and needs no sign, so it stays cheaper than a full compare.
+                    if matches!(op, CmpOp::Eq | CmpOp::Ne) {
+                        let eq = self.build_str_eq(a, b)?;
+                        return match op {
+                            CmpOp::Eq => Ok(eq.into()),
+                            _ => self
+                                .builder
+                                .build_int_sub(i64t.const_int(1, false), eq, "str_ne")
+                                .map(Into::into)
+                                .map_err(|e| e.to_string()),
+                        };
+                    }
+                    // Ordering is `strcmp`'s sign (v0.0.202). BYTE order, which is the only ordering
+                    // that needs no decision: locale collation would mean picking a language and one
+                    // of its several orders, silently. `strcmp` is already a declared runtime symbol
+                    // and every Burxt String is NUL-terminated, so there is nothing to build.
+                    let ptr = self.ctx.ptr_type(AddressSpace::default());
+                    let i32t = self.ctx.i32_type();
+                    let strcmp = self.libc("strcmp", i32t.fn_type(&[ptr.into(), ptr.into()], false));
+                    let call = self
+                        .builder
+                        .build_call(strcmp, &[a.into(), b.into()], "strcmp")
+                        .map_err(|e| e.to_string())?;
+                    let sign = match call.try_as_basic_value() {
+                        inkwell::values::ValueKind::Basic(v) => v.into_int_value(),
+                        _ => return Err("strcmp returned void".to_string()),
                     };
+                    // Widened before comparing: strcmp answers a 32-bit int and a negative one read
+                    // as 64 bits would be enormous. Sign-extended, because the sign IS the answer.
+                    let widened = self
+                        .builder
+                        .build_int_s_extend(sign, i64t, "strcmp_wide")
+                        .map_err(|e| e.to_string())?;
+                    let predicate = match op {
+                        CmpOp::Lt => inkwell::IntPredicate::SLT,
+                        CmpOp::Le => inkwell::IntPredicate::SLE,
+                        CmpOp::Gt => inkwell::IntPredicate::SGT,
+                        _ => inkwell::IntPredicate::SGE,
+                    };
+                    let bit = self
+                        .builder
+                        .build_int_compare(predicate, widened, i64t.const_zero(), "str_cmp")
+                        .map_err(|e| e.to_string())?;
+                    return self
+                        .builder
+                        .build_int_z_extend(bit, i64t, "str_cmp_bool")
+                        .map(Into::into)
+                        .map_err(|e| e.to_string());
                 }
                 // A CLASS compares field by field. NOT `memcmp`, and that is the whole of the
                 // work: a class holding a String holds a POINTER, and two equal strings need not

@@ -425,7 +425,7 @@ defines what Burxt becomes.
 | Write to stderr | trivial | **no.** `print` is stdout only; nothing in `lib/` reaches stderr | Blocking |
 | Read an environment variable | trivial | **yes (v0.0.196).** `os_env(name) -> Option<String>` — Option, because unset and empty are different facts | Done |
 | Structured logging | crates/libs | **none.** `print` is the whole story, and it only reaches stdout | Blocking |
-| Sort or order Strings | trivial | **no.** `T: Ordered` is Int and Decimal; String has no `<`, so `lib/array.bx` cannot sort names. Byte ordering is the fix and it is small | Blocking, and cheap |
+| Sort or order Strings | trivial | **yes (v0.0.202).** `<` on String is BYTE order — locale collation is a decision nobody wrote down, byte order needs none and is identical everywhere. `T: Ordered` includes String, so `array_sort` sorts names | Done |
 | An Option-returning GENERIC | `Option<T>` | **no.** `Option.None` cannot be built where `T` is a type parameter, even written out — so `array_min<T>` takes a precondition instead (which is better, but the gap is real) | Papercut, sharp |
 | A `pure` function that builds an Option | n/a | **no.** `Option.Some(x)` reads as a method call, and a method cannot be `pure` yet — so a function that only reads its arguments is refused the word saying so | Papercut |
 | Catch a failure / recover | `catch_unwind`, exceptions | **no.** A contract or bounds failure exits 70. There is no handler | Decision worth stating |

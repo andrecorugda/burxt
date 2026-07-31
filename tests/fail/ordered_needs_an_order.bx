@@ -1,0 +1,24 @@
+// `Ordered` is Int, Decimal and String — the types `<` actually works on. A bound cannot promise more
+// than the language delivers, so Bool is refused: two Bools have no order, and picking one (false
+// first? true first?) would be a decision nobody wrote down.
+//
+// String joined the list in v0.0.202, by BYTE order. Not alphabetical order in any language, because
+// locale collation is a decision — which language, and which of its several orders.
+function smallest<T: Ordered>(xs: [T]) -> T
+    requires len(xs) > 0
+{
+    let mutable best: T = xs[0];
+    let mutable i: Int = 1;
+    while i < len(xs) {
+        if xs[i] < best {
+            best = xs[i];
+        }
+        i += 1;
+    }
+    return best;
+}
+region main {
+    let mutable flags: [Bool] = [];
+    let a: Int = push(flags, true);
+    print(smallest(flags));
+}

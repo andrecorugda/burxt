@@ -221,6 +221,7 @@ function largest<T: Ordered>(a: T, b: T) -> T {
 
 print(largest(3, 9));
 print(largest($19.99, $4.50));
+print(largest("apple", "pear"));
 ```
 
 Two bounds ship, and each is exactly a set the language already has:
@@ -229,7 +230,7 @@ Two bounds ship, and each is exactly a set the language already has:
 
 | Bound | Means | Because |
 |---|---|---|
-| `Ordered` | `Int`, `Decimal` | the types `<` works on |
+| `Ordered` | `Int`, `Decimal`, `String` | the types `<` works on |
 | `Equatable` | `Int`, `Decimal`, `Bool`, `String` | the types `==` works on |
 
 </div>
@@ -237,12 +238,18 @@ Two bounds ship, and each is exactly a set the language already has:
 **A bound cannot promise more than the language delivers.** There is no `Addable`, because `+` on
 two `Decimal`s has a [scale rule](02-numbers-and-money.md) that a bound would have to lie about.
 
+A `String` is ordered by its **bytes** — so `"Zebra"` comes before `"apple"`, because `Z` is 90 and `a`
+is 97. That is not alphabetical order in any language, and it is deliberate: locale collation means
+choosing a language *and* one of that language's several orders, which is a decision nobody wrote down.
+Byte order is the one ordering that needs no decision and is identical on every machine, which is what
+a sort has to be to stay reproducible.
+
 When a bound is missing, the error names the *operator* rather than the bound, because the operator
 is the thing you were actually trying to use:
 
 ```
-error: `largest` needs `T: Ordered`, and String has no order. Ordered is Int and
-       Decimal — the types `<` works on.
+error: `largest` needs `T: Ordered`, and Bool has no order. Ordered is Int,
+       Decimal and String — the types `<` works on.
 ```
 
 Bounds are checked **where the type argument is chosen** — at the call site — so the error points at
@@ -336,17 +343,20 @@ function largest<T: Ordered>(a: T, b: T) -> T {
 
 print(largest(3, 9));
 print(largest($19.99, $4.50));
+print(largest("apple", "pear"));
 ```
 
 ```
 9
 19.99
+pear
 ```
 
-Those are two separate machine functions — one over `Int`, one over `Decimal<2>` — and the second one
-compares scaled integers directly rather than unboxing anything.
+Those are three separate machine functions — one over `Int`, one over `Decimal<2>`, one over `String` —
+and the `Decimal` one compares scaled integers directly rather than unboxing anything.
 
-**And the bound doing its job.** `String` has no order, so it cannot arrive:
+**And the bound doing its job.** `Bool` has no order — is `false` smaller than `true`, or is the
+question meaningless? Nobody wrote it down, so it cannot arrive:
 
 ```burxt
 function largest<T: Ordered>(a: T, b: T) -> T {
@@ -354,15 +364,15 @@ function largest<T: Ordered>(a: T, b: T) -> T {
     return b;
 }
 
-print(largest("apple", "pear"));
+print(largest(true, false));
 ```
 
 ```
-error: `largest` needs `T: Ordered`, and String has no order. Ordered is Int and Decimal — the types `<` works on.
+error: `largest` needs `T: Ordered`, and Bool has no order. Ordered is Int, Decimal and String — the types `<` works on.
  --> largest.bx:6:7
   |
-6 | print(largest("apple", "pear"));
-  |       ^^^^^^^^^^^^^^^^^^^^^^^^
+6 | print(largest(true, false));
+  |       ^^^^^^^^^^^^^^^^^^^^
 ```
 
 The message names the bound, names the type that failed it, **and lists what the bound contains** — so

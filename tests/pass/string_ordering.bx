@@ -1,0 +1,53 @@
+// Strings compare by BYTES — for order as well as equality, since v0.0.202.
+//
+// It was refused before with "byte ordering arrives with collections". Collections arrived, and
+// `lib/array.bx` could sort numbers but not names, which is the more common want.
+//
+// **BYTE order, said out loud rather than implied.** This is not alphabetical order in any language:
+// "Zebra" sorts before "apple" because 'Z' is 90 and 'a' is 97. Locale collation is a real thing people
+// want, and it is a DECISION — which language, and which of that language's several orders — so a `<`
+// that quietly picked one would be exactly the silent choice this language refuses. Byte order is the
+// one ordering that needs no decision, is identical on every machine, and is therefore the one a
+// reproducible sort can be built on.
+//
+// A bug found the moment this was allowed, and worth knowing about: stage-1 had ALWAYS accepted `<` on
+// Strings and emitted `strcmp(a, b) == 0` for it, because its operator table mapped only `==` and `!=`
+// and defaulted the rest to `eq`. So it answered false for everything. Nothing could reach it, because
+// stage-0 refused ordering outright — the miscompile sat behind a gate in the other compiler. Where one
+// compiler refuses something, the other's handling of it is untested BY CONSTRUCTION.
+use "../../lib/array.bx";
+
+region main {
+    // ---- the operators ----
+    print("apple" < "banana");
+    print("banana" < "apple");
+    print("apple" <= "apple");
+    print("apple" < "apple");
+    print("pear" > "apple");
+    print("apple" >= "banana");
+
+    // A prefix is smaller: "abc" runs out first.
+    print("abc" < "abcd");
+    print("abcd" < "abc");
+
+    // Case is byte order, not alphabetical order. This is the line a reader has to see once.
+    print("Zebra" < "apple");
+    print("apple" < "Zebra");
+
+    // The empty string is smaller than everything except itself.
+    print("" < "a");
+    print("" < "");
+
+    // ---- and what it was for: sorting names ----
+    let mutable names: [String] = [];
+    let a: Int = push(names, "pear");
+    let b: Int = push(names, "Apple");
+    let c: Int = push(names, "apple");
+    let d: Int = push(names, "banana");
+    print(array_is_sorted(names));
+    let n: Int = array_sort(names);
+    print(names[0] + " " + names[1] + " " + names[2] + " " + names[3]);
+    print(array_is_sorted(names));
+    print(array_min(names));
+    print(array_max(names));
+}

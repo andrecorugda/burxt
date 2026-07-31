@@ -24,9 +24,11 @@
 //
 // ---- what is NOT here, and why ---------------------------------------------------------
 //
-// **No `sort` for `[String]`.** `T: Ordered` is Int and Decimal today — Strings have no `<` yet, so a
-// bound that promised one would be a lie. Sorting names is a common thing to want, so this is a real
-// gap rather than a decision; it belongs to whatever adds byte ordering to String.
+// **Sorting Strings works** (v0.0.202), by BYTE order — so "Zebra" comes before "apple", because `Z`
+// is 90 and `a` is 97. That is not alphabetical order in any language, and it is deliberate: locale
+// collation means picking a language and one of its several orders, which is a decision nobody wrote
+// down. Byte order needs no decision and is identical on every machine, which is what a reproducible
+// sort is built on.
 //
 // **No `map` or `filter`.** Those need function values, which the language does not have. Write the
 // loop; it is three lines and a reader can see what it does.

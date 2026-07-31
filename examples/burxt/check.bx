@@ -203,9 +203,9 @@ function (mutable self: Unit) bind_type_arguments(src: String, generic: Int, arg
 
 // Does this type argument satisfy the bound the signature declared?
 //
-// The two the language ships mirror exactly what it already allows: `Ordered` is Int and
-// Decimal, the types `<` works on; `Equatable` adds Bool and String, the types `==` works on.
-// A bound cannot promise more than the language delivers.
+// The two the language ships mirror exactly what it already allows: `Ordered` is Int, Decimal
+// and String — the types `<` works on, String by BYTE order since v0.0.202 — and `Equatable`
+// adds Bool, the types `==` works on. A bound cannot promise more than the language delivers.
 function (mutable self: Unit) check_bound(src: String, bound: Int, argument: Type,
                                          parameter: Token, at: Int) -> Int {
     if bound < 0 {
@@ -213,11 +213,11 @@ function (mutable self: Unit) check_bound(src: String, bound: Int, argument: Typ
     }
     let named: Token = self.tokens[bound];
     if span_equal(src, named.start, named.length, "Ordered") {
-        if argument.kind != 40 && argument.kind != 45 {
+        if argument.kind != 40 && argument.kind != 45 && argument.kind != 42 {
             let complained: Int = self.complain_at(src, at,
                 "`" + substring(src, parameter.start, parameter.length)
                 + ": Ordered` needs a type with an order, and " + self.show_type(src, argument)
-                + " has none: Ordered is Int and Decimal");
+                + " has none: Ordered is Int, Decimal and String");
         }
         return 1;
     }
