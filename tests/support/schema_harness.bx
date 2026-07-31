@@ -1,0 +1,36 @@
+// ============================================================================
+// tests/support/schema_harness.bx — runs `src/burxt-compiler/schema.bx` from the outside, so
+// a test can hold its output against `src/rust-compiler/schema.rs`'s byte for byte.
+//
+// A HARNESS rather than a fixture, and that is why it lives in `tests/support/` beside
+// `diag_harness.bx` and `failing_suite.bx`: a fixture's answer is a checked-in `.stdout`, and
+// this program's answer depends on the file it is pointed at. `spec/A7.0-NAMING.md` §10 is the
+// habit — `diag_harness.bx` was first written into a `tests/tools/` that did not exist, beside
+// three files that said where it belonged.
+//
+//     schema_harness <file.bx>
+//
+// Prints the manifest on stdout and, when a precondition could not be expressed, the note on
+// stderr — the same two streams `burxt mcp-schema` writes, so
+// `the_two_compilers_derive_the_same_mcp_schema` can compare both without either side needing
+// a switch for the test's benefit.
+//
+// This is deliberately THIN. Every decision lives in `schema.bx`, including the note's text,
+// so the two callers of `mcp_schema` cannot produce different bytes; a harness that assembled
+// any of the output itself would be testing itself. It is also why the exit status is the only
+// thing added: a test needs to tell "refused" from "an empty manifest", and `{"tools":[]}` is
+// a legitimate answer for a file that declares no functions.
+// ============================================================================
+
+use "../../src/burxt-compiler/schema.bx";
+
+region main {
+    if argument_count() < 2 {
+        print_error("usage: schema_harness <file.bx>");
+        exit(2);
+    }
+    let problems: Int = mcp_schema(argument(1));
+    if problems > 0 {
+        exit(1);
+    }
+}

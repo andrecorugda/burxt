@@ -1,0 +1,610 @@
+// ============================================================================
+// schema.bx — `burxt mcp-schema <file.bx>`, in Burxt. The counterpart of
+// `src/rust-compiler/schema.rs`.
+//
+// `schema.rs`'s own header calls this "the one thing in this repository that no other
+// language can do", and until this file existed that sentence had a hole in it: the thing
+// no other language could do was done by a Rust program. `spec/ROADMAP-1.0.md` THE GATE
+// states the rule it broke —
+//
+//   > **Rust may BUILD Burxt. Burxt may not USE Rust.** A bootstrap is a one-time debt.
+//   > A dependency is permanent: if `mcp-schema` only exists in Rust, the one capability
+//   > no other language has belongs to the Rust program.
+//
+// — so this is task 2 of the five, and it is second because it is the strongest single
+// capability claim in the project. The claim is not "Burxt has a schema generator". It is
+// that the JSON Schema a client validates against and the check the function performs are
+// ONE artifact, because the precondition lives in the signature. That claim is about the
+// language, and it can only be made by the language.
+//
+// ---- what agreement means here ----------------------------------------------------------
+//
+// Byte-for-byte with `schema.rs` on stdout AND on stderr, for every input, and
+// `the_two_compilers_derive_the_same_mcp_schema` in `tests/runner.rs` is the test — the
+// same shape `the_two_compilers_render_a_problem_identically` already has for `diag.bx`.
+// Not "the same fields": the same bytes, including key ORDER, which is why every string
+// below is assembled in one order rather than collected and sorted. A manifest a client
+// diffs against yesterday's must be stable, and two implementations that emit the same
+// keys in different orders are two artifacts again.
+//
+// ---- the four things this reads, and the one it refuses to guess ------------------------
+//
+// Clauses are read STRUCTURALLY, from the parsed condition, never from the text — so
+// `[> $0.00]` and a written `requires unit > $0.00` produce identical schema. That is what
+// makes them the same sentence rather than two spellings that agree today. Concretely it
+// means this file looks at node kind 9 (a comparison) and asks whether its left operand is
+// the parameter's own name; it never looks at the clause's recorded text span, which the
+// parser also has and which would have been easier.
+//
+// A clause it cannot express is SKIPPED AND COUNTED, never approximated. `requires a <= b`
+// relates two parameters and JSON Schema has no key for that; emitting nothing is honest,
+// and emitting something close would be the drift this tool exists to remove. The count
+// goes to stderr so that a schema covering less than the function does says so out loud.
+//
+// ---- three places this file differs from schema.rs in HOW, not in WHAT ------------------
+//
+// **1. `own` is found by length, not by canonicalising a path.** `schema.rs` gets a
+// `Vec<SourceFile>` from the loader, canonicalises the requested path, and finds the entry
+// whose path canonicalises to the same thing — because only functions declared in the file
+// that was ASKED for may become tools. Burxt's `load_program` (modules.bx) answers the
+// concatenated buffer and nothing else, and there is no `canonicalize` in the language.
+//
+// It needs neither. The loader appends a file's text AFTER recursing into its imports, so
+// the file that was asked for is always the LAST one in the buffer; and `blank_imports`
+// replaces each `use` line with spaces of exactly the same width, so the text's length is
+// unchanged. Therefore `own` is `(len(buffer) - len(text), len(text))`, exactly, and one
+// extra `read_file` buys it. That is a stronger derivation than the path match, not a
+// weaker one: it cannot be defeated by two spellings of one path, which is the case
+// `canonicalize` is there to handle.
+//
+// Without the filter this is not a cosmetic difference. `schema.rs`'s header records what
+// happened when the filter was missing: `burxt mcp-schema` on a three-line server
+// published the entire standard library — `string_find`, `file_delete`, `os_run`. Inviting
+// a model to call `os_run` because it happened to be in scope is the exact failure this
+// project is against.
+//
+// **2. `quote` is written here rather than borrowed from `diag.bx`.** `diag.bx`'s
+// `json_escape` also escapes every byte below 0x20 as `\u00XX`; `schema.rs`'s `quote` does
+// not — it handles `"`, `\`, newline, carriage return and tab, and passes the rest
+// through. Neither can be reached from here, because the strings quoted are identifiers
+// and rendered type names. So the two are identical in practice and different in the
+// definition, and copying the DEFINITION is what byte-identical means. Reusing the other
+// one would have been a coincidence held in place by nothing.
+//
+// **3. The arena is built inside `mcp_schema`, not handed to it.** `main.bx`'s header
+// records why, and it is the region model arriving as a sentence: a `Unit` cannot be
+// returned from a function, because its storage lives in a region and would not outlive
+// it. So the literal below is a second copy of the one in `drive`. That is a real cost —
+// a new field on `Unit` has to be added in both places — and it is bounded by the compiler
+// refusing a `Unit` literal that is missing one, so it is caught at the next build rather
+// than at some later runtime. `review.bx` will need a third, and at that point the right
+// fix is for the literal to live in `types.bx` beside the class it fills.
+//
+// ---- what is NOT read, and why it is not a gap ------------------------------------------
+//
+// Only `requires` (clause code 126). `ensures` and `decreases` are ignored, exactly as
+// `schema.rs` ignores them, and the reason is the tool's meaning rather than convenience:
+// an `inputSchema` describes what a client may SEND. A postcondition is a promise about
+// what comes back and belongs in an output schema, which MCP has no place for; a
+// termination measure is about the implementation. So `function bounded(...) -> Decimal<2>
+// [it >= $0.00, it < $100.00]` contributes nothing here, and that is right.
+//
+// Money is `"type": "string"` throughout, for the reason `lib/json.bx`'s header gives: a
+// JSON number reaches a JavaScript consumer as a double, and `19.99` stops being `19.99`.
+// An `Int` is a `"number"` because it survives one.
+// ============================================================================
+
+// `emit.bx` is here because `Unit` is ONE class holding every phase, so its fields name
+// `Slot` and the other shapes the emitter declares — a module that only reads the AST still
+// has to be able to spell the arena that holds it. It costs compile time and nothing else:
+// nothing below calls the emitter. Splitting `Unit` per phase would remove the dependency and
+// is a much larger change than this file.
+use "types.bx";
+use "parser.bx";
+use "check.bx";
+use "modules.bx";
+use "emit.bx";
+
+// ---- quoting ---------------------------------------------------------------------------
+
+// A JSON string, escaped exactly as `schema.rs`'s `quote` escapes one — and see difference
+// 2 in the header for why this is not `diag.bx`'s `json_escape`.
+//
+// Byte-wise, which is correct rather than a shortcut, for the reason `diag.bx` records: every
+// byte JSON must escape is `"`, `\`, or below 0x20, and no such byte can appear inside a
+// multi-byte UTF-8 sequence, since continuation bytes are all >= 0x80. So passing the rest
+// through unexamined cannot split a codepoint — a type name with an accent in it survives.
+function schema_quote(s: String) -> String {
+    let mutable out: String = "\"";
+    let mutable i: Int = 0;
+    while i < len(s) {
+        let b: Int = byte_at(s, i);
+        if b == 34 {
+            out = out + "\\\"";
+        } else if b == 92 {
+            out = out + "\\\\";
+        } else if b == 10 {
+            out = out + "\\n";
+        } else if b == 13 {
+            out = out + "\\r";
+        } else if b == 9 {
+            out = out + "\\t";
+        } else {
+            out = out + substring(s, i, 1);
+        }
+        i += 1;
+    }
+    return out + "\"";
+}
+
+// ---- numbers ---------------------------------------------------------------------------
+
+// `n` zeroes, for padding a decimal whose digits do not reach its scale.
+//
+// Appending in a loop is quadratic and acceptable here for the reason `diag.bx`'s `repeated`
+// gives: `n` is at most a decimal's scale, so it is a handful of characters. A quadratic
+// append on four characters is not a quadratic append.
+function schema_zeros(n: Int) -> String {
+    let mutable out: String = "";
+    let mutable i: Int = 0;
+    while i < n {
+        out = out + "0";
+        i += 1;
+    }
+    return out;
+}
+
+// A decimal literal's digits, exactly, never through a float.
+//
+// A Burxt decimal literal is already an unscaled integer and a scale, which is precisely what
+// a decimal string is — so rendering it is INSERTING A POINT rather than converting anything.
+// `$19.99` is 1999 and scale 2, and the answer is "19.99" with no rounding step anywhere in
+// it. That is the same reason `lib/json.bx` keeps a JSON number as its digits, and it is why
+// this tool can promise a bound that means what the contract means.
+//
+// The padding case is `$0.05`: 5 with scale 2, whose digits are shorter than the scale, so it
+// needs "0" + "05" and not "0.5". `scale + 1 - len` rather than `scale - len` because the
+// integer part must not be empty — JSON Schema has no `.05`.
+//
+// The one input this cannot render is the most negative Int, whose magnitude has no positive
+// Int. `schema.rs` uses `unsigned_abs` and does not have the problem. No decimal literal in
+// any program is within nineteen digits of it, and naming it is cheaper than a branch nothing
+// would ever take.
+function schema_decimal_digits(unscaled: Int, scale: Int) -> String {
+    let negative: Bool = unscaled < 0;
+    let mutable magnitude: Int = unscaled;
+    if negative {
+        magnitude = 0 - unscaled;
+    }
+    let digits: String = to_string(magnitude);
+    let mutable padded: String = digits;
+    if len(digits) <= scale {
+        padded = schema_zeros(scale + 1 - len(digits)) + digits;
+    }
+    let at: Int = len(padded) - scale;
+    let mutable text: String = padded;
+    if scale != 0 {
+        text = substring(padded, 0, at) + "." + substring(padded, at, scale);
+    }
+    if negative {
+        return "-" + text;
+    }
+    return text;
+}
+
+// The digits of a literal, or the empty String when this expression is not one.
+//
+// **The empty String is the "no" answer, and it is safe rather than convenient**: a rendered
+// literal always has at least one digit, so no real answer can be mistaken for it. Burxt has
+// no generic `Option` yet (`ROADMAP-1.0.md` A3), and inventing a sentinel like "-1" here
+// would be worse — that is a number.
+//
+// Kind 6 is a unary minus, which is how `-$100.00` parses: the lexer reads `$100.00` and the
+// parser wraps it, so there is no negative literal token to look for. Flipping the SIGN OF
+// THE TEXT rather than of the value is what `schema.rs` does, and it means a negation of a
+// negation cancels instead of producing "--".
+function (self: Unit) schema_literal_digits(node: Int) -> String {
+    if node < 0 {
+        return "";
+    }
+    let n: Node = self.nodes[node];
+    if n.kind == 1 {                                 // Int literal: the value
+        return to_string(n.value);
+    }
+    if n.kind == 2 {                                 // Decimal literal: unscaled in `value`,
+        return schema_decimal_digits(n.value, n.a);  // scale in `a`
+    }
+    if n.kind == 6 {
+        let inner: String = self.schema_literal_digits(n.a);
+        if len(inner) == 0 {
+            return "";
+        }
+        if byte_at(inner, 0) == 45 {                 // already negative: strip the sign
+            return substring(inner, 1, len(inner) - 1);
+        }
+        return "-" + inner;
+    }
+    return "";
+}
+
+// ---- bounds ----------------------------------------------------------------------------
+
+// The JSON Schema fragment a clause contributes about the parameter named
+// `(name_start, name_length)`, ready to append — `,"exclusiveMinimum":"0.00"` — or the empty
+// String when this clause says nothing about that parameter that JSON Schema can hold.
+//
+// Returning the FRAGMENT rather than a key and a value is how one function answers both
+// questions this file asks, without a tuple and without a class: the manifest appends it, and
+// the skipped count asks whether it was empty. Two functions that had to stay in agreement
+// about what is expressible would be a place for them to disagree.
+//
+// **The empty answer covers four situations on purpose, and none of them is an error:**
+//   - the clause is not a comparison at all — `[it > $0.00 || it > -$100.00]` is a logical,
+//     and `[len(it) > 0]` and `[between(it, 0, 100)]` are calls;
+//   - its left side is not a bare name — `[it * 2 > 0]` is arithmetic;
+//   - it is about a DIFFERENT parameter, which is the ordinary case, since every clause is
+//     offered to every parameter;
+//   - its right side is not a literal — `[<= balance]` relates two parameters, and JSON
+//     Schema has no way to say that. The function still enforces it.
+//
+// All four are counted as skipped rather than approximated, and the last is the one the
+// stderr note names, because it is the one a reader is most likely to have written.
+//
+// `==` and `!=` are skipped too. Equality is a CONSTANT, not a bound; `const` is JSON
+// Schema's key for it, and a precondition that pins a parameter to one value is strange
+// enough that guessing what was meant is worse than saying nothing.
+function (self: Unit) schema_bound(src: String, name_start: Int, name_length: Int,
+                                  cond: Int) -> String {
+    if cond < 0 {
+        return "";
+    }
+    let c: Node = self.nodes[cond];
+    if c.kind != 9 {                                 // not a comparison
+        return "";
+    }
+    let lhs: Node = self.nodes[c.a];
+    if lhs.kind != 5 {                               // not a bare name
+        return "";
+    }
+    // `it` needs no case of its own, and that is the parser's doing rather than luck: inside a
+    // bracket `it` becomes an ordinary name node pointing at the PARAMETER's own token, so its
+    // span already reads `balance`. `[it > $0.00]` and `[> $0.00]` and `requires balance >
+    // $0.00` arrive here as the same three nodes.
+    let named: Token = self.tokens[lhs.token];
+    if !spans_equal(src, named.start, named.length, name_start, name_length) {
+        return "";
+    }
+    let value: String = self.schema_literal_digits(c.b);
+    if len(value) == 0 {
+        return "";
+    }
+    // The comparison's operator is the TOKEN KIND the parser stored: 36 `>`, 15 `>=`, 35 `<`,
+    // 14 `<=`, 12 `==`, 13 `!=`.
+    let mutable key: String = "";
+    if c.value == 36 {
+        key = "exclusiveMinimum";
+    } else if c.value == 15 {
+        key = "minimum";
+    } else if c.value == 35 {
+        key = "exclusiveMaximum";
+    } else if c.value == 14 {
+        key = "maximum";
+    }
+    if len(key) == 0 {
+        return "";
+    }
+    // The VALUE is quoted even for an Int, and that is `schema.rs`'s choice repeated rather
+    // than a slip: a bound on money must be a string for the same reason the money itself is
+    // one, and one rule for both beats a schema whose `minimum` changes type with the
+    // parameter's.
+    return "," + schema_quote(key) + ":" + schema_quote(value);
+}
+
+// What a Burxt type is on the wire.
+//
+// Money and every other decimal is a STRING, which is the position `lib/json.bx` takes: a
+// JSON number reaches a JavaScript consumer as a double, and `19.99` stops being `19.99`. An
+// `Int` is a number because it survives one, and a `Bool` is a boolean.
+//
+// Everything else — String, a class, a slice, an interface object — answers "string", which is
+// `schema.rs`'s catch-all. It is honest for `String` and approximate for the rest, and the
+// approximation is bounded by the fact that a tool taking a class has no wire encoding for it
+// in the first place. Naming that here rather than in a comment somewhere else: an MCP client
+// cannot construct a Burxt class, so a manifest entry for a function that wants one is
+// describing a call nobody can make.
+function schema_wire_type(t: Type) -> String {
+    if t.kind == 40 {                                // Int
+        return "integer";
+    }
+    if t.kind == 41 {                                // Bool
+        return "boolean";
+    }
+    if t.kind == 45 {                                // Decimal — a string, deliberately
+        return "string";
+    }
+    return "string";
+}
+
+// ---- which functions are tools at all ---------------------------------------------------
+
+// Is this item a function this manifest may publish?
+//
+// Three questions, and the reason they live in one named predicate rather than inline is that
+// TWO walks ask them — the manifest and the skipped count, for the reason `mcp_skipped_count`
+// gives. A filter written twice is a filter that will be corrected once.
+//
+// **1. A function, INCLUDING a class's associated function.** Item kind 80 is a plain function.
+// Kind 81 is a method, and a method is not a tool — it needs a receiver, and an MCP client has
+// no way to send one. But an ASSOCIATED function (`function open(...)` inside `class Account`,
+// with no receiver clause) is also kind 81 here, with flag bit 32 set, and it IS a tool: it is
+// how a class gets a constructor, it takes no receiver, and `schema.rs` publishes it as an
+// ordinary `FnDef` under the qualified name `Account.open`.
+//
+// That one bit was worth measuring rather than reasoning about. This file first tested `kind ==
+// 80` alone, which is what the two representations make obvious — stage-0 stores an associated
+// function among the functions, stage-1 stores it among the methods — and 140 of 142 fixtures
+// agreed. The two that did not, `class_defends_an_invariant.bx` and `class_private_members.bx`,
+// were the only ones in the suite with a constructor. A sweep found it in a minute; the reading
+// that the representations differ "only in bookkeeping" would never have.
+//
+// External declarations (kind 86) need no filter, exactly as `prog.externs` being a separate
+// list means a C declaration cannot reach `schema.rs`.
+//
+// **2. Declared in the file that was ASKED for.** `own_start`/`own_length` are that file's
+// byte range; the header says why this filter is a safety property rather than tidiness. The
+// range is tested against the function's NAME token, where `schema.rs` tests the declaration's
+// span start — one token apart, and never across a file boundary, so the two answer the same
+// question. The name token is what a Burxt function item carries.
+//
+// **3. Not generic.** A generic has no concrete schema until a caller says what `T` is, and an
+// MCP client has no way to say. Generic-ness is read from the TOKEN AFTER THE NAME: it is `<`
+// for `function largest<T>(...)` and `(` for everything else. That is exactly the question
+// `parse_type_params` asks, so the two cannot drift. The alternative was the `generics` side
+// table, which is keyed by NAME SPAN and also holds classes — so a generic class sharing a name
+// with a plain function would have been read as a generic function. One token is exact.
+//
+// A generic's preconditions are not counted as skipped either, and that is right rather than an
+// omission: they were not left out of a schema, there is no schema. `schema.rs` gets the same
+// answer by returning `None` before it touches its counter.
+function (self: Unit) schema_exposes(item: Int, own_start: Int, own_length: Int) -> Bool {
+    let node: Node = self.nodes[item];
+    if node.kind == 81 {
+        // Bit 32 is `associated`, set by `parse_function` when it is handed an owner and finds
+        // no receiver clause. Bits 1, 2, 4 and 16 are the other markers and the effect mask
+        // starts at bit 6, so 32 says this and nothing else.
+        if bit_and(node.value, 32) != 32 {
+            return false;
+        }
+    } else if node.kind != 80 {
+        return false;
+    }
+    let named: Token = self.tokens[node.token];
+    if named.start < own_start || named.start >= own_start + own_length {
+        return false;
+    }
+    if self.tokens[node.token + 1].kind == 35 {      // `<` — generic
+        return false;
+    }
+    return true;
+}
+
+// What this function is called in the manifest.
+//
+// `Account.open` for an associated function, and the plain name for everything else. Stage-0
+// stores the qualified name as one String; stage-1 keeps a method keyed by (receiver span, name
+// span), because a qualified name is a name in two parts — so the two halves are joined here
+// rather than looked up. The receiver's token rides in the clause node's `value` slot, put
+// there by `parse_clauses` for exactly this kind of question.
+function (self: Unit) schema_tool_name(src: String, item: Int) -> String {
+    let f: Node = self.nodes[item];
+    let named: Token = self.tokens[f.token];
+    let plain: String = substring(src, named.start, named.length);
+    if f.kind != 81 {
+        return plain;
+    }
+    let clauses: Node = self.nodes[f.c];
+    let receiver: Token = self.tokens[clauses.value];
+    return substring(src, receiver.start, receiver.length) + "." + plain;
+}
+
+// ---- one tool --------------------------------------------------------------------------
+
+// One tool entry. Only ever called for an item `schema_exposes` said yes to.
+function (self: Unit) schema_tool(src: String, item: Int) -> String {
+    let f: Node = self.nodes[item];
+    let name: String = self.schema_tool_name(src, item);
+    let params: Node = self.nodes[f.a];
+    let clauses: Node = self.nodes[f.c];
+
+    let mutable properties: String = "";
+    let mutable required: String = "";
+    let mutable p: Int = 0;
+    while p < params.b {
+        let param: Node = self.nodes[self.children[params.a + p]];
+        let pname: Token = self.tokens[param.token];
+        let declared: Type = self.declared_type(src, param.a);
+        let mutable entry: String = "\{\"type\":" + schema_quote(schema_wire_type(declared));
+        // The declared type, VERBATIM, as the description. A client's model reads this, and
+        // `Decimal<2>` says more about what is wanted than any sentence would — it says the
+        // scale. `show_type` is the checker's renderer, shared rather than reimplemented, so
+        // the description cannot drift from what a diagnostic would call the same type.
+        entry = entry + ",\"description\":" + schema_quote(self.show_type(src, declared));
+        let mutable c: Int = 0;
+        while c < clauses.b {
+            let clause: Node = self.nodes[self.children[clauses.a + c]];
+            if clause.value == 126 {                 // a `requires`; see the header
+                entry = entry + self.schema_bound(src, pname.start, pname.length, clause.a);
+            }
+            c += 1;
+        }
+        entry = entry + "\}";
+        if p > 0 {
+            properties = properties + ",";
+            required = required + ",";
+        }
+        properties = properties + schema_quote(substring(src, pname.start, pname.length))
+                     + ":" + entry;
+        // Every parameter is required, because Burxt has no optional ones and no defaults. A
+        // schema that said otherwise would be describing a different language.
+        required = required + schema_quote(substring(src, pname.start, pname.length));
+        p += 1;
+    }
+
+    // `name -> ReturnType`, which is the whole of what a Burxt signature promises about the
+    // answer. The return type is in the clause node's third slot: `parse_clauses` puts it
+    // there because a method item has five slots and six things to say, and this is the one
+    // that cost nothing.
+    let description: String = name + " -> "
+        + self.show_type(src, self.declared_type(src, clauses.c));
+    return "\{\"name\":" + schema_quote(name)
+        + ",\"description\":" + schema_quote(description)
+        + ",\"inputSchema\":\{\"type\":\"object\",\"properties\":\{" + properties
+        + "\},\"required\":[" + required + "]\}\}";
+}
+
+// ---- what could not be expressed --------------------------------------------------------
+
+// How many of one function's preconditions this file could not express.
+//
+// A clause counts when NO parameter could turn it into a bound — which is not known until every
+// parameter has been offered it, so this walks the parameters inside the clauses where
+// `schema_tool` walks the clauses inside the parameters. Same pair of loops, opposite nesting,
+// and that is the whole of the difference.
+function (self: Unit) schema_skipped_in(src: String, item: Int) -> Int {
+    let f: Node = self.nodes[item];
+    let params: Node = self.nodes[f.a];
+    let clauses: Node = self.nodes[f.c];
+    let mutable count: Int = 0;
+    let mutable c: Int = 0;
+    while c < clauses.b {
+        let clause: Node = self.nodes[self.children[clauses.a + c]];
+        if clause.value == 126 {                     // a `requires`; see the header
+            let mutable expressed: Bool = false;
+            let mutable p: Int = 0;
+            while p < params.b {
+                let param: Node = self.nodes[self.children[params.a + p]];
+                let pname: Token = self.tokens[param.token];
+                if len(self.schema_bound(src, pname.start, pname.length, clause.a)) > 0 {
+                    expressed = true;
+                }
+                p += 1;
+            }
+            if !expressed {
+                count += 1;
+            }
+        }
+        c += 1;
+    }
+    return count;
+}
+
+// ---- the manifest ----------------------------------------------------------------------
+
+// The whole manifest, and separately the count of clauses left out of it.
+//
+// **Two walks over the same items, and the reason is a named language limit rather than a
+// design choice.** `schema.rs` builds both in one pass, with `skipped: &mut usize` threaded
+// through. The Burxt equivalent is `mutable skipped: [Int]` — a growable array the caller owns,
+// which is how `lib/array.bx` says a call changes your value — and the compiler refuses it
+// here, by name:
+//
+//     in `Unit.schema_tool`, parameter `skipped` is declared `mutable`, which is not available
+//     on a METHOD yet — only on a free function.
+//
+// These have to be methods: everything they read lives in the arena, and a free function taking
+// `Unit` would copy it. So the count is a second walk answering a scalar, which is the shape
+// `main.bx`'s header already recommends for exactly this reason ("fill an array the caller owns,
+// or return a scalar summary"). The cost is one extra pass over the items and the risk that the
+// two walks disagree about which functions are tools — which is why `schema_exposes` exists and
+// both of them call it. When `mutable` reaches methods this collapses back into one pass.
+function (self: Unit) mcp_manifest(src: String, own_start: Int, own_length: Int) -> String {
+    let mutable tools: String = "";
+    let mutable emitted: Int = 0;
+    let mutable i: Int = 0;
+    while i < len(self.items) {
+        let item: Int = self.items[i];
+        if self.schema_exposes(item, own_start, own_length) {
+            if emitted > 0 {
+                tools = tools + ",";
+            }
+            tools = tools + self.schema_tool(src, item);
+            emitted += 1;
+        }
+        i += 1;
+    }
+    return "\{\"tools\":[" + tools + "]\}";
+}
+
+// The same walk, counting instead of rendering. See `mcp_manifest` for why it is a second one.
+function (self: Unit) mcp_skipped_count(src: String, own_start: Int, own_length: Int) -> Int {
+    let mutable count: Int = 0;
+    let mutable i: Int = 0;
+    while i < len(self.items) {
+        let item: Int = self.items[i];
+        if self.schema_exposes(item, own_start, own_length) {
+            count += self.schema_skipped_in(src, item);
+        }
+        i += 1;
+    }
+    return count;
+}
+
+// What a manifest that covers less than the function does says out loud.
+//
+// A function rather than an inline string, so that `main.bx` and `tests/support/schema_harness.bx`
+// cannot produce different bytes — and byte-for-byte on STDERR is half the parity claim.
+// Silence here would make an incomplete schema look like a complete one, which is exactly the
+// drift this tool exists to prevent.
+function schema_note(count: Int) -> String {
+    return "note: " + to_string(count)
+        + " precondition(s) could not be expressed as JSON Schema and were left out."
+        + " A clause relating two parameters — `requires amount <= balance` — has no key in"
+        + " JSON Schema, and the function still enforces it.";
+}
+
+// ---- the command -----------------------------------------------------------------------
+
+// `burxt mcp-schema <file.bx>` — print the manifest, and say what it could not express.
+//
+// Answers the number of problems found; 0 means it worked, which is the contract `drive` in
+// `main.bx` already uses so a caller needs to learn one convention rather than two.
+//
+// The module loader is used, so `use "..."` is followed exactly as a compile would follow it:
+// a schema read from one file would miss a tool declared in another, and silently. It is NOT
+// typechecked, and that is `schema.rs`'s choice repeated rather than a corner cut — the
+// manifest is derived from the SIGNATURES, and a file whose bodies do not check still has
+// signatures that say what they require. `burxt check` is the tool for the other question.
+function mcp_schema(path: String) -> Int touches files {
+    let src: String = load_program(path);
+    // `own`, by length rather than by canonicalising a path — see difference 1 in the header.
+    // The second read of the same file is the whole cost, and it buys an exact answer.
+    let own_length: Int = len(read_file(path));
+    let own_start: Int = len(src) - own_length;
+
+    let mutable unit: Unit = Unit { tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, current_method: 0 - 1, probing: 0, probe_changes: 0, type_bindings: [], measure_clause: 0 - 1, measure_slot: 0, measure_parameters: 0 - 1, measure_owner: "", old_nodes: [], old_slots: [], ensures_start: 0, ensures_count: 0, ensures_owner: "", bracket_clauses: [], clause_subjects: [], it_token: 0 - 1, it_is_result: 0, used_it: 0, it_seen: 0, result_type_node: 0 - 1, result_slot: 0 - 1, returns_node: 0 - 1, walked_types: [], type_binding_floor: 0, allowed_effects: 63, effects_owner: "", function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], in_function: 0, depth: 0, problems: 0, position: 0, token_end: 0, no_record_literal: 0, in_multiply: 0, print_to_stderr: 0, int_type_node: 0 - 1, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
+    let installed: Int = unit.install_keywords();
+    let total: Int = unit.run(src);
+    if unit.errors > 0 {
+        return unit.errors;
+    }
+    while !unit.done() {
+        let item: Int = unit.parse_item(src);
+        if item < 0 {
+            break;
+        }
+        push(unit.items, item);
+    }
+    if unit.errors > 0 {
+        return unit.errors;
+    }
+
+    // The manifest FIRST and then the note, in that order, and both after the walk rather than
+    // as it goes: stdout must stay one pipeable line, so nothing may interleave with it.
+    let manifest: String = unit.mcp_manifest(src, own_start, own_length);
+    print(manifest);
+    let skipped: Int = unit.mcp_skipped_count(src, own_start, own_length);
+    if skipped > 0 {
+        print_error(schema_note(skipped));
+    }
+    return 0;
+}

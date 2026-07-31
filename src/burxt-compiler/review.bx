@@ -25,12 +25,13 @@
 // consequences, all wanted: it is fast; it does not care whether the bodies are finished;
 // and it cannot be confused by a reformat, because it compares meanings rather than text.
 //
-// Not running the checker is also what keeps this byte-identical with `review.rs`, which is
-// a coincidence worth writing down rather than relying on silently. `declared_type` turns a
-// bare interface name into `dynamic Priced` — but only by asking `self.types`, which
-// `check` is what fills in. So an unchecked Unit renders `Priced`, and stage-0's parser,
-// which learns the same fact in its own typechecker, renders `Priced` too. Calling `check`
-// here to be "more informative" would break the agreement in one line.
+// Not running the checker is also what keeps this byte-identical with `review.rs`, and that
+// is worth writing down rather than relying on silently. `declared_type` turns a bare
+// interface name into `dynamic Priced` — but only by asking `self.types`, and `check` is what
+// fills that table in. So an unchecked Unit renders `Priced`, and stage-0, which learns the
+// same fact in its own typechecker, renders `Priced` too. Calling `check` here to be "more
+// informative" would break the agreement in one line, on a program with an interface in a
+// signature.
 //
 // ---- exit codes, because this is meant to be a gate -----------------------------------
 //
@@ -45,17 +46,47 @@
 //    malformed input is not the same, and cannot be without changing how `types.bx` and
 //    `parser.bx` report. Named here rather than hidden, because the agreement claim is
 //    about programs that parse.
-// 2. **A string literal inside a contract clause.** `review.rs` renders one with Rust's
+// 2. **A file that does not EXIST**, which is a sharper version of 1 and the one worth acting
+//    on. `review.rs` exits **2** with `error: cannot read <path>`; this exits **70**, because
+//    `read_file` is total in Rust and ABORTS in Burxt — there is no `file_exists` builtin, so
+//    `load_program` cannot look before it leaps. Both are non-zero and both say what happened,
+//    so nothing is silent; but a CI gate written as `if code == 2` would read them differently,
+//    and §C2 is about a CI gate. Measured, not reasoned about: `burxt review /nope.bx x.bx`
+//    answers 2 and the harness answers 70.
+//
+//    The fix is one line and it is deliberately NOT taken here, because it is a decision about
+//    the compiler's link surface rather than about this file:
+//
+//        external function access(path: String, mode: CInt) -> CInt touches files;
+//
+//    with `access(path, 4) != 0` meaning unreadable. That would make `review.bx` the first
+//    compiler module to name a foreign symbol — `lib/os.bx` does it, the compiler never has —
+//    and every build of `main.bx` would carry it once `main.bx` uses this file. A `file_exists`
+//    builtin, or a `read_file` that can answer "no", is the better shape and is a language
+//    change. So: reported, with the code, for whoever owns that call.
+// 3. **A string literal inside a contract clause.** `review.rs` renders one with Rust's
 //    `{:?}`, which decodes the escapes and re-escapes them Rust's way; this renders the
 //    source span verbatim. Identical for every literal whose escapes Rust spells the same
 //    way, and different for Burxt's own `\{` and `\}` — which decode to `{` and `}` and
 //    would come back out unescaped. A clause containing a braced string literal is the
 //    only program that can tell the two apart.
 //
-// Both are FALSE POSITIVES in the direction that matters: they can make a comparison
-// report a change that changed nothing, never hide one. `review.rs` records the same
-// preference for the same reason — "a false positive is noise, but a false negative is a
-// weakened contract nobody was told about."
+// 1 and 3 are FALSE POSITIVES in the direction that matters: they can make a comparison report
+// a change that changed nothing, never hide one. `review.rs` records the same preference for the
+// same reason — "a false positive is noise, but a false negative is a weakened contract nobody
+// was told about." 2 is neither direction: it is a wrong EXIT CODE on an input that is not a
+// comparison at all, which is why it is the one with a fix attached.
+//
+// And one both tools share, found by measuring them against each other rather than by reading
+// either: **`item: Priced` and `item: dynamic Priced` are the SAME type** — v0.0.155 made the
+// bare interface name mean the dynamic one — and both implementations report
+// `CHANGED (Priced) -> Int -> (dynamic Priced) -> Int` when a signature is rewritten from one
+// spelling to the other. That is a review crying wolf on a reformat, which is the one thing
+// `reformatted` exists to prove it does not do. It is NOT a disagreement between the two, so it
+// is not this file's to fix unilaterally; the fix is for both to render kind 46 and kind 49 the
+// same way when the name is an interface's, which needs the type table — see above for why that
+// is not free. Written down because a defect neither implementation can see alone is exactly
+// what a second implementation is for.
 //
 // ---- what it depends on, and one dependency that is a surprise ------------------------
 //
@@ -93,7 +124,7 @@ use "emit.bx";
 //
 // `review.rs` makes these five `const &str`. Burxt has no `const` yet (`ROADMAP-1.0.md`
 // A2), so they are one-line functions — which buys the same thing the consts buy, namely
-// that a typo is a compile error at the eleven sites that raise a finding rather than a
+// that a typo is a compile error at the thirteen sites that raise a finding rather than a
 // verdict that silently sorts last.
 //
 // WEAKENED means "this promises LESS than it did", and it is the only verdict that should
@@ -165,17 +196,20 @@ class Promise {
 
 // Every promise a file makes, plus the clause tables the promises index into.
 //
-// `failed` is how a Burxt function says what `Result<_, String>` says in Rust. There is no
-// generic `Result` yet (`ROADMAP-1.0.md` A3), and inventing a one-off enum for a value that
-// is consumed three lines later would be worse than a flag that is checked at both call
-// sites.
+// **It is FILLED rather than returned**, which is the shape the region rule chose. A class
+// holding growable arrays cannot be a return type — *"cannot return Promises, because its
+// storage lives in a region and would not outlive it"* — and `allocates` does not lift that;
+// the value would be built in the callee's frame. So the caller opens one and the callee is
+// handed it `mutable`, which is what `M1`'s escape rule asks for and reads better anyway: the
+// two files' promise tables are visibly the caller's, side by side, rather than two returns
+// that happen not to share anything. `lsp.bx` hit the identical wall on `Unit` in the same
+// version.
 class Promises {
-    entries: [Promise],
+    promises: [Promise],
     // Parallel: the comparable SHAPE of each clause, and the text to SHOW. Two arrays and
     // not an array of pairs, because a pair would be a class copied at every comparison.
     shapes: [String],
     texts: [String],
-    failed: Int,
 }
 
 // One thing worth telling a reviewer, and how much it should worry them.
@@ -451,21 +485,6 @@ function (self: Unit) promise_clause_text(src: String, clause: Node) -> String {
 
 // ---- collecting every promise a file makes --------------------------------------------
 
-// A Unit with nothing in it, which is what parsing a second file needs.
-//
-// **This literal is duplicated from `main.bx`**, and that is a defect rather than a design:
-// `Unit` has a hundred and twelve fields, so a field added to `types.bx` has to be added in
-// two places or one of them stops compiling. `main.bx` is off limits to this change, so the
-// duplication is reported instead of fixed — the right end state is that `main.bx` calls
-// this, and then a review is not a second spelling of the compiler's own state.
-//
-// The reason a second Unit is needed at all: a review parses TWO programs, and a Unit holds
-// one program's tokens, arena and side tables. Reusing one would compare a file against
-// itself with the other file's nodes appended to it.
-function review_unit() -> Unit {
-    return Unit { tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, current_method: 0 - 1, probing: 0, probe_changes: 0, type_bindings: [], measure_clause: 0 - 1, measure_slot: 0, measure_parameters: 0 - 1, measure_owner: "", old_nodes: [], old_slots: [], ensures_start: 0, ensures_count: 0, ensures_owner: "", bracket_clauses: [], clause_subjects: [], it_token: 0 - 1, it_is_result: 0, used_it: 0, it_seen: 0, result_type_node: 0 - 1, result_slot: 0 - 1, returns_node: 0 - 1, walked_types: [], type_binding_floor: 0, allowed_effects: 63, effects_owner: "", function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], in_function: 0, depth: 0, problems: 0, position: 0, token_end: 0, no_record_literal: 0, in_multiply: 0, print_to_stderr: 0, int_type_node: 0 - 1, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
-}
-
 // One clause list, rendered into the two parallel tables — the comparable shape and the
 // text to show — and answering how many landed.
 //
@@ -473,20 +492,19 @@ function review_unit() -> Unit {
 // measure (128) is skipped, exactly as `review.rs` skips it: it promises that an answer
 // ARRIVES rather than what the answer is, and losing one is a termination question that a
 // signature comparison has nothing useful to say about.
-function (self: Unit) review_gather_clauses(src: String, clauses: Int, params: Int, which: Int,
-                                    mutable shapes: [String],
-                                    mutable texts: [String]) -> Int {
+function (mutable self: Promises) gather_clauses(unit: Unit, src: String, clauses: Int,
+                                               params: Int, which: Int) -> Int {
     if clauses < 0 {
         return 0;
     }
-    let list: Node = self.nodes[clauses];
+    let list: Node = unit.nodes[clauses];
     let mutable found: Int = 0;
     let mutable i: Int = 0;
     while i < list.b {
-        let clause: Node = self.nodes[self.children[list.a + i]];
+        let clause: Node = unit.nodes[unit.children[list.a + i]];
         if clause.value == which {
-            push(shapes, self.promise_render(src, clause.a, params));
-            push(texts, self.promise_clause_text(src, clause));
+            push(self.shapes, unit.promise_render(src, clause.a, params));
+            push(self.texts, unit.promise_clause_text(src, clause));
             found += 1;
         }
         i += 1;
@@ -494,7 +512,7 @@ function (self: Unit) review_gather_clauses(src: String, clauses: Int, params: I
     return found;
 }
 
-// Every promise this Unit's items make.
+// Every promise the Unit's items make, pushed into the caller's tables.
 //
 // Three passes, and the shape is what `collect` in `review.rs` does with its five `for`
 // loops over a `Program`'s separate vectors. stage-1 has ONE item list instead, in source
@@ -512,26 +530,23 @@ function (self: Unit) review_gather_clauses(src: String, clauses: Int, params: I
 // about a C symbol, and its `touches` is where an effect ENTERS the program rather than
 // something a Burxt signature guarantees. Worth naming, because a reader who checked the
 // item kinds against `parse_item` would otherwise find two missing and assume an oversight.
-function (self: Unit) collect_promises(src: String) -> Promises {
-    let mutable entries: [Promise] = [];
-    let mutable shapes: [String] = [];
-    let mutable texts: [String] = [];
+function (mutable self: Promises) collect(unit: Unit, src: String) -> Int {
 
     let mutable callables: [Int] = [];
     let mutable i: Int = 0;
-    while i < len(self.items) {
-        let item: Int = self.items[i];
-        let n: Node = self.nodes[item];
+    while i < len(unit.items) {
+        let item: Int = unit.items[i];
+        let n: Node = unit.nodes[item];
         if n.kind == 80 || n.kind == 81 {
             push(callables, item);
         }
         if n.kind == 85 {
             // `class X implements Y` produces one of these with NO methods — the class's own
             // methods are what satisfy the interface — so this loop runs zero times for it,
-            // and the methods are already in `self.items` in their own right.
+            // and the methods are already in `unit.items` in their own right.
             let mutable j: Int = 0;
             while j < n.b {
-                push(callables, self.children[n.a + j]);
+                push(callables, unit.children[n.a + j]);
                 j += 1;
             }
         }
@@ -540,17 +555,17 @@ function (self: Unit) collect_promises(src: String) -> Promises {
 
     i = 0;
     while i < len(callables) {
-        let n: Node = self.nodes[callables[i]];
+        let n: Node = unit.nodes[callables[i]];
         // The clause node carries the return type in `c` and the receiver's token in
         // `value`, because a method item has five slots and six things to say. So a
         // function and a method are read by the same four lines.
-        let clauses: Node = self.nodes[n.c];
-        let mutable name: String = self.review_token_text(src, n.token);
+        let clauses: Node = unit.nodes[n.c];
+        let mutable name: String = unit.review_token_text(src, n.token);
         let mutable kind: String = "function";
         let mutable is_pure: Int = flag_pure(n.value);
         let mutable is_private: Int = 0;
         if n.kind == 81 {
-            name = self.review_token_text(src, clauses.value) + "." + name;
+            name = unit.review_token_text(src, clauses.value) + "." + name;
             if flag_associated(n.value) == 1 {
                 // An associated function — `function open(...)` inside a class body, which is
                 // how a class gets a constructor. `review.rs` finds these in `Program.fns`
@@ -560,19 +575,24 @@ function (self: Unit) collect_promises(src: String) -> Promises {
                 kind = "constructor";
             } else {
                 kind = "method";
-                // `review.rs` hardcodes `is_pure: false` for every method, because
-                // `parse_record` refuses `pure` on one — the marker goes on a free function
-                // for now. Read from the flags anyway rather than written as 0, so that the
-                // day a method may be `pure` this file does not quietly under-report it.
                 is_private = flag_private(n.value);
+                // **Zeroed to MATCH, not because the flag is wrong.** `review.rs` writes
+                // `is_pure: false` for every method — a `MethodDef` has no `is_pure` field at
+                // all — and the bit here cannot be set today anyway, because `parse_record`
+                // refuses `pure` on a method. Reading it would be this file quietly becoming
+                // MORE CAPABLE than the Rust one, and under the parity gate that is a defect
+                // rather than a feature: the day `pure` methods land, `review.bx` would report
+                // a purity finding `review.rs` does not, and the differential would break on a
+                // language feature instead of on a bug. So it matches narrowly and says so.
+                is_pure = 0;
             }
         }
-        let requires_at: Int = len(shapes);
-        let requires_count: Int = self.review_gather_clauses(src, n.c, n.a, 126, shapes, texts);
-        let ensures_at: Int = len(shapes);
-        let ensures_count: Int = self.review_gather_clauses(src, n.c, n.a, 127, shapes, texts);
-        push(entries, Promise { name: name, kind: kind,
-                    shape: self.promise_shape(src, n.a, clauses.c),
+        let requires_at: Int = len(self.shapes);
+        let requires_count: Int = self.gather_clauses(unit, src, n.c, n.a, 126);
+        let ensures_at: Int = len(self.shapes);
+        let ensures_count: Int = self.gather_clauses(unit, src, n.c, n.a, 127);
+        push(self.promises, Promise { name: name, kind: kind,
+                    shape: unit.promise_shape(src, n.a, clauses.c),
                     requires_at: requires_at, requires_count: requires_count,
                     ensures_at: ensures_at, ensures_count: ensures_count,
                     is_pure: is_pure, is_private: is_private, touches: flag_effects(n.value) });
@@ -580,31 +600,31 @@ function (self: Unit) collect_promises(src: String) -> Promises {
     }
 
     i = 0;
-    while i < len(self.items) {
-        let item: Int = self.items[i];
-        let n: Node = self.nodes[item];
+    while i < len(unit.items) {
+        let item: Int = unit.items[i];
+        let n: Node = unit.nodes[item];
         if n.kind == 82 {
-            let name: String = self.review_token_text(src, n.token);
+            let name: String = unit.review_token_text(src, n.token);
             // The field COUNT rather than the field types, matching `review.rs`. A field's own
             // type is its own promise, one entry below, so saying it twice would double every
             // finding about a class.
-            push(entries, Promise { name: name, kind: "class",
+            push(self.promises, Promise { name: name, kind: "class",
                         shape: to_string(n.b) + " field(s)",
                         requires_at: 0, requires_count: 0, ensures_at: 0, ensures_count: 0,
                         is_pure: 0, is_private: 0, touches: 0 });
             let mutable j: Int = 0;
             while j < n.b {
-                let field: Node = self.nodes[self.children[n.a + j]];
-                push(entries, Promise { name: name + "." + self.review_token_text(src, field.token),
+                let field: Node = unit.nodes[unit.children[n.a + j]];
+                push(self.promises, Promise { name: name + "." + unit.review_token_text(src, field.token),
                             kind: "field",
-                            shape: self.show_type(src, self.declared_type(src, field.a)),
+                            shape: unit.show_type(src, unit.declared_type(src, field.a)),
                             requires_at: 0, requires_count: 0, ensures_at: 0, ensures_count: 0,
                             is_pure: 0, is_private: field.value, touches: 0 });
                 j += 1;
             }
         }
         if n.kind == 84 {
-            push(entries, Promise { name: self.review_token_text(src, n.token), kind: "interface",
+            push(self.promises, Promise { name: unit.review_token_text(src, n.token), kind: "interface",
                         shape: to_string(n.b) + " method(s)",
                         requires_at: 0, requires_count: 0, ensures_at: 0, ensures_count: 0,
                         is_pure: 0, is_private: 0, touches: 0 });
@@ -612,7 +632,7 @@ function (self: Unit) collect_promises(src: String) -> Promises {
         i += 1;
     }
 
-    return Promises { entries: entries, shapes: shapes, texts: texts, failed: 0 };
+    return len(self.promises);
 }
 
 // Sort by name, then drop all but the LAST entry of each repeated name.
@@ -626,31 +646,34 @@ function (self: Unit) collect_promises(src: String) -> Promises {
 // A program with two declarations of one name is refused by the checker, which a review
 // does not run — so this is reachable only on a program that would not compile, and the
 // answer it gives there is the same answer `review.rs` gives.
-function review_unique_by_name(mutable entries: [Promise]) -> Int {
+function review_unique_by_name(mutable promises: [Promise]) -> Int {
     let mutable i: Int = 1;
-    while i < len(entries) {
-        let held: Promise = entries[i];
+    while i < len(promises) {
+        let held: Promise = promises[i];
         let mutable j: Int = i;
-        while j > 0 && held.name < entries[j - 1].name {
-            entries[j] = entries[j - 1];
+        while j > 0 && held.name < promises[j - 1].name {
+            promises[j] = promises[j - 1];
             j -= 1;
         }
-        entries[j] = held;
+        promises[j] = held;
         i += 1;
     }
     // Compact in place, then cut the tail off: `truncate` is the only way to shorten a
     // growable array, and writing the survivors forward means one pass and no second array.
     let mutable kept: Int = 0;
     i = 0;
-    while i < len(entries) {
-        let last_of_run: Bool = i + 1 >= len(entries) || entries[i].name != entries[i + 1].name;
+    while i < len(promises) {
+        // `||` short-circuits, which is what makes `promises[i + 1]` safe on the last entry —
+        // the bound is tested first and the index is never evaluated. Written as one condition
+        // rather than a nested `if` because the two halves are one question.
+        let last_of_run: Bool = i + 1 >= len(promises) || promises[i].name != promises[i + 1].name;
         if last_of_run {
-            entries[kept] = entries[i];
+            promises[kept] = promises[i];
             kept += 1;
         }
         i += 1;
     }
-    let dropped: Int = truncate(entries, kept);
+    let dropped: Int = truncate(promises, kept);
     return kept;
 }
 
@@ -662,28 +685,45 @@ function review_unique_by_name(mutable entries: [Promise]) -> Int {
 //
 // No typechecker — see the header for why that is what keeps this agreeing with `review.rs`
 // rather than merely being cheap.
-function promises_of(path: String) -> Promises touches files {
+//
+// Answers 0 when it read the file and -1 when it could not, which is what a Burxt function has
+// instead of `Result<_, String>`: there is no generic `Result` yet (`ROADMAP-1.0.md` A3), and a
+// one-off enum for a value tested on the next line would be worse than a checked Int.
+//
+// **The `Unit` literal is spelled out here**, and there is exactly one of it in this file even
+// though a review parses two programs — because this function is CALLED twice and each call
+// builds its own. A helper returning one was written first and the compiler refused it,
+// *"cannot return Unit, because its storage lives in a region and would not outlive it"*, which
+// is the region rule doing its job. `lsp.bx` needs two Units at two call sites and therefore
+// carries the literal twice; a review's second Unit falls out of the second call, so one copy
+// is enough.
+//
+// It is still a copy of `main.bx`'s, and that part is a defect rather than a design: `Unit` has
+// a hundred and twelve fields, so a field added to `types.bx` has to be added everywhere the
+// literal appears or one of them stops compiling. Since a class cannot be returned, the fix is
+// not a constructor function — it is `Unit` growing a method that fills a blank one, or the
+// arrays moving behind something that can be. Reported rather than worked around.
+function promises_of(path: String, mutable into: Promises) -> Int touches files {
     let src: String = load_program(path);
-    let mutable unit: Unit = review_unit();
+    let mutable unit: Unit = Unit { tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, current_method: 0 - 1, probing: 0, probe_changes: 0, type_bindings: [], measure_clause: 0 - 1, measure_slot: 0, measure_parameters: 0 - 1, measure_owner: "", old_nodes: [], old_slots: [], ensures_start: 0, ensures_count: 0, ensures_owner: "", bracket_clauses: [], clause_subjects: [], it_token: 0 - 1, it_is_result: 0, used_it: 0, it_seen: 0, result_type_node: 0 - 1, result_slot: 0 - 1, returns_node: 0 - 1, walked_types: [], type_binding_floor: 0, allowed_effects: 63, effects_owner: "", function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], in_function: 0, depth: 0, problems: 0, position: 0, token_end: 0, no_record_literal: 0, in_multiply: 0, print_to_stderr: 0, int_type_node: 0 - 1, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
     let installed: Int = unit.install_keywords();
     let total: Int = unit.run(src);
-    let mutable broken: Promises = Promises { entries: [], shapes: [], texts: [], failed: 1 };
     if unit.errors > 0 {
-        return broken;
+        return 0 - 1;
     }
     while !unit.done() {
         let item: Int = unit.parse_item(src);
         if item < 0 {
-            return broken;
+            return 0 - 1;
         }
         push(unit.items, item);
     }
     if unit.errors > 0 {
-        return broken;
+        return 0 - 1;
     }
-    let mutable found: Promises = unit.collect_promises(src);
-    let unique: Int = review_unique_by_name(found.entries);
-    return found;
+    let collected: Int = into.collect(unit, src);
+    let unique: Int = review_unique_by_name(into.promises);
+    return 0;
 }
 
 // ---- comparing ------------------------------------------------------------------------
@@ -694,10 +734,10 @@ function promises_of(path: String) -> Promises touches files {
 // already paying for, and `find_binding` and `find_type` set the precedent. If a review of
 // something enormous ever measures slow, `function_buckets` in `types.bx` is the pattern to
 // copy.
-function review_find_promise(among: Promises, name: String) -> Int {
+function find_promise(among: Promises, name: String) -> Int {
     let mutable i: Int = 0;
-    while i < len(among.entries) {
-        if among.entries[i].name == name {
+    while i < len(among.promises) {
+        if among.promises[i].name == name {
             return i;
         }
         i += 1;
@@ -851,37 +891,39 @@ function review_sort_findings(mutable xs: [Finding]) -> Int {
 // The exit code is part of the contract and not a convenience. It is what makes this usable
 // as a CI gate with no output parsing, which is what `ROADMAP-1.0.md` §C2 asks of it.
 function review(old_path: String, new_path: String) -> Int touches files {
-    let before: Promises = promises_of(old_path);
-    if before.failed == 1 {
+    // The two promise tables belong to THIS frame, because a class holding growable arrays
+    // cannot be returned out of one — see `Promises`.
+    let mutable before: Promises = Promises { promises: [], shapes: [], texts: [] };
+    if promises_of(old_path, before) < 0 {
         print_error("error: " + old_path + " could not be read or parsed");
         return 2;
     }
-    let after: Promises = promises_of(new_path);
-    if after.failed == 1 {
+    let mutable after: Promises = Promises { promises: [], shapes: [], texts: [] };
+    if promises_of(new_path, after) < 0 {
         print_error("error: " + new_path + " could not be read or parsed");
         return 2;
     }
 
     let mutable findings: [Finding] = [];
     let mutable i: Int = 0;
-    while i < len(before.entries) {
-        let was: Promise = before.entries[i];
-        let at: Int = review_find_promise(after, was.name);
+    while i < len(before.promises) {
+        let was: Promise = before.promises[i];
+        let at: Int = find_promise(after, was.name);
         if at < 0 {
             // A removed declaration is a weakening only if something still calls it, which
             // this cannot know — so it is reported plainly and left to the reviewer.
             push(findings, Finding { verdict: verdict_removed(), name: was.name,
                         detail: was.kind + " is gone" });
         } else {
-            let compared: Int = compare_promises(was, before, after.entries[at], after,
+            let compared: Int = compare_promises(was, before, after.promises[at], after,
                                                 findings);
         }
         i += 1;
     }
     i = 0;
-    while i < len(after.entries) {
-        let now: Promise = after.entries[i];
-        if review_find_promise(before, now.name) < 0 {
+    while i < len(after.promises) {
+        let now: Promise = after.promises[i];
+        if find_promise(before, now.name) < 0 {
             let mutable detail: String = "new " + now.kind;
             if now.is_private == 1 {
                 detail = detail + ", private";

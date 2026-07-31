@@ -1,0 +1,10 @@
+// `?` returns the failure FROM THE ENCLOSING FUNCTION, so that function has to be able to carry
+// one. This one answers with Int, which cannot, and the message says so in those terms rather than
+// complaining about the operand — because the operand is fine and the signature is the problem.
+enum Answer { Ok(Int), Error(String) }
+function f() -> Int {
+    let a: Answer = Answer.Ok(1);
+    let v: Int = a?;
+    return v;
+}
+print(1);

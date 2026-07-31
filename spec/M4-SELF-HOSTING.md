@@ -380,7 +380,7 @@ Stated plainly, because the honest scope is the interesting part:
 - ~~**stage-1 cannot compile every Burxt program.**~~ **STALE, and corrected in v0.0.215 by
   measuring instead of reading.** This said the backend does not emit Decimals and their rounding,
   `match`, `tail` with `musttail`, contracts, or the FFI boundary. **It emits all five.** Measured:
-  **142 of 142** pass programs compile correctly, **0 refused**, including the generic-heavy
+  **143 of 143** pass programs compile correctly, **0 refused**, including the generic-heavy
   `lib/array.bx`, the exact-vector library at `Decimal<7>`/`Decimal<14>`, `lib/test.bx`, and the
   pointer wall — and their binaries run and produce the same output as stage-0's.
 
@@ -389,7 +389,7 @@ Stated plainly, because the honest scope is the interesting part:
   correction, as the explanation for stage-0 being ~8,000 lines larger. That is this project's own
   warning — *"a status line saying DONE is not evidence"* — running the other way: **a status line
   saying NOT DONE is not evidence either.** The suite is. `the_burxt_backend_compiles_a_growing_share_of_the_suite`
-  had been printing `142 of 142` the whole time.
+  had been printing `143 of 143` the whole time.
 
   Anything it cannot lower is still **refused by name**, never emitted wrongly. There is simply
   nothing in the suite left for it to refuse.

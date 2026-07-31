@@ -675,6 +675,100 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
         let visited: Int = self.write_body("  " + reg + " = ptrtoint ptr " + storage + " to i64\n");
         return reg;
     }
+    // `e?` — read the tag; on the failure variant return the failure from the enclosing function,
+    // otherwise yield the success payload.
+    //
+    // **This is the only EXPRESSION in the language that can return**, and that is what makes it
+    // interesting rather than long. The shape is the one `&&` and `||` already use — write a
+    // branch, open blocks, carry on in the last one — with one simplification the short-circuit
+    // operators do not get: the failure block ends in `ret`, so it never rejoins. `&&` needs a
+    // cell to merge two answers into; here there is nothing to merge, because control leaves.
+    // After this returns, the current block is `try.ok` and the value is simply the payload.
+    //
+    // The checker proved every fact used below — two variants, a failure named `Error` or `None`,
+    // a success carrying exactly one value, an enclosing function whose failure has the same name
+    // AND the same payload types. So nothing here re-derives them and nothing here can report:
+    // the tags are looked up because a tag is a position in the declaration, which is the shared
+    // fact both compilers read rather than record.
+    if n.kind == 22 {
+        let holder: Type = self.type_at(n.a);
+        let subject: String = self.emit_expr(src, n.a);
+        let as_ptr: String = self.fresh();
+        let cast: Int = self.write_body("  " + as_ptr + " = inttoptr i64 " + subject + " to ptr\n");
+        let tag: String = self.fresh();
+        let loaded: Int = self.write_body("  " + tag + " = load i64, ptr " + as_ptr + "\n");
+        let fail_at: Int = self.failure_variant_index(src, holder);
+        let failed: String = self.fresh();
+        let compared: Int = self.write_body("  " + failed + " = icmp eq i64 " + tag + ", "
+                                   + to_string(fail_at) + "\n");
+        let fail_label: String = self.fresh_label("try.fail");
+        let ok_label: String = self.fresh_label("try.ok");
+        let branched: Int = self.write_body("  br i1 " + failed + ", label %" + fail_label
+                                   + ", label %" + ok_label + "\n" + fail_label + ":\n");
+
+        // ---- the failure path: rebuild it as the enclosing function's own failure, and return.
+        //
+        // REBUILT rather than forwarded, because the two enums are different types even when they
+        // fail the same way: `Option<Int>` and `Option<String>` put their `None` at the same
+        // position but are different widths, and the tag that means failure in one need not be
+        // the tag that means it in the other. So the tag is re-derived from the RETURN type's
+        // declaration and the payload is copied across.
+        let answers: Type = self.declared_type(src, self.returns_node);
+        let ret_fail: Int = self.failure_variant_index(src, answers);
+        let out: String = self.scratch(self.cells_of(src, answers));
+        let stored: Int = self.write_body("  store i64 " + to_string(ret_fail) + ", ptr " + out + "\n");
+        // One `memcpy` for the whole payload, not one per value, and it is exact rather than
+        // approximate: the checker refused any `?` whose failure payload differs from the
+        // enclosing function's, so the two carry the same types in the same order and therefore
+        // occupy the same cells. That is the second job that refusal does.
+        let carried: Int = self.payload_cells(src, holder, fail_at);
+        if carried > 0 {
+            let from: String = self.fresh();
+            let stepped: Int = self.write_body("  " + from + " = getelementptr i64, ptr " + as_ptr
+                                      + ", i64 1\n");
+            let into: String = self.fresh();
+            let walked: Int = self.write_body("  " + into + " = getelementptr i64, ptr " + out
+                                     + ", i64 1\n");
+            let address: String = self.fresh();
+            let taken: Int = self.write_body("  " + address + " = ptrtoint ptr " + from
+                                    + " to i64\n");
+            let copied: Int = self.copy_cells(src, into, address, carried);
+        }
+        // Out the same way an ordinary `return` of this type leaves — see kind 63. An enum is an
+        // aggregate, so in practice this is always the `sret` path; the scalar branch is here
+        // because the two must not be able to disagree about how a value leaves a function, and a
+        // one-cell enum is a shape the language does not forbid.
+        let built: String = self.fresh();
+        let addressed: Int = self.write_body("  " + built + " = ptrtoint ptr " + out + " to i64\n");
+        if self.sret != "" {
+            let handed: Int = self.copy_cells(src, self.sret, built, self.sret_cells);
+            let returned: Int = self.write_body("  ret i64 0\n");
+        } else {
+            let checked: Int = self.emit_ensures(src, built);
+            let returned: Int = self.write_body("  ret i64 " + built + "\n");
+        }
+
+        // ---- the success path: the payload, read exactly as a `match` arm binds one.
+        let opened: Int = self.write_body(ok_label + ":\n");
+        let at: String = self.fresh();
+        let walked: Int = self.write_body("  " + at + " = getelementptr i64, ptr " + as_ptr
+                                 + ", i64 1\n");
+        let restore: Int = self.bind_from_application(src, holder);
+        let ok_at: Int = 1 - fail_at;
+        let ok_variant: Node = self.nodes[self.children[self.enum_item(src, holder).a + ok_at]];
+        let payload: Type = self.declared_type(src, self.nested_children[ok_variant.b]);
+        let aggregate: Bool = self.is_aggregate_written(src, payload);
+        let dropped: Int = truncate(self.type_bindings, restore);
+        let reg: String = self.fresh();
+        if aggregate {
+            // The value IS the cells, so its address is the value — no copy, exactly as
+            // `bind_payload` does it. This is why `expr_allocates` recurses through `?`.
+            let taken: Int = self.write_body("  " + reg + " = ptrtoint ptr " + at + " to i64\n");
+        } else {
+            let read: Int = self.write_body("  " + reg + " = load i64, ptr " + at + "\n");
+        }
+        return reg;
+    }
     if n.kind == 6 || n.kind == 7 {                  // -e, !e
         let inner: String = self.emit_expr(src, n.a);
         let reg: String = self.fresh();
@@ -1241,6 +1335,41 @@ function (mutable self: Unit) place_of(src: String, node: Int) -> String {
     }
     let complained: Int = self.complain_at(src, n.token, "this is not something to assign to");
     return "";
+}
+
+// The item node of the enum or class this type names. Only ever called for a type the checker
+// already proved is a declared enum, so a missing declaration cannot arrive here — but `find_type`
+// answers -1 and `self.nodes[-1]` would not, so the guard reads the first node instead of trapping.
+// A wrong answer for an impossible input beats a crash for one.
+function (mutable self: Unit) enum_item(src: String, holder: Type) -> Node {
+    let found: Int = self.find_type(src, holder.name_start, holder.name_length);
+    if found < 0 {
+        return self.nodes[0];
+    }
+    return self.nodes[self.types[found].node];
+}
+
+// How many cells one variant's payload occupies, with the enum's type ARGUMENTS in scope.
+//
+// The bindings matter for the same reason they matter in `cells_of`, and getting it wrong is
+// invisible rather than loud: `Result<Int, Point>`'s `Error` carries `E`, which is 1 cell read
+// bare and 4 read under the binding. A `memcpy` of 8 bytes where 32 were wanted copies a quarter
+// of the value and the rest is whatever was in the scratch cells.
+function (mutable self: Unit) payload_cells(src: String, holder: Type, which: Int) -> Int {
+    let item: Node = self.enum_item(src, holder);
+    if which < 0 || which >= item.b {
+        return 0;
+    }
+    let variant: Node = self.nodes[self.children[item.a + which]];
+    let restore: Int = self.bind_from_application(src, holder);
+    let mutable total: Int = 0;
+    let mutable p: Int = 0;
+    while p < variant.c {
+        total += self.cells_of(src, self.declared_type(src, self.nested_children[variant.b + p]));
+        p += 1;
+    }
+    let dropped: Int = truncate(self.type_bindings, restore);
+    return total;
 }
 
 // Where a variant sits in its enum's declaration — that position IS the tag, so the two
@@ -2858,8 +2987,8 @@ function (mutable self: Unit) hoist_old(src: String, node: Int) -> Int {
         let right: Int = self.hoist_old(src, n.b);
         return 1;
     }
-    if n.kind == 6 || n.kind == 7 || n.kind == 11 {
-        return self.hoist_old(src, n.a);               // unary not/negate, field access
+    if n.kind == 6 || n.kind == 7 || n.kind == 11 || n.kind == 22 {
+        return self.hoist_old(src, n.a);               // unary not/negate, field access, `e?`
     }
     if n.kind == 13 {                                  // an ordinary call: walk its arguments
         let list: Node = self.nodes[n.a];

@@ -1,0 +1,1 @@
+`?` recognises a failure by the variant's NAME — `Error` or `None` — and Pair has neither. Rename the failing variant, or use `match`.

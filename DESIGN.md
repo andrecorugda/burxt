@@ -473,7 +473,7 @@ to Cranelift or add an interpreter, only codegen.rs changes.
   compiled by stage 0, and then compiled by *itself*: stage-2's IR is
   byte-identical to stage-1's, which is the fixpoint. "Burxt compiles Burxt" is
   true without an asterisk: measured at v0.0.215, the Burxt backend compiles
-  **142 of 142** pass programs with **0 refused**, and each binary prints what
+  **143 of 143** pass programs with **0 refused**, and each binary prints what
   stage 0's build of it prints. (This paragraph said *"the Burxt backend does not
   emit every construct yet"* until v0.0.215, citing a `spec/M4-SELF-HOSTING.md`
   §3b that had gone stale under it. See §3b for what that cost.) Stage 0 stays,

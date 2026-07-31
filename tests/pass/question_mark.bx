@@ -1,0 +1,80 @@
+// `?` — the shortcut that returns a failure from where it is found. v0.0.221, and this fixture
+// exists because the feature had **no implementation in the Burxt compiler at all** while the
+// suite reported 142 of 142 pass programs.
+//
+// How that was possible is the part worth keeping. `?` shipped in stage-0 long ago, and
+// `examples/absence.bx` was written to show it off — but **no `tests/pass/` fixture used it**, and
+// `the_burxt_front_end_accepts_every_burxt_source` cross-checked seven example paths NAMED BY
+// HAND, with `absence.bx` not among them. So the only user of `?` in the repository was never run
+// through the Burxt front end, which refused the character outright: `byte 63 starts no token`.
+//
+// Two lessons, and the second is the general one:
+//
+//   1. A feature with no fixture has no coverage, however long it has worked in one compiler.
+//   2. **A hand-maintained list of files is a directory boundary**, and a new file lands on the
+//      wrong side of it in silence. The sweep walks `examples/` now. This repository has paid for
+//      the same shape twice before — `.gitignore`'s whitelist hid `lib/`, `docs/` and `scripts/`
+//      for dozens of versions, and `spec/A7.0-NAMING.md` §8 records a rename that missed a
+//      constructed path.
+//
+// The four ways `?` is REFUSED each have their own fixture in `tests/fail/`, because a pass
+// fixture cannot tell "supported" from "not examined" — which is exactly how this gap survived.
+
+enum Answer { Ok(Int), Error(String) }
+
+// The failure travels out untouched, and the happy path reads as though nothing could go wrong.
+function halve(n: Int) -> Answer {
+    if remainder(n, 2) != 0 {
+        return Answer.Error("not even");
+    }
+    return Answer.Ok(divide_floor(n, 2));
+}
+
+// Two `?` in a row: either can return, and the reader does not have to trace which.
+function quarter(n: Int) -> Answer {
+    let once: Int = halve(n)?;
+    let twice: Int = halve(once)?;
+    return Answer.Ok(twice);
+}
+
+function describe(n: Int) -> String {
+    match quarter(n) {
+        Ok(v) => { return "quarter is " + to_string(v); }
+        Error(why) => { return "no: " + why; }
+    }
+}
+
+print(describe(8));
+print(describe(9));
+// Fails on the SECOND halve, so the failure comes from inside the second `?` — the case a
+// hand-written early return gets wrong by returning the first error twice.
+print(describe(6));
+
+// It works on `Option` too, because the rule is about the variant's NAME rather than a blessed
+// type: `Error` or `None` is the failure, and everything else is the success.
+enum Maybe { Some(Int), None }
+
+function first_even(a: Int, b: Int) -> Maybe {
+    if remainder(a, 2) == 0 {
+        return Maybe.Some(a);
+    }
+    if remainder(b, 2) == 0 {
+        return Maybe.Some(b);
+    }
+    return Maybe.None;
+}
+
+function doubled(a: Int, b: Int) -> Maybe {
+    let found: Int = first_even(a, b)?;
+    return Maybe.Some(found * 2);
+}
+
+function show(a: Int, b: Int) -> String {
+    match doubled(a, b) {
+        Some(v) => { return to_string(v); }
+        None => { return "none"; }
+    }
+}
+
+print(show(3, 4));
+print(show(3, 5));

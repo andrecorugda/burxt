@@ -1,0 +1,1628 @@
+// ============================================================================
+// lsp.bx — `burxt lsp` in Burxt: a language server over stdio. The counterpart of
+// `src/rust-compiler/lsp.rs`.
+//
+// **This row was declared BLOCKED two versions ago and that was wrong.** v0.0.216's parity
+// map said: *"the language server frames LSP messages over STDIN, and Burxt has no stdin. No
+// builtin reads it, and `fread` is unreachable because a caller cannot make a pointer to
+// writable memory."* Every sentence is a fact and the conclusion is false —
+// `external function getchar() -> CInt touches input` was already declared in `lib/os.bx` and
+// already in use. `tests/support/reads_stdin.bx` is the five-line program that proves it, and
+// the rule it recorded is the one this file was written under:
+//
+//   > **Before writing "blocked", run the smallest program that would prove it.**
+//
+// So five things that looked like walls were each walked up to first, and every one of them
+// gave way. They are the interesting content of this file and each is written down where it is
+// answered:
+//
+//   1. *"`print` appends a newline, so exact protocol bytes are impossible."*  ->  §output.
+//      `external function write(fd: CInt, text: String, count: Int)`, one line. It is also
+//      unbuffered, which is what makes this a SERVER rather than a batch job: measured replying
+//      in 1 ms with the client still holding stdin open, not at EOF.
+//   2. *"the checker PRINTS its diagnostics, so it would corrupt the protocol stream."*  ->
+//      §capture. `dup`/`dup2`/`fflush` turn that into a feature: the message this server
+//      publishes is the compiler's own text, captured rather than re-worded here.
+//   3. *"a diagnostic needs a span and `complain_at` keeps none."*  ->  §attribution. It keeps
+//      no span, but it increments `problems` by exactly one and prints exactly one line, and the
+//      check can be driven one ITEM at a time from outside. Measured: 221 of the 222 diagnostics
+//      across `tests/fail/` land on exactly the token `check.bx` complained at, with no new
+//      field anywhere.
+//   4. *"Burxt cannot turn an arbitrary byte into a String, so a non-ASCII buffer cannot be
+//      read."*  ->  §bytes. `ROADMAP-1.0.md` B2 is real and this is not blocked by it:
+//      `write_bytes` then `read_file` is a byte-array-to-String that is exact for all 256
+//      values, at two file operations per message. It also carries the `\uXXXX` decoding that
+//      `os_byte_as_string`'s `?` cannot, surrogate pairs included.
+//   5. *"a server runs for hours and a region is never reclaimed."*  ->  §serve. This one took
+//      three measurements and the first two were wrong in the same direction — see there. The
+//      answer is a region per TURN with the WHOLE turn inside it and the document store on disk.
+//      Measured flat at 11 MB over 4000 keystrokes, on a 2.9 KB and a 13 KB buffer alike.
+//
+// **Nothing here is blocked.** Every limitation below is a stated behaviour with a number
+// attached, which is a different thing from a wall, and the difference is the whole reason this
+// file exists at all.
+//
+// ---- what agreement means for this file -------------------------------------------------
+//
+// **Less than for `diag.bx`, and the reason is not this file.** Driven over the same session,
+// message for message, against `burxt lsp` and diffed as JSON — the numbers below are that
+// comparison, not an impression of it.
+//
+// What agrees exactly: the framing, `initialize`'s capabilities, `hover` (byte for byte, value
+// and range, including the rounding-contract note and types no program wrote down), the
+// MethodNotFound reply, `shutdown`, the exit code for `exit` with and without it, and clearing a
+// squiggle by publishing `[]`. On all 142 `tests/pass/` fixtures both servers publish the same
+// thing — which is `[]` 142 times, and is the claim that matters most, because a server that
+// invents a diagnostic in a file that compiles is worse than one that misses a real one.
+//
+// What does not: **the two compilers do not word their diagnostics alike and do not point at the
+// same token.** For `let b: Bool = 2;` stage-0 says *"type mismatch in `let b`: declared Bool,
+// but expression has type Int"* at the `2`, and the Burxt compiler says *"declared Bool, but the
+// value is Int"* at the `b`. Across `tests/fail/` that is 13 of 269 fixtures with identical
+// message text, 174 agreeing on the LINE, and 199 on the count. Of the 70 where even the count
+// differs, all 70 are files the two COMPILERS disagree about — measured by asking each compiler's
+// own CLI, and on all 411 fixtures this server's diagnostic count equals its own compiler's.
+// **That divergence is older than this file and lives in `check.bx`'s messages.** A language
+// server cannot close it, and a translation table here would hide it.
+//
+// ---- what is NOT here ------------------------------------------------------------------
+//
+// **One feature, and it is half of one.** `lsp.rs`'s `check_in_context` answers "what program
+// does this file belong to" in two ways: a file WITH `use` lines is a program root, and a file
+// without them might be a module some root assembles. The first half is here and is better than
+// the Rust one — see §the program a buffer belongs to, where the buffer needs no splicing
+// because only the imports are read from disk. The second half needs a directory listing to find
+// the root, Burxt has no `read_dir`, and so a file that is `use`d by another is checked ALONE
+// and reports every type its siblings declare as unknown. Named, not hidden.
+//
+// Go-to-definition is absent on both sides for the same reason: it needs the compiler to keep
+// name resolution rather than only its result.
+//
+// ---- why no `lib/json.bx` --------------------------------------------------------------
+//
+// It exists and it works, and this file does not use it. Three reasons, in order of weight:
+//
+//   1. **The compiler modules do not depend on `lib/`.** `diag.bx` says so, `diag_harness.bx`
+//      says so, and `diag.rs` hand-writes its own JSON escaping on the other side for the
+//      same reason. `lsp.bx` sits in `src/burxt-compiler/`, so it inherits the rule. Pulling
+//      `lib/json.bx` in would pull `lib/option.bx` and `lib/result.bx` with it and change what
+//      the compiler IS — a program that carries the standard library.
+//   2. **A server does not want a Value tree, it wants a path.** Every question this file asks
+//      of a message is *"the string at `params.textDocument.uri`"*. With no closures and no
+//      generic match, walking a parsed tree in Burxt is more code than scanning for a key —
+//      and the failure mode of a scan is *"absent"*, which the protocol already has an answer
+//      for, while the failure mode of a parser is a second thing that can be wrong.
+//   3. It is 524 lines to reuse 120.
+//
+// The cost is stated plainly: the reader below is not a JSON parser. It does not validate, it
+// does not build a tree, and it answers the wrong thing for input the protocol does not send.
+// `json_escape` on the way OUT is `diag.bx`'s, because that one is shared with the renderer
+// and must not fork.
+// ============================================================================
+
+use "types.bx";
+use "parser.bx";
+use "check.bx";
+use "emit.bx";
+use "modules.bx";
+use "diag.bx";
+
+// `emit.bx` is in that list and `lsp.rs` needs no codegen — the front end is all a language
+// server asks for. It is here because `class Unit` in `types.bx` has fields typed `Slot` and
+// `Declared`, which `emit.bx` declares: the one compilation unit holds the lexer's tokens, the
+// parser's arena, the checker's bindings AND the backend's register state, so there is no way
+// to take the front half. It costs compile time and a larger binary, nothing at runtime.
+// Splitting `Unit` is a change to a file this file may not edit, so it is reported.
+//
+// `modules.bx` is there for `starts_with_at`, not for `load_program`. Writing a local copy of a
+// three-line byte comparison would have been shorter than this comment, and wrong for the same
+// reason `json_escape` is `diag.bx`'s: one implementation of a thing, in the module whose job it
+// already is.
+
+// ---- output ----------------------------------------------------------------------------
+//
+// `print` appends a newline and goes through `printf`, and a protocol frame is exact bytes
+// with no newline — so neither the extra byte nor `printf`'s buffering is acceptable here.
+// `write(2)` answers both: it takes a byte count and it is a syscall, so a reply is on the
+// wire when the call returns rather than when a 4 KB buffer happens to fill. A client that
+// waited for a full buffer would look like a server that hung.
+//
+// No effect declared, and that is consistent rather than an oversight: `print` declares none
+// either, and there is no `output` effect in the language (`effect_name` lists files,
+// commands, clock, input, network, model).
+external function write(fd: CInt, text: String, count: Int) -> Int;
+
+// One byte of standard input, or -1 at the end. The whole of the protocol's input side.
+external function getchar() -> CInt touches input;
+
+// ---- capture ---------------------------------------------------------------------------
+//
+// The front end PRINTS its diagnostics — `complain_at` in `check.bx`, the lexer in `types.bx`,
+// the parser. On stdout. Which is the protocol stream.
+//
+// That looked like a reason this file could not exist, and it is the opposite: the checker's
+// own text is exactly what a language server should publish, so the answer is to point fd 1
+// at a scratch file for the duration of a check and read it back. Nothing in the compiler
+// changes, and the published message is the compiler's, word for word, rather than a second
+// wording maintained here that could drift from it.
+//
+// `fopen`/`fileno` rather than `open` with O_WRONLY|O_CREAT|O_TRUNC, because those three are
+// numbers that differ between systems and a hard-coded 577 is a portability bug waiting for
+// its platform.
+external function dup(fd: CInt) -> CInt touches files;
+external function dup2(from_fd: CInt, to_fd: CInt) -> CInt touches files;
+external function fopen(path: String, mode: String) -> CPointer touches files;
+external function fclose(stream: CPointer) -> CInt touches files;
+external function fileno(stream: CPointer) -> CInt;
+external function fflush(stream: CPointer) -> CInt touches files;
+external function strstr(haystack: String, needle: String) -> CPointer;
+external function getpid() -> CInt;
+
+// A genuine C NULL, and no pointer arithmetic to get it: `strstr` answers NULL when the
+// needle is not in the haystack, and an empty haystack never holds `x`.
+//
+// It is needed because `fflush(NULL)` is the only way to push `printf`'s buffer out from here.
+// The buffer belongs to `stdout`, which is a C GLOBAL — Burxt can call a function but cannot
+// name a variable in another language, so `fflush(stdout)` is unreachable and `fflush(NULL)`,
+// which flushes every stream, is reachable. The broader hammer is the available one.
+function c_null() -> CPointer {
+    return strstr("", "x");
+}
+
+// A scratch path unique to this process, so two editors do not overwrite each other's.
+function lsp_scratch(suffix: String) -> String {
+    let pid: Int = getpid();
+    return "/tmp/burxt-lsp-" + to_string(pid) + suffix;
+}
+
+// Point fd 1 at `path` and answer a dup of the real stdout, so it can be put back.
+//
+// **Nothing between `capture_begin` and `capture_end` may return early or exit.** fd 1 would
+// stay redirected and the server would go silent while still reading requests, which is the
+// worst failure shape available: alive, listening, mute. Every caller below is one straight
+// line between the two for that reason.
+function lsp_capture_begin(path: String) -> Int touches files {
+    // Anything already pending on stdout belongs to the REAL stdout. Flushing first is what
+    // stops it from landing in the capture file.
+    fflush(c_null());
+    let saved: Int = dup(1);
+    let sink: CPointer = fopen(path, "w");
+    if c_is_null(sink) {
+        return saved;                                // no capture; the checker will be noisy
+    }
+    dup2(fileno(sink), 1);
+    // The FILE* is deliberately leaked: closing it would close the fd 1 we just made, and
+    // the process holds one at a time. `fflush(NULL)` below is what makes the bytes land.
+    return saved;
+}
+
+function lsp_capture_end(saved: Int) -> Int touches files {
+    fflush(c_null());                                // the checker's text into the file
+    dup2(saved, 1);                                  // fd 1 is the protocol again
+    return 0;
+}
+
+// ---- bytes -----------------------------------------------------------------------------
+//
+// **`ROADMAP-1.0.md` B2, answered rather than worked around.** Burxt has no byte-to-String:
+// `os_byte_as_string` returns `?` for every byte >= 127, which is the row's whole content. A
+// message body is arbitrary UTF-8 — a String literal in the program being edited may hold any of
+// it — so building the body a byte at a time through a printable table would corrupt exactly the
+// input this language claims to handle exactly, and would move every byte offset after it.
+//
+// `write_bytes` writes the low byte of every element of an `[Int]`, and `read_file` reads a file
+// into a String. Together they ARE a byte-array-to-String, exact for all 256 values, at one write
+// and one read — nothing beside the typecheck that follows. So B2 is not a wall for anything that
+// can afford a file operation; it is a wall for a per-character conversion, which is a narrower
+// claim than the row makes and worth taking back there.
+//
+// Every String that enters this server comes through here, which is also why `\uXXXX` decoding
+// and a raw NUL are ordinary cases rather than special ones.
+function lsp_bytes_as_text(bytes: [Int]) -> String touches files {
+    let path: String = lsp_scratch(".msg");
+    write_bytes(path, bytes);
+    return read_file(path);
+}
+
+// ---- reading ---------------------------------------------------------------------------
+
+// True when `line` (a byte array) begins with `prefix`, ignoring case in neither: the header
+// name is fixed by the protocol.
+function lsp_line_starts_with(line: [Int], width: Int, prefix: String) -> Bool {
+    if width < len(prefix) {
+        return false;
+    }
+    let mutable i: Int = 0;
+    while i < len(prefix) {
+        if line[i] != byte_at(prefix, i) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+// The digits after a header's colon, as an Int, or -1 when there are none.
+function lsp_header_number(line: [Int], width: Int, from: Int) -> Int {
+    let mutable i: Int = from;
+    while i < width && (line[i] == 32 || line[i] == 9) {
+        i += 1;
+    }
+    let mutable value: Int = 0;
+    let mutable digits: Int = 0;
+    while i < width && line[i] >= 48 && line[i] <= 57 {
+        value = value * 10 + (line[i] - 48);
+        digits += 1;
+        i += 1;
+    }
+    if digits == 0 {
+        return 0 - 1;
+    }
+    return value;
+}
+
+// One `Content-Length`-framed message, as bytes. An EMPTY array means standard input ended
+// and the client is gone.
+//
+// A zero-length body is indistinguishable from end of input here, and that is deliberate
+// rather than sloppy: `Content-Length: 0` carries no JSON-RPC message, so there is nothing a
+// caller could do with the difference.
+function lsp_read_frame() -> [Int] touches input {
+    let mutable length: Int = 0 - 1;
+    let mutable ended: Bool = false;
+    while !ended {
+        let mutable line: [Int] = [];
+        let mutable b: Int = getchar();
+        while b >= 0 && b != 10 {
+            push(line, b);
+            b = getchar();
+        }
+        if b < 0 && len(line) == 0 {
+            return [];                               // stdin closed between messages
+        }
+        // A CRLF client's `\r` belongs to the framing, not to the header.
+        let mutable width: Int = len(line);
+        if width > 0 && line[width - 1] == 13 {
+            width -= 1;
+        }
+        if width == 0 {
+            ended = true;                            // the blank line ends the headers
+        } else {
+            if lsp_line_starts_with(line, width, "Content-Length:") {
+                length = lsp_header_number(line, width, len("Content-Length:"));
+            }
+            // Content-Type is the only other header the protocol defines and its value is
+            // fixed, so reading it would change nothing.
+            if b < 0 {
+                return [];                           // headers cut off mid-way
+            }
+        }
+    }
+    if length < 0 {
+        return [];                                   // no Content-Length: unframeable
+    }
+    let mutable body: [Int] = [];
+    let mutable i: Int = 0;
+    while i < length {
+        let c: Int = getchar();
+        if c < 0 {
+            i = length;                              // truncated body; answer what arrived
+        } else {
+            push(body, c);
+            i += 1;
+        }
+    }
+    return body;
+}
+
+// ---- JSON, read ------------------------------------------------------------------------
+//
+// See the header for why this is here rather than `lib/json.bx`. It is a SCANNER: it finds the
+// value of a named member of an object, and it knows just enough about JSON's shapes to skip
+// past the ones it was not asked about. It never builds a tree.
+
+pure function json_space(text: String, at: Int) -> Int {
+    let mutable i: Int = at;
+    while i < len(text) {
+        let b: Int = byte_at(text, i);
+        if b == 32 || b == 9 || b == 10 || b == 13 {
+            i += 1;
+        } else {
+            return i;
+        }
+    }
+    return i;
+}
+
+// One past the closing quote of the string starting at `at`. Escapes are skipped as pairs,
+// which is the only thing a skipper needs to know about them: `\"` must not end the string.
+pure function json_skip_string(text: String, at: Int) -> Int {
+    let mutable i: Int = at + 1;
+    while i < len(text) {
+        let b: Int = byte_at(text, i);
+        if b == 92 {
+            i += 2;
+        } else if b == 34 {
+            return i + 1;
+        } else {
+            i += 1;
+        }
+    }
+    return i;
+}
+
+// One past the end of whatever value starts at `at`. Objects and arrays are skipped by
+// depth, with strings skipped whole so that a `\}` inside one cannot close anything.
+pure function json_skip_value(text: String, at: Int) -> Int {
+    let mutable i: Int = json_space(text, at);
+    if i >= len(text) {
+        return i;
+    }
+    let first: Int = byte_at(text, i);
+    if first == 34 {
+        return json_skip_string(text, i);
+    }
+    if first == 123 || first == 91 {                 // '\{' or '['
+        let mutable depth: Int = 0;
+        while i < len(text) {
+            let b: Int = byte_at(text, i);
+            if b == 34 {
+                i = json_skip_string(text, i);
+            } else {
+                if b == 123 || b == 91 {
+                    depth += 1;
+                }
+                if b == 125 || b == 93 {             // '\}' or ']'
+                    depth -= 1;
+                    if depth == 0 {
+                        return i + 1;
+                    }
+                }
+                i += 1;
+            }
+        }
+        return i;
+    }
+    // A number, `true`, `false` or `null`: it ends where the next structural byte begins.
+    while i < len(text) {
+        let b: Int = byte_at(text, i);
+        if b == 44 || b == 125 || b == 93 || b == 32 || b == 9 || b == 10 || b == 13 {
+            return i;
+        }
+        i += 1;
+    }
+    return i;
+}
+
+// True when the string at `at` is exactly `name`. Compared RAW — no unescaping — which is
+// right for a member name: the protocol's keys are ASCII letters and slashes, so an escape
+// in one would mean a client that has already gone wrong somewhere else.
+pure function json_string_is(text: String, at: Int, name: String) -> Bool {
+    if at >= len(text) || byte_at(text, at) != 34 {
+        return false;
+    }
+    let mutable i: Int = at + 1;
+    let mutable k: Int = 0;
+    while i < len(text) && byte_at(text, i) != 34 {
+        if k >= len(name) || byte_at(text, i) != byte_at(name, k) {
+            return false;
+        }
+        i += 1;
+        k += 1;
+    }
+    return k == len(name);
+}
+
+// Where the value of member `key` begins, in the object starting at `object_at`, or -1.
+//
+// Only the object's OWN members are looked at — a nested `"uri"` is skipped with its parent —
+// which is what makes chained calls mean the same thing as `lsp.rs`'s
+// `path(&["params", "textDocument", "uri"])` rather than "the first `uri` anywhere".
+pure function json_member(text: String, object_at: Int, key: String) -> Int {
+    let mutable i: Int = json_space(text, object_at);
+    if i >= len(text) || byte_at(text, i) != 123 {
+        return 0 - 1;
+    }
+    i += 1;
+    while true {
+        i = json_space(text, i);
+        if i >= len(text) || byte_at(text, i) == 125 {
+            return 0 - 1;
+        }
+        if byte_at(text, i) != 34 {
+            return 0 - 1;                            // not a member: malformed, and not fatal
+        }
+        let matched: Bool = json_string_is(text, i, key);
+        let after_key: Int = json_space(text, json_skip_string(text, i));
+        if after_key >= len(text) || byte_at(text, after_key) != 58 {
+            return 0 - 1;
+        }
+        let value: Int = json_space(text, after_key + 1);
+        if matched {
+            return value;
+        }
+        i = json_space(text, json_skip_value(text, value));
+        if i < len(text) && byte_at(text, i) == 44 {
+            i += 1;
+        }
+    }
+    return 0 - 1;
+}
+
+// The two- and three-deep forms, spelled out because Burxt has no varargs and a path array
+// would need a loop that reads no better than this does.
+pure function json_member2(text: String, at: Int, first: String, second: String) -> Int {
+    let one: Int = json_member(text, at, first);
+    if one < 0 {
+        return 0 - 1;
+    }
+    return json_member(text, one, second);
+}
+
+pure function json_member3(text: String, at: Int, first: String, second: String,
+                           third: String) -> Int {
+    let two: Int = json_member2(text, at, first, second);
+    if two < 0 {
+        return 0 - 1;
+    }
+    return json_member(text, two, third);
+}
+
+// Where the LAST element of the array at `at` begins, or -1. `contentChanges` is why: under
+// full sync the last change carries the whole document.
+pure function json_array_last(text: String, at: Int) -> Int {
+    let mutable i: Int = json_space(text, at);
+    if i >= len(text) || byte_at(text, i) != 91 {
+        return 0 - 1;
+    }
+    i += 1;
+    let mutable found: Int = 0 - 1;
+    while true {
+        i = json_space(text, i);
+        if i >= len(text) || byte_at(text, i) == 93 {
+            return found;
+        }
+        found = i;
+        i = json_space(text, json_skip_value(text, i));
+        if i < len(text) && byte_at(text, i) == 44 {
+            i += 1;
+        }
+    }
+    return found;
+}
+
+// Four hex digits as an Int, or -1.
+pure function json_hex4(text: String, at: Int) -> Int {
+    let mutable value: Int = 0;
+    let mutable k: Int = 0;
+    while k < 4 {
+        if at + k >= len(text) {
+            return 0 - 1;
+        }
+        let b: Int = byte_at(text, at + k);
+        let mutable d: Int = 0 - 1;
+        if b >= 48 && b <= 57 {
+            d = b - 48;
+        } else if b >= 97 && b <= 102 {
+            d = b - 87;
+        } else if b >= 65 && b <= 70 {
+            d = b - 55;
+        }
+        if d < 0 {
+            return 0 - 1;
+        }
+        value = value * 16 + d;
+        k += 1;
+    }
+    return value;
+}
+
+// The string value at `at`, unescaped, as BYTES. `[]` when `at` does not hold a string, which
+// the callers treat as "absent" — a distinction the protocol never needs, because no LSP field
+// this file reads is meaningfully the empty string.
+//
+// **Bytes and not a String, and the reason is a measured leak rather than taste.** The first
+// version built a String a byte at a time in 4096-byte chunks — `lib/os.bx`'s pattern, whose
+// comment says chunking is there "because `text += one_byte` copies the whole String for every
+// byte". That is true and it is only half the cost. `chunk += one_byte` ALLOCATES a new String
+// every byte, and a region allocator never reuses one, so a 2.9 KB document costs
+// sum(1..2900) ~= 4.2 MB of region per read. Measured: 200 `didChange` messages on
+// `examples/tour.bx` peaked at 756 MB and the server died of region exhaustion at about 250
+// keystrokes — *"region memory exhausted"*, in a program whose per-turn region was working
+// perfectly. The turn was cheap; READING THE MESSAGE was not, and it happens outside the turn
+// because the document has to outlive it.
+//
+// `push` on an `[Int]` doubles, so this is O(n) allocation instead of O(n^2), and the array
+// becomes a String once through the same `write_bytes`/`read_file` round trip the message body
+// already uses.
+//
+// **It also closes the `\uXXXX` limitation** rather than working around it. The earlier version
+// could not spell a byte above 0x7F and answered `?`, shifting every byte offset after it. Bytes
+// are bytes, so the UTF-8 encoding below is exact, surrogate pairs included — which is how an
+// emoji in a document arrives over the wire, and is what `json.rs` does on the other side. The
+// two readers now agree on every input either one can be handed.
+function json_string_bytes(text: String, at: Int) -> [Int] {
+    let mutable out: [Int] = [];
+    if at < 0 || at >= len(text) || byte_at(text, at) != 34 {
+        return out;
+    }
+    let mutable i: Int = at + 1;
+    while i < len(text) {
+        let b: Int = byte_at(text, i);
+        if b == 34 {
+            return out;
+        }
+        if b == 92 {
+            let e: Int = byte_at(text, i + 1);
+            if e == 110 {
+                push(out, 10);
+            } else if e == 116 {
+                push(out, 9);
+            } else if e == 114 {
+                push(out, 13);
+            } else if e == 98 {
+                push(out, 8);
+            } else if e == 102 {
+                push(out, 12);
+            } else if e == 117 {
+                let mutable code: Int = json_hex4(text, i + 2);
+                i += 4;
+                // A high surrogate is half a codepoint; the low one follows as a second `\u`.
+                if code >= 55296 && code < 56320 && byte_at(text, i + 2) == 92
+                    && byte_at(text, i + 3) == 117 {
+                    let low: Int = json_hex4(text, i + 4);
+                    if low >= 56320 && low < 57344 {
+                        code = 65536 + shift_left(code - 55296, 10) + (low - 56320);
+                        i += 6;
+                    }
+                }
+                push_utf8(out, code);
+            } else {
+                push(out, byte_at(text, i + 1));     // `\"`, `\\`, `\/` are themselves
+            }
+            i += 2;
+        } else {
+            push(out, b);
+            i += 1;
+        }
+    }
+    return out;
+}
+
+// One codepoint as UTF-8, appended. Neither this nor `json_string_bytes` is `pure`, and the
+// reason is `spec/N2` Decision 5 working as designed: `mutable out: [Int]` says this call changes
+// what the caller passed, and "changes nothing" is the same promise `pure` makes. A pure
+// function that appends is a contradiction, so the word goes rather than the append.
+//
+// The four widths, spelled out; a value outside Unicode
+// becomes U+FFFD rather than a byte sequence no decoder would accept, because a client that
+// sends one has already gone wrong and a server's job is to keep serving.
+function push_utf8(mutable out: [Int], code: Int) -> Int {
+    if code < 0 || code > 1114111 {
+        push(out, 239);
+        push(out, 191);
+        push(out, 189);
+        return 3;
+    }
+    if code < 128 {
+        push(out, code);
+        return 1;
+    }
+    if code < 2048 {
+        push(out, bit_or(192, divide_floor(code, 64)));
+        push(out, bit_or(128, remainder(code, 64)));
+        return 2;
+    }
+    if code < 65536 {
+        push(out, bit_or(224, divide_floor(code, 4096)));
+        push(out, bit_or(128, remainder(divide_floor(code, 64), 64)));
+        push(out, bit_or(128, remainder(code, 64)));
+        return 3;
+    }
+    push(out, bit_or(240, divide_floor(code, 262144)));
+    push(out, bit_or(128, remainder(divide_floor(code, 4096), 64)));
+    push(out, bit_or(128, remainder(divide_floor(code, 64), 64)));
+    push(out, bit_or(128, remainder(code, 64)));
+    return 4;
+}
+
+// The string value at `at`, as a String. One file round trip, for the reason above.
+function json_string_at(text: String, at: Int) -> String touches files {
+    return lsp_bytes_as_text(json_string_bytes(text, at));
+}
+
+// A non-negative integer at `at`, or -1. Protocol positions are the only numbers read, and a
+// negative line has no meaning — so "not a number" and "negative" answer the same thing.
+pure function json_int_at(text: String, at: Int) -> Int {
+    if at < 0 {
+        return 0 - 1;
+    }
+    let mutable i: Int = json_space(text, at);
+    let mutable value: Int = 0;
+    let mutable digits: Int = 0;
+    while i < len(text) && byte_at(text, i) >= 48 && byte_at(text, i) <= 57 {
+        value = value * 10 + (byte_at(text, i) - 48);
+        digits += 1;
+        i += 1;
+    }
+    if digits == 0 {
+        return 0 - 1;
+    }
+    return value;
+}
+
+// The `id` of a request, VERBATIM — the bytes as the client wrote them, because JSON-RPC
+// allows a string or a number and a reply must echo the same one back. Reading it as an Int
+// and printing it again would turn `"id":"7"` into `"id":7`, which a strict client is right
+// to reject. `""` when there is no id, which is what distinguishes a notification.
+pure function json_raw_at(text: String, at: Int) -> String {
+    if at < 0 {
+        return "";
+    }
+    let stop: Int = json_skip_value(text, at);
+    let from: Int = json_space(text, at);
+    if stop <= from {
+        return "";
+    }
+    return substring(text, from, stop - from);
+}
+
+// ---- JSON, write -----------------------------------------------------------------------
+//
+// Built as text rather than through a Value type, which is the same trade as the reader and
+// one more reason besides: `diag.bx` already writes its LSP positions this way, and two ways
+// of spelling one object is how the two halves of an editor integration drift apart.
+//
+// A literal `\{` and `\}` are escaped in every string below, because a bare `{` opens an
+// interpolation in Burxt. JSON-RPC is nothing but braces, so this is the first error anyone
+// writing this file makes, and it is worth a line to say so.
+
+function lsp_send(body: String) -> Int {
+    // Content-Length counts BYTES. A message with a non-ASCII identifier in it would
+    // otherwise be truncated at the client, which is `lsp.rs`'s note and the same `len` here:
+    // `len` on a Burxt String is its byte count, so this is right by construction rather than
+    // by care.
+    let header: String = "Content-Length: " + to_string(len(body)) + "\r\n\r\n";
+    write(1, header, len(header));
+    write(1, body, len(body));
+    return 0;
+}
+
+function lsp_respond(id: String, result: String) -> Int {
+    return lsp_send("\{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":" + result + "\}");
+}
+
+// -32601 is MethodNotFound. An unknown REQUEST must be answered or the client waits forever;
+// an unknown notification is ignored. The presence of an `id` is the whole difference.
+function lsp_method_not_found(id: String, method: String) -> Int {
+    return lsp_send("\{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":\{\"code\":-32601,"
+        + "\"message\":" + json_escape("unsupported method `" + method + "`") + "\}\}");
+}
+
+function lsp_publish_message(uri: String, diagnostics: String) -> Int {
+    return lsp_send("\{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\","
+        + "\"params\":\{\"uri\":" + json_escape(uri) + ",\"diagnostics\":" + diagnostics
+        + "\}\}");
+}
+
+// 1 = Full sync: the client sends the whole document on every change. Incremental sync would
+// need a text-edit applier to be correct, and the correctness of the buffer is the one thing
+// a server cannot get wrong — `lsp.rs` makes the same call in the same words.
+//
+// `serverInfo` names the server and does NOT state a version, and the difference from
+// `lsp.rs` is deliberate. There it is `env!("CARGO_PKG_VERSION")`, read from the file that
+// defines the release; Burxt has no such constant, and a version hand-copied into a string
+// here would be wrong one release after it was written. An absent field is honest; a stale one
+// is a lie a client would repeat in its logs.
+function lsp_initialize_result() -> String {
+    return "\{\"capabilities\":\{\"textDocumentSync\":1,\"hoverProvider\":true\},"
+        + "\"serverInfo\":\{\"name\":\"burxt-lsp\"\}\}";
+}
+
+// ---- positions -------------------------------------------------------------------------
+
+// The byte offset of a 0-based (line, character) protocol position.
+//
+// Characters are counted in CODEPOINTS, matching `LineIndex::offset_of` in `diag.rs`. The
+// protocol actually specifies UTF-16 code units; both servers count codepoints, so the two
+// AGREE with each other and both differ from the specification above the BMP. That is one
+// shared bug rather than two behaviours, which is the better place for it to be until
+// `ROADMAP-1.0.md` A5 lands — and it is stated here so the next reader does not think this
+// side chose it independently.
+pure function lsp_offset_of(src: String, line: Int, character: Int) -> Int {
+    let mutable at: Int = 0;
+    let mutable rows: Int = 0;
+    while rows < line && at < len(src) {
+        if byte_at(src, at) == 10 {
+            rows += 1;
+        }
+        at += 1;
+    }
+    if rows < line {
+        return len(src);                             // past the last line
+    }
+    let mutable seen: Int = 0;
+    while at < len(src) && byte_at(src, at) != 10 && seen < character {
+        at += 1;
+        // Every byte that is not a UTF-8 continuation byte begins a codepoint. `diag.bx`'s
+        // header derives this; the same rule read forwards is a cursor's byte offset.
+        while at < len(src) && bit_and(byte_at(src, at), 192) == 128 {
+            at += 1;
+        }
+        seen += 1;
+    }
+    return at;
+}
+
+// One 0-based protocol position, as JSON. `diag.bx` counts lines and columns from 1 for
+// people; the protocol counts from 0, and this is the one place the subtraction happens.
+function lsp_position(src: String, offset: Int) -> String {
+    return "\{\"line\":" + to_string(line_number_at(src, offset) - 1)
+        + ",\"character\":" + to_string(column_at(src, offset) - 1) + "\}";
+}
+
+function lsp_range(src: String, from: Int, to: Int) -> String {
+    return "\{\"start\":" + lsp_position(src, from) + ",\"end\":" + lsp_position(src, to) + "\}";
+}
+
+// ---- the front end ---------------------------------------------------------------------
+
+// **A fresh `Unit` is spelled out at each of the two places that needs one**, and that is a
+// real cost worth naming rather than a slip. A `new_unit()` helper was written first and the
+// compiler refused it: *"cannot return Unit, because its storage lives in a region and would
+// not outlive it"* — which is the region rule doing its job, since the Unit would be built in
+// the helper's frame. `allocates` does not lift it; a class simply cannot be returned.
+//
+// So the sixty-field literal now appears three times in the tree: twice below and once in
+// `main.bx`. The saving grace is that duplication here is LOUD — a new field on `Unit` makes
+// every copy fail to compile, so this cannot rot silently, only noisily. The fix is a language
+// one (a constructor that allocates in the caller's region, which is what `allocates` promises
+// for values but not for classes) and it is reported rather than worked around.
+
+// ---- the program a buffer belongs to --------------------------------------------------
+//
+// **A file is not always a program.** `src/burxt-compiler/check.bx` is one of six modules
+// `main.bx` assembles; `tests/pass/map_library.bx` opens with `use "lib/map.bx";`. Checking
+// either one as an isolated buffer is wrong in two different ways, and both were measured
+// before this section existed:
+//
+//   * a file WITH imports had its `use` lines lexed as ordinary statements, so eleven of the
+//     pass fixtures published a parse error the compiler does not make — the editor showing a
+//     mistake in a file that compiles;
+//   * a file that IS a module reports every type declared in a sibling as unknown.
+//
+// The first is fixed here and the second is not, and the difference is a directory listing.
+// `lsp.rs` finds the root of a module by reading the file's own directory and its ancestors;
+// Burxt has no `read_dir`, so that half stays missing and is named in the header.
+//
+// **The root case needs no splicing**, which is where this improves on `lsp.rs` rather than
+// merely matching it. There, the program is loaded from disk and the editor's text is spliced
+// over the file's own span, with a source map to keep later files' offsets right. Here only the
+// IMPORTS are read from disk and the buffer is appended after them — so the root is never read
+// from disk at all, and the editor's text is authoritative by construction instead of by
+// arithmetic.
+//
+// `Loader` in `modules.bx` would do the walk, and it is not used: `read_file` on a path that
+// does not exist ENDS THE PROCESS (`burxt runtime error: cannot open file for reading`), and
+// `use "not-written-yet.bx";` is a thing a person types every day. A server that dies there is
+// the failure `lsp.rs` calls the worst one available. So the walk is repeated with one extra
+// line in it — an existence check — and `missing` is how the caller learns to fall back.
+
+// Whether a path can be opened for reading. The only guard there is: `read_file` does not
+// answer a failure, it ends the program.
+function lsp_readable(path: String) -> Bool touches files {
+    let f: CPointer = fopen(path, "r");
+    if c_is_null(f) {
+        return false;
+    }
+    fclose(f);
+    return true;
+}
+
+// The `file://` path a uri names, or `""`. Anything else — `untitled:`, a remote scheme — has
+// no path, and a buffer with no path is checked alone, which is correct rather than a gap: it
+// has no siblings on this disk to check it against.
+function lsp_path_of(uri: String) -> String {
+    if !starts_with_at(uri, 0, "file://", len(uri)) {
+        return "";
+    }
+    return substring(uri, len("file://"), len(uri) - len("file://"));
+}
+
+// Every file a buffer imports, transitively, in dependency order, each once — `Loader.load`'s
+// walk with an existence check added. `missing` is the count of `use` targets that are not
+// there; the caller treats any as "do not splice", because half a program is worse than no
+// program: the missing half's types would come back as unknown and silence the rules that
+// mention them.
+class Imports { seen: [String], buffer: String, missing: Int }
+
+function (mutable self: Imports) gather(directory: String, text: String) -> Int touches files {
+    let width: Int = len(text);
+    let mutable at: Int = 0;
+    let mutable in_header: Bool = true;
+    while at < width && in_header {
+        let stop: Int = end_of_line(text, at, width);
+        let begin: Int = first_non_space(text, at, stop);
+        if begin >= stop || starts_with_at(text, begin, "//", stop) {
+            at = stop + 1;
+        } else {
+            let named: String = import_on_line(text, at, stop);
+            if len(named) == 0 {
+                in_header = false;
+            } else {
+                self.take(directory + named);
+                at = stop + 1;
+            }
+        }
+    }
+    return len(self.seen);
+}
+
+function (mutable self: Imports) take(path: String) -> Int touches files {
+    for already in self.seen {
+        if already == path {
+            return 0;                                // read once; a cycle is harmless
+        }
+    }
+    push(self.seen, path);
+    if !lsp_readable(path) {
+        self.missing += 1;
+        return 0;
+    }
+    let text: String = read_file(path);
+    // Its own imports FIRST, so a declaration is in the buffer before whatever uses it.
+    self.gather(directory_of(path), text);
+    if len(self.buffer) > 0 {
+        self.buffer += "\n";                         // between files, never after the last
+    }
+    self.buffer += blank_imports(text);
+    return 1;
+}
+
+// The text to check, and how far into it the buffer starts.
+//
+// Answers the buffer's own blanked text with a shift of 0 whenever there is nothing to prepend
+// — no imports, no path, or an import that is not on disk yet. Every caller therefore has one
+// code path, and the multi-file case is a longer prefix rather than a different mode.
+function lsp_program_prefix(uri: String, src: String) -> String touches files {
+    let blanked: String = blank_imports(src);
+    if blanked == src {
+        return "";                                   // no `use` lines: the file is its own program
+    }
+    let path: String = lsp_path_of(uri);
+    if len(path) == 0 {
+        return "";
+    }
+    let mutable imports: Imports = Imports { seen: [], buffer: "", missing: 0 };
+    imports.gather(directory_of(path), src);
+    if imports.missing > 0 || len(imports.buffer) == 0 {
+        return "";
+    }
+    return imports.buffer + "\n";
+}
+
+// ---- attribution -----------------------------------------------------------------------
+//
+// **The interesting problem in this file, and the third wall that was not one.**
+//
+// `complain_at` in `check.bx` does this:
+//
+//     print("error: " + message + " (at `" + substring(src, t.start, t.length) + "`)");
+//     self.problems += 1;
+//
+// It HAS the token. It keeps nothing. So a diagnostic's span looked unobtainable without a
+// new field on `Unit` and a new line in `check.bx` — a file this file may not edit.
+//
+// Three facts recover it exactly, none of them new:
+//
+//   1. one call prints exactly one line AND increments `problems` by exactly one, so the
+//      k-th `error:` line in the capture is the k-th increment;
+//   2. `check_bodies` is a plain loop over `items`, so the same loop can be written HERE and
+//      `problems` read before and after each item — which says how many of those lines each
+//      top-level item produced;
+//   3. the line names the offending token's TEXT, and an item's token range is bounded by the
+//      next item's first token.
+//
+// So: the item gives the region, the printed text picks the token inside it. Where a name
+// occurs once in its item — which is the ordinary case, and is the case for every shape the
+// editor sees most — the span is the exact token `complain_at` was given. Where it occurs
+// more than once the FIRST occurrence in the item is used, and successive diagnostics naming
+// the same text in the same item advance through the occurrences. That can land one
+// occurrence off inside a single statement; it cannot land in the wrong statement, which is
+// the error that would matter.
+//
+// What this does NOT recover: a complaint from `collect_declarations`, `check_applications`
+// or `infer_allocates`, which run before any item is walked. Those get the token their text
+// names if it is unique in the WHOLE file, and the start of the file otherwise. `lsp.rs`
+// points at them exactly. Stated, not hidden.
+//
+// The honest alternative is three fields on `Unit` and one line in `complain_at`, which would
+// make all of this eleven lines instead of a hundred and would give the exact span every
+// time. It is reported rather than made.
+
+// None of the six functions below is `pure`, and each of them could be: they read text and
+// answer. The reason is `starts_with_at` in `modules.bx`, which is not declared `pure` — and
+// `spec/N2` Decision 5 is right to refuse the guarantee on top of a function that does not make
+// it. One word in `modules.bx` would let all six carry it; that file is not this file's to edit,
+// so it is reported.
+//
+// How many bytes of the line at `at` are the prefix that marks it a diagnostic, or -1 when it
+// is not one.
+//
+// **Two prefixes, and finding the second one cost a real bug.** The lexer and the checker print
+// `error: `; the parser prints `parse error: `. The first version of this file matched only
+// `error: `, so `let x: Int = 1` with the semicolon missing published an EMPTY diagnostics array
+// — a buffer that does not parse, and the editor showing nothing wrong with it. Caught by
+// driving both servers over the same session and diffing, which is the only reason it was
+// caught at all: every unit test of the framing passed.
+//
+// So this function is the seam, and it is written as a list rather than as a `starts_with`
+// because a third prefix appearing in the front end must be a compile-time-visible line here,
+// not a silent miss. `grep -o 'print("[a-z ]*' src/burxt-compiler/{types,parser,check}.bx` is
+// the check: today it answers `error` seven times and `parse error` twice.
+function lsp_diagnostic_prefix(printed: String, at: Int, stop: Int) -> Int {
+    if starts_with_at(printed, at, "error: ", stop) {
+        return len("error: ");
+    }
+    if starts_with_at(printed, at, "parse error: ", stop) {
+        return len("parse error: ");
+    }
+    return 0 - 1;
+}
+
+// Where the k-th diagnostic line starts, or -1. The capture holds one line per diagnostic;
+// anything else the front end prints is skipped by the prefix test.
+function lsp_error_line(printed: String, which: Int) -> Int {
+    let mutable seen: Int = 0;
+    let mutable at: Int = 0;
+    while at < len(printed) {
+        let stop: Int = line_end_at(printed, at);
+        if lsp_diagnostic_prefix(printed, at, stop) >= 0 {
+            if seen == which {
+                return at;
+            }
+            seen += 1;
+        }
+        at = stop + 1;
+    }
+    return 0 - 1;
+}
+
+function lsp_count_error_lines(printed: String) -> Int {
+    let mutable seen: Int = 0;
+    let mutable at: Int = 0;
+    while at < len(printed) {
+        let stop: Int = line_end_at(printed, at);
+        if lsp_diagnostic_prefix(printed, at, stop) >= 0 {
+            seen += 1;
+        }
+        at = stop + 1;
+    }
+    return seen;
+}
+
+// The message on the `error: ` line at `at`, without the ` (at `x`)` suffix that names the
+// token. The suffix is `complain_at`'s way of pointing at source in a terminal; in an editor
+// the RANGE points, so repeating the token in the text would be noise the Rust server does
+// not produce either.
+function lsp_message_of(printed: String, at: Int) -> String {
+    let stop: Int = line_end_at(printed, at);
+    let from: Int = at + lsp_diagnostic_prefix(printed, at, stop);
+    let cut: Int = lsp_rfind(printed, from, stop, " (at `");
+    if cut < 0 {
+        return substring(printed, from, stop - from);
+    }
+    return substring(printed, from, cut - from);
+}
+
+// The token text named by the ` (at `x`)` suffix, or `""` when the line has none — the lexer
+// and the parser print messages of that shape.
+function lsp_token_text_of(printed: String, at: Int) -> String {
+    let stop: Int = line_end_at(printed, at);
+    let cut: Int = lsp_rfind(printed, at, stop, " (at `");
+    if cut < 0 {
+        return "";
+    }
+    let from: Int = cut + len(" (at `");
+    // The suffix ends with "`)" and nothing else may follow it on the line.
+    if stop - from < 2 {
+        return "";
+    }
+    return substring(printed, from, stop - from - 2);
+}
+
+// The LAST occurrence of `needle` in `[from, stop)`, or -1. Last rather than first because a
+// message may itself contain a backtick — `` `foo` touches files `` is one — and it is the
+// suffix that has to be found.
+function lsp_rfind(text: String, from: Int, stop: Int, needle: String) -> Int {
+    let mutable found: Int = 0 - 1;
+    let mutable i: Int = from;
+    while i + len(needle) <= stop {
+        if starts_with_at(text, i, needle, stop) {
+            found = i;
+        }
+        i += 1;
+    }
+    return found;
+}
+
+// ---- diagnostics -----------------------------------------------------------------------
+
+// Every problem in `src`, as the `diagnostics` array of a `publishDiagnostics` notification.
+// `[]` when the buffer is clean — which matters as much as publishing an error, because it is
+// what CLEARS the squiggle when the code becomes valid.
+//
+// `touches files` because of the capture file and the scratch write, not because it looks at
+// the program's own imports: it does not. A `use`d module is checked ALONE here, so a file
+// that names a type declared in a sibling reports it as unknown. `lsp.rs` avoids that by
+// listing the directory to find the program the file belongs to, and Burxt has no directory
+// listing. That is the one whole feature of `lsp.rs` missing here.
+function lsp_diagnostics(uri: String, buffer: String) -> String touches files {
+    // Everything below reads `src`, which is the buffer with any imported files in front of it
+    // and its own `use` lines blanked out. `shift` is where the buffer begins inside it: a span
+    // below that came from a sibling file and is not this buffer's to report, and a span above
+    // it is `shift` bytes further along than the editor thinks.
+    let prefix: String = lsp_program_prefix(uri, buffer);
+    let shift: Int = len(prefix);
+    let src: String = prefix + blank_imports(buffer);
+    // Recorded per PROBLEM, in the order the front end produces them. See §attribution.
+    let mutable item_from: [Int] = [];               // first token of the item that complained
+    let mutable item_to: [Int] = [];                 // one past its last token
+    let mutable unit: Unit = Unit { tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, current_method: 0 - 1, probing: 0, probe_changes: 0, type_bindings: [], measure_clause: 0 - 1, measure_slot: 0, measure_parameters: 0 - 1, measure_owner: "", old_nodes: [], old_slots: [], ensures_start: 0, ensures_count: 0, ensures_owner: "", bracket_clauses: [], clause_subjects: [], it_token: 0 - 1, it_is_result: 0, used_it: 0, it_seen: 0, result_type_node: 0 - 1, result_slot: 0 - 1, returns_node: 0 - 1, walked_types: [], type_binding_floor: 0, allowed_effects: 63, effects_owner: "", function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], in_function: 0, depth: 0, problems: 0, position: 0, token_end: 0, no_record_literal: 0, in_multiply: 0, print_to_stderr: 0, int_type_node: 0 - 1, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
+    unit.install_keywords();
+
+    let path: String = lsp_scratch(".out");
+    let saved: Int = lsp_capture_begin(path);
+    // ---- nothing from here to `lsp_capture_end` may return or exit ----
+    unit.run(src);
+    // Lexer complaints come before any item exists and name no token, so the file is all the
+    // region there is for them.
+    let mutable accounted: Int = 0;
+    while accounted < unit.errors {
+        push(item_from, 0);
+        push(item_to, len(unit.tokens));
+        accounted += 1;
+    }
+    let mutable parsing: Bool = true;
+    while parsing {
+        if unit.done() {
+            parsing = false;
+        } else {
+            let item: Int = unit.parse_item(src);
+            if item < 0 {
+                parsing = false;
+            } else {
+                push(unit.items, item);
+            }
+        }
+    }
+    // A parse error DOES have a place: `position` is the token the parser stopped at. This is
+    // the one span here that is exact without any matching — measured against the Rust server,
+    // the range and the message both agree exactly for `expected \`;\`, found \`print\`` — and it
+    // is also the only diagnostic either server reports ALONE: recovering a token stream is its
+    // own design question on both sides.
+    //
+    // `position` past the last token means "expected ... found the end of the file", and the
+    // place for that is the end of the last token there IS, not token zero. `-1` marks it, and
+    // the renderer below turns it into a zero-width span at the end of the source, which is
+    // where `lsp.rs` puts it too.
+    while accounted < unit.errors {
+        if unit.position < len(unit.tokens) {
+            push(item_from, unit.position);
+            push(item_to, unit.position + 1);
+        } else {
+            push(item_from, 0 - 1);
+            push(item_to, 0 - 1);
+        }
+        accounted += 1;
+    }
+
+    if unit.errors == 0 {
+        unit.collect_declarations(src);
+        unit.check_applications(src);
+        unit.infer_allocates(src);
+        // Declaration-time complaints belong to no item. The whole token range is their
+        // region, so a unique name still lands exactly and a repeated one lands at the file.
+        let mutable declared: Int = unit.problems;
+        let mutable before_items: Int = 0;
+        while before_items < declared {
+            push(item_from, 0);
+            push(item_to, len(unit.tokens));
+            before_items += 1;
+        }
+        // `check_bodies`, written here so `problems` can be read between items. The three arms
+        // are that function's, unchanged — a fourth kind appearing there and not here would
+        // mean an item nobody checks, which is why this mirrors it line for line.
+        let mutable i: Int = 0;
+        while i < len(unit.items) {
+            let index: Int = unit.items[i];
+            let before: Int = unit.problems;
+            let item: Node = unit.nodes[index];
+            if item.kind == 80 || item.kind == 81 {
+                unit.check_body(src, index);
+            }
+            if item.kind == 85 {
+                unit.check_impl(src, index);
+                let mutable k: Int = 0;
+                while k < item.b {
+                    unit.check_body(src, unit.children[item.a + k]);
+                    k += 1;
+                }
+            }
+            if item.kind >= 60 && item.kind <= 72 {
+                unit.check_stmt_node(src, index, unknown_type());
+            }
+            let from_token: Int = item.token;
+            let mutable to_token: Int = len(unit.tokens);
+            if i + 1 < len(unit.items) {
+                to_token = unit.nodes[unit.items[i + 1]].token;
+            }
+            let mutable mine: Int = unit.problems - before;
+            while mine > 0 {
+                push(item_from, from_token);
+                push(item_to, to_token);
+                mine -= 1;
+            }
+            i += 1;
+        }
+    }
+    lsp_capture_end(saved);
+    // ---- the capture window ends here; printing is safe again ----
+
+    let printed: String = read_file(path);
+    let total: Int = lsp_count_error_lines(printed);
+    let mutable out: String = "[";
+    let mutable which: Int = 0;
+    let mutable published: Int = 0;
+    while which < total {
+        let line_at: Int = lsp_error_line(printed, which);
+        let message: String = lsp_message_of(printed, line_at);
+        let wanted: String = lsp_token_text_of(printed, line_at);
+        // Which region this diagnostic came from. A count mismatch between lines and recorded
+        // regions cannot happen for a complaint that went through `complain_at`, but a future
+        // `print` in the front end that begins with `error: ` would cause one — so it falls
+        // back to the whole file rather than reading past the end of the arrays.
+        let mutable from_token: Int = 0;
+        let mutable to_token: Int = len(unit.tokens);
+        if which < len(item_from) {
+            from_token = item_from[which];
+            to_token = item_to[which];
+        }
+        // How many earlier diagnostics in the SAME region already claimed this text, so two
+        // complaints about two occurrences of one name advance rather than pile up.
+        let skip: Int = lsp_earlier_claims(printed, which, item_from, item_to, from_token);
+        let mutable token: Int = unit.lsp_token_named(src, wanted, from_token, to_token, skip);
+        // **`skip` is a preference, not a requirement, and getting that wrong cost real spans.**
+        // The rule above assumes two complaints naming one text in one item are about two
+        // OCCURRENCES of it. Often they are about the SAME token twice — `pair(1, "two")` draws
+        // both *"argument 2 does not fit T"* and *"argument 2 should be T"*, and the item holds
+        // one `pair`. The first version then found nothing for the second complaint and fell
+        // back to underlining the item's first token, which measured as five wrong spans out of
+        // 222 across `tests/fail/`. Retrying at the first occurrence fixes all five: a repeated
+        // complaint about one token is commoner than one complaint about each of two.
+        if token < 0 && skip > 0 {
+            token = unit.lsp_token_named(src, wanted, from_token, to_token, 0);
+        }
+        let mutable span_start: Int = 0;
+        let mutable span_end: Int = 0;
+        if token >= 0 {
+            span_start = unit.tokens[token].start;
+            span_end = span_start + unit.tokens[token].length;
+        } else if from_token < 0 {
+            // End of the file: a zero-width span just past the last token, so the editor puts
+            // the cursor where the missing `;` should have gone rather than on line 1.
+            if len(unit.tokens) > 0 {
+                let last: Token = unit.tokens[len(unit.tokens) - 1];
+                span_start = last.start + last.length;
+                span_end = span_start;
+            }
+        } else if from_token < len(unit.tokens) {
+            // No named token to find: underline the region's first token, which for a
+            // statement is where the statement begins.
+            span_start = unit.tokens[from_token].start;
+            span_end = span_start + unit.tokens[from_token].length;
+        }
+        // A problem in a sibling file is dropped: it is real, and it is not this document's,
+        // and publishing it here would put a squiggle on whatever line of THIS file happens to
+        // share the offset. `lsp.rs` filters the same way for the same reason.
+        if span_start >= shift {
+            if published > 0 {
+                out += ",";
+            }
+            published += 1;
+            // `severity` 1 is Error. Burxt has no warnings: every diagnostic it can produce is
+            // a refusal to compile, which is `lsp.rs`'s note and the same constant.
+            //
+            // Positions are rendered against the BUFFER, so the offsets come back down by
+            // `shift` — and against `blank_imports(buffer)` rather than `buffer` itself, which
+            // is the same bytes at the same offsets by construction.
+            out += "\{\"range\":" + lsp_range(blank_imports(buffer), span_start - shift,
+                                             span_end - shift)
+                + ",\"severity\":1,\"source\":\"burxt\",\"message\":" + json_escape(message) + "\}";
+        }
+        which += 1;
+    }
+    return out + "]";
+}
+
+// How many diagnostics before `which` named the same token text inside the same region.
+function lsp_earlier_claims(printed: String, which: Int, item_from: [Int], item_to: [Int],
+                                 from_token: Int) -> Int {
+    let wanted: String = lsp_token_text_of(printed, lsp_error_line(printed, which));
+    if len(wanted) == 0 {
+        return 0;
+    }
+    let mutable seen: Int = 0;
+    let mutable k: Int = 0;
+    while k < which {
+        if k < len(item_from) && item_from[k] == from_token {
+            if lsp_token_text_of(printed, lsp_error_line(printed, k)) == wanted {
+                seen += 1;
+            }
+        }
+        k += 1;
+    }
+    return seen;
+}
+
+// The index of the `skip`-th token in `[from, to)` whose text is exactly `wanted`, or -1.
+function (self: Unit) lsp_token_named(src: String, wanted: String, from: Int, to: Int,
+                                      skip: Int) -> Int {
+    if len(wanted) == 0 {
+        return 0 - 1;
+    }
+    let mutable passed: Int = 0;
+    let mutable i: Int = from;
+    let mutable stop: Int = to;
+    if stop > len(self.tokens) {
+        stop = len(self.tokens);
+    }
+    while i < stop {
+        let t: Token = self.tokens[i];
+        if t.length == len(wanted) && substring(src, t.start, t.length) == wanted {
+            if passed == skip {
+                return i;
+            }
+            passed += 1;
+        }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+// ---- hover -----------------------------------------------------------------------------
+//
+// Hover earns its place more in Burxt than in most languages: a `Decimal<2, RoundHalfEven>`
+// states the scale AND the rounding contract, and a value whose contract you cannot see is
+// exactly what this language exists to make visible. It is also where an inferred type lives
+// now — `let x = $19.99;` did not delete the type, it moved it into the editor.
+//
+// **The smallest expression under the cursor wins**, because expressions nest: in `price * qty`
+// the cursor on `qty` must say `Int`, not the type of the product. `lsp.rs` gets that by comparing
+// span WIDTHS. A Burxt `Node` carries one token index and no end offset, so there are no widths to
+// compare — and the SELECTION needed none. A token is the smallest thing a cursor can be inside,
+// so: find the token under the cursor, then the node that STARTS at it. Several nodes can start at
+// one token, the arena is built bottom-up, and the operand is therefore always the lower index —
+// so the smallest expression is the first node found. That is the same rule read off the arena's
+// construction order rather than off a field.
+//
+// **What the missing end offset does cost is the RANGE, and here is the measurement.** Driven
+// against `burxt lsp` at every one of 67,663 cursor positions across 41 files:
+//
+//   both answer a hover                       6,963
+//     identical CONTENTS (the type and note)   6,902   — 99.1%
+//     identical RANGE                          4,072   — 58%
+//   only the Rust server answers              2,870   — 4.2% of all positions
+//   only this server answers                  1,286
+//
+// Two differences, both structural and neither hidden:
+//
+//   * **The range is the TOKEN, not the expression.** Hovering on `s` in `len(s)` gives the same
+//     range on both sides; hovering on `len` gives `len` here and `len(s)` there. For a leaf —
+//     which is what a person hovers on — they agree, which is why the 58% is not the number that
+//     matters and the 99.1% is.
+//   * **This server answers only INSIDE a token that begins a typed node.** The 2,870 are almost
+//     all `=`, `(`, `)`, `,`, `.`, `:`, `;` and the space between tokens: a nesting span covers
+//     those and a token does not. Closing it needs a start AND an end on `Node`, which is a change
+//     to `types.bx` and is reported rather than guessed at — a fallback to "the nearest earlier
+//     token that starts something" would answer confidently and often wrongly, which is worse in
+//     an editor than answering nothing.
+//
+// The 1,286 the other way are positions inside string literals and a few identifiers where
+// `expr_types` on the Rust side has no entry. Not chased further: this server answering more is
+// not a defect, and chasing it would be chasing the other compiler's cache.
+function (self: Unit) lsp_token_under(offset: Int) -> Int {
+    let mutable i: Int = 0;
+    while i < len(self.tokens) {
+        let t: Token = self.tokens[i];
+        if t.start <= offset && offset < t.start + t.length {
+            return i;
+        }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+function (self: Unit) lsp_node_at_token(token: Int) -> Int {
+    let mutable i: Int = 0;
+    while i < len(self.typed) {
+        if self.nodes[i].token == token && !is_unknown(self.typed[i]) {
+            return i;
+        }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+// One sentence about what a type GUARANTEES, where the name does not already say it. The part
+// worth hovering for: a scale is visible in the type, but what happens to a result that does
+// not fit that scale is the whole question. Word for word `lsp.rs`'s `explain`, because two
+// wordings for one guarantee is how a language starts feeling arbitrary.
+function (self: Unit) lsp_explain(src: String, t: Type) -> String {
+    if t.kind == 45 {
+        let mutable places: String = " decimal places";
+        if t.scale == 1 {
+            places = " decimal place";
+        }
+        if t.contract == 1 {
+            return "Exact decimal, " + to_string(t.scale) + places
+                + ". A result that needs rounding rounds half to even (banker's rounding).";
+        }
+        if t.contract == 2 {
+            return "Exact decimal, " + to_string(t.scale) + places
+                + ". A result that needs rounding rounds half away from zero.";
+        }
+        return "Exact decimal, " + to_string(t.scale) + places
+            + " — no rounding contract, so any operation that could round is a compile error "
+            + "until one is declared.";
+    }
+    if t.kind == 43 {
+        return "C's 32-bit `int`, at the FFI boundary only.";
+    }
+    if t.kind == 51 {
+        return "An opaque pointer from C. Only `c_is_null(p)` and `c_string_at(p)` may look at it.";
+    }
+    if t.kind == 44 {
+        return "C's `double`. A Decimal may not cross as one — it would lose exactness.";
+    }
+    if t.kind == 49 {
+        return "A interface object: dispatch to whichever type implements `"
+            + substring(src, t.name_start, t.name_length) + "`, decided at runtime.";
+    }
+    return "";
+}
+
+// The type under the cursor, as a `hover` result, or `null`.
+//
+// The whole front end runs, and its complaints are captured and thrown away: hover must work
+// in a file that does NOT compile — above and below the mistake — because the checker recovers
+// per statement instead of stopping. That is the same reason `lsp.rs` ignores the checker's
+// result here and reads the type cache anyway.
+function lsp_hover(uri: String, buffer: String, line: Int, character: Int) -> String touches files {
+    // The same splice as `lsp_diagnostics`: hover inside `main.bx` must see the types its `use`
+    // lines bring in, or every one of them reads as unknown and the answer is `null`.
+    let prefix: String = lsp_program_prefix(uri, buffer);
+    let shift: Int = len(prefix);
+    let src: String = prefix + blank_imports(buffer);
+    let offset: Int = shift + lsp_offset_of(buffer, line, character);
+    let mutable unit: Unit = Unit { tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, current_method: 0 - 1, probing: 0, probe_changes: 0, type_bindings: [], measure_clause: 0 - 1, measure_slot: 0, measure_parameters: 0 - 1, measure_owner: "", old_nodes: [], old_slots: [], ensures_start: 0, ensures_count: 0, ensures_owner: "", bracket_clauses: [], clause_subjects: [], it_token: 0 - 1, it_is_result: 0, used_it: 0, it_seen: 0, result_type_node: 0 - 1, result_slot: 0 - 1, returns_node: 0 - 1, walked_types: [], type_binding_floor: 0, allowed_effects: 63, effects_owner: "", function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], in_function: 0, depth: 0, problems: 0, position: 0, token_end: 0, no_record_literal: 0, in_multiply: 0, print_to_stderr: 0, int_type_node: 0 - 1, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
+    unit.install_keywords();
+
+    let path: String = lsp_scratch(".hover");
+    let saved: Int = lsp_capture_begin(path);
+    // ---- nothing from here to `lsp_capture_end` may return or exit ----
+    unit.run(src);
+    let mutable parsing: Bool = true;
+    while parsing {
+        if unit.done() {
+            parsing = false;
+        } else {
+            let item: Int = unit.parse_item(src);
+            if item < 0 {
+                parsing = false;
+            } else {
+                push(unit.items, item);
+            }
+        }
+    }
+    if unit.errors == 0 {
+        unit.check(src);
+    }
+    lsp_capture_end(saved);
+    // ---- the capture window ends here ----
+
+    let token: Int = unit.lsp_token_under(offset);
+    if token < 0 {
+        return "null";                               // whitespace: nothing, rather than a guess
+    }
+    let node: Int = unit.lsp_node_at_token(token);
+    if node < 0 {
+        return "null";
+    }
+    let shown: String = unit.show_type(src, unit.typed[node]);
+    let note: String = unit.lsp_explain(src, unit.typed[node]);
+    let mutable value: String = "```burxt\n" + shown + "\n```";
+    if len(note) > 0 {
+        value += "\n" + note;
+    }
+    let t: Token = unit.tokens[token];
+    if t.start < shift {
+        return "null";                               // the cursor landed in a sibling's text
+    }
+    return "\{\"contents\":\{\"kind\":\"markdown\",\"value\":" + json_escape(value)
+        + "\},\"range\":" + lsp_range(blank_imports(buffer), t.start - shift,
+                                     t.start + t.length - shift) + "\}";
+}
+
+// ---- documents -------------------------------------------------------------------------
+//
+// uri -> the client's current text for it. **The buffer, not the file**: diagnostics run on the
+// client's in-memory text, so they are right while the file on disk is stale, which is the
+// entire point of an editor integration.
+//
+// **On disk, and this is the design decision in this file that a reviewer should push back on
+// hardest, so here is the measurement that forced it.** `lsp.rs` keeps a `HashMap<String,
+// String>`. The first version here kept two parallel arrays, which meant the store — and
+// therefore the message it was filled from — had to be allocated OUTSIDE the per-turn region,
+// since a value that crosses out of a closing region is a dangling pointer. Measured on
+// `examples/tour.bx` (2.9 KB): 140 KB of region per keystroke that is never given back, or
+// about 7000 keystrokes before *"region memory exhausted"*. Proportional to the file, so a
+// 30 KB module gets about 700 — ten minutes of typing.
+//
+// Nested regions are not available and a value cannot be moved between regions, so there is no
+// way to recycle an in-memory store. The filesystem is the store that outlives a region. With
+// it, **every allocation a turn makes is inside the turn**, and memory is flat for as long as
+// the editor is open — measured below.
+//
+// The path is derived from the uri with `hash`, so no in-memory map is needed either. A file
+// holds `uri\ntext`, and the uri is checked on the way out: two open documents whose uris hash
+// alike would otherwise serve each other's text, and answering "not open" is the safe end of
+// that. Rare, and named rather than assumed away.
+function lsp_doc_path(uri: String) -> String {
+    let pid: Int = getpid();
+    let mutable key: Int = hash(uri);
+    if key < 0 {
+        key = 0 - key;
+    }
+    return "/tmp/burxt-lsp-" + to_string(pid) + "-" + to_string(key) + ".buf";
+}
+
+function lsp_doc_store(uri: String, text: String) -> Int touches files {
+    write_file(lsp_doc_path(uri), uri + "\n" + text);
+    return 0;
+}
+
+// The stored text for `uri`, or `""` when it is not open. `""` is also what an empty buffer
+// answers, and the two really are the same here: there is nothing to check either way.
+function lsp_doc_text(uri: String) -> String touches files {
+    let path: String = lsp_doc_path(uri);
+    if !lsp_readable(path) {
+        return "";
+    }
+    let held: String = read_file(path);
+    let stop: Int = line_end_at(held, 0);
+    if stop != len(uri) || substring(held, 0, stop) != uri {
+        return "";                                   // a different document hashed here
+    }
+    return substring(held, stop + 1, len(held) - stop - 1);
+}
+
+function lsp_doc_open(uri: String) -> Bool touches files {
+    return len(lsp_doc_text(uri)) > 0;
+}
+
+// Closing writes an empty file rather than removing one: `remove` would be another extern, and
+// an empty file fails the uri check above, which is exactly "not open".
+function lsp_doc_forget(uri: String) -> Int touches files {
+    write_file(lsp_doc_path(uri), "");
+    return 0;
+}
+
+// ---- serve -----------------------------------------------------------------------------
+//
+// **The fourth wall, and the measurement that dissolved it — then the measurement that showed
+// the first one had not.** A language server runs for hours and re-checks the buffer on every
+// keystroke; a region is reclaimed when it CLOSES, so a server whose whole life is one region
+// allocates a compiler's working set per keystroke and never gives it back. 1 GB per process is
+// the reservation, which makes that a countdown rather than a design.
+//
+// A `region` opened per turn INSIDE the loop is reclaimed per turn: 2000 turns each allocating
+// 6.4 MB peaked at 4.5 MB resident. That was measured first and it was not enough, because the
+// first version put only the CHECK inside the turn and left the message and the document store
+// outside it — they have to survive into the next turn, and a value cannot cross out of a
+// closing region. 200 keystrokes on `examples/tour.bx` peaked at 756 MB and the server died at
+// about 250. Fixing `json_string_bytes` (see there) took it to 140 KB a turn, which is 7000
+// keystrokes: better, and still a countdown.
+//
+// So **the whole turn is inside the region** — reading the frame, scanning it, checking, and
+// writing the reply — and the store that has to outlive it is the filesystem. What crosses the
+// boundary is three Ints, and an Int is a copy rather than a pointer.
+//
+// That last point is not a style preference. A top-level mutable assigned a STRING from inside a
+// region compiles today without complaint and then reads back as whatever the next allocation
+// put there — a silent use-after-free, reproduced in five lines. It is a compiler bug and it is
+// reported separately; this loop is written so that it would be correct either way.
+function lsp_serve() -> Int touches input, files {
+    let mutable serving: Int = 1;
+    let mutable shutting_down: Int = 0;
+    let mutable clean: Int = 0;
+
+    while serving == 1 {
+        // ---- one turn, one region ----
+        region turn {
+            let frame: [Int] = lsp_read_frame();
+            if len(frame) == 0 {
+                serving = 0;                         // stdin closed: the client is gone
+            } else {
+                let message: String = lsp_bytes_as_text(frame);
+                let method: String = json_string_at(message, json_member(message, 0, "method"));
+                // A request has an id and must be answered; a notification has none and must not
+                // be. Kept VERBATIM so a string id is echoed as a string.
+                let id: String = json_raw_at(message, json_member(message, 0, "id"));
+                let uri: String = json_string_at(message,
+                    json_member3(message, 0, "params", "textDocument", "uri"));
+
+                if method == "initialize" {
+                    if len(id) > 0 {
+                        lsp_respond(id, lsp_initialize_result());
+                    }
+                } else if method == "initialized" {
+                    clean += 0;                      // nothing to do, and not an error either
+                } else if method == "textDocument/didOpen" {
+                    let text: String = json_string_at(message,
+                        json_member3(message, 0, "params", "textDocument", "text"));
+                    lsp_doc_store(uri, text);
+                    lsp_publish_message(uri, lsp_diagnostics(uri, text));
+                } else if method == "textDocument/didChange" {
+                    // Full sync: the LAST change carries the whole document.
+                    let changes: Int = json_member2(message, 0, "params", "contentChanges");
+                    let last: Int = json_array_last(message, changes);
+                    let text: String = json_string_at(message, json_member(message, last, "text"));
+                    lsp_doc_store(uri, text);
+                    lsp_publish_message(uri, lsp_diagnostics(uri, text));
+                } else if method == "textDocument/didSave" {
+                    // The buffer is already authoritative, so a save changes nothing the server
+                    // knows. Republished anyway, because a client may have dropped diagnostics
+                    // in between.
+                    lsp_publish_message(uri, lsp_diagnostics(uri, lsp_doc_text(uri)));
+                } else if method == "textDocument/didClose" {
+                    lsp_doc_forget(uri);
+                    // Clear the squiggles for a file no longer open, or the client keeps showing
+                    // errors for a buffer that is gone.
+                    lsp_publish_message(uri, "[]");
+                } else if method == "textDocument/hover" {
+                    if len(id) > 0 {
+                        let line: Int = json_int_at(message,
+                            json_member3(message, 0, "params", "position", "line"));
+                        let character: Int = json_int_at(message,
+                            json_member3(message, 0, "params", "position", "character"));
+                        let text: String = lsp_doc_text(uri);
+                        if len(text) == 0 || line < 0 || character < 0 {
+                            lsp_respond(id, "null");
+                        } else {
+                            lsp_respond(id, lsp_hover(uri, text, line, character));
+                        }
+                    }
+                } else if method == "shutdown" {
+                    shutting_down = 1;
+                    if len(id) > 0 {
+                        lsp_respond(id, "null");
+                    }
+                } else if method == "exit" {
+                    // Per the protocol: a clean exit after shutdown, an error otherwise.
+                    serving = 0;
+                    if shutting_down == 0 {
+                        clean = 1;
+                    }
+                } else if len(id) > 0 {
+                    lsp_method_not_found(id, method);
+                }
+                // A message that parses to no method at all falls through here and is ignored.
+                // **No panics on bad input**: a malformed message is answered or dropped, never
+                // fatal, because a language server that dies takes the editor's language support
+                // with it until a restart.
+            }
+        }
+    }
+    return clean;
+}

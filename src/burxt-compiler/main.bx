@@ -60,6 +60,7 @@ use "check.bx";
 use "modules.bx";
 use "emit.bx";
 use "diag.bx";
+use "schema.bx";
 
 // The shell, for `build` and `run`. Those two have to invoke `llc` and `cc`, and until
 // v0.0.219 the Burxt compiler could not: it emitted IR to a file and a human ran the rest
@@ -314,6 +315,9 @@ function is_subcommand(word: String) -> Bool {
     if word == "check" || word == "build" || word == "run" || word == "emit-ir" {
         return true;
     }
+    if word == "mcp-schema" {
+        return true;
+    }
     if word == "--help" || word == "-h" || word == "help" || word == "--version" || word == "-V" {
         return true;
     }
@@ -332,7 +336,7 @@ function is_subcommand(word: String) -> Bool {
 // stderr, product to stdout.** So `burxt emit-ir x.bx > x.ll` writes IR and not a progress
 // report, and a CI log shows what went wrong on the stream built for it.
 function usage() -> Int {
-    print_error("burxt 0.0.220 — the Burxt compiler, written in Burxt");
+    print_error("burxt 0.0.221 — the Burxt compiler, written in Burxt");
     print_error("usage:");
     print_error("  burxt check   <file.bx>                  parse and typecheck only");
     print_error("  burxt build   <file.bx> [-o <path>]      compile to a native executable");
@@ -343,8 +347,10 @@ function usage() -> Int {
     print_error("  burxt check   -                          ... reading the program from stdin");
     print_error("  burxt build   <file.bx> --target <triple> an object for another machine");
     print_error("");
+    print_error("  burxt mcp-schema <file.bx>               the MCP manifest, from the preconditions");
+    print_error("");
     print_error("Not here yet, and named rather than silently missing:");
-    print_error("  layout, explain memory, review, mcp-schema, lsp, --json");
+    print_error("  layout, explain memory, review, lsp, --json");
     print_error("They exist in the Rust build. spec/ROADMAP-1.0.md THE GATE tracks the rest.");
     return 0;
 }
@@ -357,7 +363,7 @@ if argument_count() > 1 {
 }
 
 if command == "--version" || command == "-V" {
-    print_error("burxt 0.0.220 — the Burxt compiler, written in Burxt");
+    print_error("burxt 0.0.221 — the Burxt compiler, written in Burxt");
     exit(0);
 }
 
@@ -404,6 +410,18 @@ if command == "check" {
         exit(0);
     }
     exit(1);
+}
+
+if command == "mcp-schema" {
+    // The MCP tool manifest, derived from the preconditions. `schema.bx` owns every byte of it,
+    // including the note it writes to stderr when a precondition cannot be expressed as a JSON
+    // Schema constraint — so this subcommand and `tests/support/schema_harness.bx` cannot produce
+    // different output, which would make the parity test test itself.
+    let problems: Int = mcp_schema(argument(2));
+    if problems > 0 {
+        exit(1);
+    }
+    exit(0);
 }
 
 if command == "emit-ir" {
@@ -459,6 +477,9 @@ if command == "build" || command == "run" {
         exit(1);
     }
     if len(triple) > 0 {
+        // The `.ll` goes and the `.o` STAYS: the object is the product when cross-compiling, since
+        // linking needs the other machine's toolchain. Same reason `emit-ir` keeps nothing.
+        let dropped: Int = system("rm -f " + ll);
         print_error("wrote " + object + " for " + triple
                     + " — linking needs that target's libc and linker");
         exit(0);
@@ -468,6 +489,17 @@ if command == "build" || command == "run" {
         print_error("burxt: cc could not link " + object);
         exit(1);
     }
+    // The intermediates go, because the Rust build leaves ONLY the executable and this one was
+    // leaving `<name>.ll` and `<name>.o` beside it. Found by `the_repository_root_holds_only_what_belongs_there`
+    // going red on `absence`, `absence.ll` and `absence.o` after I ran a comparison from the
+    // repository root — my own test command polluting the tree, which is how the difference
+    // surfaced at all.
+    //
+    // It is a real divergence and not tidiness: a build that leaves two files behind changes what
+    // `ls` shows, what a `.gitignore` has to know about, and what a second build overwrites. Rust
+    // hands the IR to LLVM in memory and never has a file to clean up; this one goes through the
+    // disk because it emits text, so cleaning up is the cost of that choice rather than an extra.
+    let swept: Int = system("rm -f " + ll + " " + object);
     if command == "build" {
         print_error("compiled " + source + " -> " + output);
         exit(0);

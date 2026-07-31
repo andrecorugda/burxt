@@ -1,0 +1,1 @@
+`?` does not convert between failures: this one carries String, and the enclosing function's `Error` carries Int. Write the `match`, or make the two agree.

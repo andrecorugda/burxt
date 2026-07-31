@@ -506,6 +506,131 @@ function (mutable self: Unit) unify(src: String, declared: Type, actual: Type) -
 }
 
 // The generic declaration this name belongs to, or -1.
+// ---- `?`: the four questions it asks about an enum ---------------------------------------
+
+// "a" or "an", so a message reads as English — "an Int", "a Bool". Stage-0 keeps this on `Type`
+// as `article`; here it is a free function because a Burxt class holds no methods of its own in
+// this compiler and every other type predicate is a free function too.
+function article_for(t: Type) -> String {
+    if t.kind == 40 {
+        return "an";
+    }
+    return "a";
+}
+
+// Which variant of this enum is the FAILURE — the one called `Error` or `None` — or -1.
+//
+// By NAME, which is stage-0's rule and the one that makes `?` work on an enum a program declared
+// itself. Order does not matter: a declaration may put the failure first or second, and
+// `lib/option.bx` and `lib/result.bx` disagree about that, which is exactly why this searches
+// rather than assuming a position.
+function (self: Unit) failure_variant_index(src: String, holder: Type) -> Int {
+    let found: Int = self.find_type(src, holder.name_start, holder.name_length);
+    if found < 0 || self.types[found].kind != 83 {
+        return -1;
+    }
+    let item: Node = self.nodes[self.types[found].node];
+    let mutable v: Int = 0;
+    while v < item.b {
+        let variant: Node = self.nodes[self.children[item.a + v]];
+        let named: Token = self.tokens[variant.token];
+        if span_equal(src, named.start, named.length, "Error")
+           || span_equal(src, named.start, named.length, "None") {
+            return v;
+        }
+        v += 1;
+    }
+    return -1;
+}
+
+// Which variant of this enum ITEM carries this name, or -1. Split out from
+// `failure_variant_index` because the second lookup asks a different question: not "which one is
+// the failure" but "does the function I am returning from spell its failure the same way".
+function (self: Unit) variant_named(src: String, item: Node, wanted: Token) -> Int {
+    let mutable v: Int = 0;
+    while v < item.b {
+        let variant: Node = self.nodes[self.children[item.a + v]];
+        let named: Token = self.tokens[variant.token];
+        if spans_equal(src, named.start, named.length, wanted.start, wanted.length) {
+            return v;
+        }
+        v += 1;
+    }
+    return -1;
+}
+
+// One variant's payload types, resolved under its enum's type arguments and rendered as
+// `Int, String` — stage-0's `type_list`, and only ever used in a message.
+//
+// The bind/resolve/unbind is not decoration: `Result<Int, String>`'s `Error` carries `E`, and a
+// refusal that said "this one carries E" would name a letter the reader would have to go and
+// look up. Stage-0 has no such step because it MONOMORPHISES — `Result<Int, String>` becomes a
+// nominal enum whose payloads are already concrete — while stage-1 resolves lazily. Different
+// mechanism, identical text, which is the only part a reader sees.
+function (mutable self: Unit) payload_list(src: String, holder: Type, variant: Node) -> String {
+    let restore: Int = self.bind_from_application(src, holder);
+    let mutable out: String = "";
+    let mutable p: Int = 0;
+    while p < variant.c {
+        if p > 0 {
+            out = out + ", ";
+        }
+        out = out + self.show_type(src,
+            self.resolve_shallow(src, self.declared_type(src, self.nested_children[variant.b + p])));
+        p += 1;
+    }
+    let dropped: Int = truncate(self.type_bindings, restore);
+    return out;
+}
+
+// Do these two variants carry exactly the same payload? Length and every type, which is what
+// stage-0's `!=` on two `Vec<Type>` compares.
+//
+// **The two sides are bound and unbound SEPARATELY, and that is the whole subtlety.** Both enums
+// name their parameters `T` or `E`, and `resolve_shallow` searches the bindings backwards and
+// stops at the first hit — so binding the second application on top of the first would shadow
+// it, and `Result<Int, String>` propagated into `Result<Int, Int>` would compare `String` against
+// `String` and be accepted. That is a miscompile rather than a wrong message: the payload would
+// then be copied into a cell of the wrong type.
+function (mutable self: Unit) payloads_agree(src: String, mine: Type, my_variant: Node,
+                                            theirs: Type, their_variant: Node) -> Bool {
+    if my_variant.c != their_variant.c {
+        return false;
+    }
+    let mutable p: Int = 0;
+    while p < my_variant.c {
+        let here: Int = self.bind_from_application(src, mine);
+        let a: Type = self.resolve_shallow(src,
+            self.declared_type(src, self.nested_children[my_variant.b + p]));
+        let dropped_here: Int = truncate(self.type_bindings, here);
+        let there: Int = self.bind_from_application(src, theirs);
+        let b: Type = self.resolve_shallow(src,
+            self.declared_type(src, self.nested_children[their_variant.b + p]));
+        let dropped_there: Int = truncate(self.type_bindings, there);
+        if !self.same_type(src, a, b) {
+            return false;
+        }
+        p += 1;
+    }
+    return true;
+}
+
+// What the body being checked answers with, or unknown at the top level.
+//
+// Two tables because a method is not a function in this compiler's symbol tables, and exactly one
+// of the two indices is set inside a body — `check_item` clears both and sets whichever applies,
+// then restores. Derived rather than tracked in a third field, for the reason `inside_class`
+// records: a field that has to be set and restored is a field that can leak.
+function (self: Unit) enclosing_return_type() -> Type {
+    if self.current_method >= 0 {
+        return self.methods[self.current_method].return_type;
+    }
+    if self.current_function >= 0 {
+        return self.functions[self.current_function].return_type;
+    }
+    return unknown_type();
+}
+
 function (self: Unit) generic_named(src: String, start: Int, length: Int) -> Int {
     let mutable i: Int = 0;
     while i < len(self.generics) {
@@ -1522,6 +1647,128 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             return unknown_type();
         }
         return self.declared_type(src, self.result_type_node);
+    }
+
+    // ---- `e?` — M-ABSENCE: the value, or return the failure from here --------------------
+    //
+    // Sugar with teeth. It reads as though nothing can go wrong while the compiler still knows
+    // it can, which is the whole trade: `let mean = divide(a + b, n)?;` in a function answering
+    // `Result<Int, String>` is `match divide(a + b, n) { Error(e) => return Result.Error(e),
+    // Ok(v) => v }`, written once instead of at every call.
+    //
+    // **Failure is recognised by the variant's NAME — `Error` or `None`.** Not by position, not
+    // by a marker on the declaration, not by a trait. That is stage-0's rule and it is worth
+    // stating because it is the load-bearing decision: it means `?` works on an enum a program
+    // declared itself, with no ceremony, as long as it spells its failure the way the standard
+    // library does. The cost is that a two-variant enum whose failure is called `Missing` gets a
+    // refusal naming the two words, which is the message below.
+    //
+    // **`?` does NOT convert between failure payloads.** A `Result<Int, String>` cannot be
+    // propagated out of a function answering `Result<Int, Int>` even though both fail with
+    // `Error`. Converting would need a rule for HOW, and every such rule is a decision nobody
+    // wrote down — so the refusal names both payloads and says to write the `match`.
+    //
+    // Every message here is copied from `typeck.rs` word for word, because the messages are part
+    // of the parity: two compilers that refuse the same program for reasons a reader would
+    // describe differently are two languages.
+    if n.kind == 22 {
+        let value: Type = self.type_of(src, n.a, unknown_type());
+        // Already reported. A second complaint about the same expression teaches nothing and
+        // buries the first, which is the house rule everywhere `is_unknown` is guarded on.
+        if is_unknown(value) {
+            return unknown_type();
+        }
+        let shown: String = self.show_type(src, value);
+        if value.kind != 46 {
+            let complained: Int = self.complain_at(src, n.token,
+                "`?` needs a value that is either a success or a failure, and this is "
+                + article_for(value) + " " + shown
+                + ". It works on an enum with two variants, one of them `Error` or `None`.");
+            return unknown_type();
+        }
+        let found: Int = self.find_type(src, value.name_start, value.name_length);
+        if found < 0 || self.types[found].kind != 83 {
+            let complained: Int = self.complain_at(src, n.token,
+                "`?` needs an enum with two variants, and " + shown + " is not an enum.");
+            return unknown_type();
+        }
+        let item: Node = self.nodes[self.types[found].node];
+        if item.b != 2 {
+            let complained: Int = self.complain_at(src, n.token,
+                "`?` needs an enum with exactly two variants — a success and a failure — and "
+                + shown + " has " + to_string(item.b) + ". Use `match`.");
+            return unknown_type();
+        }
+        let fail_at: Int = self.failure_variant_index(src, value);
+        if fail_at < 0 {
+            let complained: Int = self.complain_at(src, n.token,
+                "`?` recognises a failure by the variant's NAME — `Error` or `None` — and "
+                + shown + " has neither. Rename the failing variant, or use `match`.");
+            return unknown_type();
+        }
+        // Exactly two variants, so the success is the other one. Subtraction rather than a
+        // second search, which is also how stage-0 gets it.
+        let ok_at: Int = 1 - fail_at;
+        let ok_variant: Node = self.nodes[self.children[item.a + ok_at]];
+        let ok_named: Token = self.tokens[ok_variant.token];
+        if ok_variant.c != 1 {
+            let complained: Int = self.complain_at(src, n.token,
+                "`?` yields the success variant's value, and `" + shown + "."
+                + substring(src, ok_named.start, ok_named.length) + "` carries "
+                + to_string(ok_variant.c) + ". It must carry exactly one.");
+            return unknown_type();
+        }
+        // What `?` ANSWERS: the success payload, under the type arguments this value was written
+        // with. `Option<Int>`'s `Some` carries `T`, and `T` is only `Int` while the application's
+        // bindings are in scope — hence the bind/resolve/unbind, which is the same three lines
+        // every walk over a generic's insides uses. Resolving is not optional: without it
+        // `let head = position_of(xs, 5)?;` gives `head` the type `T`, and the next line's
+        // arithmetic on it is checked against nothing.
+        let restore: Int = self.bind_from_application(src, value);
+        let yielded: Type = self.resolve_shallow(src,
+            self.declared_type(src, self.nested_children[ok_variant.b]));
+        let dropped: Int = truncate(self.type_bindings, restore);
+
+        // The enclosing function has to fail the SAME WAY, because that is what `?` does with
+        // the failure: it returns it from here, unchanged.
+        if self.in_function == 0 {
+            let complained: Int = self.complain_at(src, n.token,
+                "`?` returns the failure from the enclosing function, and a top-level "
+                + "statement has none to return from. Put it in a `function` that answers "
+                + "with a failure of its own, or use `match`.");
+            return yielded;
+        }
+        let fail_variant: Node = self.nodes[self.children[item.a + fail_at]];
+        let fail_named: Token = self.tokens[fail_variant.token];
+        let fail_name: String = substring(src, fail_named.start, fail_named.length);
+        let answers: Type = self.enclosing_return_type();
+        let ret_shown: String = self.show_type(src, answers);
+        let ret_found: Int = self.find_type(src, answers.name_start, answers.name_length);
+        if answers.kind != 46 || ret_found < 0 || self.types[ret_found].kind != 83 {
+            let complained: Int = self.complain_at(src, n.token,
+                "`?` returns the failure from the enclosing function, which answers with "
+                + ret_shown + " — not something that can carry a failure. Give it a return "
+                + "type with an `" + fail_name + "` variant, or use `match`.");
+            return yielded;
+        }
+        let ret_item: Node = self.nodes[self.types[ret_found].node];
+        let ret_fail_at: Int = self.variant_named(src, ret_item, fail_named);
+        if ret_fail_at < 0 {
+            let complained: Int = self.complain_at(src, n.token,
+                "`?` returns `" + fail_name + "` from the enclosing function, and " + ret_shown
+                + " has no `" + fail_name + "` variant. Make the two agree, or use `match`.");
+            return yielded;
+        }
+        let ret_fail: Node = self.nodes[self.children[ret_item.a + ret_fail_at]];
+        if !self.payloads_agree(src, value, fail_variant, answers, ret_fail) {
+            let complained: Int = self.complain_at(src, n.token,
+                "`?` does not convert between failures: this one carries "
+                + self.payload_list(src, value, fail_variant)
+                + ", and the enclosing function's `" + fail_name + "` carries "
+                + self.payload_list(src, answers, ret_fail)
+                + ". Write the `match`, or make the two agree.");
+        }
+        return yielded;
     }
 
     if n.kind == 14 {                                // a method call on a value

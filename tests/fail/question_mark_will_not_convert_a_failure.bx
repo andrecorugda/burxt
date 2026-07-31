@@ -1,0 +1,12 @@
+// Two failure payloads that do not match. `?` will NOT convert between them, and that is the
+// interesting refusal of the four: converting would need a rule about which conversions are safe,
+// and every language that has one has a story about the conversion that surprised someone. Here
+// the answer is to write the `match`, where the conversion is visible.
+enum A { Ok(Int), Error(String) }
+enum B { Ok(Int), Error(Int) }
+function f() -> B {
+    let a: A = A.Ok(1);
+    let v: Int = a?;
+    return B.Ok(v);
+}
+print(1);

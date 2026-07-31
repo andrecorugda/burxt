@@ -917,6 +917,12 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
     if n.kind == 6 || n.kind == 7 {
         return self.expr_allocates(src, n.a);
     }
+    // `e?` hands back a value read out of `e`'s OWN cells — and for an aggregate payload that
+    // value is a pointer into them, not a copy. So it is built exactly when `e` is, and answering
+    // `false` here would let a function return a pointer into storage its region just closed.
+    if n.kind == 22 {
+        return self.expr_allocates(src, n.a);
+    }
     if n.kind == 17 || n.kind == 19 {                // an array or class literal
         if self.type_at(node).kind == 47 {
             return true;                             // a growable array lives in a region
@@ -1285,10 +1291,24 @@ function (mutable self: Unit) parse_unary(src: String) -> Int {
     return self.parse_postfix(src);
 }
 
-// `.field`, `.method(args)` and `[index]`, chained as far as they go.
+// `?`, `.field`, `.method(args)` and `[index]`, chained as far as they go.
 function (mutable self: Unit) parse_postfix(src: String) -> Int {
     let mutable node: Int = self.parse_primary(src);
     while node >= 0 {
+        // `e?` — the value, or return the failure from here. Postfix and FIRST in this loop, so it
+        // binds tighter than any operator: `divide(a, b)? + 1` is "the value or return the failure"
+        // and then plus one, never "divide, then apply `?` to the sum". Stage-0 puts it in the same
+        // place in its own postfix loop for the same reason.
+        //
+        // The node carries the `?`'s OWN token rather than the start of the expression it applies
+        // to. Every refusal below is about the operator — what it needs, what the enclosing
+        // function answers — so the caret belongs under the `?`, not under a call three lines long.
+        if self.at(41) {                             // '?'
+            let here: Int = self.position;
+            let q: Int = self.advance();
+            node = self.add(22, node, 0, 0, 0, here);
+            continue;
+        }
         if self.at(23) {                             // '.'
             let here: Int = self.position;
             let n: Int = self.advance();

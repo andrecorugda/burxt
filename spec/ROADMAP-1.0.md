@@ -51,9 +51,17 @@ and keeping the Rust one for that is deliberate. What the rule forbids is Burxt 
 
 | | Count |
 |---|---|
-| Rust modules answered by a Burxt counterpart | **8 of 11** |
-| Distinct Burxt files doing the answering | 8 |
-| **Held byte-for-byte by a test** | **1** |
+| Rust modules answered by a Burxt counterpart | **9 of 11** |
+| **Held byte-for-byte by a test** | **2** — `diag.bx`, `schema.bx` |
+| Written but NOT verified | 2 — `review.bx`, `lsp.bx` |
+| Still Rust-only | **0** |
+
+**`answered` deliberately excludes the two unverified ones**, and that needed a fourth strength
+level in the map. `review.bx` reached the tree by accident in v0.0.220 — a subagent recreated it
+between my set-aside and my `git add -A` — so the committed tree failed its own orphan check and CI
+went red. The two tempting fixes were both wrong: delete a colleague's 49 KB of real work, or map it
+as though it were verified. **A module nobody has compared is not parity**, and letting it raise the
+number would be the exact self-deception this map exists to prevent.
 
 **The gate is met at 11 answered AND 11 verified, not at 11 answered.** Four rows are `Role` — the same
 job in both compilers, held only *indirectly* by the fixpoint and by the two compilers accepting and
@@ -68,7 +76,33 @@ exactly the difference between *"a file with that job exists"* and *"the two agr
 | 2 | **`schema.bx`** — `mcp-schema` | The strongest single capability claim in the project. While it is Rust-only, the claim rests on Rust |
 | 3 | **`review.bx`** — `review` | §C2 makes this the mechanical semver rule for the 1.0 promise. Rust-only means Burxt cannot enforce its own compatibility promise |
 | 4 | **`lsp.bx`** — the language server | No longer blocked; see the correction above |
-| 5 | **Raise `verified` from 1 to 11** | The gate is not met until the rows are compared, not merely populated |
+| 5 | **Raise `verified` to 11** | The gate is not met until the rows are compared, not merely populated |
+
+### What the parity work FOUND — the argument for doing it at all
+
+Three defects, none of which a reading would have produced:
+
+1. **`diag.rs` panicked.** `let é: Int = ;` — a Rust backtrace and exit 101 instead of a diagnostic,
+   because `lexer.rs` ended an unknown-character span one BYTE into a two-byte character and
+   `diag.rs` sliced there. `diag.bx` counts bytes, so it is total where the Rust one was partial: it
+   rendered the input correctly the whole time. **The differential test running in the direction
+   nobody expects** — the second implementation auditing the first.
+2. **The `?` operator had NO implementation on the Burxt side**, and the suite reported 143 of 143.
+   `?` shipped in stage-0 long ago; `examples/absence.bx` was written to show it off; **no
+   `tests/pass/` fixture used it**; and the front-end sweep cross-checked seven example paths NAMED
+   BY HAND with `absence.bx` not among them. So the only user of the feature in the repository was
+   never run through the Burxt front end, which refused the character outright.
+   **A hand-maintained list of files is a directory boundary, and a new file lands on the wrong side
+   of it in silence** — the third time this repository has paid for that shape. The sweep walks the
+   directory now. Fixed in v0.0.221 with a pass fixture and **a fail fixture per refusal**, because
+   a pass fixture cannot tell "supported" from "not examined", which is how the gap survived.
+3. **The two compilers disagreed on a program with no errors.** Rust announces success with
+   `eprintln!` and `main.bx` used `print`. Nobody looks for a parity bug in the success path. The
+   rule is now deliberate and tested: **status to stderr, product to stdout.**
+
+And one honest non-finding: `burxt build` was leaving `<name>.ll` and `<name>.o` beside the
+executable where the Rust build leaves only the executable. Found because a comparison I ran from
+the repository root tripped the root-cleanliness invariant with my own droppings.
 
 **Two capabilities were verified present before any of this was scheduled**, because the alternative is
 scheduling a language decision that is not needed:
@@ -169,7 +203,7 @@ v0.0.214 wrote: *"stage-1 is a SUBSET. Its backend does not emit Decimals and th
 was written, and **is now false.** Nothing updated §3b as each feature landed, and this document
 believed it and re-published it a version later.
 
-**Measured, in v0.0.215:** stage-1 compiles **142 of 142** pass programs, **0 refused** — including
+**Measured, in v0.0.215:** stage-1 compiles **143 of 143** pass programs, **0 refused** — including
 `match`, `Decimal` with rounding contracts, `requires`/`ensures`, `external function`, `decreases`,
 `return tail`, the generic-heavy `lib/array.bx`, the exact-vector library, `lib/test.bx` and the pointer
 wall. Their binaries run and match stage-0's output. It also compiles **itself**, 2.6 MB of IR, to a
@@ -177,7 +211,7 @@ byte-identical fixpoint.
 
 > This project's rule is *"a status line saying DONE is not evidence. The suite is."* The correction is
 > that **a status line saying NOT DONE is not evidence either** — and this one had a test printing
-> `142 of 142` beside it the whole time.
+> `143 of 143` beside it the whole time.
 
 So the ~8,000-line gap is **not capability**. It is:
 
@@ -204,7 +238,7 @@ Andre: *"make sure all rs compiler has a burxt equivalent — that is the true m
 agree."*
 
 A sharper bar than the one being met, and the sharpening is the point. "Both compilers agree" had come to
-mean **the language** is covered twice — 142 of 142, a byte-identical fixpoint, 30 of 30 runtime
+mean **the language** is covered twice — 143 of 143, a byte-identical fixpoint, 30 of 30 runtime
 guarantees, all true. But the agreement stopped where the compiler proper stops, so every claim Burxt made
 about **tooling** was a claim about what Rust can do with a Burxt AST.
 
@@ -217,7 +251,7 @@ than in an audit a hundred versions later. That timing is the entire lesson of �
 |---|---|---|---|
 | `diag.rs` | `diag.bx` | **VERIFIED** | held byte-for-byte by `the_two_compilers_render_a_problem_identically` |
 | `parser.rs` | `parser.bx` | Role | held *indirectly*: the front-end sweep and the 142-of-142 backend sweep both fail if the parsers disagree |
-| `typeck.rs` | `check.bx` | Role | held indirectly over 269 fail programs, 227 of which stage-1 refuses too |
+| `typeck.rs` | `check.bx` | Role | held indirectly over 273 fail programs, 227 of which stage-1 refuses too |
 | `codegen.rs` | `emit.bx` | Role | held indirectly, and byte-for-byte, by the fixpoint |
 | `lexer.rs` | `types.bx` | Role | shares one file with `ast.rs` |
 | `ast.rs` | `types.bx` | Role | the same file answers both rows |

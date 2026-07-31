@@ -1,0 +1,1 @@
+`?` needs a value that is either a success or a failure, and this is an Int. It works on an enum with two variants, one of them `Error` or `None`.

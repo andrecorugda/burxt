@@ -1,0 +1,1 @@
+`?` returns the failure from the enclosing function, which answers with Int — not something that can carry a failure. Give it a return type with an `Error` variant, or use `match`.

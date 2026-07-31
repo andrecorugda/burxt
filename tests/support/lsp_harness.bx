@@ -1,0 +1,37 @@
+// ============================================================================
+// tests/support/lsp_harness.bx — runs `src/burxt-compiler/lsp.bx` as a real process, so a test
+// can drive the Burxt language server over a pipe and hold its replies against
+// `burxt lsp`'s for the same session.
+//
+// It is a HARNESS rather than a fixture, and `tests/support/diag_harness.bx` is the precedent:
+// a fixture's answer is a checked-in `.stdout`, and this program's answer depends entirely on
+// what is fed to its standard input. `tests/pass/` also gives a program no stdin at all, which
+// is the reason `tests/support/reads_stdin.bx` lives here too.
+//
+// It exists as a separate program because `main.bx` is the compiler's CLI and growing an `lsp`
+// subcommand onto it is `ROADMAP-1.0.md`'s task 1, being done by someone else. When that lands
+// this harness becomes `burxt-in-burxt lsp` and can go; until then it is the only way to run
+// the module, and a module that has never been run is not a module that works.
+//
+//     lsp_harness < a-session-of-framed-messages
+//
+// Writes framed replies to standard output and NOTHING else — no progress notes, no banner.
+// That is not tidiness: the protocol stream is the output, and one stray `print` would put a
+// bare line where a client expects `Content-Length`.
+// ============================================================================
+
+use "../../src/burxt-compiler/lsp.bx";
+
+// The exit code is the server's: 0 for a clean `shutdown` then `exit`, 1 for `exit` without
+// one, which is what the protocol asks for and what the Rust server does.
+//
+// **No `region main`, and that is load-bearing.** `lsp_serve` opens a region per turn, and the
+// first version of this harness wrapped the call in `region main` — which compiled, because the
+// nesting is across a function boundary and the refusal only sees syntactic nesting, and then
+// leaked: 385 MB over 100 keystrokes, because an inner region inside an outer one hands out the
+// outer arena and never resets it. That was not the whole leak (see `json_string_bytes`), but it
+// was the first one found, and it is why this is three lines at top level instead of a block.
+let code: Int = lsp_serve();
+if code != 0 {
+    exit(code);
+}

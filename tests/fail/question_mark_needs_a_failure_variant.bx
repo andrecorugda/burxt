@@ -1,0 +1,11 @@
+// An enum with two variants and neither is a failure. `?` recognises a failure by the variant’s
+// NAME — `Error` or `None` — which is a deliberate choice: it means `?` works on any enum a user
+// writes, without a blessed type or a trait to implement. The cost is that a name carries meaning,
+// and this fixture is where that cost is stated.
+enum Pair { Left(Int), Right(Int) }
+function f() -> Pair {
+    let p: Pair = Pair.Left(1);
+    let v: Int = p?;
+    return Pair.Right(v);
+}
+print(1);

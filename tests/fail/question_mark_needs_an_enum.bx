@@ -1,0 +1,12 @@
+// `?` on a plain value. It needs something that is either a success or a failure, and an Int
+// is neither — so the refusal names the type it was handed rather than talking about generics.
+//
+// One of four fail fixtures added with `?` in v0.0.221. They exist because the operator had NO
+// implementation on the Burxt side while the suite reported 142 of 142 pass programs, and the
+// reason nothing caught it is that **a pass fixture cannot tell "supported" from "not examined."**
+function f() -> Int {
+    let n: Int = 5;
+    let y: Int = n?;
+    return y;
+}
+print(f());

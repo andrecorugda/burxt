@@ -50,6 +50,8 @@ class Keyword { word: String, code: Int }
 //   8 binary (a op b, op in `value`)             9 comparison
 //  10 logical            11 field access        12 index
 //  13 call               14 method call
+//  21 the value being returned, for a contract bracket on the return type
+//  22 `e?` — the success payload, or return the failure from the enclosing function (inner in `a`)
 // Type kinds:
 //  40 Int  41 Bool  42 String  43 CInt  44 CDouble  51 CPointer
 //  45 Decimal (scale in `a`, contract in `b`)   46 named   47 slice   48 array
@@ -777,6 +779,19 @@ function (mutable self: Unit) scan_punct(src: String, from: Int, stop: Int) -> I
     if one == 60 { let n: Int = self.emit(35, from, 1); return from + 1; }   // <
     if one == 62 { let n: Int = self.emit(36, from, 1); return from + 1; }   // >
     if one == 33 { let n: Int = self.emit(37, from, 1); return from + 1; }   // !
+    // `?` — error propagation. There is no two-character form to try first, and no `??`: a
+    // default for a failure is `match` or a named function, not a second operator whose
+    // precedence a reviewer has to remember.
+    //
+    // Worth recording WHY this line arrived so late, because the lesson is about the test suite
+    // rather than the lexer. `?` shipped in stage-0 and stage-1 had NOTHING — not a token, not a
+    // node, not a rule — and the suite reported 142 of 142 passing, because no `tests/pass/`
+    // fixture used it and the front-end sweep listed seven example paths BY HAND with
+    // `examples/absence.bx` not among them. A whole feature had zero coverage on one side. It
+    // surfaced only when `burxt mcp-schema` was run over every example and one file answered
+    // `byte 63 starts no token`. A hand-written list of what to check is a list of what you
+    // already thought of; the sweep now walks the directory.
+    if one == 63 { let n: Int = self.emit(41, from, 1); return from + 1; }   // ?
 
     // `&` and `|` alone are the two bytes people arrive with, so they get an answer rather than a
     // byte number. Same message stage-0 gives, for the same reason: the bit operations are NAMED,
