@@ -1096,6 +1096,27 @@ fn the_burxt_front_end_accepts_every_burxt_source() {
                 text
             ));
         }
+        // **And the CHECKER's verdict, which this sweep ignored until v0.0.230.**
+        //
+        // It asserted only `errors: 0` (the lexer) and `parse errors: 0` (the parser), so a program
+        // the Burxt CHECKER refuses while stage-0 accepts it passed here silently. Found by the
+        // subagent closing the `layout` generics gap: `examples/generics.bx` writes
+        // `let held = Holder { one: 42 };` with no annotation, stage-0 infers `Holder<Int>` from the
+        // literal, and `check.bx` refuses the program with three errors.
+        //
+        // **That is the worse direction of the two.** A checker that misses a rule lets a bad
+        // program through; a checker that invents one REFUSES A VALID PROGRAM, and a compiler that
+        // does that is unusable. The 43-gap sweep of v0.0.224 measured only the first direction —
+        // over `tests/fail/` — and `the_burxt_typechecker_agrees_with_the_rust_one`'s Direction 1
+        // covers `tests/pass/` and stage-1's own source but never `examples/`. So the one directory
+        // written to be READ was checked by nobody.
+        if !text.contains("type errors: 0") && !text.contains("parse errors: 1") {
+            failures.push(format!(
+                "{}: the Burxt CHECKER refused a program the Rust one accepts:\n{}",
+                source.display(),
+                text
+            ));
+        }
     }
     let _ = fs::remove_dir_all(&scratch);
     assert!(
@@ -1118,12 +1139,19 @@ fn the_burxt_front_end_accepts_every_burxt_source() {
     // failures are printed either way, and the number below is measured with no cushion.
     //
     // When `?` lands (task 14), this whole block goes and `failures.is_empty()` stands alone.
-    // **0 as of v0.0.221**, and it was 2 for the length of one version: `absence.bx` failed both
+    // **1 as of v0.0.230**, and the one is a CHECKER disagreement rather than a lexer one:
+    // `examples/generics.bx` writes `let held = Holder { one: 42 };` with no annotation, stage-0
+    // infers `Holder<Int>` from the literal, and `check.bx` cannot — it refuses a program the Rust
+    // compiler accepts. **That is the worse direction**: a missed rule lets a bad program through, an
+    // invented one refuses a valid program, and a compiler that does that is unusable. It was
+    // invisible until this version because the sweep asserted only the lexer's and parser's verdicts.
+    //
+    // Was 0, and before that 2 for the length of one version: `absence.bx` failed both
     // the lexer half and the parser half, because a file whose bytes do not tokenise cannot parse
     // either. `?` landed and both went away. The block stays rather than reverting to a bare
     // `failures.is_empty()`, because the SECOND branch below is the useful half — it fails when
     // the number drops, so a stale allowance cannot sit above a regression.
-    const CANNOT_READ_YET: usize = 0;
+    const CANNOT_READ_YET: usize = 1;
     if failures.len() > CANNOT_READ_YET {
         panic!(
             "the Burxt front end disagrees with the Rust one on {} source(s), and only {} is \

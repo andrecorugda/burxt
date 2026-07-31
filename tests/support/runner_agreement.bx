@@ -612,8 +612,10 @@ region agreement {
     // hide underneath it. The same shape as `CANNOT_READ_YET` in `runner.rs`, for the same reason,
     // and the message says which direction it moved so the fix is obvious.
     //
-    // 5 as of v0.0.226: the three fixture sweeps plus two named invariants. 68 to go.
-    let expected: Int = 5;
+    // 7 as of v0.0.229: the three fixture sweeps, plus four named invariants
+    // (`the_repository_root_holds_only_what_belongs_there`, `every_example_still_typechecks`,
+    // `every_log_file_is_linked_from_its_index`, `no_html_page_is_written_in_markdown`). 66 to go.
+    let expected: Int = 7;
     let claimed_e: Int = report.claim(answered >= expected,
         "no invariant that had moved to Burxt has gone missing (answered " + to_string(answered)
         + ", expected " + to_string(expected) + ")");

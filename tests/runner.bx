@@ -78,6 +78,20 @@ function listing_all_of(directory: String, into: String) -> String touches files
     return read_file(into);
 }
 
+// Every file under `directory` whose name matches `pattern`, one per line, RECURSIVELY.
+//
+// The shared helper the document invariants needed. `ls` cannot recurse and Burxt cannot walk a
+// tree — `opendir` answers a pointer the memory model has nothing to say about — so `find` does
+// what a recursive read would, and the answer comes back through a file. Exactly the shape of
+// `listing_of` above, one level further out, and the same honest workaround rather than a
+// pretended-away limit.
+function find_of(directory: String, pattern: String, into: String) -> String touches files, commands {
+    let command: String = "find " + directory + " -type f -name '" + pattern + "' > " + into
+        + " 2>/dev/null";
+    let status: Int = system(command);
+    return read_file(into);
+}
+
 // Run a command, capturing everything it says, and answer its exit code.
 // `system` reports the wait status, and the exit code is the high byte of it.
 function run_capturing(command: String, output: String) -> Int {
@@ -357,6 +371,8 @@ function invariant_names() -> [String] {
     let mutable all: [String] = [];
     push(all, "the_repository_root_holds_only_what_belongs_there");
     push(all, "every_example_still_typechecks");
+    push(all, "every_log_file_is_linked_from_its_index");
+    push(all, "no_html_page_is_written_in_markdown");
     return all;
 }
 
@@ -450,6 +466,193 @@ function examples_typecheck(compiler: String, work: String) -> String touches fi
     return "";
 }
 
+
+// How many lines `text` holds. `DESIGN.md` growing back into a log is measured, not felt.
+function count_lines(text: String) -> Int {
+    let mutable lines: Int = 0;
+    let mutable i: Int = 0;
+    while i < len(text) {
+        if byte_at(text, i) == 10 {
+            lines += 1;
+        }
+        i += 1;
+    }
+    return lines;
+}
+
+// The milestone log is split across files, so the index and the files must agree. Two ways to
+// drift and both silent: a log file nobody links to, and a link to a file that was renamed.
+// Checked in BOTH directions for that reason — the Rust one does, and a one-way check would pass
+// a log whose index lists nothing.
+function log_files_are_linked(work: String) -> String touches files, commands {
+    if !readable("docs/log/README.md") {
+        return "docs/log/README.md is missing, and it is the log's index";
+    }
+    let index: String = read_file("docs/log/README.md");
+    let names: String = listing_of("docs/log", work + "/log-listing");
+    let mutable found: Int = 0;
+    let mutable unlinked: String = "";
+    let mutable at: Int = 0;
+    while at < len(names) {
+        let stop: Int = line_end(names, at);
+        let entry: String = substring(names, at, stop - at);
+        if len(entry) > 3 && entry != "README.md"
+            && substring(entry, len(entry) - 3, 3) == ".md" {
+            found += 1;
+            if !contains(index, entry) {
+                if len(unlinked) > 0 {
+                    unlinked += ", ";
+                }
+                unlinked += entry;
+            }
+        }
+        at = stop + 1;
+    }
+    if found < 8 {
+        return "the log lost files: only " + to_string(found) + " entries beside the index";
+    }
+    if len(unlinked) > 0 {
+        return "docs/log/README.md does not link: " + unlinked;
+    }
+    // The other direction: every link in the index must resolve. A markdown link is `](target)`,
+    // and only local `.md` targets are checked — `../` leaves the log and a `#` is a fragment
+    // within a page, neither of which is this invariant's business.
+    let mutable missing: String = "";
+    let mutable i: Int = 0;
+    while i < len(index) {
+        if byte_at(index, i) == 40 {                 // '('
+            let mutable j: Int = i + 1;
+            while j < len(index) && byte_at(index, j) != 41 {
+                j += 1;
+            }
+            let target: String = substring(index, i + 1, j - i - 1);
+            if len(target) > 3 && substring(target, len(target) - 3, 3) == ".md"
+                && !starts_with_at_runner(target, 0, "../") && !contains(target, "#") {
+                if !readable("docs/log/" + target) {
+                    if len(missing) > 0 {
+                        missing += ", ";
+                    }
+                    missing += target;
+                }
+            }
+            i = j + 1;
+        } else {
+            i += 1;
+        }
+    }
+    if len(missing) > 0 {
+        return "docs/log/README.md links files that do not exist: " + missing;
+    }
+    // `DESIGN.md` must POINT AT the log rather than hold it: the split is the whole point, and a
+    // document that grows back into a log has quietly undone it.
+    let design: String = read_file("DESIGN.md");
+    if !contains(design, "docs/log/") {
+        return "DESIGN.md must link the log";
+    }
+    if count_lines(design) >= 1200 {
+        return "DESIGN.md is growing back into a log: " + to_string(count_lines(design)) + " lines";
+    }
+    return "";
+}
+
+// Markdown in a `.html` page reaches the live site verbatim, because kramdown never runs on one.
+//
+// Two exclusions, and both are in the Rust twin for reasons worth keeping. `_layouts` and
+// `_includes` are templates rather than pages and hold no prose. And HTML COMMENTS are stripped
+// before the scan, because a page explaining this very rule would otherwise fail it — the first
+// version of the Rust test tripped on the sentence in `404.html` telling authors not to write
+// `markdown="1"`. That is the prose-versus-pattern trap, and mirroring the fix matters more than
+// mirroring the check.
+function html_pages_are_not_markdown(work: String) -> String touches files, commands {
+    let listing: String = find_of("docs", "*.html", work + "/html-listing");
+    let mutable wrong: String = "";
+    let mutable seen: Int = 0;
+    let mutable at: Int = 0;
+    while at < len(listing) {
+        let stop: Int = line_end(listing, at);
+        let path: String = substring(listing, at, stop - at);
+        if len(path) > 0 && !contains(path, "_layouts") && !contains(path, "_includes") {
+            seen += 1;
+            let body: String = without_comments(after_front_matter(read_file(path)));
+            let mutable line_no: Int = 1;
+            let mutable k: Int = 0;
+            while k < len(body) {
+                let end: Int = line_end(body, k);
+                if starts_with_at_runner(body, k, "# ") || starts_with_at_runner(body, k, "## ")
+                    || starts_with_at_runner(body, k, "- ") || starts_with_at_runner(body, k, "|") {
+                    if len(wrong) > 0 {
+                        wrong += "; ";
+                    }
+                    wrong += path + ":" + to_string(line_no) + " is markdown in an .html page";
+                }
+                line_no += 1;
+                k = end + 1;
+            }
+            if contains(body, "markdown=\"1\"") {
+                if len(wrong) > 0 {
+                    wrong += "; ";
+                }
+                wrong += path + " sets markdown=\"1\", which does nothing in an .html page";
+            }
+        }
+        at = stop + 1;
+    }
+    // **A floor of 2, which is the measured count and not a guess — the first version said 3 and
+    // failed honestly on a site that has two pages.** `docs/` holds four `.html` files and two of
+    // them are in `_layouts`/`_includes`.
+    //
+    // The Rust twin has no floor here and does not need one: `walk` starts with
+    // `fs::read_dir(dir).unwrap()`, so a missing `docs/` panics there. `find` prints nothing and
+    // exits quietly, so the same mistake would make this invariant pass by having no pages to be
+    // wrong about. **The floor is not mirroring the Rust check, it is paying for the difference
+    // between an in-process walk and a shell one.**
+    if seen < 2 {
+        return "expected the two .html pages under docs/, examined only " + to_string(seen);
+    }
+    if len(wrong) > 0 {
+        return wrong;
+    }
+    return "";
+}
+
+// The text after a page's YAML front matter. A `#` in there is a YAML comment and entirely
+// correct, so scanning it for markdown headings would report every page.
+function after_front_matter(text: String) -> String {
+    if !starts_with_at_runner(text, 0, "---") {
+        return text;
+    }
+    let mutable i: Int = 3;
+    while i + 4 <= len(text) {
+        if byte_at(text, i) == 10 && starts_with_at_runner(text, i + 1, "---") {
+            return substring(text, i + 4, len(text) - i - 4);
+        }
+        i += 1;
+    }
+    return text;
+}
+
+// The same text with every `<!-- ... -->` removed. See `html_pages_are_not_markdown` for why.
+function without_comments(text: String) -> String {
+    let mutable out: String = "";
+    let mutable i: Int = 0;
+    while i < len(text) {
+        if starts_with_at_runner(text, i, "<!--") {
+            let mutable j: Int = i + 4;
+            while j + 3 <= len(text) && !starts_with_at_runner(text, j, "-->") {
+                j += 1;
+            }
+            if j + 3 > len(text) {
+                return out;                          // unterminated: nothing after it is code
+            }
+            i = j + 3;
+        } else {
+            out += substring(text, i, 1);
+            i += 1;
+        }
+    }
+    return out;
+}
+
 // The reason an invariant does NOT hold, or `""` when it does.
 function run_invariant(name: String, compiler: String, work: String) -> String
     touches files, commands
@@ -459,6 +662,12 @@ function run_invariant(name: String, compiler: String, work: String) -> String
     }
     if name == "every_example_still_typechecks" {
         return examples_typecheck(compiler, work);
+    }
+    if name == "every_log_file_is_linked_from_its_index" {
+        return log_files_are_linked(work);
+    }
+    if name == "no_html_page_is_written_in_markdown" {
+        return html_pages_are_not_markdown(work);
     }
     // Not silence. A name in the list with no implementation behind it is a bug in this file,
     // and the only safe answer is to fail loudly — see the note at the top of this section.
