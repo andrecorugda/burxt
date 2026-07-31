@@ -4679,6 +4679,142 @@ fn no_document_claims_a_coverage_number_the_suite_refutes() {
     );
 }
 
+/// **The Burxt compiler is a compiler, not an IR emitter — and it builds itself.**
+///
+/// Until v0.0.219 `main.bx` took a source file and an optional output path, wrote LLVM IR, and
+/// stopped. Turning that IR into a program meant a human running `llc` and `cc` by hand. So the
+/// sentence "Burxt compiles Burxt" was true about the hard part and quietly false about the part
+/// a user does: there was no `burxt build`, no `burxt run`, no exit status, no `--version`.
+///
+/// This is the gate item Andre put first — *"I will not allow that burxt is using rust; we use
+/// rust to build burxt"* — because it is what makes the Burxt-built compiler a **drop-in** rather
+/// than a backend the Rust one drives.
+///
+/// **Both capabilities it needed turned out to be already present**, which is now the third time
+/// on this roadmap that a wall was a reading rather than a fact: `external function system(...)
+/// touches commands` for `llc`/`cc`, and `getchar` for stdin one version earlier. Measured, not
+/// designed. The rule that keeps earning its place: **before writing "blocked", run the smallest
+/// program that would prove it.**
+///
+/// What this checks, in the order that matters:
+/// 1. `--version` answers, so the binary is a CLI at all.
+/// 2. `check` is quiet on a good program and exits 0; non-zero with a message on a bad one.
+/// 3. `build` produces a program that RUNS and prints the right answer — `$19.99 * 3` is
+///    `59.97` exactly, which is the language's whole claim, now made by the Burxt build of it.
+/// 4. `run` does both in one step and hands the program's exit status back to the shell.
+/// 5. **The Burxt compiler builds ITSELF through its own `build`, and the compiler that comes
+///    out compiles a program.** No Rust in that loop except to have built the first one.
+/// 6. The legacy report still prints `type errors:`, because three invariants in this file parse
+///    it. The dispatcher fires only on words it RECOGNISES for exactly that reason — a
+///    dispatcher assuming argument 1 is always a command would have broken all three, and the
+///    failure would have read as a checker regression rather than a CLI change.
+#[test]
+fn the_burxt_compiler_builds_and_runs_a_program_and_itself() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    if !llc.exists() {
+        eprintln!("skipping: {} is not installed", llc.display());
+        return;
+    }
+    let scratch = scratch_dir("burxt-cli");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let bxc = scratch.join("bxc");
+    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("src/burxt-compiler/main.bx"))
+        .arg("-o")
+        .arg(&bxc)
+        .output()
+        .expect("burxt");
+    assert!(
+        built.status.success(),
+        "the Burxt compiler did not build:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    // Exact money, because that is the claim being transferred to the Burxt build.
+    fs::write(
+        scratch.join("money.bx"),
+        "let price: Decimal<2> = $19.99;\nlet total: Decimal<2> = price * 3;\nprint(total);\n",
+    )
+    .unwrap();
+    fs::write(scratch.join("broken.bx"), "let a: Int = 1;\nlet b: Int = 2\n").unwrap();
+
+    let bxc_run = |args: &[&str]| -> (bool, String, String) {
+        let out = Command::new(&bxc)
+            .args(args)
+            .current_dir(&scratch)
+            .output()
+            .unwrap_or_else(|e| panic!("running the Burxt compiler with {:?}: {}", args, e));
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).to_string(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        )
+    };
+
+    let (ok, version, _) = bxc_run(&["--version"]);
+    assert!(ok && version.contains("burxt"), "`--version` answered: {:?}", version);
+
+    let (ok, said, _) = bxc_run(&["check", "money.bx"]);
+    assert!(ok, "`check` on a good program failed: {}", said);
+    assert!(said.contains("no errors"), "`check` should be quiet on success, said: {:?}", said);
+
+    let (ok, said, cried) = bxc_run(&["check", "broken.bx"]);
+    assert!(!ok, "`check` accepted a program with a syntax error");
+    assert!(
+        said.contains("error") || cried.contains("error"),
+        "`check` refused a broken program without saying why: {:?} {:?}",
+        said,
+        cried
+    );
+
+    let (ok, said, cried) = bxc_run(&["build", "money.bx", "-o", "./money"]);
+    assert!(ok, "`build` failed: {} {}", said, cried);
+    let ran = Command::new(scratch.join("money"))
+        .current_dir(&scratch)
+        .output()
+        .expect("the program the Burxt compiler built");
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout).trim(),
+        "59.97",
+        "the program built by the Burxt compiler printed the wrong total"
+    );
+
+    let (ok, said, _) = bxc_run(&["run", "money.bx"]);
+    assert!(ok && said.trim() == "59.97", "`run` printed: {:?}", said);
+
+    // The one that matters. The Burxt compiler compiles its own source into a working
+    // compiler, through its own `build`, and that compiler compiles a program.
+    let (ok, said, cried) =
+        bxc_run(&["build", root.join("src/burxt-compiler/main.bx").to_str().unwrap(), "-o", "./bxc2"]);
+    assert!(ok, "the Burxt compiler could not build itself: {} {}", said, cried);
+    let second = Command::new(scratch.join("bxc2"))
+        .args(["run", "money.bx"])
+        .current_dir(&scratch)
+        .output()
+        .expect("the compiler the Burxt compiler built");
+    assert_eq!(
+        String::from_utf8_lossy(&second.stdout).trim(),
+        "59.97",
+        "the compiler built BY the Burxt compiler could not compile and run a program:\n{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+
+    // And the legacy report, which three other invariants in this file parse.
+    let (_, report, _) = bxc_run(&["money.bx"]);
+    assert!(
+        report.contains("type errors:"),
+        "the legacy phase report is gone, and `the_burxt_typechecker_agrees_with_the_rust_one` \
+         parses `type errors:` out of it. The subcommand dispatch must only fire on words it \
+         RECOGNISES — every other argument 1 is a path. Got:\n{}",
+        report
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
 /// **A Burxt program reads standard input, including a framed protocol message.**
 ///
 /// This test replaces a claim that was wrong. v0.0.216's parity map said `lsp.rs` was *"BLOCKED,
@@ -5177,9 +5313,15 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
             &["src/burxt-compiler/main.bx", "src/burxt-compiler/modules.bx"],
             Strength::Partial,
             "the entry point, and `use` resolution — `load_program` is inside `main.rs` on the \
-             Rust side and its own `modules.bx` on the Burxt side. PARTIAL and not Role, because \
-             `main.rs` is 572 lines carrying ten SUBCOMMANDS (review, mcp-schema, explain, \
-             layout, --json, lsp) and `main.bx` has none. Same entry point, not the same job",
+             Rust side and its own `modules.bx` on the Burxt side. **v0.0.219 gave `main.bx` a \
+             real CLI**: `check`, `build`, `run`, `emit-ir`, `--version`, `--help`, `-o`, and an \
+             exit status. It compiles a program to a native binary and it BUILDS ITSELF through \
+             its own `build` — `the_burxt_compiler_builds_and_runs_a_program_and_itself`. \
+             Still PARTIAL, and here is exactly what is missing rather than a vague gap: \
+             `layout`, `explain memory`, `review`, `mcp-schema`, `lsp`, `--json`, `--target`, and \
+             `check -` reading stdin. Also `check` prints its diagnostics WITHOUT the caret block \
+             the Rust one renders, because `check.bx` reports a message and a token but nothing \
+             yet hands that token to `diag.bx` — so the two are not byte-identical on a refusal",
         ),
         (
             "lexer.rs",

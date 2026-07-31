@@ -59,93 +59,319 @@ use "parser.bx";
 use "check.bx";
 use "modules.bx";
 use "emit.bx";
+use "diag.bx";
 
-// The file to lex: whatever was asked for, or the tour as a default.
+// The shell, for `build` and `run`. Those two have to invoke `llc` and `cc`, and until
+// v0.0.219 the Burxt compiler could not: it emitted IR to a file and a human ran the rest
+// by hand. That is the difference between an IR emitter and a compiler, and it is why this
+// one line was the centre of the parity gate rather than the CLI parsing around it.
+//
+// `system` was already declared in `lib/os.bx` and already in use, so this needed measuring
+// rather than designing — the same lesson `getchar` taught one version earlier. The compiler
+// modules do not depend on `lib/`, so the declaration is repeated here rather than imported.
+external function system(command: String) -> CInt touches commands;
+
+// ---- the pipeline, once ----------------------------------------------------------------
+//
+// **A `Unit` cannot be RETURNED from a function, and that is not a bug.** The first version of
+// this file factored the arena out into a maker function, and the compiler refused it by name:
+//
+//     function `fresh_unit` cannot return Unit, because its storage lives in a region and
+//     would not outlive it. Fill an array the caller owns, or return a scalar summary.
+//
+// That is the region model's stated cost — `DESIGN.md` calls the granularity "the honest limit
+// of this model, accepted deliberately" — arriving as a sentence at the moment it applies,
+// which is the entire argument for the language. So the arena is built where it is used, and
+// `drive` owns one for the length of one compilation.
+//
+// It has a consequence worth flagging for `review.bx`, which needs TWO units to compare two
+// files: they cannot be handed to it by a factory. Both must be local to whatever function
+// does the comparing, or the comparison runs twice and keeps a scalar summary between passes.
+
+// The IR module: the runtime's globals, then everything the emitter built.
+//
+// The globals are here rather than in `emit.bx` because they are the same for every program
+// — a preamble, not a product of the source. Four of them carry a length header because they
+// are Burxt Strings that `to_string` can answer with; the `fmt_*` ones are C format strings
+// and must not.
+function module_text(mutable unit: Unit) -> String {
+return "; LLVM IR written by the Burxt compiler, in Burxt.\n"
+    + "@burxt.fmt_int = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n"
+    + "@burxt.fmt_str = private unnamed_addr constant [3 x i8] c\"%s\\00\"\n"
+    + "@burxt.fmt_nl = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n"
+    // These four are Burxt STRINGS, not printf formats, so they carry a length
+    // header like every other String — `to_string(true)` answers one of them, and
+    // `len` of it would otherwise read whatever the linker placed before the bytes.
+    // The `fmt_*` globals above are C format strings and need none.
+    + "@burxt.string_true = private unnamed_addr constant \{ i64, [5 x i8] \} "
+    + "\{ i64 4, [5 x i8] c\"true\\00\" \}\n"
+    + "@burxt.string_false = private unnamed_addr constant \{ i64, [6 x i8] \} "
+    + "\{ i64 5, [6 x i8] c\"false\\00\" \}\n"
+    + "@burxt.string_minus = private unnamed_addr constant \{ i64, [2 x i8] \} "
+    + "\{ i64 1, [2 x i8] c\"-\\00\" \}\n"
+    + "@burxt.string_empty = private unnamed_addr constant \{ i64, [1 x i8] \} "
+    + "\{ i64 0, [1 x i8] c\"\\00\" \}\n"
+    + "@burxt.overflow_msg = private unnamed_addr constant [42 x i8] "
+    + "c\"burxt runtime error: arithmetic overflow\\0A\\00\"\n"
+    + "@burxt.region_msg = private unnamed_addr constant [87 x i8] "
+    + "c\"burxt runtime error: region memory exhausted — this build "
+    + "reserves 1 GB per process\\0A\\00\"\n"
+    + "@burxt.divzero_msg = private unnamed_addr constant [39 x i8] "
+    + "c\"burxt runtime error: division by zero\\0A\\00\"\n"
+    + "@burxt.bounds_msg = private unnamed_addr constant [76 x i8] "
+    + "c\"burxt runtime error: index %lld is outside an array of %lld"
+    + " (at byte %lld)\\0A\\00\"\n"
+    + unit.globals + "\n" + unit.finish();
+}
+
+// Everything a program needs to become IR, in one place: load it with what it uses, lex,
+// parse, check, and emit if asked.
+//
+// `out_ll` empty means check only. `loud` is 1 for the legacy report — the token counts and
+// per-phase work that `spec/M9-PERFORMANCE.md` reads, and that three runner invariants parse
+// — and 0 for the subcommands, which must be quiet on success the way every other compiler
+// is. Both paths share this function so the two cannot drift, which is the whole reason it
+// is a function and not two copies.
+//
+// Answers the number of problems found: 0 means it worked.
+function drive(path: String, out_ll: String, loud: Int) -> Int touches files {
+    // The program AND everything it uses, in one buffer. The same design stage-0 uses, for
+    // the same reason: a Span stays a byte range, and only a renderer needs to know which
+    // file an offset fell in. See spec/M6-MODULES.md §1.5.
+    let src: String = load_program(path);
+    let mutable unit: Unit = Unit { tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, current_method: 0 - 1, probing: 0, probe_changes: 0, type_bindings: [], measure_clause: 0 - 1, measure_slot: 0, measure_parameters: 0 - 1, measure_owner: "", old_nodes: [], old_slots: [], ensures_start: 0, ensures_count: 0, ensures_owner: "", bracket_clauses: [], clause_subjects: [], it_token: 0 - 1, it_is_result: 0, used_it: 0, it_seen: 0, result_type_node: 0 - 1, result_slot: 0 - 1, returns_node: 0 - 1, walked_types: [], type_binding_floor: 0, allowed_effects: 63, effects_owner: "", function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], in_function: 0, depth: 0, problems: 0, position: 0, token_end: 0, no_record_literal: 0, in_multiply: 0, print_to_stderr: 0, int_type_node: 0 - 1, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
+    let installed: Int = unit.install_keywords();
+    let total: Int = unit.run(src);
+
+    if loud == 1 {
+        print("lexed " + path + ": " + to_string(total) + " tokens, "
+              + to_string(installed) + " keywords known");
+        print("  identifiers: " + to_string(unit.count_of(1)));
+        print("  decimals:    " + to_string(unit.count_of(3)));
+        print("  strings:     " + to_string(unit.count_of(4)));
+        print("  errors:      " + to_string(unit.errors));
+        print("first tokens:");
+        let shown: Int = unit.report(src, 8);
+    }
+    if unit.errors > 0 && loud == 0 {
+        return unit.errors;
+    }
+
+    let mutable items: Int = 0;
+    while !unit.done() {
+        let item: Int = unit.parse_item(src);
+        if item < 0 {
+            break;
+        }
+        push(unit.items, item);
+        items += 1;
+    }
+    if loud == 1 {
+        print("parsed " + to_string(items) + " items and statements into "
+              + to_string(len(unit.nodes)) + " nodes, "
+              + to_string(len(unit.children)) + " child slots");
+        print("  parse errors: " + to_string(unit.errors));
+    }
+    if unit.errors > 0 {
+        return unit.errors;
+    }
+
+    let problems: Int = unit.check(src);
+    if loud == 1 {
+        print("checked " + to_string(len(unit.functions)) + " functions and "
+              + to_string(len(unit.types)) + " types");
+        print("  type errors: " + to_string(problems));
+        // M9: what the checker actually did, per run. A number beside a phase is the only
+        // thing that turns "the checker is slow" into a place to look.
+        print("  work: " + to_string(len(unit.nodes)) + " nodes, type_of "
+              + to_string(unit.type_of_calls) + ", find_binding " + to_string(unit.find_binding_calls)
+              + " over " + to_string(len(unit.bindings)) + " bindings, find_function "
+              + to_string(unit.find_function_calls) + " over " + to_string(len(unit.functions))
+              + " functions");
+    }
+    if problems > 0 {
+        return problems;
+    }
+    if len(out_ll) == 0 {
+        return 0;
+    }
+
+    let emitted: Int = unit.emit_module(src);
+    if unit.problems > 0 {
+        if loud == 1 {
+            print("  backend refusals: " + to_string(unit.problems));
+        } else {
+            print_error("burxt: the backend refused " + to_string(unit.problems)
+                        + " construct(s) in " + path);
+        }
+        return unit.problems;
+    }
+    let text: String = module_text(unit);
+    let wrote: Int = write_file(out_ll, text);
+    if loud == 1 {
+        print("wrote " + out_ll + ", " + to_string(len(text)) + " bytes of IR");
+    }
+    return 0;
+}
+
+// ---- the shape of a command line -------------------------------------------------------
+
+// The name a built program should get when nobody said: `pay.bx` in any directory becomes
+// `./pay`, which is what `burxt build` in Rust does.
+//
+// Written out rather than derived from the path by a rule the caller cannot see, because a
+// DERIVED name is a reference no sweep can find — `spec/A7.0-NAMING.md` §9 was written after
+// exactly that cost three broken tests during the `stage1.bx` rename. Here the derivation is
+// unavoidable (it is the default), so it lives in one named function instead of inline.
+function default_output_name(path: String) -> String {
+    let mutable start: Int = 0;
+    let mutable i: Int = 0;
+    while i < len(path) {
+        if byte_at(path, i) == 47 {
+            start = i + 1;
+        }
+        i += 1;
+    }
+    let mutable stop: Int = len(path);
+    let mutable j: Int = start;
+    while j < len(path) {
+        if byte_at(path, j) == 46 {
+            stop = j;
+        }
+        j += 1;
+    }
+    return "./" + substring(path, start, stop - start);
+}
+
+// Is this word a subcommand, or the path of a program?
+//
+// **This is the compatibility hinge and it is worth stating plainly.** Three runner
+// invariants run `stage1 <file.bx>` with no subcommand and read the legacy report — one of
+// them parses `type errors:` out of it. So the dispatch below may only fire on a word it
+// RECOGNISES; anything else is a path and behaves exactly as it did before. A dispatcher that
+// assumed argument 1 was always a command would have broken all three, and the failure would
+// have looked like a checker regression rather than a CLI change.
+function is_subcommand(word: String) -> Bool {
+    if word == "check" || word == "build" || word == "run" || word == "emit-ir" {
+        return true;
+    }
+    if word == "--help" || word == "-h" || word == "help" || word == "--version" || word == "-V" {
+        return true;
+    }
+    return false;
+}
+
+function usage() -> Int {
+    print("burxt 0.0.219 — the Burxt compiler, written in Burxt");
+    print("usage:");
+    print("  burxt check   <file.bx>                  parse and typecheck only");
+    print("  burxt build   <file.bx> [-o <path>]      compile to a native executable");
+    print("  burxt run     <file.bx>                  compile then run");
+    print("  burxt emit-ir <file.bx>                  print LLVM IR");
+    print("  burxt <file.bx> [out.ll]                 the phase report, and IR if asked");
+    print("");
+    print("Not here yet, and named rather than silently missing:");
+    print("  layout, explain memory, review, mcp-schema, lsp, --json, --target");
+    print("They exist in the Rust build. spec/ROADMAP-1.0.md THE GATE tracks the rest.");
+    return 0;
+}
+
+// ---- the command line ------------------------------------------------------------------
+
+let mutable command: String = "";
+if argument_count() > 1 {
+    command = argument(1);
+}
+
+if command == "--version" || command == "-V" {
+    print("burxt 0.0.219 — the Burxt compiler, written in Burxt");
+    exit(0);
+}
+
+if command == "--help" || command == "-h" || command == "help" {
+    let helped: Int = usage();
+    exit(0);
+}
+
+if is_subcommand(command) && argument_count() < 3 {
+    print_error("burxt " + command + ": needs a file");
+    exit(2);
+}
+
+if command == "check" {
+    let problems: Int = drive(argument(2), "", 0);
+    if problems == 0 {
+        print(argument(2) + ": no errors");
+        exit(0);
+    }
+    exit(1);
+}
+
+if command == "emit-ir" {
+    // Through a file and then read back, because `print` is the only way out and the IR is
+    // one string. An honest cost, and the reason it is acceptable: `build` needs the file on
+    // disk anyway, so nothing is written that was not needed.
+    let scratch: String = "/tmp/burxt-emit-ir.ll";
+    let problems: Int = drive(argument(2), scratch, 0);
+    if problems > 0 {
+        exit(1);
+    }
+    print(read_file(scratch));
+    exit(0);
+}
+
+if command == "build" || command == "run" {
+    let source: String = argument(2);
+    let mutable output: String = default_output_name(source);
+    if argument_count() > 4 {
+        if argument(3) == "-o" {
+            output = argument(4);
+        }
+    }
+    let ll: String = output + ".ll";
+    let object: String = output + ".o";
+    let problems: Int = drive(source, ll, 0);
+    if problems > 0 {
+        exit(1);
+    }
+    // llc then cc, the same two steps the Rust build makes — it just makes them through
+    // LLVM's C API instead of through a shell. The IR is textual either way, which is what
+    // makes the two paths comparable at all.
+    let assembled: Int = system("/usr/lib/llvm-18/bin/llc -relocation-model=pic -filetype=obj -o "
+                                + object + " " + ll);
+    if assembled != 0 {
+        print_error("burxt: llc could not assemble " + ll);
+        exit(1);
+    }
+    let linked: Int = system("cc -o " + output + " " + object);
+    if linked != 0 {
+        print_error("burxt: cc could not link " + object);
+        exit(1);
+    }
+    if command == "build" {
+        print("compiled " + source + " -> " + output);
+        exit(0);
+    }
+    // `run` hands the program's own exit status back to the shell, because a test suite
+    // written in Burxt reports failure that way — `lib/test.bx` ends with `exit(test_end(t))`
+    // and it would be pointless if the runner swallowed it.
+    let ran: Int = system(output);
+    exit(divide_floor(ran, 256));
+}
+
+// ---- no subcommand: the legacy report, unchanged ---------------------------------------
+//
+// Three runner invariants depend on every line of this, including the exact text
+// `  type errors: N`. It is not a debug mode left in by accident: it is what
+// `spec/M9-PERFORMANCE.md` reads to attribute a slowdown to a phase, and what the
+// differential tests parse to compare the two checkers.
+
 let mutable path: String = "examples/tour.bx";
 if argument_count() > 1 {
     path = argument(1);
 }
-// The program AND everything it uses, in one buffer. The same design stage-0 uses, for
-// the same reason: a Span stays a byte range, and only a renderer needs to know which
-// file an offset fell in. See spec/M6-MODULES.md §1.5.
-let src: String = load_program(path);
-let mutable unit: Unit = Unit { tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, current_method: 0 - 1, probing: 0, probe_changes: 0, type_bindings: [], measure_clause: 0 - 1, measure_slot: 0, measure_parameters: 0 - 1, measure_owner: "", old_nodes: [], old_slots: [], ensures_start: 0, ensures_count: 0, ensures_owner: "", bracket_clauses: [], clause_subjects: [], it_token: 0 - 1, it_is_result: 0, used_it: 0, it_seen: 0, result_type_node: 0 - 1, result_slot: 0 - 1, returns_node: 0 - 1, walked_types: [], type_binding_floor: 0, allowed_effects: 63, effects_owner: "", function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], in_function: 0, depth: 0, problems: 0, position: 0, token_end: 0, no_record_literal: 0, in_multiply: 0, print_to_stderr: 0, int_type_node: 0 - 1, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
-let installed: Int = unit.install_keywords();
-let total: Int = unit.run(src);
-
-print("lexed " + path + ": " + to_string(total) + " tokens, "
-      + to_string(installed) + " keywords known");
-print("  identifiers: " + to_string(unit.count_of(1)));
-print("  decimals:    " + to_string(unit.count_of(3)));
-print("  strings:     " + to_string(unit.count_of(4)));
-print("  errors:      " + to_string(unit.errors));
-print("first tokens:");
-let shown: Int = unit.report(src, 8);
-
-// ---- phase 3: parse everything the tokens describe ----
-let mutable items: Int = 0;
-while !unit.done() {
-    let item: Int = unit.parse_item(src);
-    if item < 0 {
-        break;
-    }
-    push(unit.items, item);
-    items += 1;
+let mutable out_ll: String = "";
+if argument_count() > 2 {
+    out_ll = argument(2);
 }
-print("parsed " + to_string(items) + " items and statements into "
-      + to_string(len(unit.nodes)) + " nodes, "
-      + to_string(len(unit.children)) + " child slots");
-print("  parse errors: " + to_string(unit.errors));
-
-// ---- phase 4: check what the parser read ----
-if unit.errors == 0 {
-    let problems: Int = unit.check(src);
-    print("checked " + to_string(len(unit.functions)) + " functions and "
-          + to_string(len(unit.types)) + " types");
-    print("  type errors: " + to_string(problems));
-    // M9: what the checker actually did, per run. A number beside a phase is the only
-    // thing that turns "the checker is slow" into a place to look.
-    print("  work: " + to_string(len(unit.nodes)) + " nodes, type_of "
-          + to_string(unit.type_of_calls) + ", find_binding " + to_string(unit.find_binding_calls)
-          + " over " + to_string(len(unit.bindings)) + " bindings, find_function "
-          + to_string(unit.find_function_calls) + " over " + to_string(len(unit.functions))
-          + " functions");
-
-    // ---- phase 5: emit LLVM IR, when a second argument says where ----
-    if problems == 0 && argument_count() > 2 {
-        let emitted: Int = unit.emit_module(src);
-        if unit.problems == 0 {
-            let text: String = "; LLVM IR written by the Burxt compiler, in Burxt.\n"
-                + "@burxt.fmt_int = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n"
-                + "@burxt.fmt_str = private unnamed_addr constant [3 x i8] c\"%s\\00\"\n"
-                + "@burxt.fmt_nl = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n"
-                // These four are Burxt STRINGS, not printf formats, so they carry a length
-                // header like every other String — `to_string(true)` answers one of them, and
-                // `len` of it would otherwise read whatever the linker placed before the bytes.
-                // The `fmt_*` globals above are C format strings and need none.
-                + "@burxt.string_true = private unnamed_addr constant \{ i64, [5 x i8] \} "
-                + "\{ i64 4, [5 x i8] c\"true\\00\" \}\n"
-                + "@burxt.string_false = private unnamed_addr constant \{ i64, [6 x i8] \} "
-                + "\{ i64 5, [6 x i8] c\"false\\00\" \}\n"
-                + "@burxt.string_minus = private unnamed_addr constant \{ i64, [2 x i8] \} "
-                + "\{ i64 1, [2 x i8] c\"-\\00\" \}\n"
-                + "@burxt.string_empty = private unnamed_addr constant \{ i64, [1 x i8] \} "
-                + "\{ i64 0, [1 x i8] c\"\\00\" \}\n"
-                + "@burxt.overflow_msg = private unnamed_addr constant [42 x i8] "
-                + "c\"burxt runtime error: arithmetic overflow\\0A\\00\"\n"
-                + "@burxt.region_msg = private unnamed_addr constant [87 x i8] "
-                + "c\"burxt runtime error: region memory exhausted — this build "
-                + "reserves 1 GB per process\\0A\\00\"\n"
-                + "@burxt.divzero_msg = private unnamed_addr constant [39 x i8] "
-                + "c\"burxt runtime error: division by zero\\0A\\00\"\n"
-                + "@burxt.bounds_msg = private unnamed_addr constant [76 x i8] "
-                + "c\"burxt runtime error: index %lld is outside an array of %lld"
-                + " (at byte %lld)\\0A\\00\"\n"
-                + unit.globals + "\n" + unit.finish();
-            let wrote: Int = write_file(argument(2), text);
-            print("wrote " + argument(2) + ", " + to_string(len(text)) + " bytes of IR");
-        } else {
-            print("  backend refusals: " + to_string(unit.problems));
-        }
-    }
-}
+let found: Int = drive(path, out_ll, 1);
