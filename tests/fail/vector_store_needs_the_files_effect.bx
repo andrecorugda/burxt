@@ -1,0 +1,13 @@
+// A store is a FILE, and the signature has to say so. `vector_store_read` declares
+// `touches files`, so anything that calls it declares it too — which is how a reviewer
+// scanning signatures learns that "load the corpus" reaches the disk without reading its body.
+use "../../lib/vector.bx";
+
+function load(path: String) -> Result<[Row], String> {
+    return vector_store_read(path);
+}
+
+match load("corpus.jsonl") {
+    Error(why) => { print(why); }
+    Ok(rows) => { print(len(rows)); }
+}

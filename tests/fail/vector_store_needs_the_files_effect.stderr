@@ -1,0 +1,1 @@
+`vector_store_read` touches files, but `load` does not say it does

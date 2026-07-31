@@ -1,0 +1,89 @@
+// The vector store's text format — spec/N9-VECTORS-EXACTLY.md row 4.
+//
+// What is being pinned is not "JSON works". It is that a corpus can go OUT to text and come BACK and
+// score **byte-identically** — which is row 5's reproducibility claim applied to persistence, and the
+// half that actually matters in practice, because a store that loses a digit on the way to disk has
+// exactly the wobble the arithmetic was built to remove.
+//
+// Components cross as quoted digit strings on purpose. A JSON number reaches most consumers as a
+// double, and `0.1234567` stops being `0.1234567` on the way.
+//
+// The file path itself is checked by `the_vector_store_round_trips_a_file` in tests/runner.rs — a
+// fixture must not write into the repository, so the pure half lives here and the `touches files` half
+// lives there.
+use "../../lib/vector.bx";
+
+function vec3(a: Decimal<7>, b: Decimal<7>, c: Decimal<7>) -> [Decimal<7>] {
+    let mutable v: [Decimal<7>] = [];
+    let p: Int = push(v, a);
+    let q: Int = push(v, b);
+    let r: Int = push(v, c);
+    return v;
+}
+
+let tick: Decimal<7> = 0.0000001;
+
+let mutable rows: [Row] = [];
+let r1: Int = push(rows, Row { id: "east", values: vec3(1.0000000, 0.0000000, 0.0000000) });
+let r2: Int = push(rows, Row { id: "mostly-north", values: vec3(0.6000000, 0.8000000, 0.0000000) });
+// A negative component, because an embedding lives in [-1, 1] and the minus sign is the part a
+// hand-written parser gets wrong.
+let r3: Int = push(rows, Row {
+    id: "down",
+    values: vec3(tick * (0 - 6000000), 0.8000000, tick * (0 - 10000000)),
+});
+
+// ---- out ----
+let text: String = vector_store_render(rows);
+print(text);
+
+// ---- and back ----
+match vector_store_parse(text) {
+    Error(why) => { print("refused: " + why); }
+    Ok(back) => {
+        print(len(back));
+        // The claim: identical scores, not close ones. Every row scored against every row, before and
+        // after, compared as values rather than as rendered text.
+        let mutable same: Bool = true;
+        let mutable i: Int = 0;
+        while i < len(rows) {
+            if rows[i].id != back[i].id {
+                same = false;
+            }
+            let mutable j: Int = 0;
+            while j < len(rows) {
+                if vector_dot(rows[i].values, rows[j].values)
+                        != vector_dot(back[i].values, back[j].values) {
+                    same = false;
+                }
+                j += 1;
+            }
+            i += 1;
+        }
+        print(same);
+        print(vector_dot(back[1].values, back[2].values));
+        print(vector_magnitude(back[1].values));
+    }
+}
+
+// ---- what it refuses, which is the point of not rounding ----
+// A component finer than the store holds is a question, not a rounding: the writer meant those digits.
+print(option_is_some(component_from_json(json_text("0.1234567"))));
+print(option_is_some(component_from_json(json_text("0.12345678"))));
+print(option_is_some(component_from_json(json_text("-0.5"))));
+print(option_is_some(component_from_json(json_text("banana"))));
+
+match vector_store_parse("\{\"id\":\"bad\",\"values\":[\"0.12345678\"]\}") {
+    Error(why) => { print(why); }
+    Ok(fine) => { print("accepted, which is wrong"); }
+}
+match vector_store_parse("\{\"values\":[\"0.5000000\"]\}") {
+    Error(why) => { print(why); }
+    Ok(fine) => { print("accepted, which is wrong"); }
+}
+
+// Blank lines are skipped rather than refused — a JSONL file's last line ends in a newline.
+match vector_store_parse("\{\"id\":\"a\",\"values\":[\"0.5000000\"]\}\n\n") {
+    Error(why) => { print("refused: " + why); }
+    Ok(fine) => { print(len(fine)); }
+}

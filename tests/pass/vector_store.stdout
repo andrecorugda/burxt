@@ -1,0 +1,15 @@
+{"id":"east","values":["1.0000000","0.0000000","0.0000000"]}
+{"id":"mostly-north","values":["0.6000000","0.8000000","0.0000000"]}
+{"id":"down","values":["-0.6000000","0.8000000","-1.0000000"]}
+
+3
+true
+0.28000000000000
+1.0000000
+true
+false
+true
+false
+line 1: row `bad` component 1 is not an exact 7-place decimal
+line 1: a row needs a non-empty `id`
+1

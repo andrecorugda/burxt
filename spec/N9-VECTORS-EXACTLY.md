@@ -1,8 +1,9 @@
 # Burxt — "Vectors, Exactly" (N9)
 
-> Status: **the exact core is BUILT (v0.0.192).** `lib/vector.bx`, with the dimension contract,
-> brute-force top-K, and the overflow wall as a panic fixture. Rows 1, 2, 3 and 5 of §3 are done;
-> rows 4, 6–9 remain. Every number in §2 came from running the compiler, not from reading it.
+> Status: **the exact core and the store are BUILT (v0.0.193).** `lib/vector.bx`, with the dimension
+> contract, brute-force top-K, the overflow wall as a panic fixture, and a JSONL store that survives a
+> real file. Rows 1, 2, 3, 4 and 5 of §3 are done; rows 6–9 remain. Every number in §2 came from
+> running the compiler, not from reading it.
 >
 > **One row of §3 turned out to be blocked, and by the type system rather than by effort.**
 > `vector_normalise` is absent: dividing a `Decimal<7>` needs a rounding contract, so a normalised
@@ -130,7 +131,7 @@ storage and ingestion.
 | 1 | **`lib/vector.bx`** | `dot`, `squared_distance`, `magnitude_squared`, `isqrt`, `normalise`, `cosine_prenormalised`. All at `Decimal<7>` in, `Decimal<14>` out | **nothing.** Verified working today | small |
 | 2 | **A dimension contract** | `requires len(a) == len(b)`, and a stated max dimension per scale so the overflow is a compile-time-documented limit rather than a surprise | nothing — this is what `requires` is for | small |
 | 3 | **Brute-force search** | scan N vectors, keep the top K. Exact, and correct by construction — the baseline every index is checked against | `lib/array.bx` for the top-K (partial sort) | small |
-| 4 | **A text-format store** | one JSON document per vector, via `lib/json.bx`. Slow and completely honest — and it makes the whole thing usable before any binary work | nothing. `lib/json.bx` exists | small |
+| 4 | **A text-format store** ✅ | **done (v0.0.193).** JSONL — one JSON object per line, via `lib/json.bx`. `vector_store_render`/`_parse` are pure; `_write`/`_read`/`_append` declare `touches files` | nothing. `lib/json.bx` existed | small |
 | 5 | **Reproducibility test** | the same corpus and query, scored on two targets, asserting **byte-identical** output. This is the CLAIM, so it is the test that matters most | cross-compilation (#9) to be a real cross-target check; single-target is worth having first | small |
 | 6 | **A binary store format** | fixed-width records, `mmap`-able, with a header and a checksum | **bitwise ops + integer widths** (roadmap §5, re-opened) and ideally the **pointer wall** for `mmap` | medium |
 | 7 | **Durability** | append-only log, `fsync`, crash recovery, atomic rename | `fsync` is a pointer-free syscall so it clears the wall; needs an `external` declaration and a `touches files` | medium |
@@ -138,11 +139,41 @@ storage and ingestion.
 | 9 | **An ANN index** | HNSW or IVF, for corpora where brute force is too slow | needs #6, and a decision about whether an *approximate* index may be exact-scored — it may: approximate CANDIDATE selection, exact SCORING | large |
 | 10 | **`touches model`** | the effect already exists in the language and has nothing to attach to. This is what it was reserved for | nothing | small |
 
+### Row 4, as built
+
+**JSONL, not one big array**, and the reason is what a store actually needs: a line can be appended
+without rewriting the file, and a corrupt line costs one row rather than the whole corpus.
+
+```
+{"id":"east","values":["1.0000000","0.0000000","0.0000000"]}
+{"id":"down","values":["-0.6000000","0.8000000","-1.0000000"]}
+```
+
+**Components cross as quoted digit strings.** This is `lib/json.bx`'s position applied one scale up, and
+it is the whole reason the row is worth building rather than assuming: a JSON *number* reaches almost
+every consumer as a double, so writing exact vectors and reading them back through a float would defeat
+the point of the file above it. `component_from_json` **never rounds** — `"0.12345678"` answers `None`
+rather than `0.1234568`, because a component arriving with more precision than the store holds is a
+question, and the writer meant those digits.
+
+Split in two on purpose: `vector_store_render`/`vector_store_parse` are pure and take no effect, so the
+format is testable without a disk; `vector_store_write`/`_read`/`_append` declare `touches files`. There
+is a fail fixture proving a caller cannot launder that effect
+(`tests/fail/vector_store_needs_the_files_effect.bx`), which is what makes "load the corpus" visible in
+a signature rather than discoverable by reading a body.
+
+Covered by `tests/pass/vector_store.bx` (the format, and what it refuses) and
+`the_vector_store_round_trips_a_file` in `tests/runner.rs` (a real file, an append, and the scores
+asserted as **numbers** on the way back out — which is row 5's claim applied to persistence, and the
+half that matters in practice, because a store that drops a digit on the way to disk has exactly the
+wobble the arithmetic was built to remove).
+
 ### The interesting shape of that table
 
 **Rows 1–5 are buildable today, need no language change, and deliver the claim.** A slow, exact,
 reproducible vector store with a JSON-file backend is a working demonstration of something nobody
-else has — and it is a week of work, not a year.
+else has — and it is a week of work, not a year. **As of v0.0.193 all five are built**, and the count
+of language changes it took was zero.
 
 Rows 6–9 make it *fast*. Row 8 makes it *convenient*. None of them make it more correct.
 

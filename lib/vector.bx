@@ -58,6 +58,10 @@
 // ============================================================================
 
 use "option.bx";
+use "result.bx";
+use "string.bx";
+use "json.bx";
+use "files.bx";
 
 // The dot product — the inner-product metric, and cosine similarity when both vectors are unit length.
 //
@@ -188,3 +192,177 @@ function vector_top_dot(rows: [Row], query: [Decimal<7>], count: Int) -> [Scored
 // checking any body, so ordering is a matter of what reads best rather than a constraint. `Row` reads
 // best beside the store it belongs to.
 class Row { id: String, values: [Decimal<7>] }
+
+// ---- storing ------------------------------------------------------------------
+//
+// One JSON object per LINE — JSONL. Not one big array, and the reason is what a store actually needs:
+// a line can be appended without rewriting the file, and a corrupt line costs one row rather than the
+// whole corpus. It is also what every real vector store's export format looks like.
+//
+// Components cross as **quoted digit strings**, which is `lib/json.bx`'s position applied here: a JSON
+// number reaches a JavaScript consumer as a double, and `0.1234567` stops being `0.1234567`. Writing
+// exact vectors and then reading them back through a float would defeat the entire point of this file.
+//
+//     {"id":"east","values":["1.0000000","0.0000000","0.0000000"]}
+
+// The digits of a `Decimal<7>` as a JSON string. `to_string` already renders every place, so this is
+// the whole conversion.
+function component_to_json(value: Decimal<7>) -> Json {
+    return json_text(to_string(value));
+}
+
+// A `Decimal<7>` back from its digits, or None when they are not exactly that.
+//
+// **It never rounds.** `"0.12345678"` answers None rather than `0.1234568`, because a component
+// arriving with more precision than the store holds is a question and not a rounding — the writer
+// meant those digits. Same rule as `json_as_money`, one scale up.
+//
+// The reconstruction is a count of ten-millionths times one ten-millionth, exact by construction and
+// needing no rounding contract, because that is what a scaled decimal already is.
+function component_from_json(value: Json) -> Option<Decimal<7>> {
+    let digits: String = option_or(json_digits(value), "");
+    if len(digits) == 0 {
+        return Option.None;
+    }
+    let mutable whole: String = digits;
+    let mutable fraction: String = "";
+    let dot: Int = string_find(digits, ".");
+    if dot >= 0 {
+        whole = substring(digits, 0, dot);
+        fraction = substring(digits, dot + 1, len(digits) - dot - 1);
+    }
+    if len(fraction) > 7 {
+        return Option.None;                          // finer than the store holds
+    }
+    while len(fraction) < 7 {
+        fraction = fraction + "0";
+    }
+    let negative: Bool = string_starts_with(whole, "-");
+    if negative {
+        whole = substring(whole, 1, len(whole) - 1);
+    }
+    if len(whole) == 0 {
+        whole = "0";
+    }
+    match string_parse_int(whole) {
+        None => { return Option.None; }
+        Some(units) => {
+            match string_parse_int(fraction) {
+                None => { return Option.None; }
+                Some(part) => {
+                    let tick: Decimal<7> = 0.0000001;
+                    let ticks: Int = units * 10000000 + part;
+                    if negative {
+                        return Option.Some(tick * (0 - ticks));
+                    }
+                    return Option.Some(tick * ticks);
+                }
+            }
+        }
+    }
+}
+
+function vector_to_json(row: Row) -> Json {
+    let mutable values: [Json] = [];
+    let mutable i: Int = 0;
+    while i < len(row.values) {
+        let added: Int = push(values, component_to_json(row.values[i]));
+        i += 1;
+    }
+    let mutable fields: [Field] = [];
+    let a: Int = push(fields, json_field("id", json_text(row.id)));
+    let b: Int = push(fields, json_field("values", json_list(values)));
+    return json_object(fields);
+}
+
+// A row back from one JSON object. Every failure says which row and why — a store that skips a line it
+// could not read is a store that quietly returns fewer results.
+function vector_from_json(value: Json) -> Result<Row, String> {
+    let id: String = option_or(json_as_text(option_or(json_at(value, "id"), json_null())), "");
+    if len(id) == 0 {
+        return Result.Error("a row needs a non-empty `id`");
+    }
+    match json_at(value, "values") {
+        None => { return Result.Error("row `" + id + "` has no `values`"); }
+        Some(listed) => {
+            match listed {
+                List(items) => {
+                    let mutable out: [Decimal<7>] = [];
+                    let mutable i: Int = 0;
+                    while i < len(items) {
+                        match component_from_json(items[i]) {
+                            None => {
+                                return Result.Error("row `" + id + "` component "
+                                            + to_string(i + 1)
+                                            + " is not an exact 7-place decimal");
+                            }
+                            Some(component) => {
+                                let added: Int = push(out, component);
+                            }
+                        }
+                        i += 1;
+                    }
+                    return Result.Ok(Row { id: id, values: out });
+                }
+                Null => { return Result.Error("row `" + id + "`: `values` must be a list"); }
+                Truth(t) => { return Result.Error("row `" + id + "`: `values` must be a list"); }
+                Number(d) => { return Result.Error("row `" + id + "`: `values` must be a list"); }
+                Text(t) => { return Result.Error("row `" + id + "`: `values` must be a list"); }
+                Object(f) => { return Result.Error("row `" + id + "`: `values` must be a list"); }
+            }
+        }
+    }
+}
+
+// The whole store as JSONL text. Kept separate from writing it, so a caller can put it anywhere —
+// stdout, a socket once there is one, a test's assertion.
+function vector_store_render(rows: [Row]) -> String {
+    let mutable out: String = "";
+    let mutable i: Int = 0;
+    while i < len(rows) {
+        out = out + json_render(vector_to_json(rows[i])) + "\n";
+        i += 1;
+    }
+    return out;
+}
+
+function vector_store_parse(text: String) -> Result<[Row], String> {
+    let mutable rows: [Row] = [];
+    let lines: [String] = string_lines(text);
+    let mutable i: Int = 0;
+    while i < len(lines) {
+        let line: String = string_trim(lines[i]);
+        if len(line) > 0 {
+            match json_parse(line) {
+                Error(why) => {
+                    return Result.Error("line " + to_string(i + 1) + ": " + why);
+                }
+                Ok(value) => {
+                    match vector_from_json(value) {
+                        Error(why) => {
+                            return Result.Error("line " + to_string(i + 1) + ": " + why);
+                        }
+                        Ok(row) => {
+                            let added: Int = push(rows, row);
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    return Result.Ok(rows);
+}
+
+function vector_store_write(path: String, rows: [Row]) -> Int touches files {
+    return file_write(path, vector_store_render(rows));
+}
+
+function vector_store_read(path: String) -> Result<[Row], String> touches files {
+    return vector_store_parse(file_read(path));
+}
+
+// Append one row without rewriting the file, which is the reason the format is JSONL.
+function vector_store_append(path: String, row: Row) -> Int touches files {
+    return file_append(path, json_render(vector_to_json(row)) + "\n");
+}

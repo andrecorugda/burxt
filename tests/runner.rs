@@ -1249,8 +1249,8 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
 
     let _ = fs::remove_dir_all(&scratch);
     assert!(
-        caught >= 210,
-        "stage-1 rejected only {} of {} fail programs, down from 210",
+        caught >= 211,
+        "stage-1 rejected only {} of {} fail programs, down from 211",
         caught,
         total
     );
@@ -5345,6 +5345,114 @@ fn the_mcp_server_answers_a_real_exchange() {
     expect(6, "\"code\":-32601");
     expect(7, "\"code\":-32700");
     expect(8, "\"text\":\"2.00\"");
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+/// The store, through a real file — spec/N9-VECTORS-EXACTLY.md row 4.
+///
+/// `tests/pass/vector_store.bx` covers the format itself and must not write into the repository, so
+/// the half that actually touches the disk lives here: write a corpus, APPEND a row to it without
+/// rewriting the file (which is the reason the format is one object per line), read it back, and
+/// assert the scores are the same values — not close ones.
+///
+/// A store that loses a digit on the way to disk has exactly the wobble the arithmetic was built to
+/// remove, so this is row 5's reproducibility claim applied to persistence.
+#[test]
+fn the_vector_store_round_trips_a_file() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("vector-store");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let program = format!(
+        r#"use "{}/lib/vector.bx";
+
+function vec3(a: Decimal<7>, b: Decimal<7>, c: Decimal<7>) -> [Decimal<7>] {{
+    let mutable v: [Decimal<7>] = [];
+    let p: Int = push(v, a);
+    let q: Int = push(v, b);
+    let r: Int = push(v, c);
+    return v;
+}}
+
+let tick: Decimal<7> = 0.0000001;
+let query: [Decimal<7>] = vec3(0.0000000, 1.0000000, 0.0000000);
+
+let mutable rows: [Row] = [];
+let r1: Int = push(rows, Row {{ id: "east", values: vec3(1.0000000, 0.0000000, 0.0000000) }});
+let r2: Int = push(rows, Row {{ id: "mostly-north", values: vec3(0.6000000, 0.8000000, 0.0000000) }});
+
+let written: Int = vector_store_write("corpus.jsonl", rows);
+// Appended, not rewritten. This is what JSONL buys.
+let added: Int = vector_store_append("corpus.jsonl", Row {{
+    id: "down",
+    values: vec3(tick * (0 - 6000000), 0.8000000, tick * (0 - 10000000)),
+}});
+
+match vector_store_read("corpus.jsonl") {{
+    Error(why) => {{ print("refused: " + why); }}
+    Ok(back) => {{
+        print(len(back));
+        let found: [Scored] = vector_top_dot(back, query, 3);
+        let mutable k: Int = 0;
+        while k < len(found) {{
+            print(back[found[k].at].id + " " + to_string(found[k].score));
+            k += 1;
+        }}
+    }}
+}}
+"#,
+        root.display()
+    );
+    let source = scratch.join("store.bx");
+    fs::write(&source, program).unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("run")
+        .arg(&source)
+        .current_dir(&scratch)
+        .output()
+        .expect("run the store program");
+    assert!(
+        out.status.success(),
+        "the store program failed:\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Three rows: two written, one appended.
+    //
+    // Every score is asserted as a NUMBER and not a range. `east` is orthogonal to the query and
+    // still ranks, at exactly zero; `down` scores 0.8 on the y component alone. These are the same
+    // digits a float store would give as 0.79999995 on one machine and 0.80000001 on another.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        vec![
+            "3",
+            "mostly-north 0.80000000000000",
+            "down 0.80000000000000",
+            "east 0.00000000000000",
+        ],
+        "the corpus did not survive the file:\n{}",
+        stdout
+    );
+
+    // And the file on disk is the format the spec claims, line for line.
+    let written = fs::read_to_string(scratch.join("corpus.jsonl")).unwrap();
+    assert_eq!(
+        written,
+        concat!(
+            r#"{"id":"east","values":["1.0000000","0.0000000","0.0000000"]}"#,
+            "\n",
+            r#"{"id":"mostly-north","values":["0.6000000","0.8000000","0.0000000"]}"#,
+            "\n",
+            r#"{"id":"down","values":["-0.6000000","0.8000000","-1.0000000"]}"#,
+            "\n",
+        ),
+        "the store's text format changed"
+    );
 
     let _ = fs::remove_dir_all(&scratch);
 }
