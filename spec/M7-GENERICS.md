@@ -392,7 +392,7 @@ ratchet's comment.
 **The whole front end checks generics — functions, records and enums — in both compilers**, and
 the generics tests now live in `tests/pass/`, which is the bar that matters: a fixture in
 `tests/pass/` is held against *both* compilers by the differential test, while a test written
-inline in `tests/runner.rs` is only ever held against whatever it asserts. `generics_types.bx`
+inline in `tests/runner.rs` is only ever held against whatever it asserts. `generics_ast.bx`
 and `generics_functions.bx` moved there, and both compilers run them to the same output.
 
 Four things had to be right for the second one, and each was a distinction I could not see until

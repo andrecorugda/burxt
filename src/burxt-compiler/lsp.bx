@@ -100,7 +100,8 @@
 // and must not fork.
 // ============================================================================
 
-use "types.bx";
+use "ast.bx";
+use "lexer.bx";
 use "parser.bx";
 use "check.bx";
 use "emit.bx";
@@ -108,7 +109,7 @@ use "modules.bx";
 use "diag.bx";
 
 // `emit.bx` is in that list and `lsp.rs` needs no codegen — the front end is all a language
-// server asks for. It is here because `class Unit` in `types.bx` has fields typed `Slot` and
+// server asks for. It is here because `class Unit` in `ast.bx` has fields typed `Slot` and
 // `Declared`, which `emit.bx` declares: the one compilation unit holds the lexer's tokens, the
 // parser's arena, the checker's bindings AND the backend's register state, so there is no way
 // to take the front half. It costs compile time and a larger binary, nothing at runtime.
@@ -137,7 +138,7 @@ external function getchar() -> CInt touches input;
 
 // ---- capture ---------------------------------------------------------------------------
 //
-// The front end PRINTS its diagnostics — `complain_at` in `check.bx`, the lexer in `types.bx`,
+// The front end PRINTS its diagnostics — `complain_at` in `check.bx`, the lexer in `ast.bx`,
 // the parser. On stdout. Which is the protocol stream.
 //
 // That looked like a reason this file could not exist, and it is the opposite: the checker's
@@ -1324,7 +1325,7 @@ function (self: Unit) lsp_token_named(src: String, wanted: String, from: Int, to
 //   * **This server answers only INSIDE a token that begins a typed node.** The 2,870 are almost
 //     all `=`, `(`, `)`, `,`, `.`, `:`, `;` and the space between tokens: a nesting span covers
 //     those and a token does not. Closing it needs a start AND an end on `Node`, which is a change
-//     to `types.bx` and is reported rather than guessed at — a fallback to "the nearest earlier
+//     to `ast.bx` and is reported rather than guessed at — a fallback to "the nearest earlier
 //     token that starts something" would answer confidently and often wrongly, which is worse in
 //     an editor than answering nothing.
 //

@@ -79,7 +79,7 @@ argument for having two.
 
 Found by the same measurement and fixed in the same version:
 
-- **`at_byte` in `types.bx`** measured `len(src)` on every probe, and `skip_trivia`'s comment
+- **`at_byte` in `ast.bx`** measured `len(src)` on every probe, and `skip_trivia`'s comment
   loop re-walked the source per byte. The bound is now passed down from `run_range`, which is
   also more correct: interpolation lexes a *slice*, and a slice has no business reading the
   bytes after it. 36 s → 27 s on its own.

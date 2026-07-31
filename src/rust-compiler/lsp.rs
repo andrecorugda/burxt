@@ -220,7 +220,7 @@ fn number(v: &Value) -> Option<usize> {
 ///
 /// **Blanking the imports is not enough, and measuring is what showed it.** Doing only that got
 /// hover working on a file that imports something without USING it, and still answered nothing on
-/// `src/burxt-compiler/main.bx`: with `use "types.bx"` blanked, `Unit` and `Token` are unknown
+/// `src/burxt-compiler/main.bx`: with `use "ast.bx"` blanked, `Unit` and `Token` are unknown
 /// types, the checker gives up early, and there are almost no expression types left to report. The
 /// file that most needs hover is exactly the file where blanking is useless.
 ///

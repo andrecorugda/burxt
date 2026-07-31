@@ -24,7 +24,7 @@
 //
 //   src/burxt-compiler/            src/rust-compiler/
 //   main.bx     the entry point    main.rs      the entry point and CLI
-//   types.bx    shapes, lexer      ast.rs + lexer.rs
+//   ast.bx    shapes, lexer      ast.rs + lexer.rs
 //   parser.bx   tokens in, arena AST out        parser.rs
 //   check.bx    scales, regions, purity, contracts, exhaustiveness    typeck.rs
 //   emit.bx     textual LLVM IR + the runtime   codegen.rs (LLVM's C API, via inkwell)
@@ -39,7 +39,7 @@
 // splitting it is the acceptance test for having one. If the compiler cannot be
 // split, modules are not done.
 //
-//   types.bx    the shapes, and the lexer
+//   ast.bx    the shapes, and the lexer
 //   parser.bx   tokens in, arena AST out
 //   check.bx    the rules: scales, regions, purity, contracts, exhaustiveness
 //   modules.bx  `use "path";`, resolved before lexing
@@ -54,7 +54,8 @@
 // parses and checks it, and reports what it found.
 // ============================================================================
 
-use "types.bx";
+use "ast.bx";
+use "lexer.bx";
 use "parser.bx";
 use "check.bx";
 use "modules.bx";

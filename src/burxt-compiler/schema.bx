@@ -78,7 +78,7 @@
 // a new field on `Unit` has to be added in both places — and it is bounded by the compiler
 // refusing a `Unit` literal that is missing one, so it is caught at the next build rather
 // than at some later runtime. `review.bx` will need a third, and at that point the right
-// fix is for the literal to live in `types.bx` beside the class it fills.
+// fix is for the literal to live in `ast.bx` beside the class it fills.
 //
 // ---- what is NOT read, and why it is not a gap ------------------------------------------
 //
@@ -99,7 +99,8 @@
 // has to be able to spell the arena that holds it. It costs compile time and nothing else:
 // nothing below calls the emitter. Splitting `Unit` per phase would remove the dependency and
 // is a much larger change than this file.
-use "types.bx";
+use "ast.bx";
+use "lexer.bx";
 use "parser.bx";
 use "check.bx";
 use "modules.bx";

@@ -527,7 +527,7 @@ compiler cannot be split, modules are not done.** It can.
 
 ```
 src/burxt-compiler/main.bx        105 lines — the program, and five `use` lines
-src/burxt-compiler/types.bx   504 — the shapes, and the lexer
+src/burxt-compiler/ast.bx   504 — the shapes, and the lexer
 src/burxt-compiler/parser.bx  1,573 — tokens in, arena AST out
 src/burxt-compiler/check.bx   1,583 — the rules
 src/burxt-compiler/modules.bx 181 — `use "path";`, resolved before lexing

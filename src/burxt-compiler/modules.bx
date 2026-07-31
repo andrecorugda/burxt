@@ -21,7 +21,7 @@
 
 // The bound is passed, not measured. `len` on a String is `strlen`, so leaving it in
 // this condition walks the whole file on every byte, and reading a file's header costs
-// the square of the file's size. See at_byte in types.bx — the same shape, found the
+// the square of the file's size. See at_byte in ast.bx — the same shape, found the
 // same way, at the same time.
 function end_of_line(text: String, from: Int, width: Int) -> Int {
     let mutable i: Int = from;

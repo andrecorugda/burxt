@@ -98,7 +98,7 @@
 //
 // `emit.bx` is a FORCED dependency and not a choice: `Unit` has a field `slots: [Slot]` and
 // `Slot` is declared in `emit.bx`, so anything that can spell `Unit` links the code generator.
-// Reported by `review.bx` before this and worth repeating — `Slot` belongs in `types.bx`, and
+// Reported by `review.bx` before this and worth repeating — `Slot` belongs in `ast.bx`, and
 // moving it would let every tool read an AST without the backend.
 //
 // `check.bx` is needed for more than `show_type`: the type TABLE is what tells a class from an
@@ -108,7 +108,8 @@
 // of asymmetry: it follows from what each report is about.
 // ============================================================================
 
-use "types.bx";
+use "ast.bx";
+use "lexer.bx";
 use "parser.bx";
 use "check.bx";
 use "modules.bx";

@@ -196,7 +196,7 @@ Andre, on reading the fixed directory: *"the rust compiler is well named and cat
 is almost ok but has stage1 — what is stage1 if the maintainer is a human?"*
 
 Right, and it is the same defect one level down. Every neighbour is named for **what it does** —
-`parser.bx`, `check.bx`, `emit.bx`, `types.bx`, `modules.bx` — and the entry point alone was named for
+`parser.bx`, `check.bx`, `emit.bx`, `ast.bx`, `modules.bx` — and the entry point alone was named for
 **its position in a bootstrap sequence.** "Stage 1" answers *which step of building something else is
 this*, a question only whoever built it ever asks. A maintainer asks *where does the program start*, and
 that is spelled `main` in every language there is — including in `src/rust-compiler/main.rs`, sitting in
@@ -213,7 +213,7 @@ twice:
 | `src/burxt-compiler/` | | `src/rust-compiler/` |
 |---|---|---|
 | `main.bx` | the entry point | `main.rs` (+ the CLI) |
-| `types.bx` | shapes, lexer | `ast.rs` + `lexer.rs` |
+| `ast.bx` | shapes, lexer | `ast.rs` + `lexer.rs` |
 | `parser.bx` | tokens in, arena AST out | `parser.rs` |
 | `check.bx` | scales, regions, purity, contracts, exhaustiveness | `typeck.rs` |
 | `emit.bx` | textual LLVM IR + the runtime | `codegen.rs` (LLVM's C API via inkwell) |
@@ -286,8 +286,8 @@ than in an audit a hundred versions later. That timing is the entire lesson of �
 | `parser.rs` | `parser.bx` | Role | held *indirectly*: the front-end sweep and the 142-of-142 backend sweep both fail if the parsers disagree |
 | `typeck.rs` | `check.bx` | Role | held indirectly over 273 fail programs, 227 of which stage-1 refuses too |
 | `codegen.rs` | `emit.bx` | Role | held indirectly, and byte-for-byte, by the fixpoint |
-| `lexer.rs` | `types.bx` | Role | shares one file with `ast.rs` |
-| `ast.rs` | `types.bx` | Role | the same file answers both rows |
+| `lexer.rs` | `ast.bx` | Role | shares one file with `ast.rs` |
+| `ast.rs` | `ast.bx` | Role | the same file answers both rows |
 | `main.rs` | `main.bx` + `modules.bx` | **Partial** | 572 lines with ten subcommands, against a `main.bx` with none |
 | `json.rs` | `lib/json.bx` | **Partial** | the standard library, which the Burxt compiler does not itself use |
 | `schema.rs` | — | Missing | writable today |
@@ -299,7 +299,7 @@ than in an audit a hundred versions later. That timing is the entire lesson of �
 The scrutiny was deserved and the first number was flattering. **8 of 11 rows are answered — but only
 1 is VERIFIED**, and the difference is the whole point:
 
-- **`lexer.rs` and `ast.rs` point at the same `types.bx`**, so one Burxt file earned two points. Eight
+- **`lexer.rs` and `ast.rs` point at the same `ast.bx`**, so one Burxt file earned two points. Eight
   rows are answered by eight distinct files only because `main.rs` answers to two.
 - **`main.rs` → `main.bx` is generous.** 572 lines carrying ten subcommands against 118 with none. Same
   entry point, not the same job — so it is recorded `Partial`, not `Role`.

@@ -38,7 +38,7 @@ more about it than what it accepts.
 | File | What it is |
 |---|---|
 | [`main.bx`](main.bx) | **The Burxt compiler, written in Burxt** — the program, 105 lines, which `use`s the five modules below. It compiles its own source to a byte-identical fixpoint. |
-| [`burxt/types.bx`](burxt/types.bx) | The shapes everything else is written in, and the lexer. |
+| [`burxt/ast.bx`](burxt/ast.bx) | The shapes everything else is written in, and the lexer. |
 | [`burxt/parser.bx`](burxt/parser.bx) | Tokens in, arena AST out. |
 | [`burxt/check.bx`](burxt/check.bx) | The rules: scales, regions, purity, contracts, exhaustiveness. |
 | [`burxt/modules.bx`](burxt/modules.bx) | `use "path";`, resolved before lexing. |

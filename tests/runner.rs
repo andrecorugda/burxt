@@ -2983,7 +2983,7 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
         let compiler_lines: usize = // Every module `main.bx` actually `use`s — and ONLY those. Getting this list wrong is
         // how v0.0.221 first reported a 12% improvement that was a 6% regression: counting
         // every `.bx` in the directory included two that were written and not yet imported.
-        ["main.bx", "types.bx", "parser.bx", "check.bx", "modules.bx",
+        ["main.bx", "ast.bx", "lexer.bx", "parser.bx", "check.bx", "modules.bx",
                                      "emit.bx", "diag.bx", "schema.bx", "lsp.bx", "review.bx"]
             .iter()
             .filter_map(|f| fs::read_to_string(root.join("src/burxt-compiler").join(f)).ok())
@@ -3615,7 +3615,7 @@ fn one_word_per_concept_in_the_burxt_compiler() {
         "attr", "ctx", "cfg", "sig", "dest", "pos", "prev", "curr", "iter", "acc", "tok", "toks",
         "fn", "fns", "mut", "recv", "len",
     ];
-    let types_bx = fs::read_to_string(root.join("src/burxt-compiler/types.bx")).unwrap();
+    let types_bx = fs::read_to_string(root.join("src/burxt-compiler/ast.bx")).unwrap();
     for line in types_bx.lines() {
         let line = match line.find("//") {
             Some(at) => &line[..at],
@@ -3637,7 +3637,7 @@ fn one_word_per_concept_in_the_burxt_compiler() {
             let last = name.rsplit('_').next().unwrap_or(name);
             if clipped.contains(&name) || (name.contains('_') && clipped.contains(&last)) {
                 problems.push(format!(
-                    "field `{}` in src/burxt-compiler/types.bx is clipped. A field crosses files, so \
+                    "field `{}` in src/burxt-compiler/ast.bx is clipped. A field crosses files, so \
                      write the word: `length` not `len`, `parameters` not `params`, `position` \
                      not `pos`",
                     name
@@ -5275,7 +5275,7 @@ fn the_two_compilers_review_the_same_promises() {
 /// 1. Blank the imports before collecting types. Enough for a file that imports something without
 ///    USING it.
 /// 2. Resolve the whole PROGRAM around the file, as `publish` already did through
-///    `check_in_context`. Needed because with `use "types.bx"` merely blanked, `Unit` and `Token`
+///    `check_in_context`. Needed because with `use "ast.bx"` merely blanked, `Unit` and `Token`
 ///    are unknown, the checker gives up early, and almost no expression types survive — so the
 ///    file that most needs hover is exactly the one where blanking alone does nothing.
 ///
@@ -6390,7 +6390,8 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
     //
     // Andre asked "7 over 11?" and the counting deserved the scrutiny. A flat count of rows with
     // a counterpart reads as more parity than exists, three ways: `lexer.rs` and `ast.rs` both
-    // point at the SAME `types.bx`, so one Burxt file earned two points; `main.rs` is 572 lines
+    // used to point at the same file until v0.0.233 split it, so one Burxt file earned two points 
+    // and the count read higher than the parity was; `main.rs` is 572 lines
     // with ten subcommands against a `main.bx` with none; and `json.rs` maps to the standard
     // library, which the Burxt compiler does not itself use. So the strength is recorded per row
     // and reported separately, because **the number that matters is how many are HELD BY A TEST**,
@@ -6423,17 +6424,20 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
         ),
         (
             "lexer.rs",
-            &["src/burxt-compiler/types.bx"],
+            &["src/burxt-compiler/lexer.bx"],
             Strength::Role,
-            "the lexer, with the shapes it fills. Shares `types.bx` with `ast.rs` — the split is \
-             drawn differently on the two sides, which is fine, but it means these two rows are \
-             answered by ONE file and a flat count would double-count it",
+            "source text in, tokens out. **One file to one file since v0.0.233**: `types.bx` was \
+             `ast.bx` and `lexer.bx` glued together and named after neither, so this row and \
+             `ast.rs` used to point at the SAME file and this column had to explain that a flat \
+             count double-counted them. Andre found it by reading the directory — *\"why is there \
+             no ast for .bx?\"* — which is the third name here to outlive its subject",
         ),
         (
             "ast.rs",
-            &["src/burxt-compiler/types.bx"],
+            &["src/burxt-compiler/ast.bx"],
             Strength::Role,
-            "the node kinds and the arena. See `lexer.rs`: same file answers both",
+            "the node kinds, the type representation and the arenas. One file to one file since\
+             v0.0.233 — see `lexer.rs` for what that cost and who noticed",
         ),
         (
             "parser.rs",
@@ -6620,7 +6624,7 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
         .map(|(rs, _, _, _)| *rs)
         .collect();
     // Distinct Burxt files doing the answering — lower than `answered`, because `lexer.rs` and
-    // `ast.rs` share `types.bx`.
+    // `ast.rs` share `ast.bx`.
     let distinct: std::collections::BTreeSet<&str> =
         expected.iter().flat_map(|(_, cs, _, _)| cs.iter().copied()).collect();
 

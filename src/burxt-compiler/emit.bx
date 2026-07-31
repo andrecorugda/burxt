@@ -335,7 +335,7 @@ function (mutable self: Unit) intern_text(text: String) -> String {
     push(self.strings, 0);
     // Measured once. `len` on a String walks it, so leaving it in the condition makes
     // interning cost the square of the literal's length — the same shape that made the
-    // lexer quadratic. See at_byte in types.bx.
+    // lexer quadratic. See at_byte in ast.bx.
     let width: Int = len(text);
     let mutable body: String = "";
     let mutable i: Int = 0;
