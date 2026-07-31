@@ -62,6 +62,7 @@ use "emit.bx";
 use "diag.bx";
 use "schema.bx";
 use "lsp.bx";
+use "review.bx";
 
 // The shell, for `build` and `run`. Those two have to invoke `llc` and `cc`, and until
 // v0.0.219 the Burxt compiler could not: it emitted IR to a file and a human ran the rest
@@ -316,7 +317,7 @@ function is_subcommand(word: String) -> Bool {
     if word == "check" || word == "build" || word == "run" || word == "emit-ir" {
         return true;
     }
-    if word == "mcp-schema" {
+    if word == "mcp-schema" || word == "review" {
         return true;
     }
     if word == "--help" || word == "-h" || word == "help" || word == "--version" || word == "-V" {
@@ -337,7 +338,7 @@ function is_subcommand(word: String) -> Bool {
 // stderr, product to stdout.** So `burxt emit-ir x.bx > x.ll` writes IR and not a progress
 // report, and a CI log shows what went wrong on the stream built for it.
 function usage() -> Int {
-    print_error("burxt 0.0.222 — the Burxt compiler, written in Burxt");
+    print_error("burxt 0.0.225 — the Burxt compiler, written in Burxt");
     print_error("usage:");
     print_error("  burxt check   <file.bx>                  parse and typecheck only");
     print_error("  burxt build   <file.bx> [-o <path>]      compile to a native executable");
@@ -350,10 +351,11 @@ function usage() -> Int {
     print_error("");
     print_error("  burxt mcp-schema <file.bx>               the MCP manifest, from the preconditions");
     print_error("");
+    print_error("  burxt review  <old.bx> <new.bx>          what changed about what it PROMISES");
     print_error("  burxt lsp                                language server over stdio");
     print_error("");
     print_error("Not here yet, and named rather than silently missing:");
-    print_error("  layout, explain memory, review, --json");
+    print_error("  layout, explain memory, --json");
     print_error("They exist in the Rust build. spec/ROADMAP-1.0.md THE GATE tracks the rest.");
     return 0;
 }
@@ -366,7 +368,7 @@ if argument_count() > 1 {
 }
 
 if command == "--version" || command == "-V" {
-    print_error("burxt 0.0.222 — the Burxt compiler, written in Burxt");
+    print_error("burxt 0.0.225 — the Burxt compiler, written in Burxt");
     exit(0);
 }
 
@@ -431,6 +433,25 @@ if command == "check" {
         exit(0);
     }
     exit(1);
+}
+
+if command == "review" {
+    // What changed about what the program PROMISES — signatures, contracts, effects, privacy —
+    // rather than what changed textually.
+    //
+    // `spec/ROADMAP-1.0.md` §C2 makes this the **mechanical semver rule** for the 1.0
+    // compatibility promise, which is why it could not stay Rust-only: Burxt would have been
+    // unable to enforce its own compatibility promise without Rust, and that is precisely what
+    // the gate forbids.
+    //
+    // Two files, so two arenas — and a `Unit` cannot be returned from a function, so `review.bx`
+    // builds both where it uses them rather than taking them from a maker.
+    if argument_count() < 4 {
+        print_error("burxt review: needs two files — `burxt review old.bx new.bx`");
+        exit(2);
+    }
+    let verdict: Int = review(argument(2), argument(3));
+    exit(verdict);
 }
 
 if command == "mcp-schema" {
