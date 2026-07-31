@@ -583,15 +583,18 @@ function (mutable self: Promises) collect(unit: Unit, src: String) -> Int {
             } else {
                 kind = "method";
                 is_private = flag_private(n.value);
-                // **Zeroed to MATCH, not because the flag is wrong.** `review.rs` writes
-                // `is_pure: false` for every method — a `MethodDef` has no `is_pure` field at
-                // all — and the bit here cannot be set today anyway, because `parse_record`
-                // refuses `pure` on a method. Reading it would be this file quietly becoming
-                // MORE CAPABLE than the Rust one, and under the parity gate that is a defect
-                // rather than a feature: the day `pure` methods land, `review.bx` would report
-                // a purity finding `review.rs` does not, and the differential would break on a
-                // language feature instead of on a bug. So it matches narrowly and says so.
-                is_pure = 0;
+                // **The zeroing is GONE, and the comment that used to be here called it.** It
+                // read: *"the day `pure` methods land, `review.bx` would report a purity finding
+                // `review.rs` does not"* — and narrowed to match `review.rs`, which hardcoded
+                // `is_pure: false` because `MethodDef` had no field for it.
+                //
+                // A4 (v0.0.247) is that day. Both sides now read the real marker, in the same
+                // version, because the alternative is worse than divergence: a method that STOPS
+                // being `pure` is a weakened promise, and both tools would have missed it
+                // silently. §C2 makes this the mechanical semver gate for 1.0, and an
+                // under-reporting gate is worse than none — someone relies on it.
+                //
+                // So the flag is read where it always was, one line above, and nothing is zeroed.
             }
         }
         let requires_at: Int = len(self.shapes);

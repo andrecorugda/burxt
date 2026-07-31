@@ -292,7 +292,12 @@ fn collect(prog: &Program) -> BTreeMap<String, Promise> {
                 shape: shape_of(&m.parameters, &m.ret),
                 requires: normalised(&m.requires, &m.parameters),
                 ensures: normalised(&m.ensures, &m.parameters),
-                is_pure: false,
+                // `m.is_pure`, not `false`. This was hardcoded until A4 (v0.0.247) and that was
+                // CORRECT while a method could not carry the marker — and became an under-report
+                // the moment it could. A method that STOPS being `pure` is a weakened promise, and
+                // §C2 makes this tool the mechanical semver gate for 1.0, so a gate that silently
+                // misses a weakening is worse than no gate: someone is relying on it.
+                is_pure: m.is_pure,
                 private: m.private,
                 touches: m.touches.clone(),
             },
@@ -307,7 +312,9 @@ fn collect(prog: &Program) -> BTreeMap<String, Promise> {
                     shape: shape_of(&m.parameters, &m.ret),
                     requires: normalised(&m.requires, &m.parameters),
                     ensures: normalised(&m.ensures, &m.parameters),
-                    is_pure: false,
+                    // See the `prog.methods` loop above: a method in an `implement` block can
+                    // lose `pure` exactly as one written anywhere else can.
+                    is_pure: m.is_pure,
                     private: m.private,
                     touches: m.touches.clone(),
                 },

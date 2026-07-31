@@ -1,0 +1,19 @@
+// Purity is transitive through a method call, exactly as through a function call: a pure answer may
+// only be built from pure parts.
+//
+// Before A4 this was refused by a BLANKET branch — no method could be `pure`, so no method call
+// from a pure context could ever be allowed. That branch is gone, and this fixture is what stops it
+// coming back as an accidental acceptance: the rule is now "is THIS method pure", and a method that
+// is not must still be refused.
+class Point { x: Int, y: Int }
+
+function (self: Point) loose() -> Int { return self.x; }
+
+pure function (self: Point) strict() -> Int {
+    return self.loose();
+}
+
+region r {
+    let p: Point = Point { x: 1, y: 2 };
+    print(p.strict());
+}

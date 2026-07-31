@@ -1,0 +1,16 @@
+// `pure` and `touches` cannot both be on a method, for the reason they cannot both be on a free
+// function: `pure` means the answer depends on the arguments and nothing else, which is the same
+// thing as touching nothing. One marker has to go.
+//
+// The same sentence as the free-function rule, deliberately — one rule with two wordings is how a
+// language starts feeling arbitrary.
+class Point { x: Int, y: Int }
+
+pure function (self: Point) sum() -> Int touches files {
+    return self.x + self.y;
+}
+
+region r {
+    let p: Point = Point { x: 1, y: 2 };
+    print(p.sum());
+}

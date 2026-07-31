@@ -540,6 +540,22 @@ pub struct MethodDef {
     /// Always false for a method written outside a class, where there is no boundary to be
     /// private from.
     pub private: bool,
+    /// Declared `pure`: the answer depends only on the arguments, and the receiver IS an
+    /// argument — so `self.x` is readable and nothing else about the program may be.
+    ///
+    /// **This field is why A4 cost more on the Rust side than the Burxt one, which is the
+    /// reverse of the usual direction and worth saying at the site.** Normally stage-0 has the
+    /// machinery and stage-1 is catching up. Here stage-1's method item already carried the bit —
+    /// its markers ride in one flags word, and `flag_pure` read it for free — while stage-0 had
+    /// no place to put it at all, because `pure` had been refused in the PARSER since the marker
+    /// existed. A refusal in the parser leaves no room in the tree, so nothing downstream could
+    /// have asked the question even if it wanted to.
+    ///
+    /// It is also what `burxt review` reads to notice a method that has STOPPED being pure. Both
+    /// reviewers wrote `is_pure: false` for every method until v0.0.247, which was correct while
+    /// the marker was unspellable and became an under-report the moment it was not — and an
+    /// under-reporting semver gate is worse than none, because someone relies on it.
+    pub is_pure: bool,
     /// `function (mutable self: Stack<T>) push_one(...)` — the receiver's type arguments,
     /// which for a method are always the class's own parameter NAMES. A method may use the
     /// parameters of the type it is on and declare none of its own, per

@@ -175,23 +175,24 @@ impl Parser {
             } else if self.at(&Token::Extern) {
                 externs.push(self.parse_extern()?);
             } else if self.at(&Token::Pure) {
-                // `pure` only precedes a free function: a method cannot carry the
-                // marker yet, and saying so beats a confusing parse error.
                 if self.peek_at(1) != &Token::Fn {
                     return Err(format!(
                         "`pure` must be followed by `function`, but found {}",
                         self.peek_at(1).describe()
                     ));
                 }
+                // `pure function (self: T) name(...)` — a pure METHOD, as of A4. The `(` right
+                // after `function` is the same tell that distinguishes a method from a free
+                // function below; the only difference here is that `pure` came first.
+                //
+                // Until v0.0.247 this refused, and the refusal was in the PARSER — which is why
+                // `MethodDef` had nowhere to record the marker and why the Rust side needed a new
+                // field while the Burxt side needed none. See `MethodDef.is_pure`.
                 if self.peek_at(2) == &Token::LParen {
-                    return Err(
-                        "a method cannot be declared `pure` yet — the marker goes on \
-                         a free function for now. Move the calculation into one, or \
-                         drop `pure`."
-                            .to_string(),
-                    );
+                    methods.push(self.parse_method(None)?);
+                } else {
+                    fns.push(self.parse_fn()?);
                 }
-                fns.push(self.parse_fn()?);
             } else if self.at(&Token::Fn) {
                 // `fn (self: T) name(...)` is a method; `fn name(...)` is a
                 // free function — the `(` right after `fn` is the tell.
@@ -360,18 +361,10 @@ impl Parser {
 
     /// A method written inside a class body.
     ///
-    /// `pure` is refused here with the same sentence the top level uses, because a method
-    /// cannot carry the marker yet and two wordings for one rule is how a language starts
-    /// feeling arbitrary.
+    /// `pure` is read here exactly as it is at the top level, because one marker with two
+    /// spellings is how a language starts feeling arbitrary. Both routes end in `parse_method`,
+    /// which is where the flag is recorded.
     fn parse_method_in_class(&mut self, owner: &str) -> Result<MethodDef, String> {
-        if self.at(&Token::Pure) {
-            return Err(
-                "a method cannot be declared `pure` yet — the marker goes on \
-                 a free function for now. Move the calculation into one, or \
-                 drop `pure`."
-                    .to_string(),
-            );
-        }
         self.parse_method(Some(owner))
     }
 
@@ -810,6 +803,13 @@ impl Parser {
     /// `fn (self: Type) name(parameters) -> ret { body }`, or `fn (mut self: ...)`
     /// for a mutating method.
     fn parse_method(&mut self, owner: Option<&str>) -> Result<MethodDef, String> {
+        // `pure`, read in the ONE place a method is built, so there is one spelling of the rule
+        // and one place the flag comes from. Every route leaves the token in place for this —
+        // the top level, a class body and an `implement` block alike.
+        let is_pure = self.at(&Token::Pure);
+        if is_pure {
+            self.bump();
+        }
         let start = self.span().start;
         self.expect(&Token::Fn)?;
         self.expect(&Token::LParen)?;
@@ -918,7 +918,7 @@ impl Parser {
         }
         let body = self.parse_block()?;
         self.type_parameters.clear();
-        Ok(MethodDef { receiver, private: false, touches, receiver_arguments, receiver_mut, name, parameters, ret, allocates, requires, ensures, body, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok(MethodDef { receiver, private: false, is_pure, touches, receiver_arguments, receiver_mut, name, parameters, ret, allocates, requires, ensures, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `as <marshaller>` declares how a value crosses a foreign boundary.

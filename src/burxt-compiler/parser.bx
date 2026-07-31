@@ -2505,11 +2505,18 @@ function (mutable self: Unit) parse_record(src: String) -> Int {
     let base: Int = len(self.stack);
     let mutable count: Int = 0;
     while !self.at(32) && !self.done() {
-        // A method, not a field. `pure` is refused with the same sentence a free-standing
-        // one gets, because a method cannot carry the marker yet.
+        // A method, not a field. `pure` is READ here as of A4 — it used to be refused with the
+        // same sentence a free-standing method got, because the marker was unavailable on either.
+        //
+        // Stage-1 needed no new representation for this and stage-0 did, which is the reverse of
+        // the usual direction: a method item's markers already ride in one flags word, so
+        // `parse_function` has taken an `is_pure` argument since `pure` existed and bit 1 was
+        // simply never set from here. Stage-0's `MethodDef` had no field at all, because its
+        // refusal lived in the parser and a refusal leaves nowhere to record what it refused.
+        let mutable is_pure: Int = 0;
         if self.at(124) {
-            return self.complain(src, "a method cannot be declared `pure` yet — the marker "
-                        + "goes on a free function for now");
+            let marker: Int = self.advance();
+            is_pure = 1;
         }
         // `private` applies to whichever of the two follows it. Recorded in the field node's
         // spare slot for a field, and in the method item's flags for a method.
@@ -2525,13 +2532,13 @@ function (mutable self: Unit) parse_record(src: String) -> Int {
         // qualified name is a name in two parts. Passing the class's token as the OWNER is the
         // whole change — `parse_function` sees an owner with no receiver clause and knows.
         if self.at(102) && self.kind_at(1) != 29 {
-            let associated: Int = self.parse_function(src, 0, name_tok);
+            let associated: Int = self.parse_function(src, is_pure, name_tok);
             if associated < 0 { return -1; }
             push(self.items, associated);
             continue;
         }
         if self.at(102) {
-            let method: Int = self.parse_function(src, 0, name_tok);
+            let method: Int = self.parse_function(src, is_pure, name_tok);
             if method < 0 { return -1; }
             if is_private == 1 {
                 // Set the bit on the item that was just built. `parse_function` assembles the

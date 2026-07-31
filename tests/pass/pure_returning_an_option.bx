@@ -1,0 +1,37 @@
+// A `pure` function that answers an `Option` — the other half of roadmap A4, and it turned out to
+// be the SAME bug rather than a second one.
+//
+// `lib/array.bx` states the limitation in its own words: *"`array_index_of` is not `pure`, and it
+// should be. `Option.Some(i)` reads as a method call on the enum, and a method cannot be declared
+// `pure` yet."* That diagnosis was exactly right, and it is why one removal fixed both halves:
+// `Enum.Variant(x)` parses as a METHOD CALL and is told apart from a real one inside the method-call
+// branch — but the blanket *"a pure function may not call a method"* refusal sat at the TOP of that
+// branch, before anything looked at whether the receiver was an enum. So a constructor was refused
+// for being shaped like a method call.
+//
+// Replacing that blanket with "is THIS method pure" let the variant through on the way past. Nothing
+// here needed a rule of its own, which is worth recording: the roadmap paired the two halves as
+// related, and they were not merely related, they were one branch.
+//
+// This is what unblocks the ~15 standard-library signatures A4 was scheduled for — `array_pop<T>`,
+// `map.take`, `option_ok_or` — and `array_index_of` can now carry the marker it should always have
+// had. Retiring that comment in `lib/array.bx` is a library change, reported rather than made here.
+use "../../lib/option.bx";
+
+pure function index_of(xs: [Int], want: Int) -> Option<Int> {
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        if xs[i] == want {
+            return Option.Some(i);
+        }
+        i += 1;
+    }
+    return Option.None;
+}
+
+region r {
+    let numbers: [Int] = [4, 5, 6];
+    print(option_or(index_of(numbers, 5), 0 - 1));
+    print(option_or(index_of(numbers, 4), 0 - 1));
+    print(option_or(index_of(numbers, 9), 0 - 1));
+}

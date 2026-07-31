@@ -464,6 +464,10 @@ pub struct TypeChecker {
     /// arguments, checked. Hoisted with the signatures so a call to one can be
     /// judged in a single pass, in either direction.
     pure_fns: HashSet<String>,
+    /// Methods declared `pure`, keyed the way every other method table here is keyed. Beside
+    /// `pure_fns` rather than folded into it, because `(receiver, name)` is what a method call
+    /// resolves to and a flat name would collide the moment two classes both have `sum`.
+    pure_methods: HashSet<(String, String)>,
     /// How many loops enclose the statement being checked. `break` and `continue`
     /// outside a loop have nothing to act on, and saying so beats generating a jump
     /// to nowhere.
@@ -633,6 +637,7 @@ impl TypeChecker {
             alloc_fns: HashSet::new(),
             alloc_methods: HashSet::new(),
             pure_fns: HashSet::new(),
+            pure_methods: HashSet::new(),
             in_pure: None,
             in_contract: false,
             loop_depth: 0,
@@ -2419,6 +2424,34 @@ impl TypeChecker {
             // the drain loop below, so `Stack<Int>` and `Stack<String>` get their own.
             if !m.receiver_arguments.is_empty() {
                 self.current_span.set(m.span);
+                // A4, refused BY NAME rather than by accident, and checked HERE because a
+                // held-back method never reaches the registration below — the first version of
+                // this rule sat there and could never fire, so it accepted every generic case in
+                // silence.
+                //
+                // `pure` itself is no problem over a type parameter: purity is about what the
+                // answer depends on, and a parameter changes nothing about that. What is unsettled
+                // is which COPY owns the promise. `pure_methods` is keyed by `(receiver, name)`
+                // and the receiver here is the mangled instantiation, so `Stack<Int>` and
+                // `Stack<String>` would each register the same promise under a different key —
+                // workable, but it means a call resolves purity against whichever copy the caller
+                // named, and nothing today checks that all copies agree. That is a question about
+                // monomorphised keys, not about `pure`.
+                //
+                // Named rather than blanket-refused, because a refusal that happens to cover a
+                // case is how the `?` gap survived its whole life.
+                if m.is_pure {
+                    return Err(format!(
+                        "`pure function (self: {}<{}>) {}` is not available yet: a method on a \
+                         generic class is checked once per instantiation, so one `pure` promise \
+                         would have to stand for every copy at once. `pure` on a method of a \
+                         NON-generic class works today. This is a question about which copy owns \
+                         the promise rather than about purity — see spec/ROADMAP-1.0.md A4.",
+                        m.receiver,
+                        m.receiver_arguments.join(", "),
+                        m.name
+                    ));
+                }
                 let Some((parameters, _)) = self.generic_records.get(&m.receiver) else {
                     return Err(format!(
                         "`self: {}<...>` names type parameters, and `{}` is not generic.",
@@ -2470,6 +2503,34 @@ impl TypeChecker {
             }
             if !m.touches.is_empty() {
                 self.method_effects.insert(key.clone(), m.touches.clone());
+            }
+            // ---- A4: `pure` on a method -------------------------------------------------
+            //
+            // Two refusals belong on the DECLARATION, where the contradiction is visible without
+            // reading the body. Both mirror a rule a pure free function already follows, and the
+            // wording is deliberately the same shape: one marker, one reason, wherever it appears.
+            if m.is_pure && m.receiver_mut {
+                return Err(format!(
+                    "`pure function (mutable self: {}) {}` cannot be both: `pure` means the \
+                     answer depends on the arguments and nothing else, and `mutable self` says \
+                     this call changes the receiver. Drop one of the two. (It matters more than it \
+                     looks: a contract clause may call a `pure` method, so this would let a \
+                     precondition rewrite the value it is checking.)",
+                    m.receiver, m.name
+                ));
+            }
+            if m.is_pure && !m.touches.is_empty() {
+                return Err(format!(
+                    "`pure function {}.{}` cannot also `touches {}`: `pure` means the answer \
+                     depends on the arguments and nothing else, which is the same thing as \
+                     touching nothing. Drop one of the two.",
+                    m.receiver,
+                    m.name,
+                    m.touches.iter().map(|e| e.to_string()).collect::<Vec<_>>().join(", ")
+                ));
+            }
+            if m.is_pure {
+                self.pure_methods.insert(key.clone());
             }
             self.methods.insert(key, (m.receiver_mut, param_tys, m.ret.clone()));
         }
@@ -3742,7 +3803,16 @@ impl TypeChecker {
         self.in_contract = false;
         let olds = std::mem::take(&mut *self.olds.borrow_mut());
 
+        // A4: the BODY of a `pure` method is checked under the pure rule too. Before A4 this was
+        // set only around the contracts above — a method could not carry the marker, so its body
+        // had no promise to be held to, and the contract case worked because a clause is held to
+        // purity whether or not the method is.
+        let saved_body_pure = self.in_pure.clone();
+        if m.is_pure {
+            self.in_pure = Some(format!("{}.{}", m.receiver, m.name));
+        }
         let body = self.check_block(&m.body)?;
+        self.in_pure = saved_body_pure;
         self.current_ret = None;
         self.in_caller_region = false;
         self.env.clear();
@@ -6300,18 +6370,15 @@ impl TypeChecker {
             }
 
             ExprKind::MethodCall { base, method, arguments } => {
-                // Methods cannot carry the marker yet, so a pure function cannot
-                // call one. Said plainly, with the reason, rather than by letting
-                // some later check produce something confusing.
-                if let Some(name) = &self.in_pure {
-                    return Err(format!(
-                        "`pure function {}` may not call the method `.{}()`: a method cannot \
-                         be declared `pure` yet, so there is no promise to rely on. \
-                         Move the calculation into a `pure function`, passing the fields it \
-                         needs.",
-                        name, method
-                    ));
-                }
+                // Purity is transitive through a method call exactly as it is through a
+                // function call — since A4, a method CAN carry the marker, so the question is
+                // whether this particular one does rather than whether any could.
+                //
+                // The receiver's type is needed to ask, and it is only known after the base is
+                // typed, so the check sits below rather than here. What used to sit here was a
+                // flat refusal of every method call inside a pure function, which was correct
+                // while `pure` was unspellable on a method and is now exactly the blanket
+                // refusal A4 exists to replace.
                 // `Account.open(...)` — an ASSOCIATED function, which reads exactly like an
                 // enum variant and is told apart the same way `check_variant_lit` tells a
                 // variant from a local binding: by what the name in front of the dot IS.
@@ -6538,6 +6605,37 @@ impl TypeChecker {
                             receiver, method
                         )
                     })?;
+                // A4: purity is transitive through a method call. A pure thing — a `pure`
+                // function, a `pure` method, or a CONTRACT CLAUSE, all of which set `in_pure` —
+                // may call a method only if that method is `pure` too.
+                //
+                // This is the rule that makes A4 worth having, and the reason is the contract
+                // half: `typeck.rs` has always checked a method's clauses under the pure rule, so
+                // `requires self.sum() > 0` was refused by the blanket "no method is pure" branch
+                // that used to sit further up. Nothing about the contract machinery had to change
+                // — the missing piece was a method that could answer yes.
+                if self.in_pure.is_some()
+                    && !self.pure_methods.contains(&(receiver.clone(), method.clone()))
+                {
+                    let holder = self.in_pure.clone().unwrap_or_default();
+                    return Err(if self.in_contract {
+                        format!(
+                            "a contract clause on `{}` may not call `{}.{}()`, which is not \
+                             `pure`: a clause has to be able to run without changing anything, \
+                             and only `pure` says so. Declare it \
+                             `pure function (self: {}) {}(...)`, or compare fields directly.",
+                            holder, receiver, method, receiver, method
+                        )
+                    } else {
+                        format!(
+                            "`pure function {}` may not call `{}.{}()`, which is not `pure`: \
+                             purity is transitive, so a pure answer may only be built from pure \
+                             parts. Declare it `pure function (self: {}) {}(...)`, or drop `pure` \
+                             from `{}`.",
+                            holder, receiver, method, receiver, method, holder
+                        )
+                    });
+                }
                 // `private` on a method, same rule and same boundary as a private field.
                 if self.current_receiver.as_deref() != Some(receiver.as_str())
                     && self.private_methods.contains(&(receiver.clone(), method.clone()))

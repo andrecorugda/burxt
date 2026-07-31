@@ -1555,10 +1555,45 @@ function (mutable self: Unit) collect_method(src: String, index: Int) -> Int {
     let signature: Node = self.nodes[item.c];
     let receiver: Token = self.tokens[signature.value];
     let mutating: Int = flag_mutating(item.value);
+    // ---- A4: `pure` on a method ---------------------------------------------------------
+    //
+    // This used to refuse outright — *"a receiver is state, and a claim about a function of its
+    // arguments cannot be made about one"* — and the premise was wrong: the receiver IS an
+    // argument. `self.x` is a read of a value the caller handed over, which is exactly what
+    // purity permits. What a pure method may NOT have is a way to change that value, or an
+    // effect, or an impure callee, and those are the three rules below.
     if flag_pure(item.value) == 1 {
-        let complained: Int = self.complain_at(src, item.token,
-            "`pure` is not available on a method: a receiver is state, and a claim "
-            + "about a function of its arguments cannot be made about one");
+        if mutating == 1 {
+            let complained: Int = self.complain_at(src, item.token,
+                "`pure function (mutable self: "
+                + substring(src, receiver.start, receiver.length) + ") "
+                + substring(src, name.start, name.length)
+                + "` cannot be both: `pure` means the answer depends on the arguments and "
+                + "nothing else, and `mutable self` says this call changes the receiver. Drop "
+                + "one of the two. (It matters more than it looks: a contract clause may call a "
+                + "`pure` method, so this would let a precondition rewrite the value it is "
+                + "checking.)");
+        }
+        if flag_effects(item.value) > 0 {
+            let complained: Int = self.complain_at(src, item.token,
+                "`pure function " + substring(src, receiver.start, receiver.length) + "."
+                + substring(src, name.start, name.length)
+                + "` cannot also `touches`: `pure` means the answer depends on the arguments and "
+                + "nothing else, which is the same thing as touching nothing. Drop one of the two.");
+        }
+        // A generic receiver is refused BY NAME, not left to be discovered as a confusing
+        // acceptance. `pure` over a type parameter is fine in itself — purity is about what the
+        // answer depends on — but a method on a generic class is checked once per instantiation,
+        // so one promise would have to stand for every copy at once, and nothing here checks that
+        // the copies agree. A question about which copy owns the promise, not about purity.
+        if self.generic_named(src, receiver.start, receiver.length) >= 0 {
+            let complained: Int = self.complain_at(src, item.token,
+                "`pure function (self: " + substring(src, receiver.start, receiver.length)
+                + "<...>) " + substring(src, name.start, name.length)
+                + "` is not available yet: a method on a generic class is checked once per "
+                + "instantiation, so one `pure` promise would have to stand for every copy at "
+                + "once. `pure` on a method of a NON-generic class works today");
+        }
     }
     if self.find_method_named(src, receiver.start, receiver.length,
                               name.start, name.length) >= 0 {
@@ -2733,8 +2768,9 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
                 let r: Int = self.needs_region(src, n.token,
                     "`" + substring(src, m.start, m.length) + "`");
             }
-            if self.in_pure == 1 {
-                let complained: Int = self.not_pure(src, n.token, "call a method");
+            if self.in_pure == 1 && flag_pure(m.flags) == 0 {
+                let complained: Int = self.not_pure(src, n.token,
+                    "call `" + substring(src, m.start, m.length) + "`, which is not `pure`");
             }
             let ok: Int = self.check_against_params(src, n.token, n.b, m.parameters, "method");
             // The node is marked so the emitter needs none of this reasoning again: `c` is unused
@@ -2833,10 +2869,17 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             let r: Int = self.needs_region(src, n.token,
                 "`" + substring(src, m.start, m.length) + "`");
         }
-        if self.in_pure == 1 {
-            // Not "a method that is not pure": `pure` is refused ON methods, so a
-            // method call from a pure function can never be allowed.
-            let complained: Int = self.not_pure(src, n.token, "call a method");
+        // A4: purity is transitive through a method call, exactly as through a function call.
+        // The comment here used to read *"not 'a method that is not pure': `pure` is refused ON
+        // methods, so a method call from a pure function can never be allowed"* — true while the
+        // marker was unspellable, and now the question is whether THIS method carries it.
+        //
+        // This is the rule that makes A4 worth having. A contract clause is checked with
+        // `in_pure` set, so `requires self.sum() > 0` was refused by the blanket version — and the
+        // contract machinery needed no change at all, only a method that could answer yes.
+        if self.in_pure == 1 && flag_pure(m.flags) == 0 {
+            let complained: Int = self.not_pure(src, n.token,
+                "call `" + substring(src, m.start, m.length) + "`, which is not `pure`");
         }
         // The receiver's arguments are in scope for the whole call: a parameter declared `T`
         // has to accept a Point when the receiver is a `Pair<Point>`, and the answer has to BE

@@ -33,11 +33,18 @@
 // **No `map` or `filter`.** Those need function values, which the language does not have. Write the
 // loop; it is three lines and a reader can see what it does.
 //
-// **`array_index_of` is not `pure`, and it should be.** `Option.Some(i)` reads as a method call on the
-// enum, and a method cannot be declared `pure` yet — so a function that only reads its argument and
-// builds an answer is refused the word that says exactly that. Nothing is wrong with the code; the
-// `pure` checker cannot see through enum construction. A real gap, recorded rather than worked around
-// by returning -1.
+// ~~**`array_index_of` is not `pure`, and it should be.**~~ **Fixed in v0.0.248, and this comment had
+// the diagnosis exactly right.** It said `Option.Some(i)` "reads as a method call on the enum" and
+// that the `pure` checker "cannot see through enum construction". That was the mechanism: a variant
+// constructor PARSES as a method call and is told apart inside the method-call branch, but the
+// blanket *"a pure function may not call a method"* refusal sat at the TOP of that branch, before
+// anything looked at whether the receiver was an enum. So a constructor was refused for being SHAPED
+// like a method call.
+//
+// One removal fixed both halves of roadmap A4 — `pure` on a method, and `pure` returning an Option —
+// which had been listed as two related items and were one branch. **A comment that names a mechanism
+// rather than a symptom is worth more than a bug report**, and this one was load-bearing two years
+// after it was written.
 //
 // ~~**An Option-returning GENERIC is not writable at all.**~~ **Fixed in v0.0.241.** `Option.None` and
 // `Option.Some` now resolve their type argument from the enclosing signature, so `array_pop<T> -> Option<T>`
@@ -71,7 +78,7 @@ pure function array_contains<T: Equatable>(xs: [T], of: T) -> Bool {
 // `Option<Int>` rather than -1, and the difference is the whole habit this language is built on: -1 is
 // a valid Int, so a caller who forgets to check gets an index rather than a mistake. None cannot be
 // used as an index by accident.
-function array_index_of<T: Equatable>(xs: [T], of: T) -> Option<Int> {
+pure function array_index_of<T: Equatable>(xs: [T], of: T) -> Option<Int> {
     let mutable i: Int = 0;
     while i < len(xs) {
         if xs[i] == of {

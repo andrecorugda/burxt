@@ -1,0 +1,20 @@
+// `pure` and `mutable self` are a contradiction, and the reason is not symmetry with the existing
+// rule about `mutable` PARAMETERS — it is the same rule, reaching the receiver.
+//
+// `pure` says the answer depends on the arguments and nothing else, which is the same thing as
+// changing nothing. `mutable self` says this call changes the receiver. A signature asserting both
+// is asserting in two directions at once.
+//
+// And it matters more than it looks, which is why the message says so: **a contract clause may call
+// a `pure` method**, so allowing this would let a precondition rewrite the very value it is checking.
+class Counter { n: Int }
+
+pure function (mutable self: Counter) bump() -> Int {
+    self.n = self.n + 1;
+    return self.n;
+}
+
+region r {
+    let mutable c: Counter = Counter { n: 1 };
+    print(c.bump());
+}

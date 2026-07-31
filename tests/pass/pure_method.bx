@@ -1,0 +1,52 @@
+// `pure` on a method — roadmap A4 — and the third block is what the item exists for.
+//
+// The refusal this replaces claimed *"a receiver is state, and a claim about a function of its
+// arguments cannot be made about one"*, and the premise was wrong: **the receiver IS an
+// argument.** `self.x` is a read of a value the caller handed over, which is exactly what purity
+// permits. What a pure method may not have is a way to CHANGE that value, an effect, or an impure
+// callee — and each of those is a fixture in `tests/fail/` rather than a sentence here.
+//
+// **A CONTRACT CLAUSE CALLING A METHOD is the payoff, and it needed nothing new.** `typeck.rs` has
+// always checked a method's clauses with `in_pure` set — *"under the `pure` rule — exactly as on a
+// free function"* — so `requires self.sum() > 0` was already being asked whether `sum` is pure. It
+// was refused by a blanket branch that said no method could be, because none could. The whole of
+// A4's second half is that the answer can now be yes: if a contract may only call `pure` things and
+// a method could never be `pure`, then no contract could ever call a method.
+//
+// The two compilers needed OPPOSITE amounts of work here, which is the reverse of the usual
+// direction and worth recording. stage-1 needed no new representation: a method item's markers
+// already ride in one flags word and `parse_function` has taken an `is_pure` argument since `pure`
+// existed — bit 1 was simply never set from a class body. stage-0 needed a new `MethodDef.is_pure`
+// field, because its refusal lived in the PARSER, and a refusal leaves nowhere to record what it
+// refused.
+class Point { x: Int, y: Int }
+
+// The receiver, read. Nothing else is reachable.
+pure function (self: Point) sum() -> Int { return self.x + self.y; }
+
+// Purity is transitive through a method call, so a pure method may call a pure method on itself.
+pure function (self: Point) doubled() -> Int { return self.sum() * 2; }
+
+// The payoff: a clause that calls a method. Both `requires` and the body reach `sum`, and the
+// clause is the half that was impossible before A4.
+function (self: Point) grown() -> Int
+    requires self.sum() > 0
+    ensures result > 0
+{
+    return self.doubled() + self.sum();
+}
+
+// `pure` reads the same inside a class body as outside it — one marker, one spelling.
+class Segment {
+    length: Int,
+    pure function (self) halved() -> Int { return divide_floor(self.length, 2); }
+}
+
+region r {
+    let p: Point = Point { x: 3, y: 4 };
+    print(p.sum());
+    print(p.doubled());
+    print(p.grown());
+    let s: Segment = Segment { length: 9 };
+    print(s.halved());
+}

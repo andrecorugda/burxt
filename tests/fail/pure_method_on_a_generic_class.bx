@@ -1,0 +1,22 @@
+// `pure` on a method of a GENERIC class, refused BY NAME rather than by accident.
+//
+// `pure` over a type parameter is no problem in itself: purity is about what the answer depends on,
+// and a parameter changes nothing about that. What is unsettled is **which copy owns the promise.**
+// A method on a generic class is checked once per instantiation, so `Box<Int>` and `Box<String>`
+// would each register the same `pure` claim under a different key, and nothing today checks that the
+// copies agree. That is a question about monomorphised keys, not about purity.
+//
+// It is refused with its own sentence for a reason this project has paid for twice: a blanket
+// refusal that happens to cover a case is how the `?` operator went its whole life unimplemented in
+// one compiler, and how a `pure` method looked impossible when only the parser said so. A named
+// refusal is a to-do a reader can act on; an accidental one is a gap nobody can see.
+class Box<T> { held: T }
+
+pure function (self: Box<T>) get() -> T {
+    return self.held;
+}
+
+region r {
+    let b: Box<Int> = Box { held: 5 };
+    print(b.get());
+}
