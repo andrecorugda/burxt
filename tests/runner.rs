@@ -4063,9 +4063,10 @@ fn no_html_page_is_written_in_markdown() {
                 || line.starts_with("|");
             if markdown {
                 wrong.push(format!(
-                    "{}: `{}` is markdown in an .html page, so it reaches the live site verbatim. \
-                     Write the HTML, or rename the page to .md.",
+                    "{}:{} — `{}` is markdown in an .html page, so it reaches the live site \
+                     verbatim. Write the HTML, or rename the page to .md.",
                     shown,
+                    n + 1,
                     line.chars().take(48).collect::<String>()
                 ));
             }
