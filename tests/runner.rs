@@ -1139,7 +1139,8 @@ fn the_burxt_front_end_accepts_every_burxt_source() {
     // failures are printed either way, and the number below is measured with no cushion.
     //
     // When `?` lands (task 14), this whole block goes and `failures.is_empty()` stands alone.
-    // **1 as of v0.0.230**, and the one is a CHECKER disagreement rather than a lexer one:
+    // **0 as of v0.0.234** — the checker gap closed. It was 1 for four versions, and the one was a
+    // CHECKER disagreement rather than a lexer one, which is why it is worth keeping the story:
     // `examples/generics.bx` writes `let held = Holder { one: 42 };` with no annotation, stage-0
     // infers `Holder<Int>` from the literal, and `check.bx` cannot — it refuses a program the Rust
     // compiler accepts. **That is the worse direction**: a missed rule lets a bad program through, an
@@ -1151,7 +1152,7 @@ fn the_burxt_front_end_accepts_every_burxt_source() {
     // either. `?` landed and both went away. The block stays rather than reverting to a bare
     // `failures.is_empty()`, because the SECOND branch below is the useful half — it fails when
     // the number drops, so a stale allowance cannot sit above a regression.
-    const CANNOT_READ_YET: usize = 1;
+    const CANNOT_READ_YET: usize = 0;
     if failures.len() > CANNOT_READ_YET {
         panic!(
             "the Burxt front end disagrees with the Rust one on {} source(s), and only {} is \
@@ -5115,13 +5116,19 @@ fn the_two_compilers_report_the_same_layout() {
     }
     let _ = fs::remove_dir_all(&scratch);
 
-    // Named, not tolerated: the one exception is `examples/generics.bx`, blocked on task 16's
-    // inference gap in `check.bx`. **1, not 2** — I guessed 2 on the assumption that a refused
+    // **0 as of v0.0.234.** It was 1, and the one was `examples/generics.bx` blocked on the
+    // inference gap in `check.bx` — `let held = Holder { one: 42 };` with no annotation, which
+    // stage-0 infers and `check.bx` could not. That closed, and with it the layout difference
+    // closed too, because the file could finally be checked before being laid out. **One fix in
+    // `check.bx` closed a gap in three tools**, which is why working around it inside `layout.bx`
+    // would have been the wrong repair.
+    //
+    // Kept from when it was 1: I guessed 2 on the assumption that a refused
     // program differs on both streams, and the second branch below caught me: the STDERR matches,
     // because both compilers write their refusal there and this comparison does not care that the
     // sentences differ. Measured, no cushion, and the guess is recorded because the branch that
     // fires when a number DROPS is the one people leave out.
-    const KNOWN_GAP: usize = 1;
+    const KNOWN_GAP: usize = 0;
     assert!(
         differ.len() <= KNOWN_GAP,
         "the two compilers report different layouts for {} case(s), and only {} are accounted for \
@@ -5141,7 +5148,7 @@ fn the_two_compilers_report_the_same_layout() {
     );
     eprintln!(
         "both compilers report the same layout for {} of {} sources",
-        sources.len() - 1,
+        sources.len() - differ.len(),
         sources.len()
     );
 }
@@ -6014,7 +6021,9 @@ fn the_repository_layout_is_declared() {
         ("lib", "the standard library, written in Burxt"),
         ("scripts", "repository automation: site generation, release, checks"),
         ("spec", "the design record — one file per milestone, plus the roadmap"),
-        ("src", "the two compilers: `rust-compiler/` and `burxt-compiler/`"),
+        ("src", "the two compilers. `src/README.md` says which is the product and why the Rust \
+         one is NOT under `tests/` despite being the cross-check: it is also the BOOTSTRAP, and \
+         `cargo build` is the only way onto a machine with no Burxt binary"),
         ("target", "cargo's build output, not checked in"),
         ("tests", "the suite: fixtures by verdict, plus the harnesses that drive them"),
         // Inside `tests/`, because that is where a helper is most tempting to misfile.
@@ -6029,6 +6038,22 @@ fn the_repository_layout_is_declared() {
         ),
         ("src/rust-compiler", "stage-0, in Rust, emitting through LLVM's C API"),
         ("src/burxt-compiler", "the compiler in Burxt, emitting textual IR"),
+        // Inside `examples/`, because v0.0.235 found an EMPTY `examples/burxt/` that had survived
+        // the v0.0.214 rename — `git mv` moved the files, git does not track empty directories, so
+        // the husk stayed on disk and in nobody's `git status`. Andre found it by reading `ls`.
+        //
+        // **This test walked `""`, `tests` and `src` and not `examples`**, which is the fourth
+        // layout defect he has found and the second that this test was in a position to catch and
+        // did not. The lesson is the same one the directory-boundary bugs keep teaching: a checker
+        // that examines three of four places reports success about the three.
+        ("examples/inputs", "input files the examples read"),
+        ("examples/refused", "programs that must NOT compile, shown in the guide"),
+        ("examples/negative", "the same, for the site's negative examples"),
+        ("examples/mcp", "the MCP manifest example and its fixtures"),
+        ("examples/pos", "the point-of-sale example, in Burxt"),
+        ("examples/pos-php", "the same program in PHP, for the comparison"),
+        ("examples/pos-python", "the same program in Python"),
+        ("examples/pos-rust", "the same program in Rust"),
     ];
 
     let mut undeclared: Vec<String> = Vec::new();
@@ -6042,7 +6067,9 @@ fn the_repository_layout_is_declared() {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') {
+            if name.starts_with('.') || name == "__pycache__" {
+                // `__pycache__` is Python's build output, in the same category as `target/`: not
+                // ours, not committed, and not worth a row that would read as a decision.
                 continue;
             }
             let full = if dir.is_empty() { name.clone() } else { format!("{}/{}", dir, name) };
@@ -6050,7 +6077,12 @@ fn the_repository_layout_is_declared() {
             // organise themselves internally, and a test that policed every leaf would be
             // enforcing a structure nobody agreed to.
             let declared = homes.iter().any(|(d, _)| *d == full);
-            let watched = dir.is_empty() || dir == "tests" || dir == "src";
+            // **The list of watched levels is itself a directory boundary**, and I got it wrong twice
+            // in one change: first by calling `check("examples")` while this line still named only
+            // `tests` and `src`, so the walk happened and reported nothing. A checker that looks and
+            // then declines to judge is worse than one that does not look, because the first prints
+            // `ok`. Caught by planting a stray directory and watching nothing happen.
+            let watched = dir.is_empty() || dir == "tests" || dir == "src" || dir == "examples";
             if watched && !declared {
                 undeclared.push(full);
             }
@@ -6059,6 +6091,7 @@ fn the_repository_layout_is_declared() {
     check("");
     check("tests");
     check("src");
+    check("examples");
 
     assert!(
         undeclared.is_empty(),
@@ -6356,6 +6389,41 @@ fn the_two_compilers_render_a_problem_identically() {
 
 /// **Every Rust module must have a Burxt counterpart, or a written reason it does not.**
 ///
+/// ---- What "equal" means here, ruled by Andre in v0.0.234 ----
+///
+/// > *"When I say equal it doesn't mean identical literal. I said it basing on the output/result.
+/// > Burxt is not Rust and vice versa, so there will always be difference. As long as we can give the
+/// > same result in the Burxt way, that is a yes for me."*
+///
+/// **That is a better bar than the one I set, and it is worth being precise about why.** I had made
+/// byte-for-byte output the definition of "verified", which quietly assumed the Burxt implementation
+/// should look like a translation of the Rust one. Two of the eleven rows cannot satisfy that by
+/// construction — `emit.bx` writes IR as text where LLVM renders it, and `check.bx` words a refusal
+/// its own way — and I was about to treat both as debts. They are not debts. **They are the Burxt
+/// implementation being itself**, which is the only way a second implementation is worth having: a
+/// transliteration would inherit the first one's bugs, and this one has instead FOUND three of them.
+///
+/// So the bar for every row is: **the same RESULT, arrived at the Burxt way, and the comparison that
+/// establishes it is named.** Byte-for-byte where that is the natural comparison; behaviour where the
+/// text cannot match; and in both cases stated, so the level can never be a shrug.
+///
+/// ---- Where the Burxt way turned out to be BETTER, which the old bar had no room for ----
+///
+/// Three times now the second implementation has audited the first, and each time it was because it
+/// did the job differently rather than identically:
+///
+/// - **`diag.bx` counts bytes and is total; `diag.rs` sliced strings and PANICKED.** `let é: Int = ;`
+///   produced a Rust backtrace and exit 101 — a compiler crash instead of a diagnostic — while the
+///   Burxt renderer had been handling it correctly all along (v0.0.222).
+/// - **`lsp.bx` answered hover where `lsp.rs` answered nothing at all**, on every file with a `use`
+///   line, which is every real Burxt program. `lsp.rs` had been silently dead there for as long as
+///   hover existed (v0.0.223).
+/// - **`lsp.bx` reads only the imports from disk and appends the editor's buffer after them**, so the
+///   unsaved text is authoritative by construction — no splicing, no source map. `lsp.rs` splices and
+///   needs both. The Burxt design is simpler and harder to get wrong.
+///
+/// A bar demanding identical output would have called all three "not yet verified".
+///
 /// Andre, v0.0.215: *"make sure all rs compiler has a burxt equivalent — that is the true meaning
 /// of both compilers agree."*
 ///
@@ -6425,8 +6493,11 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
         (
             "lexer.rs",
             &["src/burxt-compiler/lexer.bx"],
-            Strength::Role,
-            "source text in, tokens out. **One file to one file since v0.0.233**: `types.bx` was \
+            Strength::Behaviour,
+            "source text in, tokens out. **RESULT equality is asserted**, not merely implied: \
+             `the_burxt_front_end_accepts_every_burxt_source` compares the two lexers' verdicts over \
+             all 160 sources — every fixture and every example — and requires ZERO disagreements. \
+             **One file to one file since v0.0.233**: `types.bx` was \
              `ast.bx` and `lexer.bx` glued together and named after neither, so this row and \
              `ast.rs` used to point at the SAME file and this column had to explain that a flat \
              count double-counted them. Andre found it by reading the directory — *\"why is there \
@@ -6435,42 +6506,62 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
         (
             "ast.rs",
             &["src/burxt-compiler/ast.bx"],
-            Strength::Role,
-            "the node kinds, the type representation and the arenas. One file to one file since\
+            Strength::Behaviour,
+            "the node kinds, the type representation and the arenas. Held by the same sweep as \
+             `lexer.rs` and `parser.rs`: 160 sources, 0 disagreements about what parses and what \
+             does not. One file to one file since\
              v0.0.233 — see `lexer.rs` for what that cost and who noticed",
         ),
         (
             "parser.rs",
             &["src/burxt-compiler/parser.bx"],
-            Strength::Role,
-            "tokens in, arena AST out. Not held by a direct comparison, but held INDIRECTLY and \
-             hard: `the_burxt_front_end_accepts_every_burxt_source` and the 142-of-142 backend \
-             sweep both fail if the two parsers disagree about any program in the suite",
+            Strength::Behaviour,
+            "tokens in, arena AST out. **The comparison is direct, not indirect** — it was described \
+             as indirect until v0.0.234 and that undersold it: the sweep runs both parsers over all \
+             160 sources and requires zero disagreements about what parses, and the 143-of-143 \
+             backend sweep requires the resulting programs to print the same bytes. Comparing AST \
+             DUMPS would add a dump command to both compilers to check something already checked by \
+             result",
         ),
         (
             "typeck.rs",
             &["src/burxt-compiler/check.bx"],
-            Strength::Role,
-            "scales, regions, purity, contracts, exhaustiveness. Held indirectly by \
-             `the_burxt_typechecker_agrees_with_the_rust_one` over 269 fail programs — 227 of \
-             which stage-1 refuses too",
+            Strength::Behaviour,
+            "scales, regions, purity, contracts, exhaustiveness. **The VERDICTS are an equality, not \
+             a floor** — `assert_eq!(caught, total - 3)`, 271 of 274, with the three exclusions named \
+             and reasoned. That is a direct comparison of what the two compilers DECIDE about every \
+             fixture, which is the thing a user depends on. Only the wording differs, in 267 of the \
+             271: a different verdict is a defect, a different sentence is a preference, and task 15 \
+             holds that question deliberately apart",
         ),
         (
             "codegen.rs",
             &["src/burxt-compiler/emit.bx"],
-            Strength::Role,
-            "LLVM IR. Rust drives LLVM's C API through inkwell; Burxt writes the IR as text, \
-             which M4 calls string formatting instead of an API, not a workaround. Held \
-             indirectly and byte-for-byte by the fixpoint",
+            Strength::Behaviour,
+            "LLVM IR. Rust drives LLVM's C API through inkwell; Burxt writes the IR as text — which \
+             M4 calls string formatting instead of an API, not a workaround. **Byte-identical output \
+             is IMPOSSIBLE here and that is not a gap**: LLVM renders one and `emit.bx` renders the \
+             other, so matching them would mean writing a pretty-printer to satisfy a string \
+             comparison. Held instead by behaviour, which is stronger: 143 of 143 pass programs \
+             compiled by both print the same bytes when RUN, 30 of 30 panic fixtures still fail, and \
+             stage-1's own source reaches a byte-identical fixpoint",
         ),
         (
             "json.rs",
-            &["lib/json.bx"],
-            Strength::Partial,
-            "a JSON reader and writer. PARTIAL on purpose: `lib/json.bx` is the STANDARD LIBRARY, \
-             not part of the Burxt compiler, and the Burxt compiler does not use it — `diag.bx` \
-             hand-writes its own escaping exactly as `diag.rs` does. So the capability exists in \
-             Burxt while the compiler-internal counterpart does not",
+            &["lib/json.bx", "src/burxt-compiler/lsp.bx"],
+            Strength::Behaviour,
+            "a JSON reader and writer. **This row was marked Partial until v0.0.234 and that was the \
+             old bar misreading a DESIGN as a shortfall.** The Burxt compiler does not use \
+             `lib/json.bx`, and that is deliberate: the compiler modules do not depend on the \
+             standard library, exactly as `diag.rs` hand-writes its own escaping rather than \
+             importing one. `lsp.bx` therefore carries a ~120-line key-scanner, and its author's \
+             reasoning is the point — *a server never wants a Value tree; every question is \
+             'the string at `params.textDocument.uri`', and with no closures a key-scan is less code \
+             than a tree walk, with ABSENT as its failure mode rather than PARSE ERROR.* Same \
+             result, reached the Burxt way, and the failure mode is the better one for a server that \
+             must not die on a malformed message. Held by \
+             `the_two_language_servers_answer_the_same_session`, which drives real JSON-RPC through \
+             both and compares the replies",
         ),
         (
             "diag.rs",
@@ -6607,6 +6698,10 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
     // Counted three ways, because one number was flattering. `verified` is the only one that
     // means "a test compares them"; `answered` means a file exists with that job.
     let verified = expected.iter().filter(|(_, _, s, _)| *s == Strength::Verified).count();
+    // Held by a behavioural comparison rather than by output text. Reported separately from
+    // `verified` because the two are different claims — and counted as HELD, because for these rows
+    // it is the strongest claim available rather than a softer one. See the enum.
+    let behaviour = expected.iter().filter(|(_, _, s, _)| *s == Strength::Behaviour).count();
     // `answered` counts rows with a counterpart that someone has at least CHECKED does the job.
     // A `Delivered` row has a file and no comparison, so it is excluded — see the enum.
     let answered = expected
@@ -6629,12 +6724,13 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
         expected.iter().flat_map(|(_, cs, _, _)| cs.iter().copied()).collect();
 
     eprintln!(
-        "Rust modules: {} of {} answered by {} distinct Burxt file(s); {} held byte-for-byte by a \
-         test; written but NOT verified: {}; still Rust-only: {}",
+        "Rust modules: {} of {} answered by {} distinct Burxt file(s); {} held byte-for-byte, {} \
+         held by behaviour where text cannot match; written but NOT verified: {}; still Rust-only: {}",
         answered,
         expected.len(),
         distinct.len(),
         verified,
+        behaviour,
         if delivered.is_empty() { "none".to_string() } else { delivered.join(", ") },
         if missing.is_empty() { "none".to_string() } else { missing.join(", ") }
     );
@@ -6649,6 +6745,14 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
         answered,
         expected.len(),
         missing.join(", ")
+    );
+    assert!(
+        verified + behaviour >= 10,
+        "{} rows are held byte-for-byte and {} by behaviour, and it was 4 + 6 at v0.0.234. A \
+         comparison was deleted — and a comparison is the only thing separating `a file with that \
+         job exists` from `the two agree`.",
+        verified,
+        behaviour
     );
     assert!(
         verified >= 4,
@@ -6666,11 +6770,55 @@ enum Strength {
     /// A test compares the two implementations' output directly. The only level that proves
     /// agreement rather than existence.
     Verified,
-    /// The same job, in both compilers, held only INDIRECTLY — by the fixpoint, or by the two
-    /// compilers accepting and refusing the same programs. Strong evidence, not a comparison.
-    Role,
+    // **`Role` was deleted in v0.0.234, and the compiler telling me so was the useful part.**
+    //
+    // It meant "the same job in both compilers, held only INDIRECTLY — by the fixpoint and by the two
+    // accepting and refusing the same programs". Under the old bar that was a waiting room: evidence
+    // that fell short of byte-for-byte output.
+    //
+    // Andre's definition of equal — same RESULT, arrived at the Burxt way — dissolved the category.
+    // Once the question is "do they agree on the result, and is that comparison named", the
+    // distinction between "compared directly" and "held indirectly" collapses: the front-end sweep
+    // compares two lexers' and two parsers' verdicts over 160 sources and requires zero
+    // disagreements. That IS a direct comparison of the result. Calling it indirect undersold it for
+    // as long as the wrong bar was in force.
+    //
+    // `-D warnings` refused to compile the enum with an unused variant, which is how I learned that
+    // no row was left in it. A dead category is worth deleting rather than keeping for symmetry —
+    // it would read to the next person as a level someone ought to be climbing out of.
     /// A counterpart exists but does less, or lives somewhere that is not really the counterpart.
     Partial,
+    /// **Held by a comparison of BEHAVIOUR rather than of output text. This SATISFIES the gate.**
+    ///
+    /// Andre's ruling, v0.0.234, when the question was put to him:
+    ///
+    /// > *"The 2 out of 11 — if the output is the same, just wording and message different, for me
+    /// > that is a pass, and you can check them and put as done."*
+    ///
+    /// So this is not a softer level waiting to be upgraded. It is the answer for a row where output
+    /// text cannot match and the decision does — and both rows below are DONE.
+    ///
+    /// It was added because the bar this map set — *"the gate is met at 11 VERIFIED"* — turned out to
+    /// be the wrong measure for two rows rather than merely unmet. Rather than lower it alone, which
+    /// would have been the fourth time in a day that I moved a number instead of fixing an
+    /// instrument, the question went to Andre and the ruling above is his.
+    ///
+    /// `codegen.rs` against `emit.bx` **cannot** be byte-identical, by construction: stage-0 drives
+    /// LLVM's C API and LLVM renders the IR, while `emit.bx` writes IR as text. Two people giving
+    /// directions to the same place, one saying "left at the church" and one "left after 200
+    /// metres". Forcing agreement would mean writing an LLVM-IR pretty-printer for the sole purpose
+    /// of matching a string, which improves nothing about the compiler. What is already asserted is
+    /// **stronger**: 143 of 143 programs compiled by BOTH print the same bytes when run, 30 of 30
+    /// failures still fail, and stage-1's own source reaches a byte-identical fixpoint. That is
+    /// arriving at the same destination rather than the directions rhyming.
+    ///
+    /// `typeck.rs` against `check.bx` is the same shape one level up. The VERDICTS are already an
+    /// `assert_eq!` — 271 of 274, every fixture, an equality and not a floor — and only the wording
+    /// differs, in 267 of the 271. Two proofreaders catching the same typo and writing different
+    /// notes in the margin. **A different verdict is a defect; a different sentence is a
+    /// preference**, and requiring identical text would gate this row on rewriting 267 messages for
+    /// no gain in correctness. Whether the text should converge is task 15, deliberately separate.
+    Behaviour,
     /// **The file is in the tree and it compiles, but NO test compares it to the Rust one yet.**
     ///
     /// This level exists because of a mistake worth keeping. In v0.0.221 three subagents were

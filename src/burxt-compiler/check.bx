@@ -784,6 +784,150 @@ function (mutable self: Unit) refuse_immutable_write(src: String, target: Int) -
     return 1;
 }
 
+// ---- inferring a generic class's type arguments from a literal ----------------------------
+//
+// `let held = Holder { one: 42 };` with no annotation. Stage-0 reads `T = Int` off the field
+// VALUE; stage-1 could not, and the consequence was the worse direction of divergence — it
+// **refused a valid program**, three errors deep, and `examples/generics.bx` documents the feature
+// in prose two lines above the line that would not compile.
+//
+// Why it went unseen is the reusable part: the front-end sweep asserted `errors: 0` and
+// `parse errors: 0` and never read `type errors:`, which was in the same output all along. A
+// missed refusal lets a bad program through; an invented refusal makes the compiler unusable, and
+// only one of the two directions was being measured.
+
+// A real token whose span is exactly this one, or -1.
+//
+// Needed because a generic application holds its arguments as type NODES, and a node names a type
+// through its TOKEN — so representing an inferred `Int` needs somewhere in the source that says
+// `Int`. Every inferred argument came from a field value whose type was written down, so the token
+// exists; -1 means it did not, and the caller then infers nothing rather than inventing a span.
+function (self: Unit) token_at_span(start: Int, length: Int) -> Int {
+    let mutable i: Int = 0;
+    while i < len(self.tokens) {
+        let t: Token = self.tokens[i];
+        if t.start == start && t.length == length {
+            return i;
+        }
+        i += 1;
+    }
+    return -1;
+}
+
+// A type NODE standing for a type the checker worked out, or -1 when it cannot be represented.
+//
+// The arena is the only representation a generic application has for its arguments, so an inferred
+// argument has to become a node like a written one. Synthesising nodes during checking is already
+// how `[Int]` is built for `c_bytes_at` — see `int_type_node` in parser.bx — so this is an existing
+// habit rather than a new liberty.
+//
+// A slice or array is REUSED rather than rebuilt: its `scale` already holds its element's node, so
+// the same element serves. Returning -1 for anything else is the safe direction — no inference, and
+// the caller falls back to the message that asks for an annotation.
+function (mutable self: Unit) type_as_node(src: String, t: Type) -> Int {
+    if t.kind == 40 || t.kind == 41 || t.kind == 42 || t.kind == 43 || t.kind == 44
+       || t.kind == 51 {
+        // These read nothing but `kind` back out of the node, so the token is never consulted.
+        return self.add(t.kind, 0, 0, 0, 0, 0);
+    }
+    if t.kind == 45 {
+        return self.add(45, t.scale, t.contract, 0, 0, 0);
+    }
+    if t.kind == 47 || t.kind == 48 {
+        return self.add(t.kind, t.scale, t.contract, 0, 0, 0);
+    }
+    if t.kind == 46 || t.kind == 49 || t.kind == 50 {
+        let tok: Int = self.token_at_span(t.name_start, t.name_length);
+        if tok < 0 {
+            return -1;
+        }
+        return self.add(t.kind, t.scale, t.contract, 0, 0, tok);
+    }
+    return -1;
+}
+
+// `Holder { one: 42 }` with nothing said about `T`: read each parameter off the field that IS it.
+//
+// Answers `plain` — the bare `Holder`, with no arguments — when any parameter cannot be settled,
+// which leaves the existing "cannot tell what Holder holds" refusal to fire. That is deliberate and
+// it is what the example documents: `Stack` names its type because `items: [T]` initialised with
+// `[]` says nothing, while `one: T` given `42` says everything.
+//
+// Only a field whose declared type IS the parameter is read. A field declared `[T]` or `Pair<T>`
+// would need structural unification, and stage-0 has it — but inferring from a shape stage-1 cannot
+// invert would be guessing, and guessing here produces a wrong TYPE rather than a missing message.
+// The narrower rule refuses more programs than stage-0 and mis-types none, which is the direction
+// to be wrong in; the cases it declines are named here rather than discovered later.
+function (mutable self: Unit) infer_class_arguments(src: String, node: Int, name: Token,
+                                                   plain: Type) -> Type {
+    let g: Int = self.generic_named(src, name.start, name.length);
+    if g < 0 {
+        return plain;                                // not generic: nothing to infer
+    }
+    let declaration: Generic = self.generics[g];
+    if declaration.type_param_count <= 0 {
+        return plain;
+    }
+    let found: Int = self.find_type(src, name.start, name.length);
+    if found < 0 || self.types[found].kind != 82 {
+        return plain;
+    }
+    let item: Node = self.nodes[self.types[found].node];
+    let literal: Node = self.nodes[node];
+    let args_start: Int = len(self.nested_children);
+    let mutable p: Int = 0;
+    while p < declaration.type_param_count {
+        let param: Token = self.tokens[self.type_parameters[declaration.type_param_start + p]];
+        let mutable arg: Int = 0 - 1;
+        let mutable f: Int = 0;
+        while f < item.b && arg < 0 {
+            let field: Node = self.nodes[self.children[item.a + f]];
+            let stated: Type = self.declared_type(src, field.a);
+            if stated.kind == 50 && spans_equal(src, stated.name_start, stated.name_length,
+                                                param.start, param.length) {
+                let field_name: Token = self.tokens[field.token];
+                let mutable q: Int = 0;
+                while q < literal.b && arg < 0 {
+                    let pair: Node = self.nodes[self.children[literal.a + q]];
+                    let pair_name: Token = self.tokens[pair.token];
+                    if spans_equal(src, pair_name.start, pair_name.length,
+                                   field_name.start, field_name.length) {
+                        // The value's own type, with nothing expected — there is nothing to expect
+                        // yet, since what `T` is is the question being answered. A parameter that
+                        // resolves to another parameter settles nothing, so it is declined.
+                        let actual: Type = self.type_of(src, pair.a, unknown_type());
+                        if !is_unknown(actual) && actual.kind != 50 {
+                            arg = self.type_as_node(src, actual);
+                        }
+                    }
+                    q += 1;
+                }
+            }
+            f += 1;
+        }
+        if arg < 0 {
+            // Unwound, so a half-filled argument list cannot be read by anything: the arguments of
+            // an application must be contiguous, and a partial answer is worse than none.
+            let unwound: Int = truncate(self.nested_children, args_start);
+            return plain;
+        }
+        let noted: Int = push(self.nested_children, arg);
+        p += 1;
+    }
+    // The application becomes a real NODE, not just a Type, and that is not tidiness — it is what
+    // makes the instantiation VISIBLE. `burxt layout` seeds its walk from every kind-46 node with
+    // arguments, so an inferred `Holder<Int>` that existed only as a Type was sized by the checker
+    // and then absent from the report: stage-0 listed `Holder$Int` and stage-1 listed nothing, which
+    // is the same divergence one level along. Stage-0 creates the instantiation when it
+    // monomorphises; this is the lazy equivalent, created once where it is discovered.
+    //
+    // The Type is then read back OFF the node rather than built beside it, so the two cannot
+    // disagree about what was inferred.
+    let application: Int = self.add(46, args_start, declaration.type_param_count, 0, 0,
+                                   self.nodes[node].token);
+    return self.declared_type(src, application);
+}
+
 function (self: Unit) generic_named(src: String, start: Int, length: Int) -> Int {
     let mutable i: Int = 0;
     while i < len(self.generics) {
@@ -2092,7 +2236,28 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             return unknown_type();
         }
         if holder.kind == 49 {                       // dynamic Trait
-            return self.dynamic_method(src, holder, n);
+            return self.dynamic_method(src, holder, n, 1);
+        }
+        // A method on a BOUNDED type parameter — `<T: Priced>` calling `item.price()`. The method
+        // lives on the BOUND, not on `T`, so the lookup goes to the interface's signatures. Stage-1
+        // looked for a class named `T`, found none, and said "T has no such method" — refusing
+        // `examples/generics.bx`'s own demonstration of static dispatch, which is the file written
+        // to teach the feature.
+        //
+        // `borrowed` is 0: this is monomorphised, so the receiver is the caller's value and a
+        // mutating method is legitimately reachable, unlike through an interface object.
+        if holder.kind == 50 {
+            let bound: Int = self.bound_of(src, holder.name_start, holder.name_length);
+            if bound >= 0 {
+                let bound_name: Token = self.tokens[bound];
+                let declared: Int = self.find_type(src, bound_name.start, bound_name.length);
+                if declared >= 0 && self.types[declared].kind == 84 {
+                    let as_bound: Type = Type { kind: 49, scale: 0, contract: 0,
+                                          name_start: bound_name.start,
+                                          name_length: bound_name.length };
+                    return self.dynamic_method(src, as_bound, n, 0);
+                }
+            }
         }
         let found: Int = self.find_method(src, holder, n.token);
         if found < 0 {
@@ -2207,6 +2372,11 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
            && spans_equal(src, expected.name_start, expected.name_length,
                           name.start, name.length) {
             holder = expected;                       // `Holder<Int>` said what T is
+        } else {
+            // Nothing said what `T` is, so read it off the field values — `Holder { one: 42 }`.
+            // Answers the bare `Holder` unchanged when the literal does not say enough, which
+            // leaves the refusal that asks for an annotation exactly where it was.
+            holder = self.infer_class_arguments(src, node, name, holder);
         }
         let mutable i: Int = 0;
         while i < n.b {

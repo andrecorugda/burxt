@@ -138,7 +138,7 @@ external function getchar() -> CInt touches input;
 
 // ---- capture ---------------------------------------------------------------------------
 //
-// The front end PRINTS its diagnostics — `complain_at` in `check.bx`, the lexer in `ast.bx`,
+// The front end PRINTS its diagnostics — `complain_at` in `check.bx`, the lexer in `lexer.bx`,
 // the parser. On stdout. Which is the protocol stream.
 //
 // That looked like a reason this file could not exist, and it is the opposite: the checker's
@@ -959,8 +959,21 @@ function lsp_program_prefix(uri: String, src: String) -> String touches files {
 //
 // So this function is the seam, and it is written as a list rather than as a `starts_with`
 // because a third prefix appearing in the front end must be a compile-time-visible line here,
-// not a silent miss. `grep -o 'print("[a-z ]*' src/burxt-compiler/{types,parser,check}.bx` is
-// the check: today it answers `error` seven times and `parse error` twice.
+// not a silent miss. This is the check, and it is worth RUNNING rather than trusting the numbers
+// under it:
+//
+//     grep -o 'print("[a-z ]*' src/burxt-compiler/{lexer,parser,check}.bx
+//
+// **16 `error` and 2 `parse error` as of v0.0.233, re-measured.** The line above used to name
+// `types.bx`, which v0.0.233 split into `ast.bx` and `lexer.bx` — so it had become a command
+// pointing at a path that does not exist, and `grep` on a missing file prints nothing, which a
+// reader skimming would take for *"no new prefixes, nothing to do"*. A stale comment is a
+// nuisance; **a stale INSTRUMENT answers the question wrongly and looks like an answer.**
+//
+// That is `spec/A7.0-NAMING.md` §9, and this file was its victim rather than its witness: the same
+// rename also turned "the lexer in `types.bx`" into "the lexer in `ast.bx`" in the §capture note
+// above, which is the WRONG HALF — the lexer's fifteen error prints are all in `lexer.bx` and
+// `ast.bx` has none. Both were mechanically correct substitutions and both were false.
 function lsp_diagnostic_prefix(printed: String, at: Int, stop: Int) -> Int {
     if starts_with_at(printed, at, "error: ", stop) {
         return len("error: ");

@@ -732,7 +732,15 @@ function (mutable self: Unit) builtin_type(src: String, name: Token, at: Int, ar
 // A `dynamic Trait` value can do exactly what the interface says, so the interface's signature
 // is what the call is checked against — no concrete type is involved, which is the
 // whole point of the indirection.
-function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: Node) -> Type {
+// A method call resolved against an INTERFACE's signatures rather than a class's methods.
+//
+// Two callers, and `borrowed` is which: 1 for a `dynamic Priced` — an interface OBJECT, which
+// borrows the value behind it — and 0 for a static bound `<T: Priced>`, which is monomorphised and
+// borrows nothing. The signature lookup is identical; only the mutating-receiver rule differs, and
+// it differs for a reason rather than by omission. Passing the flag rather than asking the Type
+// keeps the two cases named at the call site, where a reader can see which one they are in.
+function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: Node,
+                                            borrowed: Int) -> Type {
     let wanted: Token = self.tokens[call.token];
     let found: Int = self.find_type(src, holder.name_start, holder.name_length);
     if found < 0 {
@@ -751,7 +759,10 @@ function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: No
             // vtable would have to carry a writable receiver and nothing arranges that. Named rather
             // than half-supported — stage-1 accepted the call and the write went to the borrowed
             // copy, which is a silent wrong answer rather than a missing feature.
-            if sig.value == 1 {
+            // Only through an interface OBJECT. A static bound monomorphises to the concrete
+            // type and its receiver is the caller's own value, so `mutable self` is reachable there
+            // and refusing it would be a false refusal — the worse direction of the two.
+            if sig.value == 1 && borrowed == 1 {
                 let complained: Int = self.complain_at(src, call.token,
                     "`" + substring(src, named.start, named.length) + "` takes `mutable self`, and "
                     + "calling a mutating method through an interface object is not available yet: "

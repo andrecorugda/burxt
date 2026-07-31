@@ -373,6 +373,7 @@ function invariant_names() -> [String] {
     push(all, "every_example_still_typechecks");
     push(all, "every_log_file_is_linked_from_its_index");
     push(all, "no_html_page_is_written_in_markdown");
+    push(all, "the_mascot_plays_once");
     return all;
 }
 
@@ -653,6 +654,129 @@ function without_comments(text: String) -> String {
     return out;
 }
 
+
+// Where `needle` starts in `haystack`, or -1. `contains` answers whether; this answers where, and
+// the GIF check needs the offset.
+function index_of(haystack: String, needle: String) -> Int {
+    let n: Int = len(needle);
+    if n == 0 {
+        return 0;
+    }
+    let mutable i: Int = 0;
+    while i + n <= len(haystack) {
+        let mutable k: Int = 0;
+        let mutable same: Bool = true;
+        while k < n {
+            if byte_at(haystack, i + k) != byte_at(needle, k) {
+                same = false;
+                k = n;
+            } else {
+                k += 1;
+            }
+        }
+        if same {
+            return i;
+        }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+// The hero's mark must play ONCE and rest.
+//
+// **This one reads a BINARY file, and that capability was probed before a line of it was written.**
+// `read_file` preserves every byte including NULs: on `assets/burxt-ember.gif` it answers 108599
+// bytes, `71 73 70 56 57 97` for `GIF89a`, and finds `NETSCAPE2.0` at offset 784 with a loop count
+// of 1 — byte for byte what Python reports for the same file. So Burxt can inspect a binary
+// format, and this invariant is not a text check pretending.
+//
+// The loop count lives in the NETSCAPE application extension: the eleven bytes `NETSCAPE2.0`, then
+// `0x03 0x01`, then two little-endian bytes. 0 means forever. The animation ends with the ember
+// hidden, so exactly one play leaves a still logo — which is the whole design, and why the number
+// is 1 rather than "small".
+function mascot_plays_once() -> String touches files {
+    let mutable wrong: String = "";
+    let marker: String = "NETSCAPE2.0";
+    // Both copies, because `docs/assets/` exists only so Pages can serve it, and a divergence
+    // between them means the site shows something the brand folder does not.
+    let here: String = "assets/burxt-ember.gif";
+    let served: String = "docs/assets/burxt-ember.gif";
+    if !readable(here) || !readable(served) {
+        return "the mascot is missing from assets/ or docs/assets/";
+    }
+    let a: String = read_file(here);
+    let b: String = read_file(served);
+    let mutable which: Int = 0;
+    while which < 2 {
+        let mutable copy: String = a;
+        let mutable named: String = here;
+        if which == 1 {
+            copy = b;
+            named = served;
+        }
+        if len(copy) < 6 || substring(copy, 0, 6) != "GIF89a" {
+            if len(wrong) > 0 { wrong += "; "; }
+            wrong += named + " is not an animated GIF";
+        } else {
+            let at: Int = index_of(copy, marker);
+            if at < 0 {
+                if len(wrong) > 0 { wrong += "; "; }
+                wrong += named + " has no NETSCAPE extension, so it has no loop count";
+            } else {
+                let low: Int = byte_at(copy, at + len(marker) + 2);
+                let high: Int = byte_at(copy, at + len(marker) + 3);
+                let loops: Int = low + high * 256;
+                if loops != 1 {
+                    if len(wrong) > 0 { wrong += "; "; }
+                    wrong += named + " is set to loop " + to_string(loops)
+                        + " times — patch the two bytes after `NETSCAPE2.0\\x03\\x01` to 1 rather "
+                        + "than re-encoding, which would recompress every frame";
+                }
+            }
+        }
+        which += 1;
+    }
+    if len(a) != len(b) || a != b {
+        if len(wrong) > 0 { wrong += "; "; }
+        wrong += "assets/ and docs/assets/ hold different copies of the mascot";
+    }
+    // A GIF cannot be paused by CSS, so the only way to honour a reduced-motion preference is to
+    // hand over a different file.
+    if !readable("assets/burxt-ember-still.png") || !readable("docs/assets/burxt-ember-still.png") {
+        if len(wrong) > 0 { wrong += "; "; }
+        wrong += "the reduced-motion poster is missing from assets/ or docs/assets/";
+    }
+    let mutable page: Int = 0;
+    while page < 2 {
+        let mutable named: String = "docs/index.md";
+        if page == 1 {
+            named = "docs/404.html";
+        }
+        if readable(named) {
+            let text: String = read_file(named);
+            if contains(text, "burxt-ember.gif") {
+                if !contains(text, "prefers-reduced-motion: reduce")
+                    || !contains(text, "burxt-ember-still.png") {
+                    if len(wrong) > 0 { wrong += "; "; }
+                    wrong += named + " shows the mascot with no reduced-motion source offering "
+                        + "burxt-ember-still.png";
+                }
+                // Width and height, or the page reflows when 106 KB finishes arriving.
+                if !contains(text, "width=\"174\" height=\"222\"") {
+                    if len(wrong) > 0 { wrong += "; "; }
+                    wrong += named + " does not give the mascot its intrinsic size, so it will "
+                        + "shift the layout as it loads";
+                }
+            }
+        }
+        page += 1;
+    }
+    if len(wrong) > 0 {
+        return wrong;
+    }
+    return "";
+}
+
 // The reason an invariant does NOT hold, or `""` when it does.
 function run_invariant(name: String, compiler: String, work: String) -> String
     touches files, commands
@@ -668,6 +792,9 @@ function run_invariant(name: String, compiler: String, work: String) -> String
     }
     if name == "no_html_page_is_written_in_markdown" {
         return html_pages_are_not_markdown(work);
+    }
+    if name == "the_mascot_plays_once" {
+        return mascot_plays_once();
     }
     // Not silence. A name in the list with no implementation behind it is a bug in this file,
     // and the only safe answer is to fail loudly — see the note at the top of this section.

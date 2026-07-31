@@ -63,10 +63,95 @@ went red. The two tempting fixes were both wrong: delete a colleague's 49 KB of 
 as though it were verified. **A module nobody has compared is not parity**, and letting it raise the
 number would be the exact self-deception this map exists to prevent.
 
-**The gate is met at 11 answered AND 11 verified, not at 11 answered.** Four rows are `Role` — the same
-job in both compilers, held only *indirectly* by the fixpoint and by the two compilers accepting and
-refusing the same programs. That is strong evidence and it is not a comparison, and the difference is
-exactly the difference between *"a file with that job exists"* and *"the two agree."*
+### The bar, corrected in v0.0.234 — it was WRONG, not merely unmet
+
+This section said: **"the gate is met at 11 answered AND 11 verified."** I set that two hours before
+discovering it is the wrong measure for two of the eleven rows, and lowering it quietly would have
+been the fourth time in one day that I moved a number instead of fixing an instrument.
+
+**`codegen.rs` against `emit.bx` cannot be byte-identical, by construction.** stage-0 drives LLVM's C
+API and LLVM renders the IR; `emit.bx` writes IR as text. Two people giving directions to the same
+place, one saying *"left at the church"* and one *"left after 200 metres"*. Forcing them to agree
+would mean writing an LLVM-IR pretty-printer for the sole purpose of matching a string, which
+improves nothing about the compiler. **The claim already asserted is stronger**: 143 of 143 pass
+programs compiled by BOTH print the same bytes when run, 30 of 30 panic fixtures still fail, and
+stage-1's own source reaches a byte-identical fixpoint. That is arriving at the same destination
+rather than the directions rhyming.
+
+**`typeck.rs` against `check.bx` is the same shape one level up.** The verdicts are already an
+`assert_eq!` — 271 of 274, every fixture, an equality and not a floor. Only the wording differs, in
+267 of the 271: two proofreaders catching the same typo and writing different notes in the margin.
+**A different verdict is a defect; a different sentence is a preference.** Requiring identical text
+would gate the row on rewriting 267 messages for no gain in correctness, and whether the text should
+converge is §task 15, held deliberately apart.
+
+**Andre's ruling settled it**, when the question was put rather than decided alone:
+
+> *"The 2 out of 11 — if the output is the same, just wording and message different, for me that is a
+> pass, and you can check them and put as done."*
+
+and then generalised it, which mattered more than the ruling:
+
+> *"When I say equal it doesn't mean identical literal. I said it basing on the output/result. Burxt is
+> not Rust and vice versa, so there will always be difference. As long as we can give the same result
+> in the Burxt way, that is a yes for me. Think outside the box — novelty and originality."*
+
+**That is a better bar than mine, and the reason is not leniency.** Byte-for-byte output quietly
+assumed the Burxt implementation should be a TRANSLATION of the Rust one. A transliteration would
+inherit the original's bugs — and this one has instead **found three of them**, precisely because it did
+each job its own way:
+
+| The Burxt way | What it found |
+|---|---|
+| `diag.bx` counts bytes, so it is total | `diag.rs` sliced strings and **panicked** — `let é: Int = ;` gave a Rust backtrace and exit 101 instead of a diagnostic |
+| `lsp.bx` resolves imports and appends the editor's buffer after them | `lsp.rs` answered hover **on no file with a `use` line** — every real Burxt program — and had been dead there for as long as hover existed |
+| `lsp.bx` scans for the one key it wants instead of building a Value tree | *absent* rather than *parse error* as the failure mode, which is the right one for a server that must not die on a malformed message |
+
+A bar demanding identical output would have called all three "not yet verified", and the third one
+"Partial" — a design read as a shortfall.
+
+So the map gained a fifth strength level, `Behaviour`, those two rows are **DONE** rather than pending,
+and the bar is:
+
+> **Every row is held by the strongest comparison its nature allows, and that comparison is NAMED.**
+
+Which is a bar that can be met and cannot be met vacuously — the naming is what stops it becoming a
+shrug. Where the answer is "byte-for-byte", nothing less will do. Where byte-for-byte is impossible,
+the behavioural claim is written down and asserted, and the reason it is the ceiling is written beside
+it.
+
+| | Count |
+|---|---|
+| Rust modules answered | **11 of 11**, 0 Rust-only |
+| Held **byte-for-byte** | **4** — `diag`, `schema`, `lsp`, `review` |
+| Held by **behaviour** — same result, the Burxt way. **DONE by ruling** | **6** — `codegen`, `typeck`, `lexer`, `ast`, `parser`, `json` |
+| Still `Partial` | **1** — `main`, which owes `explain memory` and `--json` |
+
+**So the gate is 10 of 11 held, and the last one is a missing FEATURE rather than a disagreement.**
+`main.bx` has `check`, `check -`, `build`, `run`, `emit-ir`, `--target`, `layout`, `review`,
+`mcp-schema`, `lsp`, `--version` and `--help`. It owes `--json` and `explain memory` — and the second
+is honestly blocked, because the allocation inference is stage-0's alone until A12 lands.
+
+The `Role` level was **deleted** in the same version, and the compiler is what told me to: `-D warnings`
+refused an unused enum variant. Under the old bar `Role` was a waiting room for evidence that fell
+short of byte-for-byte. Under *same result, named comparison* the category dissolves — the front-end
+sweep compares two lexers' and two parsers' verdicts across all 160 sources and requires zero
+disagreements, which IS a direct comparison of the result. Calling it "indirect" undersold it for as
+long as the wrong bar was in force.
+
+**And the ruling retires work rather than only settling a label.** §task 15's second half was "converge
+267 diagnostic messages". That is now **not required**: a different sentence describing the same
+refusal is a pass. What remains required is the thing already asserted — the same *verdict* on every
+fixture, which is an equality with three named exclusions. Nobody has to rewrite 267 messages, and
+`lsp.bx`'s decision not to build a translation table was right for the same reason.
+
+The five remaining are the real work. `lexer`/`ast`/`parser` could be compared byte-for-byte via a
+token or AST dump — but that dump would have to exist in **both** compilers in the same version,
+because adding it to the Burxt side alone would make it more capable than the Rust one, which under
+this gate is a defect and not a feature. That cost is worth pricing before committing to it. `json`
+is arguably MIS-MAPPED rather than incomplete: the Burxt compiler does not use `lib/json.bx` at all —
+`lsp.bx` hand-wrote its own scanner, deliberately, so that the compiler does not depend on the
+standard library. And `main` owes `explain memory`, `--json` and the caret diagnostics.
 
 **The five tasks, in order.** Created as tasks so they cannot be forgotten between sessions:
 
