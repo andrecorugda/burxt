@@ -61,27 +61,25 @@
 // `burxt.alloc` ask for 16 bytes for a 32-byte enum and corrupt whatever came next. So: two,
 // each with one job, and the enum arm is the only place the second one is reached from.
 //
-// ---- what it does NOT do, measured -----------------------------------------------------
+// ---- the one thing it does NOT do, measured ---------------------------------------------
 //
-// **A generic class.** `burxt layout` reports MONOMORPHISED classes — `Box$Int`,
-// `Pair$String$Int`, `Box$Box_Int` — and never the `Box<T>` declaration, because the
-// typechecker replaced every application with a `Named` type before codegen saw it. Two things
-// make that unreachable from here, and both are real rather than effort:
+// **One source, `examples/generics.bx`, and it is the CHECKER rather than this file.** It writes
+// `let held = Holder { one: 42 };` with NO annotation, so `Holder<Int>` is an instantiation that
+// appears nowhere in the program — stage-0 infers it from the literal's field value. stage-1's
+// checker cannot, and says so: *"cannot tell what Holder holds from this value: write the type,
+// as in `let x: Holder<Int> = ...`"*. It refuses the whole program with four errors, so `layout`
+// answers 1 where `burxt layout` answers 0.
 //
-//   1. The mangling is a different one. Stage-0's `mangle` renders the argument with `Display`
-//      and maps every non-alphanumeric byte to `_`, so `Decimal<2>` becomes `Decimal_2_` and a
-//      nested `Box$Int` becomes `Box_Int`. Stage-1's `mangle_type` in `emit.bx` builds
-//      `Decimal2r0` and `slice.Int`. Neither is wrong — a symbol is internal — but they are not
-//      the same string, and this report prints the string.
-//   2. Reproducing stage-0's SET of instantiations means reproducing which applications its
-//      checker walked, in its order. `Unit.instances` records stage-1's, which is the same
-//      information under a different name, and turning one into the other is a fixpoint over
-//      the argument types. Writable, and not writable *here* — it belongs next to whichever
-//      compiler owns the mangling.
+// Isolated by measurement rather than argued: with the checker's verdict ignored, this file
+// reproduces three of that program's four rows byte-identically and misses exactly one —
+// `Holder$Int`, the instantiation that exists only by inference. So the gap is a front-end
+// capability (generic arguments inferred from a record literal), not a layout defect, and it
+// closes in `check.bx` for every tool at once rather than here.
 //
-// So the six corpus sources with a generic class are a NAMED GAP, and this file skips a class
-// its declaration is generic over rather than printing a `Box<T>` row that `burxt layout` does
-// not print. Reported to the lead with the fix path instead of guessed at.
+// Everything else about generics IS handled, and it took more than mangling. See `layout_print`
+// for the depth-first walk and why `map_library.bx` is the fixture that forced it: `Map<K, V>`
+// has a field of type `[MapEntry<K, V>]`, so `MapEntry$String$Int` is an instantiation the
+// program never writes and stage-0 creates while substituting.
 //
 // **A diagnostic.** A program that does not typecheck exits 1 with nothing on stdout, which is
 // what `burxt layout` does — but the WORDING of the refusal is stage-1's, and converging the
@@ -134,7 +132,8 @@ pure function round_up(value: Int, to: Int) -> Int {
 // arm for arm, including the two places it parts company with `layout_bytes`: a slice is
 // THREE cells here (stage-0's {ptr, len, cap}) and an interface object is TWO (data plus
 // vtable), where the byte layout calls them 24 and 8.
-function (self: Unit) layout_cells(src: String, written: Type) -> Int {
+function (mutable self: Unit) layout_cells(src: String, given: Type) -> Int {
+    let written: Type = self.resolve_shallow(src, given);
     if written.kind == 47 {                          // [T] — {ptr, len, cap}
         return 3;
     }
@@ -152,6 +151,10 @@ function (self: Unit) layout_cells(src: String, written: Type) -> Int {
         }
         let declaration: TypeDeclaration = self.types[found];
         let item: Node = self.nodes[declaration.node];
+        // A generic's fields are sized with its ARGUMENTS in scope, and nothing is rewritten:
+        // `Pair<Int>` is 2 cells and `Pair<Point>` is 4 from one declaration read twice. Bound
+        // AFTER the two refusals above, so every path that binds also truncates.
+        let restore: Int = self.bind_from_application(src, written);
         if declaration.kind == 82 {                  // a class: the sum of its fields
             let mutable total: Int = 0;
             let mutable f: Int = 0;
@@ -160,11 +163,15 @@ function (self: Unit) layout_cells(src: String, written: Type) -> Int {
                 total += self.layout_cells(src, self.declared_type(src, field.a));
                 f += 1;
             }
+            let dropped: Int = truncate(self.type_bindings, restore);
             return total;
         }
         if declaration.kind == 83 {                  // an enum: a tag plus the widest variant
-            return 1 + self.layout_widest_variant(src, item);
+            let widest: Int = self.layout_widest_variant(src, item);
+            let dropped: Int = truncate(self.type_bindings, restore);
+            return 1 + widest;
         }
+        let dropped: Int = truncate(self.type_bindings, restore);
         return 1;
     }
     // Int, Bool, Decimal, String, CInt, CDouble, CPointer, a type parameter — one cell each.
@@ -179,7 +186,7 @@ function (self: Unit) layout_cells(src: String, written: Type) -> Int {
 //
 // A separate function only because the class arm above and the enum arm below both want it and
 // a `while` inside a `while` inside an `if` is where a reader loses the thread.
-function (self: Unit) layout_widest_variant(src: String, item: Node) -> Int {
+function (mutable self: Unit) layout_widest_variant(src: String, item: Node) -> Int {
     let mutable widest: Int = 0;
     let mutable v: Int = 0;
     while v < item.b {
@@ -205,7 +212,8 @@ function (self: Unit) layout_widest_variant(src: String, item: Node) -> Int {
 // exists only so that an FFI boundary can be honest about width — and an array, which aligns
 // like its element. A class aligns like its widest-aligning field, which for a class of `CInt`
 // alone is 4 and otherwise 8.
-function (self: Unit) layout_align(src: String, written: Type) -> Int {
+function (mutable self: Unit) layout_align(src: String, given: Type) -> Int {
+    let written: Type = self.resolve_shallow(src, given);
     if written.kind == 43 {                          // CInt
         return 4;
     }
@@ -222,6 +230,7 @@ function (self: Unit) layout_align(src: String, written: Type) -> Int {
             return 8;                                // an enum is a run of cells
         }
         let item: Node = self.nodes[declaration.node];
+        let restore: Int = self.bind_from_application(src, written);
         let mutable widest: Int = 1;
         let mutable f: Int = 0;
         while f < item.b {
@@ -232,6 +241,7 @@ function (self: Unit) layout_align(src: String, written: Type) -> Int {
             }
             f += 1;
         }
+        let dropped: Int = truncate(self.type_bindings, restore);
         return widest;
     }
     return 8;
@@ -249,7 +259,8 @@ function (self: Unit) layout_align(src: String, written: Type) -> Int {
 // is 64-bit, so 8 is right today and would be wrong on a 32-bit one — where stage-0 would say
 // 4 and this would still say 8. Named because it is the only place the two could drift without
 // anybody changing either file.
-function (self: Unit) layout_bytes(src: String, written: Type) -> Int {
+function (mutable self: Unit) layout_bytes(src: String, given: Type) -> Int {
+    let written: Type = self.resolve_shallow(src, given);
     if written.kind == 47 {                          // [T] — {ptr, len, cap}
         return 24;
     }
@@ -269,10 +280,14 @@ function (self: Unit) layout_bytes(src: String, written: Type) -> Int {
         }
         let declaration: TypeDeclaration = self.types[found];
         let item: Node = self.nodes[declaration.node];
+        let restore: Int = self.bind_from_application(src, written);
         if declaration.kind == 83 {                  // an enum: a tag plus the widest variant
-            return 8 * (1 + self.layout_widest_variant(src, item));
+            let widest: Int = self.layout_widest_variant(src, item);
+            let dropped: Int = truncate(self.type_bindings, restore);
+            return 8 * (1 + widest);
         }
         if declaration.kind != 82 {
+            let dropped: Int = truncate(self.type_bindings, restore);
             return 8;
         }
         let mutable size: Int = 0;
@@ -284,12 +299,197 @@ function (self: Unit) layout_bytes(src: String, written: Type) -> Int {
             size += self.layout_bytes(src, mine);
             f += 1;
         }
-        return round_up(size, self.layout_align(src, written));
+        let whole: Int = round_up(size, self.layout_align(src, written));
+        let dropped: Int = truncate(self.type_bindings, restore);
+        return whole;
     }
     // Int, Bool, Decimal, CDouble, CPointer, dynamic, a type parameter — and String, per the
     // note above. `dynamic` is EIGHT here and two cells in `layout_cells`, because that is what
     // `layout_of` answers: its `_` arm catches `Dyn` and gives it one word.
     return 8;
+}
+
+// ---- monomorphised names -------------------------------------------------------------
+//
+// `burxt layout` reports a generic class once per INSTANTIATION, under the mangled name the
+// typechecker gave it: `Pair$Int`, `Nested$Point`, `Box$Box_Int`. So this file has to spell
+// those names, and the rule is `mangle` in `typeck.rs`:
+//
+//   > the name, then for each argument a `$` and the argument RENDERED AS THE AUTHOR WOULD
+//   > WRITE IT, with every byte that is not a letter or a digit replaced by `_`.
+//
+// That is why `Decimal<2>` becomes `Decimal_2_` and `[Int]` becomes `_Int_`. And it is why a
+// nested application composes: by the time `Box<Box<Int>>` is named, its argument is already
+// the instantiation `Box$Int`, whose `$` is not alphanumeric — so it flattens to `Box_Int` and
+// the whole is `Box$Box_Int`. Measured against the fixture rather than derived from the source.
+//
+// **stage-1 mangles differently on purpose** — `emit.bx`'s `mangle_type` builds `Decimal2r0` and
+// `slice.Int` — and neither is wrong, because a symbol is internal. This report prints a name,
+// so it prints stage-0's. Reusing `mangle_type` would have been the plausible wrong move.
+
+// Every byte that is not a letter or a digit becomes `_`. ASCII-only, which is exact here: the
+// input is a rendered type, and a type's name comes from an identifier, which `is_alpha` admits
+// only ASCII into.
+pure function layout_flatten(text: String) -> String {
+    let mutable out: String = "";
+    let mutable i: Int = 0;
+    while i < len(text) {
+        let b: Int = byte_at(text, i);
+        if (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || (b >= 48 && b <= 57) {
+            out = out + substring(text, i, 1);
+        } else {
+            out = out + "_";
+        }
+        i += 1;
+    }
+    return out;
+}
+
+// A type as this report names it: the mangled instantiation name for a generic class applied to
+// arguments, and what the author wrote for everything else.
+//
+// The recursion resolves at every level, like `layout_cells` and like `mangle_type` — so a field
+// of type `Pair<T>` inside `Nested<Point>` names itself `Pair$Point`, with `T` looked up rather
+// than substituted. That laziness is the whole reason stage-1 needs no new arena nodes for a
+// generic, and it is what lets this name one without inventing a declaration.
+function (self: Unit) layout_type_name(src: String, given: Type) -> String {
+    let written: Type = self.resolve_shallow(src, given);
+    // A slice or an array is rendered by RECURSING rather than by `show_type`, and that is not
+    // tidiness: `show_type` renders a slice's element straight from its node, so a `[T]` inside
+    // `Bag<String>` came out as `[T]` — the binding in scope never consulted. `mangle_type` in
+    // `emit.bx` resolves at every level for exactly this reason.
+    if written.kind == 47 {
+        return "[" + self.layout_type_name(src, self.declared_type(src, written.scale)) + "]";
+    }
+    if written.kind == 48 {
+        return "[" + self.layout_type_name(src, self.declared_type(src, written.scale)) + "; "
+               + to_string(written.contract) + "]";
+    }
+    if written.kind != 46 || written.contract <= 0 {
+        return self.show_type(src, written);
+    }
+    if self.generic_named(src, written.name_start, written.name_length) < 0 {
+        return self.show_type(src, written);
+    }
+    let mutable out: String = substring(src, written.name_start, written.name_length);
+    let mutable i: Int = 0;
+    while i < written.contract {
+        let argument: Type = self.declared_type(src, self.nested_children[written.scale + i]);
+        out = out + "$" + layout_flatten(self.layout_type_name(src, argument));
+        i += 1;
+    }
+    return out;
+}
+
+// Are all of this application's arguments CONCRETE?
+//
+// `class Nested<T> { inner: Pair<T>, tag: Int }` puts a `Pair<T>` node in the arena, and that is
+// not an instantiation of anything — stage-0 makes a record only when it has real arguments, so
+// `Pair$T` is a row `burxt layout` never prints. It printed three of them before this existed.
+//
+// Asked AFTER `resolve_shallow`, so an argument that is a parameter with a binding in scope
+// counts as concrete: inside `Nested<Point>`, `Pair<T>`'s argument resolves to Point.
+function (self: Unit) layout_is_concrete(src: String, applied: Type) -> Bool {
+    let mutable i: Int = 0;
+    while i < applied.contract {
+        let argument: Type = self.resolve_shallow(src,
+                                 self.declared_type(src, self.nested_children[applied.scale + i]));
+        if argument.kind == 50 {
+            return false;
+        }
+        if argument.kind == 46 && argument.contract > 0 {
+            if !self.layout_is_concrete(src, argument) {
+                return false;
+            }
+        }
+        i += 1;
+    }
+    return true;
+}
+
+// ---- which instantiations, and in what order ------------------------------------------
+//
+// `typeck.rs` assembles the report's subject as `structs.extend(made_record_order)`: **every
+// non-generic class first, in declaration order, then every instantiation in the order the
+// checker created it.** Measured on a fixture written for the purpose — two generic and two
+// plain classes interleaved — because reading it off the source would have been a guess about
+// which pass runs when.
+//
+// The creation order falls out of the ARENA for free, and this is the nice part. A type node's
+// arguments are parsed before the node itself, so an application has a HIGHER index than its
+// arguments; and nodes are created in source order. So walking type nodes by ascending index
+// visits every application in source order, inner before outer — which is exactly the order a
+// checker instantiating depth-first as it walks statements produces. `Nested<Point>` therefore
+// lands after the `Pair<Point>` that an earlier line already asked for, and `Box<Box<Int>>`
+// after `Box<Int>`, with no dependency pass of its own.
+//
+// Deduplicated by the mangled NAME rather than by node, because two source positions writing
+// `Pair<Int>` are one instantiation — the report shows it once.
+// (The walk itself is INLINED into `layout_print` below. It wants to fill a caller's array and
+// to be a method on `Unit` at the same time, and Burxt allows a `mutable` parameter only on a
+// free function — so it is one loop in the one place that needs it rather than a Unit field
+// nothing else would ever read.)
+
+// Bind a generic declaration's parameters to argument types held in an array rather than read
+// from an application node.
+//
+// `bind_from_application` in `check.bx` binds from a NODE, which is what the checker and the
+// emitter always have. An instantiation discovered by substitution has no node: nobody writes
+// `MapEntry<String, Int>` anywhere in `map_library.bx` — it exists because `Map<String, Int>`
+// has a field of type `[MapEntry<K, V>]`. So its arguments live in an array, and this is the
+// same binding from the other direction. Answers the base to truncate back to.
+function (mutable self: Unit) layout_bind_args(src: String, name_start: Int, name_length: Int,
+                                              held: [Type], from: Int, count: Int) -> Int {
+    let base: Int = len(self.type_bindings);
+    let generic: Int = self.generic_named(src, name_start, name_length);
+    if generic < 0 {
+        return base;
+    }
+    let declaration: Generic = self.generics[generic];
+    let mutable i: Int = 0;
+    while i < declaration.type_param_count && i < count {
+        let named: Token = self.tokens[self.type_parameters[declaration.type_param_start + i]];
+        push(self.type_bindings, TypeBinding { name_start: named.start,
+                                              name_length: named.length, bound: held[from + i] });
+        i += 1;
+    }
+    return base;
+}
+
+// The mangled name of an instantiation whose arguments are held in an array — the naming half of
+// the same asymmetry `layout_bind_args` describes.
+function (self: Unit) layout_name_with(src: String, name_start: Int, name_length: Int,
+                                      held: [Type], from: Int, count: Int) -> String {
+    let mutable out: String = substring(src, name_start, name_length);
+    let mutable i: Int = 0;
+    while i < count {
+        out = out + "$" + layout_flatten(self.layout_type_name(src, held[from + i]));
+        i += 1;
+    }
+    return out;
+}
+
+// One class's rows: the header line, then a line per field. `holder` is the type to size, and
+// `name` is what to call it — the two differ for an instantiation, which is sized as
+// `Pair<Point>` and called `Pair$Point`.
+function (mutable self: Unit) layout_one(src: String, name: String, holder: Type,
+                                        item: Node) -> Int {
+    print(name + ": size " + to_string(self.layout_bytes(src, holder)) + " align "
+          + to_string(self.layout_align(src, holder)));
+    let restore: Int = self.bind_from_application(src, holder);
+    let mutable offset: Int = 0;
+    let mutable f: Int = 0;
+    while f < item.b {
+        let field: Node = self.nodes[self.children[item.a + f]];
+        let mine: Type = self.declared_type(src, field.a);
+        offset = round_up(offset, self.layout_align(src, mine));
+        print("  +" + to_string(offset) + " " + self.layout_type_name(src, mine)
+              + " (" + to_string(self.layout_bytes(src, mine)) + " bytes)");
+        offset += self.layout_bytes(src, mine);
+        f += 1;
+    }
+    let dropped: Int = truncate(self.type_bindings, restore);
+    return f;
 }
 
 // Is this class's declaration generic? A generic class is skipped, for the reason in the
@@ -310,13 +510,41 @@ function (self: Unit) layout_is_generic(src: String, name: Token) -> Bool {
     return false;
 }
 
-// The report itself: every class, in the order it was declared.
+// The report itself.
 //
-// Enums are absent, and that is `layout_report`'s choice rather than an omission — it walks
-// `prog.structs`. An enum has no field offsets to check, so there is nothing for the
-// no-hidden-header guarantee to be observable ABOUT; its size still shows up wherever a class
-// holds one.
-function (self: Unit) layout_print(src: String) -> Int {
+// Two passes, because that is the order `typeck.rs` assembles it in — `structs.extend(
+// made_record_order)`: **every NON-GENERIC class in declaration order, then every INSTANTIATION
+// in the order the checker created it.** Measured on a fixture written for the purpose, two
+// generic and two plain classes interleaved, because reading it off the source would have been a
+// guess about which pass runs when. A generic DECLARATION is never printed: by the time
+// `layout_report` runs, the typechecker has replaced every application with a `Named` type.
+//
+// Enums are absent from both passes — `layout_report` walks `prog.structs`. An enum has no field
+// offsets, so there is nothing for the no-hidden-header guarantee to be observable ABOUT; its
+// size still shows up wherever a class holds one.
+//
+// ---- why the instantiation walk is a DEPTH-FIRST one with an explicit stack ---------------
+//
+// The seeds are easy: every generic application WRITTEN in the program, which is every kind-46
+// node with arguments, and walking nodes by ascending index gives source order with a node's
+// arguments before the node — so `Box<Int>` precedes `Box<Box<Int>>` for free.
+//
+// The seeds are not enough, and `map_library.bx` is the proof. `Map<K, V>` has a field of type
+// `[MapEntry<K, V>]`, so `MapEntry$String$Int` is an instantiation the program NEVER WRITES —
+// it exists only because `Map<String, Int>` does. Stage-0 creates it while substituting, which
+// is why its report has six classes where a scan of the source finds three.
+//
+// And the order those come out in is DFS, not by layer: `MapEntry$String$Int`, `Map$String$Int`,
+// `MapEntry$Int$Int`, `Map$Int$Int`, ... — each dependency immediately before its dependent. A
+// worklist that appended everything ready-to-go each round would have grouped all three
+// `MapEntry`s first and been wrong in a way that only shows up on a program with two
+// instantiations of one nested generic. So: post-order DFS, dependencies emitted first.
+//
+// It is ITERATIVE with an explicit stack rather than recursive, and that is the language rather
+// than taste: a recursive walk would have to hand its growing list to itself, Burxt allows a
+// `mutable` parameter only on a free function, and every step here needs `Unit`'s arena. An
+// explicit stack keeps all of it local to the one function that has both.
+function (mutable self: Unit) layout_print(src: String) -> Int {
     let mutable shown: Int = 0;
     let mutable i: Int = 0;
     while i < len(self.items) {
@@ -324,30 +552,180 @@ function (self: Unit) layout_print(src: String) -> Int {
         if item.kind == 82 {
             let named: Token = self.tokens[item.token];
             if !self.layout_is_generic(src, named) {
-                let holder: Type = self.declared_type(src, self.items[i]);
-                // `declared_type` reads a TYPE node and a class ITEM is not one, so the holder
-                // is built from the name span directly. Kind 46 with no type arguments, which
-                // is what a plain class name is once `find_type` has it.
+                // A class ITEM is not a type node, so the holder is built from the name span:
+                // kind 46 with no arguments, which is what a plain class name is.
                 let whole: Type = Type { kind: 46, scale: 0, contract: 0,
                                         name_start: named.start, name_length: named.length };
-                print(substring(src, named.start, named.length) + ": size "
-                      + to_string(self.layout_bytes(src, whole)) + " align "
-                      + to_string(self.layout_align(src, whole)));
-                let mutable offset: Int = 0;
-                let mutable f: Int = 0;
-                while f < item.b {
-                    let field: Node = self.nodes[self.children[item.a + f]];
-                    let mine: Type = self.declared_type(src, field.a);
-                    offset = round_up(offset, self.layout_align(src, mine));
-                    print("  +" + to_string(offset) + " " + self.show_type(src, mine)
-                          + " (" + to_string(self.layout_bytes(src, mine)) + " bytes)");
-                    offset += self.layout_bytes(src, mine);
-                    f += 1;
-                }
+                let fields: Int = self.layout_one(src,
+                                     substring(src, named.start, named.length), whole, item);
                 shown += 1;
             }
         }
         i += 1;
+    }
+
+    // Each pending or finished instantiation, as (declaration, arguments): the class's name span,
+    // and a range into `held`. Four parallel arrays and not a class, because a class holding
+    // arrays cannot be handed to a helper here anyway — see the header note on `mutable`.
+    let mutable done_start: [Int] = [];
+    let mutable done_length: [Int] = [];
+    let mutable done_from: [Int] = [];
+    let mutable done_count: [Int] = [];
+    let mutable done_name: [String] = [];
+    let mutable held: [Type] = [];
+    // The DFS stack, parallel the same way, plus `opened`: 0 means its dependencies have not been
+    // pushed yet, 1 means they have and the next visit emits it. The two-visit shape is what
+    // makes this post-order without recursion.
+    let mutable stack_start: [Int] = [];
+    let mutable stack_length: [Int] = [];
+    let mutable stack_from: [Int] = [];
+    let mutable stack_count: [Int] = [];
+    let mutable opened: [Int] = [];
+
+    let mutable node: Int = 0;
+    while node < len(self.nodes) {
+        let n: Node = self.nodes[node];
+        // Kind 46 with arguments is a generic APPLICATION. `declared_type` turns the node into
+        // the Type carrying them, and it also maps a bare interface name to `dynamic`, which
+        // cannot be a generic class and so falls out here.
+        if n.kind == 46 && n.b > 0 {
+            let applied: Type = self.declared_type(src, node);
+            if applied.kind == 46
+               && self.generic_named(src, applied.name_start, applied.name_length) >= 0 {
+                let declared: Int = self.find_type(src, applied.name_start, applied.name_length);
+                if declared >= 0 && self.types[declared].kind == 82
+                   && self.layout_is_concrete(src, applied) {
+                    // Seeded onto the stack with its arguments copied into `held`, so that a seed
+                    // and a discovered dependency are the same shape from here on.
+                    let from: Int = len(held);
+                    let mutable a: Int = 0;
+                    while a < applied.contract {
+                        push(held, self.resolve_shallow(src,
+                                 self.declared_type(src, self.nested_children[applied.scale + a])));
+                        a += 1;
+                    }
+                    push(stack_start, applied.name_start);
+                    push(stack_length, applied.name_length);
+                    push(stack_from, from);
+                    push(stack_count, applied.contract);
+                    push(opened, 0);
+                }
+            }
+        }
+        node += 1;
+    }
+
+    // The stack is currently the seeds in source order, and a stack pops from the END — so it is
+    // reversed once here rather than being built backwards, which would have made the scan above
+    // read against the grain.
+    let mutable lo: Int = 0;
+    let mutable hi: Int = len(stack_start) - 1;
+    while lo < hi {
+        let s0: Int = stack_start[lo];  let l0: Int = stack_length[lo];
+        let f0: Int = stack_from[lo];   let c0: Int = stack_count[lo];
+        stack_start[lo] = stack_start[hi];   stack_length[lo] = stack_length[hi];
+        stack_from[lo] = stack_from[hi];     stack_count[lo] = stack_count[hi];
+        stack_start[hi] = s0;  stack_length[hi] = l0;
+        stack_from[hi] = f0;   stack_count[hi] = c0;
+        lo += 1;
+        hi -= 1;
+    }
+
+    while len(stack_start) > 0 {
+        let top: Int = len(stack_start) - 1;
+        let name_start: Int = stack_start[top];
+        let name_length: Int = stack_length[top];
+        let from: Int = stack_from[top];
+        let count: Int = stack_count[top];
+        let name: String = self.layout_name_with(src, name_start, name_length, held, from, count);
+
+        // Already emitted? Two source positions writing `Pair<Int>` are one instantiation, and a
+        // dependency shared by two dependents is one too.
+        let mutable seen: Bool = false;
+        let mutable d: Int = 0;
+        while d < len(done_name) {
+            if done_name[d] == name {
+                seen = true;
+            }
+            d += 1;
+        }
+        if seen {
+            let cut: Int = truncate(stack_start, top);
+            let cut2: Int = truncate(stack_length, top);
+            let cut3: Int = truncate(stack_from, top);
+            let cut4: Int = truncate(stack_count, top);
+            let cut5: Int = truncate(opened, top);
+            continue;
+        }
+
+        if opened[top] == 0 {
+            opened[top] = 1;
+            // Its dependencies: every field type that is itself a concrete generic class
+            // application once this instantiation's arguments are in scope. Pushed AFTER this
+            // entry, so they pop — and emit — first.
+            let declared: Int = self.find_type(src, name_start, name_length);
+            if declared >= 0 {
+                let item: Node = self.nodes[self.types[declared].node];
+                let restore: Int = self.layout_bind_args(src, name_start, name_length,
+                                                        held, from, count);
+                let mutable f: Int = 0;
+                while f < item.b {
+                    let field: Node = self.nodes[self.children[item.a + f]];
+                    // Through a slice or an array too: `Map`'s entries are `[MapEntry<K, V>]`,
+                    // and the instantiation is inside the brackets.
+                    let mutable inner: Type = self.resolve_shallow(src,
+                                                  self.declared_type(src, field.a));
+                    while inner.kind == 47 || inner.kind == 48 {
+                        inner = self.resolve_shallow(src, self.declared_type(src, inner.scale));
+                    }
+                    if inner.kind == 46 && inner.contract > 0
+                       && self.generic_named(src, inner.name_start, inner.name_length) >= 0
+                       && self.layout_is_concrete(src, inner) {
+                        let sub: Int = self.find_type(src, inner.name_start, inner.name_length);
+                        if sub >= 0 && self.types[sub].kind == 82 {
+                            let at: Int = len(held);
+                            let mutable a: Int = 0;
+                            while a < inner.contract {
+                                push(held, self.resolve_shallow(src, self.declared_type(src,
+                                             self.nested_children[inner.scale + a])));
+                                a += 1;
+                            }
+                            push(stack_start, inner.name_start);
+                            push(stack_length, inner.name_length);
+                            push(stack_from, at);
+                            push(stack_count, inner.contract);
+                            push(opened, 0);
+                        }
+                    }
+                    f += 1;
+                }
+                let dropped: Int = truncate(self.type_bindings, restore);
+            }
+            continue;
+        }
+
+        // Second visit: every dependency is emitted, so this one is next.
+        let declared: Int = self.find_type(src, name_start, name_length);
+        if declared >= 0 {
+            let item: Node = self.nodes[self.types[declared].node];
+            let restore: Int = self.layout_bind_args(src, name_start, name_length,
+                                                    held, from, count);
+            let whole: Type = Type { kind: 46, scale: 0, contract: 0,
+                                    name_start: name_start, name_length: name_length };
+            let fields: Int = self.layout_one(src, name, whole, item);
+            let dropped: Int = truncate(self.type_bindings, restore);
+            shown += 1;
+        }
+        push(done_name, name);
+        push(done_start, name_start);
+        push(done_length, name_length);
+        push(done_from, from);
+        push(done_count, count);
+        let cut: Int = truncate(stack_start, top);
+        let cut2: Int = truncate(stack_length, top);
+        let cut3: Int = truncate(stack_from, top);
+        let cut4: Int = truncate(stack_count, top);
+        let cut5: Int = truncate(opened, top);
     }
     return shown;
 }

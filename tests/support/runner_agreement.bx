@@ -1,7 +1,7 @@
 // ============================================================================
 // tests/support/runner_agreement.bx — is `tests/runner.bx` fit to be the suite's AUTHORITY?
 //
-//     runner_agreement <runner-binary> <compiler-binary> <work-dir>
+//     runner_agreement <runner-binary> <compiler-binary> <work-dir> [rust-verdicts-file]
 //
 // Andre, v0.0.222: *"runner.rs main runner should be bx, we should eventually get rid of rust —
 // not delete, but don't use as main. We are BURXT!"* Inverting that relationship means a Burxt
@@ -51,15 +51,29 @@
 // A dirty baseline would have made every verdict here meaningless: the runner would have been
 // "noticing" failures it was going to report anyway.
 //
-// ---- what this file is NOT -------------------------------------------------------------
+// ---- the verdict-for-verdict diff ------------------------------------------------------
 //
-// It does not compare the Burxt runner against `runner.rs` verdict for verdict, and that is a
-// stated gap rather than an oversight. The Rust sweeps collect their failures into a `Vec` and
-// print them only when they assert, so **the Rust runner emits no per-fixture verdict when it is
-// green** — there is nothing to diff against on a healthy tree. Closing that needs `runner.rs`
-// to print a verdict line per fixture, which is one line in a file this file may not edit, and
-// it is reported instead. What is here is stronger than a green/green comparison anyway: two
-// runners that both examine nothing agree perfectly.
+// This was the one comparison the file could not make, and v0.0.226 closed it: `BURXT_VERDICTS=1`
+// makes the three sweeps in `runner.rs` print `ok <dir>/<name>` per fixture, the same shape
+// `runner.bx` prints. Before that, the Rust sweeps collected failures into a `Vec` and printed
+// them only on assert, so **a green Rust runner emitted nothing per fixture** and there was
+// nothing to diff on a healthy tree.
+//
+// So the two streams are now compared name by name, and the anti-vacuity claim goes with them:
+// **two runners that both examine nothing agree perfectly**, so agreement is only worth
+// asserting alongside a size. That is why the diff checks that both streams hold as many verdicts
+// as there are fixtures on disk, and why the mutation oracle above stays — agreement says the two
+// answer alike, and only mutation says either of them is looking.
+//
+// Reasons are NOT compared, and that is deliberate: the two runners word a failure differently
+// (`printed X, expected Y` against `stdout differs`), they are describing the same fact, and
+// pinning two wordings together would make every message change a test change. The VERDICT is
+// what a consumer acts on.
+//
+// It costs 64 seconds, because it runs the Rust sweeps. CI already runs them, so CI should pass
+// their captured output in as the fourth argument rather than paying twice — and when it is not
+// supplied this file runs them itself instead of skipping the check, because a check that
+// quietly does not happen is the thing this whole file exists to prevent.
 // ============================================================================
 
 external function system(command: String) -> CInt touches commands;
@@ -120,6 +134,15 @@ function ends_with_bx(name: String) -> Bool {
 // ---- the report --------------------------------------------------------------------------
 
 class Report { checks: Int, problems: Int }
+
+// `ok` or `not ok`, for a message about a disagreement. Spelled once so the two halves of a
+// sentence about two runners cannot drift apart.
+function verdict_word(failing: Bool) -> String {
+    if failing {
+        return "not ok";
+    }
+    return "ok";
+}
 
 function (mutable self: Report) claim(held: Bool, what: String) -> Int {
     self.checks += 1;
@@ -260,6 +283,30 @@ function rust_invariant_names(work: String) -> [String] touches files, commands 
     return names;
 }
 
+// The Rust runner's own per-fixture verdicts. From `captured` when the caller has them, otherwise
+// by running the three sweeps here.
+//
+// Yes, this shells out to cargo, in a file whose purpose is to remove Rust from the critical path.
+// That is the gate's own distinction and not a contradiction: **a differential test is not a
+// dependency.** Nothing here needs Rust to decide whether Burxt works — `runner.bx` does that
+// alone. This one check needs Rust because comparing two implementations requires two of them.
+function rust_verdicts(captured: String, work: String) -> String touches files, commands {
+    if len(captured) > 0 && readable(captured) {
+        print("  Rust verdicts: from " + captured);
+        return read_file(captured);
+    }
+    let log: String = work + "/rust-verdicts";
+    print("  Rust verdicts: running the three sweeps (64 s — pass them in to skip this)");
+    // Multiple filters, which libtest accepts and which is the only way to reach all three sweeps
+    // in one compile. `--nocapture` because a test's stdout is swallowed otherwise, which would
+    // make the stream empty and the comparison vacuous in the direction that looks like success.
+    let status: Int = system("BURXT_VERDICTS=1 cargo test --release --test runner -- --nocapture "
+        + "pass_programs_produce_expected_stdout "
+        + "fail_programs_are_rejected_with_expected_error "
+        + "panic_programs_die_cleanly_at_runtime > " + log + " 2>&1");
+    return read_file(log);
+}
+
 // ---- the scratch tree --------------------------------------------------------------------
 
 // A fresh copy of everything a fixture can reach. `lib/` is not optional: see the header.
@@ -352,6 +399,12 @@ region agreement {
     if argument_count() > 3 {
         work = argument(3);
     }
+    // A file holding `runner.rs`'s verdicts, captured by whoever already ran it. Optional, and
+    // when it is absent the sweeps are run here rather than the check being skipped.
+    let mutable captured: String = "";
+    if argument_count() > 4 {
+        captured = argument(4);
+    }
     let made: Int = system("mkdir -p " + work);
     let scratch: String = work + "/tree";
     // Resolved before anything changes directory. See `absolute`.
@@ -407,6 +460,62 @@ region agreement {
     // set equality, so this is the arithmetic that closes it.
     let claimed_c: Int = report.claim(read == len(disk.names),
         "the runner examined exactly what is on disk, no more");
+
+    // ---- 1b. the two runners, verdict for verdict ----
+    print("the two runners, fixture by fixture:");
+    let mutable rust: Examined = Examined { seen: [], failed: [], claims: [],
+                                            claims_failed: [] };
+    let rust_read: Int = rust.read(rust_verdicts(captured, work));
+    print("  verdicts from runner.rs: " + to_string(rust_read));
+
+    // Anti-vacuity FIRST, because every claim under it is worthless without it: two empty streams
+    // agree perfectly.
+    let claimed_r1: Int = report.claim(rust_read == len(disk.names),
+        "runner.rs emitted a verdict for every fixture on disk (" + to_string(rust_read) + " of "
+        + to_string(len(disk.names)) + ")");
+
+    let mutable only_rust: Int = 0;
+    let mutable only_burxt: Int = 0;
+    let mutable disagreed: Int = 0;
+    let mutable told: Int = 0;
+    for label in rust.seen {
+        if examined.count_of(label) == 0 {
+            only_rust += 1;
+            if told < 6 {
+                print("  runner.rs examined it and runner.bx did not: " + label);
+                told += 1;
+            }
+        } else if rust.named_failing(label) != examined.named_failing(label) {
+            disagreed += 1;
+            if told < 6 {
+                print("  the two disagree on " + label + ": runner.rs says "
+                      + verdict_word(rust.named_failing(label)) + ", runner.bx says "
+                      + verdict_word(examined.named_failing(label)));
+                told += 1;
+            }
+        }
+    }
+    for label in examined.seen {
+        let mutable there: Bool = false;
+        for other in rust.seen {
+            if other == label {
+                there = true;
+            }
+        }
+        if !there {
+            only_burxt += 1;
+            if told < 8 {
+                print("  runner.bx examined it and runner.rs did not: " + label);
+                told += 1;
+            }
+        }
+    }
+    let claimed_r2: Int = report.claim(only_rust == 0 && only_burxt == 0,
+        "both runners examined the same fixtures (" + to_string(only_rust) + " only in Rust, "
+        + to_string(only_burxt) + " only in Burxt)");
+    let claimed_r3: Int = report.claim(disagreed == 0,
+        "both runners reached the same verdict on every fixture (" + to_string(disagreed)
+        + " disagreements)");
 
     // ---- 2. the mutation oracle ----
     //
@@ -496,12 +605,22 @@ region agreement {
     }
     print("  answered " + to_string(answered) + " of " + to_string(len(rust_names))
           + " invariants in tests/runner.rs");
-    // The FLOOR, which is the only part that can fail. Raise it whenever it can be raised; never
-    // lower it. Two is what has moved so far, and stating it as a floor is what stops the next
-    // change from quietly removing one.
-    let claimed_e: Int = report.claim(answered >= 5,
-        "at least 5 of runner.rs's invariants are answered in Burxt (answered "
-        + to_string(answered) + ")");
+    // **A ratchet with TWO branches, which is the only shape that works.** A bare floor of 5 says
+    // nothing once the number reaches 40: someone could delete an invariant back to 39 and the
+    // floor would still hold. So this fails when the number DROPS — a regression — and equally
+    // when it RISES, because then the number written here is stale and a later regression could
+    // hide underneath it. The same shape as `CANNOT_READ_YET` in `runner.rs`, for the same reason,
+    // and the message says which direction it moved so the fix is obvious.
+    //
+    // 5 as of v0.0.226: the three fixture sweeps plus two named invariants. 68 to go.
+    let expected: Int = 5;
+    let claimed_e: Int = report.claim(answered >= expected,
+        "no invariant that had moved to Burxt has gone missing (answered " + to_string(answered)
+        + ", expected " + to_string(expected) + ")");
+    let claimed_g: Int = report.claim(answered <= expected,
+        "the number above is not stale — answered " + to_string(answered) + " against an expected "
+        + to_string(expected) + "; if this is the failure you are reading, raise `expected` to "
+        + to_string(answered) + " so the next regression cannot hide under it");
     // Against the REAL repository, and the first version got this wrong in an instructive way. It
     // read the untouched SCRATCH copy, which holds only `tests/` and `lib/` — so
     // `the_repository_root_holds_only_what_belongs_there` correctly called `work` a stray and
