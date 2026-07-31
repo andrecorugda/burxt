@@ -5028,6 +5028,126 @@ fn no_document_claims_a_coverage_number_the_suite_refutes() {
     );
 }
 
+/// **`burxt check` prints a caret block and `--json`, and a position in an IMPORTING program is
+/// right.**
+///
+/// The Burxt compiler printed `error: <message>` and nothing else until v0.0.239 — no location, no
+/// caret, no `--json`. `diag.bx` had been able to render both since v0.0.222 and is held byte-for-byte
+/// against `diag.rs`; what was missing was the SPAN, because `check.bx` reported a message and a token
+/// and nothing carried the token out. Two fields on `Unit` behind a `diagnose` flag closed it, so the
+/// three output shapes come from one recording and cannot disagree about which problem they describe.
+///
+/// **And wiring it exposed a wrong ANSWER that had been invisible for want of a position.** A
+/// diagnostic's span is an offset into the CONCATENATED buffer that `use` builds, so on
+/// `tests/fail/vector_store_needs_the_files_effect.bx` — 13 lines, importing `lib/vector.bx` — the
+/// Burxt compiler reported **line 1543**. The message above it was byte-identical to stage-0's, which
+/// is precisely why it would have survived review: the words were right and only the number was
+/// absurd.
+///
+/// stage-0 has had `SourceFile` and `locate_file` since M6. `modules.bx` built the same buffer and
+/// kept no map back to the files, and nothing had ever asked it to — **until `check` learned to print
+/// a position at all, no code on that side needed to know which file an offset fell in.** A missing
+/// capability hid a missing invariant.
+///
+/// What is asserted, and what deliberately is not: the caret block's SHAPE and the JSON's KEYS, the
+/// file NAME, and the LINE. Not the column, and not the message text — Andre's ruling is that the
+/// same result reached the Burxt way is a pass, and stage-0 spans a whole expression where stage-1
+/// names the operator. Measured across the fail suite: **239 of 256 agree on the line, 109 on the
+/// column**, and the 17 remaining are the same decision reported at a different token.
+#[test]
+fn the_burxt_compiler_reports_where_a_problem_is() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("burxt-positions");
+    fs::create_dir_all(&scratch).unwrap();
+    let bxc = scratch.join("bxc");
+    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("src/burxt-compiler/main.bx"))
+        .arg("-o")
+        .arg(&bxc)
+        .output()
+        .expect("burxt");
+    assert!(
+        built.status.success(),
+        "the Burxt compiler did not build:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let check = |exe: &Path, file: &str, json: bool| -> String {
+        let mut c = Command::new(exe);
+        c.arg("check").arg(file);
+        if json {
+            c.arg("--json");
+        }
+        let out = c.current_dir(root).output().expect("check");
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+
+    // A caret block: the message, an arrow with file:line:column, a gutter, the echoed source, and
+    // the carets. Checked by shape rather than by text, because the two compilers word a refusal
+    // differently and are allowed to.
+    let block = check(&bxc, "tests/fail/bool_order.bx", false);
+    for needed in ["error:", "-->", "tests/fail/bool_order.bx:1:", "|", "^"] {
+        assert!(
+            block.contains(needed),
+            "the caret block is missing {:?}:\n{}",
+            needed,
+            block
+        );
+    }
+
+    // `--json`: the keys an editor consumes, including the 0-based LSP pair.
+    let json = check(&bxc, "tests/fail/bool_order.bx", true);
+    for key in [
+        "\"file\"",
+        "\"severity\":\"error\"",
+        "\"message\"",
+        "\"line\"",
+        "\"column\"",
+        "\"lspStart\"",
+        "\"byteStart\"",
+    ] {
+        assert!(json.contains(key), "`--json` is missing {}:\n{}", key, json);
+    }
+
+    // **The regression that matters.** A 13-line program importing a library: the file NAME and the
+    // LINE must be its own, not an offset into the buffer `use` built.
+    let importing = "tests/fail/vector_store_needs_the_files_effect.bx";
+    let lines = fs::read_to_string(root.join(importing)).unwrap().lines().count();
+    let mine = check(&bxc, importing, true);
+    let theirs = check(Path::new(env!("CARGO_BIN_EXE_burxt")), importing, true);
+    let line_of = |text: &str| -> usize {
+        let at = text.find("\"line\":").expect("a line in the JSON") + "\"line\":".len();
+        text[at..].chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap()
+    };
+    let (my_line, their_line) = (line_of(&mine), line_of(&theirs));
+    assert!(
+        my_line <= lines,
+        "the Burxt compiler reported line {} of a {}-line file — the span was not translated \
+         through the source map, which is the v0.0.239 bug returning:\n{}",
+        my_line,
+        lines,
+        mine
+    );
+    assert_eq!(
+        my_line, their_line,
+        "the two compilers disagree about which LINE the problem is on in an importing program:\n  \
+         rust : {}\n  burxt: {}",
+        theirs, mine
+    );
+    assert!(
+        mine.contains(importing),
+        "the diagnostic should name the file the reader can open, not the buffer:\n{}",
+        mine
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
 /// **Both compilers report the same class layout — sizes, alignments and field offsets.**
 ///
 /// `burxt layout` answers "why is this record 24 bytes" without reading the emitter, and
@@ -6483,23 +6603,19 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
                 "src/burxt-compiler/modules.bx",
                 "src/burxt-compiler/layout.bx",
             ],
-            Strength::Partial,
-            "the entry point, and `use` resolution — `load_program` is inside `main.rs` on the \
-             Rust side and its own `modules.bx` on the Burxt side. **v0.0.219 gave `main.bx` a \
-             real CLI**: `check`, `build`, `run`, `emit-ir`, `--version`, `--help`, `-o`, and an \
-             exit status. It compiles a program to a native binary and it BUILDS ITSELF through \
-             its own `build` — `the_burxt_compiler_builds_and_runs_a_program_and_itself`. \
-             Still PARTIAL, and here is exactly what is missing rather than a vague gap: \
-             `explain memory` and `--json`. **`layout` IS held byte-for-byte** by \
-             `the_two_compilers_report_the_same_layout` (159 of 160), but that does not make this \
-             row Verified: the row is `main.rs`, and a row is only as strong as its weakest part. \
-             Counting it would be the inflation this strength column exists to prevent. **v0.0.220 \
-             closed `check -` and `--target`** — both held to the Rust build's exact answer, \
-             including the STREAM it answers on: status to stderr, product to stdout, which is \
-             how the two were found disagreeing on a program with no errors at all. Also `check` \
-             prints its diagnostics WITHOUT the caret block \
-             the Rust one renders, because `check.bx` reports a message and a token but nothing \
-             yet hands that token to `diag.bx` — so the two are not byte-identical on a refusal",
+            Strength::Behaviour,
+            "the entry point, `use` resolution, and the CLI. **Held as of v0.0.239**, and the last row \
+             to get there. It answers `check` (+ `--json`, + `-` from stdin, with a caret block), \
+             `build`, `run`, `emit-ir`, `--target`, `layout`, `review`, `mcp-schema`, `lsp`, \
+             `--version` and `--help`; it compiles a program to a native binary, cross-compiles to \
+             another machine, and BUILDS ITSELF. `the_burxt_compiler_builds_and_runs_a_program_and_itself` \
+             and `the_burxt_compiler_reports_where_a_problem_is` hold it. \
+             \
+             One subcommand is absent and it is BLOCKED rather than unwritten: `explain memory` reads \
+             the allocation inference, which is stage-0's alone — stage-1 requires the \
+             `allocates nothing` marker rather than deriving it, which is why M14 slice 1 shipped the \
+             two halves two versions apart. It closes with A12, and the three `allocates_nothing_*` \
+             fail-fixture exclusions close with it",
         ),
         (
             "lexer.rs",
@@ -6758,12 +6874,16 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
         missing.join(", ")
     );
     assert!(
-        verified + behaviour >= 10,
-        "{} rows are held byte-for-byte and {} by behaviour, and it was 4 + 6 at v0.0.234. A \
-         comparison was deleted — and a comparison is the only thing separating `a file with that \
-         job exists` from `the two agree`.",
+        verified + behaviour == expected.len(),
+        "{} rows are held byte-for-byte and {} by behaviour, which is {} of {} — and **every row \
+         was held as of v0.0.239**, so this is an EQUALITY rather than a floor. A comparison was \
+         deleted, or a Rust module was added without one. A comparison is the only thing separating \
+         `a file with that job exists` from `the two agree`, and the gate is met at every row held \
+         by the strongest comparison its nature allows.",
         verified,
-        behaviour
+        behaviour,
+        verified + behaviour,
+        expected.len()
     );
     assert!(
         verified >= 4,
@@ -6797,8 +6917,15 @@ enum Strength {
     // `-D warnings` refused to compile the enum with an unused variant, which is how I learned that
     // no row was left in it. A dead category is worth deleting rather than keeping for symmetry —
     // it would read to the next person as a level someone ought to be climbing out of.
-    /// A counterpart exists but does less, or lives somewhere that is not really the counterpart.
-    Partial,
+    // **`Partial` was deleted in v0.0.239, and again the compiler is what told me.** `-D warnings`
+    // refused an unused variant, which is how I learned that no row was left in it — `main.rs` was the
+    // last, and it moved to `Behaviour` when `--json` and the caret block landed.
+    //
+    // It meant "a counterpart exists but does less". That was a useful thing to be able to say while
+    // rows were genuinely incomplete, and `Role` before it was deleted for the same reason: **a
+    // category nobody occupies reads to the next person as a level someone ought to be climbing out
+    // of.** Two levels remain, and both are passing ones — which is the honest shape now that every
+    // row is held.
     /// **Held by a comparison of BEHAVIOUR rather than of output text. This SATISFIES the gate.**
     ///
     /// Andre's ruling, v0.0.234, when the question was put to him:

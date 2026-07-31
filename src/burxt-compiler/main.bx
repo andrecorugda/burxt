@@ -118,6 +118,40 @@ function byte_as_string(b: Int) -> String
     return "";
 }
 
+
+// The recorded problem, in the shape asked for. Nothing when there was none, or when the reporters
+// printed it themselves (`shape == 0`).
+//
+// It reads `problem_start` rather than being told the span, so a caller cannot describe one problem
+// while the checker recorded another.
+function report_problem(mutable unit: Unit, src: String, path: String, shape: Int) -> Int touches files {
+    if shape == 0 || unit.problem_start < 0 {
+        return 0;
+    }
+    // **The span is an offset into the CONCATENATED buffer, not into `path`.** Translating it is
+    // the difference between a position and a wrong answer: before v0.0.239 a problem in a program
+    // that `use`s a library reported line 1543 of a 13-line file, with a byte-identical message
+    // above it. The words looked right, which is why nobody noticed.
+    //
+    // So the file is looked up and the offset rebased, exactly as stage-0's `locate_file` does — and
+    // the SOURCE handed to the renderer is that file's own text, because a caret block has to echo
+    // the line the reader can open.
+    let named: String = file_at_offset(path, unit.problem_start);
+    let start: Int = offset_within_file(path, unit.problem_start);
+    let stop: Int = start + unit.problem_length;
+    let shown: String = read_file(named);
+    if shape == 2 {
+        print(diag_json(named, shown, start, stop, unit.problem_message));
+        return 1;
+    }
+    // The caret block ends in a newline of its own and `print_error` adds one, so the last byte is
+    // dropped and the stream supplies it — the same trick `tests/support/diag_harness.bx` uses, and
+    // for the same reason: trimming in the caller would hide a renderer that forgot the newline.
+    let block: String = diag_render(named, shown, start, stop, unit.problem_message);
+    print_error(substring(block, 0, len(block) - 1));
+    return 1;
+}
+
 // ---- the pipeline, once ----------------------------------------------------------------
 //
 // **A `Unit` cannot be RETURNED from a function, and that is not a bug.** The first version of
@@ -203,7 +237,25 @@ function drive(path: String, out_ll: String, loud: Int) -> Int touches files {
 // `the_repository_root_holds_only_what_belongs_there` would have failed on the first time
 // anyone ran `check -` from the repository root.
 function drive_source(src: String, path: String, out_ll: String, loud: Int) -> Int touches files {
+    return drive_reporting(src, path, out_ll, loud, 0);
+}
+
+// The same pipeline, with a choice of how a problem is REPORTED.
+//
+// `shape` is 0 for the plain line the compiler has always printed, 1 for the caret block, 2 for one
+// line of JSON. All three come from the same recording — `check.bx` and `parser.bx` remember the
+// FIRST problem's span behind a `diagnose` flag and print nothing when it is set — so the three
+// shapes cannot disagree about which problem they are describing, which is the failure a second
+// rendering path would have.
+//
+// The renderers are `diag.bx`'s, already held byte-for-byte against `diag.rs` since v0.0.222,
+// LSP positions included. So this function chooses; it does not format.
+function drive_reporting(src: String, path: String, out_ll: String, loud: Int,
+                         shape: Int) -> Int touches files {
     let mutable unit: Unit = Unit { tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, current_method: 0 - 1, probing: 0, probe_changes: 0, type_bindings: [], measure_clause: 0 - 1, measure_slot: 0, measure_parameters: 0 - 1, measure_owner: "", old_nodes: [], old_slots: [], ensures_start: 0, ensures_count: 0, ensures_owner: "", bracket_clauses: [], clause_subjects: [], it_token: 0 - 1, it_is_result: 0, used_it: 0, it_seen: 0, result_type_node: 0 - 1, result_slot: 0 - 1, returns_node: 0 - 1, walked_types: [], type_binding_floor: 0, allowed_effects: 63, effects_owner: "", function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], in_function: 0, depth: 0, problems: 0, diagnose: 0, problem_start: 0 - 1, problem_length: 0, problem_message: "", position: 0, token_end: 0, no_record_literal: 0, in_multiply: 0, print_to_stderr: 0, int_type_node: 0 - 1, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
+    if shape > 0 {
+        unit.diagnose = 1;
+    }
     let installed: Int = unit.install_keywords();
     let total: Int = unit.run(src);
 
@@ -218,6 +270,7 @@ function drive_source(src: String, path: String, out_ll: String, loud: Int) -> I
         let shown: Int = unit.report(src, 8);
     }
     if unit.errors > 0 && loud == 0 {
+        let told: Int = report_problem(unit, src, path, shape);
         return unit.errors;
     }
 
@@ -237,6 +290,7 @@ function drive_source(src: String, path: String, out_ll: String, loud: Int) -> I
         print("  parse errors: " + to_string(unit.errors));
     }
     if unit.errors > 0 {
+        let told: Int = report_problem(unit, src, path, shape);
         return unit.errors;
     }
 
@@ -254,6 +308,7 @@ function drive_source(src: String, path: String, out_ll: String, loud: Int) -> I
               + " functions");
     }
     if problems > 0 {
+        let told: Int = report_problem(unit, src, path, shape);
         return problems;
     }
     if len(out_ll) == 0 {
@@ -343,6 +398,7 @@ function usage() -> Int {
     print_error("burxt 0.0.230 — the Burxt compiler, written in Burxt");
     print_error("usage:");
     print_error("  burxt check   <file.bx>                  parse and typecheck only");
+    print_error("                <file.bx> --json         ... as JSON, for editors and CI");
     print_error("  burxt build   <file.bx> [-o <path>]      compile to a native executable");
     print_error("  burxt run     <file.bx>                  compile then run");
     print_error("  burxt emit-ir <file.bx>                  print LLVM IR");
@@ -358,7 +414,7 @@ function usage() -> Int {
     print_error("  burxt lsp                                language server over stdio");
     print_error("");
     print_error("Not here yet, and named rather than silently missing:");
-    print_error("  explain memory, --json");
+    print_error("  explain memory — the allocation inference is stage-0's alone until A12");
     print_error("They exist in the Rust build. spec/ROADMAP-1.0.md THE GATE tracks the rest.");
     return 0;
 }
@@ -423,14 +479,23 @@ if command == "check" {
         // Named `-`, because that is what the Rust build calls it in every message it prints,
         // and a diagnostic that names the file differently in the two compilers is a diagnostic
         // a tool cannot rely on.
-        let piped: Int = drive_source(text, "-", "", 0);
+        let piped: Int = drive_reporting(text, "-", "", 0, 1);
         if piped == 0 {
             print_error("-: no errors");
             exit(0);
         }
         exit(1);
     }
-    let problems: Int = drive(argument(2), "", 0);
+    // `--json` anywhere after the file, because that is where the Rust build accepts it.
+    let mutable shape: Int = 1;
+    let mutable a: Int = 3;
+    while a < argument_count() {
+        if argument(a) == "--json" {
+            shape = 2;
+        }
+        a += 1;
+    }
+    let problems: Int = drive_reporting(load_program(argument(2)), argument(2), "", 0, shape);
     if problems == 0 {
         print_error(argument(2) + ": no errors");
         exit(0);

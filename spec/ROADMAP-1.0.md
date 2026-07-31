@@ -124,8 +124,48 @@ it.
 |---|---|
 | Rust modules answered | **11 of 11**, 0 Rust-only |
 | Held **byte-for-byte** | **4** — `diag`, `schema`, `lsp`, `review` |
-| Held by **behaviour** — same result, the Burxt way. **DONE by ruling** | **6** — `codegen`, `typeck`, `lexer`, `ast`, `parser`, `json` |
-| Still `Partial` | **1** — `main`, which owes `explain memory` and `--json` |
+| Held by **behaviour** — same result, the Burxt way | **7** — `codegen`, `typeck`, `lexer`, `ast`, `parser`, `json`, `main` |
+| **Unheld** | **0** |
+
+## THE GATE IS MET — v0.0.239
+
+Every one of the eleven Rust modules is held by the strongest comparison its nature allows, and the
+ratchet is an **equality** rather than a floor: adding a `.rs` file without a comparison now fails the
+suite, and so does deleting one.
+
+The last row was `main`, and it closed with `--json` and the caret block. **Both `Partial` and `Role`
+were deleted along the way, and in each case `-D warnings` is what told me** — an unused enum variant
+means no row is left in that category, and a category nobody occupies reads to the next person as a
+level someone ought to be climbing out of. Two levels remain and both are passing ones, which is the
+honest shape now.
+
+**One subcommand is absent and it is BLOCKED, not unwritten.** `explain memory` reads the allocation
+inference, which is stage-0's alone: stage-1 requires the `allocates nothing` marker rather than
+deriving it, which is why M14 slice 1 shipped its two halves two versions apart. It closes with **A12**
+— and so do the three `allocates_nothing_*` fail-fixture exclusions, which would make the refusal
+equality complete with no exclusions at all.
+
+### What the gate cost, and what it bought
+
+It bought a compiler that builds itself, runs programs, cross-compiles to arm64, serves LSP, derives
+MCP manifests, reviews promises and prints layouts — and a suite where CI runs the **Burxt** runner
+first and gates on it.
+
+What it found is the better argument. **Six real defects, none of which a reading would have produced**,
+and every one because the second implementation did the job its own way rather than by transliteration:
+
+| | |
+|---|---|
+| `diag.rs` **panicked** — Rust backtrace, exit 101 — on a span ending mid-character | `diag.bx` counts bytes and is total |
+| `lsp.rs` answered hover on **no file with a `use` line** — every real program — and had been dead there for as long as hover existed | `lsp.bx` resolves imports and appends the buffer after them |
+| the `?` operator had **no implementation at all** on the Burxt side while the suite reported 143 of 143 | no fixture used it, and the sweep named seven examples BY HAND |
+| a **silent use-after-free**: `region` storage assigned outward read back as the print's own buffer | the checker had MARKED the hazard and cleared the mark |
+| `check.bx` **refused a valid program** — the worse direction, and the sweep never read the checker's verdict | one fix closed gaps in three tools |
+| a diagnostic in an importing program reported **line 1543 of a 13-line file** | invisible until `check` could print a position at all |
+
+The last one is the shape worth remembering: **a missing capability hid a missing invariant.** No code
+on the Burxt side had ever needed to know which file an offset fell in, so nothing noticed that
+`modules.bx` kept no source map — until the compiler learned to say where a problem was.
 
 **So the gate is 10 of 11 held, and the last one is a missing FEATURE rather than a disagreement.**
 `main.bx` has `check`, `check -`, `build`, `run`, `emit-ir`, `--target`, `layout`, `review`,

@@ -145,7 +145,21 @@ function blank_imports(text: String) -> String {
 // Every file a program uses, in dependency order, each one once — which is also what
 // makes a cycle harmless. Burxt has no writable parameters, so the accumulating buffer
 // and the seen-list live on a class and the walk is a method on it.
-class Loader { seen: [String], buffer: String }
+// `paths`, `starts` and `lengths` are the SOURCE MAP, and they are three arrays rather than an
+// array of records because Burxt has no tuples and a `class` per row would allocate one per file for
+// nothing. Index `i` of each describes one file: where its bytes begin in `buffer`, and how many.
+//
+// Added in v0.0.239 to fix a wrong ANSWER, not to tidy anything. A diagnostic's span is an offset
+// into the concatenated buffer, and without a map back to the files, a problem in a program that
+// `use`s a library reported **line 1543 of a 13-line file** — measured on
+// `tests/fail/vector_store_needs_the_files_effect.bx`. The message was byte-identical to stage-0's;
+// only the position was nonsense, which is the shape of bug that survives review because the words
+// look right.
+//
+// stage-0 has had this since M6 (`SourceFile` and `locate_file` in `main.rs`) and this side simply
+// never grew it — because until `burxt check` learned to print a position at all, nothing on this
+// side ever asked which file an offset fell in.
+class Loader { seen: [String], buffer: String, paths: [String], starts: [Int], lengths: [Int] }
 
 function (mutable self: Loader) load(path: String) -> Int touches files {
     for seen in self.seen {
@@ -182,7 +196,13 @@ function (mutable self: Loader) load(path: String) -> Int touches files {
     if len(self.buffer) > 0 {
         self.buffer += "\n";
     }
-    self.buffer += blank_imports(text);
+    // Recorded BEFORE appending, because the start is where this file's bytes are about to begin.
+    let began: Int = len(self.buffer);
+    let blanked: String = blank_imports(text);
+    let noted_path: Int = push(self.paths, path);
+    let noted_start: Int = push(self.starts, began);
+    let noted_length: Int = push(self.lengths, len(blanked));
+    self.buffer += blanked;
     return 1;
 }
 
@@ -191,7 +211,49 @@ function (mutable self: Loader) load(path: String) -> Int touches files {
 // `load_program`'s signature could not tell that compiling a program touches the disk. Stage-0's
 // effect check never looked at method calls, so nothing caught it for twenty-four versions.
 function load_program(path: String) -> String touches files {
-    let mutable loader: Loader = Loader { seen: [], buffer: "" };
+    let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [] };
     let done: Int = loader.load(path);
     return loader.buffer;
+}
+
+// ---- the source map -------------------------------------------------------------------
+//
+// Which FILE a buffer offset fell in, and where in that file. Two functions rather than one
+// returning both, because Burxt has no tuples — and rather than a record, because a caller wants one
+// or the other and a record would allocate for the half it discards.
+//
+// **Inclusive at the end**, and that is copied from stage-0's `locate_file` along with its reason: a
+// diagnostic about the END of a file — "expected `;`, found the end of the file" — points one past
+// its last byte, and that position belongs to the file it ended rather than to the separator after
+// it. An exclusive test reports the next file, or nothing.
+//
+// Reloading the program to answer this is the honest cost of having no way to return the arrays: a
+// `Loader` is region storage, so `load_program` cannot hand one back, and a second read of a handful
+// of files is cheaper than the machinery to avoid it. Stated rather than hidden, per the region
+// model's own terms.
+function file_at_offset(root: String, offset: Int) -> String touches files {
+    let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [] };
+    let done: Int = loader.load(root);
+    let mutable i: Int = 0;
+    while i < len(loader.paths) {
+        if offset >= loader.starts[i] && offset <= loader.starts[i] + loader.lengths[i] {
+            return loader.paths[i];
+        }
+        i += 1;
+    }
+    return root;
+}
+
+// The same offset, measured from the start of the file it fell in.
+function offset_within_file(root: String, offset: Int) -> Int touches files {
+    let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [] };
+    let done: Int = loader.load(root);
+    let mutable i: Int = 0;
+    while i < len(loader.paths) {
+        if offset >= loader.starts[i] && offset <= loader.starts[i] + loader.lengths[i] {
+            return offset - loader.starts[i];
+        }
+        i += 1;
+    }
+    return offset;
 }
