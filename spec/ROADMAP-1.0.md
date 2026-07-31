@@ -68,7 +68,7 @@ Each was learned expensively and each has a version number behind it.
 | A9 | **Generic interfaces** — the cheap alternative to closures. `dynamic Trait` is already a function value in all but name; interfaces simply cannot take type parameters. **On no roadmap — needs an explicit yes/no, because YES may replace A10** | M | `sort_by` · predicates · visitors · most of `map`/`filter`, in a form consistent with the no-closures decision |
 | A10 | **Closures / function values** — or A9 instead of it | **L** | `map`/`filter`/`fold`/`any`/`all`/`retain`/`partition`/`position` across four libraries **at once** · `signal()`, so a server can shut down cleanly |
 | A11 | **An iterator protocol.** A4.4 deferred it with *"trigger: after growable collections make iteration general."* **That trigger has fired.** | L | Lazy chains · `for` over a Map without allocating an array and re-hashing every key |
-| A12 | **M14 slice 3 — per-block release** (+ `allocates nothing`, `burxt explain memory`) | L | Bounded memory in a loop (**5,280 → 1,408 KB** per 100k Strings) · the compiler's own ceiling (**497/540 MB, one raise left**) · **prerequisite for the freestanding/IoT target** |
+| **A12** | **M14 slice 3 — per-block release** (+ `allocates nothing`, `burxt explain memory`). ⚠ **NOW NEXT, not queued — the forcing function fired at v0.0.207** | L | Bounded memory in a loop (**5,280 → 1,408 KB** per 100k Strings) · the compiler's own ceiling, which **went red in CI at 544 MB against 540** while passing locally at 537 · **prerequisite for the freestanding/IoT target** |
 
 ### A1 in detail — why the smallest item is first
 
@@ -249,7 +249,7 @@ The grouping is the useful part: these are not independent items, they are five 
 
 | # | Item |
 |---|---|
-| H1 | **A12 is also a forcing function.** Peak RSS on the compiler's own source is **497 MB against a 540 MB ceiling**, ~40 KB per line, and the 1 GB arena walls out near 25,000 lines; stage-1 is 10,839. The assert's own comment says the next raise must be slice 3 rather than a bigger number |
+| H1 | **A12's forcing function FIRED at v0.0.207**, and the promise was broken once. The ceiling went red in CI at **544 MB against 540**, while passing locally at **537** — the growth cumulative over v0.0.200–207, which added 143 lines to `emit.bx` alone with nothing re-measuring. Raised to **600 against the CI number**, because the 540 was set against a *local* 497 and CI runs ~7 MB higher, so the real margin was 3 MB rather than 43 — the exact mistake the comment above it warns about. **A ceiling must be set against CI, not the laptop.** The raise was taken because a red tree is the failure this project spent thirteen versions learning to avoid and slice 3 is not a hotfix; the cost is that A12 is now **next** rather than queued |
 | H2 | **Doc hygiene** — six spec headers still say `spec, to implement` for shipped work; `DESIGN.md` is stamped v0.0.152 and its *"Open tradeoff — Memory management"* was decided by M1; `spec/README.md` says *"as of v0.0.58"*; four audit rows are stale; **there is no effects spec in `spec/` at all**. **Fix each in whichever version touches it**, never as a separate cleanup — that is how they rotted |
 | H3 | CI green **on the commit being tagged** — a tag on a red commit must be withdrawn, which happened with v0.0.171 |
 | H4 | `cargo test --release the_release_tarball_works_without_rust_or_llvm -- --ignored` passes |
