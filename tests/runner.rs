@@ -1346,8 +1346,8 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     // floor nobody moves.
     eprintln!("the Burxt checker refuses {} of {} fail programs", caught, total);
     assert!(
-        caught >= 231,
-        "stage-1 rejected only {} of {} fail programs, down from 231",
+        caught >= 242,
+        "stage-1 rejected only {} of {} fail programs, down from 242",
         caught,
         total
     );

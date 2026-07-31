@@ -110,6 +110,39 @@ scheduling a language decision that is not needed:
 - **`build` and `run` need to invoke `llc` and `cc`** — `external function system(command: String) -> CInt touches commands` already exists in `lib/os.bx`.
 - **`check -` and `lsp` need stdin** — `external function getchar() -> CInt touches input` already exists there too, and was measured reading a framed LSP message.
 
+### A0d — the 32 accept-side gaps, enumerated at last (v0.0.224)
+
+**Where stage-0 refuses and stage-1 accepts, no test can see it.** The differential asserts
+`caught >= 242` — a **floor** — so every gap hides underneath a passing suite. That is this
+project's own rule at scale: *"where stage-0 refuses something, stage-1's handling is untested by
+construction."*
+
+It was 43 when first measured, and it is 32 now. **Nobody had ever listed them**, which is why the
+count could drift: a number with no names attached cannot be worked on.
+
+| Group | Fixtures | Verdict |
+|---|---|---|
+| **`allocates nothing`** | `allocates_nothing_broken_directly`, `..._through_a_call`, `..._through_a_dynamic` | **DELIBERATE.** The allocation fixpoint is stage-0's alone; stage-1 requires the marker rather than deriving it. M14 slice 1 shipped them two versions apart for this reason. Closes with A12 |
+| **The FFI boundary** | `boundary_cdouble_return`, `boundary_decimal_needs_marshaller`, `boundary_marshal_on_burxt_function`, `boundary_marshal_on_non_decimal`, `boundary_unknown_marshaller`, `string_extern_return`, `c_bytes_at_refuses_a_negative_literal` | **GAP, 7.** The largest group, and the one where being wrong is worst: these rules are what stop a Decimal crossing into C as a float |
+| **Interfaces and `dynamic`** | `trait_dyn_from_expr`, `trait_dyn_mut_method`, `trait_dyn_return`, `class_implements_wrong_return` | **GAP, 4.** All four are about an interface object borrowing the value behind it |
+| **Arrays** | `array_return`, `array_zero_len`, `slice_nested`, `let_inference_needs_a_type` | **GAP, 4** |
+| **`mutable` parameters** | `mutable_argument_must_be_mutable`, `mutable_argument_needs_a_home`, `mutable_method_parameter` | **GAP, 3.** Shipped v0.0.201 and stage-1 never learned to refuse the misuses |
+| **String braces** | `brace_bare_close`, `interp_empty`, `interp_unterminated` | **GAP, 3.** Same family as the `\u` and raw-NUL gaps already closed |
+| **Records: `==` and `<`** | `class_equality_needs_comparable_fields`, `class_has_no_ordering` | **GAP, 2** |
+| **Decimal limits** | `decimal_literal_precision`, `decimal_scale_cap` | **GAP, 2.** Scale > 18 does not fit a scaled i64 — accepting it silently is a wrong ANSWER, not a missing diagnostic |
+| **Odds and ends** | `bool_order`, `neg_of_string`, `region_name_clash`, `method_receiver_names_no_parameters` | **GAP, 4** |
+
+**3 deliberate, 29 gaps.** And the ratchet stays a floor only until the 29 are closed; then it
+becomes an **equality** over everything but the three, so another gap can never hide again. That
+conversion is the point of the exercise — the list is a means, the equality is the end.
+
+**The wording question, separately.** Of the 242 both compilers refuse, **4 word it identically**.
+That is not "nearly aligned", it is unrelated text that happens to refuse the same programs. The
+recommendation on record: require the same refusal SET (an equality) and the same LINE, and let
+wording converge fixture by fixture as each is touched. Never a translation table — that would hide
+the divergence rather than fix it, which is what `lsp.bx` deliberately refused to do for its
+diagnostics.
+
 ## The ordering rule — SUBORDINATE to the gate above
 
 > *"I would rather do compiler fixes to unblock a lot first, second to bugs that is urgent."*
