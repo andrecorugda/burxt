@@ -9,10 +9,11 @@ caught in a pull request at 5pm.
 That is the whole argument. `examples/pos/` shows that the money is exact — this shows the part
 that matters more: **every one of these is a review you no longer have to do.**
 
-Two kinds of refusal appear below and the difference is not cosmetic. Most are caught at
-**compile time**, before the program exists. One is a well-typed program that **stops** when a
-value cannot be represented — calling that a compile error would misdescribe how the language
-works.
+Two kinds of refusal appear below and the difference is not cosmetic. Eight are caught at
+**compile time**, before the program exists. **Two** are well-typed programs that **stop at run
+time** — an overflow past what an Int holds, and a precondition handed a value it forbids —
+because each depends on a VALUE, so no compiler in any language can catch them earlier. Calling
+either a compile error would misdescribe how the language works.
 
 Every message here was produced by running the program. `scripts/refused.py` regenerates this
 file and a test diffs it, so the page cannot claim a refusal the compiler does not make.

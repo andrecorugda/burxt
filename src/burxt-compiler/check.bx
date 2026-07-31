@@ -1045,7 +1045,18 @@ function (mutable self: Unit) complain_at(src: String, token: Int, message: Stri
         return 0;
     }
     let t: Token = self.tokens[token];
-    print("error: " + message + " (at `" + substring(src, t.start, t.length) + "`)");
+    // Recorded before it is printed, and only the FIRST: this is the span `diag.bx` renders a caret
+    // block and a JSON line from, and stage-0 answers with one diagnostic rather than a list.
+    if self.problem_start < 0 {
+        self.problem_start = t.start;
+        self.problem_length = t.length;
+        self.problem_message = message;
+    }
+    // `diagnose` means the CALLER will render it. Stage-0 prints the caret block instead of a plain
+    // line, never both, so the plain line has to go rather than be joined.
+    if self.diagnose == 0 {
+        print("error: " + message + " (at `" + substring(src, t.start, t.length) + "`)");
+    }
     self.problems += 1;
     return 0;
 }
@@ -2728,7 +2739,16 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
                     + "the interface object.");
             }
             if !is_unknown(actual) && !self.fits(src, actual, declared) {
-                let complained: Int = self.complain_at(src, n.token,
+                // Pointed at the VALUE, not at the name. The name is fine — it is the value that
+                // does not fit — and `let b: Bool = 2;` should underline the `2`.
+                //
+                // It said `n.token`, the binding, because that is the token a `let` node carries,
+                // and for as long as the message ended in ``(at `b`)`` nobody could tell. Rendering
+                // a caret block made the column visible and made this wrong in a way a reader sees:
+                // stage-0 underlines column 15 and this underlined column 5. The only class of
+                // divergence where stage-0's choice is the better one, measured over 137 differing
+                // spans — everywhere else stage-1 points at the more specific token.
+                let complained: Int = self.complain_at(src, self.nodes[n.b].token,
                     "declared " + self.show_type(src, declared) + ", but the value is "
                     + self.show_type(src, actual));
             }

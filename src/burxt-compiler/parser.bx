@@ -59,12 +59,35 @@ function (mutable self: Unit) more_in_list(closer: Int) -> Bool {
 
 function (mutable self: Unit) complain(src: String, what: String) -> Int {
     let where: Int = self.position;
+    // A SYNTAX error needs the caret block and the JSON just as much as a type error does — the
+    // reader of `burxt check --json` cannot be asked to care which phase refused. So the parser
+    // records the same three facts the checker does, into the same fields.
+    //
+    // The end-of-file case is why these are a SPAN and not a token index. There is no token past the
+    // last one, so a token could not name the position at all; `diag.bx`'s `reportable_offset`
+    // already steps back off the empty line after a trailing newline, so handing it the end of the
+    // source is enough and needs no special case here.
     if where < len(self.tokens) {
         let t: Token = self.tokens[where];
-        print("parse error: expected " + what + ", found `"
-              + substring(src, t.start, t.length) + "`");
+        if self.problem_start < 0 {
+            self.problem_start = t.start;
+            self.problem_length = t.length;
+            self.problem_message = "expected " + what + ", found `"
+                + substring(src, t.start, t.length) + "`";
+        }
+        if self.diagnose == 0 {
+            print("parse error: expected " + what + ", found `"
+                  + substring(src, t.start, t.length) + "`");
+        }
     } else {
-        print("parse error: expected " + what + ", found the end of the file");
+        if self.problem_start < 0 {
+            self.problem_start = len(src);
+            self.problem_length = 0;
+            self.problem_message = "expected " + what + ", found the end of the file";
+        }
+        if self.diagnose == 0 {
+            print("parse error: expected " + what + ", found the end of the file");
+        }
     }
     self.errors += 1;
     return -1;

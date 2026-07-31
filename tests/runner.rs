@@ -6047,7 +6047,18 @@ fn the_repository_layout_is_declared() {
         // did not. The lesson is the same one the directory-boundary bugs keep teaching: a checker
         // that examines three of four places reports success about the three.
         ("examples/inputs", "input files the examples read"),
-        ("examples/refused", "programs that must NOT compile, shown in the guide"),
+        // **Not "must not compile" — I wrote that in v0.0.235 and the directory\'s own README
+        // contradicts it.** Eight are refused at compile time; TWO are well-typed programs that stop
+        // at run time (exit 70): an overflow past what an Int holds, and a precondition handed a
+        // value it forbids. Both depend on a VALUE, so no compiler in any language catches them
+        // earlier, and `examples/refused/README.md` says calling them compile errors "would
+        // misdescribe how the language works".
+        //
+        // I found this by auditing the directory with a check that asserted the wrong thing, which is
+        // the smaller lesson: a one-line description of a directory is a claim, and this one was
+        // wrong within two versions of being written.
+        ("examples/refused", "ten mistakes that compile in every other language — eight refused at \
+         compile time, two stopped at run time. See its README"),
         ("examples/negative", "the same, for the site's negative examples"),
         ("examples/mcp", "the MCP manifest example and its fixtures"),
         ("examples/pos", "the point-of-sale example, in Burxt"),

@@ -230,6 +230,30 @@ class Unit {
     // Block depth, so a binding leaves scope at the closing brace.
     depth: Int,
     problems: Int,
+    // ---- the FIRST problem, carried out to whoever asked ----------------------------------
+    //
+    // `check.bx` and `parser.bx` used to report by PRINTING and recording only a count, so a
+    // caller learned that something was wrong and nothing about where. That is the whole of why
+    // `burxt check` had no caret block and there was no `--json`: `diag.bx` has rendered both,
+    // byte-identical to `diag.rs`, since v0.0.222 — it was never given a span to render.
+    //
+    // Four fields and not two, because a rendering needs three things and the span is only two of
+    // them. `diag_json(path, src, span_start, span_end, message)` wants the MESSAGE as well, and
+    // the message is built where the problem is found and thrown at stdout. So the text travels
+    // too.
+    //
+    // `diagnose` is the switch, and it exists because stage-0 prints the caret block INSTEAD of a
+    // plain line, never as well as one. Left 0, everything reports exactly as it did; set to 1, the
+    // reporters record the first problem and print nothing, and the caller renders it. Two output
+    // shapes from one recording, and the default is the old behaviour so nothing else has to change.
+    //
+    // The FIRST problem, not the last: stage-0's `--json` answers with one diagnostic and it is the
+    // first. So both reporters write only when `problem_start` is still -1, which is also what makes
+    // this safe to leave switched on — a later complaint cannot overwrite the one being reported.
+    diagnose: Int,
+    problem_start: Int,
+    problem_length: Int,
+    problem_message: String,
     // Where the parser is in the token array.
     position: Int,
     // Nonzero while parsing an `if`/`while` condition, where a `{` opens the BODY
