@@ -534,7 +534,7 @@ any other user on the machine can read it.
 | B4 | **No constant-time compare.** `==` on Strings is `strcmp`, which short-circuits and **leaks the answer through timing** — every token and HMAC comparison | S |
 | B5 | **The UTF-8 invariant is declared and unenforced** at all four entry points (`read_file`, `argument`, `os_env`, `c_string_at`). **Decided: validate.** Consequence: binary through `read_file` breaks → needs `file_read_bytes` (A1) | M |
 | B6 | **9 builtins are not in `is_reserved_name`** (`bit_*`, `shift_*`, `c_is_null`, `c_string_at`) → a user program can shadow them | S |
-| B7 | **Stack overflow is the only failure Burxt does not name** — raw SIGSEGV (exit 139), not exit 70 | S–M |
+| B7 | **Stack overflow is the only failure Burxt does not name** — **re-verified v0.0.247 and still real**: non-tail recursion gives **exit 139, `Segmentation fault`, core dumped**, no named error. **And it bites NARROWER than the row implies, which is worth knowing before someone budgets for it:** a TAIL-recursive runaway does not overflow at all — `return f(n + 1)` becomes a loop under `musttail`, so it runs forever instead of crashing. So the failure mode is a hang for tail calls and a raw signal for everything else, and only the second wants a named error | S–M |
 | B8 | A bare **`it` inside a string literal** in a bracket clause is wrong | S |
 | B9 | **`lib/json.bx` rejects valid JSON** (`\b`, `\f`, `\uXXXX`). Refuses rather than corrupts, but Burxt cannot read real-world JSON. Needs A5 | S–M |
 | B10 | **Iterative AST walkers** — 512 MB stack, ~30k-node ceiling | M |
@@ -641,7 +641,7 @@ and `shift_right_zeros` are, because the *behaviour* is the point.
 ## F — Papercuts
 
 Stack trace on failure · reach a Decimal's unscaled integer · `to_string` of a record / a display trait ·
-default parameter values and named arguments · `burxt fmt` · `==` on records and enums · nested match
+default parameter values and named arguments · `burxt fmt` · ~~`==` on records and enums~~ (**records DONE — measured v0.0.247: `P{x:1,y:2} == P{x:1,y:2}` is `true`, `!=` works, and a differing field gives `false`. Enums untested. Another ☐ that was stale, the second this stretch after A1**) · nested match
 patterns *(trigger fired v0.0.118)* · `old(...)` of an aggregate and `ensures` on an aggregate return ·
 `pure` methods · `decreases` on methods · mutual recursion and lexicographic measures · `if` as an
 expression · `allocates` on methods · `[0; N]` literals · unit literals (`5.km`) · pipelines ·

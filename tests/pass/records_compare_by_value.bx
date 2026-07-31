@@ -1,0 +1,46 @@
+// `==` on records, which `spec/ROADMAP-1.0.md` §F listed as a papercut and which **already works**.
+//
+// Measured at v0.0.247 rather than read: `P { x: 1, y: 2 } == P { x: 1, y: 2 }` is `true`, a differing
+// field gives `false`, and `!=` is its negation. Field-wise comparison, in declaration order.
+//
+// **This is the second stale ☐ found this stretch by probing the roadmap instead of reading it** — A1
+// (`c_bytes_at`) was the first. Both were listed as absent and both had shipped. The rule that keeps
+// paying: *a status line saying NOT DONE is not evidence either*, and it is the more dangerous
+// direction, because nobody re-tests a claim that something does not work. A wrong DONE gets found the
+// moment someone tries the feature; a wrong NOT-DONE silently removes work from the plan — or, as
+// nearly happened here, schedules work that is already finished.
+//
+// The fixture exists so the third discovery is impossible. Nothing tested this before: the feature
+// worked and no program in the suite compared two records, which is exactly how a capability becomes
+// unnoticed in both directions at once.
+//
+// What is NOT covered, named rather than left to be assumed: `==` on ENUMS is untested and may or may
+// not work, and a record holding a String field is compared here to check that a field whose storage
+// is a pointer compares by VALUE and not by address — the mistake that made `array_sort` over
+// `[String]` sort by allocation address in v0.0.202.
+
+class Point { x: Int, y: Int }
+
+let a: Point = Point { x: 1, y: 2 };
+let b: Point = Point { x: 1, y: 2 };
+let c: Point = Point { x: 9, y: 2 };
+
+print(a == b);
+print(a == c);
+print(a != c);
+print(a != b);
+
+// A String field, built two different ways so the two records cannot share storage. If `==` compared
+// addresses this would answer `false`, which is the shape of the v0.0.202 sorting bug.
+class Named { label: String, count: Int }
+let one: Named = Named { label: "ab", count: 3 };
+let two: Named = Named { label: "a" + "b", count: 3 };
+print(one == two);
+
+// A nested record, so the comparison has to recurse rather than compare the outer cells.
+class Line { from: Point, to: Point }
+let first: Line = Line { from: Point { x: 0, y: 0 }, to: Point { x: 1, y: 1 } };
+let same: Line = Line { from: Point { x: 0, y: 0 }, to: Point { x: 1, y: 1 } };
+let other: Line = Line { from: Point { x: 0, y: 0 }, to: Point { x: 1, y: 9 } };
+print(first == same);
+print(first == other);
