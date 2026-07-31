@@ -26,14 +26,17 @@
     <img src="{{ site.baseurl }}/assets/burxt-lockup-light.png" alt="Burxt">
   </a>
 
-  <!-- Below 768px these two replace the link row. The drawer button is only shown by site.js on a
-       page that HAS a sidebar, because a hamburger that opens nothing is worse than no hamburger. -->
+  <!-- Search is present at every width: a labelled pill on a wide screen, the icon on a narrow one.
+       The hamburger appears below 900px and opens the drawer below, which on this layout holds the
+       site's links — the only copy of them once the row below is hidden. -->
   <button class="find" type="button" data-find aria-label="Search the documentation">
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
       <circle cx="8.5" cy="8.5" r="5.5"/><path d="M12.8 12.8L17 17"/>
     </svg>
+    <span class="what">Search</span>
+    <kbd>⌘K</kbd>
   </button>
-  <button class="burger" type="button" data-drawer hidden aria-label="Open the contents" aria-expanded="false">
+  <button class="burger" type="button" data-drawer aria-label="Open the menu" aria-expanded="false">
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
       <path d="M3 5.5h14M3 10h14M3 14.5h14"/>
     </svg>
@@ -47,6 +50,24 @@
     <a href="{{ site.baseurl }}/install/"   class="{% if page.section == 'install' %}here{% endif %}">Install</a>
     <a href="https://github.com/andrecorugda/burxt">GitHub</a>
   </span>
+</nav>
+
+<!-- The drawer. On a page with no sidebar this is the ONLY navigation below 900px, because the
+     bar's link row is hidden there — which is exactly what was missing when the landing page,
+     the refusals, the examples and the install page had no menu at all on a phone. -->
+<nav class="side side-menu" aria-label="Menu">
+    <div class="group site">
+      <h2>Burxt</h2>
+      <ul>
+        <li class="topic"><a href="{{ site.baseurl }}/"{% if page.url == "/" %} class="here" aria-current="page"{% endif %}><span>Home</span></a></li>
+        <li class="topic"><a href="{{ site.baseurl }}/guide/"{% if page.section == "guide" %} class="here"{% endif %}><span>Guide</span></a></li>
+        <li class="topic"><a href="{{ site.baseurl }}/reference/"{% if page.section == "reference" %} class="here"{% endif %}><span>Reference</span></a></li>
+        <li class="topic"><a href="{{ site.baseurl }}/refused/"{% if page.section == "refused" %} class="here"{% endif %}><span>What it refuses</span></a></li>
+        <li class="topic"><a href="{{ site.baseurl }}/examples/"{% if page.section == "examples" %} class="here"{% endif %}><span>Examples</span></a></li>
+        <li class="topic"><a href="{{ site.baseurl }}/install/"{% if page.section == "install" %} class="here"{% endif %}><span>Install</span></a></li>
+        <li class="topic"><a href="https://github.com/andrecorugda/burxt"><span>GitHub</span></a></li>
+      </ul>
+    </div>
 </nav>
 
 <main id="top">

@@ -43,9 +43,10 @@
   var burger = document.querySelector('[data-drawer]');
   var scrim = document.querySelector('.scrim');
 
-  // A hamburger that opens nothing is worse than no hamburger, so it only appears where there is
-  // a sidebar to open. The button ships hidden and this is what reveals it.
-  if (side && burger) burger.hidden = false;
+  // Every page has a drawer now — on one with no sidebar it holds the site's own links, which below
+  // 900px are the only copy. That was the bug: the link row was hidden on every page and the
+  // hamburger appeared on none of them, so the landing page had no navigation on a phone at all.
+  if (burger && !side) burger.hidden = true;   // belt and braces; both layouts ship a drawer
   if (scrim) scrim.hidden = false;
 
   // Where focus was before a panel took it, so Esc can put it back.
@@ -85,7 +86,12 @@
     if (cameFrom && cameFrom.focus) cameFrom.focus();
   }
 
-  if (burger) burger.addEventListener('click', openDrawer);
+  // Toggle, not open. The hamburger stays visible while the drawer is out — it sits under the bar
+  // now — so a second tap on it has to be the way back.
+  if (burger) burger.addEventListener('click', function () {
+    if (body.classList.contains('drawer-open')) closeDrawer();
+    else openDrawer();
+  });
 
   // Following a link inside the drawer must close it, or the reader lands on the section with the
   // drawer still over it.

@@ -178,9 +178,35 @@ body {
 
 .bar .links { display: flex; align-items: center; gap: 1.75rem; }
 
-/* The two controls that only exist below the desktop breakpoint. 44px square, per iOS. */
-.bar .burger,
+/* Search, at EVERY width.
+ *
+ * This was a phone-only icon, on the reasoning that a desktop reader has ⌘K. They do — and they have
+ * no way to find that out, because a keyboard shortcut with nothing on screen to advertise it is a
+ * feature only its author knows about. A reference with a search index and no visible way in is a
+ * reference you Cmd-F instead, which is the thing it was built to replace.
+ *
+ * So on a wide screen it is a labelled control that says what it does and what the shortcut is, and
+ * on a narrow one it collapses to the icon. */
 .bar .find {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  height: 32px;
+  padding: 0 .5rem 0 .6rem;
+  border: 1px solid var(--hair-2);
+  border-radius: var(--pill);
+  background: var(--paper);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: color var(--quick), background var(--quick), border-color var(--quick);
+}
+.bar .find:hover { color: var(--ink); background: var(--wash); border-color: var(--ink-2); }
+.bar .find .what { white-space: nowrap; }
+.bar .find kbd { border: 0; border-bottom: 0; padding: 0 .1rem; font-size: 11.5px; }
+
+.bar .burger {
   display: none;
   width: 44px; height: 44px;
   align-items: center;
@@ -192,8 +218,14 @@ body {
   cursor: pointer;
   border-radius: var(--radius-sm);
 }
-.bar .burger:hover, .bar .find:hover { background: var(--wash); }
-.bar .burger svg, .bar .find svg { width: 19px; height: 19px; display: block; }
+.bar .burger:hover { background: var(--wash); }
+.bar .burger svg, .bar .find svg { width: 17px; height: 17px; display: block; flex: 0 0 auto; }
+
+/* The site's own links, carried inside the drawer.
+ *
+ * Hidden on a wide screen because the bar already shows them. Below 900px they are the ONLY copy —
+ * see the note on the breakpoints at the bottom of this file for what shipped without them. */
+.side .site { display: none; }
 
 main { padding: 0 var(--gap) 6rem; }
 .wrap { max-width: var(--measure); margin: 0 auto; }
@@ -627,14 +659,22 @@ tbody tr:hover { background: var(--wash-2); }
 .scrim {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: 20;
   background: rgba(0, 0, 0, 0.28);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--calm);
 }
-body.drawer-open .scrim, body.find-open .scrim { opacity: 1; pointer-events: auto; }
-body.drawer-open, body.find-open { overflow: hidden; }
+/* The search palette is modal at every width. The drawer only exists below 900px, so its scrim and
+ * its scroll lock are scoped there — otherwise a `drawer-open` class left behind by a resize dims a
+ * desktop page that has its sidebar inline and nothing overlaying it. */
+body.find-open .scrim { opacity: 1; pointer-events: auto; }
+body.find-open { overflow: hidden; }
+
+@media (max-width: 900px) {
+  body.drawer-open .scrim { opacity: 1; pointer-events: auto; }
+  body.drawer-open { overflow: hidden; }
+}
 
 /* ---- search ----------------------------------------------------------------------------------- */
 
@@ -769,8 +809,25 @@ footer a { color: var(--accent); }
 /* ---- responsive -------------------------------------------------------------------------------
  *
  * Four steps, each with a reason. 1100: the "on this page" rail runs out of room before the prose
- * does. 900: the sidebar becomes a drawer. 768: the navigation collapses to a hamburger. 520: the
- * two-column examples pane and the prev/next pair stack. */
+ * does. 900: the sidebar becomes a drawer, AND the hamburger appears to open it. 768: the link row
+ * collapses into that drawer. 520: the two-column examples pane and the prev/next pair stack.
+ *
+ * The hamburger moved from 768 to 900 to close a gap that shipped. Between those two widths a doc
+ * page's sidebar was already a drawer and there was no button anywhere that opened it, so the
+ * contents were simply gone for 130px of viewport.
+ *
+ * And the drawer now carries the site's own links, which is the bug behind that one. The link row
+ * was hidden below 768 on EVERY page, but the hamburger only appeared where there was a sidebar to
+ * open — so on the landing page, the refusals, the examples and the install page there was no
+ * navigation at all on a phone. Not "hard to find": absent. The reasoning that produced it — "a
+ * hamburger that opens nothing is worse than no hamburger" — was right about the hamburger and
+ * wrong about what to do next, which was to give it something to open. */
+
+/* `.side-menu` is the drawer on a page that has no sidebar. Above 900px the bar's link row is the
+ * navigation, so this must not draw an empty rail beside the content. */
+@media (min-width: 901px) {
+  .side-menu { display: none; }
+}
 
 @media (max-width: 1100px) {
   .docs { grid-template-columns: var(--side-w) minmax(0, 1fr); }
@@ -783,7 +840,10 @@ footer a { color: var(--accent); }
   .side {
     position: fixed;
     top: 0; bottom: 0; left: 0;
-    z-index: 45;
+    /* Under the bar (30), over the scrim (20). The drawer used to sit at 45, above everything, so
+     * opening it hid the logo and the button that opened it — and the only way out was the scrim.
+     * Sliding it beneath the bar keeps the hamburger visible, which is what closes it. */
+    z-index: 25;
     width: min(20rem, 84vw);
     max-height: none;
     height: 100dvh;
@@ -799,16 +859,21 @@ footer a { color: var(--accent); }
   /* Every topic's steps open in the drawer: it is the only navigation left, so hiding
    * ninety-six links behind a topic nobody can see the state of would be worse than a long list. */
   .side .topic .steps { display: block; }
+
+  /* The site's links live here now, and on a page with no sidebar this is the whole drawer. */
+  .side .site { display: block; }
+  .bar .burger { display: inline-flex; }
 }
 
 @media (max-width: 768px) {
   :root { --gap: 1.15rem; }
   .bar { gap: .5rem; }
   .bar .links { display: none; }
-  /* `:not([hidden])` is load-bearing. A bare `display: inline-flex` here outranks the UA
-   * stylesheet's `[hidden] { display: none }`, so site.js's `burger.hidden = true` had no effect
-   * and every page without a sidebar showed a hamburger that opened nothing. */
-  .bar .burger:not([hidden]), .bar .find:not([hidden]) { display: inline-flex; }
+  /* The search control drops its label and becomes the 44px icon a thumb wants. */
+  .bar .find { width: 44px; height: 44px; padding: 0; justify-content: center; border-color: transparent; }
+  .bar .find .what, .bar .find kbd { display: none; }
+  .bar .find svg { width: 19px; height: 19px; }
+  .bar .burger { display: inline-flex; }
   .bar .mark img { height: 20px; }
   h1 { margin-top: 2rem; }
   main { padding-bottom: 4rem; }
