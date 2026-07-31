@@ -85,7 +85,7 @@ Worth knowing how that number got written down: when the test was first added it
 
 The Rust compiler stays as the trust anchor and as the other half of a differential test, so a change to the language has two implementations that must agree or a test fails. Details in [`spec/M4-SELF-HOSTING.md`](spec/M4-SELF-HOSTING.md).
 
-Every push runs **73 invariants**, including that fixpoint, the differential test, 143 pass and 274 fail fixtures, and performance ratios that fail if a known quadratic returns.
+Every push runs **74 invariants**, including that fixpoint, the differential test, 143 pass and 274 fail fixtures, and performance ratios that fail if a known quadratic returns.
 
 **Working today:**
 

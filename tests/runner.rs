@@ -5027,6 +5027,125 @@ fn no_document_claims_a_coverage_number_the_suite_refutes() {
     );
 }
 
+/// **Both compilers report the same class layout — sizes, alignments and field offsets.**
+///
+/// `burxt layout` answers "why is this record 24 bytes" without reading the emitter, and
+/// `src/burxt-compiler/layout.bx` is its Burxt counterpart. Measured over `tests/pass` and
+/// `examples`: **159 of 160 identical**, up from 153 when it first landed.
+///
+/// **The seven that used to differ all differed for one reason, and the fix is the interesting
+/// part.** The Rust build also prints the MONOMORPHISED copies of a generic — `Entry$String$Int`
+/// beside `Point` — and the first version stopped at the concrete classes. The subagent that closed
+/// it reported something worth keeping: **the instantiation list was not in the arena to be read.**
+/// `Unit.instances` holds FUNCTION instantiations for emission only, and stage-1 never
+/// monomorphises a class at all, so the list had to be CONSTRUCTED — depth-first, dependencies
+/// first, because `Map<K, V>` has a field `[MapEntry<K, V>]` and `MapEntry$String$Int` is therefore
+/// an instantiation the program never writes down.
+///
+/// The one remaining difference is **not a layout defect**, which is why the exception is named
+/// rather than the count merely tolerated: `examples/generics.bx` writes `let held = Holder { one: 42 };`
+/// with no annotation, stage-0 infers `Holder<Int>` from the literal and `check.bx` cannot — so the
+/// Burxt compiler refuses the program before layout is reached. That is task 16, it lives in
+/// `check.bx`, and it closes for every tool at once, which is why working around it inside
+/// `layout.bx` would have been the wrong fix.
+#[test]
+fn the_two_compilers_report_the_same_layout() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("layout-agree");
+    fs::create_dir_all(&scratch).unwrap();
+    let bxc = scratch.join("bxc");
+    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("src/burxt-compiler/main.bx"))
+        .arg("-o")
+        .arg(&bxc)
+        .output()
+        .expect("burxt");
+    assert!(
+        built.status.success(),
+        "the Burxt compiler did not build:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let mut sources: Vec<PathBuf> = Vec::new();
+    for dir in ["tests/pass", "examples"] {
+        let mut found: Vec<PathBuf> = fs::read_dir(root.join(dir))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("bx"))
+            .collect();
+        found.sort();
+        sources.extend(found);
+    }
+    assert!(sources.len() > 100, "expected the whole corpus, got {}", sources.len());
+
+    let laid_out = |exe: &Path, file: &Path| -> (String, String) {
+        let out = Command::new(exe)
+            .arg("layout")
+            .arg(file)
+            .current_dir(root)
+            .output()
+            .expect("layout");
+        (
+            String::from_utf8_lossy(&out.stdout).to_string(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        )
+    };
+
+    let mut differ: Vec<String> = Vec::new();
+    for source in &sources {
+        let (rust_out, rust_err) = laid_out(Path::new(env!("CARGO_BIN_EXE_burxt")), source);
+        let (burxt_out, burxt_err) = laid_out(&bxc, source);
+        let name = source.strip_prefix(root).unwrap_or(source).display().to_string();
+        // Streams separately, for the reason the MCP-schema test records: merged, the interleaving
+        // is a buffering accident and reports disagreements that do not exist.
+        if rust_out != burxt_out {
+            differ.push(format!(
+                "{} — STDOUT\n  rust : {:.300}\n  burxt: {:.300}",
+                name, rust_out, burxt_out
+            ));
+        }
+        if rust_err != burxt_err {
+            differ.push(format!(
+                "{} — STDERR\n  rust : {:.300}\n  burxt: {:.300}",
+                name, rust_err, burxt_err
+            ));
+        }
+    }
+    let _ = fs::remove_dir_all(&scratch);
+
+    // Named, not tolerated: the one exception is `examples/generics.bx`, blocked on task 16's
+    // inference gap in `check.bx`. **1, not 2** — I guessed 2 on the assumption that a refused
+    // program differs on both streams, and the second branch below caught me: the STDERR matches,
+    // because both compilers write their refusal there and this comparison does not care that the
+    // sentences differ. Measured, no cushion, and the guess is recorded because the branch that
+    // fires when a number DROPS is the one people leave out.
+    const KNOWN_GAP: usize = 1;
+    assert!(
+        differ.len() <= KNOWN_GAP,
+        "the two compilers report different layouts for {} case(s), and only {} are accounted for \
+         (`examples/generics.bx`, blocked on the generic-literal inference gap — task 16):\n\n{}",
+        differ.len(),
+        KNOWN_GAP,
+        differ.join("\n\n")
+    );
+    assert!(
+        differ.len() == KNOWN_GAP,
+        "the two compilers now agree on every layout — {} differences, down from {}. Good news, and \
+         this allowance is now stale: lower KNOWN_GAP to {} so the next regression cannot hide \
+         underneath it.",
+        differ.len(),
+        KNOWN_GAP,
+        differ.len()
+    );
+    eprintln!(
+        "both compilers report the same layout for {} of {} sources",
+        sources.len() - 1,
+        sources.len()
+    );
+}
+
 /// **Both compilers report the same change to what a program PROMISES.**
 ///
 /// `src/burxt-compiler/review.bx` is the Burxt counterpart of `src/rust-compiler/review.rs`, and it
@@ -6291,7 +6410,10 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
              exit status. It compiles a program to a native binary and it BUILDS ITSELF through \
              its own `build` — `the_burxt_compiler_builds_and_runs_a_program_and_itself`. \
              Still PARTIAL, and here is exactly what is missing rather than a vague gap: \
-             `layout`, `explain memory`, `review`, `mcp-schema`, `lsp`, and `--json`. **v0.0.220 \
+             `explain memory` and `--json`. **`layout` IS held byte-for-byte** by \
+             `the_two_compilers_report_the_same_layout` (159 of 160), but that does not make this \
+             row Verified: the row is `main.rs`, and a row is only as strong as its weakest part. \
+             Counting it would be the inflation this strength column exists to prevent. **v0.0.220 \
              closed `check -` and `--target`** — both held to the Rust build's exact answer, \
              including the STREAM it answers on: status to stderr, product to stdout, which is \
              how the two were found disagreeing on a program with no errors at all. Also `check` \
@@ -6513,7 +6635,7 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
         if missing.is_empty() { "none".to_string() } else { missing.join(", ") }
     );
 
-    // Two ratchets, and the second is the one to be proud of. 11 answered / 4 verified at v0.0.225.
+    // Two ratchets, and the second is the one to be proud of. 11 answered / 4 verified at v0.0.232.
     // Neither may fall: `answered` falling means a counterpart was lost or a Rust module was split
     // without one, and `verified` falling means a direct comparison was deleted, which is the more
     // serious of the two because it is the only thing that turns "exists" into "agrees".
@@ -6526,7 +6648,7 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
     );
     assert!(
         verified >= 4,
-        "{} counterparts are held byte-for-byte by a test, and it was 4 at v0.0.225. A direct \
+        "{} counterparts are held byte-for-byte by a test, and it was 4 at v0.0.232. A direct \
          comparison was deleted — and that comparison is the only thing separating `a file with \
          that job exists` from `the two agree`.",
         verified
