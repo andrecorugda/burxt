@@ -11,7 +11,9 @@ description: That address does not exist. The guide, the reference and the examp
 sitemap: false
 ---
 
-<div class="hero" markdown="1">
+<!-- No `markdown="1"`: this is an .html file, and Jekyll runs Liquid on one but never the markdown
+     converter. `# Nothing here` reached the live page as a literal hash for exactly that reason. -->
+<div class="hero">
 
 <picture class="mascot">
 <source media="(prefers-reduced-motion: reduce)" srcset="{{ site.baseurl }}/assets/burxt-ember-still.png">
@@ -19,7 +21,7 @@ sitemap: false
      alt="The Burxt mark — an ember hops out from behind the b, looks around, waves, and hops back in">
 </picture>
 
-# Nothing here
+<h1>Nothing here</h1>
 
 <p class="line">The ember has had a look and there is no page at this address.</p>
 

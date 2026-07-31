@@ -263,6 +263,10 @@ main { padding: 0 var(--gap) 6rem; }
  * cropped to its own ink, 823x217, from the official 1311px lockup, so the typeface is the brand's
  * and not a system font pretending.
  *
+ * The GIF is the WHITE-background original, not the transparent one. GIF alpha is one bit, so a
+ * transparent export has to binarise every anti-aliased edge and the ember came out visibly
+ * stair-stepped. Against a white background the anti-aliasing survives, and this site is white.
+ *
  * Everything is expressed against `--mark`, the GIF's rendered height, so one number scales the pair:
  *   the wordmark's height   135/222 = 0.608   (135px beside a 144px-tall b, the lockup's own ratio)
  *   the lift off the bottom  38/222 + 5/222 = 0.194
@@ -272,7 +276,11 @@ main { padding: 0 var(--gap) 6rem; }
  *                            the brand gap is 108px in these units and the GIF already carries 60px
  *                            of transparent space to the right of the b, so only 48 is added */
 .hero .lockup-live {
-  --mark: clamp(104px, 24vw, 152px);
+  /* The lockup's whole width is about 3.3x this number (the mark, the gap, and the wordmark at
+   * 3.79:1), so 108px puts it at ~357px — where the static lockup used to sit. The first version
+   * clamped the MINIMUM at 104px, which meant it stopped scaling below ~430px of viewport and the
+   * wordmark ran to 90% of a phone's width. The minimum is what has to be small. */
+  --mark: clamp(76px, 22vw, 108px);
   display: flex;
   align-items: flex-end;
   justify-content: center;

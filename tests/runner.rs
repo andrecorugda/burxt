@@ -4010,6 +4010,77 @@ fn the_web_highlighter_knows_every_keyword_the_compiler_does() {
     );
 }
 
+/// No page written as `.html` carries markdown, because Jekyll will not convert it.
+///
+/// Jekyll runs Liquid on an `.html` file and the markdown converter on a `.md` one. It does not run
+/// both on either. So a `#` heading in a `.html` page reaches the live site as a literal hash — which
+/// is exactly what `docs/404.html` did: it shipped reading "# Nothing here" until somebody loaded it.
+///
+/// `markdown="1"` does not rescue it either. That attribute tells kramdown to process the inside of a
+/// raw `<div>`, and kramdown is never invoked here, so the attribute is decoration.
+///
+/// This is the twin of the `markdown="1"` check in `the_site_is_honest_and_complete`, which catches
+/// the same mistake from the other direction — markdown that will not render because it sits in a raw
+/// div. Both failures are invisible in the source and obvious on the page.
+#[test]
+fn no_html_page_is_written_in_markdown() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut wrong = Vec::new();
+
+    for entry in walk(&root.join("docs")) {
+        if entry.extension().and_then(|e| e.to_str()) != Some("html") {
+            continue;
+        }
+        // Layouts and includes are templates, not pages, and hold no prose.
+        let shown = entry.strip_prefix(root).unwrap().to_string_lossy().to_string();
+        if shown.contains("_layouts") || shown.contains("_includes") {
+            continue;
+        }
+        let text = fs::read_to_string(&entry).unwrap();
+        // Skip the front matter: `#` there is a YAML comment and entirely correct.
+        let body = match text.strip_prefix("---") {
+            Some(rest) => rest.split_once("\n---").map(|(_, b)| b).unwrap_or(rest),
+            None => text.as_str(),
+        };
+        // And skip HTML comments, which is what a page uses to EXPLAIN this rule. The first version
+        // of this test failed on the sentence in 404.html saying not to use `markdown="1"` — the same
+        // prose-versus-pattern trap the editor-grammar test records.
+        let mut code = String::with_capacity(body.len());
+        let mut rest = body;
+        while let Some(open) = rest.find("<!--") {
+            code.push_str(&rest[..open]);
+            rest = match rest[open..].find("-->") {
+                Some(close) => &rest[open + close + 3..],
+                None => "",
+            };
+        }
+        code.push_str(rest);
+        let body = code.as_str();
+        for (n, line) in body.lines().enumerate() {
+            let markdown = line.starts_with("# ")
+                || line.starts_with("## ")
+                || line.starts_with("- ")
+                || line.starts_with("|");
+            if markdown {
+                wrong.push(format!(
+                    "{}: `{}` is markdown in an .html page, so it reaches the live site verbatim. \
+                     Write the HTML, or rename the page to .md.",
+                    shown,
+                    line.chars().take(48).collect::<String>()
+                ));
+            }
+        }
+        if body.contains("markdown=\"1\"") {
+            wrong.push(format!(
+                "{} sets markdown=\"1\", which does nothing in an .html page — kramdown never runs \
+                 on one.",
+                shown
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 /// The mascot on the front page plays ONCE, and a reader who asked for less motion gets a still.
 ///
 /// The ember's choreography starts and ends with it hidden inside the bowl of the `b`, so one play
