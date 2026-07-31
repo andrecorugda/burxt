@@ -70,12 +70,52 @@ jobs:
       - name: Build
         run: cargo build --locked --verbose
 
-      # All of them, and the list is the point: the byte-identical self-hosting fixpoint, the
-      # differential test between the two compilers, every pass fixture compiled by BOTH and
-      # compared byte for byte, the rejection ratchet, the performance ratios, the editor grammar,
-      # the packaged extension, the guide's links and keyword currency, and the naming rule.
-      - name: Run the suite
-        run: cargo test --locked -- --nocapture
+      # `/usr/bin/time -v` is how the Burxt runner measures peak RSS — `getrusage` fills a struct
+      # through a pointer, which the memory model does not allow, and it turns out not to be needed.
+      # The shell BUILTIN `time` is a different thing and will not do; this is the coreutils-adjacent
+      # `time` package, which ubuntu-latest does not always carry.
+      - name: Install the time utility
+        run: sudo apt-get install -y time
+
+      # THE SUITE, RUN BY BURXT — and it runs FIRST, because that ordering is the point.
+      #
+      # Andre: *"runner.rs main runner should be bx, we should eventually get rid of rust — not
+      # delete, but don't use as main. We are BURXT!"* The authority on whether Burxt works was a
+      # Rust program, and the same rule that governs the compiler governs the suite: Rust may BUILD
+      # Burxt, Burxt may not USE Rust. So a contributor sees the Burxt runner's verdict before the
+      # Rust one's, and `runner.rs` becomes the cross-check.
+      #
+      # It exits nonzero on failure — verified by planting a broken fixture, because it printed
+      # `SUITE FAILED` and exited 0 for its whole life until v0.0.227, which is the one failure mode
+      # a runner must not have. The `grep` is belt-and-braces rather than load-bearing.
+      - name: Run the suite on Burxt
+        run: |
+          ./target/debug/burxt build tests/runner.bx -o /tmp/burxt-runner
+          /tmp/burxt-runner "$(realpath ./target/debug/burxt)" /tmp/burxt-suite-work | tee /tmp/suite.log
+          grep -qx 'all green' /tmp/suite.log
+
+      # And the check that LICENSES the step above. A runner that walked all 447 fixtures and
+      # compared nothing would print `ran 447, passed 447, failed 0` and be perfectly green — the
+      # oldest failure shape in this project, and the reason `tests/pass` fixtures cannot tell
+      # "supported" from "not examined". So this breaks exactly one thing a fixture asserts, in a
+      # scratch copy of the tree, and requires the runner to NAME that fixture. Mutation is the only
+      # instrument that can tell "checked and correct" from "not checked".
+      - name: The Burxt runner examines what it claims to
+        run: |
+          ./target/debug/burxt build tests/support/runner_agreement.bx -o /tmp/burxt-agreement
+          /tmp/burxt-agreement /tmp/burxt-runner "$(realpath ./target/debug/burxt)" /tmp/agreement-work
+
+      # The Rust suite, now the CROSS-CHECK rather than the authority. All of them, and the list is
+      # the point: the byte-identical self-hosting fixpoint, the differential test between the two
+      # compilers, every pass fixture compiled by BOTH and compared byte for byte, the refusal
+      # EQUALITY, the performance ratios, the editor grammar, the packaged extension, the guide's
+      # links and keyword currency, and the naming rule.
+      #
+      # `BURXT_VERDICTS=1` makes the three fixture sweeps print one TAP-style line per fixture, so
+      # the two runners' verdicts are comparable name by name. Without it a green Rust run emits
+      # nothing per fixture, and two runners that both examine nothing agree perfectly.
+      - name: Run the suite on Rust, as the cross-check
+        run: BURXT_VERDICTS=1 cargo test --locked -- --nocapture
 
       # A cheap end-to-end check that the thing a user actually types works. `print("...");` with
       # no wrapper is a whole Burxt program — no entry point to declare — and if that ever stops

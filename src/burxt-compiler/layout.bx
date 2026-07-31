@@ -1,0 +1,387 @@
+// ============================================================================
+// layout.bx — `burxt layout <file.bx>`, written in Burxt. The counterpart of
+// `layout_report` in `src/rust-compiler/codegen.rs`.
+//
+// It prints, for every declared class, its size and alignment and the byte offset of every
+// field:
+//
+//     LineItem: size 24 align 8
+//       +0 String (8 bytes)
+//       +8 Decimal<2> (8 bytes)
+//       +16 Int (8 bytes)
+//
+// ---- why a compiler ships this at all --------------------------------------------------
+//
+// `spec/A4.5-AGGREGATE-ABI.md` §3 is a DECISION, in those words: *"layout IS exactly the
+// declared fields, no hidden header, ever — no type tag, no vtable pointer, no refcount, no
+// hidden header word."* That is a promise a reader has to be able to CHECK, and this is how
+// they check it. `codegen.rs` says the same thing about its own copy: *"this makes the
+// no-hidden-header guarantee OBSERVABLE — the object model depends on it."*
+//
+// So the subject of this report is the LANGUAGE's object model, and that turns out to be the
+// one decision this file had to get right before writing a line of it.
+//
+// ---- the decision: whose layout does `layout` report? ---------------------------------
+//
+// **The two compilers deliberately disagree about the ABI**, and say so. `codegen.rs`:
+// *"A `Slice` is stage-0's three-field {ptr, len, cap} struct, which is three cells and NOT
+// the one cell stage-1 uses — the two compilers agree on behaviour, never on ABI."* Measured,
+// three ways:
+//
+//   |                | stage-0 `layout_of` | stage-1 `cells_of` |
+//   | `[T]`          | 24 bytes, align 8   | 1 cell  = 8 bytes  |
+//   | `dynamic Tr`   | 8 bytes             | 2 cells = 16 bytes |
+//   | `CInt`         | 4 bytes, align 4    | 1 cell  = 8 bytes  |
+//
+// So there are two different true answers, and reporting stage-1's would put this file in
+// disagreement with `burxt layout` on **20 of the 76 corpus sources that declare a class** —
+// measured, not estimated — with neither side wrong.
+//
+// **This reports the SPEC's layout**, which is stage-0's, and the reason is not that parity is
+// convenient. `A4.5` §3 says *"declared fields, standard alignment, no hidden header"* —
+// standard alignment is a claim about the C-shaped layout a foreign caller sees, and it is the
+// thing a reader wants checked. Stage-1's all-8-byte cell count is an INTERNAL representation
+// of its own emitter, correct for its own code and not a statement about the object model;
+// `A4.5` §4's forward note anticipates exactly that for a growable array. A `layout` that
+// printed cell counts would be answering a different question than `burxt layout` answers, and
+// then the two are not the same tool.
+//
+// **The cost, stated rather than buried:** this file does not describe the memory the
+// Burxt-built backend actually lays out. If someone ever needs THAT, it is a different
+// subcommand with a different name, not a quiet change of meaning here.
+//
+// ---- two size functions, and a third would be a bug -----------------------------------
+//
+// `layout_bytes` measures BYTES WITH ALIGNMENT — the report's subject. `layout_cells` counts
+// 8-BYTE CELLS WITH NO PADDING, and exists for exactly one thing: an enum is a tag plus room
+// for its widest variant, and that width is a cell count. `codegen.rs` carries the same pair
+// (`layout_of` and `payload_cells`) for the same reason, above a comment that is worth quoting
+// because it is a warning: *"One source of truth now. If a third size computation ever
+// appears, it is this bug again."* Counting where it should have been measuring made
+// `burxt.alloc` ask for 16 bytes for a 32-byte enum and corrupt whatever came next. So: two,
+// each with one job, and the enum arm is the only place the second one is reached from.
+//
+// ---- what it does NOT do, measured -----------------------------------------------------
+//
+// **A generic class.** `burxt layout` reports MONOMORPHISED classes — `Box$Int`,
+// `Pair$String$Int`, `Box$Box_Int` — and never the `Box<T>` declaration, because the
+// typechecker replaced every application with a `Named` type before codegen saw it. Two things
+// make that unreachable from here, and both are real rather than effort:
+//
+//   1. The mangling is a different one. Stage-0's `mangle` renders the argument with `Display`
+//      and maps every non-alphanumeric byte to `_`, so `Decimal<2>` becomes `Decimal_2_` and a
+//      nested `Box$Int` becomes `Box_Int`. Stage-1's `mangle_type` in `emit.bx` builds
+//      `Decimal2r0` and `slice.Int`. Neither is wrong — a symbol is internal — but they are not
+//      the same string, and this report prints the string.
+//   2. Reproducing stage-0's SET of instantiations means reproducing which applications its
+//      checker walked, in its order. `Unit.instances` records stage-1's, which is the same
+//      information under a different name, and turning one into the other is a fixpoint over
+//      the argument types. Writable, and not writable *here* — it belongs next to whichever
+//      compiler owns the mangling.
+//
+// So the six corpus sources with a generic class are a NAMED GAP, and this file skips a class
+// its declaration is generic over rather than printing a `Box<T>` row that `burxt layout` does
+// not print. Reported to the lead with the fix path instead of guessed at.
+//
+// **A diagnostic.** A program that does not typecheck exits 1 with nothing on stdout, which is
+// what `burxt layout` does — but the WORDING of the refusal is stage-1's, and converging the
+// two compilers' diagnostics is its own task (task 15: 2 of 231 identical today). This file
+// makes no attempt at it and does not pretend to.
+//
+// ---- the stream, checked per line ------------------------------------------------------
+//
+// `main.rs` reaches this through `print!("{}", cg.layout_report(&typed))` — **stdout**, with
+// `print!` and not `println!`, because every line of the report already ends in a newline. On
+// success it prints nothing at all on stderr, and a program with no class prints nothing at
+// all anywhere and exits 0. All three were measured, not assumed; the same check caught the two
+// compilers disagreeing on a program with no errors in v0.0.220.
+//
+// ---- dependencies ----------------------------------------------------------------------
+//
+// `emit.bx` is a FORCED dependency and not a choice: `Unit` has a field `slots: [Slot]` and
+// `Slot` is declared in `emit.bx`, so anything that can spell `Unit` links the code generator.
+// Reported by `review.bx` before this and worth repeating — `Slot` belongs in `types.bx`, and
+// moving it would let every tool read an AST without the backend.
+//
+// `check.bx` is needed for more than `show_type`: the type TABLE is what tells a class from an
+// enum, and what turns a bare interface name into `dynamic Priced`. That table is filled by
+// `check`, so unlike `review.bx` — which must NOT typecheck, to stay byte-identical — this one
+// must. The two files reaching opposite conclusions from the same question is the useful kind
+// of asymmetry: it follows from what each report is about.
+// ============================================================================
+
+use "types.bx";
+use "parser.bx";
+use "check.bx";
+use "modules.bx";
+use "emit.bx";
+
+// Round `value` up to a multiple of `to`, which is what padding a field to its own alignment
+// means. `to` is a power of two here — 1, 4 or 8 — but the arithmetic does not need it to be,
+// and `divide_floor` is exact, so this is the same expression `codegen.rs` writes as
+// `(size + align - 1) / align * align`.
+pure function round_up(value: Int, to: Int) -> Int {
+    if to <= 1 {
+        return value;
+    }
+    return divide_floor(value + to - 1, to) * to;
+}
+
+// How many 8-BYTE CELLS a value occupies with no padding anywhere.
+//
+// Reached only from the enum arm of `layout_bytes` — see the header on why there are two of
+// these and why a third would be a returning bug. It mirrors `payload_cells` in `codegen.rs`
+// arm for arm, including the two places it parts company with `layout_bytes`: a slice is
+// THREE cells here (stage-0's {ptr, len, cap}) and an interface object is TWO (data plus
+// vtable), where the byte layout calls them 24 and 8.
+function (self: Unit) layout_cells(src: String, written: Type) -> Int {
+    if written.kind == 47 {                          // [T] — {ptr, len, cap}
+        return 3;
+    }
+    if written.kind == 49 {                          // dynamic Trait — {data, vtable}
+        return 2;
+    }
+    if written.kind == 48 {                          // [T; N]
+        return written.contract
+               * self.layout_cells(src, self.declared_type(src, written.scale));
+    }
+    if written.kind == 46 {
+        let found: Int = self.find_type(src, written.name_start, written.name_length);
+        if found < 0 {
+            return 1;
+        }
+        let declaration: TypeDeclaration = self.types[found];
+        let item: Node = self.nodes[declaration.node];
+        if declaration.kind == 82 {                  // a class: the sum of its fields
+            let mutable total: Int = 0;
+            let mutable f: Int = 0;
+            while f < item.b {
+                let field: Node = self.nodes[self.children[item.a + f]];
+                total += self.layout_cells(src, self.declared_type(src, field.a));
+                f += 1;
+            }
+            return total;
+        }
+        if declaration.kind == 83 {                  // an enum: a tag plus the widest variant
+            return 1 + self.layout_widest_variant(src, item);
+        }
+        return 1;
+    }
+    // Int, Bool, Decimal, String, CInt, CDouble, CPointer, a type parameter — one cell each.
+    // CInt is ONE CELL here and FOUR BYTES in `layout_bytes`, exactly as `codegen.rs` has it:
+    // inside an enum's payload area everything is cell-aligned, and only the byte layout of a
+    // class has a reason to pack it narrower.
+    return 1;
+}
+
+// The payload area of an enum, in cells: the widest variant, where a variant's width is the
+// sum of its payload types.
+//
+// A separate function only because the class arm above and the enum arm below both want it and
+// a `while` inside a `while` inside an `if` is where a reader loses the thread.
+function (self: Unit) layout_widest_variant(src: String, item: Node) -> Int {
+    let mutable widest: Int = 0;
+    let mutable v: Int = 0;
+    while v < item.b {
+        let variant: Node = self.nodes[self.children[item.a + v]];
+        let mutable carried: Int = 0;
+        let mutable p: Int = 0;
+        while p < variant.c {
+            carried += self.layout_cells(src,
+                           self.declared_type(src, self.nested_children[variant.b + p]));
+            p += 1;
+        }
+        if carried > widest {
+            widest = carried;
+        }
+        v += 1;
+    }
+    return widest;
+}
+
+// A type's natural alignment in bytes.
+//
+// Everything in this language is 8-byte aligned except `CInt`, which is C's 32-bit int and
+// exists only so that an FFI boundary can be honest about width — and an array, which aligns
+// like its element. A class aligns like its widest-aligning field, which for a class of `CInt`
+// alone is 4 and otherwise 8.
+function (self: Unit) layout_align(src: String, written: Type) -> Int {
+    if written.kind == 43 {                          // CInt
+        return 4;
+    }
+    if written.kind == 48 {                          // [T; N] aligns like its element
+        return self.layout_align(src, self.declared_type(src, written.scale));
+    }
+    if written.kind == 46 {
+        let found: Int = self.find_type(src, written.name_start, written.name_length);
+        if found < 0 {
+            return 8;
+        }
+        let declaration: TypeDeclaration = self.types[found];
+        if declaration.kind != 82 {
+            return 8;                                // an enum is a run of cells
+        }
+        let item: Node = self.nodes[declaration.node];
+        let mutable widest: Int = 1;
+        let mutable f: Int = 0;
+        while f < item.b {
+            let field: Node = self.nodes[self.children[item.a + f]];
+            let mine: Int = self.layout_align(src, self.declared_type(src, field.a));
+            if mine > widest {
+                widest = mine;
+            }
+            f += 1;
+        }
+        return widest;
+    }
+    return 8;
+}
+
+// A type's size in bytes, per `spec/A4.5-AGGREGATE-ABI.md` §3: the declared fields, standard
+// alignment, and no hidden header.
+//
+// A class is walked field by field — pad up to the field's own alignment, place it, advance —
+// and then the whole aggregate is rounded up to its own alignment, which is what makes an
+// array of it correctly strided. Identical to `layout_of` in `codegen.rs`, arm for arm.
+//
+// A String is EIGHT, and that is the one number here that is a target fact rather than a
+// language one: stage-0 asks LLVM for the pointer width. Every target this compiler builds for
+// is 64-bit, so 8 is right today and would be wrong on a 32-bit one — where stage-0 would say
+// 4 and this would still say 8. Named because it is the only place the two could drift without
+// anybody changing either file.
+function (self: Unit) layout_bytes(src: String, written: Type) -> Int {
+    if written.kind == 47 {                          // [T] — {ptr, len, cap}
+        return 24;
+    }
+    if written.kind == 43 {                          // CInt
+        return 4;
+    }
+    if written.kind == 48 {                          // [T; N] — stride times length
+        let element: Type = self.declared_type(src, written.scale);
+        let stride: Int = round_up(self.layout_bytes(src, element),
+                                  self.layout_align(src, element));
+        return stride * written.contract;
+    }
+    if written.kind == 46 {
+        let found: Int = self.find_type(src, written.name_start, written.name_length);
+        if found < 0 {
+            return 8;
+        }
+        let declaration: TypeDeclaration = self.types[found];
+        let item: Node = self.nodes[declaration.node];
+        if declaration.kind == 83 {                  // an enum: a tag plus the widest variant
+            return 8 * (1 + self.layout_widest_variant(src, item));
+        }
+        if declaration.kind != 82 {
+            return 8;
+        }
+        let mutable size: Int = 0;
+        let mutable f: Int = 0;
+        while f < item.b {
+            let field: Node = self.nodes[self.children[item.a + f]];
+            let mine: Type = self.declared_type(src, field.a);
+            size = round_up(size, self.layout_align(src, mine));
+            size += self.layout_bytes(src, mine);
+            f += 1;
+        }
+        return round_up(size, self.layout_align(src, written));
+    }
+    // Int, Bool, Decimal, CDouble, CPointer, dynamic, a type parameter — and String, per the
+    // note above. `dynamic` is EIGHT here and two cells in `layout_cells`, because that is what
+    // `layout_of` answers: its `_` arm catches `Dyn` and gives it one word.
+    return 8;
+}
+
+// Is this class's declaration generic? A generic class is skipped, for the reason in the
+// header: `burxt layout` prints its INSTANTIATIONS under a mangling this side spells
+// differently, and printing the uninstantiated declaration would be a row the Rust build never
+// emits. Looked up by name span in `self.generics`, which is where `note_generic` put it.
+function (self: Unit) layout_is_generic(src: String, name: Token) -> Bool {
+    let mutable i: Int = 0;
+    while i < len(self.generics) {
+        let declaration: Generic = self.generics[i];
+        if declaration.type_param_count > 0
+           && spans_equal(src, declaration.start, declaration.length,
+                          name.start, name.length) {
+            return true;
+        }
+        i += 1;
+    }
+    return false;
+}
+
+// The report itself: every class, in the order it was declared.
+//
+// Enums are absent, and that is `layout_report`'s choice rather than an omission — it walks
+// `prog.structs`. An enum has no field offsets to check, so there is nothing for the
+// no-hidden-header guarantee to be observable ABOUT; its size still shows up wherever a class
+// holds one.
+function (self: Unit) layout_print(src: String) -> Int {
+    let mutable shown: Int = 0;
+    let mutable i: Int = 0;
+    while i < len(self.items) {
+        let item: Node = self.nodes[self.items[i]];
+        if item.kind == 82 {
+            let named: Token = self.tokens[item.token];
+            if !self.layout_is_generic(src, named) {
+                let holder: Type = self.declared_type(src, self.items[i]);
+                // `declared_type` reads a TYPE node and a class ITEM is not one, so the holder
+                // is built from the name span directly. Kind 46 with no type arguments, which
+                // is what a plain class name is once `find_type` has it.
+                let whole: Type = Type { kind: 46, scale: 0, contract: 0,
+                                        name_start: named.start, name_length: named.length };
+                print(substring(src, named.start, named.length) + ": size "
+                      + to_string(self.layout_bytes(src, whole)) + " align "
+                      + to_string(self.layout_align(src, whole)));
+                let mutable offset: Int = 0;
+                let mutable f: Int = 0;
+                while f < item.b {
+                    let field: Node = self.nodes[self.children[item.a + f]];
+                    let mine: Type = self.declared_type(src, field.a);
+                    offset = round_up(offset, self.layout_align(src, mine));
+                    print("  +" + to_string(offset) + " " + self.show_type(src, mine)
+                          + " (" + to_string(self.layout_bytes(src, mine)) + " bytes)");
+                    offset += self.layout_bytes(src, mine);
+                    f += 1;
+                }
+                shown += 1;
+            }
+        }
+        i += 1;
+    }
+    return shown;
+}
+
+// `burxt layout <file.bx>`: the front end, then the report. Answers the exit code — 0 when it
+// reported, 1 when the program does not compile — so the caller is a guard and an `exit`, the
+// same shape `mcp_schema` and `review` take.
+//
+// The whole front end runs first, including `check`, because a layout is only meaningful for a
+// program that is legal: a field whose type does not exist has no size. `burxt layout` reaches
+// the report through the same path for the same reason, and a program with no class at all is
+// silent and successful in both.
+function layout(path: String) -> Int touches files {
+    let src: String = load_program(path);
+    let mutable unit: Unit = Unit { tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, current_method: 0 - 1, probing: 0, probe_changes: 0, type_bindings: [], measure_clause: 0 - 1, measure_slot: 0, measure_parameters: 0 - 1, measure_owner: "", old_nodes: [], old_slots: [], ensures_start: 0, ensures_count: 0, ensures_owner: "", bracket_clauses: [], clause_subjects: [], it_token: 0 - 1, it_is_result: 0, used_it: 0, it_seen: 0, result_type_node: 0 - 1, result_slot: 0 - 1, returns_node: 0 - 1, walked_types: [], type_binding_floor: 0, allowed_effects: 63, effects_owner: "", function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], in_function: 0, depth: 0, problems: 0, position: 0, token_end: 0, no_record_literal: 0, in_multiply: 0, print_to_stderr: 0, int_type_node: 0 - 1, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
+    let installed: Int = unit.install_keywords();
+    let total: Int = unit.run(src);
+    if unit.errors > 0 {
+        return 1;
+    }
+    while !unit.done() {
+        let item: Int = unit.parse_item(src);
+        if item < 0 {
+            return 1;
+        }
+        push(unit.items, item);
+    }
+    if unit.errors > 0 {
+        return 1;
+    }
+    let problems: Int = unit.check(src);
+    if problems > 0 || unit.errors > 0 {
+        return 1;
+    }
+    let shown: Int = unit.layout_print(src);
+    return 0;
+}

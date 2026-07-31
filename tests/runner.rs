@@ -37,6 +37,33 @@ fn cases(dir: &str, expected_ext: &str) -> Vec<(PathBuf, String)> {
     out
 }
 
+/// **One TAP-style verdict per fixture, when asked for.** Off unless `BURXT_VERDICTS=1`.
+///
+/// The three fixture sweeps collect their failures into a `Vec` and print them only when the
+/// assertion fires, which means **a green Rust runner emits nothing per fixture** — so there was
+/// nothing for the Burxt runner's agreement harness to diff against on a healthy tree. Two runners
+/// that both examine nothing agree perfectly, and that is the one comparison the harness could not
+/// build. The subagent writing `tests/runner.bx` asked for this line rather than inferring it.
+///
+/// Gated on an environment variable because 447 verdicts per sweep is noise in a normal run, and a
+/// test whose output changes shape depending on who is watching is worse than one that is quiet by
+/// default and loud on request. `runner.bx` prints the same `ok <dir>/<name>` shape, so the two
+/// verdict streams are comparable name by name — which is the point: 447 with one fixture counted
+/// twice and one skipped also totals 447.
+fn verdict(dir: &str, program: &Path, why: Option<&str>) {
+    if std::env::var("BURXT_VERDICTS").as_deref() != Ok("1") {
+        return;
+    }
+    let name = program.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    match why {
+        // One line per verdict, always: a multi-line reason would put a verdict inside another
+        // verdict's text, and the subagent lost an hour to exactly that in its own harness before
+        // rendering newlines visibly. Same fix here.
+        Some(reason) => println!("not ok {}/{}: {}", dir, name, reason.replace('\n', "\\n")),
+        None => println!("ok {}/{}", dir, name),
+    }
+}
+
 /// Run `burxt <cmd> <program>` in a scratch working directory.
 fn burxt(cmd: &str, program: &Path, workdir: &Path) -> Output {
     fs::create_dir_all(workdir).unwrap();
@@ -72,6 +99,7 @@ fn pass_programs_produce_expected_stdout() {
     install_fixtures("pass", &scratch);
     let mut failures = Vec::new();
     for (program, expected) in cases("pass", "stdout") {
+        let before = failures.len();
         let out = burxt("run", &program, &scratch);
         let stdout = String::from_utf8_lossy(&out.stdout);
         if !out.status.success() {
@@ -88,6 +116,13 @@ fn pass_programs_produce_expected_stdout() {
                 stdout
             ));
         }
+        // The verdict for this fixture, for `BURXT_VERDICTS=1`. Derived from whether THIS
+        // iteration added a failure, so it cannot drift from the assertion below it.
+        verdict(
+            "pass",
+            &program,
+            failures.get(before).map(|f| f.as_str()),
+        );
     }
     let _ = fs::remove_dir_all(&scratch);
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
@@ -99,6 +134,7 @@ fn panic_programs_die_cleanly_at_runtime() {
     install_fixtures("panic", &scratch);
     let mut failures = Vec::new();
     for (program, expected) in cases("panic", "stderr") {
+        let before = failures.len();
         let needle = expected.trim();
         let out = burxt("run", &program, &scratch);
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -115,6 +151,13 @@ fn panic_programs_die_cleanly_at_runtime() {
                 stderr
             ));
         }
+        // The verdict for this fixture, for `BURXT_VERDICTS=1`. Derived from whether THIS
+        // iteration added a failure, so it cannot drift from the assertion below it.
+        verdict(
+            "panic",
+            &program,
+            failures.get(before).map(|f| f.as_str()),
+        );
     }
     let _ = fs::remove_dir_all(&scratch);
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
@@ -221,6 +264,7 @@ fn fail_programs_are_rejected_with_expected_error() {
     let scratch = scratch_dir("fail");
     let mut failures = Vec::new();
     for (program, expected) in cases("fail", "stderr") {
+        let before = failures.len();
         let needle = expected.trim();
         let out = burxt("build", &program, &scratch);
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -237,6 +281,13 @@ fn fail_programs_are_rejected_with_expected_error() {
                 stderr
             ));
         }
+        // The verdict for this fixture, for `BURXT_VERDICTS=1`. Derived from whether THIS
+        // iteration added a failure, so it cannot drift from the assertion below it.
+        verdict(
+            "fail",
+            &program,
+            failures.get(before).map(|f| f.as_str()),
+        );
     }
     let _ = fs::remove_dir_all(&scratch);
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
@@ -6168,7 +6219,11 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
     let expected: &[(&str, &[&str], Strength, &str)] = &[
         (
             "main.rs",
-            &["src/burxt-compiler/main.bx", "src/burxt-compiler/modules.bx"],
+            &[
+                "src/burxt-compiler/main.bx",
+                "src/burxt-compiler/modules.bx",
+                "src/burxt-compiler/layout.bx",
+            ],
             Strength::Partial,
             "the entry point, and `use` resolution — `load_program` is inside `main.rs` on the \
              Rust side and its own `modules.bx` on the Burxt side. **v0.0.219 gave `main.bx` a \

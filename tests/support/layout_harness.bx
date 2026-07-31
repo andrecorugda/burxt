@@ -1,0 +1,29 @@
+// ============================================================================
+// tests/support/layout_harness.bx — runs `src/burxt-compiler/layout.bx` from the outside, so a
+// test can hold its output against `burxt layout`'s byte for byte.
+//
+// A HARNESS rather than a fixture, which is why it lives here: a fixture's answer is a
+// checked-in `.stdout`, and this program's answer depends on the file it is handed.
+// `tests/support/diag_harness.bx` is the precedent.
+//
+// It exists only until `main.bx` grows a `layout` subcommand — one `use`, one branch, reported
+// separately. The moment it does, `the_two_compilers_report_the_same_layout` should drive the
+// Burxt compiler's own CLI (as `the_two_compilers_derive_the_same_mcp_schema` already does) and
+// this file should be deleted. That is the point of it, not a loss.
+//
+//     layout_harness <file.bx>
+//
+// Prints exactly what `burxt layout` prints, on the same stream, and exits with the same code:
+// 0 when it reported, 1 when the program does not compile.
+// ============================================================================
+
+use "../../src/burxt-compiler/layout.bx";
+
+region main {
+    if argument_count() < 2 {
+        print_error("usage: layout_harness <file.bx>");
+        exit(2);
+    }
+    let code: Int = layout(argument(1));
+    exit(code);
+}
