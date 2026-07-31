@@ -3438,6 +3438,7 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
         // Copied from the array `for` above rather than invented: A2 added that check after A6
         // was first written, and a second `for` form that forgot it would be a rule stage-0 has
         // and stage-1 does not — which is exactly what the checker equality exists to catch.
+        // Stage-0 was the one that had forgotten it; see the note in its `ForRange` arm.
         if self.find_const(src, name.start, name.length) >= 0 {
             let complained: Int = self.complain_at(src, n.token,
                 "this name is already declared as a `const`, which is in scope in every "

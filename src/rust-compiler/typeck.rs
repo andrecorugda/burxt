@@ -4702,10 +4702,9 @@ impl TypeChecker {
                 // integer literal into an `IntLit` (see the "Fold negated literals" comment
                 // in `check_expr`) — so this needed no arithmetic of its own.
                 // `0..n - 1` where `n` is 0 is NOT caught and runs zero times, which is the
-                // named limit: a compiler refuses what it can SEE. A `const` bound is the
-                // one case A2 could widen this to, and deliberately does not yet: a `const`
-                // reaches here already substituted only if the checker folded it, and
-                // guessing about that would be the false `Some` `literal_int` refuses to give.
+                // named limit: a compiler refuses what it can SEE. A `const` bound is not
+                // folded here either, deliberately: guessing about it would be the false
+                // `Some` that `literal_int` exists to refuse to give.
                 if let (Some(a), Some(b)) = (literal_int(&start), literal_int(&end)) {
                     if a > b {
                         return Err(format!(
