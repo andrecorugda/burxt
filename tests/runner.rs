@@ -1273,9 +1273,14 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     // When per-block release lands, the fixpoint arrives in stage-1 too and these three should start
     // being caught. **If this floor is still 226 after that, that is the bug.**
     let _ = fs::remove_dir_all(&scratch);
+    // Printed, because every other ratchet in this file prints its measured value and this one
+    // did not — so raising it meant editing the test to find out what to raise it to, which is
+    // friction in exactly the place that should be frictionless. A floor nobody can read is a
+    // floor nobody moves.
+    eprintln!("the Burxt checker refuses {} of {} fail programs", caught, total);
     assert!(
-        caught >= 226,
-        "stage-1 rejected only {} of {} fail programs, down from 226",
+        caught >= 227,
+        "stage-1 rejected only {} of {} fail programs, down from 227",
         caught,
         total
     );
@@ -4671,6 +4676,543 @@ fn no_document_claims_a_coverage_number_the_suite_refutes() {
          with `~~strikethrough~~` or `as of v0.0.NNN`. Do not simply overwrite it: M4 §3b was \
          wrong for a hundred versions and the correction is worth more than the tidy number.",
         wrong.join("\n\n")
+    );
+}
+
+/// **Every directory has a declared purpose, and a new one has to earn its place.**
+///
+/// Andre, v0.0.216: *"see if I did not mention, you are just creating trash unorganized language
+/// files."* Fair, and it had just happened: `diag.bx` needed a driver program, so I created
+/// `tests/tools/` and put it there — while **`tests/support/` already existed for exactly that**,
+/// holding `failing_suite.bx`. I did not look at the siblings first.
+///
+/// The ratio is the part worth acting on. Of the three layout defects fixed in three versions, the
+/// compiler filed under `examples/` (v0.0.214) and `stage1.bx` (v0.0.215) were **both** read off a
+/// directory listing by Andre, and only this one by a test — the one written after he pointed the
+/// pattern out. Every rule in `spec/A7.0-NAMING.md` had been applied to identifiers and none of it
+/// to the tree they live in, because **nothing in the suite ever looked at the tree.** A claim
+/// about behaviour gets measured in this file; a claim about organisation was taken on trust.
+///
+/// So: each directory is listed with what belongs in it, and a new one fails until it is either
+/// justified here or recognised as a duplicate of a home that already exists. The test cannot know
+/// whether a directory is *well named* — that needs a reader. What it can do is force the question
+/// to be asked at the moment the directory is created, rather than by whoever next reads `ls`.
+#[test]
+fn the_repository_layout_is_declared() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    // Every directory that may exist, and what belongs in it. The purpose is not decoration —
+    // it is the thing a future me is supposed to read BEFORE inventing a sibling.
+    let homes: &[(&str, &str)] = &[
+        ("assets", "images and the mascot, for the site and the README"),
+        ("dist", "release tarballs, built by `scripts/`, not checked in"),
+        ("docs", "the Jekyll site: the guide, the reference, and the milestone log"),
+        ("editors", "editor integration — the VS Code extension and its packer"),
+        ("examples", "Burxt programs written to be READ. Not the compiler (v0.0.214)"),
+        ("lib", "the standard library, written in Burxt"),
+        ("scripts", "repository automation: site generation, release, checks"),
+        ("spec", "the design record — one file per milestone, plus the roadmap"),
+        ("src", "the two compilers: `rust-compiler/` and `burxt-compiler/`"),
+        ("target", "cargo's build output, not checked in"),
+        ("tests", "the suite: fixtures by verdict, plus the harnesses that drive them"),
+        // Inside `tests/`, because that is where a helper is most tempting to misfile.
+        ("tests/pass", "programs that must compile, run, and print their `.stdout`"),
+        ("tests/fail", "programs that must be REFUSED, with the reason in `.stderr`"),
+        ("tests/panic", "programs that must compile and then die at run time"),
+        ("tests/review", "`old.bx`/`new.bx`/`.expect` triples for `burxt review`"),
+        (
+            "tests/support",
+            "Burxt programs a runner invariant DRIVES rather than compares — a harness whose \
+             answer depends on the arguments it is given, so it has no checked-in `.stdout`",
+        ),
+        ("src/rust-compiler", "stage-0, in Rust, emitting through LLVM's C API"),
+        ("src/burxt-compiler", "the compiler in Burxt, emitting textual IR"),
+    ];
+
+    let mut undeclared: Vec<String> = Vec::new();
+    let mut check = |dir: &str| {
+        let path = root.join(dir);
+        if !path.is_dir() {
+            return;
+        }
+        for entry in fs::read_dir(&path).unwrap().filter_map(|e| e.ok()) {
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            let full = if dir.is_empty() { name.clone() } else { format!("{}/{}", dir, name) };
+            // Only the levels this list actually declares. `docs/`, `spec/` and the rest
+            // organise themselves internally, and a test that policed every leaf would be
+            // enforcing a structure nobody agreed to.
+            let declared = homes.iter().any(|(d, _)| *d == full);
+            let watched = dir.is_empty() || dir == "tests" || dir == "src";
+            if watched && !declared {
+                undeclared.push(full);
+            }
+        }
+    };
+    check("");
+    check("tests");
+    check("src");
+
+    assert!(
+        undeclared.is_empty(),
+        "undeclared director{}: {:?}\n\nAdd a row to `the_repository_layout_is_declared` saying \
+         what belongs there — or, far more likely, delete it and use the home that already \
+         exists. `tests/tools/` was created in v0.0.216 beside a `tests/support/` that had been \
+         doing the same job since v0.0.204. **Before creating a directory, list the siblings and \
+         read what they hold.** A new home is a claim that no existing one fits, and that claim \
+         is almost always wrong. `spec/A7.0-NAMING.md` §10.",
+        if undeclared.len() == 1 { "y" } else { "ies" },
+        undeclared
+    );
+
+    // The other direction: a declared home that no longer exists is rot too — it tells the next
+    // reader that a place to put things exists when it does not. `dist/` and `target/` are
+    // build output, so they are allowed to be absent.
+    let missing: Vec<&str> = homes
+        .iter()
+        .filter(|(d, _)| *d != "dist" && *d != "target")
+        .filter(|(d, _)| !root.join(d).is_dir())
+        .map(|(d, _)| *d)
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "this list declares director{} that do not exist: {:?}. Renamed, or removed? Update the \
+         list — a map that cites a place nothing is at is the same defect as a spec citing a \
+         fixture that never existed (M13).",
+        if missing.len() == 1 { "y" } else { "ies" },
+        missing
+    );
+}
+
+/// **The two compilers render a problem identically — and neither crashes doing it.**
+///
+/// `src/burxt-compiler/diag.bx` is the Burxt counterpart of `src/rust-compiler/diag.rs`, the
+/// first of the four modules answering Andre's v0.0.215 bar: *"make sure all rs compiler has a
+/// burxt equivalent — that is the true meaning of both compilers agree."* A counterpart is only
+/// worth having if it agrees, so this holds them to the byte: the same message and span through
+/// both renderers must produce the same caret block and the same line of JSON.
+///
+/// The spans are not invented. Each case is a real broken program; stage-0 reports it, this test
+/// reads the span back out of `--json`, and hands *that* to the Burxt renderer. A span I made up
+/// would only prove the two implementations share my assumptions.
+///
+/// **Writing the counterpart found a crash in the original**, which is the whole argument for
+/// doing it. `let é: Int = ;` made stage-0 panic — a Rust backtrace and exit 101 instead of a
+/// diagnostic — because `lexer.rs` ended an unknown-character span at `start + 1`, one BYTE into
+/// a two-byte character, and `diag.rs` then sliced the source at that non-boundary. `diag.bx`
+/// rendered it correctly the whole time: it counts bytes, so it is total where the Rust one was
+/// partial. **The differential test working in the direction nobody expects** — the second
+/// implementation auditing the first, rather than being checked against it.
+///
+/// Both halves are fixed and both are guarded here: the lexer spans the whole character, and
+/// `LineIndex::boundary` snaps every offset before it reaches a slice. The second is not
+/// redundant. **A diagnostic renderer is the last thing standing between a problem and the
+/// person who has to fix it, so it is the wrong place to be strict** — if it crashes, the error
+/// it was called to deliver is lost, and what the user sees is a bug in the compiler instead of
+/// the bug in their program.
+#[test]
+fn the_two_compilers_render_a_problem_identically() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    let scratch = scratch_dir("diag-agree");
+    fs::create_dir_all(&scratch).unwrap();
+
+    // Each case is chosen for a property that could make the two renderers disagree.
+    let cases: &[(&str, &str)] = &[
+        ("plain.bx", "let a: Int = 1;\nlet b: Int = 2\nprint(a + b);\n"),
+        // Non-ASCII BEFORE the caret on the same line: the case that separates counting
+        // codepoints from counting bytes. Byte columns would report 25 here, not 23.
+        ("nonascii.bx", "print(\"héllo café\" + );\n"),
+        // A span that lands INSIDE a character. This is the one that used to panic.
+        ("splitchar.bx", "let é: Int = ;\n"),
+        // A tab before the caret — one character occupying eight columns, so a faithful echo
+        // would misplace the caret. Both renderers show it as one space instead.
+        ("tabbed.bx", "let a: Int = 1;\n\tlet b: Int = ;\n"),
+        // The end of a file with no trailing newline, and with one: `reportable_offset` steps
+        // back off the empty line after the last, and both must step the same way.
+        ("eof.bx", "let a: Int = 1;\nlet b: Int ="),
+        ("eofnl.bx", "let a: Int = 1;\nlet b: Int =\n"),
+        // Two-digit line number, so the gutter width is computed rather than assumed.
+        (
+            "gutter.bx",
+            "print(1);\nprint(2);\nprint(3);\nprint(4);\nprint(5);\nprint(6);\nprint(7);\n\
+             print(8);\nprint(9);\nlet x: Int = ;\n",
+        ),
+    ];
+
+    // Minimal readers for the one JSON document shape this test consumes. A real parser is in
+    // `lib/json.bx` and in `src/rust-compiler/json.rs`; pulling either in here would make the
+    // test depend on more than the thing it is testing.
+    fn number_after(json: &str, key: &str) -> u32 {
+        let at = json.find(key).unwrap_or_else(|| panic!("no `{}` in {}", key, json));
+        json[at + key.len()..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .unwrap_or_else(|_| panic!("`{}` is not a number in {}", key, json))
+    }
+    fn message_in(json: &str) -> String {
+        let at = json.find("\"message\":\"").expect("no message") + "\"message\":\"".len();
+        let bytes = json[at..].as_bytes();
+        let mut out = String::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'"' => break,
+                b'\\' => {
+                    i += 1;
+                    match bytes[i] {
+                        b'n' => out.push('\n'),
+                        b't' => out.push('\t'),
+                        b'r' => out.push('\r'),
+                        other => out.push(other as char),
+                    }
+                }
+                _ => {
+                    // Copy the whole UTF-8 sequence: a message can name the character it
+                    // could not read, and `unexpected character: 'é'` is exactly one of the
+                    // cases above.
+                    let rest = &json[at + i..];
+                    let c = rest.chars().next().unwrap();
+                    out.push(c);
+                    i += c.len_utf8();
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        out
+    }
+
+    // Build the harness both ways. Stage-0 first, because if that fails nothing else is
+    // meaningful; stage-1 second, and THAT is the parity claim — `diag.bx` must compile
+    // under the compiler written in Burxt too, not only under the Rust one.
+    let harness = root.join("tests/support/diag_harness.bx");
+    let by_stage0 = scratch.join("harness-stage0");
+    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(&harness)
+        .arg("-o")
+        .arg(&by_stage0)
+        .output()
+        .expect("burxt");
+    assert!(
+        built.status.success(),
+        "stage-0 could not build the diagnostic harness:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let mut by_stage1: Option<PathBuf> = None;
+    if llc.exists() {
+        let stage1 = scratch.join("stage1");
+        assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("build")
+            .arg(root.join("src/burxt-compiler/main.bx"))
+            .arg("-o")
+            .arg(&stage1)
+            .status()
+            .expect("burxt")
+            .success());
+        let ll = scratch.join("harness.ll");
+        let emitted = Command::new(&stage1).arg(&harness).arg(&ll).output().expect("stage-1");
+        assert!(
+            String::from_utf8_lossy(&emitted.stdout).contains("bytes of IR"),
+            "stage-1 refused `diag.bx` through the harness, so the counterpart is not real \
+             parity:\n{}{}",
+            String::from_utf8_lossy(&emitted.stdout),
+            String::from_utf8_lossy(&emitted.stderr)
+        );
+        let obj = scratch.join("harness.o");
+        assert!(Command::new(llc)
+            .args(["-relocation-model=pic", "-filetype=obj", "-o"])
+            .arg(&obj)
+            .arg(&ll)
+            .status()
+            .expect("llc")
+            .success());
+        let exe = scratch.join("harness-stage1");
+        assert!(Command::new("cc")
+            .arg("-o")
+            .arg(&exe)
+            .arg(&obj)
+            .status()
+            .expect("cc")
+            .success());
+        by_stage1 = Some(exe);
+    } else {
+        eprintln!("skipping the stage-1 half: {} is not installed", llc.display());
+    }
+
+    let mut wrong: Vec<String> = Vec::new();
+    for (name, source) in cases {
+        let path = scratch.join(name);
+        fs::write(&path, source).unwrap();
+
+        // Stage-0's own two renderings of its own diagnostic.
+        let caret = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("check")
+            .arg(name)
+            .current_dir(&scratch)
+            .output()
+            .expect("burxt check");
+        let json = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("check")
+            .arg(name)
+            .arg("--json")
+            .current_dir(&scratch)
+            .output()
+            .expect("burxt check --json");
+
+        // The regression guard for the crash. A panic is exit 101 and says so; a compiler
+        // that aborts while REPORTING an error is worse than one that reports it badly.
+        for (what, out) in [("check", &caret), ("check --json", &json)] {
+            let text = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                !text.contains("panicked"),
+                "`burxt {} {}` panicked instead of reporting a diagnostic — this is the \
+                 v0.0.216 crash returning:\n{}",
+                what,
+                name,
+                text
+            );
+        }
+
+        let rendered = {
+            let mut s = String::from_utf8_lossy(&caret.stdout).to_string();
+            s.push_str(&String::from_utf8_lossy(&caret.stderr));
+            s
+        };
+        let json_line = {
+            let mut s = String::from_utf8_lossy(&json.stdout).to_string();
+            s.push_str(&String::from_utf8_lossy(&json.stderr));
+            s.trim().to_string()
+        };
+        assert!(
+            json_line.starts_with('{'),
+            "`{}` was expected to be refused with a diagnostic, and stage-0 said: {:?}",
+            name,
+            json_line
+        );
+
+        let start = number_after(&json_line, "\"byteStart\":");
+        let end = number_after(&json_line, "\"byteEnd\":");
+        let message = message_in(&json_line);
+
+        for (which, exe) in [("stage-0", Some(&by_stage0)), ("stage-1", by_stage1.as_ref())] {
+            let exe = match exe {
+                Some(e) => e,
+                None => continue,
+            };
+            let out = Command::new(exe)
+                .arg(name)
+                .arg(start.to_string())
+                .arg(end.to_string())
+                .arg(&message)
+                .current_dir(&scratch)
+                .output()
+                .expect("the harness");
+            assert!(
+                out.status.success(),
+                "the harness built by {} failed on {}:\n{}",
+                which,
+                name,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let text = String::from_utf8_lossy(&out.stdout);
+            // The harness prints the caret block, then one line of JSON.
+            let cut = text.rfind("\n{").unwrap_or_else(|| panic!("no JSON from the harness: {}", text));
+            let (mine_caret, mine_json) = (&text[..cut + 1], text[cut + 1..].trim());
+            if mine_caret != rendered {
+                wrong.push(format!(
+                    "{} ({}): the caret rendering differs.\n  diag.rs:\n{}\n  diag.bx:\n{}",
+                    name, which, rendered, mine_caret
+                ));
+            }
+            if mine_json != json_line {
+                wrong.push(format!(
+                    "{} ({}): the JSON differs.\n  diag.rs: {}\n  diag.bx: {}",
+                    name, which, json_line, mine_json
+                ));
+            }
+        }
+    }
+
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(
+        wrong.is_empty(),
+        "the two diagnostic renderers disagree on {} case(s):\n\n{}",
+        wrong.len(),
+        wrong.join("\n\n")
+    );
+}
+
+/// **Every Rust module must have a Burxt counterpart, or a written reason it does not.**
+///
+/// Andre, v0.0.215: *"make sure all rs compiler has a burxt equivalent — that is the true meaning
+/// of both compilers agree."*
+///
+/// That is a sharper bar than the one this repository had been meeting, and the sharpening is the
+/// point. "Both compilers agree" had come to mean **the language** is covered twice: 142 of 142
+/// pass programs, a byte-identical fixpoint, 30 of 30 runtime guarantees. All true. But the
+/// agreement stopped at the compiler proper — `lsp.rs`, `review.rs`, `schema.rs`, `json.rs` and
+/// `diag.rs` exist **only in Rust**, so every claim Burxt makes about tooling is a claim about
+/// what Rust can do with a Burxt AST. The self-hosting certificate covers the part that compiles
+/// and stops exactly where the part a user touches begins.
+///
+/// So this test holds the whole `src/rust-compiler/` directory to account. Each `.rs` file is
+/// either **mapped** to its Burxt counterpart, or listed as **missing with a reason** — and the
+/// count of mapped files is a **ratchet**: it may rise, never fall. A new `.rs` file with no entry
+/// fails the test, which forces the decision at the moment the file is created rather than in a
+/// roadmap audit a hundred versions later. That timing is the entire lesson of v0.0.215.
+///
+/// **It is a ratchet and not an equality on purpose**, and the honest reason is that one row may
+/// never close: `lsp.rs` speaks LSP over **stdin**, and Burxt has no way to read it. There is no
+/// stdin builtin, and `fread` is out of reach because a caller cannot produce a pointer to
+/// writable memory — the pointer wall's `CPointer` is opaque by design. So `lsp.bx` is not
+/// "unwritten", it is **unwritable**, and it stays that way until a stdin primitive is designed.
+/// Naming that in the test beats discovering it after writing 600 lines.
+#[test]
+fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    // The map. `Some(path)` is a counterpart that must EXIST on disk; `None` is a gap, with the
+    // reason in the third column so it is read by whoever next wonders why.
+    let expected: &[(&str, Option<&str>, &str)] = &[
+        (
+            "main.rs",
+            Some("src/burxt-compiler/main.bx"),
+            "the entry point. Burxt's drives lexing, parsing, checking and IR emission; it does \
+             not yet have the SUBCOMMANDS (review, mcp-schema, explain, layout, --json), which \
+             arrive with the modules below",
+        ),
+        ("lexer.rs", Some("src/burxt-compiler/types.bx"), "the lexer, with the shapes it fills"),
+        ("ast.rs", Some("src/burxt-compiler/types.bx"), "the node kinds and the arena"),
+        ("parser.rs", Some("src/burxt-compiler/parser.bx"), "tokens in, arena AST out"),
+        (
+            "typeck.rs",
+            Some("src/burxt-compiler/check.bx"),
+            "scales, regions, purity, contracts, exhaustiveness",
+        ),
+        (
+            "codegen.rs",
+            Some("src/burxt-compiler/emit.bx"),
+            "LLVM IR. Rust drives LLVM's C API through inkwell; Burxt writes the IR as text, \
+             which M4 calls string formatting instead of an API, not a workaround",
+        ),
+        (
+            "json.rs",
+            Some("lib/json.bx"),
+            "a JSON reader and writer. The Burxt one lives in `lib/` rather than the compiler \
+             directory because it is useful to any program, which is the better home for it",
+        ),
+        (
+            "diag.rs",
+            Some("src/burxt-compiler/diag.bx"),
+            "the caret rendering and the JSON rendering of a problem, held byte-for-byte against \
+             the Rust one by `the_two_compilers_render_a_problem_identically`. Written in \
+             v0.0.216, and writing it found a CRASH in `diag.rs`: a span ending mid-character \
+             made the Rust renderer panic, while the Burxt one — which counts bytes, so it is \
+             total — rendered it correctly. The second implementation auditing the first",
+
+        ),
+        (
+            "schema.rs",
+            None,
+            "MISSING — `burxt mcp-schema`, the MCP manifest derived from preconditions. Writable \
+             today; stage-1 already parses the bracket clauses this reads. The row with the most \
+             to prove, because it is the thing no other language can do",
+        ),
+        (
+            "review.rs",
+            None,
+            "MISSING — `burxt review old.bx new.bx`, what changed about what the program PROMISES. \
+             Writable today: two parses and a comparison of signatures and contracts. Also the \
+             mechanical semver rule 1.0 depends on (ROADMAP C2), so Burxt cannot enforce its own \
+             compatibility promise until this exists",
+        ),
+        (
+            "lsp.rs",
+            None,
+            "BLOCKED, not merely missing — the language server frames LSP messages over STDIN, \
+             and Burxt has no stdin. No builtin reads it, and `fread` is unreachable because a \
+             caller cannot make a pointer to writable memory (CPointer is opaque by design). \
+             Needs a stdin primitive designed first; see ROADMAP B12",
+        ),
+    ];
+
+    let mut unlisted: Vec<String> = Vec::new();
+    let mut on_disk: Vec<String> = Vec::new();
+    for entry in fs::read_dir(root.join("src/rust-compiler")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        if !expected.iter().any(|(rs, _, _)| *rs == name) {
+            unlisted.push(name.clone());
+        }
+        on_disk.push(name);
+    }
+
+    assert!(
+        unlisted.is_empty(),
+        "`src/rust-compiler/` gained {:?} and this map says nothing about it. Add a row: either \
+         the Burxt file that answers it, or `None` with the reason there is none. The decision \
+         belongs here, on the day the file is written — M4 §3b went stale for a hundred versions \
+         because nothing forced it to be revisited.",
+        unlisted
+    );
+
+    // Every mapped counterpart must actually exist. A map that cites a missing file is the
+    // rot this whole version is about, one level up.
+    let mut broken: Vec<String> = Vec::new();
+    let mut mapped = 0;
+    for (rs, counterpart, _) in expected {
+        // A row for a `.rs` file that no longer exists is also rot — in the other direction.
+        assert!(
+            on_disk.iter().any(|n| n == rs),
+            "this map has a row for `src/rust-compiler/{}`, which does not exist. Renamed or \
+             deleted? Update the row.",
+            rs
+        );
+        if let Some(path) = counterpart {
+            if root.join(path).exists() {
+                mapped += 1;
+            } else {
+                broken.push(format!("{} -> {} (which does not exist)", rs, path));
+            }
+        }
+    }
+    assert!(broken.is_empty(), "a counterpart is cited but absent:\n  {}", broken.join("\n  "));
+
+    let missing: Vec<&str> = expected
+        .iter()
+        .filter(|(_, c, _)| c.is_none())
+        .map(|(rs, _, _)| *rs)
+        .collect();
+    eprintln!(
+        "{} of {} Rust modules have a Burxt counterpart; still Rust-only: {}",
+        mapped,
+        expected.len(),
+        missing.join(", ")
+    );
+
+    // The ratchet. 8 of 11 once `diag.bx` landed in v0.0.216. Raise it with each module written, and never lower it:
+    // the number falling means a Burxt counterpart was deleted or a Rust module was split in a
+    // way that left the Burxt side behind, and both deserve to fail loudly.
+    assert!(
+        mapped >= 8,
+        "{} of {} Rust modules have a Burxt counterpart, and it was 8 at v0.0.216. A counterpart \
+         was lost, or a Rust module was split without one. Still Rust-only: {}",
+        mapped,
+        expected.len(),
+        missing.join(", ")
     );
 }
 

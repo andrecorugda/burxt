@@ -60,8 +60,31 @@ impl<'a> LineIndex<'a> {
         LineIndex { src, starts }
     }
 
+    /// Clamp a byte offset into the source AND onto a character boundary.
+    ///
+    /// **This exists because the renderer used to panic.** Every slice below is by byte
+    /// offset, and Rust refuses a slice that splits a character — so a span whose end
+    /// landed mid-character turned `let é: Int = ;` into a Rust backtrace and exit 101.
+    /// `lexer.rs` was producing that span (`start + 1` on a two-byte character, fixed in
+    /// the same version), but fixing the producer is not enough and should not be trusted
+    /// to be: **a diagnostic renderer that crashes destroys the diagnostic it was called
+    /// to deliver.** It is the last thing standing between a problem and the person who
+    /// has to fix it, so it is the wrong place to be strict. Every offset that reaches a
+    /// slice goes through here.
+    ///
+    /// Found by writing `src/burxt-compiler/diag.bx` — the Burxt counterpart counts bytes
+    /// and is total, so it rendered this input correctly while the Rust one aborted. That
+    /// is the differential test working in the direction nobody expects.
+    fn boundary(&self, offset: usize) -> usize {
+        let mut at = offset.min(self.src.len());
+        while at > 0 && !self.src.is_char_boundary(at) {
+            at -= 1;
+        }
+        at
+    }
+
     pub fn locate(&self, offset: u32) -> Location<'a> {
-        let mut offset = (offset as usize).min(self.src.len());
+        let mut offset = self.boundary(offset as usize);
         // An error AT the end of a file that ends with a newline would otherwise
         // be reported on the empty line after the last one — true, and useless.
         // Point at the end of the last line with content instead, which is what
@@ -85,7 +108,7 @@ impl<'a> LineIndex<'a> {
     /// inverse of `locate`, needed to answer a question asked at a cursor.
     pub fn offset_of(&self, line: usize, character: usize) -> u32 {
         let start = match self.starts.get(line) {
-            Some(s) => *s,
+            Some(s) => self.boundary(*s),
             None => return self.src.len() as u32,
         };
         let rest = &self.src[start..];
@@ -103,8 +126,8 @@ impl<'a> LineIndex<'a> {
     /// How many characters the span covers on its first line — the width of the
     /// underline. At least 1, so a zero-width span still points somewhere.
     pub fn width(&self, span: Span) -> usize {
-        let start = (span.start as usize).min(self.src.len());
-        let end = (span.end as usize).min(self.src.len()).max(start);
+        let start = self.boundary(span.start as usize);
+        let end = self.boundary(span.end as usize).max(start);
         let line_end = self.src[start..].find('\n').map(|i| start + i).unwrap_or(self.src.len());
         self.src[start..end.min(line_end)].chars().count().max(1)
     }

@@ -249,7 +249,23 @@ impl<'a> Lexer<'a> {
                 // A lexer error is always inside the token being scanned, so
                 // the span runs from that token's first character to here.
                 Err(message) => {
-                    let end = self.pos.max(start + 1);
+                    // **`start + 1` was wrong, and it crashed the compiler.** An unknown
+                    // character errors WITHOUT bumping, so `self.pos == start` and the span
+                    // ended one BYTE in — which for `é` is the middle of a two-byte
+                    // character. `diag.rs` then sliced the source at that offset and
+                    // panicked: `let é: Int = ;` produced a Rust backtrace and exit 101
+                    // instead of a diagnostic. A span is measured in bytes, but it must
+                    // still land on character boundaries, because the thing that renders it
+                    // counts characters.
+                    //
+                    // Two cases, and `max` cannot serve both: if the scan advanced, `pos` is
+                    // already a boundary and is the right end. If it did not, the end is the
+                    // whole width of the character that could not be read.
+                    let end = if self.pos > start {
+                        self.pos
+                    } else {
+                        start + self.chars.peek().map(|c| c.len_utf8()).unwrap_or(1)
+                    };
                     return Err(Diagnostic::new(message, Span::new(start, end)));
                 }
             };

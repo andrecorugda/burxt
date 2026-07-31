@@ -1,0 +1,318 @@
+// ============================================================================
+// diag.bx — where a problem is, not just what it is. The Burxt counterpart of
+// `src/rust-compiler/diag.rs`.
+//
+// Andre, v0.0.215: *"make sure all rs compiler has a burxt equivalent — that is the true
+// meaning of both compilers agree."* This is the first of the four modules that answer
+// that, and the cheapest, which is why it is first.
+//
+// **Why the bar moved.** "Both compilers agree" had come to mean the LANGUAGE is covered
+// twice — 142 of 142 pass programs, a byte-identical fixpoint, 30 of 30 runtime
+// guarantees. All true, and all about the part that compiles. But `diag.rs`, `schema.rs`,
+// `review.rs` and `lsp.rs` existed only in Rust, so every claim Burxt made about TOOLING
+// was a claim about what Rust can do with a Burxt AST. The certificate stopped exactly
+// where the part a user touches begins.
+//
+// ---- the one interesting problem, and it dissolved -------------------------------------
+//
+// `diag.rs` counts COLUMNS IN CHARACTERS — `self.src[start..offset].chars().count() + 1`.
+// Burxt has no `.chars()`; codepoint iteration is `spec/A4.4`'s one remaining gap and
+// `ROADMAP-1.0.md` A5. So the obvious reading is that this module cannot agree with its
+// Rust twin until A5 lands, and the honest fallback is byte columns plus a note admitting
+// they differ on any line with an accent in it.
+//
+// That reading is wrong, and it is the **wall pattern** again (`spec/A7.0-NAMING.md` has
+// the habit; this is its eighth sighting). The question is not *"can I iterate
+// codepoints"* — it is *"can I COUNT them"*, and a count needs no iterator:
+//
+//   > In UTF-8 every byte of a multi-byte sequence after the first matches `10xxxxxx`.
+//   > So the number of codepoints in a byte range is the number of bytes that are **not**
+//   > continuation bytes — `bit_and(b, 192) != 128` — and `byte_at` plus `bit_and` are
+//   > both already here.
+//
+// Exact for valid UTF-8, which `spec/A4.4` declares a String is. No approximation, no
+// named limit, no waiting for A5. The feature that looked like a prerequisite was a
+// prerequisite for *iterating*, and nothing here iterates.
+//
+// ---- what agreement means for this file -----------------------------------------------
+//
+// Byte-for-byte with `diag.rs`, and `the_two_compilers_render_a_problem_identically` in
+// `tests/runner.rs` is the test: the same message and span through both renderers must
+// produce the same string, caret column included. That is a stronger claim than "it
+// looks right", and it is the only one worth making — a diagnostic that points one
+// column left of the problem is how a reader learns to distrust the compiler.
+// ============================================================================
+
+// ---- counting -------------------------------------------------------------------------
+
+// How many codepoints the bytes `[from, from + count)` hold. See the header: a
+// continuation byte is `10xxxxxx`, so every byte that is not one begins a codepoint.
+//
+// `pure` because it reads and answers, which is exactly what the word is for.
+pure function codepoints_in(src: String, from: Int, count: Int) -> Int {
+    let mutable found: Int = 0;
+    let mutable i: Int = from;
+    while i < from + count {
+        if bit_and(byte_at(src, i), 192) != 128 {
+            found += 1;
+        }
+        i += 1;
+    }
+    return found;
+}
+
+// A string of `n` copies of one byte, given as a one-byte String. Used for the gutter's
+// spaces and the underline's carets.
+//
+// Built with `+` rather than a run-based builder, and the reason it is acceptable HERE
+// specifically: `n` is a line number's width or a span's width, so it is a handful of
+// characters, and `ROADMAP-1.0.md` D0 is about the ~100 library functions where it is not.
+// A quadratic append on four characters is not a quadratic append.
+pure function repeated(what: String, n: Int) -> String {
+    let mutable out: String = "";
+    let mutable i: Int = 0;
+    while i < n {
+        out = out + what;
+        i += 1;
+    }
+    return out;
+}
+
+// ---- locating -------------------------------------------------------------------------
+//
+// `diag.rs` builds a `LineIndex` — every line's start offset, then a binary search. This
+// scans instead, and the difference is deliberate rather than lazy: a `LineIndex` pays for
+// itself when many offsets are located against one source, which is what a language server
+// does. A one-shot render locates two offsets, so building the index costs more than the
+// scan it saves. When `lsp.bx` becomes possible this grows an index; until then it would be
+// a structure held for nobody.
+
+// The offset a location should actually be reported at.
+//
+// An error AT the end of a file that ends with a newline would otherwise land on the empty
+// line after the last one — true, and useless. `diag.rs` steps back one byte for exactly
+// this, and so does this: "unexpected end of file" should point at the end of the last line
+// that has something on it.
+pure function reportable_offset(src: String, offset: Int) -> Int {
+    let mutable at: Int = offset;
+    if at > len(src) {
+        at = len(src);
+    }
+    if at == len(src) && len(src) > 0 {
+        if byte_at(src, len(src) - 1) == 10 {
+            at = at - 1;
+        }
+    }
+    return at;
+}
+
+// The byte offset where `offset`'s line begins.
+pure function line_start_at(src: String, offset: Int) -> Int {
+    let mutable start: Int = 0;
+    let mutable i: Int = 0;
+    while i < offset {
+        if byte_at(src, i) == 10 {
+            start = i + 1;
+        }
+        i += 1;
+    }
+    return start;
+}
+
+// The byte offset one past the last byte of `offset`'s line, NOT counting the newline —
+// so the echoed line does not carry a line break into the middle of the rendering.
+pure function line_end_at(src: String, offset: Int) -> Int {
+    let mutable i: Int = offset;
+    while i < len(src) {
+        if byte_at(src, i) == 10 {
+            return i;
+        }
+        i += 1;
+    }
+    return len(src);
+}
+
+// Which line `offset` falls on, counting from 1 the way every editor and every other
+// compiler does.
+pure function line_number_at(src: String, offset: Int) -> Int {
+    let mutable line: Int = 1;
+    let mutable i: Int = 0;
+    while i < offset {
+        if byte_at(src, i) == 10 {
+            line += 1;
+        }
+        i += 1;
+    }
+    return line;
+}
+
+// Which column, in CODEPOINTS, counting from 1.
+pure function column_at(src: String, offset: Int) -> Int {
+    let start: Int = line_start_at(src, offset);
+    return codepoints_in(src, start, offset - start) + 1;
+}
+
+// How wide the underline is: the codepoints the span covers ON ITS FIRST LINE, because a
+// caret row cannot underline a second line, and at least 1 so a zero-width span still
+// points somewhere rather than nowhere.
+pure function span_width(src: String, span_start: Int, span_end: Int) -> Int {
+    let mutable from: Int = span_start;
+    if from > len(src) {
+        from = len(src);
+    }
+    let mutable to: Int = span_end;
+    if to > len(src) {
+        to = len(src);
+    }
+    if to < from {
+        to = from;
+    }
+    let stop: Int = line_end_at(src, from);
+    if to > stop {
+        to = stop;
+    }
+    let wide: Int = codepoints_in(src, from, to - from);
+    if wide < 1 {
+        return 1;
+    }
+    return wide;
+}
+
+// ---- rendering ------------------------------------------------------------------------
+
+// The echoed source line, with tabs shown as single spaces.
+//
+// Tabs are replaced because the caret row is positioned by COUNTING characters, and a tab
+// is one character that occupies eight columns — so a faithful echo puts the caret in the
+// wrong place, which is worse than an unfaithful echo that points correctly. `diag.rs`
+// makes the same trade for the same reason.
+pure function shown_line(src: String, from: Int, to: Int) -> String {
+    let mutable out: String = "";
+    let mutable i: Int = from;
+    while i < to {
+        if byte_at(src, i) == 9 {
+            out = out + " ";
+        } else {
+            out = out + substring(src, i, 1);
+        }
+        i += 1;
+    }
+    return out;
+}
+
+// A problem, rendered the way a compiler should: the message, the location, and the
+// offending line with the span underlined beneath it.
+//
+//     error: expected `;`, found `let`
+//      --> money.bx:12:19
+//        |
+//     12 |     let x: Int = 1
+//        |                   ^
+//
+// The gutter is as wide as the line number, so line 9 and line 1009 both line up with
+// their own source. That is why `gutter` is computed rather than a constant.
+function diag_render(path: String, src: String, span_start: Int, span_end: Int,
+                     message: String) -> String {
+    let at: Int = reportable_offset(src, span_start);
+    let line: Int = line_number_at(src, at);
+    let column: Int = column_at(src, at);
+    let from: Int = line_start_at(src, at);
+    let to: Int = line_end_at(src, at);
+    let shown: String = shown_line(src, from, to);
+    let number: String = to_string(line);
+    let gutter: String = repeated(" ", len(number));
+    // The padding before the caret is `column - 1` spaces, and it is worth saying why that
+    // is not a simplification of `diag.rs`'s character-by-character version: tabs have
+    // already become single spaces above, so every character before the caret contributes
+    // exactly one column, and one space is what each of them renders as in a caret row.
+    let pad: String = repeated(" ", column - 1);
+    let carets: String = repeated("^", span_width(src, span_start, span_end));
+    return "error: " + message + "\n"
+        + gutter + "--> " + path + ":" + to_string(line) + ":" + to_string(column) + "\n"
+        + gutter + " |\n"
+        + number + " | " + shown + "\n"
+        + gutter + " | " + pad + carets + "\n";
+}
+
+// ---- JSON -----------------------------------------------------------------------------
+
+// Quote and escape a string for JSON.
+//
+// Byte-wise, and that is correct rather than a shortcut: every byte a JSON string must
+// escape is below 0x20 or is `"` or `\`, and **no such byte can appear inside a multi-byte
+// UTF-8 sequence** — continuation bytes are all >= 0x80. So passing the other bytes
+// through unexamined cannot split a codepoint. The same reason `string_split` on a
+// single-byte separator is safe, recorded in `spec/M12`.
+function json_escape(s: String) -> String {
+    let mutable out: String = "\"";
+    let mutable i: Int = 0;
+    while i < len(s) {
+        let b: Int = byte_at(s, i);
+        if b == 34 {
+            out = out + "\\\"";
+        } else {
+            if b == 92 {
+                out = out + "\\\\";
+            } else {
+                if b == 10 {
+                    out = out + "\\n";
+                } else {
+                    if b == 13 {
+                        out = out + "\\r";
+                    } else {
+                        if b == 9 {
+                            out = out + "\\t";
+                        } else {
+                            if b < 32 {
+                                out = out + "\\u00" + hex_pair(b);
+                            } else {
+                                out = out + substring(s, i, 1);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    return out + "\"";
+}
+
+// Two lowercase hex digits, for the `\u00XX` escape of a control byte. Only reached for
+// bytes below 0x20, so the high nibble is always 0 or 1 — but it is written in full
+// anyway, because a helper that is only correct for its current caller is a trap for the
+// next one.
+pure function hex_pair(b: Int) -> String {
+    let digits: String = "0123456789abcdef";
+    let high: Int = divide_floor(b, 16);
+    let low: Int = remainder(b, 16);
+    return substring(digits, high, 1) + substring(digits, low, 1);
+}
+
+// The same problem as one line of JSON, for editors and CI.
+//
+// Positions appear TWICE on purpose: 1-based line and column for humans and terminals,
+// 0-based for the Language Server Protocol. Converting in the consumer is where
+// off-by-ones live, so both are stated here once and neither consumer has to know the
+// other's convention.
+function diag_json(path: String, src: String, span_start: Int, span_end: Int,
+                   message: String) -> String {
+    let start_at: Int = reportable_offset(src, span_start);
+    let end_at: Int = reportable_offset(src, span_end);
+    let start_line: Int = line_number_at(src, start_at);
+    let start_column: Int = column_at(src, start_at);
+    let end_line: Int = line_number_at(src, end_at);
+    let end_column: Int = column_at(src, end_at);
+    return "\{\"file\":" + json_escape(path)
+        + ",\"severity\":\"error\",\"message\":" + json_escape(message)
+        + ",\"line\":" + to_string(start_line)
+        + ",\"column\":" + to_string(start_column)
+        + ",\"endLine\":" + to_string(end_line)
+        + ",\"endColumn\":" + to_string(end_column)
+        + ",\"lspStart\":\{\"line\":" + to_string(start_line - 1)
+        + ",\"character\":" + to_string(start_column - 1)
+        + "\},\"lspEnd\":\{\"line\":" + to_string(end_line - 1)
+        + ",\"character\":" + to_string(end_column - 1)
+        + "\},\"byteStart\":" + to_string(span_start)
+        + ",\"byteEnd\":" + to_string(span_end) + "\}";
+}

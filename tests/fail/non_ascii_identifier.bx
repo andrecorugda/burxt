@@ -1,0 +1,21 @@
+// A non-ASCII identifier is refused, and the point of this fixture is HOW it is refused.
+//
+// Until v0.0.216 this input **crashed the compiler**: `lexer.rs` ended the unknown-character
+// span at `start + 1`, which is one BYTE into the two bytes of `é`, and `diag.rs` then sliced
+// the source at that offset. Rust refuses a slice that splits a character, so the process
+// panicked — a backtrace and exit 101 instead of the sentence below. The worst possible shape
+// for a diagnostic bug: the reader is told the compiler is broken rather than that their
+// program is.
+//
+// Found by writing `src/burxt-compiler/diag.bx`, the Burxt counterpart, which counts bytes and
+// is therefore total — it rendered this correctly while the Rust one aborted. Both halves are
+// fixed: the span now covers the whole character, and `LineIndex::boundary` snaps every offset
+// before it reaches a slice, because a renderer that crashes destroys the diagnostic it was
+// called to deliver.
+//
+// Identifiers stay ASCII, which is a decision rather than an accident: a language whose claim
+// is that a reviewer can SEE a program is right cannot have two identifiers that look
+// identical and are not. Unicode confusables are exactly that, and no amount of care in review
+// catches them.
+let é: Int = 1;
+print(é);

@@ -146,6 +146,56 @@ choice. Keeping it as an oracle while dropping the bootstrap framing is the hone
 LSP, no `review`, no `mcp-schema`. That is where all the interesting non-compiler work still lives in
 Rust, and moving it is a real capability claim — unlike the subset claim, which was false.
 
+### A0c — IN PROGRESS (v0.0.216): every `.rs` gets a `.bx`, and it is a ratchet
+
+Andre: *"make sure all rs compiler has a burxt equivalent — that is the true meaning of both compilers
+agree."*
+
+A sharper bar than the one being met, and the sharpening is the point. "Both compilers agree" had come to
+mean **the language** is covered twice — 142 of 142, a byte-identical fixpoint, 30 of 30 runtime
+guarantees, all true. But the agreement stopped where the compiler proper stops, so every claim Burxt made
+about **tooling** was a claim about what Rust can do with a Burxt AST.
+
+`every_rust_module_has_a_burxt_counterpart_or_a_reason` now holds the whole directory to account: each
+`.rs` is mapped to its counterpart or listed as missing **with a reason**, the mapped count is a ratchet,
+and a new `.rs` with no row fails the suite — so the decision is forced when the file is written rather
+than in an audit a hundred versions later. That timing is the entire lesson of §3b.
+
+| | Counterpart | State |
+|---|---|---|
+| `main.rs` | `main.bx` | mapped; the Burxt one has no SUBCOMMANDS yet (`review`, `mcp-schema`, `explain`, `layout`, `--json`) |
+| `lexer.rs` · `ast.rs` | `types.bx` | mapped |
+| `parser.rs` | `parser.bx` | mapped |
+| `typeck.rs` | `check.bx` | mapped |
+| `codegen.rs` | `emit.bx` | mapped |
+| `json.rs` | `lib/json.bx` | mapped — the Burxt one lives in `lib/` because it is useful to any program |
+| **`diag.rs`** | **`diag.bx`** | **DONE v0.0.216**, held byte-for-byte by `the_two_compilers_render_a_problem_identically` |
+| `schema.rs` | — | **writable today.** `burxt mcp-schema`; stage-1 already parses the bracket clauses it reads |
+| `review.rs` | — | **writable today.** Also the mechanical semver rule C2 depends on, so Burxt cannot enforce its own compatibility promise until this exists |
+| `lsp.rs` | — | **BLOCKED, not merely missing.** See below |
+
+**8 of 11.** Two rows are ordinary work. The third is a real finding:
+
+> **`lsp.bx` is unwritable, not unwritten.** A language server frames messages over **stdin**, and Burxt
+> cannot read stdin. No builtin does it, and `fread` is out of reach because a caller cannot produce a
+> pointer to writable memory — `CPointer` is opaque by design, which is the pointer wall working. So this
+> row needs a **stdin primitive designed first**, and that is a language decision, not a port. Naming it
+> here beats discovering it after writing 600 lines.
+
+**And writing the first counterpart found a crash in the original**, which is the argument for the whole
+exercise stated better than I could state it in advance. `let é: Int = ;` made stage-0 **panic** — a Rust
+backtrace and exit 101 — because `lexer.rs` ended an unknown-character span one BYTE into a two-byte
+character and `diag.rs` then sliced the source at that non-boundary. `diag.bx` rendered it correctly the
+whole time: it counts bytes, so it is total where the Rust one was partial. **The differential test
+running in the direction nobody expects** — the second implementation auditing the first rather than
+being checked against it. Fixture: `tests/fail/non_ascii_identifier.bx`.
+
+The one interesting problem in `diag.bx` **dissolved**, which is the wall pattern's eighth sighting:
+`diag.rs` counts columns in CHARACTERS and Burxt has no `.chars()` (that is A5). But the question was
+never *"can I iterate codepoints"* — it was *"can I count them"*, and in UTF-8 the count is just the
+bytes that are not continuation bytes (`bit_and(b, 192) != 128`). Exact, no approximation, no waiting for
+A5, nothing named as a limit.
+
 ## A — Compiler fixes, ranked by leverage ÷ cost
 
 | # | Fix | Size | Unblocks |

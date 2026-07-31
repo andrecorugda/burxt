@@ -1,0 +1,63 @@
+// ============================================================================
+// tests/support/diag_harness.bx — runs `src/burxt-compiler/diag.bx` from the outside, so a
+// test can hold its output against `src/rust-compiler/diag.rs`'s byte for byte.
+//
+// This is a HARNESS rather than a fixture, and the distinction is why it lives in
+// `tests/support/` instead of `tests/pass/`: a fixture's answer is a checked-in `.stdout`, and
+// this program's answer depends on the arguments it is given. `tests/support/failing_suite.bx`
+// is the precedent and it was already here — I wrote this into a `tests/tools/` I invented
+// beside it without looking first, which is `spec/A7.0-NAMING.md` §10. `the_two_compilers_render_a_problem_identically`
+// supplies them from what stage-0 just reported, which is the only way the comparison is
+// against a real diagnostic rather than one I invented to pass.
+//
+// It reads no library on purpose. `string_to_int` exists in `lib/string.bx` and would do,
+// but the compiler modules do not depend on `lib/` — `diag.rs` hand-writes its own JSON
+// escaping for the same reason — and a harness that drags the standard library in would be
+// testing more than the module under test.
+//
+//     diag_harness <source.bx> <byteStart> <byteEnd> <message>
+//
+// Prints the caret rendering, then a line of JSON. Both without a trailing blank line, so
+// the comparison needs no trimming rule of its own.
+// ============================================================================
+
+use "../../src/burxt-compiler/diag.bx";
+
+// Digits to an Int. No fallback and no Option: this harness is handed its arguments by a
+// test that just read them out of stage-0's own JSON, so a non-digit here is a broken test
+// rather than bad input, and the right answer is to stop rather than to guess one.
+function digits_to_int(text: String) -> Int
+    requires len(text) > 0
+{
+    let mutable total: Int = 0;
+    let mutable i: Int = 0;
+    while i < len(text) {
+        let b: Int = byte_at(text, i);
+        if b < 48 || b > 57 {
+            print_error("diag_harness: `" + text + "` is not a number");
+            exit(2);
+        }
+        total = total * 10 + (b - 48);
+        i += 1;
+    }
+    return total;
+}
+
+region main {
+    if argument_count() < 5 {
+        print_error("usage: diag_harness <source.bx> <byteStart> <byteEnd> <message>");
+        exit(2);
+    }
+    let path: String = argument(1);
+    let span_start: Int = digits_to_int(argument(2));
+    let span_end: Int = digits_to_int(argument(3));
+    let message: String = argument(4);
+    let src: String = read_file(path);
+
+    // `diag_render` already ends in a newline, and `print` adds one — so the render goes out
+    // without its last byte and `print` supplies it. Trimming in the test instead would hide
+    // a renderer that forgot the newline, which is a real difference from `diag.rs`.
+    let rendered: String = diag_render(path, src, span_start, span_end, message);
+    print(substring(rendered, 0, len(rendered) - 1));
+    print(diag_json(path, src, span_start, span_end, message));
+}
