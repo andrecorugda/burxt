@@ -341,14 +341,20 @@ impl<'a> Lexer<'a> {
                 self.bump();
                 if self.peek_char() == Some(&'&') { self.bump(); return Ok(Token::AmpAmp); }
                 return Err(
-                    "Burxt has no bitwise `&` — did you mean `&&` (logical and)?".to_string(),
+                    "Burxt has no bitwise `&` — write `bit_and(a, b)`, or did you mean `&&` \
+                     (logical and)? The bit operations are NAMED because `a & b == c` means \
+                     `a & (b == c)` in C, and a precedence table a reviewer has to remember is \
+                     the opposite of what this language is for."
+                        .to_string(),
                 );
             }
             '|' => {
                 self.bump();
                 if self.peek_char() == Some(&'|') { self.bump(); return Ok(Token::PipePipe); }
                 return Err(
-                    "Burxt has no bitwise `|` — did you mean `||` (logical or)?".to_string(),
+                    "Burxt has no bitwise `|` — write `bit_or(a, b)`, or did you mean `||` \
+                     (logical or)?"
+                        .to_string(),
                 );
             }
             '!' => {
@@ -422,6 +428,50 @@ impl<'a> Lexer<'a> {
     /// Lex an integer or a decimal. Decimals are captured EXACTLY: we count the
     /// fractional digits to derive the scale and build the unscaled integer.
     fn lex_number(&mut self) -> Result<Token, String> {
+        // `0x...` — hexadecimal, for bit work only.
+        //
+        // Added with the bit operations (v0.0.199) and for their sake: a mask, a CRC polynomial or a
+        // protocol field is written in hex everywhere it is SPECIFIED, and a reviewer checking
+        // `0xEDB88320` against the standard that defines it should be comparing the same characters.
+        // Writing it as 3988292384 is the same number and a worse review.
+        //
+        // No hex Decimal, deliberately: a scale is a decimal-digit count, so `0x1.8` would have to
+        // mean something about base ten that base sixteen cannot say.
+        if self.peek_char() == Some(&'0') {
+            let mut clone = self.chars.clone();
+            clone.next();
+            if matches!(clone.peek(), Some(&'x') | Some(&'X')) {
+                self.bump();
+                self.bump();
+                let mut digits = String::new();
+                while let Some(&c) = self.peek_char() {
+                    if c.is_ascii_hexdigit() {
+                        digits.push(c);
+                        self.bump();
+                    } else if c == '_' {
+                        self.bump();          // `0xFFFF_FFFF` reads better and means the same
+                    } else {
+                        break;
+                    }
+                }
+                if digits.is_empty() {
+                    return Err(
+                        "`0x` needs hexadecimal digits after it, e.g. `0xFF`".to_string()
+                    );
+                }
+                // An i64 is signed, so the whole 64-bit range is written by giving all sixteen
+                // digits: `0xFFFFFFFFFFFFFFFF` is -1, the same bits `bit_not(0)` produces. Parsed
+                // as unsigned and reinterpreted, because that is what a bit pattern means — and it
+                // is checked, so `0x1_0000_0000_0000_0000` is refused rather than wrapped.
+                return match u64::from_str_radix(&digits, 16) {
+                    Ok(v) => Ok(Token::Int(v as i64)),
+                    Err(_) => Err(format!(
+                        "0x{} does not fit in 64 bits — an Int holds sixteen hex digits",
+                        digits
+                    )),
+                };
+            }
+        }
         let mut int_part = String::new();
         while let Some(&c) = self.peek_char() {
             if c.is_ascii_digit() {

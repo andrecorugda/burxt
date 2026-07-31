@@ -1249,8 +1249,8 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
 
     let _ = fs::remove_dir_all(&scratch);
     assert!(
-        caught >= 216,
-        "stage-1 rejected only {} of {} fail programs, down from 216",
+        caught >= 219,
+        "stage-1 rejected only {} of {} fail programs, down from 219",
         caught,
         total
     );
@@ -2536,13 +2536,25 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
         // The arithmetic that says when this stops being a raise: the region reserves 1 GB, so at
         // 40 KB per line the wall is around 25,000 lines of Burxt. Stage-1 is 10,400. Two more
         // milestones of this size and the answer has to be slice 3 rather than a bigger number.
+        //
+        // **v0.0.199 is the first of those two.** 497 MB measured, deterministically — three runs,
+        // the same number each time — from the pointer wall (v0.0.196) and the bit operations and hex
+        // lexing (v0.0.199), which added roughly 400 lines across both compilers. Raised to 540
+        // rather than to 500, and the paragraph above is the reason: 3 MB of margin on a 497 MB
+        // measurement is 0.6%, which is precisely the mistake the 440 raise made. A ceiling that
+        // close measures the runner, not the trend, and the failure mode is a commit that passes
+        // here and fails in CI while looking like someone else's fault.
+        //
+        // So: ONE more raise of this size, and then the answer is slice 3. Writing that here rather
+        // than in a commit message, because the next person to reach this line is the one who needs
+        // to know the budget is nearly spent.
         assert!(
-            kb < 480 * 1024,
-            "the compiler's peak RSS on its own source is {} MB; the ceiling is 480 MB, and \
+            kb < 540 * 1024,
+            "the compiler's peak RSS on its own source is {} MB; the ceiling is 540 MB, and \
              the region it reserves is 1 GB (196 MB at v0.0.90, 239 MB at v0.0.110, 335 MB at \
-             v0.0.121, 400 MB at v0.0.169, 440 MB at v0.0.183 — roughly 40 KB per line of \
-             compiler, and nothing releases until the process exits because per-block release is \
-             M14 slice 3)",
+             v0.0.121, 400 MB at v0.0.169, 440 MB at v0.0.183, 480 MB at v0.0.190, 497 MB at \
+             v0.0.199 — roughly 40 KB per line of compiler, and nothing releases until the process \
+             exits because per-block release is M14 slice 3)",
             kb / 1024
         );
     }

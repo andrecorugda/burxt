@@ -1,0 +1,5 @@
+// A Decimal has no bit pattern worth exposing: its meaning IS its scale, so shifting it would change
+// the number by a factor of two while the scale went on claiming otherwise. $1.00 is the integer 100,
+// and `shift_left` of it is 200, which is $2.00 — arithmetic dressed as a bit operation, and the kind
+// of thing that is right until someone changes the scale.
+print(bit_and($1.00, 2));

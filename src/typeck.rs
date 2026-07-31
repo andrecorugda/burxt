@@ -65,6 +65,7 @@ pub enum TypedExprKind {
     /// `divide_floor`, `divide_toward_zero` or `remainder` on two Ints. Three names rather than one
     /// operator, because they disagree on negatives.
     IntDiv { kind: crate::codegen::IntDiv, lhs: Box<TypedExpr>, rhs: Box<TypedExpr> },
+    Bit { kind: crate::codegen::BitOp, lhs: Box<TypedExpr>, rhs: Option<Box<TypedExpr>> },
     /// `old(expr)` in an `ensures` clause: the value that expression had on
     /// ENTRY, by index into the function's hoisted list.
     Old(usize),
@@ -4603,6 +4604,87 @@ impl TypeChecker {
                             at: Box::new(at),
                             len: Box::new(len),
                         },
+                    });
+                }
+                // ---- bit operations, by name ----
+                //
+                // Reversing a stated decision, and the reason is on record in
+                // spec/FAR-HORIZON-ROADMAP.md §5: bitwise was refused when the language had no
+                // ambition to store data. It does now, and without these a program cannot parse a
+                // binary format, compute a checksum, or implement a hash — so it cannot write its
+                // own file format, which is what the local-database vision is made of.
+                //
+                // NAMES rather than operators, for the reason `BitOp`'s doc gives: `a & b == c`
+                // means `a & (b == c)` in C, and the right shift is genuinely two operations that
+                // one symbol cannot distinguish.
+                if let Some(kind) = match name.as_str() {
+                    "bit_and" => Some(crate::codegen::BitOp::And),
+                    "bit_or" => Some(crate::codegen::BitOp::Or),
+                    "bit_xor" => Some(crate::codegen::BitOp::Xor),
+                    "bit_not" => Some(crate::codegen::BitOp::Not),
+                    "shift_left" => Some(crate::codegen::BitOp::Left),
+                    "shift_right_zeros" => Some(crate::codegen::BitOp::RightZeros),
+                    "shift_right_sign" => Some(crate::codegen::BitOp::RightSign),
+                    _ => None,
+                } {
+                    let unary = kind == crate::codegen::BitOp::Not;
+                    let wanted = if unary { 1 } else { 2 };
+                    if arguments.len() != wanted {
+                        return Err(format!(
+                            "{}(...) takes {} Int{}",
+                            name,
+                            wanted,
+                            if unary { "" } else { "s" }
+                        ));
+                    }
+                    let lhs = self.check_expr(&arguments[0], Some(&Type::Int))?;
+                    if lhs.ty != Type::Int {
+                        return Err(format!(
+                            "{}(...) works on the bits of an Int, but this has type {}. A Decimal \
+                             has no bit pattern worth exposing — its meaning is its scale, and \
+                             shifting it would change the number by a factor of two while the \
+                             scale kept claiming otherwise.",
+                            name, lhs.ty
+                        ));
+                    }
+                    let mut rhs = None;
+                    if !unary {
+                        let side = self.check_expr(&arguments[1], Some(&Type::Int))?;
+                        if side.ty != Type::Int {
+                            return Err(format!(
+                                "{}(...) works on Ints, but the second argument has type {}.",
+                                name, side.ty
+                            ));
+                        }
+                        // A shift DISTANCE outside 0..=63 has no answer: LLVM leaves it undefined,
+                        // C leaves it undefined, and a language whose whole claim is that it does
+                        // not answer questions wrongly cannot pick a number here. A literal is
+                        // refused now — the same treatment a literal array index out of bounds
+                        // gets — and anything else is checked at runtime.
+                        let shifting = matches!(
+                            kind,
+                            crate::codegen::BitOp::Left
+                                | crate::codegen::BitOp::RightZeros
+                                | crate::codegen::BitOp::RightSign
+                        );
+                        if shifting {
+                            if let TypedExprKind::IntLit(n) = &side.kind {
+                                if *n < 0 || *n > 63 {
+                                    return Err(format!(
+                                        "{}(x, {}) has no answer: an Int is 64 bits, so a shift \
+                                         distance is 0 to 63. Shifting by {} is not \
+                                         \"everything falls off the end\" — it is undefined, and \
+                                         this language does not answer undefined questions.",
+                                        name, n, n
+                                    ));
+                                }
+                            }
+                        }
+                        rhs = Some(Box::new(side));
+                    }
+                    return Ok(TypedExpr {
+                        ty: Type::Int,
+                        kind: TypedExprKind::Bit { kind, lhs: Box::new(lhs), rhs },
                     });
                 }
                 // Integer division, by name. `/` on two Ints stays refused: one

@@ -1,0 +1,10 @@
+// A shift distance the checker cannot see is checked at RUN time, with the same message. It has to be
+// checked somewhere: LLVM leaves a shift by 64 or more undefined, and on x86 the hardware masks the
+// distance to six bits — so `x << 64` would silently answer x.
+//
+// Both compilers report this byte for byte, which is the differential's job.
+function shifty(x: Int, n: Int) -> Int {
+    return shift_left(x, n);
+}
+print(shifty(1, 10));
+print(shifty(1, 64));

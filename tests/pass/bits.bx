@@ -1,0 +1,112 @@
+// Bit operations — v0.0.199, reversing a decision, and spec/FAR-HORIZON-ROADMAP.md §5 has the reason:
+// bitwise was refused when the language had no ambition to store data. It has one now, and without
+// these a program cannot parse a binary format, compute a checksum, or implement a hash — so it
+// cannot write its own file format, which is what the local-database vision is made of.
+//
+// NAMED, not operators, and that is the same call `divide_floor` records rather than a new one:
+//
+//   1. `a & b == c` means `a & (b == c)` in C, and has been a bug in every C program that forgot.
+//      This language's claim is that a reviewer can SEE a program is right; a precedence table they
+//      have to remember is the opposite of that. `bit_and(a, b) == c` cannot be misread.
+//   2. The right shift is genuinely TWO operations — on a negative value, filling with zeros and
+//      copying the sign bit give different answers, and one symbol cannot say which. Exactly the
+//      situation `/` on two Ints is in. Once the shift needs two names, giving `&` an operator would
+//      be the inconsistency.
+//
+// The two real checksums at the bottom are the point: those are the programs the decision was
+// reversed for, and their answers are checked against values the standards publish.
+
+// ---- the operations themselves ----
+print(bit_and(12, 10));                  // 1100 & 1010 = 1000
+print(bit_or(12, 10));                   // 1110
+print(bit_xor(12, 10));                  // 0110
+print(bit_not(0));                       // every bit set, and an Int is signed
+print(bit_not(5));
+
+// Hexadecimal, added with these and for their sake: a mask or a polynomial is written in hex
+// wherever it is SPECIFIED, so a reviewer checks the same characters the standard shows.
+print(0xFF);
+print(0xFF00);
+print(0xFFFF_FFFF);                      // `_` groups digits and means nothing
+print(0xFFFFFFFFFFFFFFFF);               // sixteen digits fill the register: -1
+print(bit_not(0) == 0xFFFFFFFFFFFFFFFF);
+
+// ---- shifts ----
+print(shift_left(1, 10));
+print(shift_right_zeros(1024, 10));
+// The two right shifts disagree on negatives, which is the whole reason there are two of them.
+print(shift_right_zeros(0 - 1, 63));     // filled with zeros: 1
+print(shift_right_sign(0 - 1, 63));      // sign copied: still -1
+print(shift_right_sign(0 - 8, 1) == divide_floor(0 - 8, 2));
+// `shift_left` DISCARDS bits past the top, and is the one place losing information is not an error —
+// because it is what a shift is for. So it is NOT `x * 2^n`: multiplication traps on overflow.
+print(shift_left(1, 63));
+
+// ---- packing bytes, which is most of a binary format ----
+function be32(a: Int, b: Int, c: Int, d: Int) -> Int {
+    return bit_or(bit_or(shift_left(a, 24), shift_left(b, 16)),
+                  bit_or(shift_left(c, 8), d));
+}
+function byte_of(word: Int, which: Int) -> Int {
+    return bit_and(shift_right_zeros(word, 8 * which), 0xFF);
+}
+let packed: Int = be32(0xDE, 0xAD, 0xBE, 0xEF);
+print(packed == 0xDEADBEEF);
+print(byte_of(packed, 3));
+print(byte_of(packed, 0));
+
+// ---- wrapping addition, built rather than built in ----
+// `+` traps on overflow, which is right: a total that silently wraps is the wrong answer this
+// language exists to refuse. But a checksum, a hash and a protocol field all NEED the wrap — so the
+// question is whether the language should offer a second `+`.
+//
+// It should not, and this is why: the wrap is CONSTRUCTIBLE from bit operations, and writing it out
+// makes it visible. A reader of `add_wrapping(a, b)` can see the carry being discarded; a reader of
+// `wrapping_add(a, b)` has to know what the name promises. Same argument as naming the shifts.
+// Addition that discards the carry out of the top, built from bit operations because `+` traps.
+// Half-adder logic: sum without carry is xor, carry is and, repeat until no carry is left.
+function add_wrapping(a: Int, b: Int) -> Int {
+    let mutable sum: Int = a;
+    let mutable carry: Int = b;
+    while carry != 0 {
+        let without: Int = bit_xor(sum, carry);
+        let next: Int = shift_left(bit_and(sum, carry), 1);
+        sum = without;
+        carry = next;
+    }
+    return sum;
+}
+print(add_wrapping(1, 2));
+print(add_wrapping(0 - 1, 1));                       // wraps to 0 rather than trapping
+print(add_wrapping(0x7FFFFFFFFFFFFFFF, 1) == 0x8000000000000000);
+
+// ---- CRC-32, against the value the standard publishes ----
+// crc32("123456789") is 0xCBF43926 — a check value written into the specification of CRC-32/ISO-HDLC
+// precisely so an implementation can prove itself. This is the fixture proving Burxt can now do the
+// thing it was unable to do one version ago.
+function crc32_byte(crc: Int, byte: Int) -> Int {
+    let mutable c: Int = bit_xor(crc, byte);
+    let mutable bit: Int = 0;
+    while bit < 8 {
+        if bit_and(c, 1) == 1 {
+            c = bit_xor(shift_right_zeros(c, 1), 0xEDB88320);
+        } else {
+            c = shift_right_zeros(c, 1);
+        }
+        bit += 1;
+    }
+    return c;
+}
+function crc32(text: String) -> Int {
+    let mutable crc: Int = 0xFFFFFFFF;
+    let mutable i: Int = 0;
+    while i < len(text) {
+        crc = crc32_byte(crc, byte_at(text, i));
+        i += 1;
+    }
+    return bit_and(bit_xor(crc, 0xFFFFFFFF), 0xFFFFFFFF);
+}
+print(crc32("123456789") == 0xCBF43926);
+print(crc32(""));
+print(crc32("a") == 0xE8B7BE43);
+print(crc32("The quick brown fox jumps over the lazy dog") == 0x414FA339);

@@ -1,0 +1,8 @@
+// An Int is 64 bits, so a shift distance is 0 to 63. Shifting by 64 is not "everything falls off the
+// end" — it is UNDEFINED in LLVM, and on x86 the hardware masks the distance to six bits, so `x << 64`
+// silently becomes `x << 0` and the value comes back unchanged. A wrong answer that looks like a
+// working program is the one outcome this language exists to prevent.
+//
+// A literal is refused here; a computed distance is checked at runtime
+// (tests/panic/shift_distance_checked_at_runtime.bx).
+print(shift_left(1, 64));

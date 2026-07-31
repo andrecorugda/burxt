@@ -403,7 +403,7 @@ defines what Burxt becomes.
 | Integer widths, unsigned | yes | partly | yes | **`Int` only**, signed 64-bit, traps | Blocking for binary work |
 | Concurrency | threads, async | threads-ish, async | threads, virtual threads | **none.** No thread, no async, no scheduler | Blocking |
 | Network / sockets | std + crates | built in | built in | **nothing wrapped.** A fd is an int so it is reachable, but no library | Blocking |
-| TLS / crypto | crates | built in | built in | **none**, and gated on bitwise | Blocking |
+| TLS / crypto | crates | built in | built in | **none.** No longer gated on bitwise (v0.0.199) — gated on sockets and a lot of work | Blocking |
 | Calling an existing C library | yes | yes (ext) | JNI | **open (v0.0.196).** `-> CPointer`, with `c_is_null` and `c_string_at`. Anything holding a handle or returning text is reachable; a C STRUCT still is not (needs widths) | Partly |
 | Dependency management | cargo | composer / pip | maven | **none.** Every program starts from `lib/` | Blocking |
 | Cross-compilation | `--target` | n/a | JVM | **objects, yes (v0.0.197)** — 8 triples, ELF/Mach-O/COFF/wasm, identical IR. Linking is delegated, so a runnable foreign binary needs that target's toolchain | Partly |
@@ -465,8 +465,9 @@ Counted rather than guessed, over §1 and §2:
    eight triples, and the IR turned out to be identical on all of them rather than merely equivalent.
    What remains is per-target LINKING (a sysroot-and-packaging problem, not a compiler one) and a
    wasm host story. See §M3 Slice 1.
-3. **Bitwise + integer widths** (unblocks: binary formats, hashing, checksums, compression, a
-   database file format, crypto).
+3. **Bitwise + integer widths** — **bitwise DONE (v0.0.199)**, as seven named builtins plus hex
+   literals, with CRC-32 checked against the standard's published values. Integer widths (`i32`,
+   unsigned) remain, and they are what a C *struct* layout and a fixed-width record need. See §5.
 4. **The small production trio — exit code, stderr, env** (unblocks: shipping *anything* as a CLI).
    Cheap, unglamorous, and currently the reason a Burxt program cannot behave like a Unix citizen.
 5. **Concurrency** (unblocks: serving, using a second core).
@@ -479,11 +480,70 @@ Counted rather than guessed, over §1 and §2:
 
 Not overturned — re-opened, with the reason the original call may not survive contact.
 
-**Bitwise operators.** Refused on purpose, and the refusal message is helpful. But the consequence is
-that Burxt cannot parse a binary format, compute a checksum, or implement a hash — which means it
-cannot write its own database file format, and Andre's local-database vision is gated on exactly
-that. Reversing a stated decision needs the reason written down, and the reason is: the decision was
-made when the language had no ambition to store data.
+**Bitwise operators — REVERSED (v0.0.199).** Refused on purpose, and the refusal message was helpful.
+But the consequence was that Burxt could not parse a binary format, compute a checksum, or implement a
+hash — so it could not write its own database file format, and the local-database vision is gated on
+exactly that. **The reason for the reversal, on record: the decision was made when the language had no
+ambition to store data.**
+
+What landed is not `&`. Seven **named** builtins:
+
+```burxt
+bit_and(a, b)   bit_or(a, b)   bit_xor(a, b)   bit_not(a)
+shift_left(x, n)   shift_right_zeros(x, n)   shift_right_sign(x, n)
+```
+
+**Names rather than operators, and this is the same call `divide_floor` already records rather than a
+new one:**
+
+1. `a & b == c` means `a & (b == c)` in C, and has been a bug in every C program that forgot. This
+   language's claim is that a reviewer can *see* a program is right; a precedence table they have to
+   remember is the opposite of that. `bit_and(a, b) == c` cannot be misread.
+2. **The right shift is genuinely two operations.** On a negative value, filling with zeros and copying
+   the sign bit give different answers, and one symbol cannot say which — exactly the situation `/` on
+   two Ints is in. Once the shift needs two names, giving `&` an operator would be the inconsistency.
+
+So `&` and `|` keep their lexer error, now naming the replacement, in both compilers.
+
+**A shift distance outside 0..=63 is refused, not answered.** This is the part that is about the
+thesis rather than about completeness: a shift by 64 is *undefined* in LLVM, and on x86 the hardware
+masks the distance to six bits — so `x << 64` silently answers `x`. A literal is a compile error; a
+computed distance traps at runtime, byte-identically in both compilers.
+
+**`shift_left` discards bits past the top, and is the one place in the language where losing
+information is not an error** — because that is what a shift is *for*. It is therefore explicitly not
+`x * 2^n`: multiplication traps on overflow and this does not. Stated in the name's documentation so
+nobody reaches for it as a fast multiply.
+
+**Wrapping addition was NOT added**, and the reason is the same shape: `+` traps, correctly, because a
+total that silently wraps is the wrong answer. But a checksum needs the wrap — and the wrap is
+*constructible* from bit operations (`tests/pass/bits.bx` builds it with half-adder logic). Writing it
+out makes the carry being discarded visible; `wrapping_add(a, b)` would require the reader to know what
+the name promises.
+
+**Hexadecimal literals came with them**, for their sake: a mask, a CRC polynomial or a protocol field
+is written in hex wherever it is *specified*, so a reviewer checking `0xEDB88320` against the standard
+that defines it compares the same characters. `3988292384` is the same number and a worse review.
+`0xFFFF_FFFF` groups digits; sixteen digits fill a signed Int, so `0xFFFFFFFFFFFFFFFF` is `-1` and
+equals `bit_not(0)`; a seventeenth is refused. No hex Decimal — a scale counts *decimal* places.
+
+**The proof is a real checksum, not a demonstration.** `tests/pass/bits.bx` computes CRC-32 and checks
+it against the three values the standard publishes for exactly this purpose:
+
+| input | expected | |
+|---|---|---|
+| `"123456789"` | `0xCBF43926` | the standard's own check value |
+| `"a"` | `0xE8B7BE43` | |
+| `"The quick brown fox jumps over the lazy dog"` | `0x414FA339` | |
+
+Byte-identical in both compilers. And the nicest confirmation that the feature was needed: **stage-1's
+own hex lexer uses it.** Accumulating `hex * 16 + d` traps on the sixteenth digit, because
+multiplication does not wrap — so the lexer that reads hex literals is written with the shift and or
+that the literals exist to serve.
+
+**Still not done, and separable:** integer widths (`i32`, unsigned). Those are what a C *struct* layout
+needs, and what a fixed-width record format wants. Bit operations alone are enough to pack and unpack
+bytes by hand, which is most of a binary format — so this unblocks N9 row 6 without them.
 
 **Floating point.** The money thesis says no float, and that is right for money. But it also rules
 out geometry, statistics, and standard vector similarity — which gates the RAG vision. The third

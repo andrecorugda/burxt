@@ -1,0 +1,4 @@
+// Sixteen hex digits fill a 64-bit Int exactly, so `0xFFFFFFFFFFFFFFFF` is -1 and is legal. A
+// seventeenth digit cannot be represented, and quietly dropping the front of the number is how a mask
+// becomes the wrong mask.
+print(0x1_0000_0000_0000_0000);

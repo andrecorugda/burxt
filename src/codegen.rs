@@ -1568,6 +1568,14 @@ impl<'ctx> CodeGen<'ctx> {
                 let b = self.gen_expr(rhs)?.into_int_value();
                 self.build_int_div(*kind, a, b).map(Into::into)
             }
+            TypedExprKind::Bit { kind, lhs, rhs } => {
+                let a = self.gen_expr(lhs)?.into_int_value();
+                let b = match rhs {
+                    Some(r) => Some(self.gen_expr(r)?.into_int_value()),
+                    None => None,
+                };
+                self.build_bit(*kind, a, b).map(Into::into)
+            }
             TypedExprKind::Old(index) => {
                 let (slot, ty) = self
                     .old_slots
@@ -2699,6 +2707,81 @@ impl<'ctx> CodeGen<'ctx> {
         let end = unsafe { self.builder.build_gep(i8t, buf, &[size], "end") }.map_err(err)?;
         self.builder.build_store(end, i8t.const_zero()).map_err(err)?;
         Ok(buf)
+    }
+
+    /// One bit operation, with the shift distance checked.
+    ///
+    /// The check is not politeness. A shift by 64 or more is UNDEFINED in LLVM — it does not mean
+    /// "every bit falls off the end", it means the optimiser may assume it never happens and emit
+    /// whatever follows from that. On x86 the hardware masks the distance to 6 bits, so `x << 64`
+    /// silently becomes `x << 0` and the value comes back unchanged: a wrong answer that looks like
+    /// a working program, which is the one outcome this language exists to prevent. A literal is
+    /// refused by the checker; anything else dies here, naming the range.
+    fn build_bit(
+        &mut self,
+        op: BitOp,
+        a: IntValue<'ctx>,
+        b: Option<IntValue<'ctx>>,
+    ) -> Result<IntValue<'ctx>, String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+        match op {
+            BitOp::Not => self
+                .builder
+                .build_not(a, "bit_not")
+                .map_err(err),
+            BitOp::And => self
+                .builder
+                .build_and(a, b.ok_or("codegen bug: bit_and with one argument")?, "bit_and")
+                .map_err(err),
+            BitOp::Or => self
+                .builder
+                .build_or(a, b.ok_or("codegen bug: bit_or with one argument")?, "bit_or")
+                .map_err(err),
+            BitOp::Xor => self
+                .builder
+                .build_xor(a, b.ok_or("codegen bug: bit_xor with one argument")?, "bit_xor")
+                .map_err(err),
+            BitOp::Left | BitOp::RightZeros | BitOp::RightSign => {
+                let n = b.ok_or("codegen bug: a shift with one argument")?;
+                // 0 <= n <= 63, as one unsigned comparison: a negative distance wraps to something
+                // enormous, so `n as u64 > 63` catches both ends at once.
+                let too_far = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::UGT,
+                        n,
+                        i64t.const_int(63, false),
+                        "shift_too_far",
+                    )
+                    .map_err(err)?;
+                let function = self
+                    .builder
+                    .get_insert_block()
+                    .and_then(|bb| bb.get_parent())
+                    .ok_or("codegen bug: a shift outside a function")?;
+                let bad = self.ctx.append_basic_block(function, "shift_undefined");
+                let ok = self.ctx.append_basic_block(function, "shift_ok");
+                self.builder.build_conditional_branch(too_far, bad, ok).map_err(err)?;
+                self.builder.position_at_end(bad);
+                self.build_panic(
+                    "burxt runtime error: a shift distance must be 0 to 63 — an Int is 64 bits\n",
+                )?;
+                self.builder.position_at_end(ok);
+                match op {
+                    BitOp::Left => self.builder.build_left_shift(a, n, "shift_left").map_err(err),
+                    // `false` is a logical shift (zeros), `true` an arithmetic one (sign).
+                    BitOp::RightZeros => self
+                        .builder
+                        .build_right_shift(a, n, false, "shift_right_zeros")
+                        .map_err(err),
+                    _ => self
+                        .builder
+                        .build_right_shift(a, n, true, "shift_right_sign")
+                        .map_err(err),
+                }
+            }
+        }
     }
 
     /// Copy the NUL-terminated bytes at a C pointer into a region-allocated Burxt String.
@@ -5043,6 +5126,40 @@ struct MeasureState<'ctx> {
     parameters: Vec<(String, Type)>,
     text: String,
     function: String,
+}
+
+/// Which bit operation a call asked for.
+///
+/// **Seven names rather than five operators**, and that is the same decision `IntDiv` records one
+/// paragraph down rather than a new one. Two reasons, and the second is the one that settles it:
+///
+/// 1. `a & b == c` means `a & (b == c)` in C, and has been a bug in every C program that forgot.
+///    Burxt's claim is that a reviewer can SEE a program is right; a precedence table they have to
+///    remember is the opposite of that. `bit_and(a, b) == c` cannot be misread.
+/// 2. **The right shift is genuinely two operations.** On a negative value, filling with zeros and
+///    copying the sign bit give different answers, and one operator cannot say which — exactly the
+///    situation `/` on two Ints is in. Once the shift needs two names, giving `&` an operator and
+///    `>>` a name would be the inconsistency.
+///
+/// So `&` and `|` keep their helpful lexer error, now pointing at `bit_and`/`bit_or`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BitOp {
+    And,
+    Or,
+    Xor,
+    /// Every bit flipped. `bit_not(0)` is -1, because an Int is signed and there is nowhere else
+    /// for the top bit to go.
+    Not,
+    /// Bits shifted past the top are DISCARDED, and this is the one place in the language where
+    /// losing information is not an error — because it is what a shift is for. `shift_left(x, n)`
+    /// is therefore **not** `x * 2^n`: multiplication traps on overflow and this does not. If you
+    /// mean arithmetic, write arithmetic and get the trap.
+    Left,
+    /// Fills with zeros — a logical shift. `shift_right_zeros(-1, 63)` is 1.
+    RightZeros,
+    /// Copies the sign bit — an arithmetic shift. `shift_right_sign(-1, 63)` is -1, and
+    /// `shift_right_sign(x, n)` is `divide_floor(x, 2^n)`.
+    RightSign,
 }
 
 /// Which integer division a call asked for. Three names rather than one operator,

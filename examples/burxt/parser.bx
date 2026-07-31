@@ -304,6 +304,13 @@ function builtin_arity(name: String) -> Int {
     if name == "c_string_at" { return 1; }
     if name == "argument" { return 1; }
     if name == "hash" { return 1; }
+    if name == "bit_not" { return 1; }
+    if name == "bit_and" { return 2; }
+    if name == "bit_or" { return 2; }
+    if name == "bit_xor" { return 2; }
+    if name == "shift_left" { return 2; }
+    if name == "shift_right_zeros" { return 2; }
+    if name == "shift_right_sign" { return 2; }
     if name == "byte_at" { return 2; }
     if name == "push" { return 2; }
     if name == "truncate" { return 2; }
@@ -330,6 +337,13 @@ function builtin_result(name: String) -> Type {
     if name == "argument_count" { return simple_type(40); }
     if name == "write_file" { return simple_type(40); }
     if name == "write_bytes" { return simple_type(40); }
+    if name == "bit_and" { return simple_type(40); }
+    if name == "bit_or" { return simple_type(40); }
+    if name == "bit_xor" { return simple_type(40); }
+    if name == "bit_not" { return simple_type(40); }
+    if name == "shift_left" { return simple_type(40); }
+    if name == "shift_right_zeros" { return simple_type(40); }
+    if name == "shift_right_sign" { return simple_type(40); }
     if name == "divide_floor" { return simple_type(40); }
     if name == "divide_toward_zero" { return simple_type(40); }
     if name == "remainder" { return simple_type(40); }
@@ -339,11 +353,49 @@ function builtin_result(name: String) -> Type {
 
 // What each builtin will accept. The receiver-shaped ones — `push` and `truncate` —
 // also need a MUTABLE binding, because they change the array in place.
+function is_bit_builtin(name: String) -> Bool {
+    return name == "bit_and" || name == "bit_or" || name == "bit_xor" || name == "bit_not"
+        || name == "shift_left" || name == "shift_right_zeros" || name == "shift_right_sign";
+}
+
 function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: String, first: Type,
-                                       second: Type, first_node: Int) -> Int {
+                                       second: Type, first_node: Int,
+                                       second_node: Int) -> Int {
     // Exactly the Equatable set — the types `==` works on. A key needs equality and a hash, and
     // the set of types that have equality is the set that can have one, which is why there is no
     // separate `Hashable` bound naming the same four types again.
+    // Bit operations work on the bits of an Int. A Decimal has no bit pattern worth exposing: its
+    // meaning IS its scale, and shifting it would change the number by a factor of two while the
+    // scale went on claiming otherwise.
+    if is_bit_builtin(called) {
+        if !is_unknown(first) && first.kind != 40 {
+            let complained: Int = self.complain_at(src, at,
+                "`" + called + "` works on the bits of an Int, but this is "
+                + self.show_type(src, first));
+        }
+        if called != "bit_not" && !is_unknown(second) && second.kind != 40 {
+            let complained: Int = self.complain_at(src, at,
+                "`" + called + "` works on Ints, but the second argument is "
+                + self.show_type(src, second));
+        }
+        // A shift distance outside 0..=63 has no answer — LLVM leaves it undefined and the
+        // hardware silently masks it, so `x << 64` comes back as x. A literal is refused here, the
+        // same treatment a literal index out of bounds gets; anything else is checked at runtime.
+        if called == "shift_left" || called == "shift_right_zeros" || called == "shift_right_sign" {
+            if second_node >= 0 {
+                let distance: Node = self.nodes[second_node];
+                // NODE kind 1 is an Int literal; 2 is the TOKEN kind it came from. Getting this
+                // wrong silently checks nothing, which is why the fail fixture is what found it.
+                if distance.kind == 1 {
+                    if distance.value < 0 || distance.value > 63 {
+                        let complained: Int = self.complain_at(src, at,
+                            "`" + called + "` by " + to_string(distance.value)
+                            + " has no answer: an Int is 64 bits, so a shift distance is 0 to 63");
+                    }
+                }
+            }
+        }
+    }
     // The two things that may be done with a CPointer, and the only two. An Int is not a pointer,
     // and letting one become one by writing it down would hand the language exactly the ability the
     // wall exists to withhold.
@@ -507,6 +559,7 @@ function (mutable self: Unit) builtin_type(src: String, name: Token, at: Int, ar
     let mutable second: Type = unknown_type();
     let mutable count: Int = 0;
     let mutable first_node: Int = -1;
+    let mutable second_node: Int = -1;
     let called_is_push: Bool = span_equal(src, name.start, name.length, "push");
     if args >= 0 {
         let list: Node = self.nodes[args];
@@ -531,7 +584,10 @@ function (mutable self: Unit) builtin_type(src: String, name: Token, at: Int, ar
                 first = t;
                 first_node = self.children[list.a];
             }
-            if i == 1 { second = t; }
+            if i == 1 {
+                second = t;
+                second_node = self.children[list.a + 1];
+            }
             i += 1;
         }
     }
@@ -543,7 +599,8 @@ function (mutable self: Unit) builtin_type(src: String, name: Token, at: Int, ar
             + "call passes " + to_string(count));
         return builtin_result(called);
     }
-    let checked: Int = self.check_builtin_args(src, at, called, first, second, first_node);
+    let checked: Int = self.check_builtin_args(src, at, called, first, second, first_node,
+                                     second_node);
     // Three builtins hand back a freshly built String, so all three need a region —
     // except `to_string` of a Bool, which renders to one of two literals and so
     // allocates nothing.

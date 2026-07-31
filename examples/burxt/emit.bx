@@ -1625,6 +1625,45 @@ function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String)
                                   + ", i64 " + second + ")\n");
         return reg;
     }
+    // ---- bit operations ----
+    // Straight LLVM instructions, except that a shift checks its distance first. That check is not
+    // politeness: a shift by 64 or more is UNDEFINED in LLVM, and on x86 the hardware masks the
+    // distance to six bits — so `x << 64` silently becomes `x << 0` and the value comes back
+    // unchanged. A wrong answer that looks like a working program is the one outcome this language
+    // exists to prevent.
+    if called == "bit_and" {
+        let visited: Int = self.write_body("  " + reg + " = and i64 " + first + ", " + second + "\n");
+        return reg;
+    }
+    if called == "bit_or" {
+        let visited: Int = self.write_body("  " + reg + " = or i64 " + first + ", " + second + "\n");
+        return reg;
+    }
+    if called == "bit_xor" {
+        let visited: Int = self.write_body("  " + reg + " = xor i64 " + first + ", " + second + "\n");
+        return reg;
+    }
+    if called == "bit_not" {
+        // No `not` instruction in LLVM: xor with all ones is the canonical spelling.
+        let visited: Int = self.write_body("  " + reg + " = xor i64 " + first + ", -1\n");
+        return reg;
+    }
+    if called == "shift_left" || called == "shift_right_zeros" || called == "shift_right_sign" {
+        // One UNSIGNED comparison catches both ends: a negative distance wraps to something
+        // enormous, so `n > 63` unsigned is `n < 0 || n > 63` signed.
+        let refused: Int = self.check_or_die("ule", second, "63",
+            "burxt runtime error: a shift distance must be 0 to 63 — an Int is 64 bits\n");
+        let mutable instruction: String = "shl";
+        if called == "shift_right_zeros" {
+            instruction = "lshr";
+        }
+        if called == "shift_right_sign" {
+            instruction = "ashr";
+        }
+        let visited: Int = self.write_body("  " + reg + " = " + instruction + " i64 " + first
+                                  + ", " + second + "\n");
+        return reg;
+    }
     let complained: Int = self.complain_at(src, n.token,
         "the Burxt backend does not emit `" + called + "` yet");
     return "0";
