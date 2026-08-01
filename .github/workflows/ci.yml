@@ -90,6 +90,7 @@ jobs:
       # a runner must not have. The `grep` is belt-and-braces rather than load-bearing.
       - name: Run the suite on Burxt
         run: |
+          set -o pipefail
           ./target/debug/burxt build tests/runner.bx -o /tmp/burxt-runner
           /tmp/burxt-runner "$(realpath ./target/debug/burxt)" /tmp/burxt-suite-work | tee /tmp/suite.log
           grep -qx 'all green' /tmp/suite.log
@@ -104,7 +105,26 @@ jobs:
       # the two runners' verdicts are comparable name by name. Without it a green Rust run emits
       # nothing per fixture, and two runners that both examine nothing agree perfectly.
       - name: Run the suite on Rust, as the cross-check
-        run: BURXT_VERDICTS=1 cargo test --locked -- --nocapture | tee /tmp/rust-verdicts.txt
+        # **`set -o pipefail` is load-bearing, and its absence hid a failing fixpoint test.**
+        #
+        # This step was `cargo test ... | tee <file>` from v0.0.229, when the tee was added to hand the
+        # verdicts to the agreement harness. A pipeline's exit status is the LAST command's, so `tee`
+        # returning 0 swallowed every cargo failure — and for thirty versions this step could not fail.
+        #
+        # What it hid: at v0.0.259, `burxt_compiles_burxt_and_reaches_the_fixpoint` FAILED with
+        # `unknown function: byte_as_string` and **CI reported success.** The strongest claim this
+        # project makes had been broken for two commits with a green tick above it.
+        #
+        # Worse, I had written the same bug down earlier in the same session — noting that `$?` after a
+        # pipe is the last command's status, not the one that matters — and then introduced it here.
+        # GitHub Actions runs bash with `-e` and NOT `-o pipefail`, so a pipe silently disarms `-e`.
+        #
+        # Every piped step in this file now sets it. The Burxt step above survived only because a
+        # `grep -qx 'all green'` follows its pipe, which is belt-and-braces that turned out to be the
+        # belt.
+        run: |
+          set -o pipefail
+          BURXT_VERDICTS=1 cargo test --locked -- --nocapture | tee /tmp/rust-verdicts.txt
 
       # And the check that LICENSES the Burxt runner — it runs AFTER the Rust cross-check, which is
       # the one wrinkle in the inversion and is worth it.
