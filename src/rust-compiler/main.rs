@@ -544,8 +544,28 @@ fn run(
 
             // link with the system C compiler (for printf + crt startup), plus
             // whatever the caller needs for the C it declared.
+            // **`run`'s executable is an intermediate too, and until v0.0.256 it was not treated
+            // as one.** The paragraph above explains why the `.o` goes to a temp dir, is
+            // pid-unique and is removed — and every word of it applies to the binary when the
+            // command is `run`, where the binary is a means rather than the product. It was
+            // written to `./<stem>` and left there.
+            //
+            // The cost was not theoretical. `burxt run` from a project root leaves a stray
+            // extensionless executable, and `the_repository_root_holds_only_what_belongs_there`
+            // caught seven of mine in one day plus one from a teammate. `.gitignore` hides them
+            // from `git status` (the `/*` then `!/*.*` whitelist ignores extensionless root
+            // files, by design), so the only thing that sees them is a test that walks the
+            // filesystem — which means a USER gets no warning at all.
+            //
+            // No mainstream `run` behaves this way: `go run` uses a temp dir, `cargo run` writes
+            // under `target/`. A command whose name says "and then run it" should not leave an
+            // artifact behind, and `build` — which exists precisely to leave one — is unchanged.
             let exe = match out {
                 Some(p) => p.to_string(),
+                None if cmd == "run" => std::env::temp_dir()
+                    .join(format!("burxt-{}-{}", std::process::id(), stem))
+                    .to_string_lossy()
+                    .into_owned(),
                 None => format!("./{}", stem),
             };
             let status = Command::new("cc")
@@ -557,12 +577,23 @@ fn run(
                 return Err("linking failed".to_string().into());
             }
             let _ = std::fs::remove_file(&obj);
-            eprintln!("compiled {} -> {}", path, exe);
+            // Not announced when the path is ours and about to be deleted: telling a reader
+            // "compiled X -> /tmp/burxt-8973-X" invites them to go and look for a file that will
+            // not be there. `build` announces, because `build`'s whole answer is where the file is.
+            if !(cmd == "run" && out.is_none()) {
+                eprintln!("compiled {} -> {}", path, exe);
+            }
 
             if cmd == "run" {
                 let status = Command::new(&exe)
                     .status()
                     .map_err(|e| format!("failed to run {}: {}", exe, e))?;
+                // Removed BEFORE exiting, because `process::exit` runs no destructors — and only
+                // when we chose the path ourselves. A caller who passed `-o` asked for a file and
+                // gets to keep it.
+                if out.is_none() {
+                    let _ = std::fs::remove_file(&exe);
+                }
                 std::process::exit(status.code().unwrap_or(1));
             }
             Ok(())

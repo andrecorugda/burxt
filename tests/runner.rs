@@ -6176,6 +6176,84 @@ fn the_burxt_compiler_builds_and_runs_a_program_and_itself() {
     let _ = fs::remove_dir_all(&scratch);
 }
 
+/// **`burxt run` leaves nothing behind; `burxt build` leaves its product.**
+///
+/// `run` wrote its executable to `./<stem>` and never removed it, so `burxt run foo.bx` from a project
+/// root left a stray extensionless binary. **Seven of mine were caught in one day**, plus one from a
+/// teammate — every single time by `the_repository_root_holds_only_what_belongs_there`, which is the
+/// only thing that could see them: `.gitignore`'s whitelist ignores extensionless root files BY DESIGN
+/// (`/*` then `!/*.*`), so `git status` stays clean and **a user gets no warning at all.**
+///
+/// The fix was already written down twelve lines above the bug. `main.rs` explains why the `.o` goes to
+/// a temp dir, is pid-unique and is deleted — *"the object is an intermediate, and it goes where
+/// intermediates belong: NOT into the working directory"* — and every word applies to the binary when
+/// the command is `run`, where the binary is a means rather than the product. **The reasoning was
+/// present and had simply not been carried one step further.**
+///
+/// No mainstream `run` behaves the old way: `go run` uses a temp dir, `cargo run` writes under
+/// `target/`. And `build` is deliberately unchanged, because leaving a file is what `build` is FOR —
+/// which is why this test asserts both halves. A fix that made `build` ephemeral too would pass a
+/// "no strays" check and destroy the command.
+#[test]
+fn run_leaves_nothing_behind_and_build_leaves_its_product() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("run-is-ephemeral");
+    fs::create_dir_all(&scratch).unwrap();
+    fs::write(scratch.join("ephemeral.bx"), "print(7);\n").unwrap();
+
+    // Both compilers, because this is a CLI promise and the gate holds them to the same behaviour.
+    let bxc = scratch.join("bxc");
+    assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("src/burxt-compiler/main.bx"))
+        .arg("-o")
+        .arg(&bxc)
+        .output()
+        .expect("burxt")
+        .status
+        .success());
+
+    for (which, exe) in [("rust", Path::new(env!("CARGO_BIN_EXE_burxt")).to_path_buf()), ("burxt", bxc)] {
+        let ran = Command::new(&exe)
+            .args(["run", "ephemeral.bx"])
+            .current_dir(&scratch)
+            .output()
+            .expect("run");
+        assert_eq!(
+            String::from_utf8_lossy(&ran.stdout).trim(),
+            "7",
+            "{}: `run` should print the program's output",
+            which
+        );
+        assert!(
+            !scratch.join("ephemeral").exists(),
+            "{}: `run` left a stray executable in the working directory — the v0.0.256 fix has \
+             regressed, and nothing but this test and the root-cleanliness invariant can see it, \
+             because `.gitignore` hides extensionless root files by design",
+            which
+        );
+
+        // And the other half: `build` must still leave the thing it was asked for.
+        let built = Command::new(&exe)
+            .args(["build", "ephemeral.bx"])
+            .current_dir(&scratch)
+            .output()
+            .expect("build");
+        assert!(built.status.success(), "{}: build failed", which);
+        assert!(
+            scratch.join("ephemeral").exists(),
+            "{}: `build` left no executable — leaving one is what `build` is FOR, and a fix that \
+             made it ephemeral would pass a no-strays check while destroying the command",
+            which
+        );
+        fs::remove_file(scratch.join("ephemeral")).unwrap();
+        let _ = fs::remove_file(scratch.join("ephemeral.ll"));
+        let _ = fs::remove_file(scratch.join("ephemeral.o"));
+    }
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
 /// **A Burxt program reads standard input, including a framed protocol message.**
 ///
 /// This test replaces a claim that was wrong. v0.0.216's parity map said `lsp.rs` was *"BLOCKED,

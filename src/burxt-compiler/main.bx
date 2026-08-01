@@ -83,40 +83,21 @@ external function system(command: String) -> CInt touches commands;
 // is repeated here rather than imported.
 external function getchar() -> CInt touches input;
 
-// One byte as a one-byte String, for rebuilding text read from a pipe.
+// `byte_as_string(b)` used to be DECLARED HERE, as a table of the 95 printable ASCII bytes plus
+// three whitespace ones, and it `exit(2)`-ed on anything else — so `burxt check -` could not read a
+// source file containing a single non-ASCII character from a pipe. **It is a BUILTIN now (roadmap
+// A13), the same name and the same signature, working for all 256 values**, so the declaration is
+// gone and the call site below is unchanged.
 //
-// It REFUSES a byte it cannot name rather than substituting `?`, which is the bug `lib/os.bx`'s
-// `os_byte_as_string` has (ROADMAP B2: every byte >= 127 becomes a question mark, silently). A
-// compiler that quietly corrupted the program it was handed would be the worst possible place
-// for that. Bytes >= 128 are UTF-8 continuation and lead bytes, so they are passed through by
-// index — the table only covers what a lookup can name.
-function byte_as_string(b: Int) -> String
-    requires b >= 0
-    requires b < 256
-{
-    if b == 9 {
-        return "\t";
-    }
-    if b == 10 {
-        return "\n";
-    }
-    if b == 13 {
-        return "\r";
-    }
-    if b >= 32 && b < 127 {
-        let printable: String = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz\{|\}~";
-        return substring(printable, b - 32, 1);
-    }
-    // A byte outside the printable range and not one of the three whitespace ones. Building it
-    // as a String needs a way to make an arbitrary byte, which this language does not have
-    // (ROADMAP D1p's `from_byte`, gated on A5). So it is REFUSED by name rather than guessed —
-    // and the practical consequence is stated where a caller will read it: `check -` accepts
-    // ASCII source today, and non-ASCII in a string literal must come from a file.
-    print_error("burxt check -: byte " + to_string(b) + " cannot be read from stdin yet — "
-                + "non-ASCII source must come from a file. See ROADMAP D1p.");
-    exit(2);
-    return "";
-}
+// Kept as a note rather than deleted silently, because the limitation it named was stated in a
+// user-facing message: *"non-ASCII source must come from a file"* was true, is no longer, and a
+// reader who remembers it needs to be told once. The refusal was the honest shape while there was
+// no way to build a byte; the answer was to give the language one.
+//
+// It is also how the collision was found, and that is worth recording: reserving the name made
+// stage-0 refuse this declaration, but the probe pass that infers `allocates` DISCARDS its errors
+// (`let _ = probe.check_program_inner(prog)`), so it aborted early, credited nothing, and the only
+// visible symptom was an unrelated escape refusal in `lsp.bx` — a file with nothing wrong with it.
 
 
 // The recorded problem, in the shape asked for. Nothing when there was none, or when the reporters
@@ -561,7 +542,22 @@ if command == "emit-ir" {
 
 if command == "build" || command == "run" {
     let source: String = argument(2);
+    // **`run`'s binary is an intermediate and goes where intermediates go.** The same reasoning
+    // `emit-ir`'s scratch file and stage-0's `.o` already follow: `run` means "and then run it", so
+    // the binary is a means rather than the product, and leaving one in the working directory is a
+    // stray a user gets no warning about — `.gitignore` hides extensionless root files by design, so
+    // only a filesystem-walking test sees them. Seven were caught in one day.
+    //
+    // `build` is unchanged: leaving a file is what `build` is FOR.
     let mutable output: String = default_output_name(source);
+    if command == "run" && argument_count() < 4 {
+        // The STEM, not the path. My first attempt appended the whole source path and would have
+        // built `/tmp/burxt-run-tests/pass/foo.bx` — directories that do not exist. `default_output_name`
+        // already answers `./<stem>`, so the two leading characters come off and the rest is reused
+        // rather than the stripping logic being written a second place to drift from the first.
+        let named: String = default_output_name(source);
+        output = "/tmp/burxt-run-" + substring(named, 2, len(named) - 2);
+    }
     if argument_count() > 4 {
         if argument(3) == "-o" {
             output = argument(4);
