@@ -1,28 +1,40 @@
-# Burxt 1.1 — the hosts, and what each one costs to verify
+# Burxt 1.1 — the release after the core
 
-**Status: the plan of record for work that needs testing and verification on machines this
-project does not have.** Created v0.0.260.
+**Status: the plan of record for 1.1.** Created v0.0.260 as a hosts-only document; Part II
+added 2026-08-01, when 1.1 acquired a second half.
 
 [`ROADMAP-1.0.md`](ROADMAP-1.0.md) is the road to *a language someone outside this repository
-can ship on*. This file is its sibling with one specific job: it holds the distribution work
-that **cannot be finished by writing it**, because finishing means proving it on hardware or
-in an environment nobody here can reach.
+can ship on*. This file holds what comes after it, and it is **two unrelated things**:
 
-That split is the whole point. Everything quick enough to build and verify in one pass went
-into 1.0's §H and is done. What is left is the work whose honest state is *"plausible, and
-unproven"* — and the failure mode this file exists to prevent is a roadmap row that says DONE
-because the code was written.
+| | What it is | Why it is not in 1.0 |
+|---|---|---|
+| **[Part I — Hosts](#part-i--the-hosts-and-what-each-one-costs-to-verify)** | Making the compiler itself run somewhere new | Cannot be **finished** by writing it — it needs hardware nobody here has |
+| **[Part II — The web stack](#part-ii--the-web-stack)** | HTML, CGI, sockets, a real server | Cannot be **started** until the core is done. Andre's call, 2026-08-01 |
+
+They share no machinery and neither blocks the other. They are in one file for one reason: a
+reader asking *"what is in 1.1"* has to find all of it in one place, and a `ROADMAP-1.1` that
+listed half the release would be the exact kind of index drift this project keeps tripping over.
 
 ---
 
-## The distinction that governs this whole document
+# Part I — the hosts, and what each one costs to verify
+
+Part I holds the distribution work that **cannot be finished by writing it**, because finishing
+means proving it on hardware or in an environment nobody here can reach.
+
+That split is the whole point. Everything quick enough to build and verify in one pass went
+into 1.0's §H and is done. What is left is the work whose honest state is *"plausible, and
+unproven"* — and the failure mode this part exists to prevent is a roadmap row that says DONE
+because the code was written.
+
+## The distinction that governs Part I
 
 Two things get called "supporting Android", and only one of them is hard.
 
 | | What it means | State |
 |---|---|---|
 | **Target** | You compile a Burxt program **for** the platform, from a machine that already works | **DONE.** Verified in `the_ir_is_the_same_for_every_target` |
-| **Host** | The `burxt` compiler **runs on** the platform | The subject of this file |
+| **Host** | The `burxt` compiler **runs on** the platform | The subject of Part I |
 
 Burxt emits correct objects for **thirteen** triples today, each measured rather than assumed
 — including all three Android ABIs, `aarch64-apple-ios` and `wasm32-wasi`. The IR is
@@ -225,12 +237,12 @@ program. Any design that cannot promise that is refused.
 
 ---
 
-## G3 — what this file does NOT cover
+## G3 — what Part I does NOT cover
 
 [`ROADMAP-1.0.md`](ROADMAP-1.0.md) §G3 is *M3 packaging — per-target linking, desktop matrix,
 Android NDK/JNI, iOS signing, wasm host glue*, and it stays post-1.0.
 
-**G3 and this file are about opposite directions**, which is why the work did not simply merge:
+**G3 and Part I are about opposite directions**, which is why the work did not simply merge:
 
 - **G3 is target-side.** Given an emitted object, produce a runnable artifact *for* that
   platform — a sysroot, a linker, an iOS signature, wasm host glue. Objects already emit for
@@ -241,12 +253,16 @@ The four hosts and the image shipped without touching G3 at all, because none of
 sysroot. Anyone reading G3 as "packaging is post-1.0, so the macOS build must wait" has the
 split backwards.
 
+**And Part II is neither.** The web stack is not target-side and not host-side — it is library and
+language work that runs on a host already supported, for a target already emitting. It appears in
+this file because it ships in 1.1, not because it belongs to the target/host axis at all.
+
 ---
 
-## Verification — the rule this file is built around
+## Verification — the rule Part I is built around
 
-Every row above states *what would have to be true* and *on what machine*, because the failure
-this document exists to prevent is a DONE that was never executed anywhere.
+Every row in Part I states *what would have to be true* and *on what machine*, because the failure
+it exists to prevent is a DONE that was never executed anywhere.
 
 - **A cross-target claim needs a runner invariant**, not a sentence. The thirteen triples are in
   `the_ir_is_the_same_for_every_target`; they were added in the same version the tarball's README
@@ -259,3 +275,76 @@ this document exists to prevent is a DONE that was never executed anywhere.
 - **NOT DONE is not evidence.** A stale limitation is worse than a stale DONE, because nobody
   re-tests what the document says does not work. N1 is an experiment with a command in it for
   exactly this reason.
+
+---
+
+# Part II — the web stack
+
+**Detail lives in [`M15-WEB.md`](M15-WEB.md).** This section is the summary a reader of the 1.1
+roadmap needs; the design, the measurements and the refusals are there.
+
+**Nothing here is built.** Andre's call, 2026-08-01: 1.0 is the real core and comes first.
+
+## Why it is in 1.1 at all
+
+Burxt has no web story, and *"how does Rust handle front-end?"* is a question with no answer in
+this repository today. Rust's answer is instructive: it put **nothing** in the language and got
+Axum, Actix, Askama and Maud from people who were not on the compiler team. PHP put the web *in*
+the language and spent twenty years unable to remove any of it.
+
+So the goal of Part II is not a Burxt web framework. It is **the primitives someone else builds one
+on** — which is how a language nobody has heard of acquires an ecosystem, and an ecosystem is the
+point.
+
+**Must NOT do:** ship a router, a template file format, or `burxt new --web`. The day one exists,
+every framework author is competing with the compiler team instead of building on it.
+
+## The split that decides the order
+
+"Front-end" is two unrelated problems wearing one word, and only one is hard:
+
+| | Needs | State |
+|---|---|---|
+| Producing HTML | strings, an escape table, a recursive render | **Needs nothing. Measured working 2026-08-01** |
+| Serving it over a socket | C struct layouts, sockets, a concurrency model | The rest of the table |
+
+| Slice | What | Depends on | Language change |
+|---|---|---|---|
+| **W0** | `lib/html.bx` + `lib/cgi.bx` | **nothing** | none |
+| **W1** | C struct layouts — enough to describe `sockaddr_in` | A7 widths (**DONE** v0.0.261) | compiler |
+| **W2** | `lib/net.bx` — the socket calls | W1 | none |
+| **W3** | Concurrency — this is **`ROADMAP-1.0.md` §G1**, not a new item | M1's re-decision | compiler, large |
+| **W4** | `lib/http.bx` — request, response, listener | W2, W3 | none |
+| **W5** | TLS / HTTPS | W4, §E build-vs-bind | undecided |
+
+**Anyone reading "the web waits on threads" has it wrong for half the stack.** W0 is numbered zero
+because it sits outside the dependency chain: `lib/html.bx` is `lib/json.bx`'s shape applied to a
+different grammar, and `lib/cgi.bx` needs only `os_env` and `os_read_all`, which already exist. A
+Burxt binary behind nginx serves dynamic pages with no listener and no concurrency — which is how
+PHP started, and is a complete deployment story rather than a lesser one.
+
+## Two rows this part fixes, and only one of them was wrong
+
+Exploring the web stack sent someone back to [`FAR-HORIZON-ROADMAP.md`](FAR-HORIZON-ROADMAP.md) §1,
+and the honest result is one correction and one sharpening — **not two errors**, which is what the
+first draft of this section claimed:
+
+- **C structs — genuinely STALE.** The row said a C struct is out of reach because it *"needs
+  widths"*. Widths landed in **v0.0.261**, and A7's own *unblocks* column names C structs. The
+  blocker was gone and the row still described it. Corrected.
+- **Sockets — accurate, but vague.** The row said *"nothing wrapped. A fd is an int so it is
+  reachable, but no library"*, verdict Blocking. That was **right on both counts** and stays
+  Blocking, because you still cannot write a network program. What it did not say is *where* the
+  boundary falls: `socket`/`send`/`recv`/`listen`/`close` cross today, and only `bind`/`connect`/
+  `accept` need the struct. Sharpened, not corrected.
+
+The first is Part I's own rule applied to a different file — *NOT DONE is not evidence*, and nobody
+re-tested the row once A7 shipped. The second is a reminder that "this document is out of date" is
+itself a claim worth checking before publishing.
+
+## Verification
+
+`M15-WEB.md` §4 carries the per-slice table, built on the same rule as Part I — what would have to
+be **executed**, not written. The one worth repeating here: **W0 will be tempting to mark DONE the
+moment `html.bx` compiles, and compiling proves nothing about escaping.** The fail fixture is the
+test that matters.
