@@ -80,6 +80,11 @@ Burxt is early and built in small, verified increments. It is **not yet ready fo
 **The Burxt compiler compiles all 144 pass programs — 0 refused — and every one prints the same bytes as the Rust compiler's build of it** — Decimals, `match`, `return tail`, `external function`, interpolation, generics and maps included.
 
 **And it keeps every runtime guarantee.** "Compiles every program" would read like more than it is on its own, because that measure only covers programs that *succeed*. So a second test runs the 34 programs in `tests/panic/` — a broken contract, an overflow, an index out of range, a byte outside 0..255, a value too wide for the C parameter it crosses into, a `decreases` measure that does not decrease — through stage-1's backend and requires each one to fail. **It keeps 37 of 37**, and that is an equality rather than a floor, so losing one is a failing test.
+Since v0.0.262 it also requires exit 70 and the fixture's own message, not merely a non-zero exit —
+because a bare `sdiv` on x86-64 *faults*, so for 120 versions the hardware was standing in for a
+check stage-1 never emitted, and the same program on arm64 printed a wrong number instead. Four
+fixtures still report that failure in different words from the Rust compiler; they are tracked by
+name as B19 rather than rounded away.
 
 Worth knowing how that number got written down: when the test was first added it was **8 of 21**. Stage-1 had been compiling every program correctly and silently discarding contracts, bounds checks and the termination measure — because every contract fixture in `tests/pass/` has contracts that *succeed*, and a satisfied contract produces identical output whether or not it was ever checked. The gap was shaped exactly like a directory boundary.
 
