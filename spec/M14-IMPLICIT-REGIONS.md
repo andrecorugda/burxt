@@ -337,6 +337,31 @@ when asked rather than on every signature forever.
 
 ## 9. Acceptance
 
+> **Status of these nine, measured v0.0.263 before slice 3 began — five are already met, and that
+> narrows what slice 3 actually owes.** Slices 1 and 2 delivered the *ergonomic* half of M14; what
+> remains is the *memory* half, and only that.
+>
+> | | criterion | state |
+> |---|---|---|
+> | 2 | `examples/pos/` with zero `allocates`, no `region`, same receipt | **already met.** Every remaining mention of either word in `examples/pos/*.bx` is in a **comment** — there is no `allocates` keyword and no `region` block left in that code. Receipt recorded for the diff |
+> | 4 | top-level `let mutable xs: [Int] = [];` | **already met** — compiles and runs today |
+> | 6 | `allocates nothing` refuses transitively | shipped v0.0.209 |
+> | 7 | the §5 hole has a fail fixture | shipped |
+> | 8 | `burxt explain memory` | shipped |
+> | 1 | fixpoint intact | **regression guard** |
+> | 3 | every `tests/pass` compiles unchanged | **regression guard** |
+> | 5 | the three measurements below | **THE deliverable** |
+> | 9 | `docs/guide/04-memory.md` rewritten | **the deliverable's other half** |
+>
+> So slice 3 is not "nine things." It is **one behaviour change measured three ways, plus a page**,
+> with two regression guards standing over it. That is worth writing down because the row count made
+> it look larger than it is, and an item that looks larger than it is gets deferred — which is what
+> happened to this one for fourteen versions while its ceiling crept to a 0.53% margin.
+>
+> It does **not** make the work smaller. Escape analysis in two compilers is still the hardest thing
+> on this roadmap, and §10 still governs. It makes the *target* smaller, which is a different and
+> more useful fact.
+
 1. Both compilers, **byte-identical fixpoint intact**, staged.
 2. `examples/pos/` compiles with **zero** `allocates` and **no** `region` block, producing the same
    receipt — the same test that proves the ergonomics proves the semantics.
