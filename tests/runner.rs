@@ -2160,6 +2160,8 @@ fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
     let mut correct = 0;
     let mut total = 0;
     let mut refused = 0;
+    // What failed and why, by name. See the note at the first `continue` below.
+    let mut wrong: Vec<String> = Vec::new();
     for entry in fs::read_dir(root.join("tests/pass")).unwrap() {
         let source = entry.unwrap().path();
         if source.extension().and_then(|e| e.to_str()) != Some("bx") {
@@ -2174,8 +2176,20 @@ fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
         let emitted = Command::new(&stage1).arg(&source).arg(&ll).output().expect("stage-1");
         if !String::from_utf8_lossy(&emitted.stdout).contains("bytes of IR") {
             refused += 1;
+            wrong.push(format!(
+                "{} (the backend refused it outright)",
+                source.file_stem().unwrap().to_string_lossy()
+            ));
             continue;
         }
+        // Every `continue` below used to be silent, and the count was the whole report. That is
+        // fine while the number is 158 of 158 and useless the moment it is not: `linux-arm64`
+        // reported "compiled 156 of 158" and there was no way to learn WHICH two from a CI log,
+        // on a machine nobody here can reproduce. A count says a thing broke; a name says what.
+        //
+        // Same shape as B18 and B19 one layer further out — a measure too coarse to point at
+        // the defect it just detected.
+        let name = source.file_stem().unwrap().to_string_lossy().into_owned();
         let obj = scratch.join("out.o");
         if !Command::new(llc)
             .args(["-relocation-model=pic", "-filetype=obj", "-o"])
@@ -2185,10 +2199,19 @@ fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
             .map(|s| s.success())
             .unwrap_or(false)
         {
+            wrong.push(format!("{} (its IR does not assemble)", name));
             continue;
         }
         let exe = scratch.join("out.exe");
-        if !Command::new("cc").arg("-o").arg(&exe).arg(&obj).status().map(|s| s.success()).unwrap_or(false) {
+        let linked = Command::new("cc").arg("-o").arg(&exe).arg(&obj).output();
+        if !linked.as_ref().map(|o| o.status.success()).unwrap_or(false) {
+            // The linker's own words: a missing symbol names the builtin that is not portable,
+            // which is exactly how `getrandom` was found on Darwin.
+            let why = linked
+                .as_ref()
+                .map(|o| String::from_utf8_lossy(&o.stderr).lines().take(3).collect::<Vec<_>>().join(" | "))
+                .unwrap_or_else(|_| "cc could not be run".into());
+            wrong.push(format!("{} (does not link: {})", name, why));
             continue;
         }
         // In the scratch directory, because a program under test may WRITE a file —
@@ -2200,6 +2223,13 @@ fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
         let expected = fs::read(&expected_path).unwrap();
         if ran.stdout == expected {
             correct += 1;
+        } else {
+            wrong.push(format!(
+                "{} (ran, but printed {:?} where {:?} was expected)",
+                name,
+                String::from_utf8_lossy(&ran.stdout).chars().take(60).collect::<String>(),
+                String::from_utf8_lossy(&expected).chars().take(60).collect::<String>(),
+            ));
         }
     }
 
@@ -2221,8 +2251,11 @@ fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
     assert_eq!(
         correct, total,
         "the Burxt backend compiled {} of {} pass programs. It compiled ALL of them from \
-         v0.0.113, so this is a regression, and `refused` was {}",
-        correct, total, refused
+         v0.0.113, so this is a regression, and `refused` was {}:\n  {}",
+        correct,
+        total,
+        refused,
+        wrong.join("\n  ")
     );
 }
 
