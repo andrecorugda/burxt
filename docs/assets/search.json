@@ -99,6 +99,13 @@
  },
  {
   "kind": "builtin",
+  "name": "byte_as_string",
+  "text": "a one-byte `String` holding `n`",
+  "url": "/reference/builtins.html#byte-as-string",
+  "where": "byte_as_string(n) -> String"
+ },
+ {
+  "kind": "builtin",
   "name": "substring",
   "text": "`count` bytes of `s`, starting at `from`",
   "url": "/reference/builtins.html#substring",
@@ -523,6 +530,20 @@
   "text": "lib/string.bx",
   "url": "/reference/string.html#is-alpha",
   "where": "pure function is_alpha(text: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "from_codepoint",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#from-codepoint",
+  "where": "pure function from_codepoint(code: Int) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "from_bytes",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#from-bytes",
+  "where": "pure function from_bytes(xs: [Int]) -> String allocates"
  },
  {
   "kind": "class",
@@ -964,13 +985,6 @@
   "text": "lib/os.bx",
   "url": "/reference/os.html#os-env-or",
   "where": "function os_env_or(name: String, fallback: String) -> String touches input"
- },
- {
-  "kind": "function",
-  "name": "os_byte_as_string",
-  "text": "lib/os.bx",
-  "url": "/reference/os.html#os-byte-as-string",
-  "where": "function os_byte_as_string(byte: Int) -> String"
  },
  {
   "kind": "keyword",

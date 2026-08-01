@@ -374,6 +374,11 @@ function invariant_names() -> [String] {
     push(all, "every_log_file_is_linked_from_its_index");
     push(all, "no_html_page_is_written_in_markdown");
     push(all, "the_mascot_plays_once");
+    push(all, "every_source_and_document_is_in_version_control");
+    push(all, "the_refusals_page_is_not_stale");
+    push(all, "the_repository_layout_is_declared");
+    push(all, "editor_grammar_knows_every_keyword_the_compiler_does");
+    push(all, "the_web_highlighter_knows_every_keyword_the_compiler_does");
     return all;
 }
 
@@ -784,6 +789,702 @@ function mascot_plays_once() -> String touches files {
     return "";
 }
 
+
+// An absolute path for something the caller may have named relatively.
+//
+// **The third time this exact class of bug has cost me a debugging round**, so it is a named
+// function now rather than a fix at each site. `refused.py` launches the compiler from the panel
+// directory, so `./target/release/burxt` — a perfectly good path from the repository root — became
+// `FileNotFoundError: './target/release/burxt'`. The Rust twin never sees this because
+// `CARGO_BIN_EXE_burxt` is absolute. **A relative path is a different path the moment anything
+// changes directory, and a test harness changes directory constantly.**
+function absolute_path(path: String, work: String) -> String touches files, commands {
+    let answer: String = output_of("realpath " + path, work + "/abs");
+    let mutable n: Int = len(answer);
+    while n > 0 && byte_at(answer, n - 1) == 10 {
+        n -= 1;
+    }
+    if n == 0 {
+        return path;                                 // not on disk; let the caller fail loudly
+    }
+    return substring(answer, 0, n);
+}
+
+// Whatever `command` printed. The general form of `listing_of` and `find_of`, for the two
+// invariants below that need a shell answer those two cannot express.
+function output_of(command: String, into: String) -> String touches files, commands {
+    let status: Int = system(command + " > " + into + " 2>/dev/null");
+    return read_file(into);
+}
+
+// Whether `text` holds `line` as a WHOLE line. Substring containment is wrong here: `lib/os.bx`
+// is a substring of nothing, but `docs/index.md` is a substring of `docs/index.md.bak`, and a
+// tracked-file check that answered yes to a near-miss would be worse than none.
+function holds_line(text: String, line: String) -> Bool {
+    let mutable at: Int = 0;
+    while at < len(text) {
+        let stop: Int = line_end(text, at);
+        if stop - at == len(line) && substring(text, at, stop - at) == line {
+            return true;
+        }
+        at = stop + 1;
+    }
+    return false;
+}
+
+// **`.gitignore` here is a whitelist, so a new directory is ignored until it is re-admitted** —
+// which means a whole directory of source can go missing with `git status` clean. That is not
+// hypothetical: `docs/` was invisible until v0.0.105 for exactly this reason.
+//
+// The walk's rules are the Rust twin's, and **the `find` below was checked against a replication
+// of that walk before this invariant was written**: both answer 707 files, zero differences. That
+// mattered because the rules are fiddly in a way that hides mistakes — dot-directories are skipped
+// EXCEPT the four that carry real configuration (`.cargo`, `.devcontainer`, `.github`, `.vscode`),
+// each of which is a file whose loss would be silent and each of which is tracked only because
+// `!/*.*` in `.gitignore` happens to match a leading dot.
+//
+// The extension list stops where the site does. It used to stop at `py`, which covered the
+// generators and not one line of what they generate into — so `docs/assets/site.js` and the layouts
+// could each have vanished unnoticed.
+function everything_is_tracked(work: String) -> String touches files, commands {
+    let tracked: String = output_of("git ls-files", work + "/tracked");
+    let mutable count: Int = 0;
+    let mutable at: Int = 0;
+    while at < len(tracked) {
+        let stop: Int = line_end(tracked, at);
+        if stop > at {
+            count += 1;
+        }
+        at = stop + 1;
+    }
+    // A floor, and here it pays for the same difference as every other one in this file: the Rust
+    // twin asserts `git ls-files` SUCCEEDED, and a Burxt `system` reports a wait status this
+    // function does not read. An empty index and a git that is not installed look identical from
+    // here, and both would make the comparison below vacuously true.
+    if count < 100 {
+        return "expected a populated git index, got " + to_string(count)
+            + " tracked paths — is this a git checkout?";
+    }
+    let found: String = output_of(
+        "find . -mindepth 1 -type d \\( -name .git -o -name target -o -name dist "
+        + "-o -name node_modules -o \\( -name \".*\" ! -name .cargo ! -name .devcontainer "
+        + "! -name .github ! -name .vscode \\) \\) -prune -o -type f \\( -name \"*.bx\" "
+        + "-o -name \"*.md\" -o -name \"*.rs\" -o -name \"*.toml\" -o -name \"*.json\" "
+        + "-o -name \"*.sh\" -o -name \"*.py\" -o -name \"*.css\" -o -name \"*.js\" "
+        + "-o -name \"*.html\" -o -name \"*.yml\" \\) -print | sed 's|^\\./||'",
+        work + "/sources");
+    let mutable examined: Int = 0;
+    let mutable untracked: String = "";
+    let mutable i: Int = 0;
+    while i < len(found) {
+        let stop: Int = line_end(found, i);
+        let path: String = substring(found, i, stop - i);
+        if len(path) > 0 {
+            examined += 1;
+            if !holds_line(tracked, path) {
+                if len(untracked) > 0 {
+                    untracked += ", ";
+                }
+                untracked += path;
+            }
+        }
+        i = stop + 1;
+    }
+    // The other half of the same guard: a `find` that matched nothing would report every file as
+    // tracked, which is the direction that looks like success.
+    if examined < 100 {
+        return "expected hundreds of source and document files, examined only "
+            + to_string(examined);
+    }
+    if len(untracked) > 0 {
+        return "these source or documentation files are not in version control — `.gitignore` is "
+            + "a whitelist, so a new directory is ignored until it is re-admitted: " + untracked;
+    }
+    return "";
+}
+
+// The refusals page shows programs the language will not accept. **A panel that starts COMPILING
+// becomes an advertisement for something Burxt no longer refuses**, which is worse than having no
+// page — so the generator is re-run in check mode and the page is read for the word it writes when
+// a panel was accepted.
+//
+// `python3 scripts/refused.py --check` is the generator, and it is the Rust twin's dependency too.
+// Burxt cannot regenerate the page itself; that would mean porting the generator, which is a
+// different task from moving this invariant.
+function refusals_page_is_current(compiler: String, work: String) -> String
+    touches files, commands
+{
+    if !readable("scripts/refused.py") {
+        return "scripts/refused.py is missing, and it is what keeps the page honest";
+    }
+    let log: String = work + "/refused";
+    let status: Int = run_capturing("BURXT=" + absolute_path(compiler, work)
+                                   + " python3 scripts/refused.py --check", log);
+    if status != 0 {
+        return "the refusals page is stale: " + trimmed(read_file(log));
+    }
+    if !readable("examples/refused/README.md") {
+        return "examples/refused/README.md is missing";
+    }
+    let page: String = read_file("examples/refused/README.md");
+    if contains(page, "ACCEPTED") {
+        return "a panel in examples/refused/ now COMPILES — either the refusal was lost, or the "
+            + "example needs rewriting to still demonstrate one";
+    }
+    // One panel per `## `, and the floor is the Rust twin's ten.
+    let mutable panels: Int = 0;
+    let mutable at: Int = 0;
+    while at < len(page) {
+        let stop: Int = line_end(page, at);
+        if starts_with_at_runner(page, at, "## ") {
+            panels += 1;
+        }
+        at = stop + 1;
+    }
+    if panels < 10 {
+        return "examples/refused/ lost panels: " + to_string(panels) + " left";
+    }
+    return "";
+}
+
+
+// Every directory that may exist. The purpose is not decoration — **it is what a future me is
+// supposed to read BEFORE inventing a sibling.** `tests/tools/` was created in v0.0.216 beside a
+// `tests/support/` that had been doing the same job since v0.0.204, and this list is the answer to
+// that: a new home is a claim that no existing one fits, and the claim is almost always wrong.
+// `spec/A7.0-NAMING.md` §10.
+//
+// The purposes are not carried over from the Rust twin, only the NAMES — a Burxt copy of nineteen
+// English sentences would be two places to edit one fact, and the sentences are not what this
+// invariant compares. What it compares is the set.
+function declared_home(path: String) -> Bool {
+    if path == "assets" { return true; }
+    if path == "dist" { return true; }
+    if path == "docs" { return true; }
+    if path == "editors" { return true; }
+    if path == "examples" { return true; }
+    // The eight under `examples/`, and I missed every one of them by copying the table from what
+    // was visible on screen instead of extracting it. The invariant then reported all eight as
+    // undeclared, which is the honest failure — but the lesson is the same one that produced the
+    // invented floor: **read the whole list, do not transcribe the part you can see.**
+    if path == "examples/inputs" { return true; }
+    if path == "examples/mcp" { return true; }
+    if path == "examples/negative" { return true; }
+    if path == "examples/pos" { return true; }
+    if path == "examples/pos-php" { return true; }
+    if path == "examples/pos-python" { return true; }
+    if path == "examples/pos-rust" { return true; }
+    if path == "examples/refused" { return true; }
+    if path == "lib" { return true; }
+    if path == "scripts" { return true; }
+    if path == "spec" { return true; }
+    if path == "src" { return true; }
+    if path == "target" { return true; }
+    if path == "tests" { return true; }
+    if path == "tests/pass" { return true; }
+    if path == "tests/fail" { return true; }
+    if path == "tests/panic" { return true; }
+    if path == "tests/review" { return true; }
+    if path == "tests/support" { return true; }
+    if path == "src/rust-compiler" { return true; }
+    if path == "src/burxt-compiler" { return true; }
+    return false;
+}
+
+// Every home that must exist on disk. `dist` and `target` are build output, so they are allowed to
+// be absent — everything else being absent means the map cites a place nothing is at.
+function home_must_exist(path: String) -> Bool {
+    if path == "dist" || path == "target" { return false; }
+    return declared_home(path);
+}
+
+// Both directions, and the second is the one a reader would not think to ask for: **a declared home
+// that no longer exists tells the next person a place to put things exists when it does not.** Same
+// defect as a spec citing a fixture that never existed.
+function layout_is_declared(work: String) -> String touches files, commands {
+    let mutable undeclared: String = "";
+    let mutable examined: Int = 0;
+    // The four parents the Rust twin walks. `""` is the repository root; the other three are where
+    // a new directory is most tempting to misfile.
+    let mutable which: Int = 0;
+    while which < 4 {
+        let mutable parent: String = "";
+        if which == 1 { parent = "tests"; }
+        if which == 2 { parent = "src"; }
+        if which == 3 { parent = "examples"; }
+        let mutable where: String = ".";
+        let mutable prefix: String = "";
+        if len(parent) > 0 {
+            where = parent;
+            prefix = parent + "/";
+        }
+        // `ls -d */` lists only directories, and `-A` is not needed because dot-directories are
+        // skipped anyway — as is `__pycache__`, which python creates and nobody declares.
+        let names: String = output_of("ls -A " + where, work + "/layout-" + to_string(which));
+        let mutable at: Int = 0;
+        while at < len(names) {
+            let stop: Int = line_end(names, at);
+            let entry: String = substring(names, at, stop - at);
+            if len(entry) > 0 && byte_at(entry, 0) != 46 && entry != "__pycache__" {
+                let full: String = prefix + entry;
+                // Only DIRECTORIES are declared homes; a file at the root is the root invariant's
+                // business, not this one.
+                if is_directory(full) {
+                    examined += 1;
+                    if !declared_home(full) {
+                        if len(undeclared) > 0 {
+                            undeclared += ", ";
+                        }
+                        undeclared += full;
+                    }
+                }
+            }
+            at = stop + 1;
+        }
+        which += 1;
+    }
+    // The floor pays for the same difference as every other one here: `ls` on a missing directory
+    // prints nothing and this function would call an empty tree fully declared.
+    if examined < 10 {
+        return "expected the declared directories to be found, examined only "
+            + to_string(examined);
+    }
+    if len(undeclared) > 0 {
+        return "undeclared directories: " + undeclared
+            + " — add a row to `declared_home` saying what belongs there, or far more likely delete "
+            + "it and use the home that already exists (spec/A7.0-NAMING.md §10)";
+    }
+    let mutable missing: String = "";
+    let mutable homes: [String] = [];
+    push(homes, "assets"); push(homes, "docs"); push(homes, "editors"); push(homes, "examples");
+    push(homes, "lib"); push(homes, "scripts"); push(homes, "spec"); push(homes, "src");
+    push(homes, "tests"); push(homes, "tests/pass"); push(homes, "tests/fail");
+    push(homes, "tests/panic"); push(homes, "tests/review"); push(homes, "tests/support");
+    push(homes, "src/rust-compiler"); push(homes, "src/burxt-compiler");
+    for home in homes {
+        if home_must_exist(home) && !is_directory(home) {
+            if len(missing) > 0 {
+                missing += ", ";
+            }
+            missing += home;
+        }
+    }
+    if len(missing) > 0 {
+        return "this list declares directories that do not exist: " + missing
+            + " — renamed, or removed? A map that cites a place nothing is at is rot";
+    }
+    return "";
+}
+
+// Whether `path` is a directory. `test -d` through the shell, because Burxt cannot stat.
+function is_directory(path: String) -> Bool touches commands {
+    let status: Int = system("test -d " + path);
+    return divide_floor(status, 256) == 0;
+}
+
+
+// ---- mirroring, and what NOT to mirror ---------------------------------------
+//
+// **Mirror what is CHECKED, not what is EXPLAINED.** `the_repository_layout_is_declared` in
+// `runner.rs` pairs each directory with an English sentence saying what belongs there; this file
+// carries only the NAMES. The sentences are documentation for a person deciding where to put a new
+// file, they are not what the invariant compares, and a Burxt copy of them would be a second place
+// to edit one fact — which is how prose and code drift apart. The next reader will be tempted to
+// copy them for fidelity; fidelity is in the set, not in the paragraph.
+//
+// The same rule cuts the other way and that is why it is worth stating: where a NUMBER or a
+// PATTERN is what gets compared, it must be mirrored exactly and re-measured rather than assumed.
+
+function is_lower_or_underscore(b: Int) -> Bool {
+    return (b >= 97 && b <= 122) || b == 95;
+}
+
+function is_name_char(b: Int) -> Bool {
+    return (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 95;
+}
+
+// The first byte of `text` at or after `from` that is not a space or a tab.
+function skip_blanks(text: String, from: Int, stop: Int) -> Int {
+    let mutable i: Int = from;
+    while i < stop && (byte_at(text, i) == 32 || byte_at(text, i) == 9) {
+        i += 1;
+    }
+    return i;
+}
+
+// `text` with every `needle` replaced by `with`.
+function replace_all(text: String, needle: String, with_what: String) -> String {
+    if len(needle) == 0 {
+        return text;
+    }
+    let mutable out: String = "";
+    let mutable i: Int = 0;
+    while i < len(text) {
+        if starts_with_at_runner(text, i, needle) {
+            out += with_what;
+            i += len(needle);
+        } else {
+            out += substring(text, i, 1);
+            i += 1;
+        }
+    }
+    return out;
+}
+
+// Whether `word` appears in `text` as a WORD rather than as a substring.
+//
+// **`as` must not be satisfied by `class`.** That is the whole reason this is not `contains`, and
+// getting it wrong would make the invariant pass while the grammar was missing a keyword — the
+// exact failure its Rust twin's comment records.
+function word_present(text: String, word: String) -> Bool {
+    if len(word) == 0 {
+        return false;
+    }
+    let mutable i: Int = 0;
+    while i + len(word) <= len(text) {
+        if starts_with_at_runner(text, i, word) {
+            let mutable ok: Bool = true;
+            if i > 0 && is_name_char(byte_at(text, i - 1)) {
+                ok = false;
+            }
+            let after: Int = i + len(word);
+            if after < len(text) && is_name_char(byte_at(text, after)) {
+                ok = false;
+            }
+            if ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    return false;
+}
+
+// The editor grammar must know every word the compiler does.
+//
+// **Mirrored from `src/rust-compiler/lexer.rs` and `typeck.rs` deliberately, not from the Burxt
+// compiler's own tables.** Both runners then assert the same thing and the verdict diff stays
+// comparable. Whether the two compilers' keyword tables AGREE is a different question with a
+// different honest failure message, and it lives in `the_two_compilers_know_the_same_keywords`
+// rather than here — a divergence surfacing as "the grammar is missing X" would be the right fact
+// under the wrong name.
+//
+// **Every scrape below carries a floor, and here is what the floors pay for.** The Rust twin's
+// built-in scrape once matched a code shape the typechecker no longer had: it found NOTHING, quietly
+// contributed an empty list, and the invariant went on passing on its keywords alone while `exit`
+// was missing from the grammar for however many versions that refactor was old. **A check that has
+// never run looks exactly like one that passes.** The numbers are measured, not guessed: 40
+// keywords, 30 built-ins, 3023 bytes of pattern as of v0.0.255.
+function grammar_knows_every_keyword() -> String touches files {
+    let lexer_path: String = "src/rust-compiler/lexer.rs";
+    let typeck_path: String = "src/rust-compiler/typeck.rs";
+    let grammar_path: String = "editors/vscode/syntaxes/burxt.tmLanguage.json";
+    if !readable(lexer_path) || !readable(typeck_path) || !readable(grammar_path) {
+        return "one of the three files this reads is missing: " + lexer_path + ", " + typeck_path
+            + ", " + grammar_path;
+    }
+
+    // Keywords, from the lexer's `"word" => Token::Variant` table.
+    let lexer: String = read_file(lexer_path);
+    let mutable words: [String] = [];
+    let mutable at: Int = 0;
+    while at < len(lexer) {
+        let stop: Int = line_end(lexer, at);
+        let begin: Int = skip_blanks(lexer, at, stop);
+        if begin < stop && byte_at(lexer, begin) == 34 {
+            let mutable j: Int = begin + 1;
+            while j < stop && byte_at(lexer, j) != 34 {
+                j += 1;
+            }
+            if j < stop {
+                // `after_quote` and not `tail`: `tail` is a keyword in this language, which is
+                // the kind of collision only writing the compiler's own test suite in it finds.
+                let after_quote: Int = skip_blanks(lexer, j + 1, stop);
+                if starts_with_at_runner(lexer, after_quote, "=> Token::") {
+                    push(words, substring(lexer, begin + 1, j - begin - 1));
+                }
+            }
+        }
+        at = stop + 1;
+    }
+    if len(words) < 20 {
+        return "failed to read the keyword table out of " + lexer_path + " — found only "
+            + to_string(len(words)) + ". It moved; fix the scrape rather than deleting it, because "
+            + "an empty list makes this invariant pass by checking nothing";
+    }
+
+    // Built-in names, from `fn is_reserved_name` in the typechecker.
+    let typeck: String = read_file(typeck_path);
+    let marker: Int = index_of(typeck, "fn is_reserved_name");
+    if marker < 0 {
+        return "`fn is_reserved_name` is not in " + typeck_path
+            + " — it moved, and an empty built-in list would make this invariant vacuous";
+    }
+    let mutable close: Int = marker;
+    while close < len(typeck) && byte_at(typeck, close) != 125 {
+        close += 1;
+    }
+    let mutable builtins: Int = 0;
+    let mutable i: Int = marker;
+    let mutable inside: Bool = false;
+    let mutable from: Int = 0;
+    while i < close {
+        if byte_at(typeck, i) == 34 {
+            if inside {
+                let candidate: String = substring(typeck, from, i - from);
+                let mutable all_lower: Bool = len(candidate) > 0;
+                let mutable k: Int = 0;
+                while k < len(candidate) {
+                    if !is_lower_or_underscore(byte_at(candidate, k)) {
+                        all_lower = false;
+                    }
+                    k += 1;
+                }
+                if all_lower {
+                    push(words, candidate);
+                    builtins += 1;
+                }
+                inside = false;
+            } else {
+                inside = true;
+                from = i + 1;
+            }
+        }
+        i += 1;
+    }
+    if builtins < 10 {
+        return "failed to read the built-in names out of " + typeck_path + " — found only "
+            + to_string(builtins) + ". They moved: find them and fix this scrape rather than "
+            + "deleting it. An empty list is how `exit` stayed missing from the grammar";
+    }
+
+    // The grammar's patterns: every `"match"`, `"begin"` and `"end"` line, with `\\b` turned into a
+    // space — a word-boundary assertion whose own `b` would otherwise look like a letter attached
+    // to the keyword in front of it.
+    let grammar: String = read_file(grammar_path);
+    let mutable patterns: String = "";
+    let mutable g: Int = 0;
+    while g < len(grammar) {
+        let stop: Int = line_end(grammar, g);
+        let begin: Int = skip_blanks(grammar, g, stop);
+        if starts_with_at_runner(grammar, begin, "\"match\"")
+            || starts_with_at_runner(grammar, begin, "\"begin\"")
+            || starts_with_at_runner(grammar, begin, "\"end\"") {
+            // The WHOLE line, indentation included — `begin` decides whether to take it, `g` is
+            // where it starts. The Rust twin filters on the trimmed line and collects the untrimmed
+            // one, and I collected the trimmed one: 2450 bytes against its 3023. The verdict was
+            // unaffected (leading spaces are word boundaries either way) and that is exactly why it
+            // was worth chasing — **a scrape that is nearly the same is not the same scrape**, and
+            // the floor below was calibrated against the other number.
+            // A separator BETWEEN lines, not after each — `join("\n")` on the Rust side leaves no
+            // trailing newline, and appending one put me a byte over at 3024 against 3023. One byte,
+            // at the very end, incapable of changing any lookup. Fixed anyway: the rule two comments
+            // up says a scrape that is nearly the same is not the same scrape, and a rule I bend the
+            // first time it costs me something is not a rule.
+            if len(patterns) > 0 {
+                patterns += "\n";
+            }
+            patterns += substring(grammar, g, stop - g);
+        }
+        g = stop + 1;
+    }
+    patterns = replace_all(patterns, "\\\\b", " ");
+    if len(patterns) < 500 {
+        return "failed to read the grammar's patterns out of " + grammar_path + " — got "
+            + to_string(len(patterns)) + " bytes";
+    }
+
+    let mutable missing: String = "";
+    for word in words {
+        if !word_present(patterns, word) {
+            if len(missing) > 0 {
+                missing += ", ";
+            }
+            missing += word;
+        }
+    }
+    if len(missing) > 0 {
+        return "these words are known to the compiler but absent from the editor grammar: "
+            + missing + " — add them to " + grammar_path;
+    }
+    return "";
+}
+
+
+// Every `"word" => <arrow>` in a Rust match table, appended to `into`. The two keyword scrapes and
+// the renamed-spelling scrape are the same shape with a different arrow, so they are one function —
+// three copies would be three places for the shape to drift.
+function scrape_table(mutable into: [String], text: String, from: Int, stop: Int,
+                      arrow: String) -> Int {
+    let mutable found: Int = 0;
+    let mutable at: Int = from;
+    while at < stop {
+        let eol: Int = line_end(text, at);
+        let mutable line_stop: Int = eol;
+        if line_stop > stop {
+            line_stop = stop;
+        }
+        let begin: Int = skip_blanks(text, at, line_stop);
+        if begin < line_stop && byte_at(text, begin) == 34 {
+            let mutable j: Int = begin + 1;
+            while j < line_stop && byte_at(text, j) != 34 {
+                j += 1;
+            }
+            if j < line_stop {
+                let after_quote: Int = skip_blanks(text, j + 1, line_stop);
+                if starts_with_at_runner(text, after_quote, arrow) {
+                    push(into, substring(text, begin + 1, j - begin - 1));
+                    found += 1;
+                }
+            }
+        }
+        at = eol + 1;
+    }
+    return found;
+}
+
+// The quoted names inside `fn is_reserved_name`, appended to `into`. Lowercase and underscore only,
+// which is what separates a built-in's name from the message text around it.
+function scrape_reserved(mutable into: [String], typeck: String) -> Int {
+    let marker: Int = index_of(typeck, "fn is_reserved_name");
+    if marker < 0 {
+        return 0;
+    }
+    let mutable close: Int = marker;
+    while close < len(typeck) && byte_at(typeck, close) != 125 {
+        close += 1;
+    }
+    let mutable found: Int = 0;
+    let mutable i: Int = marker;
+    let mutable inside: Bool = false;
+    let mutable from: Int = 0;
+    while i < close {
+        if byte_at(typeck, i) == 34 {
+            if inside {
+                let candidate: String = substring(typeck, from, i - from);
+                let mutable all_lower: Bool = len(candidate) > 0;
+                let mutable k: Int = 0;
+                while k < len(candidate) {
+                    if !is_lower_or_underscore(byte_at(candidate, k)) {
+                        all_lower = false;
+                    }
+                    k += 1;
+                }
+                if all_lower {
+                    push(into, candidate);
+                    found += 1;
+                }
+                inside = false;
+            } else {
+                inside = true;
+                from = i + 1;
+            }
+        }
+        i += 1;
+    }
+    return found;
+}
+
+// The website's highlighter must know every word the compiler does — **including the spellings the
+// language RENAMED.**
+//
+// Those are the interesting third of this invariant. `fn`, `mut`, `impl`, `dyn`, `extern`, `struct`,
+// `trait`, `record` do not compile, so the site must colour them as the errors they are rather than
+// as plain identifiers — and they are NOT in the keyword table, which is exactly why the editor
+// grammar went years without `trait` and `record`. A scrape that reads only the keyword table cannot
+// see them.
+//
+// Measured against the Rust twin: 40 keywords, 30 built-ins, 8 renamed spellings, 2103 bytes of word
+// list as of v0.0.258. Only what is inside a `words(...)` call counts — most of that file is comment,
+// and a word in a comment is not a word that highlights.
+function highlighter_knows_every_keyword() -> String touches files {
+    let lexer_path: String = "src/rust-compiler/lexer.rs";
+    let typeck_path: String = "src/rust-compiler/typeck.rs";
+    let js_path: String = "docs/assets/burxt-editor.js";
+    if !readable(lexer_path) || !readable(typeck_path) || !readable(js_path) {
+        return "one of the three files this reads is missing: " + lexer_path + ", " + typeck_path
+            + ", " + js_path;
+    }
+    let lexer: String = read_file(lexer_path);
+    let typeck: String = read_file(typeck_path);
+    let js: String = read_file(js_path);
+
+    let mutable want: [String] = [];
+    let keywords: Int = scrape_table(want, lexer, 0, len(lexer), "=> Token::");
+    if keywords < 20 {
+        return "failed to read the keyword table out of " + lexer_path + " — found only "
+            + to_string(keywords) + "; fix the scrape rather than deleting it, because an empty "
+            + "list makes this invariant pass by checking nothing";
+    }
+    let builtins: Int = scrape_reserved(want, typeck);
+    if builtins < 10 {
+        return "failed to read the built-in names out of " + typeck_path + " — found only "
+            + to_string(builtins);
+    }
+    // The renamed spellings live between `fn renamed_keyword` and its `_ => return None` arm.
+    let renamed_at: Int = index_of(lexer, "fn renamed_keyword");
+    if renamed_at < 0 {
+        return "`fn renamed_keyword` is not in " + lexer_path
+            + " — it moved, and without it the renamed spellings go unchecked";
+    }
+    let mutable renamed_end: Int = index_of(substring(lexer, renamed_at, len(lexer) - renamed_at),
+                                            "_ => return None");
+    if renamed_end < 0 {
+        return "`_ => return None` no longer closes `fn renamed_keyword` in " + lexer_path;
+    }
+    renamed_end += renamed_at;
+    let old: Int = scrape_table(want, lexer, renamed_at, renamed_end, "=>");
+    if old < 6 {
+        return "failed to read the renamed spellings out of " + lexer_path + " — found only "
+            + to_string(old) + ". These do not compile, so the site must colour them as errors; "
+            + "they are not in the keyword table, which is why the grammar went years without "
+            + "`trait` and `record`";
+    }
+
+    // Only the arguments of `words(...)`. Joined with a space, as the Rust twin does.
+    let mutable lists: String = "";
+    let mutable at: Int = 0;
+    while at < len(js) {
+        if starts_with_at_runner(js, at, "words(") {
+            let mutable j: Int = at + 6;
+            while j < len(js) && byte_at(js, j) != 41 {
+                j += 1;
+            }
+            if j < len(js) {
+                if len(lists) > 0 {
+                    lists += " ";
+                }
+                lists += substring(js, at + 6, j - at - 6);
+            }
+            at = j + 1;
+        } else {
+            at += 1;
+        }
+    }
+    if len(lists) < 500 {
+        return "failed to read the word lists out of " + js_path + " — got " + to_string(len(lists))
+            + " bytes. They are the strings passed to `words(...)`; if that shape changed, fix this "
+            + "scrape rather than loosening it to search the whole file, which is mostly comment";
+    }
+
+    let mutable missing: String = "";
+    for word in want {
+        if !word_present(lists, word) {
+            if len(missing) > 0 {
+                missing += ", ";
+            }
+            missing += word;
+        }
+    }
+    if len(missing) > 0 {
+        return "these words are known to the compiler but absent from the website's highlighter: "
+            + missing + " — add them to a word list in " + js_path
+            + "; a keyword the compiler knows and the site does not renders as a plain identifier "
+            + "on every Burxt block on the site";
+    }
+    return "";
+}
+
 // The reason an invariant does NOT hold, or `""` when it does.
 function run_invariant(name: String, compiler: String, work: String) -> String
     touches files, commands
@@ -802,6 +1503,21 @@ function run_invariant(name: String, compiler: String, work: String) -> String
     }
     if name == "the_mascot_plays_once" {
         return mascot_plays_once();
+    }
+    if name == "every_source_and_document_is_in_version_control" {
+        return everything_is_tracked(work);
+    }
+    if name == "the_refusals_page_is_not_stale" {
+        return refusals_page_is_current(compiler, work);
+    }
+    if name == "the_repository_layout_is_declared" {
+        return layout_is_declared(work);
+    }
+    if name == "editor_grammar_knows_every_keyword_the_compiler_does" {
+        return grammar_knows_every_keyword();
+    }
+    if name == "the_web_highlighter_knows_every_keyword_the_compiler_does" {
+        return highlighter_knows_every_keyword();
     }
     // Not silence. A name in the list with no implementation behind it is a bug in this file,
     // and the only safe answer is to fail loudly — see the note at the top of this section.

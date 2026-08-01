@@ -9,9 +9,12 @@
 // characters all appear, and so does a COMBINING sequence, because that is the case a
 // codepoint-correct reverse still gets visually wrong and the comment says so.
 //
-// What is deliberately NOT tested, because it does not exist: `from_codepoint`, `from_bytes` and
-// `from_byte`. There is no way to turn a number into a byte of a String in Burxt — see the gap
-// recorded at the bottom of `lib/string.bx`, which measures each step of that claim.
+// `from_codepoint` and `from_bytes` are NOT tested here, and the reason changed in v0.0.259. This
+// note used to say they *did not exist*, because there was no way to turn a number into a byte of a
+// String in Burxt. The `byte_as_string` builtin (§A13) removed that wall and both are written now —
+// they live in `tests/pass/string_from_codepoint.bx`, which checks `from_codepoint` against
+// `codepoint_at` over every codepoint there is. The third name §D1p asked for, `from_byte`, is the
+// builtin under a second spelling and is deliberately not added.
 use "../../lib/string.bx";
 
 region r {

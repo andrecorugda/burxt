@@ -40,15 +40,17 @@ A Burxt String is bytes, and the language gives you `len`, `byte_at`, `substring
 | [`is_valid_utf8`](#is-valid-utf8) | function | Is every byte part of a well-formed UTF-8 sequence? |
 | [`is_continuation`](#is-continuation) | function | A continuation byte — `10xxxxxx`, the second and later byte of a multi-byte sequence, and never the first. §D1p asks for |
 | [`codepoint_at`](#codepoint-at) | function | The codepoint at codepoint index `i`, as a number. `codepoint_at("é", 0)` is 233. |
-| [`to_bytes`](#to-bytes) | function | Every byte, as numbers. §D1p asks for it, and the honest note is that its partner `from_bytes` is NOT here — see the gap |
+| [`to_bytes`](#to-bytes) | function | Every byte, as numbers. §D1p asks for it, and `from_bytes` at the bottom of this file is the inverse — `from_bytes(to_by |
 | [`char_index`](#char-index) | function | The CODEPOINT index of `of`, or None. The companion to `string_find`, which answers a BYTE offset. |
 | [`string_reverse`](#string-reverse) | function | Built in 4 KB chunks rather than one prepend per character, which is the idiom this project has paid for three times (v0 |
 | [`string_to_upper_ascii`](#string-to-upper-ascii) | function | `a`..`z` become `A`..`Z`. Every other byte, ASCII or not, is passed through unchanged. |
 | [`string_to_lower_ascii`](#string-to-lower-ascii) | function | `A`..`Z` become `a`..`z`. Every other byte, ASCII or not, is passed through unchanged. |
-| [`ascii_letter`](#ascii-letter) | function | The one-byte String for an ASCII LETTER code, by table lookup. |
+| [`ascii_letter`](#ascii-letter) | function | The one-byte String for an ASCII LETTER code. |
 | [`is_ascii`](#is-ascii) | function | Is every byte below 128? Equivalently: is this text unchanged by any of the byte-wise functions above, and safe to treat |
 | [`all_digits`](#all-digits) | function | Is every byte `0`..`9`? **Not a number check** — no sign, no digit grouping, no bounds. It says what its name says, and  |
 | [`is_alpha`](#is-alpha) | function | Is every byte an ASCII letter? Same ASCII-only limit: `é` is not alphabetic to this function, and a full answer needs th |
+| [`from_codepoint`](#from-codepoint) | function | A codepoint as its UTF-8 bytes. `from_codepoint(233)` is `"é"`, and it is the exact inverse of `codepoint_at` — which is |
+| [`from_bytes`](#from-bytes) | function | Bytes back into a String, the exact inverse of `to_bytes`. `from_bytes(to_bytes(s)) == s` for every String, including on |
 
 ## Functions
 {: #functions}
@@ -317,11 +319,11 @@ O(n) in `i` for the same reason `char_at` is. Walk with `next_char` if you want 
 function to_bytes(text: String) -> [Int]
 ```
 
-Every byte, as numbers. §D1p asks for it, and the honest note is that its partner `from_bytes` is NOT here — see the gap recorded at the bottom of this file. Bytes come out of a String freely; getting them back in is the thing this language cannot do yet.
+Every byte, as numbers. §D1p asks for it, and `from_bytes` at the bottom of this file is the inverse — `from_bytes(to_bytes(s)) == s` for every String. This note used to say the partner did not exist and that getting bytes back into a String was "the thing this language cannot do yet"; the `byte_as_string` builtin (§A13) is what changed, in v0.0.259.
 
 `len` and `byte_at` already give a caller this one byte at a time, so this exists for the case where the bytes have to be held: passed to a function, sorted, hashed, compared as a whole.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L549)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L550)
 
 ### `char_index`
 {: #char-index}
@@ -338,7 +340,7 @@ Matches only on a CODEPOINT BOUNDARY, and that is a real difference from `string
 
 An EMPTY needle answers `Some(0)`, matching `string_find`'s 0 — every string contains the empty string, at the beginning.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L574)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L575)
 
 ### `string_reverse`
 {: #string-reverse}
@@ -349,7 +351,7 @@ pure function string_reverse(text: String) -> String allocates
 
 Built in 4 KB chunks rather than one prepend per character, which is the idiom this project has paid for three times (v0.0.68, v0.0.77, v0.0.82) and `lib/os.bx` uses for the same reason: a String is immutable, so `out = piece + out` copies everything already collected on every character and turns a reverse into O(n²). The chunk bounds that copy to 4 KB.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L621)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L622)
 
 ### `string_to_upper_ascii`
 {: #string-to-upper-ascii}
@@ -360,7 +362,7 @@ pure function string_to_upper_ascii(text: String) -> String allocates
 
 `a`..`z` become `A`..`Z`. Every other byte, ASCII or not, is passed through unchanged.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L676)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L677)
 
 ### `string_to_lower_ascii`
 {: #string-to-lower-ascii}
@@ -371,7 +373,7 @@ pure function string_to_lower_ascii(text: String) -> String allocates
 
 `A`..`Z` become `a`..`z`. Every other byte, ASCII or not, is passed through unchanged.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L695)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L696)
 
 ### `ascii_letter`
 {: #ascii-letter}
@@ -380,13 +382,15 @@ pure function string_to_lower_ascii(text: String) -> String allocates
 pure function ascii_letter(code: Int) -> String
 ```
 
-The one-byte String for an ASCII LETTER code, by table lookup.
+The one-byte String for an ASCII LETTER code.
 
-A table rather than arithmetic, because **there is no way to build a String from a byte value in this language** — see the gap at the bottom of the file. `substring` of a literal is the only Int-to-String path there is, and it works here precisely because the 52 letters are the only bytes these two functions ever need to produce.
+**Two 26-character tables and a `substring` until v0.0.259**, because there was no way to build a String from a byte value in this language and `substring` of a literal was the only Int-to-String path there was. It worked here precisely because the 52 letters were the only bytes the two case functions ever need to produce. `byte_as_string` (§A13) makes the tables unnecessary, and the body is now one line.
+
+**It is kept rather than replaced by the builtin, and the difference is the CONTRACT, not the conversion.** The three `requires` clauses say this is a letter code and nothing else, which is what makes the two callers above readable: `ascii_letter(byte - 32)` states that the arithmetic landed in the letter range, and the compiler checks it. `byte_as_string(byte - 32)` would accept any byte and say nothing. So this is a narrowing, unlike `from_byte`, which would have been a second spelling and is not written.
 
 `requires` rather than a fallback: a code outside the two letter runs is a caller mistake, and answering `"?"` for it is how `os_byte_as_string` came to destroy data silently (roadmap §B2).
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L722)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L731)
 
 ### `is_ascii`
 {: #is-ascii}
@@ -397,7 +401,7 @@ pure function is_ascii(text: String) -> Bool
 
 Is every byte below 128? Equivalently: is this text unchanged by any of the byte-wise functions above, and safe to treat as one byte per character?
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L744)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L748)
 
 ### `all_digits`
 {: #all-digits}
@@ -408,7 +412,7 @@ pure function all_digits(text: String) -> Bool
 
 Is every byte `0`..`9`? **Not a number check** — no sign, no digit grouping, no bounds. It says what its name says, and `string_parse_int` is the one that answers whether the text is an Int. Arabic-Indic and Devanagari digits are NOT digits here, which follows from every byte being ASCII and is the same limit `_ascii` names elsewhere.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L757)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L761)
 
 ### `is_alpha`
 {: #is-alpha}
@@ -419,5 +423,44 @@ pure function is_alpha(text: String) -> Bool
 
 Is every byte an ASCII letter? Same ASCII-only limit: `é` is not alphabetic to this function, and a full answer needs the Unicode category tables that full case mapping needs.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L769)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L773)
+
+### `from_codepoint`
+{: #from-codepoint}
+
+```burxt
+pure function from_codepoint(code: Int) -> String allocates
+```
+
+A codepoint as its UTF-8 bytes. `from_codepoint(233)` is `"é"`, and it is the exact inverse of `codepoint_at` — which is the property the fixture checks, over every codepoint in every one of the four widths rather than a chosen few.
+
+**Four branches, mirroring `codepoint_at`'s decode.** The leading byte carries the width marker and the top bits; each continuation carries six more, marked `10xxxxxx`. Written as the inverse of the decoder directly above it so the pair can be read together — a mask there is a shift here.
+
+`requires` rather than a fallback, and this is the same call `ascii_letter` records: a number that is not a codepoint is a caller mistake, and answering U+FFFD for it would be the silent substitution `os_byte_as_string`'s `"?"` was. The two exclusions are what UTF-8 cannot encode:
+
+* **above U+10FFFF** there is no codepoint, so there is no encoding to produce. * **U+D800..U+DFFF are SURROGATES** — half of a UTF-16 pair, never a character on their own.
+
+```burxt
+ Encoding one produces CESU-8, which `is_valid_utf8` rejects, so allowing it here would let
+ this function build text its own module calls invalid.
+```
+
+**It never emits a PARTIAL sequence**, which is the whole reason to prefer it over the builtin: every branch appends all of its bytes or the contract refuses before any of them. A caller assembling text one codepoint at a time therefore cannot produce a truncated character.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L833)
+
+### `from_bytes`
+{: #from-bytes}
+
+```burxt
+pure function from_bytes(xs: [Int]) -> String allocates
+```
+
+Bytes back into a String, the exact inverse of `to_bytes`. `from_bytes(to_bytes(s)) == s` for every String, including one holding a NUL — checked in the fixture, because a length-prefixed String makes that ordinary and it would be easy to assume otherwise.
+
+**It does NOT promise valid UTF-8**, and that is not a gap to fill later: the bytes are the caller's, and a function that validated them would have to answer something for the invalid case, which is either a lie or an `Option` that every caller with known-good bytes then has to unwrap. `is_valid_utf8(from_bytes(xs))` says it in one line where a reader can see it. This is also the only way to build a deliberately BINARY String — which `write_bytes` then writes out.
+
+Chunked, not `out += b`, for the reason three earlier functions in this file carry: appending to a String copies it, so byte-at-a-time is O(n²). The project has paid for that three times.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L868)
 

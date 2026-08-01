@@ -311,6 +311,8 @@
           id: len
         - name: "byte_at"
           id: byte-at
+        - name: "byte_as_string"
+          id: byte-as-string
         - name: "substring"
           id: substring
         - name: "to_string"

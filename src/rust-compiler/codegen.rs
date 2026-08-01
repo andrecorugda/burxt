@@ -1811,6 +1811,10 @@ impl<'ctx> CodeGen<'ctx> {
                 let ptr = self.gen_expr(p)?.into_pointer_value();
                 self.build_c_string_at(ptr).map(Into::into)
             }
+            TypedExprKind::ByteAsString(n) => {
+                let byte = self.gen_expr(n)?.into_int_value();
+                self.build_byte_as_string(byte).map(Into::into)
+            }
             TypedExprKind::ToString(v) => {
                 let val = self.gen_expr(v)?;
                 self.build_to_string(&v.ty, val).map(Into::into)
@@ -3193,6 +3197,61 @@ impl<'ctx> CodeGen<'ctx> {
         let end = unsafe { self.builder.build_gep(i8t, buf, &[len], "c_end") }.map_err(err)?;
         self.builder.build_store(end, i8t.const_zero()).map_err(err)?;
         Ok(buf)
+    }
+
+    /// `byte_as_string(n)` — a one-byte String holding `n`, the exact inverse of `byte_at`.
+    ///
+    /// Emitted INLINE rather than as a lazily-defined `burxt.*` helper, which is what `substring`
+    /// and `c_string_at` do and for the same reason: the failure NAMES the offending number, and a
+    /// shared helper would have to take it as a parameter to print it anyway. Nine instructions.
+    ///
+    /// ONE unsigned comparison covers both ends. A negative `n` wraps to something enormous, so
+    /// `n u<= 255` is `n >= 0 && n <= 255` signed — the same trick the shift-distance check uses,
+    /// and the reason there is no second branch for the negative case.
+    fn build_byte_as_string(&mut self, n: IntValue<'ctx>) -> Result<PointerValue<'ctx>, String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+        let i8t = self.ctx.i8_type();
+
+        let fits = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::ULE,
+                n,
+                i64t.const_int(255, false),
+                "byte_fits",
+            )
+            .map_err(err)?;
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_parent())
+            .ok_or("codegen bug: byte_as_string outside a function")?;
+        let broken = self.ctx.append_basic_block(function, "byte_out_of_range");
+        let ok = self.ctx.append_basic_block(function, "byte_ok");
+        self.builder.build_conditional_branch(fits, ok, broken).map_err(err)?;
+
+        self.builder.position_at_end(broken);
+        let fprintf = self.fprintf_fn();
+        let (stderr_g, _, exit) = self.panic_deps();
+        let fmt = self.global_str(
+            "burxt runtime error: byte_as_string(%lld) has no answer — a byte is 0 to 255\n",
+            "fmt_byte_range",
+        );
+        let stream = self.load_stderr(stderr_g)?;
+        let arguments: Vec<BasicMetadataValueEnum> = vec![stream.into(), fmt.into(), n.into()];
+        self.builder.build_call(fprintf, &arguments, "fprintf").map_err(err)?;
+        self.build_exit70(exit)?;
+
+        self.builder.position_at_end(ok);
+        // `build_alloc_string` writes the length header AND the trailing NUL, so the only byte
+        // left to store is the one asked for. That is also why a NUL byte needs no special case:
+        // the length is in the header, not in the bytes, so `byte_as_string(0)` is a String of
+        // length 1 that happens to hold a zero.
+        let out = self.build_alloc_string(i64t.const_int(1, false))?;
+        let byte = self.builder.build_int_truncate(n, i8t, "byte").map_err(err)?;
+        self.builder.build_store(out, byte).map_err(err)?;
+        Ok(out)
     }
 
     /// Render a value to a region-allocated String, using the SAME format the

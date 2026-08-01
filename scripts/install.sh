@@ -8,6 +8,17 @@
 # What it installs: the `burxt` binary, and the standard library where `use` can find it.
 # What it needs from you: a C compiler, because `burxt build` calls `cc` to link. LLVM is
 # inside the binary; Rust and cargo are not needed at all.
+#
+# Hosts published per release: linux-x86_64, linux-arm64, darwin-arm64, darwin-x86_64.
+#
+# On **Windows** there is no tarball and no `burxt.exe`, deliberately — use the container:
+#
+#     wslc  run --rm -v "$PWD:/work" ghcr.io/andrecorugda/burxt run hello.bx   # Windows 11
+#     docker run --rm -v "$PWD:/work" ghcr.io/andrecorugda/burxt run hello.bx  # anywhere
+#
+# `wslc` is Windows 11's built-in Linux container runtime — no Docker Desktop, no third-party
+# runtime. The reasoning for not shipping a native MSVC build, and the trigger that would
+# reverse it, are in spec/ROADMAP-1.1.md §W1–W2.
 set -e
 
 PREFIX="${PREFIX:-/usr/local}"

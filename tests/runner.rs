@@ -8821,6 +8821,21 @@ fn the_ir_is_the_same_for_every_target() {
         // Both 32-bit, and both identical — see the note above.
         "armv7-unknown-linux-gnueabihf",
         "wasm32-unknown-unknown",
+        // Added in v0.0.260, and added because the RELEASE NOTES started naming them. The
+        // tarball's README now tells a reader that Burxt emits for Android, iOS and WASI, and
+        // the rule this suite runs on is that a cross-target claim needs a runner invariant
+        // rather than a sentence. Each of these was measured emitting a correct object before
+        // being written down — Android's three ABIs give ELF aarch64 / ELF ARM EABI5 / ELF
+        // x86-64, iOS gives a Mach-O arm64 object, WASI a wasm module.
+        //
+        // Android is a TARGET here and nothing more. The compiler still does not RUN on a
+        // phone, and conflating the two is the mistake this comment exists to prevent:
+        // hosting needs LLVM 18 rebuilt for bionic, which is spec/ROADMAP-1.1.md's problem.
+        "aarch64-linux-android",
+        "armv7a-linux-androideabi",
+        "x86_64-linux-android",
+        "aarch64-apple-ios",
+        "wasm32-wasi",
     ] {
         let there = ir_for(Some(triple));
         if there != host {

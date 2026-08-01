@@ -540,9 +540,10 @@ pure function codepoint_at(text: String, i: Int) -> Int
          + bit_and(byte_at(text, at + 3), 63);
 }
 
-// Every byte, as numbers. §D1p asks for it, and the honest note is that its partner `from_bytes`
-// is NOT here — see the gap recorded at the bottom of this file. Bytes come out of a String
-// freely; getting them back in is the thing this language cannot do yet.
+// Every byte, as numbers. §D1p asks for it, and `from_bytes` at the bottom of this file is the
+// inverse — `from_bytes(to_bytes(s)) == s` for every String. This note used to say the partner did
+// not exist and that getting bytes back into a String was "the thing this language cannot do yet";
+// the `byte_as_string` builtin (§A13) is what changed, in v0.0.259.
 //
 // `len` and `byte_at` already give a caller this one byte at a time, so this exists for the case
 // where the bytes have to be held: passed to a function, sorted, hashed, compared as a whole.
@@ -710,12 +711,20 @@ pure function string_to_lower_ascii(text: String) -> String allocates {
     return done + chunk;
 }
 
-// The one-byte String for an ASCII LETTER code, by table lookup.
+// The one-byte String for an ASCII LETTER code.
 //
-// A table rather than arithmetic, because **there is no way to build a String from a byte value in
-// this language** — see the gap at the bottom of the file. `substring` of a literal is the only
-// Int-to-String path there is, and it works here precisely because the 52 letters are the only
-// bytes these two functions ever need to produce.
+// **Two 26-character tables and a `substring` until v0.0.259**, because there was no way to build a
+// String from a byte value in this language and `substring` of a literal was the only Int-to-String
+// path there was. It worked here precisely because the 52 letters were the only bytes the two case
+// functions ever need to produce. `byte_as_string` (§A13) makes the tables unnecessary, and the body
+// is now one line.
+//
+// **It is kept rather than replaced by the builtin, and the difference is the CONTRACT, not the
+// conversion.** The three `requires` clauses say this is a letter code and nothing else, which is
+// what makes the two callers above readable: `ascii_letter(byte - 32)` states that the arithmetic
+// landed in the letter range, and the compiler checks it. `byte_as_string(byte - 32)` would accept
+// any byte and say nothing. So this is a narrowing, unlike `from_byte`, which would have been a
+// second spelling and is not written.
 //
 // `requires` rather than a fallback: a code outside the two letter runs is a caller mistake, and
 // answering `"?"` for it is how `os_byte_as_string` came to destroy data silently (roadmap §B2).
@@ -724,12 +733,7 @@ pure function ascii_letter(code: Int) -> String
     requires code <= 122
     requires code <= 90 || code >= 97
 {
-    let upper: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    if code <= 90 {
-        return substring(upper, code - 65, 1);
-    }
-    let lower: String = "abcdefghijklmnopqrstuvwxyz";
-    return substring(lower, code - 97, 1);
+    return byte_as_string(code);
 }
 
 // ---- cheap classification, §D1c ---------------------------------------------------------
@@ -777,56 +781,107 @@ pure function is_alpha(text: String) -> Bool {
 }
 
 // ============================================================================
-// THE GAP: `from_codepoint`, `from_bytes` and `from_byte` are NOT here.
+// BUILDING TEXT FROM NUMBERS, §D1p — and this section was THE GAP until v0.0.255.
 //
-// §D1p asks for all three and they are the reason `\uXXXX` in JSON still cannot decode (§B9). They
-// are not missing because they are hard to write. **There is no way to turn a number into a byte of
-// a String in this language**, and every step of that was measured on v0.0.252 rather than assumed:
+// What stood here was an argument that `from_codepoint`, `from_bytes` and `from_byte` could not be
+// written: **there was no way to turn a number into a byte of a String in this language.** Four
+// measured steps, kept because they are the reason the builtin below exists rather than a
+// convenience — no builtin was Int-to-String; no escape named a byte (`\xNN` and `\uXXXX` do not
+// exist); so `substring` of a LITERAL was the only path; and a source file must be valid UTF-8, so
+// a byte >= 0x80 could only reach a literal inside a complete multi-byte character.
 //
-//   1. **No builtin does it.** The complete list is `len` `byte_at` `push` `read_file` `to_string`
-//      `old` `substring` `truncate` `write_file` `argument` `argument_count` `divide_floor`
-//      `divide_toward_zero` `remainder` `write_bytes` `hash` `bit_and` `bit_or` `bit_xor` `bit_not`
-//      `shift_left` `shift_right_zeros` `shift_right_sign` `c_is_null` `c_string_at` `c_bytes_at`.
-//      Nothing there is Int-to-String. `to_string(233)` is `"233"`, three digit characters.
-//   2. **No escape names a byte.** Burxt strings support `\\ \" \n \r \t \0 \{ \}` and nothing else
-//      — there is no `\xNN` and no `\uXXXX`. Checked against the lexer's own refusal message.
-//   3. **So `substring` of a LITERAL is the only Int-to-String path**, which is what
-//      `ascii_letter` above and `os_byte_as_string` both do. It can only produce bytes that appear
-//      literally in the source.
-//   4. **A source file must be valid UTF-8** — a raw `0xC4` byte in a literal is refused by the
-//      reader, not the lexer: *"cannot read p3.bx: stream did not contain valid UTF-8"*. So a byte
-//      >= 0x80 can only reach a literal as part of a complete multi-byte character.
+// That last step is what closed the door. Continuation bytes were cheap — `"ÀÁÂ...ÿ"` yields every
+// byte `0x80`..`0xBF` — but the 51 UTF-8 LEAD bytes `0xC2`..`0xF4` each needed their own character
+// from their own block, six of them unassigned codepoints (`0xCC` combining marks, `0xEE` Private
+// Use Area, `0xF1`..`0xF4` four empty planes). Counted, not estimated. **That table was refused**:
+// a reviewer cannot read mixed scripts and invisible codepoints, `git diff` shows mojibake, and an
+// editor that normalises Unicode would silently break a whole plane.
 //
-// That last point is what closes the door. Continuation bytes are cheap: the 64 ordinary letters
-// `"ÀÁÂ...ÿ"` encode as `C3 80`..`C3 BF`, so one readable literal yields every byte `0x80`..`0xBF`
-// at its odd offsets. **The LEAD bytes are the problem.** A codepoint's UTF-8 lead is `0xC2`..`0xF4`,
-// each value requires its own character from its own block, and that is 51 characters — of which
-// **six are unassigned codepoints** (`0xCC` is combining marks, `0xEE` is the Private Use Area, and
-// `0xF1`..`0xF4` are four empty planes). Counted, not estimated.
+// **The answer was to give the language the missing operation instead: `byte_as_string(n)`**, a
+// builtin, roadmap §A13. Everything below is ordinary Burxt on top of it. The refusal was right and
+// the workaround would have been wrong; what was missing was one primitive, and a library note is
+// where that became visible.
 //
-// A 51-character table of mixed scripts and invisible codepoints in the standard library is a
-// liability rather than a clever trick: a reviewer cannot read it, `git diff` shows mojibake, and
-// an editor that normalises Unicode silently breaks `from_codepoint` for a whole plane. So it is
-// **not written**, and the decision is recorded here rather than made silently by omission.
+// ---- what these can and cannot promise --------------------------------------------------
 //
-// **What would unblock it: one builtin, and the smallest useful one is `byte_string(n) -> String`**
-// — a one-byte String for `0 <= n <= 255`. Everything else is ordinary Burxt on top of it:
-// `from_codepoint` becomes the four-branch encoder that mirrors `codepoint_at` above,
-// `from_bytes(xs)` becomes a fold, `from_byte` retires `os_byte_as_string` and its `"?"` (§B2), and
-// JSON `\uXXXX` decodes. That is the whole cluster behind one function the compiler already has the
-// machinery for — `substring` builds a String of length 1 today.
+// `byte_as_string` is the ONE builtin that can build a String `is_valid_utf8` rejects —
+// `byte_as_string(0xC3)` alone is a lead byte with no continuation, and that is measured, not
+// inferred. **`from_codepoint` is the safe layer**: it emits a whole sequence or refuses, so it
+// cannot leave a partial one behind. `from_bytes` makes no such promise and says so — it is for
+// bytes that are already known to be text, or for building a String that is deliberately binary.
+
+// A codepoint as its UTF-8 bytes. `from_codepoint(233)` is `"é"`, and it is the exact inverse of
+// `codepoint_at` — which is the property the fixture checks, over every codepoint in every one of
+// the four widths rather than a chosen few.
 //
-// Recorded, not worked around. Nothing here returns a sentinel or a `"?"` in place of a byte it
-// cannot build.
+// **Four branches, mirroring `codepoint_at`'s decode.** The leading byte carries the width marker
+// and the top bits; each continuation carries six more, marked `10xxxxxx`. Written as the inverse of
+// the decoder directly above it so the pair can be read together — a mask there is a shift here.
 //
-// ---- how to check whether this is still true -------------------------------------------
+// `requires` rather than a fallback, and this is the same call `ascii_letter` records: a number
+// that is not a codepoint is a caller mistake, and answering U+FFFD for it would be the silent
+// substitution `os_byte_as_string`'s `"?"` was. The two exclusions are what UTF-8 cannot encode:
 //
-// Measured on **v0.0.252**. NO ROADMAP ITEM covers the builtin; §D1p lists the three functions as
-// though they were library work, and this note is the argument that one of them is not.
+//   * **above U+10FFFF** there is no codepoint, so there is no encoding to produce.
+//   * **U+D800..U+DFFF are SURROGATES** — half of a UTF-16 pair, never a character on their own.
+//     Encoding one produces CESU-8, which `is_valid_utf8` rejects, so allowing it here would let
+//     this function build text its own module calls invalid.
 //
-//     check 1: does a byte-building builtin exist? `grep is_reserved_name src/rust-compiler/typeck.rs`
-//     check 2: `let s: String = "a\xC4b";`               — expect: unknown escape
-//     check 3: a file containing a raw 0xC4 in a literal — expect: not valid UTF-8
+// **It never emits a PARTIAL sequence**, which is the whole reason to prefer it over the builtin:
+// every branch appends all of its bytes or the contract refuses before any of them. A caller
+// assembling text one codepoint at a time therefore cannot produce a truncated character.
+pure function from_codepoint(code: Int) -> String allocates
+    requires code >= 0
+    requires code <= 1114111
+    requires code < 55296 || code > 57343
+{
+    if code < 128 {
+        return byte_as_string(code);
+    }
+    if code < 2048 {
+        return byte_as_string(192 + shift_right_zeros(code, 6))
+             + byte_as_string(128 + bit_and(code, 63));
+    }
+    if code < 65536 {
+        return byte_as_string(224 + shift_right_zeros(code, 12))
+             + byte_as_string(128 + bit_and(shift_right_zeros(code, 6), 63))
+             + byte_as_string(128 + bit_and(code, 63));
+    }
+    return byte_as_string(240 + shift_right_zeros(code, 18))
+         + byte_as_string(128 + bit_and(shift_right_zeros(code, 12), 63))
+         + byte_as_string(128 + bit_and(shift_right_zeros(code, 6), 63))
+         + byte_as_string(128 + bit_and(code, 63));
+}
+
+// Bytes back into a String, the exact inverse of `to_bytes`. `from_bytes(to_bytes(s)) == s` for
+// every String, including one holding a NUL — checked in the fixture, because a length-prefixed
+// String makes that ordinary and it would be easy to assume otherwise.
 //
-// If check 1 turns up something new, delete this whole block and write the four-branch encoder.
+// **It does NOT promise valid UTF-8**, and that is not a gap to fill later: the bytes are the
+// caller's, and a function that validated them would have to answer something for the invalid case,
+// which is either a lie or an `Option` that every caller with known-good bytes then has to unwrap.
+// `is_valid_utf8(from_bytes(xs))` says it in one line where a reader can see it. This is also the
+// only way to build a deliberately BINARY String — which `write_bytes` then writes out.
+//
+// Chunked, not `out += b`, for the reason three earlier functions in this file carry: appending to a
+// String copies it, so byte-at-a-time is O(n²). The project has paid for that three times.
+pure function from_bytes(xs: [Int]) -> String allocates {
+    let mutable done: String = "";
+    let mutable chunk: String = "";
+    for i in 0..len(xs) {
+        chunk += byte_as_string(xs[i]);
+        if len(chunk) >= 4096 {
+            done += chunk;
+            chunk = "";
+        }
+    }
+    return done + chunk;
+}
+
+// `from_byte` is NOT here, and §D1p's third name is answered rather than dropped: it would be
+// `byte_as_string` under a second spelling. The builtin already takes an Int 0..255 and answers a
+// one-byte String, in either compiler, with the same range refusal — there is nothing for a wrapper
+// to add, and an alias whose body is `return byte_as_string(n);` costs a reader the question of what
+// the difference is. Named here because "we decided it is the same function" and "we forgot" look
+// identical from the outside.
 // ============================================================================

@@ -1,31 +1,60 @@
-# Tag a version, get a tarball people can actually install.
+# Tag a version, get artifacts people can actually install.
 #
 # `scripts/release.sh` does the work and carries its own smoke test — it unpacks the tarball into a
 # directory that has never seen this project and compiles a program with the UNPACKED binary. So
-# this workflow is thin on purpose: if the artifact is broken, the script fails here for the same
+# the build jobs are thin on purpose: if the artifact is broken, the script fails here for the same
 # reason it would fail on a laptop, and the failure is reproducible by running one command.
+#
+# Three jobs, in this order and for this reason:
+#
+#   tarball  — one per host, built NATIVELY on that architecture. No cross-compilation and no QEMU:
+#              a statically-linked LLVM 18 under emulation is hours per arch for a byte-identical
+#              result, and a build that slow stops being run.
+#   image    — a multi-arch OCI image assembled from the two Linux tarballs the matrix just built.
+#              This is also the Windows story: `wslc` runs it on Windows 11 with no Docker Desktop,
+#              which is why there is no MSVC port of the compiler here.
+#   publish  — collects every artifact, checksums them together, and attaches them to the release.
+#              Checksumming happens ONCE across all platforms so SHA256SUMS covers the whole set
+#              rather than one file per job.
 name: Release
 
 on:
   push:
     tags: ["v*"]
-  # So the artifact can be built and downloaded without cutting a tag — useful for checking that a
-  # change to the packaging works before it is permanent.
+  # So the artifacts can be built and downloaded without cutting a tag — useful for checking that a
+  # change to the packaging works before it is permanent. Doubly so now: a four-host matrix has
+  # three hosts nobody can test on a laptop.
   workflow_dispatch:
 
 jobs:
   tarball:
-    name: Build, smoke-test and publish the tarball
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write        # only to attach assets to the release
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      # One broken host should not hide whether the other three work. With `fail-fast` the first
+      # macOS failure would cancel the Linux builds mid-flight and the run would say nothing about
+      # them, which is the opposite of what a matrix is for.
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runs-on: ubuntu-latest
+          # arm64 Linux is FREE on public repositories (GA August 2025) and it is the architecture
+          # the cloud argument actually rests on — Graviton, Ampere, Raspberry Pi.
+          - name: linux-arm64
+            runs-on: ubuntu-24.04-arm
+          - name: darwin-arm64
+            runs-on: macos-14
+          - name: darwin-x86_64
+            runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
 
       # LLVM **18**, pinned, for the reason CI pins it: inkwell is on feature `llvm18-1`, and this
       # is also the LLVM that ends up statically linked INSIDE the published binary. The version
       # here is the version users get.
-      - name: Install LLVM 18
+      - name: Install LLVM 18 (Linux)
+        if: runner.os == 'Linux'
         run: |
           # Into /tmp, NOT the workspace. Downloading it beside the checkout left `llvm.sh` in the
           # repository root, and two tests correctly refused it — `the_repository_root_holds_only
@@ -35,16 +64,136 @@ jobs:
           chmod +x /tmp/llvm.sh
           sudo /tmp/llvm.sh 18
           sudo apt-get install -y llvm-18 llvm-18-dev libpolly-18-dev
+          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
+
+      # Homebrew's `llvm@18` is keg-only, so it is never on PATH and its prefix has to be asked for
+      # rather than guessed. `--force-bottle` keeps this from falling into a source build of LLVM,
+      # which is the difference between four minutes and an hour.
+      - name: Install LLVM 18 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install --force-bottle llvm@18
+          echo "LLVM_SYS_181_PREFIX=$(brew --prefix llvm@18)" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
 
       # The whole suite before publishing anything. A release that fails its own tests is worse
       # than no release, because someone will install it.
+      #
+      # `-D warnings` because CI passes it and a plain build does not — the third distinct way this
+      # project has had CI go red while every local run was green.
       - name: Run the suite
-        run: cargo test --locked
+        env:
+          RUSTFLAGS: "-D warnings"
+        run: cargo test --locked --release
+
+      # H4's release gate, and it only means anything on a machine with no toolchain of its own.
+      - name: The tarball works without Rust or LLVM
+        run: cargo test --release the_release_tarball_works_without_rust_or_llvm -- --ignored
 
       - name: Build the tarball
         run: sh scripts/release.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball-${{ matrix.name }}
+          path: dist/burxt-*.tar.gz
+          if-no-files-found: error
+
+  image:
+    name: Multi-arch OCI image
+    needs: tarball
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write        # to push to GHCR
+    steps:
+      - uses: actions/checkout@v4
+
+      # Only the two Linux tarballs. A container image cannot carry a Mach-O binary, and asking for
+      # all four here would silently pick a wrong one.
+      - uses: actions/download-artifact@v4
+        with:
+          name: tarball-linux-x86_64
+          path: /tmp/tarballs/amd64
+      - uses: actions/download-artifact@v4
+        with:
+          name: tarball-linux-arm64
+          path: /tmp/tarballs/arm64
+
+      # Unpack into the layout scripts/Dockerfile expects — dist/oci/linux-<TARGETARCH>/ — because
+      # buildx sets TARGETARCH to Docker's spelling (amd64/arm64), not uname's (x86_64/aarch64).
+      # Those two vocabularies differing is exactly the kind of thing that produces an image that
+      # runs the wrong binary, so the translation happens once, here, in the open.
+      - name: Lay the binaries out for the image
+        run: |
+          set -eux
+          for arch in amd64 arm64; do
+              mkdir -p "dist/oci/linux-$arch"
+              tar xzf /tmp/tarballs/$arch/burxt-*.tar.gz -C /tmp/tarballs/$arch
+              unpacked=$(find /tmp/tarballs/$arch -maxdepth 1 -type d -name 'burxt-*' | head -1)
+              [ -n "$unpacked" ] || { echo "no unpacked dir for $arch" >&2; exit 1; }
+              cp "$unpacked/burxt" "dist/oci/linux-$arch/burxt"
+              cp -r "$unpacked/lib"  "dist/oci/linux-$arch/lib"
+          done
+          file dist/oci/linux-amd64/burxt dist/oci/linux-arm64/burxt
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # `ghcr.io/<owner>/burxt` lowercased — GHCR rejects uppercase in a repository name and the
+      # owner's login is not guaranteed to be lowercase.
+      - name: Work out the image name
+        id: name
+        run: echo "repo=ghcr.io/$(echo '${{ github.repository }}' | tr 'A-Z' 'a-z')" >> "$GITHUB_OUTPUT"
+
+      # `load` cannot hold a multi-arch manifest, so the image is built for amd64 alone first and
+      # actually RUN. Pushing a manifest nobody has executed is how you publish an image whose
+      # `burxt build` fails on the missing `cc` — the exact failure this Dockerfile installs gcc to
+      # prevent, and one no amount of building would reveal.
+      - name: Smoke-test the image before pushing it
+        run: |
+          set -eux
+          docker buildx build -f scripts/Dockerfile --platform linux/amd64 \
+              --load -t burxt:smoke dist/oci
+          printf 'let price: Decimal<2> = 19.99;\nprint(price * 3);\n' > /tmp/money.bx
+          got=$(docker run --rm -v /tmp:/work burxt:smoke run money.bx)
+          [ "$got" = "59.97" ] || { echo "image returned '$got', wanted 59.97" >&2; exit 1; }
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          # `dist/oci`, not the repository root — see scripts/Dockerfile for why the context is
+          # narrowed rather than filtered with a .dockerignore.
+          context: dist/oci
+          file: scripts/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          # Untagged builds on `workflow_dispatch` are built and smoke-tested but NOT pushed, so the
+          # packaging can be exercised without publishing anything — same rule the tarballs follow.
+          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          tags: |
+            ${{ steps.name.outputs.repo }}:${{ github.ref_name }}
+            ${{ steps.name.outputs.repo }}:latest
+
+  publish:
+    name: Collect and publish
+    needs: [tarball, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # only to attach assets to the release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tarball-*
+          path: /tmp/tarballs
+          merge-multiple: true
 
       # The extension too, so the editor experience is one download away rather than a build step.
       - name: Package the VS Code extension
@@ -53,9 +202,16 @@ jobs:
       - name: Collect the assets
         run: |
           mkdir -p upload
-          cp dist/burxt-*.tar.gz upload/
+          cp /tmp/tarballs/burxt-*.tar.gz upload/
           cp editors/vscode/*.vsix upload/
           cd upload && sha256sum * > SHA256SUMS && cat SHA256SUMS
+
+      # Four tarballs, or something silently did not build. Without this the release would happily
+      # publish one platform and look complete.
+      - name: There must be four tarballs
+        run: |
+          count=$(ls upload/burxt-*.tar.gz | wc -l)
+          [ "$count" -eq 4 ] || { echo "expected 4 tarballs, found $count:"; ls -1 upload/; exit 1; }
 
       - uses: actions/upload-artifact@v4
         with:

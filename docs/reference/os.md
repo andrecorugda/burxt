@@ -30,9 +30,8 @@ Arguments, the clock, running a command, and exiting with a code. Each one wraps
 | [`os_read_byte`](#os-read-byte) | function | One byte of standard input, or -1 at the end. The whole of the input, a byte at a time, is what a program can do today — |
 | [`os_read_line`](#os-read-line) | function | One line of standard input, without its newline, or None at end of input. |
 | [`os_read_all`](#os-read-all) | function | — |
-| [`os_env`](#os-env) | function | A single byte as a one-character String. Burxt has no character type and `to_string` of an Int gives digits, so the only |
+| [`os_env`](#os-env) | function | An environment variable, or a stated absence. |
 | [`os_env_or`](#os-env-or) | function | The same question with a stated fallback, for the common case where a missing setting has a sensible default. Separate f |
-| [`os_byte_as_string`](#os-byte-as-string) | function | — |
 
 ## Functions
 {: #functions}
@@ -136,7 +135,7 @@ A bare `\r` before the newline is dropped, so a CRLF client and an LF client are
 function os_read_all() -> String touches input
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L109)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L112)
 
 ### `os_env`
 {: #os-env}
@@ -145,13 +144,13 @@ function os_read_all() -> String touches input
 function os_env(name: String) -> Option<String> touches input
 ```
 
-A single byte as a one-character String. Burxt has no character type and `to_string` of an Int gives digits, so the only way through is a table. An environment variable, or a stated absence.
+An environment variable, or a stated absence.
 
 `Option<String>` and not `String`, because **unset and empty are different facts.** `FOO=` sets FOO to the empty string; not mentioning FOO at all is a different thing, and a library that answered "" for both would make "is this configured" unanswerable. `getenv` distinguishes them by returning NULL, and this is where that distinction is preserved rather than flattened.
 
 `touches input` because the value came from outside the program. Whether reading the environment deserves an effect of its own is an open question — see spec/FAR-HORIZON-ROADMAP.md M2 — but `input` is honest today: it is a value the process was started with.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L139)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L140)
 
 ### `os_env_or`
 {: #os-env-or}
@@ -162,14 +161,5 @@ function os_env_or(name: String, fallback: String) -> String touches input
 
 The same question with a stated fallback, for the common case where a missing setting has a sensible default. Separate from `os_env` rather than a parameter with a default, because Burxt has no default arguments — and because the two really are different questions.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L151)
-
-### `os_byte_as_string`
-{: #os-byte-as-string}
-
-```burxt
-function os_byte_as_string(byte: Int) -> String
-```
-
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L155)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L152)
 

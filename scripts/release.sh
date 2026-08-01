@@ -19,7 +19,11 @@ export LLVM_SYS_181_PREFIX="${LLVM_SYS_181_PREFIX:-/usr/lib/llvm-18}"
 cargo build --release
 
 rm -rf "$OUT" && mkdir -p "$OUT/lib"
-strip -o "$OUT/burxt" target/release/burxt
+# Copy then strip in place, rather than `strip -o dest src`. GNU and BSD strip disagree about
+# `-o` in ways that are not worth discovering on a release runner, and copy-then-strip is the
+# spelling both agree on.
+cp target/release/burxt "$OUT/burxt"
+strip "$OUT/burxt"
 cp lib/*.bx "$OUT/lib/"
 cp lib/README.md "$OUT/lib/"
 cp LICENSE-MIT LICENSE-APACHE "$OUT/"
@@ -48,8 +52,31 @@ Or keep it wherever you unpacked it and call it by path.
 
 - **A C compiler** (\`cc\`), because \`burxt build\` hands the object file to the system
   linker. Nothing else: LLVM is inside this binary.
-- Linux x86-64 for this tarball. Other targets are a build away — the compiler's front end
-  knows nothing about platforms — but they are not built here yet.
+- **$TARGET** — this tarball runs on that and nothing else. Other hosts are published
+  alongside it: Linux x86-64, Linux arm64, macOS arm64 and macOS x86-64.
+
+  On **Windows**, use the container image rather than this tarball:
+
+      docker run --rm -v "\$PWD:/work" ghcr.io/andrecorugda/burxt run hello.bx
+      wslc   run --rm -v "\$PWD:/work" ghcr.io/andrecorugda/burxt run hello.bx
+
+  \`wslc\` is Windows 11's built-in Linux container runtime — no Docker Desktop needed.
+
+## Compiling FOR another machine
+
+The host above is where the *compiler* runs. What it can *emit* is a longer list, and the
+LLVM IR is byte-identical for every one of them, which is what makes the decimal answers
+identical too:
+
+    burxt build pay.bx --target aarch64-linux-android -o pay.o
+
+That writes an **object and stops**, on purpose: linking needs that platform's libc, sysroot
+and linker, so it is handed to the toolchain that already has them (the NDK here). Verified
+to emit: \`aarch64-unknown-linux-gnu\`, \`x86_64-unknown-linux-gnu\`, \`riscv64-unknown-linux-gnu\`,
+\`aarch64-apple-darwin\`, \`x86_64-apple-darwin\`, \`x86_64-pc-windows-msvc\`,
+\`armv7-unknown-linux-gnueabihf\`, \`wasm32-unknown-unknown\`, \`wasm32-wasi\`,
+\`aarch64-apple-ios\`, and the three Android ABIs
+(\`aarch64-linux-android\`, \`armv7a-linux-androideabi\`, \`x86_64-linux-android\`).
 
 ## Where things are
 
@@ -78,9 +105,23 @@ BIN="$SMOKE/$NAME/burxt"
 
 # If this links libLLVM then "needs no LLVM installed" is false, and that sentence is on the
 # install page.
-if ldd "$BIN" 2>/dev/null | grep -qi llvm; then
+#
+# The tool differs by platform, and getting this wrong is silent rather than loud: `ldd` does
+# not exist on macOS, so the original `ldd | grep` simply found nothing there and the check
+# PASSED for every Darwin build without ever looking. A guard that cannot fail is not a guard
+# — so the tool is chosen explicitly and an unknown platform is a hard stop, not a shrug.
+case "$(uname -s)" in
+    Linux)  SHARED_LIBS="ldd $BIN" ;;
+    Darwin) SHARED_LIBS="otool -L $BIN" ;;
+    *)      echo "FAIL: no way to list shared libraries on $(uname -s)" >&2; exit 1 ;;
+esac
+if ! $SHARED_LIBS >/dev/null 2>&1; then
+    echo "FAIL: could not inspect the binary's shared libraries with: $SHARED_LIBS" >&2
+    exit 1
+fi
+if $SHARED_LIBS 2>/dev/null | grep -qi llvm; then
     echo "FAIL: the binary links libLLVM, so it is not standalone" >&2
-    ldd "$BIN" | grep -i llvm >&2
+    $SHARED_LIBS | grep -i llvm >&2
     exit 1
 fi
 

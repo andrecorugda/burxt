@@ -24,7 +24,7 @@ written **once, carefully**, instead of forty times.
 | [`vector.bx`](vector.bx) | `vector_dot`, `vector_magnitude`, `vector_is_unit`, `vector_normalise`, `vector_top_dot`, and a store: `vector_store_render`/`parse`/`read`/`write`/`append`. Exact, never through a float |
 | [`test.bx`](test.bx) | `Tests`, `test_begin`, `check_int`/`money`/`decimal`/`string`/`bool`/`that`, `test_end`. Testing Burxt, in Burxt — no registration, because there are no function values |
 | [`files.bx`](files.bx) | `file_read`, `file_write`, `file_append`, `file_exists`, `file_delete`, `file_move`, `file_make_directory`, `file_list_directory` |
-| [`os.bx`](os.bx) | `os_args`, `os_arg`, `os_arg_count`, `os_now`, `os_run`, `os_capture`, `os_read_byte`, `os_read_all`, `os_byte_as_string` |
+| [`os.bx`](os.bx) | `os_args`, `os_arg`, `os_arg_count`, `os_now`, `os_run`, `os_capture`, `os_read_byte`, `os_read_line`, `os_read_all`, `os_env`, `os_env_or` |
 
 The first two rows used to read `str.bx` and `fs.bx`, which have never been the filenames — so both
 links 404'd, and `map.bx` and `json.bx` were missing from a table whose whole job is saying what is

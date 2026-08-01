@@ -331,9 +331,9 @@
           }
         },
         {
-          "comment": "Built-in scalar types. CInt, CDouble and CPointer exist only at the C boundary.",
+          "comment": "Built-in scalar types. CInt, CDouble, CPointer and the fixed widths i32/u8/u32/u64 exist only at the C boundary.",
           "name": "support.type.primitive.burxt",
-          "match": "\\b(Int|Bool|String|CInt|CDouble|CPointer|Decimal)\\b"
+          "match": "\\b(Int|Bool|String|CInt|CDouble|CPointer|Decimal|i32|u8|u32|u64)\\b"
         },
         {
           "comment": "`dynamic Trait` is the only syntax that asks for runtime dispatch.",
@@ -431,7 +431,7 @@
         {
           "comment": "Built-in functions. `print` is a statement keyword; the rest are calls.",
           "name": "support.function.builtin.burxt",
-          "match": "\\b(print|print_error|len|byte_at|push|read_file|to_string|old|divide_floor|divide_toward_zero|remainder|substring|write_file|write_bytes|argument|argument_count|truncate|hash|exit|bit_and|bit_or|bit_xor|bit_not|shift_left|shift_right_zeros|shift_right_sign|c_is_null|c_string_at|c_bytes_at)\\b"
+          "match": "\\b(print|print_error|len|byte_at|byte_as_string|push|read_file|to_string|old|divide_floor|divide_toward_zero|remainder|substring|write_file|write_bytes|argument|argument_count|truncate|hash|exit|bit_and|bit_or|bit_xor|bit_not|shift_left|shift_right_zeros|shift_right_sign|c_is_null|c_string_at|c_bytes_at)\\b"
         }
       ]
     },

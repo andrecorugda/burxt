@@ -491,7 +491,7 @@ A5, nothing named as a limit.
 | ~~A4~~ | ~~**`pure` on a method / `pure` returning an Option**~~ **DONE v0.0.248, and the two halves were ONE branch.** A variant constructor `Enum.Variant(x)` PARSES as a method call and is told apart inside the method-call branch — but the blanket *"a pure function may not call a method"* refusal sat at the TOP of that branch, before anything checked whether the receiver was an enum. **So a constructor was refused for being SHAPED like a method call**, and one removal fixed both items. `lib/array.bx`'s comment had named that mechanism exactly, years before anyone acted on it. **The row also understated the payoff:** `typeck.rs` has always checked a method's clauses with `in_pure` set, so `requires self.sum() > 0` was already asking whether `sum` is pure and being refused by the blanket branch — the whole second half of the item is that the answer can now be yes | — |
 | A5 | **`.chars()` / codepoint iteration** — A4.4's one remaining gap | M | The whole UTF-8 layer: correct case handling · a `string_reverse` that does not corrupt · char indexing · `\uXXXX` in JSON · `is_valid_utf8` |
 | ~~A6~~ | ~~**`for i in 0..n`**~~ **DONE v0.0.245**, both compilers, ten fail fixtures, all refused by both. **Exclusive only, and no inclusive form** — three reasons: `0..len(xs)` is the same bound `while i < len(xs)` already writes, half-open ranges tile with no gap (which is why `substring(s, from, LENGTH)` is half-open too), and two forms one character apart where that character changes the iteration count is precisely what a reviewer's eye slides over. Cost named: `0..n + 1` shows a visible `+ 1` rather than an invisible `=`. **`for`-only, not a value** — a range as a value wants an iterator protocol (A11) and half of one is worse than waiting. **Reversed LITERALS refused, reversed computed bounds run zero times**, because `for i in 0..len(xs)` over an empty array is correct code that must not trap | — |
-| A7 | **Integer widths** `i32`/`u8`/`u32`/`u64` — **DESIGN SETTLED v0.0.252, build deliberately stopped and reverted; see §A7d** | M→**L** | C structs (`dirent.d_name`) · fixed-width records → N9 row 6 · `clock_gettime` → **monotonic and sub-second time**, so benchmarking and timeouts · binary formats · A4.4's deferred **Bytes type** |
+| A7 | **Integer widths** `i32`/`u8`/`u32`/`u64` — **STAGE-0 BUILT AND VERIFIED v0.0.260. Stage-1 lexes the four words and implements none of them, so the two compilers DISAGREE on a width program today; see §A7e** | M→**L** | C structs (`dirent.d_name`) · fixed-width records → N9 row 6 · `clock_gettime` → **monotonic and sub-second time**, so benchmarking and timeouts · binary formats · A4.4's deferred **Bytes type** |
 | A8 | **Tuples** | M | `zip` · `enumerate` · `char_indices` · `split_at` · `divmod` · `split_once` without inventing a record |
 | A9 | **Generic interfaces** — the cheap alternative to closures. `dynamic Trait` is already a function value in all but name; interfaces simply cannot take type parameters. **On no roadmap — needs an explicit yes/no, because YES may replace A10** | M | `sort_by` · predicates · visitors · most of `map`/`filter`, in a form consistent with the no-closures decision |
 | A10 | **Closures / function values** — or A9 instead of it | **L** | `map`/`filter`/`fold`/`any`/`all`/`retain`/`partition`/`position` across four libraries **at once** · `signal()`, so a server can shut down cleanly |
@@ -575,7 +575,7 @@ marker.** Read from the path rather than run, since the work was reverted — ve
 `codegen.rs` (generalise `i32 @burxt.checked.cint(i64)` to `burxt.checked.<bits>.<signed>`), all of
 stage-1, and fixtures.
 
-### A13 — `byte_string(n)`: one builtin behind a whole cluster (found v0.0.253)
+### ~~A13~~ — `byte_as_string(n)`: **DONE v0.0.260**, one builtin behind a whole cluster
 
 **NEW, and it is the highest leverage-per-line item on this roadmap.** One builtin —
 `byte_string(n) -> String`, a one-byte String for `0 <= n <= 255` — unblocks all of:
@@ -642,6 +642,50 @@ scrapes the body of `fn is_reserved_name`, and §B6 requires reserving a builtin
 lands in `is_reserved_name`.** Correct §A7d's wording accordingly.
 
 **Everything else is ordinary Burxt on top of it.**
+
+### A7e — stage-0 landed at v0.0.260, and the two compilers now disagree
+
+The §A7d design is **built and verified in stage-0**, and the three-file cascade §A7d predicted is paid:
+`i32`/`u8`/`u32`/`u64` are in the grammar, the `.vsix` and the generated reference. Measured, not read:
+
+```
+$ burxt check w1.bx        # let n: u8 = 5;
+error: `u8` only exists at the C boundary (external function signatures) — use Int in
+Burxt code; values convert at the call.
+
+$ burxt run w3.bx          # external function putchar(c: u8); putchar(300)
+burxt runtime error: this value does not fit in a u8 — the external parameter holds 0 to 255
+exit 70
+```
+
+Boundary-only, and a **per-width** runtime trap that names the width and its range — both halves of the
+design, not just the syntax.
+
+**Stage-1 has none of it, and that is the state to hold in view rather than the "reverted" the row said
+for eight versions while the build sat in the tree.** Stage-1 lexes the four words — that is why
+`the_two_compilers_know_the_same_keywords` is green — and its checker implements nothing behind them:
+
+```
+$ stage1 check w1.bx    error: declared u8, but the value is Int          # refuses, WRONG REASON
+$ stage1 check w2.bx    error: external function `abs` returns i32, but only Int, CInt or
+                        CPointer may cross the C boundary as a return    # REFUSES what stage-0 ACCEPTS
+```
+
+The first line is the trap [[burxt-stage1-silent-agreement]] names: stage-1 reads `u8` as an unknown
+named type, every rule goes quiet, and the *accidental* refusal reads like agreement. A fail fixture
+could not tell the difference — it checks refusal, not the reason — which is the second process rule in
+the negative direction.
+
+**The forcing function already exists and needs nothing built.** `the_burxt_backend_compiles_a_growing_
+share_of_the_suite` is an `assert_eq!(correct, total)` — an equality since v0.0.113, deliberately not a
+ratchet, *"keeping one now would let a regression hide above the line."* So **the moment a width program
+lands in `tests/pass/`, that equality goes red and stays red until stage-1 implements widths.** That is
+why no width pass fixture is committed at v0.0.260: the fixture is not documentation of the gap, it is
+the gate, and it lands **with** stage-1's half, in the same version, as §A0 requires of every row.
+
+Remaining: `check.bx` and `emit.bx` — the boundary-only rule, the extern parameter/return admission, and
+the per-width checked truncation, mirroring `build_to_cint`. Then the pass fixture, and A7 is done on
+both stages.
 
 ## B — Urgent bugs, silent wrong answers first
 
@@ -811,7 +855,7 @@ The grouping is the useful part: these are not independent items, they are five 
 |---|---|
 | G1 | **Concurrency** — threads, shared regions, **derived mutual exclusion from a declared invariant** (*"the genuinely novel step"*), data races as compile errors, `map_seeded`. Regions were chosen partly to make this right; effect handlers are the intended mechanism |
 | G2 | **The pointer wall's remaining doors** — callbacks into Burxt (→ `sqlite3_exec`, `signal`), C→Burxt strings, an environment effect → then sockets → TLS → HTTPS → a model client |
-| G3 | **M3 packaging** — per-target linking, desktop matrix, Android NDK/JNI, iOS signing, wasm host glue. *Objects already emit for 8 triples with byte-identical IR; what remains is a sysroot per platform* |
+| G3 | **M3 packaging** — per-target linking, desktop matrix, Android NDK/JNI, iOS signing, wasm host glue. *Objects already emit for **13** triples with byte-identical IR; what remains is a sysroot per platform.* Was written as 8; the other five (Android's three ABIs, `aarch64-apple-ios`, `wasm32-wasi`) already worked and nothing had looked — measured and added to `the_ir_is_the_same_for_every_target` in v0.0.260. **G3 is target-side and stays post-1.0**; the HOST work (four platforms, the image) shipped in §H without needing a sysroot, and reading G3 as "packaging is post-1.0, so macOS waits" has the split backwards — see [ROADMAP-1.1](ROADMAP-1.1.md) §G3 |
 | G4 | **Freestanding runtime (IoT)** — configurable region, no-libc mode, `print` routed out. Xtensa (ESP32), AVR, MSP430, ARM/Thumb and RISC-V 32 backends are already registered and `armv7` emits real ELF. **Needs A12.** The pitch is unusually strong here: exact decimals, no float, no GC, no runtime, bounded memory and byte-identical IR is what embedded control code wants, and it is the one domain where "no floating point" reads as a feature |
 | G5 | **An encoder to guard** — N1 / NOVELTY §1's serialization and database boundary exactness. `lib/json.bx` fired this trigger |
 | G6 | N9 rows 6–9 + the *"money may not reach a model"* rule and its fixtures · borrow and mutability tracking for `dynamic` · M4 phases 4b–6 · static contract proving (SMT) · A4.6's deferred rows |
@@ -829,6 +873,11 @@ The grouping is the useful part: these are not independent items, they are five 
 | H4 | `cargo test --release the_release_tarball_works_without_rust_or_llvm -- --ignored` passes |
 | H5 | **The 1.0 limitations document** — every `Decision` and every unpicked `Blocking` row, so nothing surprises anyone. This is what makes a high bar honest instead of optimistic |
 | H6 | A stated **compatibility promise**, with `burxt review` as its mechanical enforcer |
+| H7 | **DONE (v0.0.260) — four hosts, not one.** `release.yml` builds natively per architecture: `linux-x86_64`, `linux-arm64` (free on public repos since GA August 2025), `darwin-arm64`, `darwin-x86_64`. `fail-fast: false`, because one broken host must not hide whether the other three work, and `publish` refuses to attach anything unless **four** tarballs arrive — without that count a release would ship one platform and look complete |
+| H8 | **DONE (v0.0.260) — a multi-arch OCI image**, `amd64` + `arm64`, from `scripts/Dockerfile`. It **copies** the binaries the matrix already built rather than compiling inside the image: a statically-linked LLVM 18 under QEMU is hours per architecture for a byte-identical result, and a build that slow stops being run. The image carries **gcc**, which is not a convenience — `burxt build` calls `cc` to link, so an image holding only the binary would pass `burxt check` and fail every build, reproducing the exact failure `install.sh` already warns about. It is **run** before it is pushed: build `linux/amd64`, execute `19.99 * 3`, refuse to push unless it prints `59.97` |
+| H9 | **DONE (v0.0.260) — Windows, by container, deliberately.** Windows 11's `wslc` runs OCI images natively — no Docker Desktop, no third-party runtime (preview 29 June 2026, GA fall 2026). So H8's image *is* the Windows host, and the native MSVC port is refused with its bill written out in [ROADMAP-1.1](ROADMAP-1.1.md) §W2. The trigger that reopens it: someone who needs `burxt.exe` outside a container |
+| H10 | **DONE (v0.0.260) — the release script stopped being Linux-only in a way that could not fail.** `ldd` does not exist on macOS, so the "does this binary link libLLVM?" guard found nothing there and **passed without looking** — for every Darwin build, silently. Now the tool is chosen per platform (`ldd` / `otool -L`) and an unknown platform is a hard stop. *A guard that cannot fail is not a guard.* Also `strip -o` → copy-then-strip, since GNU and BSD disagree about `-o` and a release runner is the wrong place to find out |
+| H11 | **Distribution work that needs a machine we do not have → [ROADMAP-1.1](ROADMAP-1.1.md).** Android as a **host** (an experiment with the command written down, not a wall — NDK r27 *is* LLVM 18), the native Windows port, and the `use`-search-path question the container raised. The split is by **verifiability**: 1.0 holds what could be built and proven in one pass; 1.1 holds what cannot be finished by writing it |
 
 ---
 

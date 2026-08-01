@@ -1788,6 +1788,11 @@ function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String)
                                   + ", i64 " + second + ")\n");
         return reg;
     }
+    if called == "byte_as_string" {
+        let visited: Int = self.write_body("  " + reg
+            + " = call i64 @burxt.byte_as_string(i64 " + first + ")\n");
+        return reg;
+    }
     if called == "substring" {
         let visited: Int = self.write_body("  " + reg + " = call i64 @burxt.substring(i64 " + first
                                   + ", i64 " + second + ", i64 " + third + ")\n");
@@ -3817,6 +3822,33 @@ function runtime_ir() -> String {
         + "  %b = load i8, ptr %q\n"
         + "  %z = zext i8 %b to i64\n"
         + "  ret i64 %z\n\}\n\n"
+        // The EXACT INVERSE of `burxt.byte_at` above, and placed beside it so the pair can be read
+        // together: `byte_at(byte_as_string(n), 0) == n` for every one of the 256 values, which
+        // `tests/pass/byte_as_string.bx` checks as a loop rather than on a chosen few.
+        //
+        // ONE unsigned comparison covers both ends. A negative n wraps to something enormous, so
+        // `n u> 255` is `n < 0 || n > 255` signed — the same trick the shift-distance check uses,
+        // and the reason there is no second branch for the negative case.
+        //
+        // `alloc_string` writes the length header AND the trailing NUL, so the only byte left to
+        // store is the one asked for. That is also why a zero byte needs no special case: the
+        // length lives in the header, not in the bytes, so `byte_as_string(0)` is a String of
+        // length 1 that happens to hold a NUL.
+        + "define i64 @burxt.byte_as_string(i64 %n) \{\n"
+        + "entry:\n"
+        + "  %bad = icmp ugt i64 %n, 255\n"
+        + "  br i1 %bad, label %oops, label %ok\n"
+        + "oops:\n"
+        + "  %err = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.byte_range_msg, i64 %n)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n"
+        + "ok:\n"
+        + "  %out = call i64 @burxt.alloc_string(i64 1)\n"
+        + "  %p = inttoptr i64 %out to ptr\n"
+        + "  %byte = trunc i64 %n to i8\n"
+        + "  store i8 %byte, ptr %p\n"
+        + "  ret i64 %out\n\}\n\n"
         + "define i64 @burxt.strcmp(i64 %a, i64 %b) \{\n"
         + "entry:\n"
         + "  %pa = inttoptr i64 %a to ptr\n"
@@ -3995,6 +4027,9 @@ function runtime_ir() -> String {
         + "@burxt.substring_msg = private unnamed_addr constant [91 x i8] "
         + "c\"burxt runtime error: substring(s, %lld, %lld) does not fit \\E2\\80\\94 this string "
         + "has %lld bytes\\0A\\00\"\n"
+        + "@burxt.byte_range_msg = private unnamed_addr constant [80 x i8] "
+        + "c\"burxt runtime error: byte_as_string(%lld) has no answer \\E2\\80\\94 a byte is "
+        + "0 to 255\\0A\\00\"\n"
         + "@burxt.truncate_msg = private unnamed_addr constant [116 x i8] "
         + "c\"burxt runtime error: truncate(xs, %lld) \\E2\\80\\94 this array has %lld elements, "
         + "and truncate only ever makes one shorter\\0A\\00\"\n"

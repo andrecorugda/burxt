@@ -1,0 +1,187 @@
+# Burxt 1.1 — the hosts, and what each one costs to verify
+
+**Status: the plan of record for work that needs testing and verification on machines this
+project does not have.** Created v0.0.260.
+
+[`ROADMAP-1.0.md`](ROADMAP-1.0.md) is the road to *a language someone outside this repository
+can ship on*. This file is its sibling with one specific job: it holds the distribution work
+that **cannot be finished by writing it**, because finishing means proving it on hardware or
+in an environment nobody here can reach.
+
+That split is the whole point. Everything quick enough to build and verify in one pass went
+into 1.0's §H and is done. What is left is the work whose honest state is *"plausible, and
+unproven"* — and the failure mode this file exists to prevent is a roadmap row that says DONE
+because the code was written.
+
+---
+
+## The distinction that governs this whole document
+
+Two things get called "supporting Android", and only one of them is hard.
+
+| | What it means | State |
+|---|---|---|
+| **Target** | You compile a Burxt program **for** the platform, from a machine that already works | **DONE.** Verified in `the_ir_is_the_same_for_every_target` |
+| **Host** | The `burxt` compiler **runs on** the platform | The subject of this file |
+
+Burxt emits correct objects for **thirteen** triples today, each measured rather than assumed
+— including all three Android ABIs, `aarch64-apple-ios` and `wasm32-wasi`. The IR is
+byte-identical for every one, which is what makes the decimal answers identical too.
+
+**Do not let a "we support Android" row hide which of the two it means.** Every row below says
+host or target in its first sentence.
+
+---
+
+## H — where 1.0 left it
+
+For reference, because 1.1 only makes sense against what already shipped:
+
+- Four **hosts** built natively and published per tag: `linux-x86_64`, `linux-arm64`,
+  `darwin-arm64`, `darwin-x86_64`.
+- A multi-arch **OCI image** (`amd64` + `arm64`), smoke-tested by actually running it before
+  the manifest is pushed.
+- **Windows is served by that image**, via WSL container — see W1.
+
+---
+
+## W — Windows
+
+### W1 — Windows is DONE, by container, and that is a decision not a shortcut
+
+**Host.** Windows 11 ships `wslc.exe`, a built-in OCI runtime: Linux containers natively, no
+Docker Desktop, no third-party runtime, Docker-compatible CLI, GPU support from day one.
+Announced at Build 2026, public preview 29 June 2026, GA targeted fall 2026.
+
+So `wslc run ghcr.io/andrecorugda/burxt run hello.bx` is the Windows story, and it costs one
+line of documentation against an image that had to exist for Kubernetes anyway.
+
+**The trigger that would reopen this:** a Windows user who needs `burxt.exe` on `PATH` outside
+a container — a CI runner that cannot nest containers, an IDE integration that shells out, or
+an installer that must not require WSL. Until one of those is real, W2 is not worth its price.
+
+### W2 — A native MSVC port — NOT scheduled, and here is the bill
+
+**Host.** Three separate ports, not one:
+
+1. **inkwell + LLVM 18 under MSVC.** The Linux and macOS builds get LLVM from apt and Homebrew.
+   Windows has neither; `llvm-sys` must find an MSVC-built LLVM 18 with the static libraries,
+   and that is the step that historically eats the week.
+2. **The link step.** `burxt build` shells out to `cc`. On MSVC there is no `cc` — it is
+   `link.exe` with entirely different flag spelling, or `clang-cl`. This is compiler surface,
+   not packaging: `main.rs` currently hands everything after the source file to the linker
+   *unchanged*, and that contract does not survive the translation.
+3. **Install and library paths.** `scripts/install.sh` is POSIX shell and assumes
+   `/usr/local`. Windows needs its own path, and then there are permanently two.
+
+**Cost of the third one is the real argument.** The first two are finite. A second install
+surface is forever, and it goes stale the way six spec headers went stale.
+
+**Verification it would need:** the full suite green on `windows-latest`, the tarball smoke
+test rewritten in something that is not `sh`, and `the_release_tarball_works_without_rust_or_llvm`
+given a Windows equivalent. None of that can be checked from here.
+
+---
+
+## N — Android as a host
+
+### N1 — Running the compiler on the phone — an EXPERIMENT, not a wall
+
+**Host.** Termux, `burxt build` typed on the device.
+
+The version objection is gone: **NDK r27 bundles LLVM 18**, exactly what inkwell's `llvm18-1`
+feature wants. But that toolchain *runs on x86-64 and targets Android* — `llvm-sys` needs LLVM's
+static libraries built to **run on** aarch64 bionic, and the NDK does not ship those. Termux has
+its own `llvm` package, which may be the missing piece.
+
+**This is written as an experiment on purpose.** Six times in this project a wall that looked
+like a design constraint dissolved without new machinery, and the rule that came out of it is
+*measure the error, do not reason about it*. Nobody has run the build and read the linker error.
+Until someone does, "impossible" is an opinion.
+
+**The measurement, in order:**
+
+```sh
+# on the device, under Termux
+pkg install llvm rust binutils
+LLVM_SYS_181_PREFIX=$(llvm-config --prefix) cargo build --release
+```
+
+**Report the exact failure, not a summary.** A missing `libLLVM*.a` is a different problem from
+a bionic symbol mismatch, and only the second is genuinely fatal.
+
+**What it is worth if it works:** less than it looks. CHN hosts on Termux because it is 830 KB
+of C with no dependency; Burxt would be an 18 MB binary compiling on a phone CPU. The people
+served are people writing Burxt on a phone. Shipping Burxt programs **to** Android is the
+commercially real one and it already works.
+
+**Trigger to promote this above W2:** anyone asks for it. Nobody has.
+
+---
+
+## L — What the container found out about the language
+
+### L1 — `use` has no search path, and the image is where that first hurts
+
+**Compiler, not packaging.** `use` resolves **relative to the importing file's directory and
+nothing else** — no search path, no environment variable (`load_into`,
+`src/rust-compiler/main.rs`). So inside the image the standard library must be named in full:
+
+```burxt
+use "/usr/local/lib/burxt/string.bx";
+```
+
+A `BURXT_LIB` environment variable was drafted into `scripts/Dockerfile` and **removed before
+it shipped**, because the compiler never reads one and an image advertising a variable that
+does nothing is worse than one stating the real path.
+
+**Why the container is what raised it.** On a laptop the library's location is a user's choice
+and a search path would need a policy. In the image it has exactly **one** fixed home, which is
+the first context where a search path has an unambiguous answer.
+
+**Why it is not scheduled here.** It is a language change and it collides with a decision on
+record — *no implicit prelude, no glob imports*. A search path is one step from an implicit
+prelude, and the reason to want it (typing) is the weakest kind of reason this project accepts.
+The correctness argument, if there is one, is that an absolute path in source is not portable
+between the tarball and the image — and **that** is worth a spec.
+
+**Must NOT do:** add a search path that makes `use "string.bx"` resolve differently depending on
+where the compiler was installed. Two machines compiling the same file must compile the same
+program. Any design that cannot promise that is refused.
+
+---
+
+## G3 — what this file does NOT cover
+
+[`ROADMAP-1.0.md`](ROADMAP-1.0.md) §G3 is *M3 packaging — per-target linking, desktop matrix,
+Android NDK/JNI, iOS signing, wasm host glue*, and it stays post-1.0.
+
+**G3 and this file are about opposite directions**, which is why the work did not simply merge:
+
+- **G3 is target-side.** Given an emitted object, produce a runnable artifact *for* that
+  platform — a sysroot, a linker, an iOS signature, wasm host glue. Objects already emit for
+  thirteen triples; what remains is everything after the object.
+- **This file is host-side.** Make the compiler itself run somewhere new.
+
+The four hosts and the image shipped without touching G3 at all, because none of them needed a
+sysroot. Anyone reading G3 as "packaging is post-1.0, so the macOS build must wait" has the
+split backwards.
+
+---
+
+## Verification — the rule this file is built around
+
+Every row above states *what would have to be true* and *on what machine*, because the failure
+this document exists to prevent is a DONE that was never executed anywhere.
+
+- **A cross-target claim needs a runner invariant**, not a sentence. The thirteen triples are in
+  `the_ir_is_the_same_for_every_target`; they were added in the same version the tarball's README
+  began naming them.
+- **A host claim needs the suite green on that host.** The four in 1.0 run `cargo test --release`
+  and the H4 tarball gate on their own runner. A host that cannot do both is not supported.
+- **An image claim needs the image RUN.** `release.yml` builds `linux/amd64`, executes
+  `19.99 * 3`, and refuses to push unless it prints `59.97`. Building a manifest proves nothing;
+  an image missing `cc` builds perfectly and fails every `burxt build`.
+- **NOT DONE is not evidence.** A stale limitation is worse than a stale DONE, because nobody
+  re-tests what the document says does not work. N1 is an experiment with a command in it for
+  exactly this reason.

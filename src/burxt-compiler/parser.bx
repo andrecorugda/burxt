@@ -355,6 +355,7 @@ function builtin_arity(name: String) -> Int {
     if name == "read_file" { return 1; }
     if name == "c_is_null" { return 1; }
     if name == "c_string_at" { return 1; }
+    if name == "byte_as_string" { return 1; }
     if name == "c_bytes_at" { return 2; }
     if name == "argument" { return 1; }
     if name == "hash" { return 1; }
@@ -381,6 +382,7 @@ function builtin_result(name: String) -> Type {
     if name == "to_string" { return simple_type(42); }
     if name == "read_file" { return simple_type(42); }
     if name == "c_string_at" { return simple_type(42); }
+    if name == "byte_as_string" { return simple_type(42); }
     if name == "c_is_null" { return simple_type(41); }
     if name == "substring" { return simple_type(42); }
     if name == "argument" { return simple_type(42); }
@@ -403,6 +405,38 @@ function builtin_result(name: String) -> Type {
     if name == "remainder" { return simple_type(40); }
     if name == "hash" { return simple_type(40); }
     return unknown_type();
+}
+
+// Is the value at `node` WRITTEN DOWN, and if so what is it?
+//
+// Two methods rather than one, because there is no answer an Int could carry for "not a literal":
+// 0 and -1 are both perfectly good literals, so any sentinel would make some real program's
+// argument unreadable. Asking twice walks two nodes and costs nothing.
+//
+// `kind == 6` is unwrapped because THE LEXER READS NO SIGN: `-1` is a unary minus WRAPPING the
+// literal `1`, never a literal holding -1. A rule that only looked at `kind == 1` would therefore
+// see nothing at all for every negative argument — which is what the `c_bytes_at` rule below did
+// for as long as it existed, and it was a fixture that found it rather than a reading.
+function (self: Unit) is_written_int(node: Int) -> Bool {
+    if node < 0 {
+        return false;
+    }
+    let outer: Node = self.nodes[node];
+    if outer.kind == 1 {
+        return true;
+    }
+    if outer.kind == 6 {
+        return self.nodes[outer.a].kind == 1;
+    }
+    return false;
+}
+
+function (self: Unit) written_int(node: Int) -> Int {
+    let outer: Node = self.nodes[node];
+    if outer.kind == 6 {
+        return 0 - self.nodes[outer.a].value;
+    }
+    return outer.value;
 }
 
 // What each builtin will accept. The receiver-shaped ones — `push` and `truncate` —
@@ -470,35 +504,46 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
                 "`c_bytes_at(p, n)` takes a count of bytes as an Int, but this is "
                 + self.show_type(src, second));
         }
-        if second_node >= 0 {
-            // `-1` is a unary minus WRAPPING the literal 1, not a literal holding -1: the lexer
-            // reads no sign. So this rule existed and never fired — it tested `kind == 1` and every
-            // negative count it was written for arrives as kind 6. Unwrapped here, which is the same
-            // one-level-too-shallow mistake the class-literal escape rule had, found the same way.
-            let mutable counted: Node = self.nodes[second_node];
-            let mutable magnitude: Int = counted.value;
-            let mutable negative: Bool = false;
-            if counted.kind == 6 {
-                let inner: Node = self.nodes[counted.a];
-                if inner.kind == 1 {
-                    negative = true;
-                    magnitude = inner.value;
-                    counted = inner;
-                }
-            }
-            if counted.kind == 1 && (negative || counted.value < 0) {
-                let mutable shown: Int = magnitude;
-                if negative {
-                    shown = 0 - magnitude;
-                }
-                if shown < 0 {
-                    let complained: Int = self.complain_at(src, at,
-                        "`c_bytes_at(p, " + to_string(shown) + ")` asks for a negative "
-                        + "number of bytes, which is not a smaller read but an enormous one. "
-                        + "A count is 0 or more.");
-                }
+        // `-1` is a unary minus WRAPPING the literal 1, not a literal holding -1: the lexer reads
+        // no sign. So this rule existed and never fired — it tested `kind == 1` and every negative
+        // count it was written for arrives as kind 6. That unwrapping now lives in
+        // `is_written_int`/`written_int` above, shared with `byte_as_string` below, because it is
+        // one question — *is this value written down?* — and answering it twice is how the two
+        // copies drift.
+        if self.is_written_int(second_node) {
+            let shown: Int = self.written_int(second_node);
+            if shown < 0 {
+                let complained: Int = self.complain_at(src, at,
+                    "`c_bytes_at(p, " + to_string(shown) + ")` asks for a negative "
+                    + "number of bytes, which is not a smaller read but an enormous one. "
+                    + "A count is 0 or more.");
             }
         }
+    }
+    // `byte_as_string(n)` — the one-byte String whose only byte is `n`, and the exact inverse of
+    // `byte_at`. See the note beside stage-0's copy in typeck.rs for WHY it is a builtin at all:
+    // there was no Int-to-String path in the language, and the 51-character table that would have
+    // faked one was refused.
+    if called == "byte_as_string" {
+        if !is_unknown(first) && first.kind != 40 {
+            let complained: Int = self.complain_at(src, at,
+                "`byte_as_string` takes an Int byte value, but this is "
+                + self.show_type(src, first));
+        }
+        // A WRITTEN-DOWN value out of range is refused now; anything computed is checked at
+        // runtime. Both, unlike `CInt`, which traps at runtime only — a fixture pins CInt's
+        // contract so it cannot gain a literal check without changing, while a new builtin pays
+        // nothing for one. The wording has to match stage-0's to the substring the fixture pins.
+        if self.is_written_int(first_node) {
+            let shown: Int = self.written_int(first_node);
+            if shown < 0 || shown > 255 {
+                let complained: Int = self.complain_at(src, at,
+                    "`byte_as_string(" + to_string(shown) + ")` has no answer: a byte is 0 to 255. "
+                    + "A codepoint above 255 is more than one byte — `from_codepoint` in "
+                    + "lib/string.bx encodes it");
+            }
+        }
+        return 1;
     }
     if called == "hash" {
         // A type PARAMETER is hashable when its bound says so, which is the whole job of a bound:
@@ -713,12 +758,13 @@ function (mutable self: Unit) builtin_type(src: String, name: Token, at: Int, ar
     }
     let checked: Int = self.check_builtin_args(src, at, called, first, second, first_node,
                                      second_node);
-    // Three builtins hand back a freshly built String, so all three need a region —
+    // Four builtins hand back a freshly built String, so all four need a region —
     // except `to_string` of a Bool, which renders to one of two literals and so
     // allocates nothing.
     let mutable builds: Bool = span_equal(src, name.start, name.length, "substring")
         || span_equal(src, name.start, name.length, "read_file")
-        || span_equal(src, name.start, name.length, "c_string_at");
+        || span_equal(src, name.start, name.length, "c_string_at")
+        || span_equal(src, name.start, name.length, "byte_as_string");
     if span_equal(src, name.start, name.length, "to_string") && first.kind != 41 {
         builds = true;
     }

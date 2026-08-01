@@ -441,6 +441,32 @@ BUILTINS = [
         "probe": 'print(byte_at("hello", 1));\n',
     },
     {
+        "name": "byte_as_string",
+        "signature": "byte_as_string(n) -> String",
+        "answers": "a one-byte `String` holding `n`",
+        "region": True,
+        "doc": "**The exact inverse of `byte_at`**: `byte_at(byte_as_string(n), 0)` is `n` for every "
+               "one of the 256 values. `n` must be 0 to 255 — a literal outside that is refused "
+               "when the program is compiled, and anything computed is checked when it runs.\n\n"
+               "It is the ONLY way to turn a number into text, and the reason it had to be a builtin "
+               "rather than a library function: `substring` of a literal was the only Int-to-String "
+               "path there was, and a source file must be valid UTF-8, so a byte above 127 could only "
+               "be written down inside a complete multi-byte character. `to_string(233)` is a "
+               "different conversion — three digit characters, `\"233\"`.\n\n"
+               "**It is also the one builtin that can build a `String` `is_valid_utf8` rejects.** "
+               "`byte_as_string(0xC3)` on its own is a UTF-8 lead byte with no continuation after it. "
+               "That is what it is FOR — assembling a sequence one byte at a time — but it "
+               "means the caller owns the validity of what comes out. For text, use "
+               "`from_codepoint` in `lib/string.bx`, which emits a whole character or refuses.\n\n"
+               "A zero byte is ORDINARY, not a terminator: a Burxt `String` carries its length in a "
+               "header, so `byte_as_string(0)` has length 1 and the full 0..255 range needs no "
+               "special case.",
+        "probe": 'print(byte_as_string(65));\n'
+                 'print(byte_at(byte_as_string(200), 0));\n'
+                 'print(byte_as_string(195) + byte_as_string(169));\n',
+        "refuses": 'print(byte_as_string(256));\n',
+    },
+    {
         "name": "substring",
         "signature": "substring(s, from, count) -> String",
         "answers": "`count` bytes of `s`, starting at `from`",

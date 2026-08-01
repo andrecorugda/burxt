@@ -86,7 +86,10 @@ function os_read_line() -> Option<String> touches input {
     let mutable b: Int = getchar();
     while b >= 0 && b != 10 {
         any = true;
-        chunk += os_byte_as_string(b);
+        // `byte_as_string` and not the `os_byte_as_string` that used to be at the bottom of this
+        // file: that one answered `"?"` for every byte >= 127, so **every non-ASCII character a
+        // client sent arrived as a question mark** — the whole point of retiring it (§B2).
+        chunk += byte_as_string(b);
         // In CHUNKS, because `text += one_byte` copies the whole String for every byte — the mistake
         // this project has paid for three times, and `os_read_all` right below carries the same note.
         if len(chunk) >= 4096 {
@@ -111,7 +114,7 @@ function os_read_all() -> String touches input {
     let mutable chunk: String = "";
     let mutable b: Int = getchar();
     while b >= 0 {
-        chunk += os_byte_as_string(b);
+        chunk += byte_as_string(b);
         // Appended in chunks, because `text += one_byte` copies the whole
         // String for every byte — the mistake this project has now paid for three
         // times, written down in the guide as a rule.
@@ -124,8 +127,6 @@ function os_read_all() -> String touches input {
     return text + chunk;
 }
 
-// A single byte as a one-character String. Burxt has no character type and
-// `to_string` of an Int gives digits, so the only way through is a table.
 // An environment variable, or a stated absence.
 //
 // `Option<String>` and not `String`, because **unset and empty are different facts.** `FOO=` sets FOO
@@ -152,19 +153,29 @@ function os_env_or(name: String, fallback: String) -> String touches input {
     return option_or(os_env(name), fallback);
 }
 
-function os_byte_as_string(byte: Int) -> String {
-    let printable: String = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz\{|\}~";
-    if byte == 10 {
-        return "\n";
-    }
-    if byte == 9 {
-        return "\t";
-    }
-    if byte == 13 {
-        return "\r";
-    }
-    if byte >= 32 && byte < 127 {
-        return substring(printable, byte - 32, 1);
-    }
-    return "?";
-}
+// `os_byte_as_string(byte)` used to be DECLARED HERE, and it was roadmap §B2: a table of the
+// printable ASCII bytes that answered **`"?"` for every byte >= 127**. It is gone, and the two
+// readers above call the `byte_as_string` BUILTIN instead (§A13).
+//
+// **It was a silent data-destroying bug, in the only Int-to-character path the library had.** Every
+// UTF-8 lead and continuation byte — every non-ASCII character in anything read from a pipe — came
+// back as a question mark, with nothing anywhere saying so. `os_read_line` and `os_read_all` are
+// exactly the functions a program reads real input with, so the damage landed on the data most
+// likely to be someone's, and a caller had no way to tell a genuine `?` from a destroyed byte.
+//
+// Two things worth keeping about how it got there. It was **not written carelessly**: while there
+// was no way to build a byte in this language, a table was the only mechanism available, and the
+// three whitespace escapes it special-cased show someone thinking about the edges. What was wrong
+// was the FALLBACK — `"?"` answers a question it could not answer. `ascii_letter` in
+// `lib/string.bx` faced the identical wall and chose `requires` instead, which is why that one is
+// still correct and this one had to go.
+//
+// And it had **no doc comment at all**, while the two orphaned lines of one sat above `os_env`,
+// where a reader would credit them to the wrong function. A wrong answer with no documentation is
+// the hardest kind to find, because there is nothing to disagree with the code.
+//
+// REMOVED rather than made correct, because correct would have been `return byte_as_string(byte);`
+// — a second name for a builtin, carrying an `os_` prefix for something that has nothing to do with
+// the operating system. `spec/ROADMAP-1.0.md` §D1p says "retires the lossy `os_byte_as_string`",
+// and retiring it is what that means. A program calling it gets an unknown-function error naming
+// the line, which is the outcome this language prefers to a silent redirection.

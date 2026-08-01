@@ -78,6 +78,9 @@ pub enum TypedExprKind {
     ToString(Box<TypedExpr>),
     /// `byte_at(s, i)`: the i-th byte as an Int, bounds-checked at runtime.
     ByteAt { s: Box<TypedExpr>, index: Box<TypedExpr> },
+    /// `byte_as_string(n)`: the one-byte String whose only byte is `n`, region-allocated.
+    /// The exact inverse of `ByteAt`, and range-checked the same way an index is.
+    ByteAsString(Box<TypedExpr>),
     /// `hash(x)`: a deterministic, unseeded hash of an Equatable value.
     ///
     /// Unseeded on purpose. The same input hashes the same in every run on every machine, which
@@ -606,7 +609,29 @@ fn is_reserved_name(name: &str) -> bool {
             | "bit_and" | "bit_or" | "bit_xor" | "bit_not"
             | "shift_left" | "shift_right_zeros" | "shift_right_sign"
             | "c_is_null" | "c_string_at" | "c_bytes_at"
+            // The exact inverse of `byte_at`, and the only builtin that turns a number into
+            // bytes (roadmap A13). Reserved from the first version it existed, unlike the ten
+            // above — being in this list is what the editor grammar and the generated reference
+            // are scraped from, so a builtin that is not here is a builtin no tool knows.
+            | "byte_as_string"
     )
+}
+
+/// The value of a WRITTEN-DOWN integer, or None for anything computed.
+///
+/// `Neg` is unwrapped because the lexer reads no sign: `-1` is a unary minus WRAPPING the literal
+/// `1`, never a literal holding -1. A check that only looked at `IntLit` would therefore see
+/// nothing at all for every negative argument — which is exactly the bug the Burxt-side
+/// `c_bytes_at` rule had for as long as it existed, found by a fixture rather than by reading.
+fn written_int(e: &TypedExpr) -> Option<i64> {
+    match &e.kind {
+        TypedExprKind::IntLit(n) => Some(*n),
+        TypedExprKind::Neg(inner) => match &inner.kind {
+            TypedExprKind::IntLit(n) => Some(-*n),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 impl TypeChecker {
@@ -3197,6 +3222,9 @@ impl TypeChecker {
                 Some("joining two Strings builds a new one".to_string())
             }
             TypedExprKind::Substring { .. } => Some("`substring(...)` builds a new String".to_string()),
+            TypedExprKind::ByteAsString(_) => {
+                Some("`byte_as_string(...)` builds a one-byte String".to_string())
+            }
             TypedExprKind::ToString(_) => Some("`to_string(...)` builds a String".to_string()),
             TypedExprKind::ReadFile(_) => Some("`read_file(...)` builds a String".to_string()),
             TypedExprKind::CStringAt(_) => {
@@ -3218,6 +3246,7 @@ impl TypeChecker {
             | TypedExprKind::ReadFile(_)
             | TypedExprKind::CStringAt(_)
             | TypedExprKind::CBytesAt { .. }
+            | TypedExprKind::ByteAsString(_)
             | TypedExprKind::Substring { .. } => true,
             // A call to an `allocates` function or method built its result in OUR
             // region, so it is region storage here and the same escape rules apply.
@@ -3401,7 +3430,7 @@ impl TypeChecker {
     /// function returns.
     fn check_extern(&self, e: &ExternFn) -> Result<(), String> {
         const RESERVED: [&str; 6] = ["printf", "fprintf", "fputs", "exit", "stderr", "main"];
-        if e.name == "len" || e.name == "byte_at" || e.name == "push" || e.name == "read_file" || e.name == "to_string" || e.name == "old" || e.name == "substring" || e.name == "truncate" || e.name == "write_file" || e.name == "argument" || e.name == "argument_count" || e.name == "divide_floor" || e.name == "divide_toward_zero" || e.name == "remainder" || e.name == "write_bytes" || e.name == "hash" {
+        if e.name == "len" || e.name == "byte_at" || e.name == "push" || e.name == "read_file" || e.name == "to_string" || e.name == "old" || e.name == "substring" || e.name == "truncate" || e.name == "write_file" || e.name == "argument" || e.name == "argument_count" || e.name == "divide_floor" || e.name == "divide_toward_zero" || e.name == "remainder" || e.name == "write_bytes" || e.name == "hash" || e.name == "byte_as_string" {
             return Err(format!("the name `{}` is reserved for a built-in", e.name));
         }
         if RESERVED.contains(&e.name.as_str()) {
@@ -5626,6 +5655,68 @@ impl TypeChecker {
                             at: Box::new(at),
                             len: Box::new(len),
                         },
+                    });
+                }
+                // `byte_as_string(n)` — the one-byte String whose only byte is `n`.
+                //
+                // **The exact inverse of `byte_at`**, and that is the property to hold onto:
+                // `byte_at(byte_as_string(n), 0) == n` for every one of the 256 values, which
+                // `tests/pass/byte_as_string.bx` checks as a loop rather than on a chosen few.
+                //
+                // It exists because there was NO Int-to-String path in the language. `substring`
+                // of a literal is the only other one, and a source file must be valid UTF-8, so a
+                // literal can only hold a byte >= 0x80 inside a complete multi-byte character —
+                // which makes the 51 UTF-8 LEAD bytes reachable only through 51 characters from 51
+                // blocks, six of them unassigned codepoints. That table was refused as a library
+                // liability; this builtin is what it was refused in favour of. lib/string.bx's
+                // "THE GAP" header has the four measured steps.
+                //
+                // No NUL carve-out, and that was measured rather than assumed: a Burxt String is
+                // LENGTH-PREFIXED (an i64 at `s - 8`), so `len("a\0b")` is 3 and a zero byte is
+                // ordinary. The full 0..255 range needs no special case.
+                if name == "byte_as_string" {
+                    if arguments.len() != 1 {
+                        return Err(
+                            "byte_as_string(...) takes one byte value: byte_as_string(n)"
+                                .to_string(),
+                        );
+                    }
+                    let n = self.check_expr(&arguments[0], Some(&Type::Int))?;
+                    if n.ty != Type::Int {
+                        return Err(format!(
+                            "byte_as_string(...) takes an Int byte value, but this has type {}",
+                            n.ty
+                        ));
+                    }
+                    // A WRITTEN-DOWN value out of range is refused now; anything computed is
+                    // checked at runtime. Both, rather than only the runtime trap `CInt` has:
+                    // `tests/panic/cint_range.stderr` pins CInt's contract so it cannot gain a
+                    // literal check without changing, but a NEW builtin pays nothing for one, and
+                    // a program that cannot be right should not compile. The cost is that the two
+                    // out-of-range messages are worded differently, which is why both name the
+                    // same range in the same words.
+                    // Worded to match stage-1's `check_builtin_args` BYTE FOR BYTE, backticks and
+                    // missing full stop included. `tests/fail/` is an equality across the two
+                    // compilers, and a wording that merely overlaps on the pinned substring is a
+                    // wording that has not been compared.
+                    if let Some(v) = written_int(&n) {
+                        if v < 0 || v > 255 {
+                            return Err(format!(
+                                "`byte_as_string({})` has no answer: a byte is 0 to 255. \
+                                 A codepoint above 255 is more than one byte — \
+                                 `from_codepoint` in lib/string.bx encodes it",
+                                v
+                            ));
+                        }
+                    }
+                    if !self.has_region() {
+                        return Err(
+                            self.needs_region("byte_as_string(...) builds a one-byte String")
+                        );
+                    }
+                    return Ok(TypedExpr {
+                        ty: Type::String,
+                        kind: TypedExprKind::ByteAsString(Box::new(n)),
                     });
                 }
                 // ---- bit operations, by name ----

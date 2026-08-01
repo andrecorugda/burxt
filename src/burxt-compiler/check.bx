@@ -1507,6 +1507,7 @@ function is_reserved_name(src: String, start: Int, length: Int) -> Bool {
         || span_equal(src, start, length, "c_is_null")
         || span_equal(src, start, length, "c_string_at")
         || span_equal(src, start, length, "c_bytes_at")
+        || span_equal(src, start, length, "byte_as_string")
         || span_equal(src, start, length, "bit_and")
         || span_equal(src, start, length, "bit_or")
         || span_equal(src, start, length, "bit_xor")

@@ -1,0 +1,14 @@
+// The other half of the range rule: a COMPUTED value cannot be checked at compile time, so it is
+// checked at runtime and the failure NAMES the number it was given.
+//
+// The literal half is `tests/fail/byte_as_string_out_of_range.bx`. Two fixtures because they are two
+// mechanisms — a refusal in the typechecker and a branch in the emitted code — and one of them
+// passing says nothing about the other.
+//
+// `299` arrives through a loop rather than as `byte_as_string(256)` because the whole point is that
+// the checker cannot see it. Constant folding it would turn this into the fixture above.
+let mutable n: Int = 0;
+for i in 0..300 {
+    n = i;
+}
+print(byte_as_string(n));
