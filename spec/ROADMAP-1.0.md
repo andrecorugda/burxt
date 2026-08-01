@@ -544,7 +544,7 @@ keywords broke `editor_grammar_knows_every_keyword_the_compiler_does`; fixing th
 `the_packaged_extension_matches_the_grammar_in_the_repository` and `the_reference_is_not_stale`. **Three
 files nobody named** — because `M10` §2e is a rule (*a change to the language is not finished until the
 highlighter, the language server and the packaged extension have changed with it*) and no estimate here
-accounts for it. **Any row that adds a KEYWORD is three files larger than it looks.**
+accounts for it. **Any row that adds a KEYWORD is three files larger than it looks** — and §A13 sharpened this: it is not keywords, it is anything landing in `is_reserved_name`, because that function's body is what the grammar test scrapes. A BUILTIN costs the same three files.
 
 **The representation is the part worth keeping.** ONE variant — `Type::Width { bits: u32, signed: bool }`
 — not four. `u8` versus `u32` is two numbers, and no `match` arm cares about the spelling: `llvm_type`
@@ -601,9 +601,47 @@ codepoints in the standard library is a liability, not a clever trick: a reviewe
 is not written, and the decision is recorded where the functions would have been rather than made
 silently by omission.
 
-**Everything else is ordinary Burxt on top of it.** `from_codepoint` is the four-branch encoder
-mirroring the existing `codepoint_at`; `from_bytes` is a fold. Size: **S**, and it clears two §B bugs
-and a §D row.
+**The design is SETTLED as of v0.0.254 — four questions answered by measurement, and one of them
+overturned this section's own premise.**
+
+**The name is `byte_as_string(n)`, not `byte_string(n)`.** This language names behaviour AND direction —
+`divide_floor`, `shift_right_zeros`, `string_to_upper_ascii`. `byte_string` names neither, and
+`byte_string("a")` reads just as plausibly as the reverse conversion. `byte_as_string` states the
+direction, mirrors the `os_byte_as_string` it retires, and does not borrow `to_string`'s meaning —
+`to_string(233)` is three digit characters, a different conversion. Best property: it is the exact
+inverse of `byte_at`, so **`byte_at(byte_as_string(n), 0) == n` for every 0..255** — one identity,
+fixturable as a loop over all 256 values, which is a stronger pass fixture than any hand-picked set.
+
+**Out of range: a compile-time refusal for a LITERAL, a runtime trap otherwise — CHOSEN, not
+inherited.** CInt traps at runtime only and `tests/panic/cint_range.stderr` pins that, so CInt is
+untouched; for a NEW builtin the literal check is free and strictly better, and the lexer already
+refuses a knowably-bad literal (the sixteen-hex-digit rule). Two fixtures: `tests/fail` for the
+literal, `tests/panic` for the computed value.
+
+**It CAN manufacture invalid UTF-8, and its own doc comment must say so.** The capability already
+exists — `read_file` reads arbitrary bytes, `c_string_at` copies whatever C hands over — so this adds no
+new hole in §B5's declared-and-unenforced invariant. What changes is that the hole becomes reachable
+from **pure Burxt** rather than only across the boundary: a change in kind, not degree. So the builtin
+documents that it is the one builtin able to build a String that `is_valid_utf8` rejects, that it exists
+to assemble a valid sequence byte by byte, and that `from_codepoint` is the safe layer above it.
+
+**And the NUL hazard does not exist — which this section assumed it did.** A Burxt String is
+**LENGTH-PREFIXED**: an i64 header at `s - 8`, so `len` is an O(1) header read. Measured in both
+compilers: `len("a\0b")` is 3, `byte_at(s, 1)` is 0, `substring(s, 1, 1)` has length 1. So a NUL is an
+ordinary byte and the full 0..255 range needs no carve-out. `tests/fail/string_raw_nul.bx` refuses a raw
+NUL in SOURCE, which is source hygiene through a different door.
+
+That was found because `emit.bx` still claimed *"`len` is therefore strlen, which is also why a String
+has no length field"* — **load-bearing prose, stale, fourteen lines above the code that adds the
+header.** Retired in v0.0.254. A stale sentence that gives a REASON is worse than a stale number,
+because a reader can act on it, and an agent nearly did.
+
+**A13 is a 15-FILE item, and the reason generalises §A7d.** `editor_grammar_knows_every_keyword_the_compiler_does`
+scrapes the body of `fn is_reserved_name`, and §B6 requires reserving a builtin's name. So it is not
+*keywords* that cost three extra files (grammar → `.vsix` → generated reference) — it is **anything that
+lands in `is_reserved_name`.** Correct §A7d's wording accordingly.
+
+**Everything else is ordinary Burxt on top of it.**
 
 ## B — Urgent bugs, silent wrong answers first
 

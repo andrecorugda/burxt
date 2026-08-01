@@ -3639,10 +3639,28 @@ function (self: Unit) declaration_node(src: String, start: Int, length: Int) -> 
 // allocator, and the String operations that build in it. Emitting it means a Burxt
 // program needs nothing on the machine but a C library.
 //
-// A Burxt String is a NUL-terminated pointer, carried as an i64 like every other value
-// — one value type through the whole emitter, cast at the few places a pointer is
-// needed. `len` is therefore strlen, which is also why a String has no length field
-// that could fall out of step with its bytes. The bump allocator's MARK is the region:
+// A Burxt String is a pointer carried as an i64 like every other value — one value type
+// through the whole emitter, cast at the few places a pointer is needed. It is
+// **LENGTH-PREFIXED**: an i64 header sits at `s - 8`, so `len` is an O(1) header read and a
+// NUL is an ordinary byte. `burxt.alloc_string` fourteen lines below allocates `len + 9` and
+// says why — *"reading n bytes used to cost n squared, because a bounds check is a length and
+// a length was a strlen. 102400 statements took 31.67 seconds; they take 0.05 now."*
+//
+// **This paragraph said the opposite until v0.0.254**, and it is worth keeping the correction
+// rather than the sentence: it read *"`len` is therefore strlen, which is also why a String has
+// no length field that could fall out of step with its bytes."* The header was added as a
+// performance fix and the paragraph explaining the design it replaced was never touched — so
+// the file argued FOR the absence of a field it had already grown, fourteen lines above the
+// code that grows it.
+//
+// **That is worse than a stale number, because it is load-bearing prose**: it gives a REASON,
+// so a reader can act on it. An agent scoping `byte_as_string` (§A13) nearly concluded that a
+// NUL needed a special case, on the strength of this sentence, and only measured because the
+// consequence was a language rule. Measured instead: `len("a\0b")` is 3 in both compilers,
+// `byte_at(s, 1)` is 0, and `substring(s, 1, 1)` has length 1. So the full 0..255 range is
+// ordinary and §A13 needs no NUL carve-out.
+//
+// The bump allocator's MARK is the region:
 // opening one remembers where the pointer stood, closing it puts the pointer back, and
 // that is the whole of release — O(1) for any number of allocations.
 function runtime_ir() -> String {
