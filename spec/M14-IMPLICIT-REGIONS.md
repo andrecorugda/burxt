@@ -83,8 +83,15 @@
 >   `explain_memory_agrees_with_the_allocation_rule` holds it against `allocates nothing` function by
 >   function, so neither can quietly stop consulting the inference. **`allocates nothing` shipped in
 >   v0.0.209** (stage-0 checks it; stage-1 parses it and does not, because the allocation fixpoint is
->   stage-0's alone — the same staging slice 1 used two versions apart). Acceptance item 6 is met: a
->   fail fixture per path, direct, through a call, and through a `dynamic`, each naming its cause.
+>   stage-0's alone — the same staging slice 1 used two versions apart). ~~Acceptance item 6 is met: a
+>   fail fixture per path, direct, through a call, and through a `dynamic`, each naming its cause.~~
+>   **Item 6 is NOT met — corrected v0.0.264.** Those three paths have fixtures; a **fourth** does not,
+>   and on it the clause is unsound. `function fill(mutable dst: [Int], n: Int) allocates nothing {
+>   push(dst, i); }` is **accepted**, and `push` allocates into caller-owned storage. `push` never asks
+>   `has_region()`, and `has_region` is the sole recorder, so the owner is never credited; the direct
+>   form is caught only because the `let` asks. Recorded as **B22**. Three fixtures covering three
+>   paths read as coverage, which is the second process rule exactly: a fixture set cannot tell
+>   "refuses everything it should" from "refuses everything anyone thought to write."
 >   Slice 2 delivered
 >   half of §1: nothing needs a region in order to allocate. It did **not** deliver §3's
 >   constant-memory loop, and the numbers below say why that matters.
@@ -345,7 +352,7 @@ when asked rather than on every signature forever.
 > |---|---|---|
 > | 2 | `examples/pos/` with zero `allocates`, no `region`, same receipt | **already met.** Every remaining mention of either word in `examples/pos/*.bx` is in a **comment** — there is no `allocates` keyword and no `region` block left in that code. Receipt recorded for the diff |
 > | 4 | top-level `let mutable xs: [Int] = [];` | **already met** — compiles and runs today |
-> | 6 | `allocates nothing` refuses transitively | shipped v0.0.209 |
+> | 6 | `allocates nothing` refuses transitively | **NOT MET — I was wrong two commits ago.** Shipped v0.0.209 and **unsound through a `mutable` parameter**: `fill(mutable dst: [Int], …) allocates nothing { push(dst, i); }` is accepted. Recorded as **B22**. I marked this met by reading "shipped" instead of measuring it, which is the third time today |
 > | 7 | the §5 hole has a fail fixture | shipped |
 > | 8 | `burxt explain memory` | shipped |
 > | 1 | fixpoint intact | **regression guard** |
