@@ -8,7 +8,7 @@
 // The chain that closes it, and worth reading because no single piece is new:
 //
 //   malloc      -> CPointer      legal since v0.0.196 (the pointer wall)
-//   getrandom   fills it          a CPointer is already an allowed extern PARAMETER
+//   getentropy  fills it          a CPointer is already an allowed extern PARAMETER
 //   c_bytes_at  reads it out      NEW — this is the missing link
 //   free        returns it        an ordinary extern the program calls in the open
 //
@@ -17,7 +17,17 @@
 // more confident than the mechanism.
 external function malloc(size: Int) -> CPointer;
 external function free(p: CPointer) -> Int;
-external function getrandom(buffer: CPointer, length: Int, flags: Int) -> Int touches input;
+// `getentropy`, not `getrandom`. Both fill a buffer from the kernel's entropy pool; only one of
+// them exists everywhere. `getrandom(buf, len, flags)` is a **Linux extension** — the first macOS
+// runner this fixture ever met refused to link it:
+//
+//     Undefined symbols for architecture arm64: "_getrandom"
+//
+// `getentropy(buf, len)` is the portable spelling: glibc >= 2.25, macOS >= 10.12, musl, and the
+// BSDs it originally came from. It answers 0 or -1 rather than a byte count, and it is capped at
+// **256 bytes per call** — which is why the contract below now says so out loud instead of letting
+// a 257-byte request fail at run time for a reason the signature never mentioned.
+external function getentropy(buffer: CPointer, length: Int) -> Int touches input;
 
 // Bytes from the operating system's entropy pool.
 //
@@ -25,7 +35,7 @@ external function getrandom(buffer: CPointer, length: Int, flags: Int) -> Int to
 // makes it unusable from a `pure` function or a contract, which is correct: a clause that checked a
 // random number would answer differently every time it ran.
 function os_random_bytes(count: Int) -> [Int] touches input
-    requires count > 0
+    requires count > 0 && count <= 256
 {
     let buffer: CPointer = malloc(count);
     if c_is_null(buffer) {
@@ -33,7 +43,16 @@ function os_random_bytes(count: Int) -> [Int] touches input
         let nothing: [Int] = [];
         return nothing;
     }
-    let got: Int = getrandom(buffer, count, 0);
+    // 0 on success, -1 on failure — and it is CHECKED, where the old `getrandom` call had its
+    // result bound to `got` and never read. An unread return from an entropy source is the exact
+    // shape of bug this language exists to refuse: on failure the buffer keeps whatever `malloc`
+    // left in it, and that would be returned as a key.
+    let filled: Int = getentropy(buffer, count);
+    if filled != 0 {
+        let released_early: Int = free(buffer);
+        let nothing: [Int] = [];
+        return nothing;
+    }
     let bytes: [Int] = c_bytes_at(buffer, count);
     let released: Int = free(buffer);
     return bytes;
