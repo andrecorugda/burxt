@@ -125,6 +125,20 @@ function (self: Unit) literal_int_value(node: Int) -> Int {
 // The method table already knows what the type can do.
 class Implementation { trait_start: Int, trait_len: Int, type_start: Int, type_len: Int }
 
+// ---- B25: one `mutable` parameter that a function GROWS -----------------------------------------
+//
+// `owner` indexes `functions`, `parameter` is the position in its parameter list. Per PARAMETER and
+// not per function, because `function move(mutable from: [Int], mutable into: [Int])` may grow one
+// and only read the other, and a rule that refused both would refuse a program that says exactly
+// what it does.
+//
+// The fact this records is the one a call site cannot work out for itself: the growth happens in
+// the callee's body, on a name the callee chose, and only the CALLER knows whose binding was handed
+// over. So the callee's body records "parameter 0 grows" and the call site turns that into "`xs`
+// grows" — which is why this needs a fixpoint rather than a walk, and why B20's local rule could
+// not see it.
+class ParameterGrowth { owner: Int, parameter: Int }
+
 
 
 
@@ -2897,6 +2911,25 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
                         + "`let mutable " + named + ": " + self.show_type(src, holder)
                         + "` to allow it.");
                 }
+                // B25 through `self`, which is the same hole wearing the receiver's name:
+                // `function (mutable self: Bag) add(v: Int) { push(self.items, v); }` called on an
+                // outer `bag` inside a region grows storage the region will release. Recorded
+                // before the refusal, so the growth travels one link further out — a method that
+                // calls it on its OWN `mutable self` grows too.
+                //
+                // The root is the name with nothing to walk, and the check just above is what
+                // guarantees that: a mutating method can only be called on a variable.
+                if self.grows_self(found) {
+                    let passed: Int = self.record_parameter_growth(src, base.start, base.length);
+                    if self.region_depth > 0 && bound >= 0
+                       && self.bindings[bound].in_region == 0 {
+                        let complained: Int = self.complain_at(src, n.token,
+                            self.growing_an_outer_binding(src,
+                                substring(src, base.start, base.length),
+                                self.show_type(src, holder) + "."
+                                + substring(src, m.start, m.length) + "(...)"));
+                    }
+                }
             }
         }
         if flag_private(m.flags) == 1 && !self.inside_class(src, holder) {
@@ -3145,6 +3178,13 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
         }
         let ok: Int = self.check_against_params(src, n.token, n.a, signature.parameters,
                                                 "function");
+        // B25: this callee grows one of its `mutable` parameters, so the growth is really a growth
+        // of whatever THIS call handed over — and only here is it known whose binding that is.
+        // After `check_against_params` rather than inside it, because that function is shared with
+        // the two method forms and only the free-function form has a per-parameter answer to look
+        // up. See `check_growing_arguments`.
+        let grown: Int = self.check_growing_arguments(src, n.token, n.a, signature.parameters,
+                                                      found);
         // DEEPLY, not shallowly. `resolve_shallow` only answers for a bare parameter, so a
         // function returning `Map<K, V>` answered `Map<K, V>` — with the parameters still in it —
         // and whoever received that had no bindings left to make sense of them. The emitter reads
@@ -3554,6 +3594,59 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
         // write reaches it.
         if target.kind == 11 || target.kind == 12 {
             let refused: Int = self.refuse_immutable_write(src, n.a);
+            // ---- B21: and the same is true of the REGION rule --------------------------------
+            //
+            // The escape rule below has been on whole-name assignment since v0.0.222 and was never
+            // extended to the three spellings that reach a place through a field or an index. Not a
+            // weak check — there was none, in either compiler — so
+            //
+            //     region r { b.name = "hello-" + "world"; }
+            //
+            // compiled clean and `b.name` afterwards read the next allocation's bytes.
+            //
+            // Asked about the ROOT binding, because `g.items[0] = v` is a write into `g` and the
+            // question is only ever about a NAME: was it declared inside the open region, where the
+            // bytes and the binding die together, or outside it, where the binding outlives them.
+            // One question answers all four spellings, which is why stage-0 grew `place_root` for
+            // this and stage-1 already had `lvalue_root`.
+            let place: Int = self.lvalue_root(n.a);
+            // NOT gated on a region being open, and B25 is why: in
+            // `function rename(mutable b: Box, tag: String) { b.name = "n-" + tag; }` there is no
+            // region at all, and the storage still lands in the caller's `b`. The refusal below is
+            // still gated; the RECORDING is not. Stage-0 restructured these three arms the same way
+            // and for the same reason.
+            if place >= 0 && self.expr_allocates(src, n.b) {
+                let root: Token = self.tokens[self.nodes[place].token];
+                let owner: Int = self.find_binding(src, root.start, root.length);
+                let named: String = substring(src, root.start, root.length);
+                let grown: Int = self.record_parameter_growth(src, root.start, root.length);
+                // "field" for `b.name`, "element" for anything reached through an index — including
+                // `g.items[0]`, where the write is through a field AND an index and the thing
+                // written is still an element. Stage-0 chooses the word the same way.
+                let mutable part: String = "element";
+                if target.kind == 11 {
+                    part = "field";
+                }
+                if self.region_depth > 0 && owner >= 0 && self.bindings[owner].in_region == 0 {
+                    let complained: Int = self.complain_at(src, self.nodes[place].token,
+                        "`" + named + "` was declared outside " + self.open_region(src)
+                        + ", so its " + part + " cannot be assigned a value built inside it — the "
+                        + "bytes are released at the closing brace and `" + named
+                        + "` would read whatever the region hands out next. Declare `" + named
+                        + "` inside the region, or build the value outside it.");
+                }
+                if self.region_depth > 0 && owner >= 0 && self.bindings[owner].in_region == 1 {
+                    // Declared inside the region, so the store is fine — but the binding now HOLDS
+                    // region storage, and `return b` has to be refused exactly as `return b.name`
+                    // already is. The whole-name arm records this; without the same line the taint
+                    // is lost the moment it arrives through a field.
+                    let was: Binding = self.bindings[owner];
+                    self.bindings[owner] = Binding { start: was.start, length: was.length,
+                                          bound_type: was.bound_type, writable: was.writable,
+                                          depth: was.depth, in_region: was.in_region,
+                                          holds_region: 1 };
+                }
+            }
         }
         // Only a `let mutable` binding may be assigned to.
         if target.kind == 5 {
@@ -3614,17 +3707,20 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
             // when the region closed, so the read afterwards was unguarded. **Marking a hazard is
             // not refusing it**, and a rule one line away from being enforced is not a rule.
             //
-            // The message does not name the region, where stage-0's says `region one_turn`. The
-            // region's name is not reachable here: it lives on the `region` node, and reaching it
-            // would take a `Unit` field, which would mean editing the `Unit { ... }` literal in
-            // `main.bx` — another change's file. The rule and the refusal are identical; only the
-            // quoted name is missing, and `tests/fail/` compares stage-1 by whether it refuses
-            // rather than by its wording, so nothing is claimed that is not delivered.
+            // The message NAMES the region, as stage-0's has since v0.0.222. It used to say
+            // `this region`, and the note here explained why — the name lives on the `region`
+            // node and reaching it needed a `Unit` field — and then left the divergence in place
+            // on the grounds that `tests/fail/` compares stage-1 by whether it refuses rather
+            // than by its wording. That reasoning is what made it permanent: the messages ARE
+            // the language's instruction set, so two wordings for one rule is a divergence
+            // whether or not a fixture measures it. `Unit.region_token` is the field, and it is
+            // three lines.
             if self.region_depth > 0 && found >= 0 && self.expr_allocates(src, n.b) {
                 if self.bindings[found].in_region == 0 {
                     let complained: Int = self.complain_at(src, target.token,
                         "`" + substring(src, name.start, name.length) + "` was declared outside "
-                        + "this `region`, so it cannot be assigned a value built inside it — the "
+                        + self.open_region(src)
+                        + ", so it cannot be assigned a value built inside it — the "
                         + "bytes are released at the closing brace and `"
                         + substring(src, name.start, name.length) + "` would read whatever the "
                         + "region hands out next. Declare `"
@@ -3777,8 +3873,16 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
             // the program's arena and outlive every call. The `in_caller_region` half is gone
             // with the word that fed it.
             if self.region_depth > 0 {
+                // Naming the TYPE, as stage-0 does — `cannot return this String`. Found by
+                // comparing the two compilers' text on the escape fixtures while closing B25:
+                // both refuse, so no fixture and no differential could see it, and one rule
+                // still had two wordings. The same divergence the region name was, in the
+                // sibling rule, and it survived because "does it refuse" was the only
+                // question anything asked.
+                let built: Type = self.type_at(n.a);
                 let complained: Int = self.complain_at(src, n.token,
-                    "cannot return this: it was built inside a `region` block, which "
+                    "cannot return this " + self.show_type(src, built)
+                    + ": it was built inside a `region` block, which "
                     + "releases at its closing brace, so its storage would not outlive "
                     + "the call. Move the allocation out of the `region` block, or return "
                     + "a scalar summary.");
@@ -3841,9 +3945,16 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
                 + "` is already a variable, so it cannot name a region too — pick a different "
                 + "name.");
         }
+        // The NAME, published for the refusals inside. Saved and restored rather than set, so the
+        // arm reads the same whether or not regions nest — the refusal above is what makes them
+        // not, and a rule and the state it relies on should not have to be read together to be
+        // sure of either.
+        let outer_region: Int = self.region_token;
+        self.region_token = n.token;
         self.region_depth += 1;
         let body: Int = self.check_block_nodes(src, n.a, return_type);
         self.region_depth -= 1;
+        self.region_token = outer_region;
         return 1;
     }
 
@@ -4025,6 +4136,311 @@ function (mutable self: Unit) check_scalar_match(src: String, n: Node, value: Ty
     return 1;
 }
 
+// ---- B25: growth THROUGH a `mutable` parameter -------------------------------------------------
+//
+// `region r { grow(xs, 11); }` where `grow(mutable dst: [Int], v: Int) { push(dst, v); }` is B20 one
+// call away, and it was silent in stage-1 while stage-0 refused it. The receiver check sees a CALL,
+// not a `push` on `xs`, so the growth is invisible where the binding is known and the binding is
+// invisible where the growth is.
+//
+// **A `mutable` parameter is a hole in every rule that reasons about where a value is built, and
+// there are two such rules.** B22/B23 was that hole in `allocates nothing`; this is the same hole in
+// the escape rule. Both are closed by the same move — credit the OWNER of the storage, not the
+// syntax in front of you — and both need the fixpoint because the credit travels along calls.
+//
+// This is the recording half: "something grew the current body's parameter N", written where the
+// growth is. The refusal is at the call site, which is the only place that knows whose binding
+// parameter N received.
+function (mutable self: Unit) record_parameter_growth(src: String, root_start: Int,
+                                        root_length: Int) -> Int {
+    // Only a probe round records. The real pass reads what the rounds settled, exactly as it reads
+    // the `allocates` bits, so the answer cannot depend on how far the real pass has got.
+    if self.probing == 0 {
+        return 0;
+    }
+    if self.current_method >= 0 {
+        // A method, and the only thing tracked here is its own `mutable self`. An ordinary
+        // `mutable` parameter of a method is NOT tracked — stage-0 does not track it either, and
+        // this mirrors that rather than improving on it, because the two compilers refusing
+        // different programs is the one failure the differential exists to catch. Recorded as a
+        // known hole in BOTH: `function (self: Bag) fill(mutable dst: [Int])` growing `dst` is the
+        // spelling neither compiler credits.
+        if span_equal(src, root_start, root_length, "self") {
+            if self.methods[self.current_method].mutating == 1 {
+                let noted: Int = self.note_grow_self(self.current_method);
+            }
+        }
+        return 0;
+    }
+    if self.current_function < 0 {
+        return 0;                                    // the top level owns its storage
+    }
+    let owner: DeclaredFunction = self.functions[self.current_function];
+    let params: Node = self.nodes[owner.parameters];
+    let mutable i: Int = 0;
+    while i < params.b {
+        let param: Node = self.nodes[self.children[params.a + i]];
+        let named: Token = self.tokens[param.token];
+        // `b` is the `mutable` flag. Only a `mutable` parameter can carry a change back to the
+        // caller, so only one of those is worth recording — an ordinary parameter is a copy, and
+        // growing a copy reaches nobody.
+        if param.b == 1 && spans_equal(src, named.start, named.length, root_start, root_length) {
+            let noted: Int = self.note_grow_parameter(self.current_function, i);
+            return 1;
+        }
+        i += 1;
+    }
+    return 0;
+}
+
+// Both notes count into `probe_changes`, which is what makes the ordinary `allocates` fixpoint
+// converge on these too: the sets only ever grow, over a finite number of (function, parameter)
+// pairs, so a round that adds nothing new is a round that ends the loop.
+function (mutable self: Unit) note_grow_parameter(owner: Int, parameter: Int) -> Int {
+    if self.grows_parameter(owner, parameter) {
+        return 0;
+    }
+    push(self.grow_parameters, ParameterGrowth { owner: owner, parameter: parameter });
+    self.probe_changes += 1;
+    return 1;
+}
+
+function (mutable self: Unit) note_grow_self(method: Int) -> Int {
+    if self.grows_self(method) {
+        return 0;
+    }
+    push(self.grow_self, method);
+    self.probe_changes += 1;
+    return 1;
+}
+
+function (self: Unit) grows_parameter(owner: Int, parameter: Int) -> Bool {
+    for known in self.grow_parameters {
+        if known.owner == owner && known.parameter == parameter {
+            return true;
+        }
+    }
+    return false;
+}
+
+function (self: Unit) grows_self(method: Int) -> Bool {
+    for known in self.grow_self {
+        if known == method {
+            return true;
+        }
+    }
+    return false;
+}
+
+// B25's refusal: B20's sentence with the CALL named as the cause instead of `push`, because the call
+// is what the reader is looking at — the growth is in a body somewhere else. Word for word stage-0's
+// `growing_an_outer_binding`.
+function (self: Unit) growing_an_outer_binding(src: String, named: String,
+                                          callee: String) -> String {
+    return "`" + named + "` was declared outside " + self.open_region(src)
+         + ", so it cannot grow inside it — `" + callee + "` grows it, and the bytes are released "
+         + "at the closing brace, leaving `" + named + "` reading whatever the region hands out "
+         + "next. Declare `" + named + "` inside the region, or grow it outside it.";
+}
+
+// The argument half: for each `mutable` parameter the callee GROWS, the growth belongs to whatever
+// the caller passed. Recorded first, then refused — the record is the link that makes the fixpoint
+// transitive, and a body that gets refused must still be classed, because a probe round discards
+// errors and carries on.
+//
+// Only free functions. A method's ordinary `mutable` parameters are not tracked; see the note in
+// `record_parameter_growth`.
+function (mutable self: Unit) check_growing_arguments(src: String, at: Int, list_node: Int,
+                                           params_node: Int, callee: Int) -> Int {
+    let list: Node = self.nodes[list_node];
+    let params: Node = self.nodes[params_node];
+    if list.b != params.b {
+        return 0;                                    // already refused, and the pairing is broken
+    }
+    let mutable i: Int = 0;
+    while i < params.b {
+        let param: Node = self.nodes[self.children[params.a + i]];
+        if param.b == 1 && self.grows_parameter(callee, i) {
+            let place: Int = self.lvalue_root(self.children[list.a + i]);
+            if place >= 0 {
+                let root: Token = self.tokens[self.nodes[place].token];
+                let passed: Int = self.record_parameter_growth(src, root.start, root.length);
+                if self.region_depth > 0 {
+                    let owner: Int = self.find_binding(src, root.start, root.length);
+                    if owner >= 0 && self.bindings[owner].in_region == 0 {
+                        let complained: Int = self.complain_at(src, at,
+                            self.growing_an_outer_binding(src,
+                                substring(src, root.start, root.length),
+                                substring(src, self.functions[callee].start,
+                                          self.functions[callee].length) + "(...)"));
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    return 1;
+}
+
+// ---- B23: `allocates nothing`, and saying WHY -------------------------------------------------
+//
+// A few words for the thing that allocates, or "" when it cannot be named simply.
+//
+// Whether the claim is broken is decided by `infer_allocates` and by nothing here — this only puts
+// a name to the first cause, so a refusal is a fix rather than a search. Best effort by design: a
+// body this cannot describe is still refused, with the shorter sentence.
+//
+// Word for word stage-0's `describe_allocation`, arm for arm, because the .stderr fixtures pin one
+// text and two compilers must produce it.
+function (mutable self: Unit) describe_allocation(src: String, node: Int) -> String {
+    if node < 0 {
+        return "";
+    }
+    let n: Node = self.nodes[node];
+    // The `dynamic` arm comes BEFORE the `expr_allocates` guard, for stage-0's reason at the same
+    // place: the inference reaches a dyn call through `has_region()` being asked at the call site,
+    // not through `expr_allocates`, which has no arm for it and would answer false — losing the one
+    // path that is hardest to find by reading.
+    if n.kind == 14 {
+        let holder: Type = self.type_at(n.a);
+        if holder.kind == 49 {
+            let method: Token = self.tokens[n.token];
+            return "`." + substring(src, method.start, method.length)
+                 + "(...)` through a `dynamic "
+                 + substring(src, holder.name_start, holder.name_length)
+                 + "` allocates — and the claim has to hold for EVERY implementation, so one that "
+                 + "allocates is enough to break it";
+        }
+    }
+    // `push` before the guard too, and for the same kind of reason: stage-1's `expr_allocates`
+    // answers false for a `push` call, because a builtin's answer is decided by the builtin and
+    // `push` answers an Int. It is credited through `has_region()` at the call site instead — see
+    // B22 in parser.bx — so asking the guard first would leave the commonest cause unnamed.
+    if n.kind == 13 {
+        let called: Token = self.tokens[n.token];
+        if span_equal(src, called.start, called.length, "push") {
+            return "`push(...)` may grow the array";
+        }
+    }
+    if !self.expr_allocates(src, node) {
+        return "";
+    }
+    if n.kind == 8 {
+        if n.value == 25 && self.type_at(n.a).kind == 42 {
+            return "joining two Strings builds a new one";
+        }
+    }
+    // An INTERPOLATED String — node kind 18 — is a join, and stage-0 says so because it lowers one
+    // into `+` before anything describes it. Stage-1 keeps it whole, so without this arm the two
+    // compilers refused the same program and gave different reasons: measured on `"${n}"`,
+    // `"a${n}"`, `"${n}${n}"` and `"${n}b"`, stage-0 says "joining two Strings builds a new one"
+    // for all four and stage-1 said nothing at all. The same sentence, because it is the same fact
+    // about the same program — the difference was only where each compiler was standing.
+    //
+    // Chasing this wording is what found the missing `expr_allocates` arm for kind 18, which was a
+    // use-after-free rather than a message. Worth recording: the reason text is a READOUT of the
+    // inference, so the two compilers disagreeing about a reason is evidence about the rule.
+    if n.kind == 18 {
+        return "joining two Strings builds a new one";
+    }
+    if n.kind == 13 {
+        let called: Token = self.tokens[n.token];
+        let name: String = substring(src, called.start, called.length);
+        if name == "substring" { return "`substring(...)` builds a new String"; }
+        if name == "byte_as_string" { return "`byte_as_string(...)` builds a one-byte String"; }
+        if name == "to_string" { return "`to_string(...)` builds a String"; }
+        if name == "read_file" { return "`read_file(...)` builds a String"; }
+        if name == "c_string_at" { return "`c_string_at(...)` copies C's bytes into a String"; }
+        if name == "c_bytes_at" { return "`c_bytes_at(...)` copies C's bytes into an array"; }
+        if builtin_arity(name) >= 0 { return ""; }
+        return "`" + name + "(...)` builds its answer in the caller's region";
+    }
+    if n.kind == 14 {
+        let receiver: Node = self.nodes[n.a];
+        let method: Token = self.tokens[n.token];
+        if receiver.kind == 5 {
+            let base: Token = self.tokens[receiver.token];
+            return "`" + substring(src, base.start, base.length) + "."
+                 + substring(src, method.start, method.length)
+                 + "(...)` builds its answer in the caller's region";
+        }
+        return "";
+    }
+    if n.kind == 17 {
+        return "a growable array is built here";
+    }
+    return "";
+}
+
+// The first nameable allocation in a block, in source order, or "".
+function (mutable self: Unit) first_allocation(src: String, block: Int) -> String {
+    if block < 0 {
+        return "";
+    }
+    let b: Node = self.nodes[block];
+    // An `else if` puts a statement where a block usually goes, exactly as `block_exits` allows,
+    // so a branch is asked the same question either way.
+    if b.kind != 16 {
+        return self.first_allocation_in(src, block);
+    }
+    let mutable i: Int = 0;
+    while i < b.b {
+        let found: String = self.first_allocation_in(src, self.children[b.a + i]);
+        if found != "" {
+            return found;
+        }
+        i += 1;
+    }
+    return "";
+}
+
+function (mutable self: Unit) first_allocation_in(src: String, node: Int) -> String {
+    if node < 0 {
+        return "";
+    }
+    let n: Node = self.nodes[node];
+    // The statements that carry one value: `let`, an assignment, `print`, `return`, and a bare
+    // expression. Stage-0's arm list, with stage-1's kind numbers.
+    if n.kind == 60 || n.kind == 61 {
+        return self.describe_allocation(src, n.b);
+    }
+    if n.kind == 62 || n.kind == 63 || n.kind == 70 {
+        return self.describe_allocation(src, n.a);
+    }
+    if n.kind == 65 {                                // if: the condition, then both branches
+        let cond: String = self.describe_allocation(src, n.a);
+        if cond != "" {
+            return cond;
+        }
+        let taken: String = self.first_allocation(src, n.b);
+        if taken != "" {
+            return taken;
+        }
+        return self.first_allocation(src, n.c);
+    }
+    // `while`, `for` and `for` over a range: the body. A range's BOUNDS cannot allocate — both are
+    // Ints — and stage-0 does not walk a `for`'s iterable either.
+    if n.kind == 66 || n.kind == 72 || n.kind == 74 {
+        return self.first_allocation(src, n.b);
+    }
+    if n.kind == 69 {                                // region: the body is in `a`
+        return self.first_allocation(src, n.a);
+    }
+    if n.kind == 71 {                                // match: every arm, in order
+        let mutable i: Int = 0;
+        while i < n.c {
+            let arm: Node = self.nodes[self.children[n.b + i]];
+            let found: String = self.first_allocation(src, arm.a);
+            if found != "" {
+                return found;
+            }
+            i += 1;
+        }
+        return "";
+    }
+    return "";
+}
+
 // ---- the pass ----------------------------------------------------------------
 // A function or method body, with its parameters — and a method's `self` — in scope.
 function (mutable self: Unit) check_body(src: String, index: Int) -> Int {
@@ -4168,6 +4584,36 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int {
     self.in_function = 1;
     self.loop_depth = 0;
     let body: Int = self.check_block_nodes(src, item.b, return_type);
+    // ---- B23: `allocates nothing` is a CLAIM, and until v0.0.264 stage-1 threw it away ---------
+    //
+    // The word was parsed into `claims_nothing` and nothing ever read it, so stage-1 answered `no
+    // errors` on a function whose first statement joins two Strings while stage-0 refused it. One
+    // field and one comparison, because the hard half — the fixpoint — has been here since
+    // v0.0.144; the comment in parser.bx that said otherwise is what kept this open.
+    //
+    // Checked against the STORED signature, which is what the probe updates, and at the END of the
+    // body, because the body is what decides. And against the TRANSITIVE answer, because a claim
+    // that stopped at the first call would be worth nothing: a function that calls something that
+    // allocates does allocate.
+    //
+    // Functions only, as in stage-0 — a method there cannot carry the claim, because its parser
+    // reads `allocates` and stops. That asymmetry is stage-0's and predates this.
+    if item.kind == 80 && self.current_function >= 0 {
+        let declared: DeclaredFunction = self.functions[self.current_function];
+        if flag_claims_nothing(declared.flags) == 1 && flag_allocates(declared.flags) == 1 {
+            let owner: Token = self.tokens[item.token];
+            let mutable why: String = "";
+            let named: String = self.first_allocation(src, item.b);
+            if named != "" {
+                why = " — " + named;
+            }
+            let complained: Int = self.complain_at(src, item.token,
+                "`function " + substring(src, owner.start, owner.length)
+                + "` claims `allocates nothing`, and it does allocate" + why
+                + ". Either drop the claim, or move the building into a function that does not "
+                + "make it.");
+        }
+    }
     if !self.block_exits(item.b) {
         // Every Burxt function returns a value, so falling off the end is not a
         // silent zero — it is a missing answer, and the compiler says which function.

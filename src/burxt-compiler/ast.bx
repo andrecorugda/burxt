@@ -148,11 +148,18 @@ class Type {
 // `region_scope: HashSet<String>`; here it rides on the binding, which is cheaper and needs no
 // second table to keep in step with this one.
 //
-// **It is on `Binding` rather than on `Unit` for a reason that is a constraint, not a preference:**
-// a new `Unit` field would have to be added to the `Unit { ... }` literal in `main.bx`, and that
-// file belongs to another change in flight. A `Binding` literal is only ever built where a name is
-// declared, all of which is in `check.bx` and `parser.bx`. Fewer files, and the fact lives on the
-// thing it is about.
+// It is on `Binding` rather than on `Unit` because the fact is ABOUT a binding: the question is
+// "may THIS name hold region storage", and a `Unit` field would need a side table keyed by name to
+// answer it — which is what stage-0's `region_scope: HashSet<String>` is, and the reason the two
+// have to be kept in step.
+//
+// **The note that stood here gave a different reason, and that reason was temporary:** *"a new
+// `Unit` field would have to be added to the `Unit { ... }` literal in `main.bx`, and that file
+// belongs to another change in flight."* True the week it was written, and it stopped being true —
+// `region_token`, `region_mark` and `region_loop_depth` went into `Unit` for B20/B21/B24, and the
+// six literal sites are one line each. A design justified by a scheduling constraint reads as
+// justified by the design once the constraint expires, so the reason is restated as the standing
+// one and the expired one is kept visible rather than quietly dropped.
 // `holds_region` is 1 when this name was GIVEN region storage — its initializer, or a later
 // assignment inside the region, built something in the region's bytes. Stage-0's `region_locals`,
 // and the two marks answer different questions that are easy to conflate:
@@ -328,6 +335,16 @@ class Unit {
     // `allocates` — which means the caller's region is the region in effect. Together
     // these answer M1's one question: is there somewhere to allocate?
     region_depth: Int,
+    // The NAME token of the `region` block currently open, or -1. One slot and not a stack,
+    // because regions do not nest — check_stmt_node's kind 69 arm refuses an inner one — so
+    // "the open region" is always exactly one thing.
+    //
+    // It exists so a refusal can say `region r` where it used to say `this region`. That is
+    // not decoration: the two compilers' messages ARE the language's instruction set, and
+    // stage-0 has named the region since v0.0.222. The note that used to sit on the escape
+    // rule in check.bx said reaching the name "would take a `Unit` field" and left it — which
+    // was true, and the field is three lines.
+    region_token: Int,
     in_caller_region: Int,
     in_pure: Int,
     loop_depth: Int,
@@ -492,6 +509,17 @@ class Unit {
     // How many `allocates` flags this round newly set. Zero ends the fixpoint: the set only
     // grows, over a finite number of functions, so it has to stop growing.
     probe_changes: Int,
+    // ---- B25: which `mutable` parameters a function grows, and whose `mutable self` grows ------
+    //
+    // The SAME fixpoint that infers `allocates` answers this — `probe_changes` counts an addition
+    // here exactly as it counts a flag, so one loop converges both. Stage-0 folded it into
+    // `infer_allocates` for the same reason: the two facts are transitive through the same call
+    // graph, and two loops over one graph would have to agree about when to stop.
+    //
+    // `grow_self` holds METHOD indices rather than pairs, because a `mutable self` receiver is
+    // always the whole binding — there is no position to name.
+    grow_parameters: [ParameterGrowth],
+    grow_self: [Int],
     // The backend's state: the IR text, the constants it referred to, a counter for
     // registers and one for labels, the locals' allocas, and the enclosing loops'
     // labels so `break` and `continue` know where to jump.
@@ -515,6 +543,21 @@ class Unit {
     declared: [String],
     loop_condition_labels: [String],
     loop_end_labels: [String],
+    // ---- unwinding a `region` on an EARLY exit -------------------------------------------
+    //
+    // The saved bump mark of the region being emitted, as its register name, or "" outside one.
+    // A `region` block is a mark and a store, so reaching the closing brace releases it — but
+    // `return`, `break`, `continue` and `?` all branch PAST that store, and the cursor then keeps
+    // climbing for the life of the process. Measured before this existed: a `continue` out of a
+    // region in a 200,000-iteration loop cost 13,904 KB against stage-0's 1,408 KB, same answer.
+    //
+    // `region_loop_depth` is how many loops were already open when the region opened, and it is
+    // what tells the two `break` cases apart. A jump out of a loop that ENCLOSES the region leaves
+    // the region and must release it; a jump out of a loop INSIDE the region stays put and must
+    // not, or the region would be released while its own body is still reading it. Stage-0 stores
+    // the same fact per loop in `loop_stack`; one Int is enough here because regions do not nest.
+    region_mark: String,
+    region_loop_depth: Int,
     in_function: Int,
     // Where the program's tokens end, which is not where the token ARRAY ends: an
     // interpolation fragment appends its own, and the parser must not walk into them.

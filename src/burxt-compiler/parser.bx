@@ -726,6 +726,64 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
                 }
             }
         }
+        // B22, stage-1's half: `push` ALLOCATES, and it never said so.
+        //
+        // `has_region` is the sole recorder — the probe credits the owning function only when
+        // something in its body asks — and `push` never asked, in either compiler. So
+        // `function fill(mutable dst: [Int], n: Int) -> Int allocates nothing { push(dst, i); }`
+        // allocates into caller-owned storage with the claim intact. Not in B23's row, but B23
+        // gives stage-1 the rule that makes the hole reachable: a claim stage-1 now checks would
+        // have shipped with stage-0's known unsoundness on the day it started checking.
+        //
+        // Asked BEFORE the refusal below, because under probing this RECORDS: a body that gets
+        // refused must still be classed, or the inference would depend on which round found what.
+        // The same ordering M14 §5 records for `leaks`.
+        //
+        // `push` and not `truncate`: truncate only lowers a length, so it builds nothing.
+        if called == "push" {
+            let asked: Bool = self.has_region();
+        }
+        // ---- B20: a container declared OUTSIDE the region cannot grow inside it ---------------
+        //
+        // `push` does not write into the buffer the binding already has — it builds a FRESH one out
+        // of the arena's next bytes, copies, and stores that. Inside a `region` those bytes belong
+        // to the region, and its closing brace puts the bump pointer back, so a binding declared
+        // outside is left pointing at storage the region will hand out again. Measured on v0.0.263:
+        // five pushes into an outer `xs` inside a region, four into a later `ys`, and `xs[0]`
+        // printed 777 under stage-0 and 4 under stage-1 — the same corruption reading as two
+        // different plausible answers, which is the shape this language exists to refuse.
+        //
+        // The RECEIVER decides, not the value: it is the buffer that moves into the region, not
+        // what is being appended. So this asks nothing about argument two, and `push(xs, 11)` with
+        // an Int literal is refused exactly as `push(xs, "a" + "b")` is.
+        //
+        // Asked about the ROOT of the place, so `push(g.items, v)` is a write into `g`. And it fires
+        // only when the root is declared OUTSIDE the open region — never merely because a region is
+        // open — which is what ~100 `push` sites across `tests/pass` depend on.
+        if called == "push" && first_node >= 0 {
+            let place: Int = self.lvalue_root(first_node);
+            if place >= 0 {
+                let root: Token = self.tokens[self.nodes[place].token];
+                // B25's fact, recorded where the growth IS and NOT gated on a region: if this
+                // `push` grows one of the enclosing function's `mutable` parameters, then calling
+                // that function from inside a region grows the CALLER's binding — and the call site
+                // is the only place that can see whose binding that is. There need be no region
+                // here at all for that to be true, which is why the record sits above the gate.
+                let grown: Int = self.record_parameter_growth(src, root.start, root.length);
+                if self.region_depth > 0 {
+                    let owner: Int = self.find_binding(src, root.start, root.length);
+                    if owner >= 0 && self.bindings[owner].in_region == 0 {
+                        let named: String = substring(src, root.start, root.length);
+                        let complained: Int = self.complain_at(src, at,
+                            "`" + named + "` was declared outside " + self.open_region(src)
+                            + ", so it cannot grow inside it — `push` builds a new buffer in the "
+                            + "region, and the bytes are released at the closing brace, leaving `"
+                            + named + "` reading whatever the region hands out next. Declare `"
+                            + named + "` inside the region, or grow it outside it.");
+                    }
+                }
+            }
+        }
         if called == "push" && !is_unknown(first) {
             let want: Type = self.declared_type(src, first.scale);
             // `fits`, not `same_type` — an element is a DECLARED position, so a rounding contract
@@ -914,6 +972,28 @@ function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: No
                 }
                 p += 1;
             }
+            // M14 §5: a method reached through an interface object ALLOCATES if any implementation
+            // of it does. The call site cannot know which one runs — that is what `dynamic` means —
+            // so the conservative answer is the only sound one, and it costs a region the program
+            // was going to need anyway. No syntax: read off the implementations, which is possible
+            // because `allocates` is inferred.
+            //
+            // This was MISSING from stage-1, not merely weak, and B23 is what made it visible: the
+            // moment `allocates nothing` became a rule here,
+            // `tests/fail/allocates_nothing_broken_through_a_dynamic.bx` was the one of its three
+            // paths stage-1 still accepted. A claim checked on two paths out of three is the shape
+            // this project keeps writing down — three fixtures read as coverage, and the fourth
+            // spelling nobody wrote is where the hole is.
+            //
+            // `leaks` is computed BEFORE `has_region` is asked, and the order is load-bearing:
+            // under probing `has_region` RECORDS that something here wanted a region, so asking it
+            // first would record on every dyn call and class half the program as allocating.
+            let leaks: Bool = self.any_implementation_allocates(src, holder, wanted);
+            if leaks && !self.has_region() {
+                let r: Int = self.needs_region(src, call.token,
+                    "`dynamic " + substring(src, holder.name_start, holder.name_length) + "."
+                    + substring(src, wanted.start, wanted.length) + "`");
+            }
             return self.declared_type(src, sig.a);
         }
         i += 1;
@@ -921,6 +1001,27 @@ function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: No
     let complained: Int = self.complain_at(src, call.token,
         self.show_type(src, holder) + " has no such method");
     return unknown_type();
+}
+
+// Does ANY implementation of this interface's method allocate? Stage-0's `leaks`, spelled with
+// stage-1's two-span method lookup instead of a `(receiver, name)` set — the same table every
+// direct call already reads `allocates` from, so there is no second place for the answer to live.
+function (self: Unit) any_implementation_allocates(src: String, holder: Type,
+                                              wanted: Token) -> Bool {
+    let mutable i: Int = 0;
+    while i < len(self.impls) {
+        let candidate: Implementation = self.impls[i];
+        if spans_equal(src, candidate.trait_start, candidate.trait_len,
+                    holder.name_start, holder.name_length) {
+            let found: Int = self.find_method_named(src, candidate.type_start, candidate.type_len,
+                                wanted.start, wanted.length);
+            if found >= 0 && flag_allocates(self.methods[found].flags) == 1 {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    return false;
 }
 
 function (self: Unit) find_method_named(src: String, holder_start: Int, holder_len: Int,
@@ -1120,6 +1221,22 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
     if n.kind == 3 {
         return self.tokens[n.token].interpolated;
     }
+    // ---- an INTERPOLATED String, as a value: node kind 18, and this arm was missing ------------
+    //
+    // Found while making stage-1's `allocates nothing` reason text agree with stage-0's, which is
+    // the useful part of how it was found: the message was a symptom of the RULE not firing, not a
+    // wording problem. Two use-after-frees stage-0 refuses and stage-1 accepted, measured:
+    //
+    //     region inner { let s: String = "item ${n}"; return s; }   // returned released bytes
+    //     region one { kept = "turn ${1}"; }                        // assigned them outward
+    //
+    // `check_expr`'s own comment two files over already said what this arm is: *"Interpolation IS
+    // `to_string` plus `+`, so as a VALUE it allocates."* The kind 3 arm above covers a single
+    // interpolated PIECE, which made the case look handled — the same one-level-deep miss the class
+    // literal arm below records, and invisible for the same reason: the loop looks right.
+    if n.kind == 18 {
+        return true;
+    }
     if n.kind == 8 {
         if n.value == 25 && self.type_at(node).kind == 42 {
             return true;                             // joining Strings
@@ -1196,6 +1313,25 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
         if span_equal(src, name.start, name.length, "substring")
             || span_equal(src, name.start, name.length, "read_file")
             || span_equal(src, name.start, name.length, "argument") {
+            return true;
+        }
+        // Three more that build a String or an array out of the arena, and all three were missing.
+        // Stage-0 has had them since each shipped — `ByteAsString`, `CStringAt` and `CBytesAt` are
+        // three arms of its `expr_allocates` — and stage-1 answered `false`, so
+        //
+        //     region inner { let s: String = byte_as_string(65); return s; }
+        //
+        // compiled clean and returned a pointer into bytes the region had just released. Stage-0
+        // refuses it. `byte_as_string` shipped in v0.0.260 and the escape rules were never asked
+        // about it; `c_string_at` and `c_bytes_at` copy C's bytes in, which is the same allocation
+        // wearing a different name.
+        //
+        // The list above and the `builds` list in `builtin_call` are the SAME question asked twice
+        // — that one already names `c_string_at` and `byte_as_string`, and this one did not, which
+        // is how the gap survived: one of the two places was right.
+        if span_equal(src, name.start, name.length, "byte_as_string")
+            || span_equal(src, name.start, name.length, "c_string_at")
+            || span_equal(src, name.start, name.length, "c_bytes_at") {
             return true;
         }
         if span_equal(src, name.start, name.length, "to_string") {
@@ -1357,6 +1493,24 @@ function (mutable self: Unit) note_allocates() -> Int {
     return 0;
 }
 
+// The open `region` block, spelled the way a message quotes it: `` `region r` ``.
+//
+// Every refusal in the region family names it, because "this region" leaves a reader who has two
+// braces in view to work out which one released the bytes. Stage-0 has quoted the name since
+// v0.0.222; stage-1 said `this region` until `Unit` carried the token, and the note that used to sit
+// on the assignment rule in check.bx explained why and then left the divergence standing — which is
+// how a wording difference becomes permanent.
+//
+// The fallback exists for the one caller that can be reached with no region open — nothing does
+// today, and a message reading `this region` is a better failure than a lookup on -1.
+function (self: Unit) open_region(src: String) -> String {
+    if self.region_token < 0 {
+        return "this `region`";
+    }
+    let named: Token = self.tokens[self.region_token];
+    return "`region " + substring(src, named.start, named.length) + "`";
+}
+
 function (mutable self: Unit) has_region() -> Bool {
     // Probing: refuse nothing, and treat "something wanted a region while none was open"
     // as the definition of "this function allocates in its caller's region". Six sites ask
@@ -1503,6 +1657,12 @@ function flag_mutating(flags: Int) -> Int {
 // keys a method by TWO spans, and a qualified name is exactly a name in two parts.
 function flag_associated(flags: Int) -> Int {
     return remainder(divide_floor(flags, 32), 2);
+}
+// `allocates nothing` — the CLAIM, at bit 12, the first bit above the effect mask. Deliberately not
+// derived from bit 2 being clear: bit 2 is what the inference concluded, this is what the signature
+// promised, and B23 is the two of them never being compared.
+function flag_claims_nothing(flags: Int) -> Int {
+    return remainder(divide_floor(flags, 4096), 2);
 }
 
 // ---- expressions -------------------------------------------------------------
@@ -2514,19 +2674,20 @@ function (mutable self: Unit) parse_function(src: String, is_pure: Int, owner: I
     if self.at_word(src, "allocates") {              // contextual: only here does the
         builds_in_caller = 1;                        // word mean the marker.
         let a: Int = self.advance();
-        // `allocates nothing` is the opposite claim, and stage-1 PARSES it without checking it.
+        // `allocates nothing` is the opposite claim, and it is CHECKED — see `check_body`.
         //
-        // That is a deliberate asymmetry rather than an oversight, and worth stating because the
-        // usual rule here is the reverse. Stage-0 checks the claim against its allocation fixpoint;
-        // stage-1 has no such fixpoint — the whole inference is stage-0's, and stage-1 has always
-        // required the marker rather than deriving it (M14 slice 1 shipped stage-0 v0.0.142 and
-        // stage-1 v0.0.144, two versions apart, for the same reason).
+        // **The comment that stood here said stage-1 could not check it, and that was false for
+        // 120 versions.** It read: *"stage-1 has no such fixpoint — the whole inference is
+        // stage-0's, and stage-1 has always required the marker rather than deriving it."*
+        // `check.bx`'s `infer_allocates` is a full least fixpoint and has been since v0.0.144, one
+        // version after slice 1 landed in stage-0. So the note described the staging correctly on
+        // the day it was written and was stale by the next release, and nothing re-read it: the
+        // word was parsed into `claims_nothing` and thrown away, and stage-1 answered `no errors`
+        // on a function whose first statement joins two Strings while stage-0 refused it.
         //
-        // Recognising the word costs nothing and keeps the two compilers accepting the same
-        // programs, which is what the differential measures. Checking it needs the fixpoint, and
-        // that is per-block release's other half. Until then a claim stage-1 cannot verify is one it
-        // does not pretend to: it reads the word and moves on, and stage-0 is where the refusal
-        // lives. `spec/M14-IMPLICIT-REGIONS.md` §8 predicted exactly this staging.
+        // A stale "cannot" is worse than a stale "done", because nobody re-tests what a comment
+        // says does not work. This one would have sent whoever writes per-block release building a
+        // fixpoint that already existed.
         if self.at_word(src, "nothing") {
             builds_in_caller = 0;
             claims_nothing = 1;
@@ -2550,6 +2711,11 @@ function (mutable self: Unit) parse_function(src: String, is_pure: Int, owner: I
     if receiver_mut == 1 { flags += 4; }
     if associated == 1 { flags += 32; }
     flags += reaches * 64;                           // the effect mask, at bits 6..11
+    // Bit 12, above the effect mask — the first free bit. `allocates nothing`, the CLAIM, which is
+    // not the negation of bit 2: bit 2 is what the inference WORKED OUT, and the two disagreeing is
+    // exactly the error. So the claim needs its own bit rather than being read off the absence of
+    // the other, and this line is the whole of what B23 was missing.
+    if claims_nothing == 1 { flags += 4096; }
     if receiver_tok >= 0 {
         // A method: `c` is the clause node, which holds the receiver and the return
         // type both, so a method item has the same shape a function's does.

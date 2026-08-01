@@ -1,0 +1,1 @@
+`bag` was declared outside `region r`, so it cannot grow inside it — `Bag.add(...)` grows it, and the bytes are released at the closing brace, leaving `bag` reading whatever the region hands out next. Declare `bag` inside the region, or grow it outside it.

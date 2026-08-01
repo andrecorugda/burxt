@@ -1,0 +1,1 @@
+`function fill` claims `allocates nothing`, and it does allocate — `push(...)` may grow the array. Either drop the claim, or move the building into a function that does not make it.

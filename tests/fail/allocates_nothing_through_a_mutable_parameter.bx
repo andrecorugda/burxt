@@ -1,0 +1,22 @@
+// B22, and it is the worst of the five because it is not a crash — it is a contract that
+// lies. This was ACCEPTED from v0.0.209, and `burxt explain memory` reported `fill() nothing`.
+//
+// `push` allocates, into storage the caller owns. The claim was never violated by anything the
+// checker looked at, because `push` never asked `has_region()` and `has_region` is the sole
+// recorder that credits the allocation to the function containing it. The direct form —
+// `let mutable xs: [Int] = []; push(xs, n);` — was caught, but only because the `let` asks.
+//
+// M14's acceptance item 6 named three paths and had a fail fixture for each: direct, through a
+// call, through a `dynamic`. This is a fourth, and three fixtures covering three paths read as
+// coverage. A fixture set cannot tell "refuses everything it should" from "refuses everything
+// anyone thought to write."
+function fill(mutable dst: [Int], n: Int) -> Int allocates nothing {
+    let mutable i: Int = 0;
+    while i < n {
+        push(dst, i);
+        i = i + 1;
+    }
+    return n;
+}
+let mutable target: [Int] = [];
+print(fill(target, 3));

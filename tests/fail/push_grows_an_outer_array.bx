@@ -1,0 +1,18 @@
+// B20. `push` into a container declared OUTSIDE the region was a use-after-free, and it
+// printed a wrong number rather than crashing — stage-0 answered 777 and stage-1 answered 4,
+// which is worth recording because it means a fixture pinning either compiler's wrong answer
+// would have been wrong for the other. Fix before fixture.
+//
+// `push` grows by allocating a fresh buffer in the arena and storing it into the array's
+// header. When that header belongs to a binding declared outside the region, the region's
+// closing brace puts the bump pointer back and the buffer is handed out again to the next
+// allocation. Nothing dangled visibly: the array kept a valid-looking pointer to bytes that
+// now belonged to somebody else.
+//
+// The escape rule existed and covered whole-name assignment and `return`. Growth is a third
+// way a value reaches an outer place, and it had no rule at all.
+let mutable xs: [Int] = [];
+region r {
+    push(xs, 11);
+}
+print(xs[0]);

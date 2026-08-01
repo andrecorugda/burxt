@@ -1,0 +1,10 @@
+// B21. Field assignment through a region was a use-after-free. `AssignField`,
+// `AssignFieldIndex` and `AssignIndex` carried no region check at all — not a weak one, none.
+// The rule was written for whole-name assignment and never extended to the three other ways
+// a value reaches an outer place.
+class Box { name: String }
+let mutable b: Box = Box { name: "start" };
+region r {
+    b.name = "hello-" + "world";
+}
+print(b.name);

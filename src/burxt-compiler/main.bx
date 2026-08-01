@@ -250,7 +250,7 @@ function drive_source(src: String, path: String, out_ll: String, loud: Int) -> I
 // LSP positions included. So this function chooses; it does not format.
 function drive_reporting(src: String, path: String, out_ll: String, loud: Int,
                          shape: Int) -> Int touches files {
-    let mutable unit: Unit = Unit { tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], consts: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, current_method: 0 - 1, probing: 0, probe_changes: 0, type_bindings: [], measure_clause: 0 - 1, measure_slot: 0, measure_parameters: 0 - 1, measure_owner: "", old_nodes: [], old_slots: [], ensures_start: 0, ensures_count: 0, ensures_owner: "", bracket_clauses: [], clause_subjects: [], it_token: 0 - 1, it_is_result: 0, used_it: 0, it_seen: 0, result_type_node: 0 - 1, result_slot: 0 - 1, returns_node: 0 - 1, walked_types: [], type_binding_floor: 0, allowed_effects: 63, effects_owner: "", function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], typed: [], region_depth: 0, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], in_function: 0, depth: 0, problems: 0, diagnose: 0, problem_start: 0 - 1, problem_length: 0, problem_message: "", position: 0, token_end: 0, no_record_literal: 0, in_extern_signature: 0, range_bounds: 0, in_multiply: 0, print_to_stderr: 0, int_type_node: 0 - 1, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
+    let mutable unit: Unit = Unit { tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], consts: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, current_method: 0 - 1, probing: 0, probe_changes: 0, grow_parameters: [], grow_self: [], type_bindings: [], measure_clause: 0 - 1, measure_slot: 0, measure_parameters: 0 - 1, measure_owner: "", old_nodes: [], old_slots: [], ensures_start: 0, ensures_count: 0, ensures_owner: "", bracket_clauses: [], clause_subjects: [], it_token: 0 - 1, it_is_result: 0, used_it: 0, it_seen: 0, result_type_node: 0 - 1, result_slot: 0 - 1, returns_node: 0 - 1, walked_types: [], type_binding_floor: 0, allowed_effects: 63, effects_owner: "", function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], typed: [], region_depth: 0, region_token: 0 - 1, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], region_mark: "", region_loop_depth: 0, in_function: 0, depth: 0, problems: 0, diagnose: 0, problem_start: 0 - 1, problem_length: 0, problem_message: "", position: 0, token_end: 0, no_record_literal: 0, in_extern_signature: 0, range_bounds: 0, in_multiply: 0, print_to_stderr: 0, int_type_node: 0 - 1, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
     if shape > 0 {
         unit.diagnose = 1;
     }
@@ -410,7 +410,7 @@ function is_subcommand(word: String) -> Bool {
 // this string against `Cargo.toml`, which is the only thing that can catch a duplicated fact
 // diverging: not more care at the bump, but a test that fails when the two disagree.
 function usage() -> Int {
-    print_error("burxt 0.0.263 — the Burxt compiler, written in Burxt");
+    print_error("burxt 0.0.264 — the Burxt compiler, written in Burxt");
     print_error("usage:");
     print_error("  burxt check   <file.bx>                  parse and typecheck only");
     print_error("                <file.bx> --json         ... as JSON, for editors and CI");
@@ -442,7 +442,7 @@ if argument_count() > 1 {
 }
 
 if command == "--version" || command == "-V" {
-    print_error("burxt 0.0.263 — the Burxt compiler, written in Burxt");
+    print_error("burxt 0.0.264 — the Burxt compiler, written in Burxt");
     exit(0);
 }
 

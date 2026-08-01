@@ -1,0 +1,6 @@
+// B21, the index form. Same hole, same cause: the place is an element rather than a field.
+let mutable names: [String] = ["one"];
+region r {
+    names[0] = "two-" + "three";
+}
+print(names[0]);

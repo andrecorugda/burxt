@@ -1,0 +1,29 @@
+// B24. Stage-1 never unwound a region on `return`, `break` or `continue` — it emitted the
+// mark's restoring store after the body, and an early exit branched straight past it. Stage-0
+// called `close_open_region` on all three paths. Measured over 200,000 iterations, peak RSS
+// was 1,408 KB from stage-0 and 13,904 KB from stage-1: 9.9x, the same printed answer, and
+// identical the moment the early exit was removed.
+//
+// This fixture proves the ANSWER is right. The memory is a measurement, so it lives in a
+// runner invariant instead — `tests/pass` compares stdout and cannot see peak RSS, which is
+// exactly why this survived: nothing that ran the program was looking at what it cost.
+//
+// It matters beyond `region`, which is why it blocked A12 rather than following it: per-block
+// release makes every block an exit point that has to unwind.
+let mutable rounds: Int = 0;
+let mutable width: Int = 0;
+let mutable i: Int = 0;
+while i < 3 {
+    i = i + 1;
+    region each {
+        let label: String = "row {i}";
+        width = len(label);
+        if width > 0 {
+            rounds = rounds + 1;
+            continue;
+        }
+        rounds = rounds - 100;
+    }
+}
+print(rounds);
+print(width);

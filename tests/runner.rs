@@ -1474,17 +1474,24 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     // second direction is the one that has cost this project the most, and it now has an
     // instrument. Two former ratchets in this file were converted the same way for the same
     // reason — *"keeping one now would let a regression hide above the line."*
-    const STAGE_0_ONLY: [&str; 3] = [
-        // The allocation fixpoint is stage-0's alone: stage-1 REQUIRES the `allocates nothing`
-        // marker rather than deriving it, which is why M14 slice 1 shipped the two halves two
-        // versions apart. These three fixtures break a claim that stage-1 never computes, so it
-        // has nothing to check them against. They close with A12 (per-block release), not before,
-        // and until then this is a difference in what the two compilers KNOW rather than a gap in
-        // what one of them enforces.
-        "allocates_nothing_broken_directly.bx",
-        "allocates_nothing_broken_through_a_call.bx",
-        "allocates_nothing_broken_through_a_dynamic.bx",
-    ];
+    // **v0.0.264: the last three exclusions are gone, and the equality now has NO exceptions.**
+    //
+    // They were excluded with this reason: "the allocation fixpoint is stage-0's alone: stage-1
+    // REQUIRES the `allocates nothing` marker rather than deriving it... They close with A12
+    // (per-block release), not before."
+    //
+    // **Both halves of that were wrong**, and the second half is the expensive kind of wrong —
+    // a limitation nobody re-tests. Stage-1's `infer_allocates` (`check.bx:4812`) has been a full
+    // least fixpoint since **v0.0.144**, and the spec's own status block said so; a two-link
+    // unannotated chain was already refused correctly. What stage-1 actually lacked was the rule
+    // that CONSULTS it: `parser.bx` read the word `nothing`, set `claims_nothing = 1`, and nothing
+    // ever looked at that field again. So the gap was one field away from closed for 120 versions
+    // while a comment here said it needed the hardest item on the roadmap.
+    //
+    // Recorded as B23. And they closed BEFORE A12 rather than with it, which is what happens when
+    // a deferral cites a reason nobody measures — see B20/B21/B22/B25, all found the same week by
+    // going and looking.
+    const STAGE_0_ONLY: [&str; 0] = [];
     let expected = total - STAGE_0_ONLY.len();
     assert_eq!(
         caught, expected,
@@ -9865,4 +9872,145 @@ region r {
     );
 
     let _ = fs::remove_dir_all(&scratch);
+}
+
+/// **A `region` releases its memory on EVERY exit from the block, not just the one at the bottom.**
+///
+/// B24, and the reason it survived: `tests/pass` compares stdout, so nothing that ran a program was
+/// looking at what the program COST. Stage-1 emitted the mark-restoring store after the body and an
+/// early exit branched straight past it, so `continue` out of a `region` inside a loop leaked every
+/// iteration. Same printed answer, every time — the only visible difference was peak RSS:
+///
+/// | | |
+/// |---|---|
+/// | stage-0 | 1,408 KB |
+/// | stage-1, before the fix | **13,904 KB** — 9.9× |
+/// | either compiler, early exit removed | 1,408 KB |
+///
+/// So this is measured rather than asserted through a fixture, and it is measured for **both**
+/// compilers, because the whole defect was one backend forgetting what the other remembered.
+///
+/// It also guards A12. Per-block release makes **every block an exit point that must unwind**, so a
+/// regression here would not be one loop leaking — it would be every early return in the language.
+#[test]
+fn a_region_releases_on_every_exit_from_the_block() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let timer = Path::new("/usr/bin/time");
+    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    // Skipping OUT LOUD, per the lesson of the generator that skipped silently in CI for thirteen
+    // versions: a check that has never run looks exactly like one that passes.
+    if !timer.exists() {
+        eprintln!("skipping: /usr/bin/time is not installed, so peak RSS cannot be measured");
+        return;
+    }
+    if !llc.exists() {
+        eprintln!("skipping: {} is not installed", llc.display());
+        return;
+    }
+    let scratch = scratch_dir("region-early-exit");
+    fs::create_dir_all(&scratch).unwrap();
+
+    // 200,000 iterations, each building a String inside a `region` and leaving through `continue`.
+    // Large enough that a leak is unmistakable and a correct answer is still fast.
+    let program = "\
+let mutable rounds: Int = 0;
+let mutable width: Int = 0;
+let mutable i: Int = 0;
+while i < 200000 {
+    i = i + 1;
+    region each {
+        let label: String = \"row {i}\";
+        width = len(label);
+        if width > 0 {
+            rounds = rounds + 1;
+            continue;
+        }
+        rounds = rounds - 1;
+    }
+}
+print(rounds);
+";
+    let source = scratch.join("early_exit.bx");
+    fs::write(&source, program).unwrap();
+
+    let peak_kb = |exe: &Path| -> (u64, String) {
+        let out = Command::new(timer)
+            .arg("-v")
+            .arg(exe)
+            .current_dir(&scratch)
+            .output()
+            .expect("/usr/bin/time -v");
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        let kb = err
+            .lines()
+            .find(|l| l.contains("Maximum resident set size"))
+            .and_then(|l| l.rsplit(' ').next().and_then(|n| n.trim().parse::<u64>().ok()))
+            .unwrap_or_else(|| panic!("could not read peak RSS out of:\n{}", err));
+        (kb, String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+
+    // stage-0.
+    let rust_exe = scratch.join("by_rust");
+    assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(&source)
+        .arg("-o")
+        .arg(&rust_exe)
+        .status()
+        .expect("burxt build")
+        .success());
+    let (rust_kb, rust_said) = peak_kb(&rust_exe);
+
+    // stage-1, through its textual IR.
+    let stage1 = scratch.join("stage1");
+    assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("src/burxt-compiler/main.bx"))
+        .arg("-o")
+        .arg(&stage1)
+        .status()
+        .expect("burxt build")
+        .success());
+    let ll = scratch.join("early_exit.ll");
+    assert!(Command::new(&stage1).arg(&source).arg(&ll).status().expect("stage-1").success());
+    let obj = scratch.join("early_exit.o");
+    assert!(Command::new(llc)
+        .args(["-relocation-model=pic", "-filetype=obj", "-o"])
+        .arg(&obj)
+        .arg(&ll)
+        .status()
+        .expect("llc")
+        .success());
+    let burxt_exe = scratch.join("by_burxt");
+    assert!(Command::new("cc").arg("-o").arg(&burxt_exe).arg(&obj).status().expect("cc").success());
+    let (burxt_kb, burxt_said) = peak_kb(&burxt_exe);
+
+    let _ = fs::remove_dir_all(&scratch);
+    eprintln!("peak RSS through 200k early exits: stage-0 {} KB, stage-1 {} KB", rust_kb, burxt_kb);
+
+    // The answer first, because a leak that also computes the wrong thing is a different bug.
+    assert_eq!(rust_said, "200000", "stage-0 got the answer wrong, so the RSS number means nothing");
+    assert_eq!(burxt_said, "200000", "stage-1 got the answer wrong, so the RSS number means nothing");
+
+    // A CEILING, not an equality of the two numbers. The measured value is ~1,408 KB in both; the
+    // leak was 13,904 KB. 6,000 KB sits far above the noise of a differently-sized binary or a
+    // libc that maps more up front, and far below any real regression — the failure this guards is
+    // 10x, not 10%.
+    const CEILING_KB: u64 = 6_000;
+    assert!(
+        rust_kb < CEILING_KB,
+        "stage-0 used {} KB across 200,000 `continue`s out of a `region`, over the {} KB ceiling — \
+         the region is not being released on the early-exit path",
+        rust_kb,
+        CEILING_KB
+    );
+    assert!(
+        burxt_kb < CEILING_KB,
+        "stage-1 used {} KB across 200,000 `continue`s out of a `region`, over the {} KB ceiling. \
+         This is B24: the mark-restoring store is emitted after the body, and an early exit \
+         branches past it. Stage-0 unwinds on return, break and continue; stage-1 must too — and \
+         it matters more once every block is a region, because then every early exit unwinds",
+        burxt_kb,
+        CEILING_KB
+    );
 }

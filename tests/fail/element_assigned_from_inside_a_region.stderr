@@ -1,0 +1,1 @@
+`names` was declared outside `region r`, so its element cannot be assigned a value built inside it — the bytes are released at the closing brace and `names` would read whatever the region hands out next. Declare `names` inside the region, or build the value outside it.

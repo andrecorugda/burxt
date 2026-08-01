@@ -761,9 +761,14 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
         let addressed: Int = self.write_body("  " + built + " = ptrtoint ptr " + out + " to i64\n");
         if self.sret != "" {
             let handed: Int = self.copy_cells(src, self.sret, built, self.sret_cells);
+            // `?` is a `return` written as a punctuation mark, so it leaves an open `region` the
+            // same way one does and releases it the same way. Stage-0 closes at both of these two
+            // sites too; missing them would leave the one early exit that has no keyword.
+            let released: Int = self.close_open_region();
             let returned: Int = self.write_body("  ret i64 0\n");
         } else {
             let checked: Int = self.emit_ensures(src, built);
+            let released: Int = self.close_open_region();
             let returned: Int = self.write_body("  ret i64 " + built + "\n");
         }
 
@@ -2000,6 +2005,20 @@ function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String)
     return "0";
 }
 
+// Put the bump cursor back, if a `region` is open. Leaving one by `return`, `break`, `continue`
+// or `?` releases it exactly as reaching its closing brace would — and the store at the brace is
+// unreachable from an early exit, so without this the region is simply never released.
+//
+// Stage-0's `close_open_region`, and it is one store because that is the whole of a region: the
+// closing brace's own code is the same line. There is nothing to release when no region is open,
+// which is what the empty mark means, and the caller is spared the test.
+function (mutable self: Unit) close_open_region() -> Int {
+    if self.region_mark == "" {
+        return 0;
+    }
+    return self.write_body("  store i64 " + self.region_mark + ", ptr @burxt.bump\n");
+}
+
 function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int {
     let n: Node = self.nodes[node];
 
@@ -2107,11 +2126,19 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int {
             // No `ensures` here: the checker already refuses one on a function whose answer
             // travels through the caller's storage, because binding `result` to it needs care a
             // scalar does not.
+            //
+            // Released AFTER the copy, never before: the value being returned may still live in
+            // the region, and the checker only refuses returning region storage — copying out of
+            // it is exactly what makes an `sret` return legal.
+            let released: Int = self.close_open_region();
             return self.write_body("  ret i64 0\n");
         }
         // `ensures` at EVERY return, not at one exit. Verified against stage-0, which fires on each
         // return path — a function with an early return has two places the promise must hold.
         let checked: Int = self.emit_ensures(src, value);
+        // After the clauses, for stage-0's reason at the same place: a postcondition may read
+        // region storage, and it is still a promise about a value the region has not released yet.
+        let released: Int = self.close_open_region();
         return self.write_body("  ret i64 " + value + "\n");
     }
 
@@ -2288,6 +2315,16 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int {
         if n.kind == 68 {
             target = self.loop_condition_labels[depth - 1];
         }
+        // A jump out of the loop that ENCLOSES the open region leaves the region, so it releases
+        // it. A jump out of a loop written INSIDE the region stays within it and must not — and
+        // releasing there would be worse than the leak it fixes, because the region's own body
+        // goes on reading storage the store just handed back. `region_loop_depth` is how many
+        // loops were open when the region opened, so the two are told apart rather than guessed:
+        // the innermost loop is the region's own enclosing one exactly when the count has not
+        // grown since. Stage-0 keeps the same fact per loop entry in `loop_stack`.
+        if depth <= self.region_loop_depth {
+            let released: Int = self.close_open_region();
+        }
         let jumped: Int = self.write_body("  br label %" + target + "\n");
         // The block after an unconditional branch needs a label, and nothing reaches it.
         let dead: String = self.fresh_label("after");
@@ -2298,7 +2335,17 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int {
         // The mark IS the region: closing it releases every allocation at once.
         let mark: String = self.fresh();
         let saved: Int = self.write_body("  " + mark + " = load i64, ptr @burxt.bump\n");
+        // Published for the early exits — `return`, `break`, `continue`, `?` — every one of which
+        // branches past the store below. Saved and restored rather than set, so nothing leaks out
+        // of the block; regions do not nest, so the saved value is always "" in practice and the
+        // save is there to make that a property of the code rather than of the checker.
+        let outer_mark: String = self.region_mark;
+        let outer_loops: Int = self.region_loop_depth;
+        self.region_mark = mark;
+        self.region_loop_depth = len(self.loop_end_labels);
         let body: Int = self.emit_block(src, n.a);
+        self.region_mark = outer_mark;
+        self.region_loop_depth = outer_loops;
         return self.write_body("  store i64 " + mark + ", ptr @burxt.bump\n");
     }
 

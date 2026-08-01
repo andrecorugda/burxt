@@ -577,6 +577,45 @@ pub struct TypeChecker {
     /// question about the checker and must not need `&mut` to do it.
     probe_fns: RefCell<HashSet<String>>,
     probe_methods: RefCell<HashSet<(String, String)>>,
+
+    // ---- B25: does a call GROW something the caller owns? ---------------------
+    //
+    // B20 refuses `region r { push(xs, 11); }` for an `xs` declared outside. One call away it
+    // was still a silent use-after-free, because the growth happens in the callee's body where
+    // no region is open:
+    //
+    // ```text
+    // function grow(mutable dst: [Int], v: Int) -> Int { push(dst, v); return v; }
+    // let mutable xs: [Int] = [];
+    // region r { let a: Int = grow(xs, 11); ... }        // accepted; xs[0] printed 777
+    // ```
+    //
+    // `alloc_fns` cannot answer it. "Does this function allocate?" is the wrong question — a
+    // function that builds a String to print allocates and touches nobody's array, and refusing
+    // on that answer falsely rejects correct code. Measured, rather than reasoned about: with
+    // the rule keyed on `alloc_fns` this program is refused, and it is sound —
+    //
+    // ```text
+    // function note(mutable seen: [Int], i: Int) -> Int { print("at " + to_string(i));
+    //                                                     seen[0] = i; return 0; }
+    // ```
+    //
+    // — so the question has to be asked PER PARAMETER: does region storage land in *this* one?
+    /// Free functions that put region storage into a `mutable` parameter, by index. Per index
+    /// rather than per function, so `f(mutable a, mutable b)` that grows only `a` still accepts
+    /// an outer `b`.
+    grow_params: HashSet<(String, usize)>,
+    /// Methods that put region storage into their `mutable self`. Separate from `grow_params`
+    /// because a method may not declare a `mutable` parameter at all — only `mutable self` —
+    /// so the receiver is the whole of the question for a method, and it has no index.
+    grow_self: HashSet<(String, String)>,
+    probe_grow_params: RefCell<HashSet<(String, usize)>>,
+    probe_grow_self: RefCell<HashSet<(String, String)>>,
+    /// This body's `mutable` parameters, name → position. What lets a growth found deep in a
+    /// body be attributed to the parameter it lands in.
+    current_writable_params: HashMap<String, usize>,
+    /// True while checking a method declared `mutable self`.
+    current_self_writable: bool,
 }
 
 /// The names a program may not declare.
@@ -694,6 +733,12 @@ impl TypeChecker {
             current_receiver: None,
             probing: false,
             probe_owner: RefCell::new((String::new(), String::new())),
+            grow_params: HashSet::new(),
+            grow_self: HashSet::new(),
+            probe_grow_params: RefCell::new(HashSet::new()),
+            probe_grow_self: RefCell::new(HashSet::new()),
+            current_writable_params: HashMap::new(),
+            current_self_writable: false,
             probe_fns: RefCell::new(HashSet::new()),
             probe_methods: RefCell::new(HashSet::new()),
         }
@@ -709,9 +754,11 @@ impl TypeChecker {
         // M14: work out which functions allocate before checking anything, so `allocates`
         // need not be written. See `probing` on the struct for why this needs a fixpoint
         // and not a pass.
-        let (fns, methods) = Self::infer_allocates(prog);
+        let (fns, methods, grow_params, grow_self) = Self::infer_allocates(prog);
         self.alloc_fns.extend(fns);
         self.alloc_methods.extend(methods);
+        self.grow_params.extend(grow_params);
+        self.grow_self.extend(grow_self);
 
         let result = self.check_program_inner(prog);
         if let Err(message) = result {
@@ -892,9 +939,23 @@ impl TypeChecker {
     /// nothing, and the real pass reports the problem with its own message — so the
     /// diagnostics a user sees are exactly the ones they saw before M14, in the same order.
     /// A probe that reported anything would be a second source of truth for error text.
-    fn infer_allocates(prog: &Program) -> (HashSet<String>, HashSet<(String, String)>) {
+    ///
+    /// It answers TWO questions in one set of rounds, added for B25: which functions allocate,
+    /// and which put that storage into a `mutable` parameter. They share the rounds because they
+    /// share the walk and are mutually monotone — the second reads `expr_allocates`, which reads
+    /// the first — so running them separately would mean two passes converging on each other.
+    fn infer_allocates(
+        prog: &Program,
+    ) -> (
+        HashSet<String>,
+        HashSet<(String, String)>,
+        HashSet<(String, usize)>,
+        HashSet<(String, String)>,
+    ) {
         let mut fns: HashSet<String> = HashSet::new();
         let mut methods: HashSet<(String, String)> = HashSet::new();
+        let mut grow_params: HashSet<(String, usize)> = HashSet::new();
+        let mut grow_self: HashSet<(String, String)> = HashSet::new();
         // One round per link in the longest call chain. The bound is the number of
         // functions, which no chain can exceed without repeating a name, and it is a
         // backstop rather than an expectation — real programs settle in two or three.
@@ -904,17 +965,26 @@ impl TypeChecker {
             probe.probing = true;
             probe.alloc_fns = fns.clone();
             probe.alloc_methods = methods.clone();
+            probe.grow_params = grow_params.clone();
+            probe.grow_self = grow_self.clone();
             let _ = probe.check_program_inner(prog);
             let found_fns = probe.probe_fns.borrow().clone();
             let found_methods = probe.probe_methods.borrow().clone();
-            let grew = !found_fns.is_subset(&fns) || !found_methods.is_subset(&methods);
+            let found_params = probe.probe_grow_params.borrow().clone();
+            let found_self = probe.probe_grow_self.borrow().clone();
+            let grew = !found_fns.is_subset(&fns)
+                || !found_methods.is_subset(&methods)
+                || !found_params.is_subset(&grow_params)
+                || !found_self.is_subset(&grow_self);
             fns.extend(found_fns);
             methods.extend(found_methods);
+            grow_params.extend(found_params);
+            grow_self.extend(found_self);
             if !grew {
                 break;
             }
         }
-        (fns, methods)
+        (fns, methods, grow_params, grow_self)
     }
 
     /// Does this function build its answer in the caller's region?
@@ -2618,6 +2688,10 @@ impl TypeChecker {
         // function happened to be checked last.
         *self.probe_owner.borrow_mut() = (String::new(), String::new());
         self.current_receiver = None;
+        // Same reason, for B25's half of the probe: out here there are no parameters, so a map
+        // left over from the last function would attribute a top-level growth to it.
+        self.current_writable_params.clear();
+        self.current_self_writable = false;
         // Top-level code may reach anything. There is no signature here for a reviewer to read,
         // because the file itself is what they are reading — so nothing is hidden by allowing it,
         // and forbidding it would mean no program could do I/O at its entry point.
@@ -3027,6 +3101,106 @@ impl TypeChecker {
                 }
             }
         }
+    }
+
+    /// The binding an lvalue ultimately writes into: `g.items[0]` is a write to `g`.
+    ///
+    /// Every escape rule below is about a NAME — was it declared inside the open region or
+    /// outside it — and three of the four ways to reach a place are spelled through a field
+    /// or an index. Walking to the root is what lets one question answer all four.
+    fn place_root<'a>(e: &'a Expr) -> Option<&'a str> {
+        let mut cur = e;
+        loop {
+            match &cur.kind {
+                ExprKind::Var(name) => return Some(name),
+                ExprKind::Field { base, .. } | ExprKind::Index { base, .. } => cur = base,
+                _ => return None,
+            }
+        }
+    }
+
+    /// The open region's name, when `name` was declared OUTSIDE it — otherwise `None`.
+    ///
+    /// The one question behind B20, B21 and the whole-name rule that came before them: region
+    /// storage may land in a binding declared INSIDE the region, because it dies with the
+    /// region, and never in one declared outside it, because that binding outlives the bytes.
+    ///
+    /// `None` when no region is open, which is the common case and the reason this is a
+    /// separate function: the rule must fire because a name is *outside* the region, never
+    /// merely because a region happens to be open — ~100 `push` sites across `tests/pass`
+    /// depend on that distinction.
+    fn declared_outside_open_region(&self, name: &str) -> Option<String> {
+        match &self.current_region {
+            Some(open) if !self.region_scope.contains(name) => Some(open.clone()),
+            _ => None,
+        }
+    }
+
+    /// Record that region storage lands in one of THIS body's `mutable` parameters.
+    ///
+    /// The B25 half of the probe, and it mirrors `has_region` exactly: a query that records
+    /// while probing and does nothing in the real pass, so the fixpoint and the rule read the
+    /// same fact from the same place. Called with the ROOT of a place — `dst`, `dst.items`,
+    /// `self.lines` all record against `dst` or `self`.
+    ///
+    /// Transitivity comes through the call site rather than a second walk: `outer` passing its
+    /// own `dst` to `inner`, whose parameter is already known to grow, records `outer` on the
+    /// next round. One round per link, which is the round structure `infer_allocates` already
+    /// has.
+    fn record_param_growth(&self, root: &str) {
+        if !self.probing {
+            return;
+        }
+        let (receiver, name) = self.probe_owner.borrow().clone();
+        if name.is_empty() {
+            return;                   // the top level owns its storage; nothing to attribute
+        }
+        if root == "self" {
+            if self.current_self_writable && !receiver.is_empty() {
+                self.probe_grow_self.borrow_mut().insert((receiver, name));
+            }
+            return;
+        }
+        if let Some(i) = self.current_writable_params.get(root) {
+            if receiver.is_empty() {
+                self.probe_grow_params.borrow_mut().insert((name, *i));
+            }
+        }
+    }
+
+    /// A callee's name as the programmer WROTE it.
+    ///
+    /// `mangle` gives a generic's instantiation a symbol like `add_one$Int`, and a reader who
+    /// typed `add_one(xs, 11)` should not be told about a name they have never seen. A no-op for
+    /// every ordinary function, since only `mangle` puts a `$` in a name.
+    fn declared_name(name: &str) -> &str {
+        name.split_once('$').map(|(declared, _)| declared).unwrap_or(name)
+    }
+
+    /// B25's refusal. B20's sentence with the CALL named as the cause instead of `push`,
+    /// because that is what the reader is looking at — the growth is in a body somewhere else.
+    fn growing_an_outer_binding(name: &str, open: &str, callee: &str) -> String {
+        format!(
+            "`{}` was declared outside `region {}`, so it cannot grow inside it — `{}` grows it, \
+             and the bytes are released at the closing brace, leaving `{}` reading whatever the \
+             region hands out next. Declare `{}` inside the region, or grow it outside it.",
+            name, open, callee, name, name
+        )
+    }
+
+    /// B21's refusal, one sentence for all three ways a value reaches an outer place.
+    ///
+    /// `part` is the word for what is being written — "field" or "element". The rest is the
+    /// whole-name refusal's voice, because it is the same rule: the reader who has met one of
+    /// these should not have to read the other to recognise it.
+    fn assigning_into_outer_region(name: &str, open: &str, part: &str) -> String {
+        format!(
+            "`{}` was declared outside `region {}`, so its {} cannot be assigned a value built \
+             inside it — the bytes are released at the closing brace and `{}` would read whatever \
+             the region hands out next. Declare `{}` inside the region, or build the value \
+             outside it.",
+            name, open, part, name, name
+        )
     }
 
     /// Does evaluating this expression produce region-allocated storage? Needed
@@ -3590,6 +3764,16 @@ impl TypeChecker {
         self.env.clear();
         self.current_params.clear();
         self.region_locals.clear();
+        // B25: which parameters a growth found in this body can be attributed to. Rebuilt per
+        // body rather than cleared once, because a stale map would credit this function's
+        // growth to whichever function was checked last.
+        self.current_writable_params.clear();
+        self.current_self_writable = false;
+        for (i, p) in f.parameters.iter().enumerate() {
+            if p.writable {
+                self.current_writable_params.insert(p.name.clone(), i);
+            }
+        }
         let mut parameters = Vec::new();
         for p in &f.parameters {
             if let Some(m) = p.marshal {
@@ -3778,6 +3962,10 @@ impl TypeChecker {
         let outer_receiver = self.current_receiver.replace(m.receiver.clone());
         self.env.clear();
         self.region_locals.clear();
+        // B25. A method may not declare a `mutable` parameter — only `mutable self` — so the
+        // map is empty here by construction and the receiver carries the whole question.
+        self.current_writable_params.clear();
+        self.current_self_writable = m.receiver_mut;
         self.env.insert(
             "self".to_string(),
             (Type::Named(m.receiver.clone()), m.receiver_mut),
@@ -4511,6 +4699,28 @@ impl TypeChecker {
                         typed.ty.article(), typed.ty, lvalue, cur_ty
                     ));
                 }
+                // B21. The rule the whole-name `Assign` arm has carried since v0.0.222, which
+                // was never extended to the three spellings that reach a place through a field
+                // or an index — so `region r { b.name = "hello-" + "world"; }` compiled clean and
+                // `b.name` afterwards read the next allocation's bytes. Not a weak check: there
+                // was none.
+                if self.expr_allocates(&typed) {
+                    // B25, and it is why this is no longer gated on a region being open: in
+                    // `function rename(mutable b: Box, tag: String) { b.name = "n-" + tag; }`
+                    // there IS no region, and the storage still lands in the caller's `b`.
+                    // Measured — the field spelling of B25 corrupted just as the `push` one did.
+                    self.record_param_growth(name);
+                    if self.current_region.is_some() {
+                        if let Some(open) = self.declared_outside_open_region(name) {
+                            return Err(Self::assigning_into_outer_region(name, &open, "field"));
+                        }
+                        // Declared INSIDE the region, so the store is fine — but the binding now
+                        // holds region storage, and `return b` has to be refused exactly as
+                        // `return b.name` already is. The whole-name arm records this; without
+                        // the same line here the taint is lost the moment it arrives via a field.
+                        self.region_locals.insert(name.clone());
+                    }
+                }
                 Ok(TypedStmt::AssignField { name: name.clone(), indices, value: typed })
             }
             StmtKind::AssignFieldIndex { name, path, index, value } => {
@@ -4558,6 +4768,16 @@ impl TypeChecker {
                         elem
                     ));
                 }
+                // B21, reached through a field AND an index: `g.items[0] = "a" + "b"`.
+                if self.expr_allocates(&typed) {
+                    self.record_param_growth(name);          // B25, same reason as the field arm
+                    if self.current_region.is_some() {
+                        if let Some(open) = self.declared_outside_open_region(name) {
+                            return Err(Self::assigning_into_outer_region(name, &open, "element"));
+                        }
+                        self.region_locals.insert(name.clone());
+                    }
+                }
                 Ok(TypedStmt::AssignFieldIndex {
                     name: name.clone(),
                     indices,
@@ -4601,6 +4821,16 @@ impl TypeChecker {
                         "cannot assign {} {} to `{}[...]`, which holds {}",
                         typed.ty.article(), typed.ty, name, elem
                     ));
+                }
+                // B21, reached through an index: `names[0] = "a" + "b"`.
+                if self.expr_allocates(&typed) {
+                    self.record_param_growth(name);          // B25, same reason as the field arm
+                    if self.current_region.is_some() {
+                        if let Some(open) = self.declared_outside_open_region(name) {
+                            return Err(Self::assigning_into_outer_region(name, &open, "element"));
+                        }
+                        self.region_locals.insert(name.clone());
+                    }
                 }
                 Ok(TypedStmt::AssignIndex { name: name.clone(), len, index, value: typed })
             }
@@ -5534,6 +5764,53 @@ impl TypeChecker {
                         }
                     };
                     self.require_mutable_place(&arguments[0])?;
+                    // B22: `push` ALLOCATES, and until v0.0.264 it never said so.
+                    //
+                    // `has_region` is the sole recorder — the probe credits the owning function
+                    // only when something in its body asks. `push` grows through
+                    // `build_alloc_array` + memcpy, which is `burxt.alloc`, and it never asked. So
+                    //
+                    //     function fill(mutable dst: [Int], n: Int) -> Int allocates nothing {
+                    //         while i < n { push(dst, i); i = i + 1; }
+                    //
+                    // was ACCEPTED with the claim intact: a signature saying "nothing" about a
+                    // function that allocates, which for a language whose case is that a reviewer
+                    // can trust what a signature says is worse than a crash. The direct form
+                    // `let mutable xs: [Int] = []; push(xs, n);` was caught, but only because the
+                    // `let` asks — so the hole was exactly "the storage came from the caller".
+                    //
+                    // Asked BEFORE the refusal below, because under probing this RECORDS, and a
+                    // body that gets refused must still be classed: the probe discards errors and
+                    // carries on, and a function credited only on the paths that typecheck would
+                    // make the inference depend on which round found what.
+                    let _ = self.has_region();
+                    // B20: growing a container declared outside the open region is a
+                    // use-after-free, and it was silent. `push` builds a FRESH buffer — the
+                    // arena's next bytes — and stores it into the binding; the region's closing
+                    // brace puts the bump pointer back, and the binding is left reading whatever
+                    // the region hands out next. Measured on v0.0.263: five pushes into an outer
+                    // `xs` inside a region, four into a later `ys`, and `xs[0]` printed 777.
+                    //
+                    // Same rule as whole-name assignment, asked about the RECEIVER rather than
+                    // the value: the value is irrelevant here, because it is the buffer that
+                    // moves into the region, not what is being appended.
+                    if let Some(root) = Self::place_root(&arguments[0]) {
+                        // B25's fact, recorded where the growth is: if this `push` grows one of
+                        // the enclosing function's `mutable` parameters, then calling that
+                        // function from inside a region grows the CALLER's binding, and the
+                        // call site is the only place that can see whose binding it is.
+                        self.record_param_growth(root);
+                        if let Some(open) = self.declared_outside_open_region(root) {
+                            return Err(format!(
+                                "`{}` was declared outside `region {}`, so it cannot grow inside \
+                                 it — `push` builds a new buffer in the region, and the bytes are \
+                                 released at the closing brace, leaving `{}` reading whatever the \
+                                 region hands out next. Declare `{}` inside the region, or grow \
+                                 it outside it.",
+                                root, open, root, root
+                            ));
+                        }
+                    }
                     let value = self.check_expr(&arguments[1], Some(&elem))?;
                     if !self.storable(&value.ty, &elem) {
                         return Err(format!(
@@ -6343,7 +6620,26 @@ impl TypeChecker {
                 }
                 let declared = self.extern_parameters.get(name).cloned();
                 // Which parameters were declared `mutable`. Empty for an extern, which has none.
-                let writable = self.fn_writable.get(name).cloned().unwrap_or_default();
+                let writable = self
+                    .fn_writable
+                    .get(name)
+                    // A generic INSTANTIATION is registered in pass 2b, which runs AFTER the
+                    // call sites that ask about it — so `add_one$Int` is absent from the map
+                    // while `add_one` is present, and the whole `mutable` branch below was
+                    // skipped for every generic call. Two things were silently missing because
+                    // of it: B25 one instantiation away (measured — `region r { add_one(xs, 11)
+                    // ... }` for an outer `xs` printed 777), and `require_mutable_argument`,
+                    // which let an immutable `let` binding be handed to a generic `mutable`
+                    // parameter and changed behind a reader who was told it could not be.
+                    //
+                    // Falling back to the generic's own vector is exact rather than an
+                    // approximation: `specialise` clones the declaration and substitutes only
+                    // TYPES, so an instantiation's parameters are writable exactly where the
+                    // generic's are. `$` cannot occur in a declared name — `mangle` is what
+                    // puts it there — so the split cannot collide with a real function.
+                    .or_else(|| name.split_once('$').and_then(|(g, _)| self.fn_writable.get(g)))
+                    .cloned()
+                    .unwrap_or_default();
                 let mut typed_args = Vec::new();
                 for (i, (argument, param_ty)) in arguments.iter().zip(&param_tys).enumerate() {
                     // A `mutable` parameter changes the CALLER's value, so the caller must have one
@@ -6353,7 +6649,26 @@ impl TypeChecker {
                     // home for the change to land in — the callee would modify a temporary and the
                     // program would look like it worked.
                     if writable.get(i).copied().unwrap_or(false) {
-                        self.require_mutable_argument(name, i, argument)?;
+                        self.require_mutable_argument(Self::declared_name(name), i, argument)?;
+                        // B25: the callee grows THIS parameter, so the growth is really a growth
+                        // of whatever the caller passed — and only here is it known whose
+                        // binding that is. Per index, so a `mutable` parameter the callee never
+                        // grows is unaffected.
+                        if self.grow_params.contains(&(name.clone(), i)) {
+                            if let Some(root) = Self::place_root(argument) {
+                                // Recorded BEFORE the refusal, so a body that gets refused is
+                                // still classed: the probe discards errors and carries on, and
+                                // this is the link that makes the fixpoint transitive.
+                                self.record_param_growth(root);
+                                if let Some(open) = self.declared_outside_open_region(root) {
+                                    return Err(Self::growing_an_outer_binding(
+                                        root,
+                                        &open,
+                                        &format!("{}(...)", Self::declared_name(name)),
+                                    ));
+                                }
+                            }
+                        }
                     }
                     let typed = self.check_expr(argument, Some(param_ty))?;
                     if !self.storable(&typed.ty, param_ty) {
@@ -6798,6 +7113,22 @@ impl TypeChecker {
                              allow it.",
                             method, name, name, receiver
                         ));
+                    }
+                    // B25 through `self`, which is the same hole and had to be measured rather
+                    // than assumed: `class Log { lines: [Int] }` with
+                    // `function (mutable self: Log) add(v: Int) { push(self.lines, v); }`, called
+                    // five times on an outer `l` inside a region, printed 777 for `l.lines[0]`.
+                    // A `mutable self` receiver is always a plain variable — the check just above
+                    // is what guarantees it — so the root is the name, with no place to walk.
+                    if self.grow_self.contains(&(receiver.clone(), method.clone())) {
+                        self.record_param_growth(name);
+                        if let Some(open) = self.declared_outside_open_region(name) {
+                            return Err(Self::growing_an_outer_binding(
+                                name,
+                                &open,
+                                &format!("{}.{}(...)", receiver, method),
+                            ));
+                        }
                     }
                 }
 

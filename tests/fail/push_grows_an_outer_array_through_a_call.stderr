@@ -1,0 +1,1 @@
+`xs` was declared outside `region r`, so it cannot grow inside it — `grow(...)` grows it, and the bytes are released at the closing brace, leaving `xs` reading whatever the region hands out next. Declare `xs` inside the region, or grow it outside it.

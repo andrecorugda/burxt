@@ -1,0 +1,17 @@
+// B25 — B20 one call away, and found only because B20's fix was probed with shapes its author
+// had never been shown. The receiver check saw `grow(xs, …)` rather than a `push` on `xs`, so
+// the growth was invisible to it: accepted, and `xs[0]` printed 777 instead of 11.
+//
+// The pattern is worth more than the bug. A `mutable` parameter is a hole in EVERY rule that
+// reasons about where a value is built, and there are two such rules — B22 was this same hole
+// in `allocates nothing`, and this is it in the escape rule. Both needed a fixpoint answering
+// "does this function grow, or store into, one of its `mutable` parameters?"
+function grow(mutable dst: [Int], v: Int) -> Int allocates {
+    push(dst, v);
+    return v;
+}
+let mutable xs: [Int] = [];
+region r {
+    let a: Int = grow(xs, 11);
+}
+print(xs[0]);

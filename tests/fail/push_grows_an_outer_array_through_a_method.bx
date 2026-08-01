@@ -1,0 +1,14 @@
+// B25, the method form. A method cannot grow its own field unless `self` is declared `mutable`
+// — the immutability rule already closes the ordinary case, which is why this needs the word to
+// be reachable at all. With it, the growth crosses the same boundary as the plain-function form
+// and the message names the method rather than the callee.
+class Bag { items: [Int] }
+function (mutable self: Bag) add(v: Int) -> Int allocates {
+    push(self.items, v);
+    return v;
+}
+let mutable bag: Bag = Bag { items: [] };
+region r {
+    let a: Int = bag.add(11);
+}
+print(bag.items[0]);
