@@ -1,0 +1,223 @@
+// lib/set.bx — `Set<T: Equatable>` over `Map<T, Bool>`, and the shape of the file was decided by
+// three measurements rather than by taste.
+//
+// **1. A free generic function cannot call a method on `Map<T, Bool>`.** `spec/ROADMAP-1.0.md` §D1g
+// says "over `Map<T, Bool>`" without saying whether that means a wrapper class or a naming
+// convention with `set_*` free functions. The second one does not compile: a free generic body is
+// checked ABSTRACTLY, so `T` never becomes a type and `Map<T, Bool>` never becomes a class with
+// methods. A generic METHOD's body is checked per instantiation, so everything here is a method and
+// `set_new` is the only free function — it gets away with it by containing no method call.
+//
+// **2. Copying a Set corrupts the original**, so union/intersect/difference cannot copy-then-mutate.
+// An array binding is a pointer and a length copied by value while the buffer is shared; measured on
+// a bare `Map` too, so it is the language's array semantics rather than anything this library did.
+// The three build a fresh Set with `add`, which is O(n) and correct.
+//
+// **3. A re-added element goes to the END.** `lib/map.bx`'s comment says `set` revives a tombstone
+// in place; that branch is unreachable, because `probe` walks past any entry that is not
+// `live && key == key`. So the guarantee is the clean one — an element's position is the position of
+// the `add` that most recently made it a member — and this fixture pins it.
+use "../../lib/set.bx";
+
+// The fixture prints orders, so it needs to render one. A loop over `items()`, which is what a
+// caller writes too — there is no `map` or `join` for arrays, deliberately.
+function show_ints(xs: [Int]) -> String allocates {
+    let mutable out: String = "";
+    for i in 0..len(xs) {
+        if i > 0 {
+            out = out + ",";
+        }
+        out = out + to_string(xs[i]);
+    }
+    return out;
+}
+
+function show_strings(xs: [String]) -> String allocates {
+    let mutable out: String = "";
+    for i in 0..len(xs) {
+        if i > 0 {
+            out = out + "|";
+        }
+        out = out + xs[i];
+    }
+    return out;
+}
+
+region main {
+    // ---- an empty set answers everything without a special case ----
+    let mutable empty: Set<Int> = set_new();
+    print(empty.count());
+    print(len(empty.items()));
+    print(empty.has(1));
+    print(show_ints(empty.items()));               // the empty string
+    // The empty set is a subset of everything, including itself. Falls out of a loop running zero
+    // times rather than being written down.
+    print(empty.is_subset_of(empty));
+    print(empty.equals(empty));
+    print(option_is_none(empty.take()));
+
+    // ---- add answers whether it was NEW, which is why a set beats a scan ----
+    let mutable s: Set<Int> = set_new();
+    print(s.add(30));
+    print(s.add(10));
+    print(s.add(30));                              // already there: false, and count does not move
+    print(s.count());
+    print(s.has(30));
+    print(s.has(99));
+    // Insertion order, NOT sorted and not hash order.
+    print(show_ints(s.items()));
+
+    // ---- add_all, the stand-in for the `set_from(xs)` that cannot be written ----
+    // Deduplicating a list is the reason most programs want a set, so this is the headline use.
+    let mutable seen: Set<Int> = set_new();
+    let fresh: Int = seen.add_all([3, 1, 4, 1, 5, 9, 2, 6, 5, 3]);
+    print(fresh);                                  // 7 distinct out of 10
+    print(seen.count());
+    print(show_ints(seen.items()));                // the input with repeats dropped, order kept
+
+    // ---- remove, and the ordering rule a reader would get wrong ----
+    let mutable order: Set<Int> = set_new();
+    let o1: Int = order.add_all([10, 20, 30, 40]);
+    print(show_ints(order.items()));
+    print(order.remove(20));
+    print(order.remove(20));                       // gone already: false
+    print(show_ints(order.items()));
+    // **Back at the END, not at its old position.** A tombstone is never revived, so this holds
+    // whether or not a rehash happened to intervene — the whole point of pinning it here.
+    print(order.add(20));
+    print(show_ints(order.items()));
+    print(order.count());
+
+    // ---- take: first in insertion order, which makes a Set a deterministic worklist ----
+    // "Some element" is the usual signature elsewhere and it makes a graph walk depend on a hash
+    // function, so the same program visits in a different order on a different build.
+    let mutable pending: Set<Int> = set_new();
+    let p1: Int = pending.add_all([7, 8, 9]);
+    print(option_or(pending.take(), 0 - 1));
+    print(option_or(pending.take(), 0 - 1));
+    print(option_or(pending.take(), 0 - 1));
+    print(option_is_none(pending.take()));         // drained
+    print(pending.count());
+
+    // A worklist that grows while it drains, which is the shape of every graph walk.
+    let mutable work: Set<Int> = set_new();
+    let w1: Bool = work.add(1);
+    let mutable visited: Int = 0;
+    let mutable guard: Int = 0;
+    while guard < 20 {
+        match work.take() {
+            None => { guard = 20; }
+            Some(job) => {
+                visited += 1;
+                if job < 4 {
+                    let a: Bool = work.add(job * 2);
+                    let b: Bool = work.add(job * 2 + 1);
+                }
+                guard += 1;
+            }
+        }
+    }
+    print(visited);
+
+    // ---- the algebra: a NEW Set each time, and both operands survive ----
+    let mutable a: Set<Int> = set_new();
+    let a1: Int = a.add_all([1, 2, 3, 4]);
+    let mutable b: Set<Int> = set_new();
+    let b1: Int = b.add_all([3, 4, 5]);
+
+    // This set's members in this set's order, then other's new ones in other's order.
+    print(show_ints(a.union(b).items()));
+    print(show_ints(b.union(a).items()));          // same members, different order — stated, not hidden
+    print(a.union(b).count());
+    print(show_ints(a.intersect(b).items()));
+    print(show_ints(b.intersect(a).items()));
+    print(show_ints(a.difference(b).items()));
+    print(show_ints(b.difference(a).items()));     // not symmetric, which the name says
+    // Neither operand changed. No `mutable` in those signatures, and this is the check that says so.
+    print(show_ints(a.items()));
+    print(show_ints(b.items()));
+    print(to_string(a.count()) + " " + to_string(b.count()));
+
+    // Union with the empty set, and a set with itself.
+    print(show_ints(a.union(empty).items()));
+    print(show_ints(a.intersect(empty).items()));
+    print(show_ints(a.difference(empty).items()));
+    print(show_ints(a.difference(a).items()));     // empty
+    print(a.union(a).count());
+
+    // ---- subset and equality ----
+    let mutable small: Set<Int> = set_new();
+    let s1: Int = small.add_all([3, 1]);
+    print(small.is_subset_of(a));
+    print(a.is_subset_of(small));
+    print(small.is_subset_of(small));
+    print(empty.is_subset_of(a));
+    print(a.is_subset_of(empty));
+
+    // Equal members in a DIFFERENT insertion order are equal. This is why `equals` exists: `==` on
+    // a Set is refused by the compiler, because `Map.entries` is a growable array and equality on
+    // one is an undecided question — and set equality is not field equality anyway.
+    let mutable forwards: Set<Int> = set_new();
+    let f1: Int = forwards.add_all([1, 2, 3]);
+    let mutable backwards: Set<Int> = set_new();
+    let f2: Int = backwards.add_all([3, 2, 1]);
+    print(show_ints(forwards.items()));
+    print(show_ints(backwards.items()));
+    print(forwards.equals(backwards));
+    print(backwards.equals(forwards));
+    print(forwards.equals(a));                     // different counts
+    print(a.equals(forwards));
+    // The identity every set algebra has to satisfy: a == (a-b) union (a intersect b).
+    print(a.equals(a.difference(b).union(a.intersect(b))));
+
+    // ---- a Set of Strings, so T is not always Int ----
+    let mutable names: Set<String> = set_new();
+    let n1: Int = names.add_all(["gasket", "widget", "gasket", "flange"]);
+    print(n1);
+    print(show_strings(names.items()));
+    print(names.has("widget"));
+    print(names.has("sprocket"));
+    print(names.remove("widget"));
+    print(show_strings(names.items()));
+    let mutable stock: Set<String> = set_new();
+    let n2: Int = stock.add_all(["flange", "sprocket"]);
+    print(show_strings(names.intersect(stock).items()));
+    print(show_strings(names.difference(stock).items()));
+    print(show_strings(names.union(stock).items()));
+
+    // ---- growth past the initial slot table, so a rehash is exercised ----
+    // The map starts at 8 slots and grows when more than half full, so 40 members means several
+    // rehashes — and insertion order has to survive every one of them.
+    let mutable many: Set<Int> = set_new();
+    for i in 0..40 {
+        let added: Bool = many.add(i * 7);
+    }
+    print(many.count());
+    print(many.items()[0]);
+    print(many.items()[39]);
+    print(many.has(7 * 39));
+    print(many.has(7 * 40));
+    // Every member still findable after all that growth, and the order still the insertion one.
+    let mutable all_found: Bool = true;
+    let mutable in_order: Bool = true;
+    let listed: [Int] = many.items();
+    for i in 0..40 {
+        if !many.has(i * 7) {
+            all_found = false;
+        }
+        if listed[i] != i * 7 {
+            in_order = false;
+        }
+    }
+    print(all_found);
+    print(in_order);
+    // Removing half leaves the other half findable and in order — tombstones must not shift anyone.
+    for i in 0..20 {
+        let gone: Bool = many.remove(i * 14);
+    }
+    print(many.count());
+    print(show_ints(many.items()));
+    print(many.items()[0]);
+    print(many.has(0));
+    print(many.has(7));
+}

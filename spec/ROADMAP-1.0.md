@@ -578,7 +578,7 @@ is O(n²) and this project has paid for that three times (v0.0.68, v0.0.77, v0.0
 | D1d | **`lib/string.bx`** parse & format | `parse_int_base` · `parse_hex` · `int_to_base` · `int_to_hex` · `int_to_binary` · `int_padded` · `int_grouped` · **`parse_decimal`** *(per scale)* · `decimal_padded` |
 | D1e | **`lib/array.bx`** | **`slice`** · `copy` · `concat` · `insert_at` · `remove_value` · `count_of` · `last_index_of` · `binary_search` · `equals` · `dedup` · `product_int` · `repeat` · `take` · `drop` · `pop` *(precondition form)* · `rotate` · **a faster stable sort** |
 | D1f | **`lib/map.bx`** | **`values()`** · **`entries()`** · `clear()` · `merge()` · `take()` · `is_empty()` · `map_increment` · `map_from` |
-| D1g | **`lib/set.bx`** *(new)* | `Set<T: Equatable>` over `Map<T, Bool>` — `add` · `has` · `remove` · `count` · `items` · `union` · `intersect` · `difference`. **Every comparison language ships one; Burxt has none** |
+| ~~D1g~~ | ~~**`lib/set.bx`**~~ **DONE v0.0.251** — 367 lines, `class Set<T: Equatable>` over `Map<T, Bool>` with `add`, `add_all`, `has`, `remove`, `take`, `count`, `items`, `is_subset_of`, `equals`, `union`, `intersect`, `difference`. **`take() -> Option<T>` is the §D2a item, and it was unwritable this morning** — an Option-returning generic needed A3, which landed hours earlier. Reads under both compilers |
 | ~~D1h~~ | ~~**`lib/math.bx`**~~ **DONE v0.0.249** — 528 lines, 24 declarations, `INT_MAX`/`INT_MIN` as folded consts, and all three `checked_*` are `pure`. **The overflow ORDER is the design:** Burxt's `+` traps, so `checked_add` cannot compute-then-test — it asks `math_add_overflows` first, which is why those three predicates exist as public functions rather than hiding inside. Measured: `checked_add(INT_MAX, 1)` answers None without crashing, `isqrt(15)` is 3 and `isqrt(16)` is 4 exactly. Reads under both compilers |
 | D1i | **Decimal helpers** | per-scale `abs` · `min` · `max` · `is_zero` · `percent_of` · `round_to` · **`money_split`** — largest-remainder penny allocation, *the* canonical exact-money problem, and absent |
 | D1j | **`lib/time.bx`** *(new)* | civil date ↔ unix seconds · ISO-8601 format + parse · `Duration` · day/second arithmetic · `weekday` · `is_leap_year` · `days_in_month`. **UTC only, said so.** Monotonic and sub-second need A7 |
@@ -597,7 +597,7 @@ is O(n²) and this project has paid for that three times (v0.0.68, v0.0.77, v0.0
 
 | # | Item | Needs |
 |---|---|---|
-| D2a | `array_pop<T> -> Option<T>` · generic `Set` · `map.take` · `option_ok_or` | A3 |
+| ~~D2a~~ | ~~`array_pop<T> -> Option<T>` · generic `Set` · `map.take` · `option_ok_or`~~ **A3 UNBLOCKED v0.0.241 and the payoff is cashed:** `array_pop<T>` measured working in both compilers, and `lib/set.bx`'s `take() -> Option<T>` shipped v0.0.251 — a generic Set with an Option-returning method, which is the whole row | ~~A3~~ done |
 | D2b | Codepoint-correct `string_reverse`, case handling, char indexing, JSON `\u` | A5 |
 | D2c | `zip` · `enumerate` · `char_indices` · `split_at` · `divmod` | A8 |
 | D2d | `map` · `filter` · `fold` · `any` · `all` · `sort_by` · `retain` · `partition` · `position` | A9 or A10 |
