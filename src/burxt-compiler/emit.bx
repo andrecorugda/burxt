@@ -56,10 +56,24 @@ function (mutable self: Unit) write_body(text: String) -> Int {
 // one would be discarded when the first function opened.
 // The module's text, in CHUNKS of 512 bytes.
 //
-// The number is a balance, and it is worth the arithmetic. With A appends into a buffer that
-// is flushed at T bytes, the copying is about A x T/2; joining the N/T chunks pairwise costs
-// N per round for log2(N/T) rounds. Emitting this compiler is A ~ 300,000 and N ~ 1.5 MB, so
-// T = 4096 spent about 600 MB and ran the region out; T = 512 spends about 95 MB.
+// The arithmetic is right: with A appends into a buffer flushed at T bytes, the copying is
+// about A x T/2, and joining the N/T chunks pairwise costs N per round for log2(N/T) rounds.
+//
+// **But the measurement that used to sit here was wrong, and it was wrong in the way that
+// costs most — a real number attributed to the wrong cause.** It said *"T = 4096 spent about
+// 600 MB and ran the region out; T = 512 spends about 95 MB."* Swept 64 -> 4096, the total
+// moves by **3 MB** (182.0 / 182.2 / 182.3 / 180.6 / 185.0). This threshold is very nearly
+// inert, because `close_function` already hands this function 512-byte pieces, so its appends
+// are coarse and the flush almost never fires mid-piece.
+//
+// That 600 MB was **B29** — `self.globals`, a flat String appended once per string literal and
+// quadratic in the literal count — being blamed on the nearest constant. It was measured
+// honestly, written down confidently, and then reasoned from for many versions, including as
+// evidence that only a large architectural change could reduce this compiler's memory. Chunking
+// `globals` took peak RSS from 1,132 MB to 178.
+//
+// The tuning that DOES matter is `write_body`'s, which is a different function with fine-grained
+// appends: 512 -> 128 there was worth 9 MB. Keep the number here; delete the claim.
 // `a += b` copies the whole left side, so appending
 // fifty thousand times to one growing String copies gigabytes — which is exactly how
 // this compiler first exhausted its region while emitting its own source. Chunks bound
@@ -352,6 +366,40 @@ function (self: Unit) find_slot(src: String, start: Int, length: Int) -> Int {
 // Every byte as a hex escape. LLVM accepts c"\68\69\00", and emitting only escapes
 // means no byte needs a character to stand for it — which matters in a language whose
 // own `to_string` answers with digits, not letters.
+// Join a chunk list into one String by repeated PAIRWISE merging — the same shape
+// `finish` and `finish_globals` use, and for the same reason: folding left rebuilds the
+// whole prefix on every step, which is the quadratic this exists to avoid.
+//
+// **B30.** Both string-interning loops built their hex escape with `body += hex_of(...)`,
+// one byte at a time. That is quadratic in a SINGLE literal's length: 2,000 bytes cost
+// 14 MB, 4,000 cost 32 MB, and 8,000 cost **103 MB for one literal**. It went unseen
+// because the compiler's own longest literal is 223 bytes — but a user program embedding
+// a 10 KB SQL schema, HTML template or JSON fixture pays about 150 MB for it, and a
+// program that embeds one is what a real application looks like.
+//
+// Same defect as B29, one level down, and found while attributing that one. B29 only ever
+// hurt this repository; this one is a cliff under anybody's feet.
+function join_chunks(chunks: [String]) -> String {
+    if len(chunks) == 0 {
+        return "";
+    }
+    let mutable joined: [String] = chunks;
+    while len(joined) > 1 {
+        let mutable merged: [String] = [];
+        let mutable i: Int = 0;
+        while i + 1 < len(joined) {
+            let pair: String = joined[i] + joined[i + 1];
+            push(merged, pair);
+            i += 2;
+        }
+        if i < len(joined) {
+            push(merged, joined[i]);
+        }
+        joined = merged;
+    }
+    return joined[0];
+}
+
 function hex_of(value: Int) -> String {
     let digits: String = "0123456789abcdef";
     return "\\" + substring(digits, divide_floor(value, 16), 1)
@@ -370,12 +418,21 @@ function (mutable self: Unit) intern_text(text: String) -> String {
     // interning cost the square of the literal's length — the same shape that made the
     // lexer quadratic. See at_byte in ast.bx.
     let width: Int = len(text);
+    let mutable pieces: [String] = [];
     let mutable body: String = "";
     let mutable i: Int = 0;
     while i < width {
         body += hex_of(byte_at(text, i));
+        if len(body) > 128 {
+            push(pieces, body);
+            body = "";
+        }
         i += 1;
     }
+    if len(body) > 0 {
+        push(pieces, body);
+    }
+    body = join_chunks(pieces);
     // `{ i64 length, [n+1 x i8] bytes }`, and the operand answered is a GEP past the header, so a
     // literal looks exactly like a region-built String to everything downstream. Without the header
     // `len("hello")` would read whatever the linker placed before the bytes.
@@ -410,6 +467,7 @@ function power_of_ten(scale: Int) -> Int {
 function (mutable self: Unit) intern(src: String, start: Int, length: Int) -> String {
     let name: String = "@burxt.s" + to_string(len(self.strings));
     push(self.strings, start);
+    let mutable pieces: [String] = [];
     let mutable body: String = "";
     let mutable count: Int = 0;
     let mutable i: Int = 0;
@@ -430,7 +488,15 @@ function (mutable self: Unit) intern(src: String, start: Int, length: Int) -> St
             count += 1;
             i += 1;
         }
+        if len(body) > 128 {
+            push(pieces, body);
+            body = "";
+        }
     }
+    if len(body) > 0 {
+        push(pieces, body);
+    }
+    body = join_chunks(pieces);
     let shape: String = "\{ i64, [" + to_string(count + 1) + " x i8] \}";
     let wrote_global: Int = self.write_globals(name + " = private unnamed_addr constant " + shape + " \{ i64 "
         + to_string(count) + ", [" + to_string(count + 1) + " x i8] c\"" + body + hex_of(0)
