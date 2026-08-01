@@ -1,0 +1,233 @@
+// lib/time.bx — dates and durations in whole seconds, UTC only, exact integer arithmetic.
+//
+// `os_now()` answered seconds since 1970 and nothing else, so a Burxt program could tell you the time
+// was 1785312000 and could not tell you it was a Saturday. §D1j is that gap, and *"time + date +
+// randomness"* is one of the four must-ships for 1.0.
+//
+// **The three limits, all of them named rather than approximated:**
+//
+//   1. **UTC only.** No timezone parameter and no local time — `DESIGN.md` committed to
+//      *"timezone-explicit or not at all"*. So `time_parse_iso` REFUSES an offset rather than
+//      reading `+05:00` as UTC, which would be wrong by five hours while looking right.
+//   2. **Whole seconds.** Sub-second and monotonic time need `clock_gettime`, which needs A7
+//      integer widths. Nothing here pretends to precision it does not have.
+//   3. **No leap seconds**, because unix time has none: a day is always exactly 86400 seconds.
+//      2016-12-31T23:59:60Z is a real UTC second with no unix representation at all.
+//
+// The calendar conversion is **Howard Hinnant's** exact-integer pair — no table, no loop, no float,
+// proleptic Gregorian. Burxt makes it shorter than the C++: Hinnant computes the era as
+// `(y >= 0 ? y : y-399) / 400` purely to make truncating `/` behave like floor, and Burxt's
+// `divide_floor` IS that operation, so both sign-correction hacks disappear.
+use "../../lib/time.bx";
+
+region main {
+    // ---- 1970-01-01, day zero in both directions ----
+    let epoch: DateTime = time_from_unix(0);
+    print(time_format_iso(epoch));
+    print(to_string(epoch.year) + " " + to_string(epoch.month) + " " + to_string(epoch.day));
+    print(time_to_unix(epoch));
+    print(time_weekday(epoch));                    // 4 — the epoch was a Thursday
+    print(time_day_of_year(epoch));
+
+    // ---- BEFORE 1970, which is where a naive implementation is wrong by a day ----
+    // -1 second is the last second of 1969, not 1970 minus one second. `divide_floor` and a floor
+    // modulo are what get this right; truncating division answers day 0 and second -1, which is an
+    // impossible time on the wrong date.
+    print(time_format_iso(time_from_unix(0 - 1)));
+    print(time_format_iso(time_from_unix(0 - 86400)));
+    print(time_format_iso(time_from_unix(0 - 86401)));
+    let before: DateTime = time_from_unix((0 - 446751900));
+    print(time_format_iso(before));
+    print(time_to_unix(before) == (0 - 446751900));
+    print(time_weekday(before));
+    // A date of birth, which is the first thing anyone asks a date library for.
+    print(option_or(time_parse_unix("1969-07-20T20:17:40Z"), 0) == (0 - 14182940));
+    print(time_format_iso(time_from_unix((0 - 14182940))));
+
+    // ---- the Feb 28 / Feb 29 boundary, in a leap year and a common one ----
+    print(time_is_leap_year(2024));
+    print(time_is_leap_year(2023));
+    print(time_days_in_month(2024, 2));
+    print(time_days_in_month(2023, 2));
+    // 2024 is a leap year, so 29 February exists and the day after is 1 March.
+    print(time_format_date(time_from_unix(1709164800)));
+    print(time_format_date(time_from_unix(1709164800 + 86400)));
+    print(time_day_of_year(time_from_unix(1709251200)));
+    // 2023 is not, so 28 February is followed by 1 March.
+    print(time_format_date(time_from_unix(1677542400)));
+    print(time_format_date(time_from_unix(1677542400 + 86400)));
+    print(time_day_of_year(time_from_unix(1677628800)));
+    // And 2023-02-29 does not exist: it parses as digits and is then REFUSED, rather than being
+    // helpfully normalised to 1 March. A parser that normalises is one that accepts a typo.
+    print(option_is_none(time_parse_iso("2023-02-29")));
+    print(option_is_some(time_parse_iso("2024-02-29")));
+
+    // ---- the century rule, which is where 1900 and 2100 catch a wrong implementation ----
+    // Divisible by 4 but not a leap year, because they are centuries that are not divisible by 400.
+    print(time_is_leap_year(1900));
+    print(time_is_leap_year(2100));
+    print(time_is_leap_year(2000));                // divisible by 400, so it IS
+    print(time_is_leap_year(1600));
+    print(time_days_in_month(1900, 2));
+    print(time_days_in_month(2000, 2));
+    print(time_format_date(time_from_unix((0 - 2203977600) + 86400)));   // 1900-03-01, no 29th
+    print(time_format_date(time_from_unix(951782400 + 86400)));   // 2000-03-01, after a real 29th
+
+    // ---- negative years, where a truncating remainder gets the leap rule backwards ----
+    print(time_is_leap_year(0));                   // year 0 is divisible by 400
+    print(time_is_leap_year(0 - 1));
+    print(time_is_leap_year(0 - 4));               // -4 IS a leap year
+    print(time_is_leap_year(0 - 100));
+    print(time_is_leap_year(0 - 400));
+    print(time_days_in_month(0 - 4, 2));
+
+    // ---- the calendar round trip, over consecutive days including negative ones ----
+    // Hinnant both ways: days -> civil -> days must be the identity everywhere, and the interesting
+    // region is around day 0 where the era arithmetic changes sign.
+    let mutable exact: Bool = true;
+    for i in 0..2000 {
+        let day: Int = i - 1000;
+        let civil: DateTime = time_civil_from_days(day);
+        if time_days_from_civil(civil.year, civil.month, civil.day) != day {
+            exact = false;
+        }
+    }
+    print(exact);
+    // And the seconds round trip across a day boundary in both directions.
+    let mutable seconds_exact: Bool = true;
+    for i in 0..4000 {
+        let at: Int = i - 2000;
+        if time_to_unix(time_from_unix(at)) != at {
+            seconds_exact = false;
+        }
+    }
+    print(seconds_exact);
+    // Day 0 is the epoch, and 146097 days is exactly one 400-year Gregorian era.
+    print(time_days_from_civil(1970, 1, 1));
+    print(time_format_date(time_civil_from_days(146097)));
+    print(time_days_from_civil(2370, 1, 1) - time_days_from_civil(1970, 1, 1));
+
+    // ---- weekday, against dates whose day everyone knows ----
+    print(time_weekday(time_from_unix((0 - 14182940))));           // 1969-07-20 was a Sunday: 7
+    print(time_weekday(time_from_unix(946684800)));            // 2000-01-01 was a Saturday: 6
+    print(time_weekday(time_from_unix(1785587696)));            // 2026-08-01 is a Saturday: 6
+    // Seven consecutive days cover every weekday exactly once, ending back where they started.
+    let mutable week: String = "";
+    for i in 0..8 {
+        week = week + to_string(time_weekday(time_from_unix(1785587696 + i * 86400)));
+    }
+    print(week);
+
+    // ---- ISO-8601 formatting, zero-padded and always Z ----
+    print(time_format_iso(time_from_unix(1785587696)));
+    print(time_format_date(time_from_unix(1785587696)));
+    // Years below 1000 are padded to four digits, which `strftime("%Y")` on glibc does NOT do —
+    // found while checking this fixture against a reference that was the one getting it wrong.
+    print(time_format_iso(time_from_unix((0 - 62135596800))));
+    print(time_format_date(time_from_unix((0 - 62135596800))));
+    print(time_format_iso(time_from_unix(253402300799)));     // 9999-12-31T23:59:59Z, the format edge
+    print(time_pad(7, 2));
+    print(time_pad(7, 4));
+    print(time_pad(12345, 4));                     // NOT truncated to four digits
+
+    // ---- ISO-8601 parsing: Option, and every refusal is a decision ----
+    print(option_or(time_parse_unix("1970-01-01T00:00:00Z"), 0 - 1));
+    print(option_or(time_parse_unix("2026-08-01T12:34:56Z"), 0 - 1));
+    let parsed: DateTime = option_or(time_parse_iso("2026-08-01T12:34:56Z"),
+                                     time_from_unix(0));
+    print(to_string(parsed.hour) + ":" + to_string(parsed.minute) + ":" + to_string(parsed.second));
+    // The date-only form, which a CSV column usually holds. Midnight is implied.
+    print(time_format_iso(option_or(time_parse_iso("2026-08-01"), time_from_unix(0))));
+    // **An OFFSET is refused.** The single most important None here: reading +05:00 as UTC would be
+    // wrong by five hours and look right, and converting it needs timezone arithmetic that is not
+    // in this module by decision.
+    print(option_is_none(time_parse_iso("2026-08-01T12:34:56+05:00")));
+    print(option_is_none(time_parse_iso("2026-08-01T12:34:56-05:00")));
+    // A fractional part is refused rather than silently dropped — see limit 2.
+    print(option_is_none(time_parse_iso("2026-08-01T12:34:56.500Z")));
+    // Lower case, a space for the T, and an unpadded field: one spelling per concept.
+    print(option_is_none(time_parse_iso("2026-08-01t12:34:56Z")));
+    print(option_is_none(time_parse_iso("2026-08-01T12:34:56z")));
+    print(option_is_none(time_parse_iso("2026-08-01 12:34:56Z")));
+    print(option_is_none(time_parse_iso("2026-8-1")));
+    print(option_is_none(time_parse_iso("20260801T123456Z")));
+    // Out-of-range fields, each refused rather than wrapped into the next unit.
+    print(option_is_none(time_parse_iso("2026-13-01")));
+    print(option_is_none(time_parse_iso("2026-00-01")));
+    print(option_is_none(time_parse_iso("2026-08-32")));
+    print(option_is_none(time_parse_iso("2026-08-01T24:00:00Z")));
+    print(option_is_none(time_parse_iso("2026-08-01T12:60:00Z")));
+    // Second 60 is a leap second — a real UTC second with no unix representation. See limit 3.
+    print(option_is_none(time_parse_iso("2026-08-01T12:34:60Z")));
+    print(option_is_none(time_parse_iso("")));
+    print(option_is_none(time_parse_iso("not-a-date")));
+    print(option_is_none(time_parse_iso("2026/08/01")));
+    // Everything that formats, parses back to the same instant.
+    let mutable round_trips: Bool = true;
+    for i in 0..500 {
+        let at: Int = 1785587696 + i * 97001;
+        if option_or(time_parse_unix(time_format_iso(time_from_unix(at))), 0 - 1) != at {
+            round_trips = false;
+        }
+    }
+    print(round_trips);
+
+    // ---- durations: the unit is in the constructor's name ----
+    print(duration_total_seconds(duration_hours(3)));
+    print(duration_total_seconds(duration_days(1)));
+    print(duration_total_minutes(duration_hours(2)));
+    print(duration_total_hours(duration_days(2)));
+    print(duration_total_days(duration_hours(47)));          // floor, so 1
+    // A duration may be NEGATIVE, and the whole-unit answers round toward negative infinity so that
+    // one more second never means fewer minutes.
+    print(duration_total_minutes(duration_seconds(0 - 90)));
+    print(duration_total_minutes(duration_seconds(90)));
+    print(duration_total_days(duration_seconds(0 - 1)));
+    // Adding a duration to an instant. `time_add` cannot be handed a second TIMESTAMP, because a
+    // timestamp is not a Duration — that is the whole reason Duration is a class.
+    print(time_format_iso(time_from_unix(time_add(1785587696, duration_days(1)))));
+    print(time_format_iso(time_from_unix(time_add(1785587696, duration_hours(0 - 12)))));
+    // A leap day crossed by adding a year of days: 2024-02-28 plus one day is the 29th.
+    print(time_format_date(time_from_unix(time_add(1709078400, duration_days(1)))));
+    print(time_format_date(time_from_unix(time_add(1677542400, duration_days(1)))));
+    // Between, which is directed: negative when the second argument is earlier.
+    print(duration_total_days(time_between(1709078400, 1709251200)));
+    print(duration_total_days(time_between(1709251200, 1709078400)));
+    print(duration_total_seconds(time_between(1785587696, 1785587696)));
+    // 2024 had 366 days, 2023 had 365 — measured through the duration API rather than asserted.
+    print(duration_total_days(time_between(1704067200, 1735689600)));
+    print(duration_total_days(time_between(1672531200, 1704067200)));
+
+    // ---- the representable range, and that it refuses rather than wraps ----
+    // These two consts are computed, not chosen: the years every one of whose dates fits in Int
+    // seconds. A conversion inside the range cannot overflow; outside it, `time_is_valid` is false
+    // and `time_to_unix`'s contract stops the program instead of answering a wrapped date.
+    print(TIME_MIN_YEAR);
+    print(TIME_MAX_YEAR);
+    print(time_is_valid(DateTime { year: TIME_MAX_YEAR, month: 12, day: 31,
+                                   hour: 23, minute: 59, second: 59 }));
+    print(time_is_valid(DateTime { year: TIME_MAX_YEAR + 1, month: 1, day: 1,
+                                   hour: 0, minute: 0, second: 0 }));
+    print(time_is_valid(DateTime { year: TIME_MIN_YEAR, month: 1, day: 1,
+                                   hour: 0, minute: 0, second: 0 }));
+    print(time_is_valid(DateTime { year: TIME_MIN_YEAR - 1, month: 12, day: 31,
+                                   hour: 0, minute: 0, second: 0 }));
+    // `time_from_unix` is TOTAL — every Int is an instant, including the extremes.
+    print(time_from_unix(INT_MAX).year);
+    print(time_from_unix(INT_MIN).year);
+    print(time_from_unix(INT_MAX).second);
+    // Validity, field by field.
+    print(time_is_valid(DateTime { year: 2024, month: 2, day: 29, hour: 0, minute: 0, second: 0 }));
+    print(time_is_valid(DateTime { year: 2023, month: 2, day: 29, hour: 0, minute: 0, second: 0 }));
+    print(time_is_valid(DateTime { year: 2024, month: 0, day: 1, hour: 0, minute: 0, second: 0 }));
+    print(time_is_valid(DateTime { year: 2024, month: 1, day: 1, hour: 24, minute: 0, second: 0 }));
+    print(time_is_valid(DateTime { year: 2024, month: 1, day: 1, hour: 0, minute: 0, second: 60 }));
+
+    // ---- SECONDS_PER_DAY is exact, which is limit 3 restated as arithmetic ----
+    print(SECONDS_PER_DAY);
+    print(SECONDS_PER_DAY == SECONDS_PER_HOUR * 24);
+    print(SECONDS_PER_HOUR == SECONDS_PER_MINUTE * 60);
+    // Every day in a leap year is 86400 seconds, including the leap DAY. A leap SECOND would break
+    // this and unix time has none.
+    print(time_between(1709164800, 1709164800 + 86400).seconds == SECONDS_PER_DAY);
+}
