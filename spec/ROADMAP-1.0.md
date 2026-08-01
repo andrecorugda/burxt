@@ -491,7 +491,7 @@ A5, nothing named as a limit.
 | ~~A4~~ | ~~**`pure` on a method / `pure` returning an Option**~~ **DONE v0.0.248, and the two halves were ONE branch.** A variant constructor `Enum.Variant(x)` PARSES as a method call and is told apart inside the method-call branch — but the blanket *"a pure function may not call a method"* refusal sat at the TOP of that branch, before anything checked whether the receiver was an enum. **So a constructor was refused for being SHAPED like a method call**, and one removal fixed both items. `lib/array.bx`'s comment had named that mechanism exactly, years before anyone acted on it. **The row also understated the payoff:** `typeck.rs` has always checked a method's clauses with `in_pure` set, so `requires self.sum() > 0` was already asking whether `sum` is pure and being refused by the blanket branch — the whole second half of the item is that the answer can now be yes | — |
 | A5 | **`.chars()` / codepoint iteration** — A4.4's one remaining gap | M | The whole UTF-8 layer: correct case handling · a `string_reverse` that does not corrupt · char indexing · `\uXXXX` in JSON · `is_valid_utf8` |
 | ~~A6~~ | ~~**`for i in 0..n`**~~ **DONE v0.0.245**, both compilers, ten fail fixtures, all refused by both. **Exclusive only, and no inclusive form** — three reasons: `0..len(xs)` is the same bound `while i < len(xs)` already writes, half-open ranges tile with no gap (which is why `substring(s, from, LENGTH)` is half-open too), and two forms one character apart where that character changes the iteration count is precisely what a reviewer's eye slides over. Cost named: `0..n + 1` shows a visible `+ 1` rather than an invisible `=`. **`for`-only, not a value** — a range as a value wants an iterator protocol (A11) and half of one is worse than waiting. **Reversed LITERALS refused, reversed computed bounds run zero times**, because `for i in 0..len(xs)` over an empty array is correct code that must not trap | — |
-| A7 | **Integer widths** `i32`/`u8`/`u32`/`u64` | M | C structs (`dirent.d_name`) · fixed-width records → N9 row 6 · `clock_gettime` → **monotonic and sub-second time**, so benchmarking and timeouts · binary formats · A4.4's deferred **Bytes type** |
+| A7 | **Integer widths** `i32`/`u8`/`u32`/`u64` — **DESIGN SETTLED v0.0.252, build deliberately stopped and reverted; see §A7d** | M→**L** | C structs (`dirent.d_name`) · fixed-width records → N9 row 6 · `clock_gettime` → **monotonic and sub-second time**, so benchmarking and timeouts · binary formats · A4.4's deferred **Bytes type** |
 | A8 | **Tuples** | M | `zip` · `enumerate` · `char_indices` · `split_at` · `divmod` · `split_once` without inventing a record |
 | A9 | **Generic interfaces** — the cheap alternative to closures. `dynamic Trait` is already a function value in all but name; interfaces simply cannot take type parameters. **On no roadmap — needs an explicit yes/no, because YES may replace A10** | M | `sort_by` · predicates · visitors · most of `map`/`filter`, in a form consistent with the no-closures decision |
 | A10 | **Closures / function values** — or A9 instead of it | **L** | `map`/`filter`/`fold`/`any`/`all`/`retain`/`partition`/`position` across four libraries **at once** · `signal()`, so a server can shut down cleanly |
@@ -530,6 +530,50 @@ any other user on the machine can read it.
 > the generator **compiles**, so the page is verified rather than remembered.
 
 ---
+
+### A7d — the integer-widths design, settled before it was built (v0.0.252)
+
+An agent built representation, lexing and parsing end to end — `external function abs(n: i32) -> i32;`
+lexed, parsed and reached the extern boundary check, clean under `-D warnings` — and then **reverted all
+five files** rather than hand over a 30%-applied twelve-file change with codegen in it. Its own reason
+is the best statement of why: *"that is exactly how today's two 'rules that compiled and enforced
+nothing' happened."*
+
+**The size estimate was wrong, and the reason generalises to this whole document.** Adding four type
+keywords broke `editor_grammar_knows_every_keyword_the_compiler_does`; fixing that broke
+`the_packaged_extension_matches_the_grammar_in_the_repository` and `the_reference_is_not_stale`. **Three
+files nobody named** — because `M10` §2e is a rule (*a change to the language is not finished until the
+highlighter, the language server and the packaged extension have changed with it*) and no estimate here
+accounts for it. **Any row that adds a KEYWORD is three files larger than it looks.**
+
+**The representation is the part worth keeping.** ONE variant — `Type::Width { bits: u32, signed: bool }`
+— not four. `u8` versus `u32` is two numbers, and no `match` arm cares about the spelling: `llvm_type`
+wants the bit count, the range check wants the bounds. `Decimal { scale, rounding }` is the precedent.
+With `-D warnings` the compiler then NAMED every site needing an arm: **three, all in `codegen.rs`**
+(`payload_cells`, `llvm_type`, `gen_print_value`). Four variants would have been four arms in each.
+
+**Boundary-only keeps it inside the compiler, and that is measured.** `CInt` is already refused by name
+in a `let`, a parameter and a class field — *"CInt only exists at the C boundary (external function
+signatures) — use Int in Burxt code; values convert at the call."* So a width can never reach the layout
+walk, which is why `layout.bx`, `layout_of`, `review` and the LSP need no arm at all.
+
+**Trap at RUNTIME per width — settled by a fixture rather than by taste.**
+`tests/panic/cint_range.stderr` PINS CInt's runtime trap, so adding a compile-time refusal for an
+out-of-range literal would change CInt's existing contract. A literal check would be strictly better and
+is a **separate decision**, not something to smuggle in beside this one.
+
+**`u64` is a real limit and must be NAMED, not pretended.** `Int` is a signed i64, so a `u64` above
+`INT_MAX` has no Int to land in. The honest shape: the range check's upper bound for `u64` is the SIGNED
+maximum, and the message says so rather than claiming a range the language cannot hold.
+
+**`review` needs no change, and why it differs from A4 is the reusable part.** A parameter going `CInt`
+→ `u8` changes `Promise.shape`, which `review` renders from the Type's `Display`, so a width is carried
+already. A4 needed work because `pure` is a **marker** the Promise struct did not hold. **Shape versus
+marker.** Read from the path rather than run, since the work was reverted — verify when it lands.
+
+**What remains:** two `typeck.rs` sites plus the boundary-only refusal, the per-width checked helper in
+`codegen.rs` (generalise `i32 @burxt.checked.cint(i64)` to `burxt.checked.<bits>.<signed>`), all of
+stage-1, and fixtures.
 
 ## B — Urgent bugs, silent wrong answers first
 
