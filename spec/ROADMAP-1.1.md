@@ -119,6 +119,80 @@ commercially real one and it already works.
 
 ---
 
+## D — macOS, and the bug the matrix found on its first run
+
+### D1 — `stderr` does not exist on Darwin — MEASURED, one symbol, blocks both macOS hosts
+
+**Host and target, both.** The four-host matrix was dispatched before any tag, and
+`darwin-arm64` failed the suite immediately. Every failing test was a test that *links*:
+
+```
+Undefined symbols for architecture arm64:
+  "_stderr", referenced from:
+      _bx.at_byte in burxt-12623-main.o
+ld: symbol(s) not found for architecture arm64
+```
+
+`codegen.rs:3441` emits `add_global(ptr, None, "stderr")`. On glibc `stderr` is a real
+exported symbol. On Darwin it is **not**: `<stdio.h>` defines `stderr` as a macro for
+`__stderrp`, and nothing named `stderr` is exported at all. One hardcoded symbol name,
+and it takes down every linking test on macOS at once.
+
+The shape of the fix — **not applied here, see the ownership note below**:
+
+```rust
+// Darwin's libc exports no `stderr`: <stdio.h> makes it a macro for `__stderrp`.
+let name = if triple.contains("apple") { "__stderrp" } else { "stderr" };
+let stderr_g = self.module.add_global(ptr, None, name);
+```
+
+### D2 — why no test caught it, and the design question that follows
+
+**This is the part worth more than the fix.**
+
+`the_ir_is_the_same_for_every_target` covers thirteen triples including
+`aarch64-apple-darwin`, and it passes. It passes **because** the bug is uniform: the test
+compares IR across targets after dropping the `target triple` and `target datalayout` lines,
+so a global named `@stderr` appears identically everywhere and reads as agreement.
+
+*A test for sameness cannot see an error that is the same everywhere.* The IR-equality test
+was the wrong instrument, and it will stay the wrong instrument for this class of bug.
+
+So `--target x86_64-apple-darwin` has been emitting objects that **cannot link on a Mac**
+since cross-targeting shipped in v0.0.197, and the tarball README now names Darwin among the
+verified triples. That claim is currently **false for linking** and true only for emission.
+
+**The design question this forces**, and it is a real one rather than a bug report: the
+project's stated property is that *the IR is byte-identical for every target, which is what
+makes the decimal answers identical too*. But libc symbol names are platform-dependent by
+nature. Those two cannot both be absolute. The resolution is probably that the guarantee
+covers **the arithmetic** — every decimal operation, every rounding helper, every overflow
+check — and explicitly excludes libc interface symbols. That exception should be **written
+into the guarantee**, because an unqualified claim that is quietly untrue is worse than a
+narrower one that holds.
+
+**What must be true before macOS is called supported:**
+
+1. The symbol chosen by target, not hardcoded.
+2. A **link** test, not an IR-comparison test — the existing instrument is structurally blind
+   here. Emitting an object proves nothing about whether it links.
+3. The full suite green on `macos-14` and `macos-13` runners.
+4. The guarantee in §D2 restated with its libc exception.
+
+**Ownership note.** `src/rust-compiler/codegen.rs` was staged by another session while this
+was diagnosed, so the fix was deliberately **not** applied — see `.claude/SESSION-CLAIMS.md`.
+Diagnosing and handing over beats two sessions editing one file.
+
+### D3 — the matrix stays at four hosts
+
+The two macOS entries are **left in and left failing**. Removing them would make the release
+green by making it silent, and `publish` deliberately refuses to attach anything unless four
+tarballs arrive — precisely so a release cannot ship one platform and look complete.
+
+**A red matrix that names the missing platform is worth more than a green one that hides it.**
+
+---
+
 ## L — What the container found out about the language
 
 ### L1 — `use` has no search path, and the image is where that first hurts
