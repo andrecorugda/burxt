@@ -5097,19 +5097,38 @@ fn the_burxt_backend_keeps_every_runtime_guarantee() {
             lost.push(format!("{} (does not link)", name));
             continue;
         }
-        // Must die. Which signal or code does not matter here — the pass-suite sweep already
-        // checks the MESSAGE for programs that succeed, and what this test is about is whether the
-        // guarantee exists at all.
+        // Must die **with Burxt's named error**, not merely die.
+        //
+        // This used to accept any non-zero exit, reasoning that "which signal or code does not
+        // matter here". It mattered. B18: stage-1 emitted a bare `sdiv`, which on x86-64 lowers
+        // to `idiv` and FAULTS on a zero divisor — so the program died of SIGFPE, this test saw
+        // a non-zero exit, and counted the guarantee as kept. **The hardware was standing in for
+        // a check the compiler never emitted.** On aarch64 nothing faults: `sdiv` by zero yields
+        // 0, the program ran to completion, and the wrong number was printed. Invisible for 120
+        // versions because every machine tested on was x86-64.
+        //
+        // A signal is not a guarantee. Exit 70 and the fixture's own message are.
         let ran = Command::new("timeout")
             .arg("5")
             .arg(&exe)
             .current_dir(&scratch)
             .output()
             .expect("the compiled program");
+        let said = String::from_utf8_lossy(&ran.stderr).into_owned();
+        let want = fs::read_to_string(source.with_extension("stderr")).unwrap_or_default();
+        let want = want.trim();
         match ran.status.code() {
             Some(0) => lost.push(format!("{} (ran to completion — the check is missing)", name)),
             Some(124) => lost.push(format!("{} (never terminated)", name)),
-            _ => kept += 1,
+            Some(70) if want.is_empty() || said.contains(want) => kept += 1,
+            Some(70) => lost.push(format!(
+                "{} (exited 70 but said the wrong thing — wanted {:?})",
+                name, want
+            )),
+            other => lost.push(format!(
+                "{} (died as {:?} rather than Burxt's exit 70 — a signal is not a named error)",
+                name, other
+            )),
         }
     }
 
@@ -5125,12 +5144,51 @@ fn the_burxt_backend_keeps_every_runtime_guarantee() {
     // It got here as a floor: 8 when the sweep was added at v0.0.136, then 11 with contracts, 13
     // with the `decreases` measure, 18 with bounds and remainder, 21 with CInt range, mixed-scale
     // overflow and read_file.
+    //
+    // **B19, found the moment this test began checking the MESSAGE and not just the exit.** Four
+    // fixtures die correctly at exit 70 and say something different from stage-0. That is its own
+    // defect — the two compilers disagree about what a runtime failure is CALLED — and it is not
+    // B18's, so it is named here rather than folded in or quietly tolerated.
+    //
+    // Listed by exact name and matched exactly: a new divergence fails, and fixing one fails too
+    // until it is struck from the list. A bare count would let one be traded for another.
+    const B19_RUNTIME_TEXT_DIVERGES: [&str; 4] = [
+        // stage-1 routes argument access through the array bounds check and loses the framing
+        // entirely: "index 99 is outside an array of 1 (at byte 0)". Structural, not wording.
+        "argument_out_of_range",
+        // stage-1: "index 5 is outside an array of 3 (at byte 145)".
+        // stage-0: "index 5 is out of bounds — this array holds 3 values (valid indexes 0 to 2)".
+        "array_oob_runtime",
+        // stage-1 truncates at "arithmetic overflow" and drops the explanation.
+        "mixed_scale_overflow",
+        // Same shape as array_oob_runtime.
+        "slice_index_oob",
+    ];
+    let mut divergent: Vec<String> = lost
+        .iter()
+        .filter(|l| l.contains("said the wrong thing"))
+        .map(|l| l.split_whitespace().next().unwrap_or("").to_string())
+        .collect();
+    divergent.sort();
+    let mut expected: Vec<String> = B19_RUNTIME_TEXT_DIVERGES.iter().map(|s| s.to_string()).collect();
+    expected.sort();
     assert_eq!(
-        kept, total,
-        "the Burxt backend kept {} of {} runtime guarantees. It kept ALL of them from v0.0.140, \
-         so this is a regression — a program compiled by stage-1 no longer enforces:\n  {}",
+        divergent, expected,
+        "the set of fixtures whose stage-1 runtime TEXT differs from stage-0 has changed (B19). \
+         Fixing one means striking it from B19_RUNTIME_TEXT_DIVERGES; a new one means stage-1 \
+         has drifted further. Full detail:\n  {}",
+        lost.join("\n  ")
+    );
+
+    assert_eq!(
+        kept,
+        total - B19_RUNTIME_TEXT_DIVERGES.len(),
+        "the Burxt backend kept {} of {} runtime guarantees ({} are B19's known text \
+         divergences). Anything beyond those is a regression — a program compiled by stage-1 \
+         no longer enforces:\n  {}",
         kept,
         total,
+        B19_RUNTIME_TEXT_DIVERGES.len(),
         lost.join("\n  ")
     );
 }
@@ -8973,10 +9031,23 @@ fn the_ir_is_the_same_for_every_target() {
             String::from_utf8_lossy(&out.stderr)
         );
         // The two lines that are SUPPOSED to differ are the two being dropped.
+        //
+        // `__stderrp` is normalised to `stderr` as the THIRD permitted difference, and it is a
+        // real exception rather than a convenience: Darwin's libc exports no `stderr` at all —
+        // <stdio.h> makes it a macro for `__stderrp` — so an Apple object referencing `stderr`
+        // does not link. The guarantee this test defends is that the ARITHMETIC is identical on
+        // every target: every decimal operation, rounding helper and overflow check. A libc
+        // interface symbol is not arithmetic, and one platform spells this one differently.
+        //
+        // Normalising alone would only TOLERATE the difference, so `apple_targets_name_darwins_
+        // stderr` below asserts it is actually made. Tolerating without asserting is how the
+        // original bug lived: this test compared targets against each other, the wrong symbol
+        // was equally wrong in all of them, and a test for sameness cannot see an error that is
+        // the same everywhere.
         String::from_utf8_lossy(&out.stdout)
             .lines()
             .filter(|l| !l.starts_with("target triple") && !l.starts_with("target datalayout"))
-            .map(|l| format!("{}\n", l))
+            .map(|l| format!("{}\n", l.replace("__stderrp", "stderr")))
             .collect()
     };
 
@@ -9064,6 +9135,75 @@ fn the_ir_is_the_same_for_every_target() {
         arm, win,
         "two different triples produced the same target lines, so --target is being ignored"
     );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+/// Darwin's libc exports no `stderr`: <stdio.h> defines it as a macro for `__stderrp`. An Apple
+/// object referencing `stderr` therefore does not link —
+///
+///     Undefined symbols for architecture arm64: "_stderr"
+///
+/// — and since every runtime error writes to stderr, that is every program.
+///
+/// This existed from v0.0.197, when cross-targeting shipped, until a macos-14 runner in the
+/// release matrix finally ran the suite on a Mac. **Nothing could have caught it before**, and
+/// that is the lesson worth keeping: `the_ir_is_the_same_for_every_target` compares each target
+/// against the host, and the wrong symbol was equally wrong in all of them. A test for sameness
+/// is structurally blind to an error that is the same everywhere. It needed a test that names
+/// the expected difference — this one.
+///
+/// The sameness test normalises `__stderrp` back to `stderr` so the arithmetic still compares
+/// equal. That normalisation would, on its own, let a regression through silently; this test is
+/// what stops it, by asserting the rename is actually made.
+#[test]
+fn apple_targets_name_darwins_stderr() {
+    let scratch = scratch_dir("darwin-stderr");
+    fs::create_dir_all(&scratch).unwrap();
+    let source = scratch.join("money.bx");
+    fs::write(&source, CROSS_PROGRAM).unwrap();
+
+    let ir_for = |triple: &str| -> String {
+        let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("emit-ir")
+            .arg(&source)
+            .args(["--target", triple])
+            .output()
+            .expect("burxt");
+        assert!(
+            out.status.success(),
+            "emit-ir failed for {}:\n{}",
+            triple,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    for triple in ["aarch64-apple-darwin", "x86_64-apple-darwin", "aarch64-apple-ios"] {
+        let ir = ir_for(triple);
+        assert!(
+            ir.contains("@__stderrp = external"),
+            "{} must reference Darwin's `__stderrp`; its libc has no `stderr` and the object \
+             will not link. Got:\n{}",
+            triple,
+            ir.lines().filter(|l| l.contains("stderr")).collect::<Vec<_>>().join("\n"),
+        );
+        assert!(
+            !ir.contains("@stderr = external"),
+            "{} still declares `@stderr`, which does not exist on Darwin",
+            triple,
+        );
+    }
+
+    // The other direction, so the rename cannot leak onto platforms that do export `stderr`.
+    for triple in ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "wasm32-wasi"] {
+        let ir = ir_for(triple);
+        assert!(
+            ir.contains("@stderr = external") && !ir.contains("__stderrp"),
+            "{} must use plain `stderr` — `__stderrp` is Darwin's spelling alone",
+            triple,
+        );
+    }
 
     let _ = fs::remove_dir_all(&scratch);
 }

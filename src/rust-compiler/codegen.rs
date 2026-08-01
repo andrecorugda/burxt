@@ -3438,6 +3438,9 @@ impl<'ctx> CodeGen<'ctx> {
             None => {
                 let ptr = self.ctx.ptr_type(AddressSpace::default());
                 let i32t = self.ctx.i32_type();
+                // Named `stderr` here and RENAMED for Apple targets in `stamp_target`, which is
+                // the first moment the triple is known — see the note there. Choosing the name
+                // at this point cannot work: `compile()` runs before any target is set.
                 let stderr_g = self.module.add_global(ptr, None, "stderr");
                 let fputs_ty = i32t.fn_type(&[ptr.into(), ptr.into()], false);
                 let fputs = self.module.add_function("fputs", fputs_ty, None);
@@ -5602,6 +5605,37 @@ impl<'ctx> CodeGen<'ctx> {
     ) {
         self.module.set_triple(triple);
         self.module.set_data_layout(&tm.get_target_data().get_data_layout());
+
+        // Darwin's libc exports NO symbol called `stderr`. <stdio.h> defines `stderr` as a
+        // macro for `__stderrp`, so a reference to `stderr` links against glibc and fails on
+        // every Apple target with:
+        //
+        //     Undefined symbols for architecture arm64: "_stderr"
+        //
+        // That is every program able to report a runtime error — so, every program. Measured
+        // on a macos-14 runner, and true for `--target *-apple-darwin` ever since
+        // cross-targeting shipped in v0.0.197.
+        //
+        // **Why it is done HERE, by renaming, and not where the global is created.** The whole
+        // module is built before any target is chosen: `main.rs` calls `cg.compile()` and only
+        // then `retarget()`. During construction `get_triple()` is empty, so the name cannot be
+        // decided at `add_global`. `stamp_target` is the one point both the `emit-ir --target`
+        // path and the object-emission path pass through with a triple in hand.
+        //
+        // **Why no test caught it.** `the_ir_is_the_same_for_every_target` compares targets
+        // against each other, and the wrong symbol was equally wrong in all of them — a test
+        // for sameness cannot see an error that is the same everywhere. What it needs is a LINK
+        // test; emitting an object proves nothing about whether the object links.
+        //
+        // **This is the documented exception to byte-identical IR.** The guarantee is about the
+        // ARITHMETIC — every decimal operation, rounding helper and overflow check is identical
+        // on every target, which is what makes the answers identical. A libc interface symbol is
+        // not arithmetic, and one platform simply spells this one differently. ROADMAP-1.1 §D2.
+        if triple.as_str().to_string_lossy().contains("apple") {
+            if let Some(g) = self.module.get_global("stderr") {
+                g.set_name("__stderrp");
+            }
+        }
     }
 
     /// Stamp the module for `triple` without emitting anything — what `emit-ir --target` needs, so

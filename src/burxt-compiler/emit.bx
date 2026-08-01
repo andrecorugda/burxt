@@ -1933,7 +1933,15 @@ function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String)
         return reg;
     }
     if called == "divide_toward_zero" {
-        let visited: Int = self.write_body("  " + reg + " = sdiv i64 " + first + ", " + second + "\n");
+        // Through a helper, for the reason `remainder` below already gives — and this line is
+        // why B18 existed. It used to emit a bare `sdiv i64`, which on x86-64 lowers to `idiv`
+        // and FAULTS on a zero divisor, so the program died of SIGFPE and the runtime-guarantee
+        // test counted the guarantee as kept. The hardware was standing in for the check.
+        // On aarch64 `sdiv` by zero returns 0 and never traps: the program ran to completion
+        // and printed a wrong number. Measured on ubuntu-24.04-arm, invisible for 120 versions
+        // because every machine this project tested on was x86-64.
+        let visited: Int = self.write_body("  " + reg + " = call i64 @burxt.divide_toward_zero(i64 "
+                                  + first + ", i64 " + second + ")\n");
         return reg;
     }
     if called == "remainder" {
@@ -3901,15 +3909,11 @@ function runtime_ir() -> String {
         // Bounds-checked, and the check costs one load now that a String carries its length — which
         // is the whole argument M12 made. Reading past the end would hand back whatever byte follows,
         // and silent garbage is the failure this language exists to refuse.
+        // The zero check was here from the start; the overflow check was NOT, and `srem` leaves
+        // the most negative Int over -1 as undefined exactly as `sdiv` does. Same guard as the
+        // two divisions now, from the same function, so the trio cannot drift apart again.
         + "define i64 @burxt.remainder(i64 %a, i64 %b) \{\n"
-        + "entry:\n"
-        + "  %zero = icmp eq i64 %b, 0\n"
-        + "  br i1 %zero, label %oops, label %ok\n"
-        + "oops:\n"
-        + "  %err = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.remainder_msg)\n"
-        + "  call void @exit(i32 70)\n"
-        + "  unreachable\n"
+        + divide_guard("remainder")
         + "ok:\n"
         + "  %r = srem i64 %a, %b\n"
         + "  ret i64 %r\n\}\n\n"
@@ -4144,8 +4148,23 @@ function runtime_ir() -> String {
         + "@burxt.truncate_msg = private unnamed_addr constant [116 x i8] "
         + "c\"burxt runtime error: truncate(xs, %lld) \\E2\\80\\94 this array has %lld elements, "
         + "and truncate only ever makes one shorter\\0A\\00\"\n"
+        // The six division messages. Their text is stage-0's word for word — the differential
+        // compares what the two compilers PRINT, so a rewording here is a divergence there.
+        + "@burxt.divtrunc_msg = private unnamed_addr constant [54 x i8] "
+        + "c\"burxt runtime error: divide_toward_zero(...) by zero\\0A\\00\"\n"
+        + "@burxt.divtrunc_over_msg = private unnamed_addr constant [115 x i8] "
+        + "c\"burxt runtime error: divide_toward_zero(...) overflowed \\E2\\80\\94 the most "
+        + "negative Int divided by -1 has no Int answer\\0A\\00\"\n"
+        + "@burxt.divfloor_msg = private unnamed_addr constant [48 x i8] "
+        + "c\"burxt runtime error: divide_floor(...) by zero\\0A\\00\"\n"
+        + "@burxt.divfloor_over_msg = private unnamed_addr constant [109 x i8] "
+        + "c\"burxt runtime error: divide_floor(...) overflowed \\E2\\80\\94 the most "
+        + "negative Int divided by -1 has no Int answer\\0A\\00\"\n"
         + "@burxt.remainder_msg = private unnamed_addr constant [45 x i8] "
         + "c\"burxt runtime error: remainder(...) by zero\\0A\\00\"\n"
+        + "@burxt.remainder_over_msg = private unnamed_addr constant [106 x i8] "
+        + "c\"burxt runtime error: remainder(...) overflowed \\E2\\80\\94 the most "
+        + "negative Int divided by -1 has no Int answer\\0A\\00\"\n"
         + "@burxt.mode_read = private unnamed_addr constant [2 x i8] c\"r\\00\"\n"
         + "@burxt.mode_write = private unnamed_addr constant [2 x i8] c\"w\\00\"\n"
         // "wb" and not "w" for a byte buffer. Identical on Linux; the distinction is real on
@@ -4436,8 +4455,14 @@ function runtime_ir() -> String {
         + "i64 %limit, i64 %at)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n\}\n\n"
+        + "define i64 @burxt.divide_toward_zero(i64 %a, i64 %b) \{\n"
+        + divide_guard("divtrunc")
+        + "ok:\n"
+        + "  %q = sdiv i64 %a, %b\n"
+        + "  ret i64 %q\n\}\n\n"
         + "define i64 @burxt.divide_floor(i64 %a, i64 %b) \{\n"
-        + "entry:\n"
+        + divide_guard("divfloor")
+        + "ok:\n"
         + "  %q = sdiv i64 %a, %b\n"
         + "  %r = srem i64 %a, %b\n"
         + "  %nonzero = icmp ne i64 %r, 0\n"
@@ -4447,6 +4472,40 @@ function runtime_ir() -> String {
         + "  %lower = sub i64 %q, 1\n"
         + "  %answer = select i1 %adjust, i64 %lower, i64 %q\n"
         + "  ret i64 %answer\n\}\n\n";
+}
+
+// The two checks every integer division owes, as one block of IR with the message prefix
+// substituted. Written once because three helpers need exactly the same guard, and three
+// copies is three places to forget one — which is the shape B18 already took: `remainder`
+// had the zero check, `divide_toward_zero` had neither, and `divide_floor` had neither.
+//
+// It leaves the builder positioned at a label `ok:`, which the caller opens.
+//
+// **Why both checks and not just the zero one.** LLVM leaves BOTH cases undefined, and on
+// x86-64 both happen to fault, so a missing check looks like a working one. On aarch64
+// neither faults: `sdiv` by zero yields 0, and the most negative Int over -1 yields itself.
+// Two silently wrong numbers rather than two named errors.
+function divide_guard(prefix: String) -> String {
+    return "entry:\n"
+        + "  %zero = icmp eq i64 %b, 0\n"
+        + "  br i1 %zero, label %oops, label %chk\n"
+        + "oops:\n"
+        + "  %err = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt." + prefix + "_msg)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n"
+        + "chk:\n"
+        // The most negative Int divided by -1 has no Int answer: the true quotient is one
+        // past the top of the range. Stage-0 checks the same pair with the same message.
+        + "  %amin = icmp eq i64 %a, -9223372036854775808\n"
+        + "  %bneg1 = icmp eq i64 %b, -1\n"
+        + "  %bad = and i1 %amin, %bneg1\n"
+        + "  br i1 %bad, label %over, label %ok\n"
+        + "over:\n"
+        + "  %err2 = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err2, ptr @burxt." + prefix + "_over_msg)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n";
 }
 
 // One rounding helper per mode, differing only in the tie rule. Written as text with the

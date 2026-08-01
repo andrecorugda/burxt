@@ -1,0 +1,4 @@
+// `srem` leaves the most negative Int over -1 undefined exactly as `sdiv` does, and stage-1's
+// remainder helper checked only the zero case. The quotient is one past the top of the range.
+let most_negative: Int = -9223372036854775807 - 1;
+print(remainder(most_negative, -1));

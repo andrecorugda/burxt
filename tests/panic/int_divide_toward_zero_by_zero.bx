@@ -1,0 +1,5 @@
+// B18's fixture. `int_division_by_zero.bx` covers `divide_floor`, and nothing covered
+// `divide_toward_zero` — which is the one that emitted a bare `sdiv` in stage-1 and so
+// relied on x86's `idiv` fault instead of a check. On aarch64 it returned 0 and printed it.
+let n: Int = 0;
+print(divide_toward_zero(1, n));
