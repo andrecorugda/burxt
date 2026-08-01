@@ -4529,10 +4529,18 @@ function (mutable self: Unit) note_relay_root(src: String, node: Int) -> Int {
         let name: Token = self.tokens[n.token];
         let callee: Int = self.find_function(src, name.start, name.length);
         if callee < 0 {
-            // Not a declared function. A BUILTIN relays nothing — `substring` and `to_string`
-            // build fresh storage and said so — but an ENUM CONSTRUCTOR carries its payload, so
-            // `return Some(s)` hands back a value pointing at `s`. Told apart exactly as
-            // `expr_allocates` tells them apart, by asking whether the name has a builtin arity.
+            // Not a declared function, so either a builtin or nothing this compiler knows.
+            //
+            // A BUILTIN relays nothing: `substring` and `to_string` build fresh storage, which is
+            // the same list `expr_allocates` keeps and the reason that one answers `true` for them
+            // where this one answers nothing.
+            //
+            // The walk below mirrors `expr_allocates`'s enum-constructor fallthrough, and **it is
+            // unreachable for enums, measured**: `return Some(s)` does not parse — `unknown
+            // function` — because a variant is always written `Wrapped.Some(s)`, which is a
+            // METHOD-CALL node and is handled in the kind 14 arm below. It is kept for the shape
+            // rather than the catch, and said to be unexercised rather than left looking load-
+            // bearing, so nobody reads it as covering a case the kind 14 arm is actually covering.
             if builtin_arity(substring(src, name.start, name.length)) >= 0 {
                 return 0;
             }

@@ -1,0 +1,20 @@
+// B32b. A `dynamic` whose implementation RELAYS a parameter — distinct from one that allocates.
+// The dyn arm asked "does any implementation allocate?", answered no, and returned there, so it
+// never went on to ask "does any implementation relay?". Two properties, one call site, and only
+// the first was consulted. It reads the method-PARAMETER table, so this fixture also depends on
+// keying relays by position rather than by receiver.
+// A dyn call whose implementation relays a PARAMETER rather than the receiver, and which
+// allocates nothing — so `any_implementation_allocates` answers false and only the relay sees it.
+interface Taker { function take(self, x: String) -> String }
+class Plain { tag: String }
+implement Taker for Plain {
+    function (self) take(x: String) -> String { return x; }
+}
+let p: Plain = Plain { tag: "t" };
+let d: dynamic Taker = p;
+let mutable kept: String = "";
+region r {
+    let built: String = "secret-" + "value";
+    kept = d.take(built);
+}
+print(kept);

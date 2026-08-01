@@ -1,0 +1,21 @@
+// The NEGATIVE half of B32b, and it is the one that keeps the property honest.
+//
+// A `dynamic` relay of storage that was never region-built must still be ACCEPTED. An aliasing
+// property over-refuses far more easily than the six arms that preceded it did, and the corpus
+// cannot tell an over-refusing compiler from a correct one — every corpus program that should be
+// refused stays refused either way. So the accepting cases carry the weight, and this one runs and
+// prints its answer rather than merely compiling.
+// The same dyn relay with an argument built OUTSIDE the region. Must stay accepted.
+interface Taker { function take(self, x: String) -> String }
+class Plain { tag: String }
+implement Taker for Plain {
+    function (self) take(x: String) -> String { return x; }
+}
+let p: Plain = Plain { tag: "t" };
+let d: dynamic Taker = p;
+let outside: String = "safe-" + "value";
+let mutable kept: String = "";
+region r {
+    kept = d.take(outside);
+}
+print(kept);

@@ -1,0 +1,12 @@
+// B32b. A relay carrying its argument out inside an enum payload. A variant is always written
+// `Wrapped.Some(s)`, so it arrives as a method-call node rather than a plain call — worth a fixture
+// precisely because the shape a reader expects (a call) is not the shape the compiler sees.
+// An enum constructor carrying a parameter out of a relay.
+enum Wrapped { Some(String), None }
+function wrap(s: String) -> Wrapped { return Wrapped.Some(s); }
+let mutable kept: Wrapped = Wrapped.None;
+region r {
+    let built: String = "secret-" + "value";
+    kept = wrap(built);
+}
+print("done");
