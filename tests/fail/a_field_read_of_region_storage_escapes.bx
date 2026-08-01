@@ -1,0 +1,25 @@
+// B35, and it was the only one of the family that the two compilers DISAGREED about — stage-0
+// refused it and stage-1 accepted it, which is worse than a shared leak. A shared leak is
+// invisible to the differential because both sides answer the same wrong thing; a disagreement is
+// exactly what the differential exists to catch, and it could not, because no fixture spelled it.
+//
+// No pattern, no `dynamic`, no relay function. A plain `let`, and then a field READ of it:
+// `expr_allocates` had no arm for a field access or an index, so the taint on `b` was thrown away
+// the moment anything reached through it. Proven: printed `ab`, then `0` after a clobbering region.
+//
+// It also bounded B27 — taint reached a `for` binding correctly and the field read discarded it —
+// and it was found by the agent that had already measured its own fix green, by probing shapes the
+// 133-program corpus did not cover.
+class Box { name: String }
+class Holder { tag: String }
+let mutable h: Holder = Holder { tag: "start" };
+region r {
+    let b: Box = Box { name: "a" + "b" };
+    h.tag = b.name;
+}
+print(h.tag);
+region clobber {
+    let mutable k: Int = 0;
+    while k < 40 { let junk: String = "ZZZZZZZZZZZZZZZZ" + to_string(k); k = k + 1; }
+}
+print(h.tag);

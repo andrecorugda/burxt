@@ -1271,6 +1271,33 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
     if n.kind == 22 {
         return self.expr_allocates(src, n.a);
     }
+    // ---- A field READ and an element READ, and the same fact one level along -------------------
+    //
+    // `b.name` and `xs[0]` hand back a value read out of storage something ELSE owns, exactly as
+    // `?` above does — and for an aggregate that value is a pointer into it. So the read is region
+    // storage precisely when the thing read from is, which the recursion answers by asking about
+    // `n.a`: the receiver for a field, the base for an element. `lvalue_root` walks the same `a`
+    // link for the same reason, so a nested `o.inner.tag` needs nothing of its own.
+    //
+    // Both arms were missing, and it was not a shared leak — **stage-0 refuses both and stage-1
+    // accepted them**, so the two compilers disagreed about whether a use-after-free is a program,
+    // which is the failure the differential exists to catch and could not, because no fixture
+    // spells either shape. Measured, built and run with stage-1:
+    //
+    //     region r { let b: Box = Box { name: "a" + "b" }; h.tag = b.name; }   // prints ab, then 0
+    //     region r { ... push(made, "a" + "b"); kept = made[0]; }              // prints ab, then ""
+    //
+    // Type-blind, and deliberately so: `total = b.n` for an Int field of a record built in the
+    // region is refused here, and an Int is copied so it could not dangle. Stage-0 refuses it too,
+    // measured — and the two compilers agreeing conservatively is worth more than either being
+    // cleverer alone, which is M14 §2's Decision 2 in the small. Recorded rather than quietly
+    // corrected, so whoever narrows it narrows BOTH.
+    //
+    // The inference does not move: `holds_region` is only ever set while a region is open, so
+    // `return b.name` in an ordinary function still answers exactly what it answered before.
+    if n.kind == 11 || n.kind == 12 {
+        return self.expr_allocates(src, n.a);
+    }
     if n.kind == 17 {                                // an array literal: children ARE the values
         if self.type_at(node).kind == 47 {
             return true;                             // a growable array lives in a region
@@ -1397,6 +1424,32 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
             }
         }
         let holder: Type = self.type_at(n.a);
+        // ---- B26: a call through a `dynamic`, and this arm was missing -------------------------
+        //
+        // `find_method` below looks for a method ON the holder, and a `dynamic Named` has none —
+        // the implementations do. So a dyn call answered `false` here, and every rule that asks this
+        // function about a VALUE never saw it: `kept = d.name()`, `return d.name()`,
+        // `h.tag = d.name()` and `names[0] = d.name()` inside a `region` were all accepted, and
+        // `h.tag` printed the next allocation's bytes after the region closed.
+        //
+        // The inference reached dyn calls all along, by another road — `dynamic_method` asks
+        // `has_region()` at the call site — which is exactly why this looked covered: one rule
+        // consulted the dyn path, the other did not, and only the first had a fixture. That is the
+        // same shape three of this week's defects had, and it is the argument for putting the arm
+        // HERE rather than at the four rules that ask: a second traversal is a second place to be
+        // wrong, and `kept = Wrap { s: d.name() }` — a dyn call one level down inside a record
+        // literal — is a use-after-free that only the recursion already in this function catches.
+        // Measured: it prints `item AB`, then the next region's bytes.
+        //
+        // `any_implementation_allocates` rather than a flat `true`, matching stage-0's
+        // `dyn_call_allocates`, which iterates `impls` the same way. The choice is load-bearing
+        // twice over. A flat `true` refuses `total = d.count()` where no implementation allocates —
+        // a false refusal, and measured to turn `tests/pass/allocates_nothing.bx` red. And the
+        // `return` rule asks this function during a probe round and then records `has_region()` on
+        // a yes, so a flat `true` would class every function calling a dyn method as allocating.
+        if holder.kind == 49 {
+            return self.any_implementation_allocates(src, holder, self.tokens[n.token]);
+        }
         let found: Int = self.find_method(src, holder, n.token);
         if found >= 0 {
             return flag_allocates(self.methods[found].flags) == 1;

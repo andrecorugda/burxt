@@ -1,0 +1,11 @@
+// B27, the loop form. A `for` header binds a name the same way a `match` arm does, and it was
+// missed for the same reason — the taint was attached to statement KINDS rather than to values.
+let mutable kept: String = "";
+region r {
+    let mutable made: [String] = [];
+    let p: Int = push(made, "a" + "b");
+    for n in made {
+        kept = n;
+    }
+}
+print(kept);

@@ -3312,6 +3312,57 @@ function (mutable self: Unit) check_args(src: String, list_node: Int) -> Int {
     return list.b;
 }
 
+// ---- B27: a pattern binding and a loop binding are bindings, and carried no taint -------------
+//
+// `match w { Some(s) => ... }` and `for n in made { ... }` each introduce a name that ALIASES the
+// value it was read out of: a payload is a pointer into the enum's own cells and an aggregate
+// element is a pointer into the array's, which is the same fact `expr_allocates`'s `?` arm already
+// records — *"`e?` hands back a value read out of `e`'s OWN cells, and for an aggregate payload that
+// value is a pointer into them, not a copy."* So when the subject holds region storage, the new name
+// holds it too.
+//
+// The note at the `let` said the other five binding sites "pass 0, and that cannot cause a false
+// refusal because none of them is assignable" — true, and beside the point: the escape rules ask
+// `expr_allocates` about the VALUE, and a name with no taint answers false wherever it is read, not
+// only where it is written. So
+//
+//     region r { let w = W.Some("a" + "b"); match w { Some(s) => { kept = s; } } }
+//
+// with `kept` declared outside was ACCEPTED, printed `ab`, and printed the next allocation's bytes
+// after the region closed — while the same program with `kept = w_payload_expression` was refused.
+//
+// Nothing here has to know about the `let` relay: `let t: String = s;` asks `expr_allocates` about
+// `s`, which reads this bit off `Binding.holds_region`, so tainting the ROOT carries through any
+// number of relays. That half was already right, and it is why `m5` in the audit corpus was refused
+// while `x3` was not — the same rule, reached from a root that had nothing to say.
+//
+// `base` is the index the pattern or the header pushed from, which both callers already hold because
+// both already `truncate` back to it. Written back as whole `Binding`s because Burxt has no
+// `xs[i].field = v` — the shape the two assignment arms already use to set `holds_region`.
+function (mutable self: Unit) taint_aliased_bindings(src: String, base: Int, source: Int) -> Int {
+    if self.region_depth == 0 {
+        return 0;
+    }
+    // `in_region` and `holds_region` are set on exactly the conditions the `let` sets them on:
+    // declared while a region was open, and given something the region built. Mirrored rather than
+    // invented, because a second answer to "is this name region storage" is how the two halves of
+    // this rule came apart in the first place.
+    let built: Bool = self.expr_allocates(src, source);
+    let mutable i: Int = base;
+    while i < len(self.bindings) {
+        let was: Binding = self.bindings[i];
+        let mutable holds: Int = was.holds_region;
+        if built {
+            holds = 1;
+        }
+        self.bindings[i] = Binding { start: was.start, length: was.length,
+                              bound_type: was.bound_type, writable: was.writable,
+                              depth: was.depth, in_region: 1, holds_region: holds };
+        i += 1;
+    }
+    return 1;
+}
+
 // ---- statements --------------------------------------------------------------
 function (mutable self: Unit) check_block_nodes(src: String, block: Int, return_type: Type) -> Int {
     if block < 0 {
@@ -3476,6 +3527,9 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
         self.depth += 1;
         push(self.bindings, Binding { start: name.start, length: name.length, bound_type: element,
                               writable: 0, depth: self.depth, in_region: 0, holds_region: 0 });
+        // B27: the element aliases the array's storage, so it is region storage when the array is.
+        // `n.a` is the holder, already typed just above, so the answer comes off the `typed` cache.
+        let tainted: Int = self.taint_aliased_bindings(src, base, n.a);
         self.loop_depth += 1;
         let body: Int = self.check_block_nodes(src, n.b, return_type);
         self.loop_depth -= 1;
@@ -4039,6 +4093,10 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
             // with the arm — which is what `truncate` is for.
             let base: Int = len(self.bindings);
             let bound: Int = self.bind_arm(src, value, arm);
+            // B27: a payload name aliases the subject's cells, so it is region storage when the
+            // subject is — `match wrap(1) { ... }` included, where the subject is a call and never
+            // had a name of its own. `n.a` is the subject, typed at the top of this arm.
+            let tainted: Int = self.taint_aliased_bindings(src, base, n.a);
             let body: Int = self.check_block_nodes(src, arm.a, return_type);
             let dropped: Int = truncate(self.bindings, base);
             i += 1;

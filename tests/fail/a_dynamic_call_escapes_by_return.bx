@@ -1,0 +1,14 @@
+// B26 through `return`. The return rule asks the same blind question, so it had the same hole.
+interface Named { function name(self) -> String }
+class Item { sku: String }
+implement Named for Item {
+    function (self) name() -> String { return "item " + self.sku; }
+}
+function fetch(sku: String) -> String allocates {
+    region inner {
+        let i: Item = Item { sku: sku };
+        let d: dynamic Named = i;
+        return d.name();
+    }
+}
+print(fetch("A"));

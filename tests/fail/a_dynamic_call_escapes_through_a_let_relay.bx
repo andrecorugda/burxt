@@ -1,0 +1,15 @@
+// B26 crossed with B27's laundering: the dyn call's result is bound by a `let` first, and the
+// `let` did not carry the taint forward. Two independent holes composing, which is why an
+// enumeration of sites could never have closed this — the fix has to be "taint follows the
+// value" rather than "taint is set at these N places".
+interface Named { function name(self) -> String }
+class Item { sku: String }
+implement Named for Item { function (self) name() -> String { return "item " + self.sku; } }
+let mutable kept: String = "";
+region r {
+    let i: Item = Item { sku: "AB" };
+    let d: dynamic Named = i;
+    let s: String = d.name();
+    kept = s;
+}
+print(kept);

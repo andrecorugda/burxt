@@ -3368,12 +3368,35 @@ impl TypeChecker {
         }
     }
 
+    /// Does a call through an interface object build its result in the caller's region?
+    ///
+    /// Yes if ANY implementation of the interface does. The call site cannot know which one
+    /// runs — that is what `dynamic` means — so the conservative answer is the only sound one
+    /// (M14 §10: a wrong guess costs memory, never correctness).
+    ///
+    /// This is ONE function because the fact was answered in two places and only one of them
+    /// was right. The `no region open here` check at the `DynCall` site computed it inline;
+    /// `expr_allocates` had no `DynCall` arm at all, and every escape rule asks
+    /// `expr_allocates` — so a value built behind a vtable escaped its region through whole-name
+    /// assignment, `return`, a field, an element, and one call away through a `mutable`
+    /// parameter. B26, a live use-after-free: `h.tag = d.name()` printed `item AB` and then the
+    /// next region's bytes. The `allocates nothing` fixture for the dynamic path is exactly why
+    /// it looked covered — two rules asking the same question, and only one of them had been
+    /// asked through a `dynamic`.
+    fn dyn_call_allocates(&self, interface_name: &str, method: &str) -> bool {
+        self.impls.iter().any(|(implemented, concrete)| {
+            implemented == interface_name
+                && self.alloc_methods.contains(&(concrete.clone(), method.to_string()))
+        })
+    }
+
     /// A few words for the thing that allocates, or None when it cannot be named simply.
     fn describe_allocation(&self, e: &TypedExpr) -> Option<String> {
-        // The `dynamic` arm comes BEFORE the guard, because `expr_allocates` has no `DynCall` arm —
-        // the inference reaches a dyn call another way, through `has_region()` being asked at the
-        // call site when the interface method allocates. So the guard would answer false here and
-        // the message would lose the one path hardest to find by reading.
+        // The `dynamic` arm comes BEFORE the guard. It no longer has to — `expr_allocates` has a
+        // `DynCall` arm since B26 — but it still SHOULD: this walk names the first nameable cause
+        // for a message about a missing region, and a dyn call is the one path hardest to find by
+        // reading, so it is named whenever it is reached rather than only when the impls that are
+        // in scope happen to allocate.
         //
         // Naming it is sound rather than a guess: this walk returns the FIRST nameable cause, so a
         // dyn call is only reached when nothing before it allocated — and the claim has to hold for
@@ -3433,6 +3456,25 @@ impl TypeChecker {
             TypedExprKind::MethodCall { receiver, method, .. } => {
                 self.alloc_methods.contains(&(receiver.clone(), method.clone()))
             }
+            // B26. Same reason as the two arms above, for the call whose callee is not known
+            // until run time: if any implementation allocates, the result HERE is region
+            // storage and every escape rule below has to see it. See `dyn_call_allocates`.
+            TypedExprKind::DynCall { interface_name, method, .. } => {
+                self.dyn_call_allocates(interface_name, method)
+            }
+            // B34. `?` yields the Ok payload of the value it unwraps, so the answer for the
+            // unwrap is the answer for what was unwrapped: the taint has to pass THROUGH it.
+            // Without this arm `let got: String = make(n)?;` inside a region laundered it, and
+            // stage-0 accepted what stage-1 refuses — a verdict divergence with stage-0 as the
+            // permissive one, which is the worse direction for the compiler that is the spec.
+            TypedExprKind::Try { value, .. } => self.expr_allocates(value),
+            // B33. `argument(n)` is COPIED into the region, with a length header, and
+            // `codegen.rs:3831` explains why in capitals: `argv` holds C's strings, which have
+            // no header, so handing one back directly would make `len` read whatever the loader
+            // left in front of it. A copy in the region is region storage like any other, and
+            // the comment at the `Arg` site claimed the opposite for as long as the copy has
+            // existed — see there.
+            TypedExprKind::Arg(_) => true,
             // Bool renders to a literal; the others allocate.
             TypedExprKind::ToString(v) => v.ty != Type::Bool,
             TypedExprKind::Binary { op: BinOp::Add, lhs, rhs }
@@ -3483,6 +3525,42 @@ impl TypeChecker {
                 .map(|fs| fs.iter().any(|(_, t)| self.region_allocated(t)))
                 .unwrap_or(false),
             Type::Array { elem, .. } => self.region_allocated(elem),
+            _ => false,
+        }
+    }
+
+    /// COULD a value of this type be region storage? A different question from
+    /// `region_allocated`, which asks whether the type is ALWAYS in a region — a String
+    /// may be a `.rodata` literal or a concatenation living in a region, and both are
+    /// `String`, so `region_allocated` answers no for it and must keep doing so.
+    ///
+    /// This exists for B27, and only to keep the taint OFF names that cannot dangle. A
+    /// `match` arm's binding takes its value from the enum that was matched on, so when
+    /// that enum was built in the region the binding is region storage too — but a
+    /// payload of type Int is a COPY of a scalar, and tainting that would refuse correct
+    /// programs. False positives are as much a failure as false negatives here.
+    ///
+    /// A type parameter and a `dynamic` answer YES: neither says what the storage is, and
+    /// M14 §10 is explicit that a wrong guess must cost memory rather than correctness.
+    fn may_be_region_storage(&self, ty: &Type) -> bool {
+        match ty {
+            Type::String | Type::Slice(_) => true,
+            Type::Named(n) => {
+                if let Some(fields) = self.structs.get(n) {
+                    return fields.iter().any(|(_, t)| self.may_be_region_storage(t));
+                }
+                if let Some(variants) = self.enums.get(n) {
+                    return variants
+                        .iter()
+                        .any(|(_, payload)| payload.iter().any(|t| self.may_be_region_storage(t)));
+                }
+                false
+            }
+            Type::Array { elem, .. } => self.may_be_region_storage(elem),
+            Type::Generic { arguments, .. } => {
+                arguments.iter().any(|t| self.may_be_region_storage(t))
+            }
+            Type::Param(_) | Type::Dyn(_) => true,
             _ => false,
         }
     }
@@ -4352,6 +4430,17 @@ impl TypeChecker {
         at: Span,
         shown: String,
     ) -> Result<TypedStmt, String> {
+            // B27. A pattern binding is the SIXTH place a name enters scope, and it was the
+            // first one that never asked this: if the value being matched on is region storage,
+            // so is everything the pattern pulls out of it. `region r { let w = W.Some("a" +
+            // "b"); match w { Some(s) => { kept = s; } } }` with `kept` declared outside was
+            // accepted, printed `secret-1`, and printed the next region's bytes afterwards —
+            // the escape rules all consult `region_locals`, and no pattern ever wrote to it.
+            //
+            // Asked ONCE, here, rather than per arm: the scrutinee does not change between
+            // arms, and `expr_allocates` reads `region_locals`, which the arms may add to.
+            let scrutinee_allocates =
+                self.current_region.is_some() && self.expr_allocates(&scrutinee);
             let mut typed_arms: Vec<TypedArm> = Vec::new();
             for arm in arms {
                 // Checking the previous arm's body moved the position; an error
@@ -4404,6 +4493,7 @@ impl TypeChecker {
                 // Payload names are ordinary immutable locals, scoped to the arm.
                 let saved = self.env.clone();
                 let mut bindings = Vec::new();
+                let mut tainted: Vec<String> = Vec::new();
                 for (name, ty) in arm.bindings.iter().zip(payload) {
                     if let Some(message) = self.shadows_a_const(name) {
                         self.env = saved;
@@ -4418,10 +4508,22 @@ impl TypeChecker {
                         ));
                     }
                     self.env.insert(name.clone(), (ty.clone(), false));
+                    if scrutinee_allocates && self.may_be_region_storage(ty) {
+                        // Tracked so it can be taken back out below. The taint follows the
+                        // NAME, and this name is gone at the arm's closing brace — while a
+                        // second arm may legitimately bind the same name to an Int payload,
+                        // which must not inherit this arm's taint.
+                        if self.region_locals.insert(name.clone()) {
+                            tainted.push(name.clone());
+                        }
+                    }
                     bindings.push((name.clone(), ty.clone()));
                 }
                 let body = self.check_block(&arm.body);
                 self.env = saved;
+                for name in tainted.drain(..) {
+                    self.region_locals.remove(&name);
+                }
                 typed_arms.push(TypedArm { tag, bindings, body: body? });
             }
 
@@ -5007,10 +5109,25 @@ impl TypeChecker {
                 // for a convenience, and nothing may be written back through it.
                 let saved = self.env.clone();
                 self.env.insert(name.clone(), (elem.clone(), false));
+                // B27, the loop half. A copy of an element is not a copy of the STORAGE it
+                // points at: `for n in made { h.tag = n; }` over an array built inside the
+                // region handed `h` the region's bytes, because the loop binding carried no
+                // taint. Same rule as a pattern binding, same reason.
+                let taint = self.current_region.is_some()
+                    && self.expr_allocates(&iterable)
+                    && self.may_be_region_storage(&elem);
+                // `insert` answers false when the name was already tainted, which is exactly
+                // the question "is this loop the one that has to take the taint back out?" —
+                // the binding is gone at the closing brace, and a later name reusing the
+                // spelling must not inherit it.
+                let tainted = taint && self.region_locals.insert(name.clone());
                 self.loop_depth += 1;
                 let body = self.check_block(body);
                 self.loop_depth -= 1;
                 self.env = saved;
+                if tainted {
+                    self.region_locals.remove(name);
+                }
                 Ok(TypedStmt::For {
                     name: name.clone(),
                     elem,
@@ -5851,8 +5968,19 @@ impl TypeChecker {
                             index.ty
                         ));
                     }
-                    // No region: the C runtime's argument strings outlive the program,
-                    // so this borrows rather than copies.
+                    // This COPIES into the region — `codegen.rs:3831`, which says so in capitals
+                    // and gives the reason: `argv` holds C's strings, and a C string has no
+                    // length header, so handing the pointer back would make `len` read whatever
+                    // the loader happened to place in front of it. One `strlen` at the boundary
+                    // buys a real Burxt String.
+                    //
+                    // **This comment used to say the opposite** — "no region: the C runtime's
+                    // argument strings outlive the program, so this borrows rather than copies" —
+                    // and it was reasoned from for as long as the copy has existed. B33: it made
+                    // `expr_allocates` answer false for `argument(n)`, so `kept = argument(0)`
+                    // inside a region was accepted and `len(kept)` printed 22 and then 1 after
+                    // the next region reused the bytes. The `Arg` arm of `expr_allocates` is the
+                    // fix; this is the sentence that misled everyone who read it first.
                     return Ok(TypedExpr {
                         ty: Type::String,
                         kind: TypedExprKind::Arg(Box::new(index)),
@@ -6929,10 +7057,10 @@ impl TypeChecker {
                     // load-bearing: under probing `has_region` RECORDS that something here
                     // wanted a region, so asking it first would record on every such call and
                     // mark half the program as allocating.
-                    let leaks = self.impls.iter().any(|(implemented, concrete)| {
-                        *implemented == interface_name
-                            && self.alloc_methods.contains(&(concrete.clone(), method.clone()))
-                    });
+                    //
+                    // The test itself lives in `dyn_call_allocates` because `expr_allocates`
+                    // needs the same answer and had a different one — B26.
+                    let leaks = self.dyn_call_allocates(&interface_name, method);
                     if leaks && !self.has_region() {
                         return Err(format!(
                             "`dynamic {}.{}` builds its result in the caller's region — some \

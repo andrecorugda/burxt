@@ -1,0 +1,14 @@
+// B27. A binding introduced by a `match` arm carried NO taint. The taint was recorded at
+// `let` and at the four assignment forms and nowhere else, so a payload bound by a pattern
+// was laundered by the pattern itself. Proven to corrupt: printed `secret-1`, then the
+// clobbering region's bytes.
+enum Wrapped { Some(String), None }
+let mutable kept: String = "";
+region r {
+    let w: Wrapped = Wrapped.Some("a" + "b");
+    match w {
+        Some(s) => { kept = s; }
+        None => { print("none"); }
+    }
+}
+print(kept);

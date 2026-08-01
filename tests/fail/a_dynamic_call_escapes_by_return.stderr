@@ -1,0 +1,1 @@
+cannot return this String: it was built inside a `region` block, which releases at its closing brace, so its storage would not outlive the call. Move the allocation out of the `region` block, or return a scalar summary.

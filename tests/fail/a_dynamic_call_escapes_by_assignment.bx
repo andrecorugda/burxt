@@ -1,0 +1,24 @@
+// B26. A call through a `dynamic` was not treated as allocating at all, so a value built
+// behind an interface escaped its region by every route the rule otherwise covers.
+//
+// `expr_allocates` had no arm for a dynamic dispatch. The `allocates nothing` inference DID
+// reach dyn calls, by a different route — which is why this looked covered: there was a
+// fixture for the dynamic path, for the other rule, and its passing stood in for this one.
+// Two rules asking the same question, one of them blind, and only the sighted one tested.
+//
+// The answer cannot be exact, because the implementation is unknown at the call site. It does
+// not need to be: M14 §2 Decision 2 says promote outward when in doubt, so a dyn call counts
+// as allocating if ANY implementation of that method does. A wrong guess costs memory; the
+// other direction costs a use-after-free.
+interface Named { function name(self) -> String }
+class Item { sku: String }
+implement Named for Item {
+    function (self) name() -> String { return "item " + self.sku; }
+}
+let mutable kept: String = "";
+region r {
+    let i: Item = Item { sku: "A" + "B" };
+    let d: dynamic Named = i;
+    kept = d.name();
+}
+print(kept);

@@ -1,0 +1,18 @@
+// B27's worst form, and the one that proves the shape of the fix. One extra line stepped
+// around the rule wherever it fired:
+//
+//     let t: String = tainted;
+//     outer = t;                 // passed, where `outer = tainted;` was refused
+//
+// A rule you can step around by adding a line is not a rule. This fixture exists so that the
+// next person who adds a binding construct finds out immediately.
+enum Wrapped { Some(String), None }
+let mutable kept: String = "";
+region r {
+    let w: Wrapped = Wrapped.Some("a" + "b");
+    match w {
+        Some(s) => { let t: String = s; kept = t; }
+        None => { print("none"); }
+    }
+}
+print(kept);

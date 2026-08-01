@@ -1,0 +1,1 @@
+`b` was declared outside `region r`, so it cannot be assigned a value built inside it — the bytes are released at the closing brace and `b` would read whatever the region hands out next. Declare `b` inside the region, or build the value outside it.

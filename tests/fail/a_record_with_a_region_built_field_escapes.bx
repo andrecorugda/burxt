@@ -1,0 +1,14 @@
+// B27 carrying a whole RECORD out, one of whose fields was built in the region. The record
+// itself lives in an alloca and does not dangle; the String inside it does. Worth its own
+// fixture because the value that escapes and the value that dangles are not the same value.
+class Box { name: String }
+enum W { Some(Box), None }
+let mutable b: Box = Box { name: "start" };
+region r {
+    let w: W = W.Some(Box { name: "a" + "b" });
+    match w {
+        Some(v) => { b = v; }
+        None => { print("none"); }
+    }
+}
+print(b.name);
