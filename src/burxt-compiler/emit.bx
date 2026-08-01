@@ -44,7 +44,7 @@ class Slot { start: Int, length: Int, index: Int, cells: Int, aggregate: Int }
 // enough for the quadratic term to matter.
 function (mutable self: Unit) write_body(text: String) -> Int {
     self.body_pending += text;
-    if len(self.body_pending) > 512 {
+    if len(self.body_pending) > 128 {
         push(self.body_chunks, self.body_pending);
         self.body_pending = "";
     }
@@ -67,6 +67,39 @@ function (mutable self: Unit) write_body(text: String) -> Int {
 //
 // The real fix is a byte buffer that grows in place, which needs a builtin that writes
 // one. Recorded rather than pretended away: this is a cost, not a design.
+function (mutable self: Unit) write_globals(text: String) -> Int {
+    self.globals += text;
+    if len(self.globals) > 512 {
+        push(self.global_chunks, self.globals);
+        self.globals = "";
+    }
+    return 0;
+}
+
+function (mutable self: Unit) finish_globals() -> String {
+    if len(self.globals) > 0 {
+        push(self.global_chunks, self.globals);
+        self.globals = "";
+    }
+    if len(self.global_chunks) == 0 {
+        return "";
+    }
+    while len(self.global_chunks) > 1 {
+        let mutable merged: [String] = [];
+        let mutable i: Int = 0;
+        while i + 1 < len(self.global_chunks) {
+            let pair: String = self.global_chunks[i] + self.global_chunks[i + 1];
+            let added: Int = push(merged, pair);
+            i += 2;
+        }
+        if i < len(self.global_chunks) {
+            let last: Int = push(merged, self.global_chunks[i]);
+        }
+        self.global_chunks = merged;
+    }
+    return self.global_chunks[0];
+}
+
 function (mutable self: Unit) write_module(text: String) -> Int {
     self.pending += text;
     if len(self.pending) > 512 {
@@ -347,9 +380,9 @@ function (mutable self: Unit) intern_text(text: String) -> String {
     // literal looks exactly like a region-built String to everything downstream. Without the header
     // `len("hello")` would read whatever the linker placed before the bytes.
     let shape: String = "\{ i64, [" + to_string(width + 1) + " x i8] \}";
-    self.globals += name + " = private unnamed_addr constant " + shape + " \{ i64 "
+    let wrote_global: Int = self.write_globals(name + " = private unnamed_addr constant " + shape + " \{ i64 "
         + to_string(width) + ", [" + to_string(width + 1) + " x i8] c\"" + body + hex_of(0)
-        + "\" \}\n";
+        + "\" \}\n");
     // The GEP expression inline, repeated at each use, and that is the MEASURED choice rather than
     // the tidy one. An `alias` naming the byte pointer once looks obviously better — a short name
     // instead of sixty characters — and cost 0.99 s and 968 MB against 0.11 s and 326 MB, because
@@ -399,9 +432,9 @@ function (mutable self: Unit) intern(src: String, start: Int, length: Int) -> St
         }
     }
     let shape: String = "\{ i64, [" + to_string(count + 1) + " x i8] \}";
-    self.globals += name + " = private unnamed_addr constant " + shape + " \{ i64 "
+    let wrote_global: Int = self.write_globals(name + " = private unnamed_addr constant " + shape + " \{ i64 "
         + to_string(count) + ", [" + to_string(count + 1) + " x i8] c\"" + body + hex_of(0)
-        + "\" \}\n";
+        + "\" \}\n");
     return "getelementptr inbounds (" + shape + ", ptr " + name + ", i32 0, i32 1)";
 }
 

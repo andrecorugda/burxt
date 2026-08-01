@@ -526,6 +526,7 @@ class Unit {
     chunks: [String],
     pending: String,
     globals: String,
+    global_chunks: [String],
     // The caller's storage for an aggregate return, while a function that has one is
     // being emitted, and how many cells it holds.
     sret: String,

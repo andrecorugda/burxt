@@ -3265,17 +3265,27 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
             kb_per_line
         );
         assert!(
-            kb_per_line < 62.0,
-            "the compiler now uses {:.1} KB of peak RSS per line of its own source, and the bar is \
-             62.0, which is set to catch a JUMP and not to track the creep. The trend: 50.1 \
-             (v0.0.214) -> 53.2 (v0.0.221) -> 52.3 (v0.0.222) -> 54.2 (v0.0.225) -> 56.3 \
-             (v0.0.226) -> 57.4 (v0.0.228), and CI measures ~1.3% above local, so the real \
-             comparison is ~58.2 against 62.0. **I raised this bar three times in four versions, \
-             once after writing on this very line that I would not.** So it is now set with \
-             deliberate headroom and an honest claim about what it detects: a leak (+20 KB/line) \
-             fires the same day, a version's worth of new checker rules (+1 or +2) does not. \
-             Holding it tight enough to catch the creep would mean editing it every version, which \
-             is not an instrument. Only A12 (per-block release) changes the arithmetic.",
+            kb_per_line < 12.0,
+            "the compiler now uses {:.1} KB of peak RSS per line of its own source, against a bar \
+             of 12.0. **Measured at 9.2 when this bar was set, down from 61.6**, so this is real \
+             headroom rather than the cushion the old bar had become.\n\n\
+             The history is the point. This number went 50.1 -> 53.2 -> 52.3 -> 54.2 -> 56.3 -> \
+             57.4 -> 61.6 and the bar was raised THREE TIMES to let it through, once immediately \
+             after a comment on this line promising it would not be. It read as creeping waste \
+             that only A12 could fix. It was **one line**: `self.globals` was a flat growing \
+             String appended once per string literal, so the cost was quadratic in the compiler's \
+             own literal count — 549 KB of peak RSS for every literal added anywhere in the \
+             compiler, forever. The trend had only ever risen because it was ONE QUADRATIC \
+             SAMPLED AT A GROWING n, and every raise was paying interest on it.\n\n\
+             `chunks` and `body_chunks` already had chunk lists; `globals` never got one. Giving \
+             it the same treatment took 1,132 MB to 178, and tuning `write_body`'s threshold from \
+             512 to 128 took it to 169. Output byte-identical on all 159 fixtures, fixpoint \
+             intact, 5.4x faster.\n\n\
+             So this bar can now be an instrument instead of a cushion: at 12.0 against 9.2 it \
+             catches a real regression while leaving room for the compiler to grow honestly. The \
+             thing it was waiting for A12 to fix was never a lifetime problem — it was a \
+             data-structure bug, and A12 could not have fixed it, because the dead prefixes are \
+             interleaved with the live String that is still growing.",
             kb_per_line
         );
     }
