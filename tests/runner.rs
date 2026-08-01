@@ -1694,16 +1694,44 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
     let _ = fs::remove_dir_all(&scratch);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     assert_eq!(out, "1\n2\n3\n", "the reads before the bad one must still print");
-    // The message carries the numbers and the position, because "outside the array" left
-    // a reader to guess which index and how long the array was — and the two together
-    // are usually the whole diagnosis. That improvement is what found the short-circuit
-    // bug in v0.0.73, so it is asserted rather than assumed.
+    // The message carries the numbers, because a bare "out of bounds" left a reader to guess
+    // which index and how long the array was — and the two together are usually the whole
+    // diagnosis. That improvement is what found the short-circuit bug in v0.0.73, so it is
+    // asserted rather than assumed.
+    //
+    // The wording is stage-0's as of v0.0.263 (B19). It used to be stage-1's own — "index 3 is
+    // outside an array of 3" — and this assertion was written against it, which is why closing
+    // B19 broke a test that was otherwise right. Worth noting WHY that is the correct direction:
+    // this test asserted stage-1's text in isolation, so it could confirm the message was
+    // informative and never that it was the SAME message the other compiler prints. Two
+    // compilers can both be informative and still disagree, which is exactly what B19 was.
     assert!(
-        err.contains("index 3 is outside an array of 3"),
+        err.contains("index 3 is out of bounds — this array holds 3 values"),
         "the failure belongs on stderr, with the index and the length: {:?}",
         err
     );
-    assert!(err.contains("(at byte "), "and with the position in the source: {:?}", err);
+    // **And it does NOT carry a raw source byte offset — a decision, not an omission.**
+    //
+    // Stage-1 used to append "(at byte 145)" here and stage-0 never did, which is one of B19's
+    // four divergences. Closing B19 meant choosing a direction, so: the offset goes.
+    //
+    // Not because stage-0 wins by seniority. Because "at byte 145" is a compiler-writer's number
+    // in a user's message. It answers *where is the expression*, when a person holding a failed
+    // program is asking *what was I allowed to pass* — and stage-0's third number, the last valid
+    // index, answers exactly that. The offset is also unactionable as printed: a runtime error
+    // carries no file name, so "byte 145" is an offset into an unnamed buffer, and it is bytes
+    // rather than line and column, so nothing but a tool can use it. If a source position belongs
+    // in a runtime failure it should arrive as `file:line:col`, in BOTH compilers, as its own
+    // change with its own reason — not as one backend's habit.
+    //
+    // Asserted in the negative so the decision has teeth: re-adding the offset to either compiler
+    // fails here, rather than silently re-opening B19 from the other side.
+    assert!(
+        !err.contains("(at byte "),
+        "the runtime message must not carry a raw source byte offset — see the note above; \
+         stage-0 has never printed one and B19 was closed by dropping it: {:?}",
+        err
+    );
     assert_eq!(code, Some(70), "a named runtime failure exits 70");
 }
 
@@ -5146,24 +5174,25 @@ fn the_burxt_backend_keeps_every_runtime_guarantee() {
     // overflow and read_file.
     //
     // **B19, found the moment this test began checking the MESSAGE and not just the exit.** Four
-    // fixtures die correctly at exit 70 and say something different from stage-0. That is its own
-    // defect — the two compilers disagree about what a runtime failure is CALLED — and it is not
-    // B18's, so it is named here rather than folded in or quietly tolerated.
+    // fixtures died correctly at exit 70 and said something different from stage-0 — the two
+    // compilers disagreeing about what a runtime failure is CALLED. Its own defect, named rather
+    // than folded into B18 or quietly tolerated, and **all four are CLOSED as of v0.0.263**:
     //
-    // Listed by exact name and matched exactly: a new divergence fails, and fixing one fails too
-    // until it is struck from the list. A bare count would let one be traded for another.
-    const B19_RUNTIME_TEXT_DIVERGES: [&str; 4] = [
-        // stage-1 routes argument access through the array bounds check and loses the framing
-        // entirely: "index 99 is outside an array of 1 (at byte 0)". Structural, not wording.
-        "argument_out_of_range",
-        // stage-1: "index 5 is outside an array of 3 (at byte 145)".
-        // stage-0: "index 5 is out of bounds — this array holds 3 values (valid indexes 0 to 2)".
-        "array_oob_runtime",
-        // stage-1 truncates at "arithmetic overflow" and drops the explanation.
-        "mixed_scale_overflow",
-        // Same shape as array_oob_runtime.
-        "slice_index_oob",
-    ];
+    //   argument_out_of_range  stage-1 borrowed the ARRAY bounds check, so a program given one
+    //                          argument and asked for its hundredth said "index 99 is outside an
+    //                          array of 1" — naming an array nobody wrote. It has its own check
+    //                          and its own message now. Structural, not wording.
+    //   array_oob_runtime      the third number was the SOURCE BYTE OFFSET — a compiler-writer's
+    //   slice_index_oob        number. Stage-0 prints the last valid index, which is what the
+    //                          reader is actually asking for.
+    //   mixed_scale_overflow   stage-1 truncated at "arithmetic overflow" and dropped the reason.
+    //
+    // The list stays, empty, and the assertion stays an exact match. It is the only thing standing
+    // between "the two compilers say the same thing at runtime" and nobody noticing when they stop
+    // — which is precisely how these four survived: runtime text was compared by NO test until the
+    // B18 tightening required the named message. Keeping an empty list costs one line and means a
+    // new divergence fails loudly instead of being absorbed into a count.
+    const B19_RUNTIME_TEXT_DIVERGES: [&str; 0] = [];
     let mut divergent: Vec<String> = lost
         .iter()
         .filter(|l| l.contains("said the wrong thing"))

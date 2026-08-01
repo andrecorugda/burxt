@@ -173,16 +173,33 @@ return "; LLVM IR written by the Burxt compiler, in Burxt.\n"
     + "\{ i64 1, [2 x i8] c\"-\\00\" \}\n"
     + "@burxt.string_empty = private unnamed_addr constant \{ i64, [1 x i8] \} "
     + "\{ i64 0, [1 x i8] c\"\\00\" \}\n"
-    + "@burxt.overflow_msg = private unnamed_addr constant [42 x i8] "
-    + "c\"burxt runtime error: arithmetic overflow\\0A\\00\"\n"
+    // B19. These three said something different from stage-0, and nothing compared them:
+    // `the_two_compilers_render_a_problem_identically` covers COMPILE-TIME diagnostics, and
+    // runtime text was checked by no test at all until the B18 tightening required the named
+    // message. Same blind spot as B18, one layer up — a program that dies correctly can still
+    // say the wrong thing about why, and for a language whose case is that errors read as
+    // advice, the wording IS the feature.
+    + "@burxt.overflow_msg = private unnamed_addr constant [97 x i8] "
+    + "c\"burxt runtime error: arithmetic overflow \\E2\\80\\94 the exact result no "
+    + "longer fits in the value range\\0A\\00\"\n"
     + "@burxt.region_msg = private unnamed_addr constant [87 x i8] "
     + "c\"burxt runtime error: region memory exhausted — this build "
     + "reserves 4 GB per process\\0A\\00\"\n"
     + "@burxt.divzero_msg = private unnamed_addr constant [39 x i8] "
     + "c\"burxt runtime error: division by zero\\0A\\00\"\n"
-    + "@burxt.bounds_msg = private unnamed_addr constant [76 x i8] "
-    + "c\"burxt runtime error: index %lld is outside an array of %lld"
-    + " (at byte %lld)\\0A\\00\"\n"
+    // The third number was the SOURCE BYTE OFFSET, which is a compiler-writer's number: it
+    // tells a reader where in the file the indexing expression sits, not what they may
+    // legally pass. Stage-0 prints the last valid index instead, which is the number that
+    // ends the argument about whether 5 was allowed.
+    + "@burxt.bounds_msg = private unnamed_addr constant [109 x i8] "
+    + "c\"burxt runtime error: index %lld is out of bounds \\E2\\80\\94 this array "
+    + "holds %lld values (valid indexes 0 to %lld)\\0A\\00\"\n"
+    // `argument(n)` had NO message of its own — it borrowed the array bounds check, so a
+    // program given one argument and asked for its hundredth said "index 99 is outside an
+    // array of 1", naming an array the programmer never wrote. Structural, not wording.
+    + "@burxt.argument_msg = private unnamed_addr constant [114 x i8] "
+    + "c\"burxt runtime error: argument(%lld) does not exist \\E2\\80\\94 this program "
+    + "was given %lld arguments (0 is its own name)\\0A\\00\"\n"
     + unit.globals + "\n" + unit.finish();
 }
 
@@ -393,7 +410,7 @@ function is_subcommand(word: String) -> Bool {
 // this string against `Cargo.toml`, which is the only thing that can catch a duplicated fact
 // diverging: not more care at the bump, but a test that fails when the two disagree.
 function usage() -> Int {
-    print_error("burxt 0.0.262 — the Burxt compiler, written in Burxt");
+    print_error("burxt 0.0.263 — the Burxt compiler, written in Burxt");
     print_error("usage:");
     print_error("  burxt check   <file.bx>                  parse and typecheck only");
     print_error("                <file.bx> --json         ... as JSON, for editors and CI");
@@ -425,7 +442,7 @@ if argument_count() > 1 {
 }
 
 if command == "--version" || command == "-V" {
-    print_error("burxt 0.0.262 — the Burxt compiler, written in Burxt");
+    print_error("burxt 0.0.263 — the Burxt compiler, written in Burxt");
     exit(0);
 }
 

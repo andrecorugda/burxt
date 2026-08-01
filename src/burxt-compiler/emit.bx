@@ -4189,7 +4189,21 @@ function runtime_ir() -> String {
         + "define i64 @burxt.argument(i64 %i) \{\n"
         + "entry:\n"
         + "  %n = load i64, ptr @burxt.argc\n"
-        + "  call void @burxt.bounds(i64 %i, i64 %n, i64 0)\n"
+        // Its OWN check, not `@burxt.bounds` (B19). Borrowing the array one made a program
+        // given one argument and asked for its hundredth say "index 99 is outside an array
+        // of 1" — naming an array the programmer never wrote, and offering a valid-index
+        // range for it. The failure is real; the explanation was of a different program.
+        + "  %low = icmp slt i64 %i, 0\n"
+        + "  %high = icmp sge i64 %i, %n\n"
+        + "  %bad = or i1 %low, %high\n"
+        + "  br i1 %bad, label %missing, label %present\n"
+        + "missing:\n"
+        + "  %err = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.argument_msg, "
+        + "i64 %i, i64 %n)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n"
+        + "present:\n"
         + "  %argv = load ptr, ptr @burxt.argv\n"
         + "  %at = getelementptr ptr, ptr %argv, i64 %i\n"
         + "  %s = load ptr, ptr %at\n"
@@ -4449,10 +4463,14 @@ function runtime_ir() -> String {
         + "ok:\n  ret void\n"
         + "oops:\n"
         + "  %err = load ptr, ptr @stderr\n"
-        // The numbers, because "outside the array" leaves a reader to guess which index
-        // and how long the array was — and the two together usually name the bug.
+        // The numbers, because "out of bounds" leaves a reader to guess which index and how
+        // long the array was — and the two together usually name the bug. The THIRD is the
+        // last valid index rather than `%at`, the source byte offset this used to print:
+        // `%at` answers "where is the expression" and the reader is asking "what was I
+        // allowed to pass". Stage-0 has always printed the latter (B19).
+        + "  %last = sub i64 %limit, 1\n"
         + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.bounds_msg, i64 %i, "
-        + "i64 %limit, i64 %at)\n"
+        + "i64 %limit, i64 %last)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n\}\n\n"
         + "define i64 @burxt.divide_toward_zero(i64 %a, i64 %b) \{\n"
