@@ -491,7 +491,7 @@ A5, nothing named as a limit.
 | ~~A4~~ | ~~**`pure` on a method / `pure` returning an Option**~~ **DONE v0.0.248, and the two halves were ONE branch.** A variant constructor `Enum.Variant(x)` PARSES as a method call and is told apart inside the method-call branch — but the blanket *"a pure function may not call a method"* refusal sat at the TOP of that branch, before anything checked whether the receiver was an enum. **So a constructor was refused for being SHAPED like a method call**, and one removal fixed both items. `lib/array.bx`'s comment had named that mechanism exactly, years before anyone acted on it. **The row also understated the payoff:** `typeck.rs` has always checked a method's clauses with `in_pure` set, so `requires self.sum() > 0` was already asking whether `sum` is pure and being refused by the blanket branch — the whole second half of the item is that the answer can now be yes | — |
 | A5 | **`.chars()` / codepoint iteration** — A4.4's one remaining gap | M | The whole UTF-8 layer: correct case handling · a `string_reverse` that does not corrupt · char indexing · `\uXXXX` in JSON · `is_valid_utf8` |
 | ~~A6~~ | ~~**`for i in 0..n`**~~ **DONE v0.0.245**, both compilers, ten fail fixtures, all refused by both. **Exclusive only, and no inclusive form** — three reasons: `0..len(xs)` is the same bound `while i < len(xs)` already writes, half-open ranges tile with no gap (which is why `substring(s, from, LENGTH)` is half-open too), and two forms one character apart where that character changes the iteration count is precisely what a reviewer's eye slides over. Cost named: `0..n + 1` shows a visible `+ 1` rather than an invisible `=`. **`for`-only, not a value** — a range as a value wants an iterator protocol (A11) and half of one is worse than waiting. **Reversed LITERALS refused, reversed computed bounds run zero times**, because `for i in 0..len(xs)` over an empty array is correct code that must not trap | — |
-| A7 | **Integer widths** `i32`/`u8`/`u32`/`u64` — **STAGE-0 BUILT AND VERIFIED v0.0.260. Stage-1 lexes the four words and implements none of them, so the two compilers DISAGREE on a width program today; see §A7e** | M→**L** | C structs (`dirent.d_name`) · fixed-width records → N9 row 6 · `clock_gettime` → **monotonic and sub-second time**, so benchmarking and timeouts · binary formats · A4.4's deferred **Bytes type** |
+| A7 | **Integer widths** `i32`/`u8`/`u32`/`u64` — design settled v0.0.252 (§A7d); **in flight.** v0.0.260 shipped the tooling half (grammar, `.vsix`, reference) ahead of the compiler by mistake — see §A7e, which is a lesson about measurement, not a status | M→**L** | C structs (`dirent.d_name`) · fixed-width records → N9 row 6 · `clock_gettime` → **monotonic and sub-second time**, so benchmarking and timeouts · binary formats · A4.4's deferred **Bytes type** |
 | A8 | **Tuples** | M | `zip` · `enumerate` · `char_indices` · `split_at` · `divmod` · `split_once` without inventing a record |
 | A9 | **Generic interfaces** — the cheap alternative to closures. `dynamic Trait` is already a function value in all but name; interfaces simply cannot take type parameters. **On no roadmap — needs an explicit yes/no, because YES may replace A10** | M | `sort_by` · predicates · visitors · most of `map`/`filter`, in a form consistent with the no-closures decision |
 | A10 | **Closures / function values** — or A9 instead of it | **L** | `map`/`filter`/`fold`/`any`/`all`/`retain`/`partition`/`position` across four libraries **at once** · `signal()`, so a server can shut down cleanly |
@@ -643,49 +643,55 @@ lands in `is_reserved_name`.** Correct §A7d's wording accordingly.
 
 **Everything else is ordinary Burxt on top of it.**
 
-### A7e — stage-0 landed at v0.0.260, and the two compilers now disagree
+### A7e — v0.0.260 shipped A7's tooling ahead of its compiler, and why the measurement lied
 
-The §A7d design is **built and verified in stage-0**, and the three-file cascade §A7d predicted is paid:
-`i32`/`u8`/`u32`/`u64` are in the grammar, the `.vsix` and the generated reference. Measured, not read:
+**What is true:** at v0.0.260 the grammar, the `.vsix` and the generated reference list `i32`, `u8`,
+`u32` and `u64`. **The compiler in that same commit does not know any of them** — `git show
+HEAD:src/rust-compiler/lexer.rs | grep -c TyWidth` answers `0`, and a freshly built binary says
+*"unknown type `u8` — declare it with `class u8 { ... }`"*. So the highlighter colours four types the
+language does not have. That is a false promise to a reader, shipped by me, and this section exists
+because the way it happened is worth more than the defect.
 
-```
-$ burxt check w1.bx        # let n: u8 = 5;
-error: `u8` only exists at the C boundary (external function signatures) — use Int in
-Burxt code; values convert at the call.
+**How it happened.** An agent's A7 build was in the working tree. I measured it by running
+`./target/release/burxt`, got a boundary-only refusal and a per-width runtime trap, and wrote both
+transcripts down as evidence. Then the agent stashed its work — as I had asked it to, an hour earlier
+and had forgotten — and I committed. **The binary was still the old build.** `cargo build --release`
+said `Finished in 0.02s` because the source it was asked about had gone backwards, not forwards.
 
-$ burxt run w3.bx          # external function putchar(c: u8); putchar(300)
-burxt runtime error: this value does not fit in a u8 — the external parameter holds 0 to 255
-exit 70
-```
+So the rule this repository already had — *DONE is not evidence, the suite is* — has a sibling:
 
-Boundary-only, and a **per-width** runtime trap that names the width and its range — both halves of the
-design, not just the syntax.
+> **A binary is not evidence of the source it came from.** `target/release/burxt` is an artifact of
+> whatever the tree held when it was last built, and in a tree with another writer in it that can be
+> minutes ago and three reverts away. Measure the source, or rebuild and measure, and when the two
+> disagree believe `git show`.
 
-**Stage-1 has none of it, and that is the state to hold in view rather than the "reverted" the row said
-for eight versions while the build sat in the tree.** Stage-1 lexes the four words — that is why
-`the_two_compilers_know_the_same_keywords` is green — and its checker implements nothing behind them:
+And the sharper form, because the same greps ten minutes apart gave opposite answers:
 
-```
-$ stage1 check w1.bx    error: declared u8, but the value is Int          # refuses, WRONG REASON
-$ stage1 check w2.bx    error: external function `abs` returns i32, but only Int, CInt or
-                        CPointer may cross the C boundary as a return    # REFUSES what stage-0 ACCEPTS
-```
+> **You cannot measure a tree someone else is writing to.** Ownership by file was supposed to prevent
+> this and did not, because the *artifact* is shared even when no file is. What is stable under a
+> concurrent writer is `git show <commit>:<path>` and nothing else.
 
-The first line is the trap [[burxt-stage1-silent-agreement]] names: stage-1 reads `u8` as an unknown
-named type, every rule goes quiet, and the *accidental* refusal reads like agreement. A fail fixture
-could not tell the difference — it checks refusal, not the reason — which is the second process rule in
-the negative direction.
+**Why nothing caught it.** `editor_grammar_knows_every_keyword_the_compiler_does` and
+`the_web_highlighter_knows_every_keyword_the_compiler_does` both run **compiler → editor** and there is
+no test in the other direction, so a word the editor knows and the compiler does not is invisible to
+the suite. That is the same shape as the first process rule: a check that has never run looks exactly
+like one that passes. **The missing invariant is the reverse direction** — every type the Burxt grammar
+and the Burxt word lists highlight must be a type the compiler knows — and it lands with A7's compiler
+half, when it can be green for the right reason rather than by having nothing to say.
 
-**The forcing function already exists and needs nothing built.** `the_burxt_backend_compiles_a_growing_
-share_of_the_suite` is an `assert_eq!(correct, total)` — an equality since v0.0.113, deliberately not a
-ratchet, *"keeping one now would let a regression hide above the line."* So **the moment a width program
-lands in `tests/pass/`, that equality goes red and stays red until stage-1 implements widths.** That is
-why no width pass fixture is committed at v0.0.260: the fixture is not documentation of the gap, it is
-the gate, and it lands **with** stage-1's half, in the same version, as §A0 requires of every row.
+**A second false green found while looking.** `the_web_highlighter_knows_every_keyword_the_compiler_does`
+scraped all fourteen `words(...)` calls in `docs/assets/burxt-editor.js`, seven of which belong to the
+PHP, Python and Rust snippets on the comparison page. So the test answered *"does this page know the
+word at all"* under a name promising *"does the BURXT highlighter know it."* `i32`/`u8`/`u32`/`u64`
+appear in that file exactly once — in **Rust's** type list — so the test was green while Burxt's own
+list had none of them. Now scoped to the lists above `var PORTS`.
 
-Remaining: `check.bx` and `emit.bx` — the boundary-only rule, the extern parameter/return admission, and
-the per-width checked truncation, mirroring `build_to_cint`. Then the pass fixture, and A7 is done on
-both stages.
+**Status of the work itself:** in flight, both stages, per §A7d. The design is unchanged and good — one
+`Type::Width { bits, signed }`, boundary-only, a per-width trap. When it lands, `tests/pass/` gets its
+first width program, and that fixture is the gate: `the_burxt_backend_compiles_a_growing_share_of_the_
+suite` is an `assert_eq!(correct, total)`, deliberately an equality and not a ratchet since v0.0.113, so
+the fixture goes red the moment it exists and stays red until **stage-1** implements widths too. It
+lands with stage-1's half, in one version, as §A0 requires of every row.
 
 ## B — Urgent bugs, silent wrong answers first
 
