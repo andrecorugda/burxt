@@ -1968,6 +1968,56 @@ fn every_log_file_is_linked_from_its_index() {
     );
 }
 
+/// The same invariant, for `spec/` — and this is now the one that matters more. `docs/log/`
+/// froze at v0.0.89 and says so in its own header; from v0.0.90 the record moved into the
+/// milestone specs, each carrying its own status block. So the index that has to stay honest
+/// is `spec/README.md`, and it had **no check at all** until this was written.
+///
+/// It earned itself on the first run: `spec/A7.0-NAMING.md` had existed unlinked since
+/// 2026-07-29. A spec nobody links is a spec nobody finds, which makes it a spec nobody
+/// applies — and the naming rule is precisely the kind that dies quietly when unread.
+#[test]
+fn every_spec_is_linked_from_its_index() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = root.join("spec");
+    let index = fs::read_to_string(dir.join("README.md")).expect("spec/README.md");
+
+    let mut files = Vec::new();
+    for entry in fs::read_dir(&dir).unwrap() {
+        let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+        if name.ends_with(".md") && name != "README.md" {
+            files.push(name);
+        }
+    }
+    files.sort();
+    assert!(files.len() >= 30, "spec/ lost files: {} left, {:?}", files.len(), files);
+
+    let unlinked: Vec<&String> = files.iter().filter(|n| !index.contains(n.as_str())).collect();
+    assert!(
+        unlinked.is_empty(),
+        "spec/README.md is the index and does not link {:?} — add a row saying what it is, \
+         rather than deleting this assertion",
+        unlinked
+    );
+
+    // And the other direction: every link in the index resolves. Anchors and paths that leave
+    // the directory are somebody else's invariant.
+    for piece in index.split('(').skip(1) {
+        let target = piece.split(')').next().unwrap_or("");
+        if target.ends_with(".md")
+            && !target.starts_with("../")
+            && !target.contains('#')
+            && !target.contains('/')
+        {
+            assert!(
+                dir.join(target).exists(),
+                "spec/README.md links {}, which does not exist",
+                target
+            );
+        }
+    }
+}
+
 /// Two directories of data, and the DIRECTORY is the promise: everything in
 /// `examples/negative/` must be rejected, everything in `examples/inputs/` must compile.
 ///
@@ -2867,24 +2917,61 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
     // Peak RSS, not allocation count, because the region touches its pages and the pages are
     // what run out. Skipped rather than failed when /usr/bin/time is absent, since a test that
     // cannot measure must not claim a verdict.
-    if std::path::Path::new("/usr/bin/time").exists() {
-        let measured = Command::new("/usr/bin/time")
-            .arg("-f")
-            .arg("%M")
+    // **The existence check was testing for the wrong thing.** `/usr/bin/time` EXISTS on macOS —
+    // it is simply a different program. BSD time has no `-f`, so the path check passed, the flag
+    // was rejected, and the assertion below fired on a Darwin runner with
+    //
+    //     /usr/bin/time: illegal option -- f
+    //
+    // Exactly the shape of the `ldd` bug in `scripts/release.sh`: a capability probe that asks
+    // whether a file is present when what it needs to know is whether it can do the job.
+    //
+    // So the flag is probed rather than assumed, and the two spellings are read differently:
+    // GNU `-f %M` answers KILOBYTES, BSD `-l` answers "maximum resident set size" in BYTES.
+    // Getting that wrong would report a number 1024x off and still look plausible.
+    let gnu_time = Command::new("/usr/bin/time")
+        .args(["-f", "%M", "true"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    let bsd_time = !gnu_time
+        && Command::new("/usr/bin/time")
+            .args(["-l", "true"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+    if gnu_time || bsd_time {
+        let mut cmd = Command::new("/usr/bin/time");
+        if gnu_time {
+            cmd.args(["-f", "%M"]);
+        } else {
+            cmd.arg("-l");
+        }
+        let measured = cmd
             .arg(&stage1)
             .arg(root.join("src/burxt-compiler/main.bx"))
             .arg(scratch.join("self-memory.ll"))
             .output()
             .expect("time on stage1");
         let reported = String::from_utf8_lossy(&measured.stderr);
-        let kb: u64 = reported
-            .lines()
-            .last()
-            .unwrap_or("0")
-            .trim()
-            .parse()
-            .unwrap_or(0);
-        assert!(kb > 0, "could not read peak RSS from:\n{}", reported);
+        let kb: u64 = if gnu_time {
+            reported.lines().last().unwrap_or("0").trim().parse().unwrap_or(0)
+        } else {
+            // "         12345678  maximum resident set size" — bytes on Darwin.
+            reported
+                .lines()
+                .find(|l| l.contains("maximum resident set size"))
+                .and_then(|l| l.trim().split_whitespace().next())
+                .and_then(|n| n.parse::<u64>().ok())
+                .map(|bytes| bytes / 1024)
+                .unwrap_or(0)
+        };
+        assert!(
+            kb > 0,
+            "could not read peak RSS from {} time:\n{}",
+            if gnu_time { "GNU" } else { "BSD" },
+            reported
+        );
         eprintln!("the compiler's peak RSS on its own source: {} MB", kb / 1024);
         // 480 MB from v0.0.185, and the TREND is what this number is for rather than the value.
         // 196 MB at v0.0.90, 239 at v0.0.110, 335 at v0.0.121, 392 at v0.0.168, 400 at v0.0.169,
@@ -6672,11 +6759,22 @@ fn run_leaves_nothing_behind_and_build_leaves_its_product() {
             .current_dir(&scratch)
             .output()
             .expect("run");
+        // stderr and the exit status are in the message because without them this failure is
+        // undiagnosable from a CI log: on `darwin-arm64` the stage-1 compiler's `run` printed
+        // nothing and the assertion could say only `left: ""`. Whatever `run` complained about
+        // went to stderr and was discarded by the very assertion that needed it.
+        //
+        // Third time this session that a test detected something it could not describe — after
+        // the guarantee test that accepted any non-zero exit, and the coverage test that counted
+        // without naming. The rule that keeps emerging: if a test can fail, it must be able to
+        // say what failed.
         assert_eq!(
             String::from_utf8_lossy(&ran.stdout).trim(),
             "7",
-            "{}: `run` should print the program's output",
-            which
+            "{}: `run` should print the program's output. exit={:?}\n--- its stderr ---\n{}",
+            which,
+            ran.status.code(),
+            String::from_utf8_lossy(&ran.stderr),
         );
         assert!(
             !scratch.join("ephemeral").exists(),
