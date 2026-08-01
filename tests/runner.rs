@@ -6358,7 +6358,60 @@ fn the_two_compilers_report_the_same_version() {
             version, declared
         );
     }
-    eprintln!("both compilers report version {}", declared);
+    // And `Cargo.lock`, which is the version site a local run CANNOT see.
+    //
+    // v0.0.261 was green locally at 78 of 78 and red in CI on the build step:
+    //
+    //     error: cannot update the lock file ... because --locked was passed
+    //
+    // A local `cargo test` rewrites `Cargo.lock` silently as part of building, so the bump appears
+    // to have worked; CI passes `--locked` and refuses. Worse, the rewrite happens DURING the run,
+    // so a suite verified after staging still leaves the new lock file unstaged — the one ordering
+    // where "stage, then verify" is not enough, because the verification itself dirties the tree.
+    //
+    // So the lock is checked here rather than trusted to a habit. This is the fourth version site
+    // (`Cargo.toml`, two in `main.bx`, and this) and the only one whose failure mode is invisible
+    // to the suite that is supposed to catch it.
+    // Read the INDEX copy, not the working-tree copy, and the distinction is the whole test.
+    // `cargo test` regenerates `Cargo.lock` before running, so by the time any test can read the
+    // file from disk cargo has already repaired it — a disk-reading version of this check passes
+    // even when the lock is stale, which I confirmed by mutation before writing this one. It is
+    // unfalsifiable, and an unfalsifiable check is worse than none because it looks like cover.
+    //
+    // `git show :Cargo.lock` is what will actually be committed, cargo cannot rewrite it, and it
+    // is exactly what CI's `--locked` will read. It relies on this repository's convention that
+    // the suite is run AFTER staging — which is the same convention three separate incidents this
+    // session established for other reasons.
+    let staged = Command::new("git")
+        .args(["show", ":Cargo.lock"])
+        .current_dir(root)
+        .output()
+        .expect("git show :Cargo.lock");
+    if !staged.status.success() {
+        eprintln!("skipping the Cargo.lock check: nothing staged (run the suite after staging)");
+        eprintln!("both compilers report version {}", declared);
+        return;
+    }
+    let lock = String::from_utf8_lossy(&staged.stdout).to_string();
+    let locked = lock
+        .split_once("name = \"burxt\"")
+        .and_then(|(_, rest)| rest.split_once("version = \""))
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(v, _)| v)
+        .expect(
+            "the `burxt` package entry in `Cargo.lock`. If its shape changed, fix this scrape \
+             rather than dropping it — CI builds with `--locked` and this is the only check that \
+             sees a stale lock before the push does.",
+        );
+    assert_eq!(
+        locked, declared,
+        "`Cargo.lock` pins burxt {} and `Cargo.toml` says {}. CI builds with `--locked`, so this \
+         is a red build on a suite that passed locally — `cargo test` rewrote the lock as a side \
+         effect of running, which is exactly why it went unnoticed. Stage `Cargo.lock` with the bump.",
+        locked, declared
+    );
+
+    eprintln!("both compilers and Cargo.lock report version {}", declared);
 }
 
 /// **The two compilers know the same keywords — as an equality, not a floor.**
