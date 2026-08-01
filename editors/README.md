@@ -191,20 +191,89 @@ so loudly when it does not.
 
 `.bx` files currently show as plain text on github.com. Burxt is not in
 [github/linguist](https://github.com/github-linguist/linguist) yet, and that is a
-**popularity gate rather than a technical one**: Linguist asks that a language
-already be in use across a few hundred public repositories before it is added.
+**popularity gate rather than a technical one**.
 
-What is already done, so the submission is a form-filling exercise when the bar
-is met:
+### The bar, quoted rather than remembered
+
+An earlier version of this section said "a few hundred public repositories". That
+was wrong, and wrong in the flattering direction. Linguist's
+[`CONTRIBUTING.md`][linguist-contrib] states the requirement as *files*, not repos:
+
+> - at least **2000 files** per extension […] indexed in the last year […] excluding
+>   forks, for extensions […] expected to occur more than once per repo, like Ruby's
+>   `.rb` extension.
+> - at least 200 files […] for extensions or filenames expected to only occur **once**
+>   per repo, like a `Makefile`.
+> - the results should show a reasonable distribution across unique `:user/:repo`
+>   combinations […] If particular users are showing a high proportion of the results,
+>   **for example the primary language owner, we will filter out those users** using
+>   `-user:<username>`.
+
+`.bx` is a per-file extension, so the number is 2000, not 200. And the last clause is
+the one that actually bites: this repository is the primary language owner's, so every
+`.bx` file in it counts for **zero**. The evidence has to come from repositories that
+are not ours. Linguist also states plainly that it does "not accept PRs for very new or
+hobby languages, and will close any such PRs" — so filing early is not a neutral act.
+
+The query the PR template asks for wants keywords unique to the language, so that
+`.bx` files belonging to something else do not pad the count. `RoundHalfEven` is the
+best single token we have — it is a Burxt rounding contract, it appears in 8 of the 30
+`.bx` files here, and nothing else spells it:
+
+```
+https://github.com/search?type=code&q=NOT+is%3Afork+path%3A*.bx+RoundHalfEven
+```
+
+Broader, if the count above is short: `Decimal<` reaches 18 of 30 files, and the
+quoted-path import form `use "option.bx"` is unlike any other language's `use`.
+
+Merges land only shortly before a Linguist release, every few months.
+
+### Verified clear, 2026-08-01
+
+Two things that would have been rejection causes are checked and clean:
+
+- **`.bx` is unclaimed.** No language in Linguist's `languages.yml` on `main` uses the
+  extension, so no `heuristics.yml` entry and no `test_heuristics.rb` case is needed —
+  a missing heuristic test is the single most common reason these PRs bounce.
+  *Caveat with a clock on it:* BoxLang (Ortus Solutions) also uses `.bx`. It has no
+  Linguist issue or PR today. If it lands first, Burxt inherits the heuristic work.
+
+  **Decided, so it stays decided: `.bx` is not being given up.** `.bxt` is unclaimed
+  and a rename is cheap *today*, which makes it a tempting suggestion — but the
+  trigger for it would only fire once Burxt has outside adoption, and by then the
+  `.bx` files in strangers' repositories *are* the Linguist evidence. Renaming at
+  that point discards the evidence and splits the ecosystem across two extensions
+  permanently. Supporting both is worse still: Linguist's bar is **per extension**,
+  so two extensions halve the count on each. If we end up sharing `.bx`, the answer
+  is a heuristic, not a retreat.
+- **The grammar survives PCRE.** Linguist compiles grammars with PCRE where TextMate
+  uses Oniguruma, and rejects grammars whose patterns fail. All 57 regexes in
+  `burxt.tmLanguage.json` were scanned for the Oniguruma-only constructs (`\h`, `\y`,
+  `(?~`, `\K`, variable-length lookbehind): **zero hits**.
+
+### The submission kit
 
 - [x] An open-source TextMate grammar (`vscode/syntaxes/burxt.tmLanguage.json`,
       scope `source.burxt`) — the artifact Linguist actually consumes.
 - [x] Unambiguous extension: `.bx`.
-- [x] Real sample programs to contribute as Linguist samples — `examples/` and
-      the 230+ programs under `tests/`.
 - [x] A licence Linguist accepts (MIT OR Apache-2.0).
 - [x] A brand colour taken from the artwork: `#E8502A` (see `assets/README.md`).
-- [ ] Usage across enough public repositories. **This is the only open item.**
+      The PR template requires a *rationale* for the colour, not just the hex; ours is
+      that it is sampled pixel-wise from `burxt-b-favicon-512.png`.
+- [ ] **Two or three** real-world sample programs — not the 230+ under `tests/`, which
+      an earlier version of this list offered. `bundle exec rake samples` feeds a
+      Bayesian classifier, and burying it in near-identical fixtures teaches it the
+      shape of our test suite rather than the shape of the language. `examples/tour.bx`,
+      `examples/invoice.bx` and `examples/parser.bx` are the intended three.
+- [ ] **A standalone grammar repository.** `script/add-grammar <url>` adds the grammar
+      repo to Linguist *as a git submodule* and copies its licence file. Pointing it at
+      this repository would vendor the whole compiler into Linguist, and our licence
+      files are named `LICENSE-MIT` / `LICENSE-APACHE` rather than a plain `LICENSE`,
+      which the script's detection may not find. The grammar needs its own small repo
+      with a conventional licence file before any PR is opened.
+- [ ] Usage across enough public repositories — 2000 `.bx` files, ours excluded.
+      **This remains the only item that cannot be bought with work here.**
 - [ ] The `languages.yml` entry, submitted as a PR:
 
 ```yaml
@@ -215,10 +284,12 @@ Burxt:
     - ".bx"
   tm_scope: source.burxt
   ace_mode: text
-  language_id: <assigned by linguist>
+  language_id: <assigned by script/update-ids>
 ```
 
 **Deliberately not worked around.** `.gitattributes` could force `.bx` to be
 counted as some other language and the repo would look "detected" — but it would
 be *wrongly* detected, and a wrong label is worse than no label. That is the same
 standard the language itself applies to a silently wrong number.
+
+[linguist-contrib]: https://github.com/github-linguist/linguist/blob/main/CONTRIBUTING.md#language-extension-and-filename-usage-requirements

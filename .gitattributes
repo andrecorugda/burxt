@@ -12,9 +12,10 @@ spec/**        linguist-documentation
 editors/vscode/syntaxes/*.json linguist-vendored=false
 
 # NOTE on GitHub language detection: Burxt is not yet in github/linguist, so
-# `.bx` files show as plain text on github.com. That is a popularity gate (the
-# language has to be in use across a few hundred public repositories), not a
-# technical one — the grammar Linguist requires already lives in
+# `.bx` files show as plain text on github.com. That is a popularity gate — 2000
+# non-fork `.bx` files indexed in the last year, and Linguist filters out the
+# primary language owner, so this repository's own files count for zero — not a
+# technical one; the grammar Linguist requires already lives in
 # editors/vscode/syntaxes/burxt.tmLanguage.json. Deliberately NOT worked around
 # by mislabelling `.bx` as another language: a wrong label is worse than no
 # label. See editors/README.md for the submission checklist.
