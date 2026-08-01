@@ -1,7 +1,18 @@
-// CInt keeps C's 32-bit sign intact: strcmp's -1 must stay -1.
+// CInt keeps C's 32-bit sign intact: strcmp's NEGATIVE must stay negative.
 // (Declared -> Int, the old i64 mapping read undefined upper bits.)
+//
+// This once printed the raw value and expected `-1`. That was wrong, and arm64 proved it:
+// C specifies only that strcmp returns a value less than, equal to, or greater than zero —
+// **the magnitude is unspecified**. glibc on x86-64 answered -1 here; on aarch64 it answered
+// -32, and the same on `widths.bx` gave -64. Neither is a bug; the fixture was asserting an
+// implementation detail of one libc on one architecture.
+//
+// The sign is what this fixture is actually about — a negative i32 read as 64 bits would be
+// enormous, which is the defect CInt exists to prevent — so the sign is what it now checks.
+// Burxt's own String ordering was never exposed to this: `codegen.rs` uses strcmp's sign and
+// nothing else ("the sign IS the answer").
 external function strcmp(a: String, b: String) -> CInt;
-print(strcmp("abc", "abd"));
+print(strcmp("abc", "abd") < 0);
 print(strcmp("abc", "abd") < 0);
 print(strcmp("same", "same") == 0);
 print(strcmp("abd", "abc") > 0);

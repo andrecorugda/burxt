@@ -27,7 +27,12 @@
 // uses for its scale and contract. Four variants would have been four identical arms at every site.
 
 // `strcmp` answers a C `int`, and it answers a NEGATIVE one. Declared `i32`, so the result is
-// SIGN-extended into Burxt's 64 bits: -1 stays -1.
+// SIGN-extended into Burxt's 64 bits: negative stays negative.
+//
+// It says "negative" rather than "-1" because C specifies only the SIGN — the magnitude of
+// strcmp's answer is unspecified, and the two libcs disagree. glibc/x86-64 gives -1 for
+// `strcmp("a","b")`; glibc/aarch64 gives -64. This fixture asserted -1 and failed on the first
+// arm64 runner that ever ran it.
 external function strcmp(a: String, b: String) -> i32;
 
 // `strlen` answers a `size_t`. Declared `u8` here — not what the real header says, and chosen on
@@ -46,9 +51,12 @@ external function malloc(n: u64) -> CPointer;
 // This is the whole reason a width carries its signedness. `strcmp("a", "b")` is negative; read as
 // unsigned it would be an enormous positive number, and every comparison built on it would be
 // backwards while looking perfectly reasonable.
-print(strcmp("a", "b"));                         // -1
+// `< 0` and not the raw value: sign-extension is what is under test, and reading a negative
+// i32 as unsigned would make this `true` become `false`. The magnitude would only be testing
+// which libc the runner has.
+print(strcmp("a", "b") < 0);                     // true
 print(strcmp("b", "a") > 0);                     // true
-print(strcmp("a", "a"));                         // 0
+print(strcmp("a", "a"));                         // 0 — equality IS specified by C
 
 // ---- 2. ZERO extension: a u8 return of 200 is 200, not -56 ----
 //
