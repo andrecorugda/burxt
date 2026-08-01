@@ -375,8 +375,25 @@ function is_subcommand(word: String) -> Bool {
 // The discipline underneath it is the Unix one and it is worth keeping deliberately: **status to
 // stderr, product to stdout.** So `burxt emit-ir x.bx > x.ll` writes IR and not a progress
 // report, and a CI log shows what went wrong on the stream built for it.
+// **The version is a hardcoded string, and it DRIFTED 29 versions before anything noticed.**
+//
+// `main.rs` prints `env!("CARGO_PKG_VERSION")` and therefore cannot drift — it reads the one place
+// the version is defined. Burxt has no equivalent: no build script, no compile-time environment
+// read, so the number has to be written here by hand. That is the honest cost of the language not
+// having the feature, and it is not going away.
+//
+// What made it a bug rather than a chore: `Cargo.toml`'s bump asserts it replaced exactly one
+// thing, and this one used a plain string replace with no assertion. An agent copied its own
+// `main.bx` over this file during a merge, reverting the number to its base — and every bump after
+// that searched for a string that no longer existed and silently did nothing. **`burxt --version`
+// reported 0.0.230 while the compiler was at 0.0.259.**
+//
+// My own CLI test asserted `--version` output *contains* "burxt" — the word, not the number — so it
+// passed throughout. `the_two_compilers_report_the_same_version` in `tests/runner.rs` now compares
+// this string against `Cargo.toml`, which is the only thing that can catch a duplicated fact
+// diverging: not more care at the bump, but a test that fails when the two disagree.
 function usage() -> Int {
-    print_error("burxt 0.0.230 — the Burxt compiler, written in Burxt");
+    print_error("burxt 0.0.259 — the Burxt compiler, written in Burxt");
     print_error("usage:");
     print_error("  burxt check   <file.bx>                  parse and typecheck only");
     print_error("                <file.bx> --json         ... as JSON, for editors and CI");
@@ -408,7 +425,7 @@ if argument_count() > 1 {
 }
 
 if command == "--version" || command == "-V" {
-    print_error("burxt 0.0.230 — the Burxt compiler, written in Burxt");
+    print_error("burxt 0.0.259 — the Burxt compiler, written in Burxt");
     exit(0);
 }
 

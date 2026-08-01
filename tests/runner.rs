@@ -6176,6 +6176,71 @@ fn the_burxt_compiler_builds_and_runs_a_program_and_itself() {
     let _ = fs::remove_dir_all(&scratch);
 }
 
+/// **Both compilers report the same version, and the Burxt one had been wrong for 29 versions.**
+///
+/// `main.rs` prints `env!("CARGO_PKG_VERSION")`, so stage-0's `--version` cannot drift — it reads the
+/// one place the version is defined. `main.bx` has no equivalent: Burxt has no build script and no
+/// compile-time environment read, so the number is a hardcoded string. **It said `0.0.230` while
+/// `Cargo.toml` said `0.0.259`.**
+///
+/// The mechanism is worth more than the number. An agent copied its own `main.bx` over the file during
+/// a merge, reverting the version to its base — and every subsequent bump was a plain string replace
+/// searching for the PREVIOUS number, which no longer existed, so each one silently did nothing.
+/// `Cargo.toml`'s bump asserts it replaced exactly one thing. This one did not, because it was a
+/// `.replace()` rather than a checked substitution.
+///
+/// **And my own CLI test asserted `--version` output CONTAINS "burxt"** — the word, not the number — so
+/// it passed the whole time. A test that checks the shape of an answer and not its content is how a
+/// duplicated fact diverges unnoticed.
+///
+/// The duplication itself cannot be removed: Burxt genuinely cannot read `Cargo.toml` at compile time.
+/// So the fix is not care at the bump, it is this test — **when one fact must live in two places, the
+/// only durable guard is something that fails when they disagree.**
+#[test]
+fn the_two_compilers_report_the_same_version() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let declared = env!("CARGO_PKG_VERSION");
+
+    let main_bx = fs::read_to_string(root.join("src/burxt-compiler/main.bx")).unwrap();
+    let marker = "burxt ";
+    let mut found: Vec<String> = Vec::new();
+    for line in main_bx.lines() {
+        // The version lines are `print_error("burxt 0.0.N — the Burxt compiler, written in Burxt");`
+        if !line.contains("the Burxt compiler, written in Burxt") {
+            continue;
+        }
+        let at = match line.find(marker) {
+            Some(a) => a + marker.len(),
+            None => continue,
+        };
+        let word: String = line[at..].chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+        if !word.is_empty() {
+            found.push(word);
+        }
+    }
+
+    // A floor, for the reason every scrape in this file carries one: a pattern that stops matching
+    // finds nothing and agrees with anything. `main.bx` prints its version from `--version` and from
+    // `--help`, so two is the number, and one would mean the scrape half-broke.
+    assert!(
+        found.len() >= 2,
+        "expected at least two version strings in `main.bx` (`--version` and the usage banner), found \
+         {:?}. The scrape has stopped matching — an empty scrape agrees with any version",
+        found
+    );
+    for version in &found {
+        assert_eq!(
+            version, declared,
+            "`src/burxt-compiler/main.bx` reports version {} and `Cargo.toml` says {}. Burxt cannot \
+             read `Cargo.toml` at compile time, so this number is written by hand and CAN drift — it \
+             was 29 versions stale when this test was added, because a bump used a plain string \
+             replace that silently matched nothing. Update `main.bx`.",
+            version, declared
+        );
+    }
+    eprintln!("both compilers report version {}", declared);
+}
+
 /// **The two compilers know the same keywords — as an equality, not a floor.**
 ///
 /// A keyword that exists in one compiler and not the other is **exactly the `?`-operator failure**: `?`

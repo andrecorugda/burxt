@@ -770,6 +770,39 @@ type · no warnings only errors · parser errors arrive alone · SOLID lints · 
 
 ---
 
+### F13 — `tail` is a reserved word, and it is the only common NOUN among them (found v0.0.259)
+
+`let tail: Int = 5;` does not compile: *"expected identifier after 'let', found `tail`"*. Measured
+v0.0.259, and found the only way it could be — by writing the compiler's own test suite **in Burxt**,
+where a list's `tail` is the obvious name for a thing.
+
+**The full reserved list is 31 words**, and every one of them is a structural keyword or a verb except
+this: `as break class const continue dynamic else enum external false for function if implement
+implements in interface is let match mutable print print_error private pure region return self tail true
+while`. Checked against the words a user would plausibly reach for: `result`, `old`, `it`, `value` and
+`count` are all **usable**; `self` and `match` are reserved and nobody is surprised. `tail` is the
+outlier, and it is a noun — `head`/`tail` in list code, `tail` of a file, `tail` of a queue.
+
+**Why it is reserved at all, and why the fix is not free.** `tail` appears only in `return tail <call>`,
+which sits in a position an ordinary identifier can also occupy. `return tail;` is unambiguous today
+because it cannot mean a tail call (there is nothing to call) — but `return tail (x);` genuinely is
+ambiguous: a tail call of `(x)`, or a return of `tail(x)`, a call to a function named `tail`. So making it
+contextual needs two tokens of lookahead and still leaves that case, which is exactly the kind of rule
+`spec/A7.0-NAMING.md` warns costs more to explain than it saves.
+
+**Three options, none obviously right, so this is recorded rather than decided:**
+
+1. **Leave it.** Cost: a common noun is unavailable, forever, and every user meets it the first time they
+   write a list function. Cheapest, and the honest note is that `head` being free while `tail` is not is
+   the sort of asymmetry that reads as an accident even when it is not.
+2. **Contextual after `return`**, accepting the `return tail (x)` ambiguity by resolving it one way and
+   naming the resolution. Costs lookahead and a rule to remember.
+3. **Rename the feature** — `return musttail`, or fold it into `decreases`' vocabulary — so the reserved
+   word is one nobody wants. Costs a language change in both compilers plus the grammar/`.vsix`/reference
+   cascade (§A7d), for an ergonomic win.
+
+Size **S** for 1, **M** for 2 or 3. Not urgent, and it belongs to whoever decides the tail-call surface.
+
 ## G — Post-1.0, by gate
 
 The grouping is the useful part: these are not independent items, they are five gates.
