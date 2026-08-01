@@ -6176,6 +6176,101 @@ fn the_burxt_compiler_builds_and_runs_a_program_and_itself() {
     let _ = fs::remove_dir_all(&scratch);
 }
 
+/// **The two compilers know the same keywords — as an equality, not a floor.**
+///
+/// A keyword that exists in one compiler and not the other is **exactly the `?`-operator failure**: `?`
+/// shipped in stage-0, no fixture used it, and the Burxt front end did not know the character for as
+/// long as the operator existed, while the suite reported 143 of 143. Nothing looked at the two keyword
+/// tables side by side, so nothing could have seen it.
+///
+/// They agree today — 31 each, zero divergence, measured before this test was written. **They agreed by
+/// discipline rather than by test**, which is the same standing that `==` on records had before someone
+/// noticed it already worked: unexamined, and true only until it wasn't.
+///
+/// Prompted by a question from the agent migrating the suite: `editor_grammar_knows_every_keyword_the_compiler_does`
+/// scrapes `lexer.rs`, which reads oddly in a Burxt-primary suite, and it asked whether the Burxt copy
+/// should scrape `lexer.bx`, mirror exactly, or require the grammar to know the UNION. **The union
+/// option would have caught a divergence — but as "the grammar is missing X" rather than "only one
+/// compiler has X"**, which is the right fact reported under the wrong name. So the grammar invariant
+/// mirrors exactly and stays comparable between runners, and the divergence gets its own check here,
+/// where the failure says what actually happened.
+///
+/// Both scrapes carry a FLOOR, and that is not decoration. `editor_grammar_knows_every_keyword_the_compiler_does`
+/// records that its own built-in scrape once matched a code shape that no longer existed, found nothing,
+/// and **passed on its keywords alone while `exit` was missing from the grammar** for however many
+/// versions the refactor was old. A scrape that finds nothing must fail, not agree.
+#[test]
+fn the_two_compilers_know_the_same_keywords() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    // stage-0: the keyword arms of the identifier match, `"word" => Token::Name`.
+    let rs = fs::read_to_string(root.join("src/rust-compiler/lexer.rs")).unwrap();
+    let mut stage0: Vec<String> = rs
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            let rest = l.strip_prefix('"')?;
+            let (word, tail) = rest.split_once('"')?;
+            if !tail.trim_start().starts_with("=> Token::") {
+                return None;
+            }
+            if word.is_empty() || !word.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+                return None;
+            }
+            Some(word.to_string())
+        })
+        .collect();
+
+    // stage-1: `self.add_word("word", code)`.
+    let bx = fs::read_to_string(root.join("src/burxt-compiler/lexer.bx")).unwrap();
+    let mut stage1: Vec<String> = bx
+        .lines()
+        .filter_map(|l| {
+            let at = l.find("add_word(\"")? + "add_word(\"".len();
+            let word = l[at..].split('"').next()?;
+            if word.is_empty() || !word.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+                return None;
+            }
+            Some(word.to_string())
+        })
+        .collect();
+
+    stage0.sort();
+    stage0.dedup();
+    stage1.sort();
+    stage1.dedup();
+
+    // The floors, paying for exactly the failure this test's own comment describes: a scrape whose
+    // pattern stops matching finds nothing and agrees with the other empty set.
+    assert!(
+        stage0.len() >= 25,
+        "the stage-0 keyword scrape found only {} words, and there are at least 25. The pattern \
+         `\"word\" => Token::` has stopped matching — an empty scrape agrees with anything, which is \
+         how `exit` went missing from the editor grammar unnoticed",
+        stage0.len()
+    );
+    assert!(
+        stage1.len() >= 25,
+        "the stage-1 keyword scrape found only {} words via `add_word(\"...\")`, and there are at \
+         least 25. Same hazard as above, other compiler",
+        stage1.len()
+    );
+
+    let only_stage0: Vec<&String> = stage0.iter().filter(|w| !stage1.contains(w)).collect();
+    let only_stage1: Vec<&String> = stage1.iter().filter(|w| !stage0.contains(w)).collect();
+    assert!(
+        only_stage0.is_empty() && only_stage1.is_empty(),
+        "the two compilers do not know the same keywords, which is the `?`-operator failure in its \
+         original form — a word one compiler lexes and the other does not.\n  only in stage-0 \
+         (`lexer.rs`): {:?}\n  only in stage-1 (`lexer.bx`): {:?}\n\nIf a keyword genuinely belongs \
+         to one compiler alone, that is a claim worth making out loud in an exclusion list with its \
+         reason, exactly as the refusal equality does for `allocates nothing`.",
+        only_stage0,
+        only_stage1
+    );
+    eprintln!("both compilers know the same {} keywords", stage0.len());
+}
+
 /// **`burxt run` leaves nothing behind; `burxt build` leaves its product.**
 ///
 /// `run` wrote its executable to `./<stem>` and never removed it, so `burxt run foo.bx` from a project

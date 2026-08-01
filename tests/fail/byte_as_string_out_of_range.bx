@@ -1,0 +1,15 @@
+// A byte is 0 to 255, and 256 is not one. Refused at COMPILE time because it is written down: the
+// program cannot be right, so it should not build.
+//
+// **This is a choice rather than an inheritance, and the distinction cost a measurement.** `CInt`
+// traps at runtime only, and `tests/panic/cint_range.stderr` PINS that, so giving CInt a literal
+// check would change an existing contract. A new builtin pays nothing for one — the same treatment a
+// literal array index out of bounds and a literal shift distance already get.
+//
+// The runtime half is `tests/panic/byte_as_string_checked_at_runtime.bx`; a computed value cannot be
+// checked here, and is not pretended away.
+//
+// `from_codepoint` is named in the message on purpose. 256 is a plausible thing for someone to want —
+// it is a codepoint, just not a byte — and the refusal that says where to go instead is worth more
+// than one that only says no.
+print(byte_as_string(256));
