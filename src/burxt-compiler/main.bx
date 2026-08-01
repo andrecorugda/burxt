@@ -83,6 +83,41 @@ external function system(command: String) -> CInt touches commands;
 // is repeated here rather than imported.
 external function getchar() -> CInt touches input;
 
+// Where LLVM lives, asked rather than assumed.
+//
+// This compiler shells out to `llc` because it emits TEXTUAL IR — stage-0 writes objects through
+// inkwell and never runs this path, which is exactly why the bug below was invisible for so long:
+// only stage-1 needs `llc`, and only a non-Debian machine disagrees about where it is.
+//
+// The path was hardcoded to `/usr/lib/llvm-18/bin/llc`, which is Debian's layout. On macOS
+// **every** stage-1 compile failed — the first two Darwin runners this project ever used both
+// reported it, and the message was `No such file or directory` from `sh`, which is at least
+// honest about the cause.
+//
+// The obvious fix does not work. Homebrew's `llvm@18` is **keg-only**, so nothing called `llc` is
+// ever on PATH on macOS, and `llc-18` is Debian's spelling rather than a portable one. What both
+// CI workflows already export is `LLVM_SYS_181_PREFIX` — the variable inkwell itself needs — so
+// the honest question is "where did whoever built me find LLVM", and the answer is already in the
+// environment. The Debian path stays as the default so a Linux user notices nothing.
+//
+// Declared here rather than imported for the same reason as `system` and `getchar`: the compiler
+// modules do not depend on `lib/`, so `lib/os.bx`'s `os_env_or` is not reachable from here.
+external function getenv(name: String) -> CPointer touches input;
+
+// `LLVM_SYS_181_PREFIX/bin/llc` when that is set, and Debian's path when it is not.
+function llc_command() -> String touches input {
+    let found: CPointer = getenv("LLVM_SYS_181_PREFIX");
+    if c_is_null(found) {
+        return "/usr/lib/llvm-18/bin/llc";
+    }
+    // Copied at the boundary — after this line the bytes are Burxt's and the pointer is gone.
+    let prefix: String = c_string_at(found);
+    if len(prefix) == 0 {
+        return "/usr/lib/llvm-18/bin/llc";
+    }
+    return prefix + "/bin/llc";
+}
+
 // `byte_as_string(b)` used to be DECLARED HERE, as a table of the 95 printable ASCII bytes plus
 // three whitespace ones, and it `exit(2)`-ed on anything else — so `burxt check -` could not read a
 // source file containing a single non-ASCII character from a pipe. **It is a BUILTIN now (roadmap
@@ -410,7 +445,7 @@ function is_subcommand(word: String) -> Bool {
 // this string against `Cargo.toml`, which is the only thing that can catch a duplicated fact
 // diverging: not more care at the bump, but a test that fails when the two disagree.
 function usage() -> Int {
-    print_error("burxt 0.0.264 — the Burxt compiler, written in Burxt");
+    print_error("burxt 0.0.265 — the Burxt compiler, written in Burxt");
     print_error("usage:");
     print_error("  burxt check   <file.bx>                  parse and typecheck only");
     print_error("                <file.bx> --json         ... as JSON, for editors and CI");
@@ -442,7 +477,7 @@ if argument_count() > 1 {
 }
 
 if command == "--version" || command == "-V" {
-    print_error("burxt 0.0.264 — the Burxt compiler, written in Burxt");
+    print_error("burxt 0.0.265 — the Burxt compiler, written in Burxt");
     exit(0);
 }
 
@@ -622,7 +657,7 @@ if command == "build" || command == "run" {
     if len(triple) > 0 {
         machine = " -mtriple=" + triple;
     }
-    let assembled: Int = system("/usr/lib/llvm-18/bin/llc -relocation-model=pic -filetype=obj"
+    let assembled: Int = system(llc_command() + " -relocation-model=pic -filetype=obj"
                                 + machine + " -o " + object + " " + ll);
     if assembled != 0 {
         print_error("burxt: llc could not assemble " + ll);

@@ -93,6 +93,81 @@ fn scratch_dir(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("burxt-tests-{}-{}", std::process::id(), tag))
 }
 
+/// **Where `llc` is, asked rather than assumed — and the reason this is a function.**
+///
+/// Eleven tests shell out to `llc`, because stage-1 emits **textual IR** and something has to turn
+/// it into an object. Every one of them hardcoded `/usr/lib/llvm-18/bin/llc`, which is Debian's
+/// layout, each behind `if !llc.exists() { skip }`.
+///
+/// On macOS that guard was **always true**, so all eleven skipped — including the backend-coverage
+/// test, the runtime-guarantee test and the fixpoint. Both Darwin hosts reported "78 passed" while
+/// barely exercising stage-1 at all. A green tick that means less than it looks is the failure this
+/// file has now met four times: the generator that skipped silently in CI for thirteen versions,
+/// `| tee` swallowing an exit status, a scrape that found nothing and agreed with everything, and
+/// this. **A skip is not a pass, and nobody reads the log line that says so.**
+///
+/// `LLVM_SYS_181_PREFIX` is what both CI workflows already export — inkwell needs it to build
+/// stage-0 at all — so the answer was already in the environment. Homebrew's `llvm@18` is keg-only,
+/// so no `llc` is ever on PATH on macOS, and `llc-18` is Debian's spelling rather than a portable
+/// one; asking the prefix is the only thing that works on both. Debian's path stays the default so
+/// a Linux developer notices no difference. `src/burxt-compiler/main.bx` resolves it the same way,
+/// deliberately: if the compiler and its tests disagreed about where LLVM is, the tests would be
+/// checking a toolchain the compiler does not use.
+fn llc_path() -> PathBuf {
+    llc_under(std::env::var("LLVM_SYS_181_PREFIX").ok().as_deref())
+}
+
+/// The resolution itself, split out so it can be TESTED rather than trusted.
+///
+/// It cannot be tested through the environment: `llvm-sys` reads `LLVM_SYS_181_PREFIX` at BUILD
+/// time and refuses to compile if it points anywhere without an LLVM in it, so a test that sets the
+/// variable to a bogus path never gets as far as running. Taking the value as an argument makes the
+/// decision a pure function of its input, which is the only version of this that can be checked.
+fn llc_under(prefix: Option<&str>) -> PathBuf {
+    match prefix {
+        Some(p) if !p.is_empty() => PathBuf::from(p).join("bin/llc"),
+        _ => PathBuf::from("/usr/lib/llvm-18/bin/llc"),
+    }
+}
+
+/// **`llc` is found through `LLVM_SYS_181_PREFIX`, and Debian's path is only the fallback.**
+///
+/// Guards the fix for the eleven silent skips: if this resolution ever stops consulting the
+/// environment, macOS goes back to skipping every stage-1 test while reporting a pass, and the
+/// symptom is a green tick rather than a failure. So the decision is asserted directly.
+#[test]
+fn llc_is_found_through_the_llvm_prefix_when_one_is_set() {
+    assert_eq!(
+        llc_under(Some("/opt/homebrew/opt/llvm@18")),
+        PathBuf::from("/opt/homebrew/opt/llvm@18/bin/llc"),
+        "a set prefix must be used — this is the macOS case, where Homebrew's llvm@18 is keg-only \
+         and no `llc` is ever on PATH"
+    );
+    assert_eq!(
+        llc_under(None),
+        PathBuf::from("/usr/lib/llvm-18/bin/llc"),
+        "with no prefix set, Debian's path stays the default so a Linux developer notices nothing"
+    );
+    assert_eq!(
+        llc_under(Some("")),
+        PathBuf::from("/usr/lib/llvm-18/bin/llc"),
+        "an EMPTY prefix must fall back rather than producing `/bin/llc` — an exported-but-unset \
+         variable is the shape a CI workflow produces by accident"
+    );
+    // The compiler resolves it the same way, and it must keep doing so: if `main.bx` and this file
+    // disagreed about where LLVM is, the tests would be exercising a toolchain the compiler does
+    // not use — which is the more subtle version of the bug this whole fix is about.
+    let main_bx =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/burxt-compiler/main.bx"))
+            .unwrap();
+    assert!(
+        main_bx.contains("LLVM_SYS_181_PREFIX"),
+        "src/burxt-compiler/main.bx must resolve `llc` through LLVM_SYS_181_PREFIX too — it shells \
+         out because it emits textual IR, and it hardcoded Debian's path, which is why every \
+         stage-1 compile failed on both Darwin hosts"
+    );
+}
+
 #[test]
 fn pass_programs_produce_expected_stdout() {
     let scratch = scratch_dir("pass");
@@ -1537,7 +1612,8 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
 #[test]
 fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    let llc = llc_path();
+    let llc = llc.as_path();
     if !llc.exists() {
         eprintln!("skipping: {} is not installed", llc.display());
         return;
@@ -1761,7 +1837,8 @@ fn programs_compiled_by_the_burxt_backend_run_and_agree_with_stage_0() {
 #[test]
 fn burxt_compiles_burxt_and_reaches_the_fixpoint() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    let llc = llc_path();
+    let llc = llc.as_path();
     if !llc.exists() {
         eprintln!("skipping: {} is not installed", llc.display());
         return;
@@ -2138,7 +2215,8 @@ fn the_guide_and_examples_are_linked_and_compile() {
 #[test]
 fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    let llc = llc_path();
+    let llc = llc.as_path();
     if !llc.exists() {
         eprintln!("skipping: {} is not installed", llc.display());
         return;
@@ -2317,7 +2395,8 @@ fn the_suite_also_runs_on_burxt() {
     // in Burxt, checking the compiler written in Rust. Burxt by Burxt, with stage-0 as the
     // thing under test rather than the thing doing the testing.
     let mut selfhosted = String::new();
-    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    let llc = llc_path();
+    let llc = llc.as_path();
     if llc.exists() {
         let stage1 = scratch.join("stage1");
         assert!(Command::new(env!("CARGO_BIN_EXE_burxt"))
@@ -5138,7 +5217,8 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 #[test]
 fn the_burxt_backend_keeps_every_runtime_guarantee() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    let llc = llc_path();
+    let llc = llc.as_path();
     if !llc.exists() {
         eprintln!("skipping: {} is not installed", llc.display());
         return;
@@ -6256,7 +6336,8 @@ fn the_two_compilers_derive_the_same_mcp_schema() {
 #[test]
 fn the_burxt_compiler_builds_and_runs_a_program_and_itself() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    let llc = llc_path();
+    let llc = llc.as_path();
     if !llc.exists() {
         eprintln!("skipping: {} is not installed", llc.display());
         return;
@@ -7016,7 +7097,8 @@ fn the_repository_layout_is_declared() {
 #[test]
 fn the_two_compilers_render_a_problem_identically() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    let llc = llc_path();
+    let llc = llc.as_path();
     let scratch = scratch_dir("diag-agree");
     fs::create_dir_all(&scratch).unwrap();
 
@@ -9341,7 +9423,8 @@ fn a_program_reports_its_status_to_the_shell() {
     let scratch = scratch_dir("exit-status");
     fs::create_dir_all(&scratch).unwrap();
 
-    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    let llc = llc_path();
+    let llc = llc.as_path();
     let stage1 = scratch.join("stage1");
     let have_stage1 = llc.exists()
         && Command::new(env!("CARGO_BIN_EXE_burxt"))
@@ -9519,7 +9602,8 @@ fn print_error_writes_to_stderr() {
     );
 
     // ---- stage-1, the same program, the same two streams ----
-    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    let llc = llc_path();
+    let llc = llc.as_path();
     if !llc.exists() {
         eprintln!("skipping the stage-1 half: {} is not installed", llc.display());
         let _ = fs::remove_dir_all(&scratch);
@@ -9643,7 +9727,8 @@ FAIL deliberately broken / my own: because I said so
     check("stage-0", &Command::new(&exe).output().expect("the suite"));
 
     // ---- stage-1 ----
-    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    let llc = llc_path();
+    let llc = llc.as_path();
     if !llc.exists() {
         eprintln!("skipping the stage-1 half: {} is not installed", llc.display());
         let _ = fs::remove_dir_all(&scratch);
@@ -9896,7 +9981,8 @@ region r {
 fn a_region_releases_on_every_exit_from_the_block() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let timer = Path::new("/usr/bin/time");
-    let llc = Path::new("/usr/lib/llvm-18/bin/llc");
+    let llc = llc_path();
+    let llc = llc.as_path();
     // Skipping OUT LOUD, per the lesson of the generator that skipped silently in CI for thirteen
     // versions: a check that has never run looks exactly like one that passes.
     if !timer.exists() {
