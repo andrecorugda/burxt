@@ -1132,7 +1132,62 @@ function (mutable self: Unit) emit_c_call(src: String, n: Node, signature: Decla
             let cast: Int = self.write_body("  " + as_ptr + " = inttoptr i64 " + value + " to ptr\n");
             passed = as_ptr;
         }
-        if shape == "i32" {
+        // A sized width, roadmap A7 — checked BEFORE the CInt arm below, because `u32` and `i32`
+        // both give the shape string "i32" and the unsigned one must not take the signed path.
+        if is_width(want) {
+            let bits: Int = want.scale;
+            let narrow_to: String = "i" + to_string(bits);
+            // **The same narrow-widen-compare the CInt arm uses, generalised** — and the
+            // generalisation is exact rather than approximate: `value == sext(trunc(value))` is
+            // true precisely when the value fits a SIGNED N-bit integer, and with `zext` precisely
+            // when it fits an UNSIGNED one. So one round trip expresses both bounds, and there is
+            // no table of four ranges to get wrong.
+            //
+            // **u64 is the exception and it has to be, for a reason that is a language limit
+            // rather than an oversight.** Truncating an i64 to 64 bits is a no-op, so the round
+            // trip always agrees and would check NOTHING. What can still be checked is the half
+            // that matters: a negative Int reaching C as a `size_t` is not a small number, it is
+            // an enormous one, and every C API handed one has the bug to show for it. The other
+            // half — a u64 above `Int`'s maximum — has no Int to land in at all, because a Burxt
+            // Int is a signed i64. Named here and in the message, not papered over.
+            if bits >= 64 && want.contract == 0 {
+                let refused: Int = self.check_or_die("sge", value, "0",
+                    "burxt runtime error: this value does not fit in a u64 as Burxt can hold it "
+                    + "— an Int is a SIGNED 64-bit integer, so the checked range is 0 to "
+                    + "9223372036854775807, and the top half of a u64 has no Int to land in\n");
+            } else {
+                let narrow: String = self.fresh();
+                let cast: Int = self.write_body("  " + narrow + " = trunc i64 " + value + " to "
+                                       + narrow_to + "\n");
+                let widened: String = self.fresh();
+                let mutable how: String = "zext";
+                if want.contract == 1 {
+                    how = "sext";
+                }
+                let back: Int = self.write_body("  " + widened + " = " + how + " " + narrow_to
+                                       + " " + narrow + " to i64\n");
+                // The bounds are IN the message, computed from the two numbers so they cannot
+                // disagree with the check above. Stage-0 words it identically.
+                let mutable low: String = "0";
+                let mutable high: Int = shift_left(1, bits) - 1;
+                if want.contract == 1 {
+                    high = shift_left(1, bits - 1) - 1;
+                    low = to_string(0 - shift_left(1, bits - 1));
+                }
+                let spelled: String = c_width_name(want);
+                // "an i32", "a u8" — the article follows the SPELLING's sound: `i` reads "eye" and
+                // takes "an", `u` reads "you" and takes "a". Stage-0 builds it the same way.
+                let mutable article: String = "a";
+                if want.contract == 1 {
+                    article = "an";
+                }
+                let refused: Int = self.check_or_die("eq", value, widened,
+                    "burxt runtime error: this value does not fit in " + article + " " + spelled
+                    + " — the external parameter holds " + low + " to " + to_string(high) + "\n");
+                passed = narrow;
+            }
+        }
+        if shape == "i32" && !is_width(want) {
             // Narrow, widen back, and compare. `trunc` silently keeps the low 32 bits, so
             // 4294967296 arrives in C as 0 — a wrong answer that looks like a valid one, and the
             // exact class of silent corruption this language exists to refuse.
@@ -1160,10 +1215,32 @@ function (mutable self: Unit) emit_c_call(src: String, n: Node, signature: Decla
     // return to Int, because a Burxt caller receives an Int — but the call instruction
     // must name the width C actually returns, or the upper 32 bits are read as data.
     // `strcmp` answering -1 came back as 4294967295 until this looked at the declaration.
-    let shape: String = c_type_of(self.extern_return(src, signature));
+    let answered: Type = self.extern_return(src, signature);
+    let shape: String = c_type_of(answered);
     let answer: String = self.fresh();
     let called: Int = self.write_body("  " + answer + " = call " + shape + " @"
         + substring(src, signature.start, signature.length) + "(" + args + ")\n");
+    // A sized width widens to Burxt's i64, and WHICH extension is the entire content of the
+    // signedness bit: an `i32` sign-extends so -1 stays -1, a `u8` zero-extends so 0xFF is 255 and
+    // not -1. Getting it backwards is a silently wrong number, which is why the fixture checks both
+    // directions on values where the two answers differ.
+    //
+    // A `u64` is already 64 bits, so there is no extension to choose — and a value above `Int`'s
+    // maximum arrives NEGATIVE. That is the same limit the parameter check names, seen from the
+    // other side, and it is stated rather than hidden.
+    if is_width(answered) {
+        if answered.scale >= 64 {
+            return answer;
+        }
+        let widened: String = self.fresh();
+        let mutable how: String = "zext";
+        if answered.contract == 1 {
+            how = "sext";
+        }
+        let ext: Int = self.write_body("  " + widened + " = " + how + " i" + to_string(answered.scale)
+                               + " " + answer + " to i64\n");
+        return widened;
+    }
     if shape == "i32" {
         // Sign-extended, not zero-extended: a C function that answers -1 means -1.
         let widened: String = self.fresh();
@@ -2594,12 +2671,30 @@ function (mutable self: Unit) param_type_at(src: String, params_node: Int, i: In
 // be declared as such or the sign is lost on the way back; everything else is an i64,
 // including a Decimal — which crosses as the exact scaled integer it already is, and that
 // is the whole of `as scaled`: no conversion, because none is needed.
+// A width spelled the way the program wrote it, for a runtime message. Built from the two numbers
+// rather than a table, so the four spellings and the four checks cannot drift apart.
+function c_width_name(t: Type) -> String {
+    if t.contract == 1 {
+        return "i" + to_string(t.scale);
+    }
+    return "u" + to_string(t.scale);
+}
+
 function c_type_of(bound_type: Type) -> String {
     if bound_type.kind == 42 {
         return "ptr";
     }
     if bound_type.kind == 43 {
         return "i32";
+    }
+    // A sized C integer, roadmap A7 — the bit count IS the LLVM type, which is the payoff of
+    // carrying two numbers instead of four kinds. Signedness does not appear here at all: an LLVM
+    // integer has no sign, so it lives in the range check and the extension instead.
+    //
+    // Note `u32` and `i32` both answer "i32", so every reader of this shape that cares about
+    // signedness must ask the TYPE rather than the string. `emit_c_call` does.
+    if bound_type.kind == 52 {
+        return "i" + to_string(bound_type.scale);
     }
     // An opaque pointer, both ways: C receives and returns a real `ptr`, and the emitter casts at
     // the boundary just as it does for a String. What keeps it opaque is the CHECKER — nothing in
@@ -3678,18 +3773,34 @@ function runtime_ir() -> String {
         + "declare i32 @snprintf(ptr, i64, ptr, ...)\n"
         + "declare i32 @fprintf(ptr, ptr, ...)\n"
         + "@stderr = external global ptr\n\n"
-        // One gigabyte, the same reservation stage-0 makes, and the SAME refusal when it
-        // runs out. A bump allocator that does not check its limit does not fail — it
-        // writes past the mapping and the program dies with a signal, which is the one
-        // outcome this language is supposed to make impossible. Exit 70 and a named
-        // error, like every other runtime failure.
+        // FOUR gigabytes, the same reservation stage-0 makes, and the SAME refusal when it runs
+        // out. A bump allocator that does not check its limit does not fail — it writes past the
+        // mapping and the program dies with a signal, which is the one outcome this language is
+        // supposed to make impossible. Exit 70 and a named error, like every other runtime failure.
+        //
+        // **It said one gigabyte until v0.0.261, and the sentence "the same reservation stage-0
+        // makes" was FALSE for thirty-eight versions.** Stage-0 went to 4 GB in v0.0.222 with the
+        // argument written out in `codegen.rs` — the reservation is virtual, so raising it costs
+        // nothing resident, and only per-block release (A12) fixes what is actually touched. That
+        // raise never reached here, so the two runtimes quietly disagreed about how much memory a
+        // Burxt program may use, and which compiler built your binary decided it.
+        //
+        // **Found by the compiler failing to compile itself.** A7 added about eighty lines, stage-1
+        // built by stage-0 (4 GB) compiled main.bx at a peak of 1.016 GB and passed, and stage-1
+        // built by ITSELF (1 GB) died with `region memory exhausted` — so the fixpoint broke. HEAD
+        // measured 1,042,976 KB against the 1,048,576 KB ceiling: a margin of 0.53%, which any
+        // change of this size would have taken. The number was the wall, not the design; the
+        // divergence is what made it look like A7's fault.
+        //
+        // A12 is exactly as urgent as it was. What is RESIDENT is the real limit and no constant
+        // moves it.
         + "define i64 @burxt.alloc(i64 %n) \{\n"
         + "entry:\n"
         + "  %a = load ptr, ptr @burxt.arena\n"
         + "  %isnull = icmp eq ptr %a, null\n"
         + "  br i1 %isnull, label %init, label %go\n"
         + "init:\n"
-        + "  %m = call ptr @malloc(i64 1073741824)\n"
+        + "  %m = call ptr @malloc(i64 4294967296)\n"
         + "  %failed = icmp eq ptr %m, null\n"
         + "  br i1 %failed, label %exhausted, label %mapped\n"
         + "mapped:\n"
@@ -3701,7 +3812,7 @@ function runtime_ir() -> String {
         + "  %padded = add i64 %n, 7\n"
         + "  %rounded = and i64 %padded, -8\n"
         + "  %next = add i64 %off, %rounded\n"
-        + "  %over = icmp ugt i64 %next, 1073741824\n"
+        + "  %over = icmp ugt i64 %next, 4294967296\n"
         + "  br i1 %over, label %exhausted, label %hand_out\n"
         + "hand_out:\n"
         + "  %p = getelementptr i8, ptr %base, i64 %off\n"

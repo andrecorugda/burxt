@@ -195,9 +195,63 @@ function (mutable self: Unit) parse_type(src: String) -> Int {
     if k == 140 { let n: Int = self.advance(); return self.add(40, 0, 0, 0, 0, here); }
     if k == 141 { let n: Int = self.advance(); return self.add(41, 0, 0, 0, 0, here); }
     if k == 142 { let n: Int = self.advance(); return self.add(42, 0, 0, 0, 0, here); }
-    if k == 143 { let n: Int = self.advance(); return self.add(43, 0, 0, 0, 0, here); }
+    // `CInt` is boundary-only too, and stage-1 did not enforce it — roadmap §B16.
+    //
+    // **Stage-1 ACCEPTED `function f(n: CInt) -> Int` while stage-0 refused it**, which is a
+    // divergence in what is ACCEPTED and the direction that matters (§B15). It survived because
+    // `tests/fail/cint_in_burxt.bx` only covers the `let` form, and stage-1 refused THAT by
+    // accident — through "declared CInt, but the value is Int", a type mismatch that reads exactly
+    // like agreement. A fail fixture checks that a program is refused, never why, so nothing could
+    // see it. `tests/fail/cint_as_a_parameter.bx` is the case that never existed.
+    //
+    // Enforced HERE rather than in the checker for the reason `in_extern_signature` records: stage-0
+    // gets this free from `validate_type`, which every declared type passes through, and stage-1 has
+    // no equivalent — `declared_type` is a pure conversion the extern path also uses. So the widths
+    // needed a choke point, and once built it was three lines to give CInt the same rule. That is
+    // the whole of §B16.
+    if k == 143 {
+        let n: Int = self.advance();
+        if self.in_extern_signature == 0 {
+            let complained: Int = self.complain_at(src, here,
+                "CInt only exists at the C boundary (external function signatures) — "
+                + "use Int in Burxt code; values convert at the call.");
+        }
+        return self.add(43, 0, 0, 0, 0, here);
+    }
     if k == 144 { let n: Int = self.advance(); return self.add(44, 0, 0, 0, 0, here); }
     if k == 148 { let n: Int = self.advance(); return self.add(51, 0, 0, 0, 0, here); }
+    // A sized C integer, roadmap A7 — node kind 52, with `a` the BIT COUNT and `b` 1 for signed.
+    //
+    // ONE node kind carrying two numbers, mirroring stage-0's single `Type::Width { bits, signed }`
+    // rather than four kinds. No reader of a type node cares about the spelling: the emitter wants
+    // the bits, the range check wants the bounds. And it needed no new field — `a` and `b` are the
+    // same two slots a Decimal uses for its scale and contract, which is the pattern this parser
+    // already reaches for whenever a type carries parameters.
+    if k >= 149 && k <= 152 {
+        let n: Int = self.advance();
+        let mutable bits: Int = 32;
+        let mutable signed: Int = 0;
+        if k == 149 { signed = 1; }
+        if k == 150 { bits = 8; }
+        if k == 152 { bits = 64; }
+        // Boundary-only, and this is the ONE place that enforces it — see `in_extern_signature`
+        // in ast.bx for why the check lives in the parser rather than the checker. Refusing here
+        // covers a `let`, a parameter, a class field, a return type, an array element and a
+        // generic argument with one rule, because every one of them reaches `parse_type`.
+        //
+        // The node is still built after complaining, so the rest of the declaration is checked
+        // normally and the reader gets every problem in the file rather than only the first.
+        if self.in_extern_signature == 0 {
+            let mutable spelled: String = "u" + to_string(bits);
+            if signed == 1 {
+                spelled = "i" + to_string(bits);
+            }
+            let complained: Int = self.complain_at(src, here,
+                "`" + spelled + "` only exists at the C boundary (external function signatures) — "
+                + "use Int in Burxt code; values convert at the call.");
+        }
+        return self.add(52, bits, signed, 0, 0, here);
+    }
     if k == 145 {
         // Decimal<S> or Decimal<S, RoundHalfEven>: the scale and the contract are
         // part of the type, so they are part of the node.
@@ -2752,10 +2806,21 @@ function (mutable self: Unit) parse_extern(src: String) -> Int {
             + "would be no symbol to link against");
         return -1;
     }
+    // The one window in which a sized width may be written. Set around the parameters AND the
+    // return type, because both sides of an extern signature admit one, and cleared before
+    // `touches` so nothing after the signature inherits the permission.
+    self.in_extern_signature = 1;
     let params: Int = self.parse_params(src);
-    if params < 0 { return -1; }
-    if !self.eat(src, 10, "`->` and a return type") { return -1; }
+    if params < 0 {
+        self.in_extern_signature = 0;
+        return -1;
+    }
+    if !self.eat(src, 10, "`->` and a return type") {
+        self.in_extern_signature = 0;
+        return -1;
+    }
     let return_type: Int = self.parse_type(src);
+    self.in_extern_signature = 0;
     if return_type < 0 { return -1; }
     // `touches ...` on an extern is where an effect ENTERS the program: there is no body to reason
     // about, so the declaration is the only thing that can say what a C function reaches. An extern

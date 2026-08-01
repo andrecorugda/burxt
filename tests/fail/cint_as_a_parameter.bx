@@ -1,0 +1,19 @@
+// `CInt` in a Burxt function's parameter — refused, and this fixture is roadmap §B16.
+//
+// **It never existed, and that is why the bug survived.** `tests/fail/cint_in_burxt.bx` covers
+// `let x: CInt = 1;`, which stage-1 refused for the WRONG REASON — "declared CInt, but the value is
+// Int", an ordinary type mismatch, because stage-1 read the annotation and the initialiser and
+// found they disagreed. That refusal reads exactly like agreement with stage-0 from outside, and a
+// fail fixture cannot tell the difference: it checks that a program is refused, never why.
+//
+// A PARAMETER has no initialiser to disagree with, so nothing accidental refused it, and stage-1
+// ACCEPTED this program while stage-0 refused it — a divergence in what is accepted, which is the
+// direction §B15 says matters. Measured on v0.0.260.
+//
+// The rule itself is the same one `CInt`'s own message has always stated: C's widths describe C's
+// memory, and inside Burxt there is one integer type. The value converts at the call, where the
+// conversion is checked.
+function scaled(n: CInt) -> Int {
+    return n;
+}
+print(scaled(1));

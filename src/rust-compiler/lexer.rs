@@ -80,6 +80,10 @@ pub enum Token {
     TyDecimal,
     /// C's 32-bit int — only meaningful in extern fn signatures.
     TyCInt,
+    /// A sized C integer — `i32` `u8` `u32` `u64`, roadmap A7. ONE token carrying the two numbers
+    /// that distinguish them, for the same reason `Type::Width` is one variant: the parser has
+    /// nothing to decide, so four tokens would be four identical arms.
+    TyWidth { bits: u32, signed: bool },
     TyCPointer,
     PrintError,
     /// C's `double` — an FFI-only type, so a lossy crossing can be NAMED and
@@ -185,6 +189,9 @@ impl Token {
             Token::TyBool => "`Bool`".to_string(),
             Token::TyString => "`String`".to_string(),
             Token::TyCInt => "`CInt`".to_string(),
+            Token::TyWidth { bits, signed } => {
+                format!("`{}{}`", if *signed { "i" } else { "u" }, bits)
+            }
             Token::TyCPointer => "`CPointer`".to_string(),
             Token::PrintError => "`print_error`".to_string(),
             Token::TyCDouble => "`CDouble`".to_string(),
@@ -864,6 +871,20 @@ impl<'a> Lexer<'a> {
             "Bool" => Token::TyBool,
             "String" => Token::TyString,
             "CInt" => Token::TyCInt,
+            // The four sized C integers, roadmap A7. Lower-case and unprefixed because that is what
+            // a C header and every systems language spell them: `uint8_t` is `u8` in Rust, Zig, Odin
+            // and Swift's `UInt8`, and a Burxt-flavoured `CUInt8` would make a reader translate at
+            // every FFI declaration. They are boundary-only, so the lower-case spelling never sits
+            // beside a Burxt type where the case difference would look arbitrary.
+            //
+            // FOUR and not every width C has: these are the ones the roadmap's own callers need —
+            // `i32` for `clock_gettime`, `u8` for a `dirent.d_name` byte, `u32`/`u64` for fixed-width
+            // binary formats. `i8`/`i16`/`u16` cost one line each the day something wants them, and
+            // adding a width nobody has asked for is a rule that compiles and enforces nothing.
+            "i32" => Token::TyWidth { bits: 32, signed: true },
+            "u8" => Token::TyWidth { bits: 8, signed: false },
+            "u32" => Token::TyWidth { bits: 32, signed: false },
+            "u64" => Token::TyWidth { bits: 64, signed: false },
             "CPointer" => Token::TyCPointer,
             "CDouble" => Token::TyCDouble,
             "Decimal" => Token::TyDecimal,

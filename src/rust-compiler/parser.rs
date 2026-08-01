@@ -1704,6 +1704,11 @@ impl Parser {
             Token::TyBool => Ok(Type::Bool),
             Token::TyString => Ok(Type::String),
             Token::TyCInt => Ok(Type::CInt),
+            // One arm, because the lexer already carried the two numbers. Whether a width is
+            // ALLOWED here is `validate_type`'s job, not the parser's — the parser's business is
+            // what was written, and refusing it at the boundary check is what makes the message say
+            // where a width may go rather than "unexpected token".
+            Token::TyWidth { bits, signed } => Ok(Type::Width { bits, signed }),
             Token::TyCPointer => Ok(Type::CPointer),
             Token::TyCDouble => Ok(Type::CDouble),
             Token::TyDecimal => {

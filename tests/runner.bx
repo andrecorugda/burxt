@@ -1441,16 +1441,43 @@ function highlighter_knows_every_keyword() -> String touches files {
             + "`trait` and `record`";
     }
 
-    // Only the arguments of `words(...)`. Joined with a space, as the Rust twin does.
+    // **Only the BURXT word lists, which means stopping at `var PORTS`.**
+    //
+    // The unscoped version — mine, until this comment — searched all fourteen `words(...)` lists in
+    // the file, and six of them belong to the PHP, Python and Rust snippets the site also
+    // highlights. So a Burxt keyword counted as "known to the highlighter" when a sibling language
+    // merely shared the spelling. I reported that as a theoretical weakness; **it is not
+    // theoretical.** With A7's integer widths in the compiler, `i32`, `u8`, `u32` and `u64` appear
+    // in this file exactly once each — in RUST's type list — and Burxt's own `var TYPE` has none of
+    // them. Unscoped, this invariant is green on a live gap, under a name promising the Burxt
+    // highlighter specifically.
+    //
+    // A test whose NAME makes a claim it does not check is the failure this repository keeps paying
+    // for: `exit` missing from the grammar, M13 DONE for fourteen versions. So this is tightened
+    // rather than joined by a second invariant — a second one would leave the false claim standing
+    // beside a true one, and the next reader believes the shorter name.
+    //
+    // `var PORTS` is the seam: Burxt's lists are `var X = words(...)` above it, the ports' are
+    // `keyword:`/`type:` inside it. If the marker moves, RE-SCOPE rather than dropping the split.
+    let ports_at: Int = index_of(js, "var PORTS");
+    if ports_at < 0 {
+        return "`var PORTS` is not in " + js_path + " — it is the seam between Burxt's word lists "
+            + "and the other languages'. Re-scope this scrape rather than dropping the split, or "
+            + "the invariant goes back to passing when PHP happens to share a spelling";
+    }
+    // Note for whoever measures this next: there are EIGHT `words(` occurrences above the seam, not
+    // seven. The eighth is `function words(s)`, the definition itself, which contributes the single
+    // letter `s` to the joined text. Harmless, present in the Rust twin too, and worth naming so the
+    // next person does not spend a round wondering which list they are missing.
     let mutable lists: String = "";
     let mutable at: Int = 0;
-    while at < len(js) {
+    while at < ports_at {
         if starts_with_at_runner(js, at, "words(") {
             let mutable j: Int = at + 6;
-            while j < len(js) && byte_at(js, j) != 41 {
+            while j < ports_at && byte_at(js, j) != 41 {
                 j += 1;
             }
-            if j < len(js) {
+            if j < ports_at {
                 if len(lists) > 0 {
                     lists += " ";
                 }
@@ -1461,8 +1488,10 @@ function highlighter_knows_every_keyword() -> String touches files {
             at += 1;
         }
     }
-    if len(lists) < 500 {
-        return "failed to read the word lists out of " + js_path + " — got " + to_string(len(lists))
+    // 767 bytes as of v0.0.261, measured after scoping — the unscoped number was 2103, and a floor
+    // calibrated against THAT would have been measuring the other languages.
+    if len(lists) < 400 {
+        return "failed to read Burxt's word lists out of " + js_path + " — got " + to_string(len(lists))
             + " bytes. They are the strings passed to `words(...)`; if that shape changed, fix this "
             + "scrape rather than loosening it to search the whole file, which is mostly comment";
     }

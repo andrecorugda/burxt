@@ -1,0 +1,20 @@
+// A value that does not fit the declared width must die loudly, never wrap. Roadmap A7.
+//
+// `putchar` takes a `u8` here, and 299 does not fit one. Truncating would hand C the byte 43 — a
+// different number than the one written, acted on as if it were right. That is the silent wrong
+// answer this language exists to refuse, at the one boundary where the type system stops.
+//
+// The value is COMPUTED, through a loop, so the checker cannot fold it. A literal out of range is
+// not refused at compile time for a width, and that is deliberate rather than an omission: `CInt`
+// traps at runtime only and `tests/panic/cint_range.stderr` pins that contract, so the widths match
+// their older sibling instead of splitting the boundary into two rules a reader has to remember.
+//
+// The bounds are IN the message — "holds 0 to 255" — because "does not fit in a u8" sends a reader
+// to a header file and the numbers are the whole answer.
+external function putchar(c: u8) -> i32;
+let mutable n: Int = 0;
+for i in 0..300 {
+    n = i;
+}
+let wrote: Int = putchar(n);
+print(wrote);

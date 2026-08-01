@@ -1,0 +1,21 @@
+// The `u64` limit, named rather than pretended away. Roadmap A7.
+//
+// A Burxt `Int` is a SIGNED 64-bit integer, so a `u64` splits into two halves and they fail
+// differently:
+//
+//   * a NEGATIVE Int is refused here, at runtime, and that is a real check rather than a
+//     formality — `-1` reaching C as a `size_t` is not a small number, it is 18446744073709551615,
+//     and every C API that has been handed one has the bug to show for it.
+//   * a u64 ABOVE `Int`'s maximum cannot be checked at all, because there is no Int that holds it.
+//     The message says so instead of claiming a range the language cannot express.
+//
+// That asymmetry is why `u64` is the one width whose check is not the narrow-widen-compare round
+// trip the other three share: truncating an i64 to 64 bits is a no-op, so the round trip would
+// agree with itself and check nothing.
+external function malloc(n: u64) -> CPointer;
+let mutable size: Int = 0;
+for i in 0..1 {
+    size = 0 - 1;
+}
+let block: CPointer = malloc(size);
+print(c_is_null(block));

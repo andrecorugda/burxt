@@ -95,6 +95,19 @@ function (mutable self: Unit) install_keywords() -> Int {
     n = self.add_word("Bool", 141);
     n = self.add_word("String", 142);
     n = self.add_word("CInt", 143);
+    // The four sized C integers, roadmap A7. Codes 149..152, chosen after CPointer's 148 rather
+    // than beside CInt's 143 because the numbers are a wire format between this table and
+    // `parse_type` — renumbering to keep them tidy would be a silent change to both.
+    //
+    // Lexed as KEYWORDS, and that is the whole bug being fixed here. Without these four lines the
+    // words fall through to the identifier path and become NAMED types, so `let n: u8 = 5;` was
+    // refused with *"declared u8, but the value is Int"* — an accidental refusal from a type
+    // mismatch, which reads exactly like agreement with stage-0 and is not. A fail fixture cannot
+    // tell those apart: it checks that a program is refused, never why.
+    n = self.add_word("i32", 149);
+    n = self.add_word("u8", 150);
+    n = self.add_word("u32", 151);
+    n = self.add_word("u64", 152);
     n = self.add_word("CDouble", 144);
     // An opaque pointer from C. A type keyword rather than a library name, because the checker
     // has to refuse `==`, `print` and arithmetic on it — and a library cannot refuse anything.

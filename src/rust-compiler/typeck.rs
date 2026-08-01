@@ -2316,8 +2316,13 @@ impl TypeChecker {
             // - CInt and CDouble are C's widths; Burxt passes an Int.
             // - `Decimal<S> as scaled` keeps its exact Burxt type, scale and
             //   all, because the scale IS the contract.
+            // A width joins CInt here, and that is the half of A7 a caller actually sees: Burxt
+            // code passes and receives an ordinary Int, and the narrowing to `u8` or the widening
+            // from `i32` happens at the call in codegen. So a width never becomes the type of a
+            // Burxt expression — which is the same fact `validate_type` enforces from the other
+            // side, and the reason nothing downstream needed an arm.
             let seen = |t: &Type| match t {
-                Type::CInt | Type::CDouble => Type::Int,
+                Type::CInt | Type::CDouble | Type::Width { .. } => Type::Int,
                 other => other.clone(),
             };
             let param_tys: Vec<Type> = e.parameters.iter().map(|p| seen(&p.ty)).collect();
@@ -3337,6 +3342,24 @@ impl TypeChecker {
                  use Int in Burxt code; values convert at the call."
                     .to_string(),
             ),
+            // A width is boundary-only, and THIS ARM IS WHAT MAKES THAT TRUE. `validate_type` runs
+            // on every `let`, parameter, return and field; an `external function` signature is
+            // checked by `check_extern`'s own allowlist instead, which is the only path that does
+            // not come through here. So one refusal in one place buys the whole rule — and it is
+            // also why `layout.bx`, `layout_of`, `review` and the language server need no arm: a
+            // width can never be the type of anything they walk.
+            //
+            // `CInt` has two SPECIALISED copies of this message further down, for a slice element
+            // and an array element. A width deliberately has neither: the element arms fall through
+            // to `other => self.validate_type(...)`, which recurses back here and gives one wording
+            // for all five positions. That is not tidiness — stage-1 refuses a width in the PARSER,
+            // where there is no way to know whether the type being read is an element, so a
+            // specialised message here would be a message the two compilers could not both produce.
+            Type::Width { .. } => Err(format!(
+                "`{}` only exists at the C boundary (external function signatures) — \
+                 use Int in Burxt code; values convert at the call.",
+                ty
+            )),
             // Elements may be scalars OR aggregates: a `[Node; 256]` is
             // stack-allocatable, which is what makes an arena-style AST
             // (children referenced by index, never by pointer) possible without
@@ -3445,8 +3468,13 @@ impl TypeChecker {
         // and neither can know the other did. Identical signatures are harmless; a
         // MISMATCH is not, because then the program holds two beliefs about one symbol.
         if let Some((parameters, ret)) = self.fns.get(&e.name) {
+            // A width joins CInt here, and that is the half of A7 a caller actually sees: Burxt
+            // code passes and receives an ordinary Int, and the narrowing to `u8` or the widening
+            // from `i32` happens at the call in codegen. So a width never becomes the type of a
+            // Burxt expression — which is the same fact `validate_type` enforces from the other
+            // side, and the reason nothing downstream needed an arm.
             let seen = |t: &Type| match t {
-                Type::CInt | Type::CDouble => Type::Int,
+                Type::CInt | Type::CDouble | Type::Width { .. } => Type::Int,
                 other => other.clone(),
             };
             let mine: Vec<Type> = e.parameters.iter().map(|p| seen(&p.ty)).collect();
@@ -3492,16 +3520,24 @@ impl TypeChecker {
                         e.name, p.name, other, m
                     ))
                 }
+                // The widths join this list and nowhere else, which IS the boundary rule: this
+                // is the one path that does not go through `validate_type`, and `validate_type`
+                // refuses every width. Roadmap A7.
                 (
-                    Type::Int | Type::String | Type::CInt | Type::CDouble | Type::CPointer,
+                    Type::Int
+                    | Type::String
+                    | Type::CInt
+                    | Type::CDouble
+                    | Type::CPointer
+                    | Type::Width { .. },
                     None,
                 ) => {}
                 (other, None) => {
                     return Err(format!(
                         "in external function `{}`, parameter `{}` has type {}, but only \
-                         Int, CInt, CDouble, String and a marshalled Decimal may \
-                         cross the C boundary for now — C has no {}, and the raw \
-                         value would silently lose its meaning.",
+                         Int, CInt, a sized width (i32, u8, u32, u64), CDouble, String and a \
+                         marshalled Decimal may cross the C boundary for now — C has no {}, \
+                         and the raw value would silently lose its meaning.",
                         e.name, p.name, other, other
                     ))
                 }
@@ -3529,13 +3565,14 @@ impl TypeChecker {
         // String is a Burxt value with an owner, so accepting one here would be a claim about
         // whose memory it is. `-> CPointer` plus `c_string_at` says the same thing and says who
         // copied.
-        if !matches!(e.ret, Type::Int | Type::CInt | Type::CPointer) {
+        if !matches!(e.ret, Type::Int | Type::CInt | Type::CPointer | Type::Width { .. }) {
             return Err(format!(
-                "external function `{}` returns {}, but only Int, CInt or CPointer may cross \
-                 the C boundary as a return — a {} is a Burxt value with an owner, and C \
-                 cannot say whose it is. If the C function returns a pointer, declare \
-                 `-> CPointer` and read it with `c_string_at`, which copies. (If it returns a \
-                 32-bit `int`, declare `-> CInt` so the sign survives.)",
+                "external function `{}` returns {}, but only Int, CInt, a sized width \
+                 (i32, u8, u32, u64) or CPointer may cross the C boundary as a return — a {} \
+                 is a Burxt value with an owner, and C cannot say whose it is. If the C \
+                 function returns a pointer, declare `-> CPointer` and read it with \
+                 `c_string_at`, which copies. (If it returns a 32-bit `int`, declare `-> CInt` \
+                 or `-> i32` so the sign survives.)",
                 e.name, e.ret, e.ret
             ));
         }

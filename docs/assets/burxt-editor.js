@@ -43,7 +43,11 @@
   );
 
   // Types the language owns. Anything else Capitalised is a type the program declared.
-  var TYPE = words('Int Bool String CInt CDouble CPointer Decimal RoundHalfEven RoundHalfUp');
+  // `i32 u8 u32 u64` are the sized C integers (roadmap A7) and belong here, not in the Rust word
+  // list further down that happens to contain the same spellings — the site highlights Rust blocks
+  // too, and matching them there colours Rust code while leaving Burxt code plain.
+  var TYPE = words('Int Bool String CInt CDouble CPointer Decimal RoundHalfEven RoundHalfUp '
+    + 'i32 u8 u32 u64');
 
   // The contract vocabulary. Contextual in the parser — legal as ordinary names elsewhere — but on
   // a signature they are the whole reason this language exists, so they get their own colour.

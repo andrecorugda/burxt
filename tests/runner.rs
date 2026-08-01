@@ -4440,7 +4440,21 @@ fn the_web_highlighter_knows_every_keyword_the_compiler_does() {
     want.extend(old);
 
     // Only what is inside a `words('...')` call. A word in a comment is not a word that highlights.
-    let lists: String = js
+    //
+    // And only the BURXT lists. The file has fourteen `words(...)` calls: seven for Burxt, and the
+    // rest inside `var PORTS = {...}` for the PHP, Python and Rust snippets the comparison page puts
+    // beside it. Scraping all fourteen made this test answer "does this page know the word at all"
+    // while its name promises "does the BURXT highlighter know it" — two different questions, and the
+    // gap between them is not theoretical: at v0.0.260 `i32`, `u8`, `u32` and `u64` were in the file
+    // exactly once, in **Rust's** type list, and this test was green while the Burxt highlighter did
+    // not know a single one of them. A shared spelling was answering for a keyword nobody had added.
+    // `class` is in three of the port lists and `trait` in three, so the cover was wide.
+    let burxt_only = js.split_once("var PORTS").map(|(before, _)| before).expect(
+        "`var PORTS` in docs/assets/burxt-editor.js — the marker separating the Burxt word lists \
+         from the PHP/Python/Rust ones. If that changed, re-scope this scrape rather than dropping \
+         it: a word list belonging to another language must never answer for Burxt's.",
+    );
+    let lists: String = burxt_only
         .split("words(")
         .skip(1)
         .filter_map(|chunk| chunk.split_once(')').map(|(args, _)| args.to_string()))
@@ -4473,6 +4487,112 @@ fn the_web_highlighter_knows_every_keyword_the_compiler_does() {
          the site does not renders as a plain identifier on all {} Burxt blocks.",
         missing,
         92
+    );
+}
+
+/// The REVERSE direction: every type the editors colour is a type the compiler knows.
+///
+/// **The two tests above run compiler → editor only, and that is how v0.0.260 shipped.** It added
+/// `i32`, `u8`, `u32` and `u64` to the VS Code grammar, the packaged `.vsix` and the generated
+/// reference — while the compiler knew none of them, because A7's lexer half had been reverted and
+/// the commit went out believing it had not. Both editor tests were green throughout: a word the
+/// editor knows and the compiler does not is *invisible* to a subset check pointing the other way.
+///
+/// The consequence is worse than a stale document. A user writes `let n: u8 = 5;`, the editor
+/// colours `u8` as a type, and the compiler answers "unknown type `u8`" — so the tooling asserts a
+/// language feature that does not exist, and the person believes the editor.
+///
+/// **Scoped to TYPES on purpose.** A blanket reverse check cannot work: the grammar deliberately
+/// colours words the compiler must NOT know — `fn`, `mut`, `impl`, `struct`, `trait` are highlighted
+/// as ERRORS, which is the whole point of the `REFUSED` list. Types have no such exception. Every
+/// type either compiler admits is a keyword in the lexer's table, so the subset is exact.
+#[test]
+fn every_type_the_editors_highlight_is_one_the_compiler_knows() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let lexer = fs::read_to_string(root.join("src/rust-compiler/lexer.rs")).unwrap();
+    let grammar =
+        fs::read_to_string(root.join("editors/vscode/syntaxes/burxt.tmLanguage.json")).unwrap();
+    let js = fs::read_to_string(root.join("docs/assets/burxt-editor.js")).unwrap();
+
+    // The compiler's whole vocabulary, from the `"word" => Token::Variant` table — the same scrape
+    // `editor_grammar_knows_every_keyword_the_compiler_does` uses, so the two tests cannot disagree
+    // about what the compiler knows.
+    let known: Vec<String> = lexer
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            let rest = l.strip_prefix('"')?;
+            let (word, tail) = rest.split_once('"')?;
+            tail.trim_start().starts_with("=> Token::").then(|| word.to_string())
+        })
+        .collect();
+    assert!(
+        known.len() > 20,
+        "failed to read the keyword table out of src/rust-compiler/lexer.rs (found {:?}). Fix the \
+         scrape rather than deleting it: an empty list makes this test pass by checking nothing.",
+        known
+    );
+
+    let mut claimed: Vec<(&str, String)> = Vec::new();
+
+    // 1. The VS Code grammar's primitive-type pattern, by its scope name rather than by line —
+    //    a `match` regex found positionally is a match that moves.
+    let types_rule = grammar
+        .split_once("support.type.primitive.burxt")
+        .and_then(|(_, rest)| rest.split_once("\"match\""))
+        .and_then(|(_, rest)| rest.split_once(':'))
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(pattern, _)| pattern.to_string())
+        .expect(
+            "the `support.type.primitive.burxt` rule in editors/vscode/syntaxes/burxt.tmLanguage.json",
+        );
+    for word in types_rule
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .filter(|w| !w.is_empty() && *w != "b")
+    {
+        claimed.push(("the VS Code grammar", word.to_string()));
+    }
+
+    // 2. The website highlighter's Burxt type list. Scoped above `var PORTS` for the reason the
+    //    test above records: below it are the PHP/Python/Rust lists, and Rust's contains `i32` and
+    //    `u8` — which is precisely how the missing words looked present.
+    let burxt_only = js.split_once("var PORTS").map(|(before, _)| before).expect(
+        "`var PORTS` in docs/assets/burxt-editor.js — the marker separating the Burxt word lists \
+         from the other languages'",
+    );
+    let type_list = burxt_only
+        .split_once("var TYPE")
+        .and_then(|(_, rest)| rest.split_once("words("))
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .map(|(args, _)| args.to_string())
+        .expect("`var TYPE = words('...')` in docs/assets/burxt-editor.js");
+    for word in type_list
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .filter(|w| !w.is_empty())
+    {
+        claimed.push(("the website highlighter", word.to_string()));
+    }
+
+    assert!(
+        claimed.len() > 10,
+        "read only {} type names out of the two editors — the scrape broke, and an empty list \
+         would make this test pass by checking nothing.",
+        claimed.len()
+    );
+
+    let unknown: Vec<String> = claimed
+        .iter()
+        .filter(|(_, w)| !known.contains(w))
+        .map(|(where_, w)| format!("`{}` in {}", w, where_))
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "these types are highlighted by an editor but are NOT types the compiler knows: {:?}\n\
+         The tooling is ahead of the language: a user writes one, sees it coloured as a type, and \
+         the compiler answers `unknown type`. Either land the compiler half or take the word back \
+         out — v0.0.260 shipped exactly this and both forward-direction editor tests stayed green.",
+        unknown
     );
 }
 

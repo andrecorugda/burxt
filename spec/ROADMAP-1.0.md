@@ -491,7 +491,7 @@ A5, nothing named as a limit.
 | ~~A4~~ | ~~**`pure` on a method / `pure` returning an Option**~~ **DONE v0.0.248, and the two halves were ONE branch.** A variant constructor `Enum.Variant(x)` PARSES as a method call and is told apart inside the method-call branch — but the blanket *"a pure function may not call a method"* refusal sat at the TOP of that branch, before anything checked whether the receiver was an enum. **So a constructor was refused for being SHAPED like a method call**, and one removal fixed both items. `lib/array.bx`'s comment had named that mechanism exactly, years before anyone acted on it. **The row also understated the payoff:** `typeck.rs` has always checked a method's clauses with `in_pure` set, so `requires self.sum() > 0` was already asking whether `sum` is pure and being refused by the blanket branch — the whole second half of the item is that the answer can now be yes | — |
 | A5 | **`.chars()` / codepoint iteration** — A4.4's one remaining gap | M | The whole UTF-8 layer: correct case handling · a `string_reverse` that does not corrupt · char indexing · `\uXXXX` in JSON · `is_valid_utf8` |
 | ~~A6~~ | ~~**`for i in 0..n`**~~ **DONE v0.0.245**, both compilers, ten fail fixtures, all refused by both. **Exclusive only, and no inclusive form** — three reasons: `0..len(xs)` is the same bound `while i < len(xs)` already writes, half-open ranges tile with no gap (which is why `substring(s, from, LENGTH)` is half-open too), and two forms one character apart where that character changes the iteration count is precisely what a reviewer's eye slides over. Cost named: `0..n + 1` shows a visible `+ 1` rather than an invisible `=`. **`for`-only, not a value** — a range as a value wants an iterator protocol (A11) and half of one is worse than waiting. **Reversed LITERALS refused, reversed computed bounds run zero times**, because `for i in 0..len(xs)` over an empty array is correct code that must not trap | — |
-| A7 | **Integer widths** `i32`/`u8`/`u32`/`u64` — design settled v0.0.252 (§A7d); **in flight.** v0.0.260 shipped the tooling half (grammar, `.vsix`, reference) ahead of the compiler by mistake — see §A7e, which is a lesson about measurement, not a status | M→**L** | C structs (`dirent.d_name`) · fixed-width records → N9 row 6 · `clock_gettime` → **monotonic and sub-second time**, so benchmarking and timeouts · binary formats · A4.4's deferred **Bytes type** |
+| ~~A7~~ | ~~**Integer widths** `i32`/`u8`/`u32`/`u64`~~ **DONE v0.0.261, both stages.** Boundary-only, one `Type::Width { bits, signed }`, per-width trap at exit 70. All five boundary refusals byte-identical across the compilers; `strcmp -> i32` = **-1** and `strlen -> u8` on 200 chars = **200**, the two values where sign- and zero-extension disagree. The non-mechanical part was that **stage-1 has no `validate_type` choke point** — the rule lives in `parse_type` behind an `in_extern_signature` flag, and once it existed, giving `CInt` the same rule (§B16) cost three lines. The choke point was the whole cost; which type attaches first is incidental | — | C structs (`dirent.d_name`) · fixed-width records → N9 row 6 · `clock_gettime` → **monotonic and sub-second time**, so benchmarking and timeouts · binary formats · A4.4's deferred **Bytes type** |
 | A8 | **Tuples** | M | `zip` · `enumerate` · `char_indices` · `split_at` · `divmod` · `split_once` without inventing a record |
 | A9 | **Generic interfaces** — the cheap alternative to closures. `dynamic Trait` is already a function value in all but name; interfaces simply cannot take type parameters. **On no roadmap — needs an explicit yes/no, because YES may replace A10** | M | `sort_by` · predicates · visitors · most of `map`/`filter`, in a form consistent with the no-closures decision |
 | A10 | **Closures / function values** — or A9 instead of it | **L** | `map`/`filter`/`fold`/`any`/`all`/`retain`/`partition`/`position` across four libraries **at once** · `signal()`, so a server can shut down cleanly |
@@ -686,7 +686,38 @@ word at all"* under a name promising *"does the BURXT highlighter know it."* `i3
 appear in that file exactly once — in **Rust's** type list — so the test was green while Burxt's own
 list had none of them. Now scoped to the lists above `var PORTS`.
 
-**Status of the work itself:** in flight, both stages, per §A7d. The design is unchanged and good — one
+### A7f — how it actually closed, v0.0.261, and the two things that fell out
+
+**A7 is done on both stages** and the reverse-direction invariant this section asked for now exists:
+`every_type_the_editors_highlight_is_one_the_compiler_knows`, scoped to **types** because a blanket
+reverse check cannot work — the grammar deliberately colours `fn`, `mut`, `impl`, `struct` and `trait`
+as errors and those must stay unknown to the compiler. Mutation-tested rather than trusted: `u16` added
+to the grammar and `f64` to the site list fails it, naming both. **It would have caught v0.0.260 on the
+day.**
+
+**The spelling-match trap caught me a second time, from the other side.** I told the agent not to re-add
+the four widths to `docs/assets/burxt-editor.js` because v0.0.260 had put them there. It had not. Line
+188 is the **Rust** word list the comparison page uses; Burxt's own `TYPE` list at line 46 had none of
+them. I matched on spelling without checking which language's list I was in — the identical mistake the
+scoping fix exists to prevent, made by the person who wrote the scoping fix, one hour later. The suite
+settled it, which is the point of having one. **The VS Code grammar genuinely had been paid; the site
+had not.** Two artifacts, one cascade, and "already done" was true of one and false of the other.
+
+**A7 broke the fixpoint and A7 was not the cause — the ninth instance of the wall pattern.** Stage-2
+died with `region memory exhausted`. **Stage-0 raised its arena to 4 GB in v0.0.222 and stage-1 never
+did**, while `emit.bx`'s comment claimed *"the same reservation stage-0 makes"* — false for
+thirty-eight versions. HEAD's stage-2 peaked at **1,042,976 KB against a 1,048,576 KB ceiling, a margin
+of 0.53%**, and A7's ~80 lines took it. Any change of that size would have. Stage-1 built by stage-0
+(4 GB) compiled `main.bx` at 1.016 GB and passed; stage-1 built by itself (1 GB) died. **The number was
+the wall, not the design.** Stage-0's own exhaustion message was stale the same way — *"reserves 1 GB"*
+while reserving 4, which is what a user reads at the moment they hit it. Both fixed.
+
+**This does not make A12 less urgent; it makes the deadline legible.** The reservation is virtual and
+resident use is the real limit, which no constant moves. What is new is that the compiler is measured
+compiling itself at ~1 GB touched, and there is now a fixpoint test standing between that number and
+the next surprise.
+
+**Status of the work itself:** DONE v0.0.261, both stages, per §A7d. The design is unchanged and good — one
 `Type::Width { bits, signed }`, boundary-only, a per-width trap. When it lands, `tests/pass/` gets its
 first width program, and that fixture is the gate: `the_burxt_backend_compiles_a_growing_share_of_the_
 suite` is an `assert_eq!(correct, total)`, deliberately an equality and not a ratchet since v0.0.113, so
@@ -711,7 +742,8 @@ lands with stage-1's half, in one version, as §A0 requires of every row.
 | B12 | ~~**stage-1 backend gaps**~~ — **there are none, measured v0.0.215: 142 of 142 pass programs, 0 refused.** The claim came from a stale `M4` §3b. **Re-pointed:** the real gap is the TOOLCHAIN — stage-1 has no LSP, no `burxt review`, no `mcp-schema`, so every non-compiler tool lives only in Rust. Moving one is a genuine capability claim | L |
 | B13 | M11's **1.67× compile-time growth is unattributed**; the ratchet tightening is pending | S |
 | B15 | **stage-0 accepts a trailing `;` on an interface method signature and stage-1 refuses it.** Found by writing a fixture in v0.0.209 — no existing fixture used the `;` form, so the differential could not see it. A divergence in what is ACCEPTED, which is the direction that matters | S |
-| B16 | **stage-1 has no C-boundary rule at all, so it ACCEPTS `function f(n: CInt) -> Int` that stage-0 refuses.** Verified at v0.0.260a from the commit, not the tree: `git show c5d6ffe:src/burxt-compiler/check.bx \| grep -c "only exists at the C boundary"` → **0**, against **3** in `typeck.rs`. `tests/fail/cint_in_burxt.bx` covers only the `let` form, which stage-1 refuses *accidentally* through "declared CInt, but the value is Int" — so the parameter form never had a fixture and the divergence survived. Same shape as B15, same direction: **a divergence in what is ACCEPTED.** Found by a13-bytes while scoping A7, and it is **A7's real blocker** — a width fail fixture cannot pass the refusal `assert_eq!` until stage-1 gains a genuine boundary rule, and stage-1 has no `validate_type` choke point to hang one on. Build that choke point first, as its own step | M |
+| ~~B16~~ | ~~**stage-1 has no C-boundary rule at all, so it ACCEPTS `function f(n: CInt) -> Int` that stage-0 refuses.**~~ **CLOSED v0.0.261.** Found by a13-bytes while scoping A7, verified from the commit rather than the tree: `check.bx` had **0** occurrences of the boundary message against `typeck.rs`'s **3**. `tests/fail/cint_in_burxt.bx` covered only the `let` form, which stage-1 refused *accidentally* through "declared CInt, but the value is Int" — the second process rule in the negative direction, since a fail fixture checks refusal and not the reason. The parameter form never had a fixture, so nothing could see it. Same shape and direction as B15: **a divergence in what is ACCEPTED.** `tests/fail/cint_as_a_parameter.bx` is the fixture that never existed; both compilers now refuse it with byte-identical text | — |
+| B17 | **The two compilers agree on the boundary refusal's TEXT and disagree on its SPAN.** Measured at v0.0.261 on `function scaled(n: CInt)`: byte-identical sentence, but stage-0 points at **1:1** and stage-1 at **1:20**; the width form diverges the same way. Neither is wrong-as-such and **stage-1's is the better one** — it puts the caret on the offending type rather than the start of the declaration — so the fix is to move stage-0 to stage-1's span, an improvement rather than a regression. It hides because a `.stderr` fixture records one compiler's output and `the_two_compilers_render_a_problem_identically` compares the rendered message. **The span is not cosmetic**: it is where the editor draws the squiggle and what the LSP returns | S |
 | B14 | **Doc rot** — `lib/README.md` claims `Option`/`Result` do not exist · `map.bx` claims no bit ops · the module table omits 3 modules · `docs/reference/builtins.md` omits 9 builtins while claiming to be generated from that list | XS |
 
 ---

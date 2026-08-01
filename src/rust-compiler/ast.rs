@@ -50,6 +50,24 @@ pub enum Type {
     /// runtime (a value that doesn't fit is a loud error, never a silent wrap).
     /// In Burxt code the value is always an Int.
     CInt,
+    /// A SIZED C integer at the FFI boundary: `i32` `u8` `u32` `u64`. Roadmap A7.
+    ///
+    /// **ONE variant carrying two numbers, not four variants.** `u8` versus `u32` differs only in
+    /// the bit count, and no `match` arm anywhere cares about the spelling: `llvm_type` wants the
+    /// bits, the range check wants the bounds, `layout_of` wants bits/8. Four variants would have
+    /// been four arms at each of those sites, all saying the same thing with different numbers.
+    /// `Decimal { scale, rounding }` is the precedent — a family of types held as its parameters.
+    ///
+    /// **Boundary-only, exactly like `CInt`**, and `validate_type` is where that is enforced: a
+    /// width may appear in an `external function` signature and nowhere else. That is what keeps it
+    /// out of the layout walk, out of `review`, and out of the language server — a width is never
+    /// the type of a Burxt binding, so nothing downstream of the boundary can meet one.
+    ///
+    /// **`u64` above `Int`'s maximum is a real limit, and the range check NAMES it** rather than
+    /// pretending: a Burxt `Int` is a signed i64, so a `u64` value above `i64::MAX` has no Int to
+    /// land in. The upper bound checked for `u64` is therefore the SIGNED maximum, and the runtime
+    /// message says so instead of claiming a range the language cannot hold.
+    Width { bits: u32, signed: bool },
     /// An opaque pointer C handed back: a `FILE*`, a `DIR*`, a socket, a `char*`.
     ///
     /// Burxt treats it as a value it may MOVE but never look inside. Exactly two things can be
@@ -116,6 +134,12 @@ impl std::fmt::Display for Type {
             Type::Bool => write!(f, "Bool"),
             Type::String => write!(f, "String"),
             Type::CInt => write!(f, "CInt"),
+            // Spelled back exactly as it was written, which is what makes `review` need no change:
+            // a parameter going `CInt` -> `u8` changes `Promise.shape`, and `review` renders that
+            // from this `Display`. A width is carried by the shape already.
+            Type::Width { bits, signed } => {
+                write!(f, "{}{}", if *signed { "i" } else { "u" }, bits)
+            }
             Type::CPointer => write!(f, "CPointer"),
             Type::CDouble => write!(f, "CDouble"),
             Type::Decimal { scale, rounding: None } => write!(f, "Decimal<{}>", scale),

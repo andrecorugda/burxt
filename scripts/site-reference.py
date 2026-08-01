@@ -764,6 +764,7 @@ TYPES = """
 | `[T]` | Growable array. Lives in a region. Bounds always checked |
 | `dynamic Named` | An interface object: a value plus the interface's method table |
 | `CInt`, `CDouble` | C's widths. Only in an `external function` signature |
+| `i32`, `u8`, `u32`, `u64` | Sized C integers, boundary-only. A value that does not fit **traps** at the call rather than wrapping. `u64` is checked against `Int`'s signed maximum, because Burxt has no wider integer to receive the top half |
 """
 
 # What a well-typed program can still do. These are not compile errors, and the difference is the

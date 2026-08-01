@@ -520,6 +520,18 @@ class Unit {
     // interpolation fragment appends its own, and the parser must not walk into them.
     token_end: Int,
     no_record_literal: Int,
+    // Non-zero while an `external function` SIGNATURE is being parsed, and only then. It exists to
+    // make the boundary-only rule for sized widths (roadmap A7) a single check in a single place:
+    // `parse_type` is the one function that can produce a width, so refusing there with this at
+    // zero refuses one in a `let`, a parameter, a field, a return, an array element and a generic
+    // argument, all at once.
+    //
+    // Stage-0 gets the same coverage from `validate_type`, which every declared type passes
+    // through. Stage-1 HAS NO SUCH CHOKE POINT — `declared_type` is a pure conversion used by the
+    // extern path too — so the equivalent single point is here, one step earlier. Written as a
+    // parser mode flag because that is what this parser already does for the three questions of
+    // the same shape: `no_record_literal`, `range_bounds`, `in_multiply`.
+    in_extern_signature: Int,
     // Non-zero while the BOUNDS of a `for i in a..b` are being parsed, and only then. A range
     // is not a value — see statement kind 74 above — so a `..` reached with this at zero is
     // refused by name instead of collapsing into "expected `;`" about a token the author meant.

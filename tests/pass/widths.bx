@@ -1,0 +1,88 @@
+// Sized C integers at the FFI boundary — `i32` `u8` `u32` `u64`, roadmap A7.
+//
+// Burxt has one integer type and it is `Int`, a signed 64-bit number. C does not: a `dirent.d_name`
+// byte is 8 bits, `clock_gettime` wants a 32-bit clock id, and `malloc` takes a `size_t`. Before
+// these four, the only way to say so was `CInt`, which is 32 bits and signed and nothing else — so
+// a `u8` parameter had to be declared `Int`, and the value crossed as 64 bits into a C function
+// expecting one byte. That is not a diagnostic gap, it is the ABI being wrong.
+//
+// ---- what these are, and what they deliberately are not ----
+//
+// **They exist ONLY in an `external function` signature.** A `let`, a parameter, a class field, an
+// array element and a return type all refuse one — see `tests/fail/width_outside_the_c_boundary.bx`.
+// Inside Burxt every value stays an `Int`; the narrowing happens AT THE CALL and is checked there.
+// So a width is a statement about C's memory, never a second integer type with its own overflow
+// rules, which is the thing that would quietly undo the language's arithmetic guarantees.
+//
+// **Four, not every width C has.** These are the ones the roadmap's own callers need. `i8`, `i16`
+// and `u16` cost one line each the day something wants them; adding a width nobody has asked for
+// would be a rule that compiles and enforces nothing.
+//
+// ---- the representation, which is the part worth copying ----
+//
+// ONE type carrying two numbers — bits and signedness — not four variants. No rule cares which of
+// the four it is: the LLVM type wants the bit count, the range check wants the bounds, and the
+// extension wants the sign. Stage-0 spells it `Type::Width { bits, signed }`; stage-1 spells it
+// node kind 52 with the bits in `a` and the sign in `b`, reusing the same two slots a `Decimal`
+// uses for its scale and contract. Four variants would have been four identical arms at every site.
+
+// `strcmp` answers a C `int`, and it answers a NEGATIVE one. Declared `i32`, so the result is
+// SIGN-extended into Burxt's 64 bits: -1 stays -1.
+external function strcmp(a: String, b: String) -> i32;
+
+// `strlen` answers a `size_t`. Declared `u8` here — not what the real header says, and chosen on
+// purpose: it is the case where zero-extension and sign-extension DISAGREE, and a fixture that
+// cannot tell them apart is a fixture that would pass with the extension backwards.
+external function strlen(s: String) -> u8;
+
+// A 32-bit signed parameter, range-checked on the way in.
+external function abs(n: i32) -> i32;
+
+// `size_t`, the width that motivated `u64`.
+external function malloc(n: u64) -> CPointer;
+
+// ---- 1. sign extension: an i32 return of -1 is -1, not 4294967295 ----
+//
+// This is the whole reason a width carries its signedness. `strcmp("a", "b")` is negative; read as
+// unsigned it would be an enormous positive number, and every comparison built on it would be
+// backwards while looking perfectly reasonable.
+print(strcmp("a", "b"));                         // -1
+print(strcmp("b", "a") > 0);                     // true
+print(strcmp("a", "a"));                         // 0
+
+// ---- 2. ZERO extension: a u8 return of 200 is 200, not -56 ----
+//
+// The same bit pattern, the other rule. 200 in a byte has its top bit set, so sign-extending would
+// answer -56. The string below is exactly 200 characters, so the number is checkable by counting
+// rather than by trusting the comment.
+let two_hundred: String = "12345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890";
+print(len(two_hundred));                         // 200 — Burxt's own count, as the control
+print(strlen(two_hundred));                      // 200 — through a u8, zero-extended
+
+// ---- 3. a checked parameter, at both ends of the range ----
+//
+// The bounds are inclusive and the check is exact: 2147483647 fits an i32 and 2147483648 does not.
+// The failing side is `tests/panic/width_out_of_range.bx`, because a pass fixture cannot show a
+// trap; what is shown here is that the value at the very edge is NOT refused.
+print(abs(0 - 5));                               // 5
+print(abs(2147483647));                          // 2147483647 — the largest i32
+print(abs(0 - 2147483647));                      // 2147483647
+print(abs(0));                                   // 0
+
+// ---- 4. u64, and the half of it Burxt can express ----
+//
+// A `size_t` parameter. Zero and positive Ints cross unchanged; a NEGATIVE one is refused at
+// runtime (`tests/panic/width_u64_negative.bx`), because -1 as a `size_t` is 18446744073709551615
+// rather than a small number. The half above `Int`'s maximum has no Int to land in at all, which
+// the refusal names rather than hides.
+let block: CPointer = malloc(64);
+print(c_is_null(block));                         // false — 64 bytes is an ordinary request
+
+// ---- 5. a width is not a Burxt type, and the call site proves it ----
+//
+// Every value above is an ordinary `Int` on this side of the boundary: it can be bound, compared
+// and printed like any other. Nothing here declares a width, and nothing can.
+let compared: Int = strcmp("apple", "banana");
+let counted: Int = strlen("hello");
+print(compared < 0 && counted == 5);             // true
+print(counted + 1);                              // 6 — an Int, doing Int arithmetic

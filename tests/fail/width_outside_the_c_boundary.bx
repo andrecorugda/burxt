@@ -1,0 +1,20 @@
+// A sized width — `i32` `u8` `u32` `u64` — exists ONLY in an `external function` signature, exactly
+// as `CInt` does. Roadmap A7.
+//
+// The rule is not caution, it is the point of the feature: a width says how many bits C uses, and
+// inside Burxt there is one integer type and it is `Int`. A `let n: u8` would be a second integer
+// type with its own overflow behaviour, silently, in a language whose whole claim is that
+// arithmetic does not surprise you. Values convert AT THE CALL, where the conversion is checked and
+// a value that does not fit is a loud error.
+//
+// One position per fixture would be five files saying one thing. This is the `let`; the other four
+// positions — a parameter, a class field, an array element and a return type — are the same rule
+// through different doors, and `tests/pass/widths.bx` records that all five are refused with the
+// same wording in both compilers.
+//
+// **Both compilers reach this refusal by different routes, which is worth knowing.** Stage-0 refuses
+// in `validate_type`, which every declared type passes through. Stage-1 has no such choke point, so
+// it refuses in the PARSER — `parse_type` is the one function that can produce a width, and a flag
+// says whether an extern signature is open. Same rule, same words, one step apart.
+let n: u8 = 5;
+print(n);

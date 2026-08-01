@@ -1376,6 +1376,14 @@ impl<'ctx> CodeGen<'ctx> {
                 Layout { size: w, align: w, field_offsets: vec![] }
             }
             Type::CInt => Layout { size: 4, align: 4, field_offsets: vec![] },
+            // Written out rather than left to the `_` fallback below, which would answer 8 for a
+            // `u8`. A width is boundary-only, so it should never reach a layout walk at all — but a
+            // fallback that is silently wrong for three of the four widths is the kind of thing that
+            // only shows up once something else changes, and `bits / 8` is the honest answer.
+            Type::Width { bits, .. } => {
+                let w = (*bits / 8) as u64;
+                Layout { size: w, align: w, field_offsets: vec![] }
+            }
             _ => Layout { size: 8, align: 8, field_offsets: vec![] },
         }
     }
@@ -1399,7 +1407,11 @@ impl<'ctx> CodeGen<'ctx> {
     fn payload_cells(&self, ty: &Type) -> u32 {
         match ty {
             Type::Int | Type::Bool | Type::Decimal { .. } | Type::String => 1,
-            Type::CInt | Type::CDouble | Type::CPointer => 1,
+            // A width is boundary-only, so it can never be an enum variant's payload — the checker
+            // refuses it in a field long before this runs. Answered anyway, and answered 1, because
+            // every C scalar here is one cell and an arm that agrees with its neighbours cannot
+            // become a wrong number if the boundary rule is ever widened.
+            Type::CInt | Type::CDouble | Type::CPointer | Type::Width { .. } => 1,
             Type::Param(_) | Type::Generic { .. } => 1,
             Type::Slice(_) => 3,
             Type::Array { elem, len } => self.payload_cells(elem) * (*len as u32),
@@ -1450,6 +1462,18 @@ impl<'ctx> CodeGen<'ctx> {
             Type::Int | Type::Bool | Type::Decimal { .. } => self.ctx.i64_type().into(),
             Type::String => self.ctx.ptr_type(AddressSpace::default()).into(),
             Type::CInt => self.ctx.i32_type().into(),
+            // The whole payoff of ONE variant: the bit count IS the LLVM type, so `u8` and `u64`
+            // need no separate arms. Signedness does not appear here at all — LLVM integers carry
+            // no sign, which is why it lives in the range check and the extension instead.
+            // `custom_width_int_type` answers a Result — LLVM rejects a width of 0 or above 2^23 —
+            // and the four widths the lexer admits are all valid, so the failure is unreachable.
+            // Unwrapped to the 8-bit type rather than panicking, because `llvm_type` cannot report
+            // an error and a crash here would be a worse diagnostic than a wrong integer that no
+            // path can reach.
+            Type::Width { bits, .. } => std::num::NonZeroU32::new(*bits)
+                .and_then(|b| self.ctx.custom_width_int_type(b).ok())
+                .unwrap_or_else(|| self.ctx.i8_type())
+                .into(),
             // An opaque pointer, the same LLVM type a String uses — the TARGET decides the width,
             // never this code. What keeps it opaque is the checker, not the representation: nothing
             // in Burxt can load through it, and the only way to read what it points at is
@@ -1573,6 +1597,17 @@ impl<'ctx> CodeGen<'ctx> {
             // this arm means the refusal was lost.
             Type::CPointer => {
                 return Err("codegen bug: a CPointer reached print".to_string())
+            }
+            // Unreachable for the same reason `CInt` never appears here: a width exists only in an
+            // extern signature, and by the time a returned value is a Burxt expression it has been
+            // extended to `Int`. So there is nothing to format, and a wrong guess would print a
+            // truncated number — a silently wrong answer rather than a loud one.
+            Type::Width { bits, signed } => {
+                return Err(format!(
+                    "codegen bug: `{}{}` reached print — a width exists only at the C boundary",
+                    if *signed { "i" } else { "u" },
+                    bits
+                ))
             }
             Type::Int => {
                 let fmt = self.global_str("%lld", "fmt_int");
@@ -2131,6 +2166,14 @@ impl<'ctx> CodeGen<'ctx> {
                             Some(Type::CInt) => {
                                 v = self.build_to_cint(v.into_int_value())?.into();
                             }
+                            // Exactly what `CInt` does, per width. The check is the point: a
+                            // `u8` parameter handed 256 must be a loud runtime error, because a
+                            // silent truncation to 0 is a different number than the one written,
+                            // and C would act on it.
+                            Some(Type::Width { bits, signed }) => {
+                                let (bits, signed) = (*bits, *signed);
+                                v = self.build_to_width(v.into_int_value(), bits, signed)?.into();
+                            }
                             // A double holds every integer up to 2^53 exactly and
                             // starts skipping them after that, so the crossing is
                             // range-checked. Handing C a different integer than
@@ -2198,6 +2241,27 @@ impl<'ctx> CodeGen<'ctx> {
                         .build_int_s_extend(result.into_int_value(), i64t, "cint_ret")
                         .map(Into::into)
                         .map_err(|e| e.to_string());
+                }
+                // A width return widens to Burxt's i64, and WHICH extension is the whole content of
+                // `signed`: an `i32` sign-extends so -1 stays -1, a `u8` zero-extends so 0xFF is 255
+                // rather than -1. Getting this backwards is a silently wrong number, which is why
+                // `tests/pass/widths.bx` checks both directions on the same bit pattern.
+                //
+                // `u64` is the one that cannot be made honest: it is already 64 bits, so there is no
+                // extension to choose and a value above `Int`'s maximum arrives NEGATIVE. Named in
+                // the documentation and in A7d rather than papered over — Burxt has no unsigned
+                // 64-bit type for it to land in, and inventing one is not this item.
+                if let Some((_, Type::Width { bits, signed })) = &extern_sig {
+                    let (bits, signed) = (*bits, *signed);
+                    if bits >= 64 {
+                        return Ok(result);
+                    }
+                    let widened = if signed {
+                        self.builder.build_int_s_extend(result.into_int_value(), i64t, "width_ret")
+                    } else {
+                        self.builder.build_int_z_extend(result.into_int_value(), i64t, "width_ret")
+                    };
+                    return widened.map(Into::into).map_err(|e| e.to_string());
                 }
                 Ok(result)
             }
@@ -4560,7 +4624,7 @@ impl<'ctx> CodeGen<'ctx> {
 
         self.builder.position_at_end(full_bb);
         self.build_panic(
-            "burxt runtime error: region memory exhausted — this build reserves 1 GB \
+            "burxt runtime error: region memory exhausted — this build reserves 4 GB \
              per process for region allocation\n",
         )?;
 
@@ -4855,6 +4919,120 @@ impl<'ctx> CodeGen<'ctx> {
             inkwell::values::ValueKind::Basic(v) => Ok(v.into_int_value()),
             _ => Err("CInt helper returned void".to_string()),
         }
+    }
+
+    /// Range-check and narrow an Int to a sized C integer, roadmap A7.
+    ///
+    /// `build_to_cint` generalised: the helper is named `burxt.checked.<bits>.<s|u>` so each width
+    /// gets exactly one, defined the first time it is needed and shared after that.
+    fn build_to_width(
+        &mut self,
+        v: IntValue<'ctx>,
+        bits: u32,
+        signed: bool,
+    ) -> Result<IntValue<'ctx>, String> {
+        let f = self.to_width_fn(bits, signed)?;
+        let call = self
+            .builder
+            .build_call(f, &[v.into()], "checked_width")
+            .map_err(|e| e.to_string())?;
+        match call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(x) => Ok(x.into_int_value()),
+            _ => Err("width helper returned void".to_string()),
+        }
+    }
+
+    /// Get (or lazily define) `iN @burxt.checked.<bits>.<s|u>(i64)`.
+    ///
+    /// **The bounds are computed from the two numbers rather than tabulated**, which is what one
+    /// `Type::Width` variant buys: `i32` is `-2^31 ..= 2^31-1`, `u8` is `0 ..= 2^8-1`, and a table
+    /// of four would be four chances to write one bound wrong.
+    ///
+    /// **`u64`'s upper bound is `i64::MAX`, not `u64::MAX`, and the message says so.** A Burxt `Int`
+    /// is a signed i64, so there is no Int above `i64::MAX` to check — the honest statement is that
+    /// the language cannot express the top half of a `u64`, and the refusal names that rather than
+    /// claiming a range it cannot hold. `u64` therefore only rejects NEGATIVES, which is a real
+    /// check and not a no-op: `-1` as a `size_t` is an enormous number and every C API that has
+    /// been handed one has the bug to show for it.
+    fn to_width_fn(&mut self, bits: u32, signed: bool) -> Result<FunctionValue<'ctx>, String> {
+        let spelled = format!("{}{}", if signed { "i" } else { "u" }, bits);
+        let symbol = format!("burxt.checked.{}.{}", bits, if signed { "s" } else { "u" });
+        if let Some(f) = self.module.get_function(&symbol) {
+            return Ok(f);
+        }
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let saved_block = self.builder.get_insert_block();
+
+        let i64t = self.ctx.i64_type();
+        let target = std::num::NonZeroU32::new(bits)
+            .and_then(|b| self.ctx.custom_width_int_type(b).ok())
+            .ok_or_else(|| format!("codegen bug: {} is not a width LLVM accepts", bits))?;
+        let fn_ty = target.fn_type(&[i64t.into()], false);
+        let f = self.module.add_function(&symbol, fn_ty, None);
+        let entry = self.ctx.append_basic_block(f, "entry");
+        let panic_bb = self.ctx.append_basic_block(f, "doesnt_fit");
+        let ok_bb = self.ctx.append_basic_block(f, "ok");
+
+        self.builder.position_at_end(entry);
+        let v = f.get_nth_param(0).unwrap().into_int_value();
+        use inkwell::IntPredicate::*;
+        // Bounds as i64, which is what the value being checked is. `1 << (bits - 1)` for a signed
+        // width and `1 << bits` for an unsigned one — and `bits == 64` unsigned would shift by 64,
+        // which is undefined, so that case takes `i64::MAX` directly. That is the same limit the
+        // doc comment names, arriving as an arithmetic edge as well as a language one.
+        let (low, high): (i64, i64) = if signed && bits >= 64 {
+            // Not reachable from the four widths the lexer admits, and written anyway because the
+            // signed branch below would OVERFLOW here: `1i64 << 63` is `i64::MIN`, and negating it
+            // has no i64 answer. A compiler that panicked while compiling would be the worst
+            // possible version of this feature, and the day someone adds `i64` this arm is already
+            // the right answer — every i64 fits an Int, so the check is vacuous.
+            (i64::MIN, i64::MAX)
+        } else if signed {
+            let span = 1i64 << (bits - 1);
+            (-span, span - 1)
+        } else if bits >= 64 {
+            (0, i64::MAX)
+        } else {
+            (0, (1i64 << bits) - 1)
+        };
+        let max = i64t.const_int(high as u64, true);
+        let min = i64t.const_int(low as u64, true);
+        let too_big = self.builder.build_int_compare(SGT, v, max, "too_big").map_err(err)?;
+        let too_small = self.builder.build_int_compare(SLT, v, min, "too_small").map_err(err)?;
+        let out = self.builder.build_or(too_big, too_small, "out_of_range").map_err(err)?;
+        self.builder.build_conditional_branch(out, panic_bb, ok_bb).map_err(err)?;
+
+        self.builder.position_at_end(panic_bb);
+        // The bounds are IN the message. "does not fit in a u8" sends a reader to a header file;
+        // "a u8 holds 0 to 255" is the whole answer, and the numbers are the ones actually checked
+        // rather than a second copy that could disagree with them.
+        // "an i32", "a u8" — the article follows the SPELLING's sound, not the type's signedness
+        // as such: `i` reads "eye" and takes "an", `u` reads "you" and takes "a". Stage-1 builds the
+        // same string the same way, because these two messages are compared byte for byte.
+        let article = if signed { "an" } else { "a" };
+        let mut said = format!(
+            "burxt runtime error: this value does not fit in {} {} — the external parameter holds \
+             {} to {}\n",
+            article, spelled, low, high
+        );
+        if !signed && bits >= 64 {
+            said = format!(
+                "burxt runtime error: this value does not fit in a u64 as Burxt can hold it — an \
+                 Int is a SIGNED 64-bit integer, so the checked range is 0 to {}, and the top half \
+                 of a u64 has no Int to land in\n",
+                i64::MAX
+            );
+        }
+        self.build_panic(&said)?;
+
+        self.builder.position_at_end(ok_bb);
+        let narrowed = self.builder.build_int_truncate(v, target, "width").map_err(err)?;
+        self.builder.build_return(Some(&narrowed)).map_err(err)?;
+
+        if let Some(bb) = saved_block {
+            self.builder.position_at_end(bb);
+        }
+        Ok(f)
     }
 
     /// Get (or lazily define) `i32 @burxt.checked.cint(i64)`: returns the

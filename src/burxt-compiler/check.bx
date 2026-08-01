@@ -21,10 +21,29 @@ function simple_type(kind: Int) -> Type {
     return Type { kind: kind, scale: 0, contract: 0, name_start: 0, name_length: 0 };
 }
 
+// A sized C integer, roadmap A7 — kind 52, with the BIT COUNT in `scale` and signedness in
+// `contract`. The same two slots a Decimal uses, and the same choice stage-0 makes with one
+// `Type::Width { bits, signed }` variant: no rule below cares which of the four it is, only what
+// the bounds are and how many bits to truncate to.
+function width_type(bits: Int, signed: Int) -> Type {
+    return Type { kind: 52, scale: bits, contract: signed, name_start: 0, name_length: 0 };
+}
+
+// Is this a sized C integer? Asked by name so the four call sites cannot each get `kind == 52`
+// slightly wrong, which is how `CPointer`'s kind 51 was left out of `declared_type` for a version.
+function is_width(t: Type) -> Bool {
+    return t.kind == 52;
+}
+
 // C's widths as Burxt sees them at the boundary. See N1-BOUNDARY-EXACTNESS: the
 // exactness rule lives in `as scaled`, and the widths themselves are C's business.
+//
+// A width joins CInt and CDouble here, and that is the half of A7 a caller sees: Burxt code passes
+// and receives an ordinary Int, and the narrowing to `u8` or the widening from `i32` happens at the
+// call in the emitter. So a width is never the type of a Burxt expression — the same fact the
+// boundary refusal enforces from the other side.
 function as_burxt_sees(t: Type) -> Type {
-    if t.kind == 43 || t.kind == 44 {
+    if t.kind == 43 || t.kind == 44 || t.kind == 52 {
         return simple_type(40);
     }
     return t;
@@ -140,6 +159,14 @@ function (self: Unit) show_type(src: String, t: Type) -> String {
     if t.kind == 41 { return "Bool"; }
     if t.kind == 42 { return "String"; }
     if t.kind == 43 { return "CInt"; }
+    // Spelled back exactly as it was written. Built from the two numbers rather than a table of
+    // four, so a width that ever gains a fifth spelling cannot be rendered wrong here.
+    if t.kind == 52 {
+        if t.contract == 1 {
+            return "i" + to_string(t.scale);
+        }
+        return "u" + to_string(t.scale);
+    }
     if t.kind == 51 { return "CPointer"; }
     if t.kind == 44 { return "CDouble"; }
     if t.kind == 45 {
@@ -841,7 +868,11 @@ function (self: Unit) enclosing_return_type() -> Type {
 // the two mistakes have different answers — one is about precision, the other about ownership.
 function (mutable self: Unit) check_extern_return(src: String, at: Int, named: String,
                                                  answered: Type) -> Int {
-    if answered.kind == 40 || answered.kind == 43 || answered.kind == 51 {
+    // A sized width joins Int, CInt and CPointer, roadmap A7 — the return side of the boundary
+    // admission, and the mirror of `check_extern_param` below. Stage-0 accepted `-> i32` from the
+    // version widths landed; stage-1 refused it, which is a divergence in what is ACCEPTED and the
+    // direction that matters most (§B15).
+    if answered.kind == 40 || answered.kind == 43 || answered.kind == 51 || is_width(answered) {
         return 0;
     }
     if answered.kind == 44 {                         // CDouble
@@ -853,7 +884,8 @@ function (mutable self: Unit) check_extern_return(src: String, at: Int, named: S
     }
     let complained: Int = self.complain_at(src, at,
         "external function `" + named + "` returns " + self.show_type(src, answered)
-        + ", but only Int, CInt or CPointer may cross the C boundary as a return — a "
+        + ", but only Int, CInt, a sized width (i32, u8, u32, u64) or CPointer may cross the C "
+        + "boundary as a return — a "
         + self.show_type(src, answered) + " is a Burxt value with an owner, and C cannot say whose "
         + "it is. If the C function returns a pointer, declare `-> CPointer` and read it with "
         + "`c_string_at`, which copies.");
@@ -1208,6 +1240,14 @@ function (self: Unit) declared_type(src: String, node: Int) -> Type {
         }
         return Type { kind: n.kind, scale: n.a, contract: n.b,
                     name_start: t.start, name_length: t.length };
+    }
+    // A sized C integer carries its two numbers, exactly as a Decimal carries scale and contract.
+    // **This arm is why A7 is not a silent no-op in stage-1.** The block below says it in general
+    // and it is worth saying again at the type it was written for: a node kind this function does
+    // not recognise becomes UNKNOWN, an unknown type silences every rule downstream, and the result
+    // is a checker that agrees because it stopped asking.
+    if n.kind == 52 {
+        return width_type(n.a, n.b);
     }
     if n.kind == 47 || n.kind == 48 {
         // `scale` holds the ELEMENT type's node for a slice or an array, and
