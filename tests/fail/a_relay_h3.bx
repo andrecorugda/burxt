@@ -1,0 +1,21 @@
+// B32b. A relay through a `dynamic`. The dyn arm asked whether any implementation ALLOCATES and
+// returned there, so it never went on to ask whether any implementation RELAYS — two properties, one
+// call site, and only the first was consulted.
+//
+// **These four shipped inside v0.0.269 as stage-1 accepting what stage-0 refused**, and the corpus
+// reported zero divergences because it does not spell these shapes. That is the lesson worth more
+// than the fix: a differential is only as wide as its corpus, and mine was narrower than the
+// language. The commit claiming the family was closed was wrong when it was written.
+interface Relay { function give(self, s: String) -> String }
+class Plain { tag: Int }
+implement Relay for Plain {
+    function (self) give(s: String) -> String { return s; }
+}
+let mutable kept: String = "";
+region r {
+    let p: Plain = Plain { tag: 1 };
+    let d: dynamic Relay = p;
+    let built: String = "secret-" + "value";
+    kept = d.give(built);
+}
+print(kept);

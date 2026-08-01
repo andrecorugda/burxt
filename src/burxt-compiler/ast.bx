@@ -538,8 +538,22 @@ class Unit {
     // indices for the receiver, which has no position to name — but unlike `grow_self` it does NOT
     // require `mutable self`, because reading a field off a shared receiver relays it just as well
     // as writing one.
+    //
+    // A method's ORDINARY parameters get their own list rather than sharing `relay_self` under an
+    // encoding. Stage-0 keys one set by `(receiver, method, position)` with 0 meaning `self` and
+    // `i + 1` meaning parameter `i`; the two compilers must agree on the BEHAVIOUR and need not
+    // agree on the bookkeeping, and a reader who meets `parameter: 0` should not have to learn
+    // that it means something other than the first parameter. `owner` indexes `methods`.
+    //
+    // And unlike growth, a method's ordinary parameters ARE tracked here. `record_parameter_growth`
+    // skips them deliberately, mirroring a hole stage-0 has; that hole does not exist for relaying,
+    // because a parameter does not need to be `mutable` to be handed back —
+    // `function (self: Bag) take(x: String) -> String { return x; }` is a use-after-free that both
+    // compilers refuse. Tracking one and not the other is not an inconsistency: growth needs
+    // permission to WRITE through the parameter, and relaying needs nothing but the pointer.
     relay_parameters: [ParameterGrowth],
     relay_self: [Int],
+    relay_method_parameters: [ParameterGrowth],
     // The backend's state: the IR text, the constants it referred to, a counter for
     // registers and one for labels, the locals' allocas, and the enclosing loops'
     // labels so `break` and `continue` know where to jump.

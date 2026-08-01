@@ -4334,6 +4334,15 @@ function (self: Unit) relays_self(method: Int) -> Bool {
     return false;
 }
 
+function (self: Unit) relays_method_parameter(method: Int, parameter: Int) -> Bool {
+    for known in self.relay_method_parameters {
+        if known.owner == method && known.parameter == parameter {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Both notes count into `probe_changes`, so the fourth property converges in `infer_allocates`'s
 // existing rounds rather than in a loop of its own. Two loops over one call graph would have to
 // agree about when to stop, which is the argument the B25 note above already makes.
@@ -4351,6 +4360,15 @@ function (mutable self: Unit) note_relay_self(method: Int) -> Int {
         return 0;
     }
     push(self.relay_self, method);
+    self.probe_changes += 1;
+    return 1;
+}
+
+function (mutable self: Unit) note_relay_method_parameter(method: Int, parameter: Int) -> Int {
+    if self.relays_method_parameter(method, parameter) {
+        return 0;
+    }
+    push(self.relay_method_parameters, ParameterGrowth { owner: method, parameter: parameter });
     self.probe_changes += 1;
     return 1;
 }
@@ -4422,10 +4440,30 @@ function (mutable self: Unit) note_relay_root(src: String, node: Int) -> Int {
             if span_equal(src, named.start, named.length, "self") {
                 return self.note_relay_self(self.current_method);
             }
-            // A method's ordinary parameters are not tracked, mirroring the hole
-            // `record_parameter_growth` records for growth — stage-0 does not track them either,
-            // and the two compilers refusing different programs is the failure the differential
-            // exists to catch.
+            // A method's ORDINARY parameters, and they are tracked — unlike growth, where
+            // `record_parameter_growth` skips them to mirror a hole stage-0 has.
+            //
+            // **This arm was missing and it was a live use-after-free**, found by probing rather
+            // than by the corpus, which has no program of this shape:
+            //
+            //     function (self: Bag) take(x: String) -> String { return x; }
+            //     region r { kept = bag.take("secret-" + "value"); }   // prints secret-value, then 0
+            //
+            // The reason growth can skip these and relaying cannot is worth stating rather than
+            // leaving as an inconsistency: growth needs permission to WRITE through the parameter,
+            // so only a `mutable` one can carry anything back, and stage-0 declines to track those.
+            // Relaying needs nothing but the pointer, which every parameter has.
+            let holder: Method = self.methods[self.current_method];
+            let mparams: Node = self.nodes[holder.parameters];
+            let mutable mi: Int = 0;
+            while mi < mparams.b {
+                let mparam: Node = self.nodes[self.children[mparams.a + mi]];
+                let mname: Token = self.tokens[mparam.token];
+                if spans_equal(src, mname.start, mname.length, named.start, named.length) {
+                    return self.note_relay_method_parameter(self.current_method, mi);
+                }
+                mi += 1;
+            }
             return 0;
         }
         if self.current_function < 0 {
@@ -4447,14 +4485,65 @@ function (mutable self: Unit) note_relay_root(src: String, node: Int) -> Int {
         }
         return 0;
     }
-    if n.kind == 11 || n.kind == 12 || n.kind == 22 {
-        return self.note_relay_root(src, n.a);       // a field, an element, a `?` payload
+    if n.kind == 11 || n.kind == 22 {
+        return self.note_relay_root(src, n.a);       // a field, a `?` payload
+    }
+    if n.kind == 12 {                                // an element: the base AND the index
+        // The index is walked because stage-0 walks it, and the two compilers agreeing matters
+        // more here than the one case being reachable. It is inert in practice — an index is an
+        // Int, so it cannot be region storage — but "inert in practice" is the reasoning that put
+        // `sdiv` on arm64 in B18, and mirroring costs one line.
+        let base: Int = self.note_relay_root(src, n.a);
+        return base + self.note_relay_root(src, n.b);
+    }
+    // ---- An aggregate built HERE is fresh; what it HOLDS is not ------------------------------
+    //
+    // `return Box { name: s }` hands the caller a record whose field points at `s`'s bytes. The
+    // record is new, so `expr_allocates` was right that nothing of the CALLER's was allocated —
+    // and the pointer inside it is the caller's problem all the same. Proven, both compilers
+    // accepted it before this arm and it printed `secret-value` and then `0`.
+    //
+    // This is the array-literal and class-literal pair that `expr_allocates` already walks two
+    // files over, asked in the opposite direction: that one asks whether a child was BUILT, this
+    // one asks whether a child was GIVEN. A form is in exactly one of the two.
+    if n.kind == 17 {                                // an array literal: children ARE the values
+        let mutable noted: Int = 0;
+        let mutable i: Int = 0;
+        while i < n.b {
+            noted += self.note_relay_root(src, self.children[n.a + i]);
+            i += 1;
+        }
+        return noted;
+    }
+    if n.kind == 19 {                                // a class literal: children are field PAIRS
+        let mutable noted: Int = 0;
+        let mutable i: Int = 0;
+        while i < n.b {
+            let pair: Node = self.nodes[self.children[n.a + i]];
+            noted += self.note_relay_root(src, pair.a);
+            i += 1;
+        }
+        return noted;
     }
     if n.kind == 13 {                                // a call: transitive through the property
         let name: Token = self.tokens[n.token];
         let callee: Int = self.find_function(src, name.start, name.length);
         if callee < 0 {
-            return 0;                                // a builtin relays nothing; see the note above
+            // Not a declared function. A BUILTIN relays nothing — `substring` and `to_string`
+            // build fresh storage and said so — but an ENUM CONSTRUCTOR carries its payload, so
+            // `return Some(s)` hands back a value pointing at `s`. Told apart exactly as
+            // `expr_allocates` tells them apart, by asking whether the name has a builtin arity.
+            if builtin_arity(substring(src, name.start, name.length)) >= 0 {
+                return 0;
+            }
+            let payload: Node = self.nodes[n.a];
+            let mutable carried: Int = 0;
+            let mutable p: Int = 0;
+            while p < payload.b {
+                carried += self.note_relay_root(src, self.children[payload.a + p]);
+                p += 1;
+            }
+            return carried;
         }
         let list: Node = self.nodes[n.a];
         let mutable noted: Int = 0;
@@ -4467,13 +4556,62 @@ function (mutable self: Unit) note_relay_root(src: String, node: Int) -> Int {
         }
         return noted;
     }
-    if n.kind == 14 {                                // a method call, through the receiver
-        let holder: Type = self.type_at(n.a);
-        let found: Int = self.find_method(src, holder, n.token);
-        if found >= 0 && self.relays_self(found) {
-            return self.note_relay_root(src, n.a);
+    if n.kind == 14 {                                // a method call
+        // `Enum.Variant(payload)` is a method-call node too — the base is a type name rather than
+        // a value — and a variant carries its payload. Told apart the way `expr_allocates` tells
+        // it apart: a bare name that resolves to an enum declaration.
+        let base: Node = self.nodes[n.a];
+        if base.kind == 5 {
+            let base_name: Token = self.tokens[base.token];
+            let declared: Int = self.find_type(src, base_name.start, base_name.length);
+            if declared >= 0 && self.types[declared].kind == 83 {
+                let payload: Node = self.nodes[n.b];
+                let mutable carried: Int = 0;
+                let mutable p: Int = 0;
+                while p < payload.b {
+                    carried += self.note_relay_root(src, self.children[payload.a + p]);
+                    p += 1;
+                }
+                return carried;
+            }
         }
-        return 0;
+        let holder: Type = self.type_at(n.a);
+        // A call through a `dynamic`: the interface names no body, so the answer is whether ANY
+        // implementation relays — the same shape `any_implementation_allocates` already has for
+        // allocation, and stage-0's `dyn_call_relays`.
+        if holder.kind == 49 {
+            let mutable noted: Int = 0;
+            if self.any_implementation_relays_self(src, holder, self.tokens[n.token]) {
+                noted += self.note_relay_root(src, n.a);
+            }
+            let list: Node = self.nodes[n.b];
+            let mutable i: Int = 0;
+            while i < list.b {
+                if self.any_implementation_relays_parameter(src, holder,
+                                                     self.tokens[n.token], i) {
+                    noted += self.note_relay_root(src, self.children[list.a + i]);
+                }
+                i += 1;
+            }
+            return noted;
+        }
+        let found: Int = self.find_method(src, holder, n.token);
+        if found < 0 {
+            return 0;
+        }
+        let mutable noted: Int = 0;
+        if self.relays_self(found) {
+            noted += self.note_relay_root(src, n.a);
+        }
+        let list: Node = self.nodes[n.b];
+        let mutable i: Int = 0;
+        while i < list.b {
+            if self.relays_method_parameter(found, i) {
+                noted += self.note_relay_root(src, self.children[list.a + i]);
+            }
+            i += 1;
+        }
+        return noted;
     }
     return 0;
 }

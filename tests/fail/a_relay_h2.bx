@@ -1,0 +1,16 @@
+// B32b. A relay through a method's ORDINARY parameter, not its receiver. Tracking the receiver alone
+// misses `bag.take(built)`, and the fix keys the property by position rather than by "is it self".
+//
+// **These four shipped inside v0.0.269 as stage-1 accepting what stage-0 refused**, and the corpus
+// reported zero divergences because it does not spell these shapes. That is the lesson worth more
+// than the fix: a differential is only as wide as its corpus, and mine was narrower than the
+// language. The commit claiming the family was closed was wrong when it was written.
+class Bag { n: Int }
+function (self: Bag) take(x: String) -> String { return x; }
+let bag: Bag = Bag { n: 1 };
+let mutable kept: String = "";
+region r {
+    let built: String = "secret-" + "value";
+    kept = bag.take(built);
+}
+print(kept);

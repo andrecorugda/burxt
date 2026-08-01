@@ -1,0 +1,14 @@
+// B32b. A relay returning an ELEMENT of a parameter array. The base of the index carries the taint.
+//
+// **These four shipped inside v0.0.269 as stage-1 accepting what stage-0 refused**, and the corpus
+// reported zero divergences because it does not spell these shapes. That is the lesson worth more
+// than the fix: a differential is only as wide as its corpus, and mine was narrower than the
+// language. The commit claiming the family was closed was wrong when it was written.
+function pick(xs: [String], i: Int) -> String { return xs[i]; }
+let mutable kept: String = "";
+region r {
+    let mutable made: [String] = [];
+    let p: Int = push(made, "secret-" + "value");
+    kept = pick(made, 0);
+}
+print(kept);

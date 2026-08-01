@@ -1,0 +1,16 @@
+// B32b. A relay that wraps its argument in a RECORD LITERAL. `wrap(s) -> Box { return Box { name: s }; }`
+// does not allocate the String and does not return it directly — it returns an aggregate holding it —
+// and the relay property has to recurse into literal children to see that.
+//
+// **These four shipped inside v0.0.269 as stage-1 accepting what stage-0 refused**, and the corpus
+// reported zero divergences because it does not spell these shapes. That is the lesson worth more
+// than the fix: a differential is only as wide as its corpus, and mine was narrower than the
+// language. The commit claiming the family was closed was wrong when it was written.
+class Box { name: String }
+function wrap(s: String) -> Box { return Box { name: s }; }
+let mutable kept: Box = Box { name: "" };
+region r {
+    let built: String = "secret-" + "value";
+    kept = wrap(built);
+}
+print(kept.name);

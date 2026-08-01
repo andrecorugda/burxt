@@ -1024,6 +1024,51 @@ function (self: Unit) any_implementation_allocates(src: String, holder: Type,
     return false;
 }
 
+// ---- B32 through a `dynamic`: does ANY implementation hand back what it was given? ------------
+//
+// The interface names no body, so the question can only be asked of the implementations, exactly
+// as `any_implementation_allocates` above asks it about allocation. Stage-0's `dyn_call_relays` is
+// the same iteration over the same table.
+//
+// Two functions rather than one with a position argument, because the receiver and a parameter are
+// looked up in two different tables and folding them would need the `0 = self, i + 1 = parameter`
+// encoding this file deliberately does not use.
+function (self: Unit) any_implementation_relays_self(src: String, holder: Type,
+                                               wanted: Token) -> Bool {
+    let mutable i: Int = 0;
+    while i < len(self.impls) {
+        let candidate: Implementation = self.impls[i];
+        if spans_equal(src, candidate.trait_start, candidate.trait_len,
+                    holder.name_start, holder.name_length) {
+            let found: Int = self.find_method_named(src, candidate.type_start, candidate.type_len,
+                                wanted.start, wanted.length);
+            if found >= 0 && self.relays_self(found) {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    return false;
+}
+
+function (self: Unit) any_implementation_relays_parameter(src: String, holder: Type,
+                                               wanted: Token, parameter: Int) -> Bool {
+    let mutable i: Int = 0;
+    while i < len(self.impls) {
+        let candidate: Implementation = self.impls[i];
+        if spans_equal(src, candidate.trait_start, candidate.trait_len,
+                    holder.name_start, holder.name_length) {
+            let found: Int = self.find_method_named(src, candidate.type_start, candidate.type_len,
+                                wanted.start, wanted.length);
+            if found >= 0 && self.relays_method_parameter(found, parameter) {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    return false;
+}
+
 function (self: Unit) find_method_named(src: String, holder_start: Int, holder_len: Int,
                                   name_start: Int, name_length: Int) -> Int {
     let mutable i: Int = 0;
@@ -1463,21 +1508,34 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
         // `return` rule asks this function during a probe round and then records `has_region()` on
         // a yes, so a flat `true` would class every function calling a dyn method as allocating.
         if holder.kind == 49 {
-            return self.any_implementation_allocates(src, holder, self.tokens[n.token]);
+            if self.any_implementation_allocates(src, holder, self.tokens[n.token]) {
+                return true;
+            }
+            // B32 behind an interface. The dyn arm asked about ALLOCATION and stopped, so an
+            // implementation that hands back what it was given was invisible here — the same
+            // one-rule-consults-it-and-the-other-does-not shape this arm was written to fix,
+            // reappearing one property later.
+            if self.any_implementation_relays_self(src, holder, self.tokens[n.token]) {
+                if self.expr_allocates(src, n.a) {
+                    return true;
+                }
+            }
+            return self.relayed_dyn_argument_allocates(src, holder, self.tokens[n.token], n.b);
         }
         let found: Int = self.find_method(src, holder, n.token);
         if found >= 0 {
             if flag_allocates(self.methods[found].flags) == 1 {
                 return true;
             }
-            // B32 through a receiver: `b.name_of()` returning `self.name` points into `b`. The
-            // receiver is the only thing asked, because a method's ordinary parameters are not
-            // tracked — the hole `record_parameter_growth` already records for growth, kept in
-            // both compilers rather than closed in one.
+            // B32 through a receiver: `b.name_of()` returning `self.name` points into `b`.
             if self.relays_self(found) {
-                return self.expr_allocates(src, n.a);
+                if self.expr_allocates(src, n.a) {
+                    return true;
+                }
             }
-            return false;
+            // And through an ordinary parameter of the method. Growth does not track these and
+            // relaying must: see `note_relay_root`, where the asymmetry is argued.
+            return self.relayed_method_argument_allocates(src, found, n.b);
         }
         return false;
     }
@@ -1496,6 +1554,39 @@ function (mutable self: Unit) relayed_argument_allocates(src: String, callee: In
     let mutable i: Int = 0;
     while i < list.b {
         if self.relays_parameter(callee, i) {
+            if self.expr_allocates(src, self.children[list.a + i]) {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    return false;
+}
+
+// The same question for a METHOD's ordinary parameters, and for a method reached through a
+// `dynamic`. Three functions rather than one, because the three look their answer up in three
+// different tables; the loop is the same and the fact asked is the same.
+function (mutable self: Unit) relayed_method_argument_allocates(src: String, callee: Int,
+                                            list_node: Int) -> Bool {
+    let list: Node = self.nodes[list_node];
+    let mutable i: Int = 0;
+    while i < list.b {
+        if self.relays_method_parameter(callee, i) {
+            if self.expr_allocates(src, self.children[list.a + i]) {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    return false;
+}
+
+function (mutable self: Unit) relayed_dyn_argument_allocates(src: String, holder: Type,
+                                            wanted: Token, list_node: Int) -> Bool {
+    let list: Node = self.nodes[list_node];
+    let mutable i: Int = 0;
+    while i < list.b {
+        if self.any_implementation_relays_parameter(src, holder, wanted, i) {
             if self.expr_allocates(src, self.children[list.a + i]) {
                 return true;
             }
