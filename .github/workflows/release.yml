@@ -30,6 +30,11 @@ jobs:
   tarball:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runs-on }}
+    # A dead runner label queues forever rather than erroring, and `image`/`publish` are
+    # `needs: tarball`, so one unschedulable host silently freezes the whole release — which is
+    # exactly what a retired `macos-13` did here, four times, while looking like "still running".
+    # 60 minutes is roughly 3x the slowest good host, so it cannot fire on a merely slow one.
+    timeout-minutes: 60
     strategy:
       # One broken host should not hide whether the other three work. With `fail-fast` the first
       # macOS failure would cancel the Linux builds mid-flight and the run would say nothing about
@@ -45,8 +50,18 @@ jobs:
             runs-on: ubuntu-24.04-arm
           - name: darwin-arm64
             runs-on: macos-14
+          # `macos-15-intel`, NOT `macos-13`. The Intel image was retired on 4 December 2025 and
+          # the label now matches no runner at all — a job asking for it is queued forever rather
+          # than failing. Across four dispatches this one sat with `runner_name: ""` and an empty
+          # step list while the other three finished, and because `image` and `publish` are
+          # `needs: tarball`, neither could ever start. **A run that hangs reports nothing; a run
+          # that fails reports something.** That is what `timeout-minutes` below is for.
+          #
+          # Intel macOS has a deadline of its own: GitHub drops x86_64 macOS entirely once the
+          # macOS 15 image retires in autumn 2027. When that lands this row goes away and the
+          # Darwin story is arm64 only.
           - name: darwin-x86_64
-            runs-on: macos-13
+            runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
 
