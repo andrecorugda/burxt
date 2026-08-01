@@ -101,9 +101,26 @@ function string_is_space(byte: Int) -> Bool {
 // One spelling per concept, so the byte form is gone rather than kept beside this. A separator is a
 // string; that a one-character string is also a byte is not a second idea.
 //
-// An EMPTY separator answers the whole text as one piece rather than splitting into characters. Burxt
-// has no character type — a String is bytes — so "split into characters" is not a thing this could
-// mean, and looping forever on a zero-width match is the alternative.
+// An EMPTY separator answers the whole text as one piece rather than splitting into characters.
+//
+// ~~Burxt has no character type — a String is bytes — so "split into characters" is not a thing this
+// could mean.~~ **That reason expired with A5 (v0.0.250).** A one-codepoint String is exactly what
+// `char_at` answers, so "split into characters" now means something precise. The BEHAVIOUR here is
+// unchanged and the decision is deliberately still open; what follows is the argument, not a ruling.
+//
+// The case for leaving it: an empty separator has **no forced answer**. It occurs between every pair
+// of characters, and also at the start, at the end, and unboundedly often at each position — so
+// "cut at every occurrence" does not determine a result. Python refuses `"abc".split("")` outright;
+// JavaScript answers UTF-16 code units and cuts emoji in half. Neither is a spelling worth copying.
+//
+// And when there is more than one right answer, this project's habit is to make the caller pick by
+// NAME — `divide_floor` against `divide_toward_zero`, `shift_right_zeros` against
+// `shift_right_sign`, `string_to_upper_ascii` against a full mapping that does not exist yet. By
+// that habit the codepoint split is a separate `string_chars(text) -> [String]`, six lines over
+// `next_char`, and not a degenerate case of this one. It is not written, because which way this
+// goes is not a call to make inside a comment.
+//
+// The one thing that would be wrong is silence: looping forever on a zero-width match.
 function string_split(text: String, separator: String) -> [String] {
     let mutable pieces: [String] = [];
     let width: Int = len(separator);
@@ -461,3 +478,355 @@ pure function is_valid_utf8(text: String) -> Bool {
     }
     return true;
 }
+
+// A continuation byte — `10xxxxxx`, the second and later byte of a multi-byte sequence, and never
+// the first. §D1p asks for it by name, and it is one line, but it is the line every other function
+// in this section is built on: `char_count` counts bytes that are NOT this, and `next_char` reads a
+// width only from bytes that are NOT this.
+//
+// Takes a BYTE, not a String, and so is spelled like `string_is_space` — the two are the same kind
+// of question asked of the same kind of value.
+pure function is_continuation(byte: Int) -> Bool {
+    return bit_and(byte, 192) == 128;
+}
+
+// The codepoint at codepoint index `i`, as a number. `codepoint_at("é", 0)` is 233.
+//
+// The companion to `char_at`, which answers the same character as a one-codepoint String. Two
+// functions rather than one because the two answers are used for different things: a String goes
+// into output and a comparison, a number goes into a range test and arithmetic. Neither is
+// derivable from the other without the decode below, so having only one would make every caller
+// write it.
+//
+// The width comes from `next_char` rather than from the leading byte a second time, which is what
+// makes this total: `next_char` clamps to `len(text)`, so no read below can go past the end even on
+// a truncated final sequence. It ASSUMES valid UTF-8 for its ANSWER — a truncated three-byte
+// sequence decodes as though it were the two bytes that are there, which is a well-defined number
+// and not the codepoint anyone meant. Same standing as `char_count` and `char_at`; see the section
+// header.
+//
+// O(n) in `i` for the same reason `char_at` is. Walk with `next_char` if you want all of them.
+pure function codepoint_at(text: String, i: Int) -> Int
+    requires i >= 0
+    requires i < char_count(text)
+{
+    let mutable at: Int = 0;
+    let mutable seen: Int = 0;
+    while seen < i {
+        at = next_char(text, at);
+        seen += 1;
+    }
+    let ending: Int = next_char(text, at);
+    let width: Int = ending - at;
+    let leading: Int = byte_at(text, at);
+    if width == 1 {
+        return leading;
+    }
+    // The leading byte carries the top bits and each continuation carries six more. The masks are
+    // the complement of the width marker: `110xxxxx` keeps 5 bits, `1110xxxx` keeps 4, `11110xxx`
+    // keeps 3.
+    if width == 2 {
+        return shift_left(bit_and(leading, 31), 6)
+             + bit_and(byte_at(text, at + 1), 63);
+    }
+    if width == 3 {
+        return shift_left(bit_and(leading, 15), 12)
+             + shift_left(bit_and(byte_at(text, at + 1), 63), 6)
+             + bit_and(byte_at(text, at + 2), 63);
+    }
+    return shift_left(bit_and(leading, 7), 18)
+         + shift_left(bit_and(byte_at(text, at + 1), 63), 12)
+         + shift_left(bit_and(byte_at(text, at + 2), 63), 6)
+         + bit_and(byte_at(text, at + 3), 63);
+}
+
+// Every byte, as numbers. §D1p asks for it, and the honest note is that its partner `from_bytes`
+// is NOT here — see the gap recorded at the bottom of this file. Bytes come out of a String
+// freely; getting them back in is the thing this language cannot do yet.
+//
+// `len` and `byte_at` already give a caller this one byte at a time, so this exists for the case
+// where the bytes have to be held: passed to a function, sorted, hashed, compared as a whole.
+function to_bytes(text: String) -> [Int] {
+    let mutable out: [Int] = [];
+    for i in 0..len(text) {
+        let added: Int = push(out, byte_at(text, i));
+    }
+    return out;
+}
+
+// The CODEPOINT index of `of`, or None. The companion to `string_find`, which answers a BYTE offset.
+//
+// **Both exist because they answer different questions, and mixing them corrupts text.** A byte
+// offset is what `substring` takes; a codepoint index is what `char_at` takes and what a human
+// counting characters means. In `"héllo"` the `l` is at byte 3 and character 2, and handing 3 to
+// `char_at` reads the wrong character while handing 2 to `substring` splits the `é` in half. The
+// names are the only thing standing between a caller and that bug, which is why neither is called
+// `index_of`.
+//
+// Matches only on a CODEPOINT BOUNDARY, and that is a real difference from `string_find` rather
+// than an implementation detail: searching `"é"` for the single byte `0xA9` succeeds byte-wise and
+// has no codepoint index to answer, so this walks boundaries and compares from each one. A needle
+// that only occurs straddling a character is reported as absent, which is the truthful answer to
+// the question actually asked.
+//
+// An EMPTY needle answers `Some(0)`, matching `string_find`'s 0 — every string contains the empty
+// string, at the beginning.
+function char_index(text: String, of: String) -> Option<Int> {
+    if len(of) == 0 {
+        return Option.Some(0);
+    }
+    let mutable at: Int = 0;
+    let mutable index: Int = 0;
+    while at < len(text) {
+        if string_matches_at(text, of, at) {
+            return Option.Some(index);
+        }
+        at = next_char(text, at);
+        index += 1;
+    }
+    return Option.None;
+}
+
+// ---- reversing, which is what a byte-wise version gets wrong -----------------------------
+
+// The text, codepoint by codepoint, backwards. **`string_reverse("aé中🙂")` is `"🙂中éa"`.**
+//
+// This is the function §D1a has asked for since the first audit, and the reason it needed A5 is
+// that **a byte-wise reverse corrupts every multi-byte character.** Reversing the bytes of `"é"`
+// (`C3 A9`) gives `A9 C3`, which is not a character at all — a continuation byte followed by a
+// leader. The output is not merely wrong, it is not UTF-8, and every downstream reader of it is
+// entitled to do something different with it. Whole codepoints move; their bytes do not.
+//
+// ---- the limit, which the roadmap's word "codepoint-aware" states exactly ----
+//
+// This reverses CODEPOINTS, not what a reader would call characters, and the difference is visible:
+//
+//   * `"e" + U+0301` (a combining acute) renders as `é` and is TWO codepoints. Reversed, the accent
+//     lands on whatever now precedes it. Still valid UTF-8, still the wrong picture.
+//   * An emoji built from a zero-width-joiner sequence, or a flag built from two regional
+//     indicators, comes apart the same way.
+//
+// The fix is grapheme-cluster segmentation, which needs the Unicode break tables — a generated
+// data file, not a library function, and the same class of thing full case mapping needs. It is not
+// here and this is not pretending otherwise. What IS guaranteed: the output is valid UTF-8 whenever
+// the input is, and reversing twice returns the original exactly. Both are checked in
+// `tests/pass/string_codepoints.bx` on text with two-, three- and four-byte characters.
+//
+// ---- the cost ----
+//
+// Built in 4 KB chunks rather than one prepend per character, which is the idiom this project has
+// paid for three times (v0.0.68, v0.0.77, v0.0.82) and `lib/os.bx` uses for the same reason: a
+// String is immutable, so `out = piece + out` copies everything already collected on every
+// character and turns a reverse into O(n²). The chunk bounds that copy to 4 KB.
+pure function string_reverse(text: String) -> String allocates {
+    let mutable done: String = "";
+    let mutable chunk: String = "";
+    let mutable at: Int = 0;
+    while at < len(text) {
+        let ending: Int = next_char(text, at);
+        // PREPEND: the piece read last ends up first.
+        chunk = substring(text, at, ending - at) + chunk;
+        if len(chunk) >= 4096 {
+            done = chunk + done;
+            chunk = "";
+        }
+        at = ending;
+    }
+    return chunk + done;
+}
+
+// ---- case, and the name is the decision -------------------------------------------------
+//
+// **`_ascii` is not a shorthand, it is the promise.** These map `a`..`z` and `A`..`Z`, and pass
+// every other byte through unchanged. Two measured examples, both in the fixture:
+//
+//     string_to_upper_ascii("Straße")  ->  "STRAßE"      the ß is not touched
+//     string_to_lower_ascii("ÉCOLE")   ->  "École"       the É is not touched
+//
+// The second one is the whole argument in one line: it looks like it worked. A caller who tests
+// with `"ECOLE"` sees `"ecole"` and ships, and the failure surfaces on somebody else's data.
+//
+// The name carries the limit for the same reason `divide_floor` and `shift_right_zeros` do: there
+// is more than one right answer and the caller must pick. A function called `string_to_upper` that
+// silently ignored every character outside ASCII would be a silent wrong answer in the standard
+// library of a language whose whole thesis is refusing them — and it is the wrong answer that is
+// hardest to notice, because it is correct on all the test data an English-speaking author thinks
+// to write.
+//
+// What full Unicode case mapping would need, so the gap is sized rather than gestured at:
+//
+//   * ~1,400 generated mapping entries, which is a data file the build produces, not a function.
+//   * **`ß` upper-cases to `SS`** — one codepoint becoming two, so the answer is not the same
+//     length in characters and no in-place mapping can express it.
+//   * **Locale**: Turkish `i` upper-cases to `İ` (dotted), not `I`, so there is no single correct
+//     answer without knowing the language. A function with no locale argument cannot be right.
+//
+// That is a module with a generated table and a locale parameter, and it is a different decision
+// from this one. `spec/ROADMAP-1.0.md` §D1a is satisfied by naming the limit today.
+//
+// ---- why a BYTE-wise loop is safe here, which is not obvious ----
+//
+// Every byte of a multi-byte sequence is >= 0x80 and every ASCII letter is < 0x80, so a byte-wise
+// pass **cannot touch a non-ASCII character** — there is no byte inside `é` or `中` that could be
+// mistaken for a letter. That is a designed property of UTF-8 and the reason these need no
+// codepoint walk, unlike `string_reverse`. The fixture checks it on real non-ASCII text rather than
+// asserting it here.
+
+// `a`..`z` become `A`..`Z`. Every other byte, ASCII or not, is passed through unchanged.
+pure function string_to_upper_ascii(text: String) -> String allocates {
+    let mutable done: String = "";
+    let mutable chunk: String = "";
+    for i in 0..len(text) {
+        let byte: Int = byte_at(text, i);
+        if byte >= 97 && byte <= 122 {
+            chunk += ascii_letter(byte - 32);
+        } else {
+            chunk += substring(text, i, 1);
+        }
+        if len(chunk) >= 4096 {
+            done += chunk;
+            chunk = "";
+        }
+    }
+    return done + chunk;
+}
+
+// `A`..`Z` become `a`..`z`. Every other byte, ASCII or not, is passed through unchanged.
+pure function string_to_lower_ascii(text: String) -> String allocates {
+    let mutable done: String = "";
+    let mutable chunk: String = "";
+    for i in 0..len(text) {
+        let byte: Int = byte_at(text, i);
+        if byte >= 65 && byte <= 90 {
+            chunk += ascii_letter(byte + 32);
+        } else {
+            chunk += substring(text, i, 1);
+        }
+        if len(chunk) >= 4096 {
+            done += chunk;
+            chunk = "";
+        }
+    }
+    return done + chunk;
+}
+
+// The one-byte String for an ASCII LETTER code, by table lookup.
+//
+// A table rather than arithmetic, because **there is no way to build a String from a byte value in
+// this language** — see the gap at the bottom of the file. `substring` of a literal is the only
+// Int-to-String path there is, and it works here precisely because the 52 letters are the only
+// bytes these two functions ever need to produce.
+//
+// `requires` rather than a fallback: a code outside the two letter runs is a caller mistake, and
+// answering `"?"` for it is how `os_byte_as_string` came to destroy data silently (roadmap §B2).
+pure function ascii_letter(code: Int) -> String
+    requires code >= 65
+    requires code <= 122
+    requires code <= 90 || code >= 97
+{
+    let upper: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    if code <= 90 {
+        return substring(upper, code - 65, 1);
+    }
+    let lower: String = "abcdefghijklmnopqrstuvwxyz";
+    return substring(lower, code - 97, 1);
+}
+
+// ---- cheap classification, §D1c ---------------------------------------------------------
+//
+// All three answer a question about the WHOLE String and all three are true of the empty String,
+// which is the vacuous answer and the one that composes: "every byte is a digit" is true when there
+// are no bytes. A caller who means "a non-empty run of digits" checks the length too, and that is
+// clearer written at the call than hidden in one of these.
+
+// Is every byte below 128? Equivalently: is this text unchanged by any of the byte-wise functions
+// above, and safe to treat as one byte per character?
+pure function is_ascii(text: String) -> Bool {
+    for i in 0..len(text) {
+        if byte_at(text, i) >= 128 {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Is every byte `0`..`9`? **Not a number check** — no sign, no digit grouping, no bounds. It says
+// what its name says, and `string_parse_int` is the one that answers whether the text is an Int.
+// Arabic-Indic and Devanagari digits are NOT digits here, which follows from every byte being ASCII
+// and is the same limit `_ascii` names elsewhere.
+pure function all_digits(text: String) -> Bool {
+    for i in 0..len(text) {
+        let byte: Int = byte_at(text, i);
+        if byte < 48 || byte > 57 {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Is every byte an ASCII letter? Same ASCII-only limit: `é` is not alphabetic to this function, and
+// a full answer needs the Unicode category tables that full case mapping needs.
+pure function is_alpha(text: String) -> Bool {
+    for i in 0..len(text) {
+        let byte: Int = byte_at(text, i);
+        if !(byte >= 65 && byte <= 90) && !(byte >= 97 && byte <= 122) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// ============================================================================
+// THE GAP: `from_codepoint`, `from_bytes` and `from_byte` are NOT here.
+//
+// §D1p asks for all three and they are the reason `\uXXXX` in JSON still cannot decode (§B9). They
+// are not missing because they are hard to write. **There is no way to turn a number into a byte of
+// a String in this language**, and every step of that was measured on v0.0.252 rather than assumed:
+//
+//   1. **No builtin does it.** The complete list is `len` `byte_at` `push` `read_file` `to_string`
+//      `old` `substring` `truncate` `write_file` `argument` `argument_count` `divide_floor`
+//      `divide_toward_zero` `remainder` `write_bytes` `hash` `bit_and` `bit_or` `bit_xor` `bit_not`
+//      `shift_left` `shift_right_zeros` `shift_right_sign` `c_is_null` `c_string_at` `c_bytes_at`.
+//      Nothing there is Int-to-String. `to_string(233)` is `"233"`, three digit characters.
+//   2. **No escape names a byte.** Burxt strings support `\\ \" \n \r \t \0 \{ \}` and nothing else
+//      — there is no `\xNN` and no `\uXXXX`. Checked against the lexer's own refusal message.
+//   3. **So `substring` of a LITERAL is the only Int-to-String path**, which is what
+//      `ascii_letter` above and `os_byte_as_string` both do. It can only produce bytes that appear
+//      literally in the source.
+//   4. **A source file must be valid UTF-8** — a raw `0xC4` byte in a literal is refused by the
+//      reader, not the lexer: *"cannot read p3.bx: stream did not contain valid UTF-8"*. So a byte
+//      >= 0x80 can only reach a literal as part of a complete multi-byte character.
+//
+// That last point is what closes the door. Continuation bytes are cheap: the 64 ordinary letters
+// `"ÀÁÂ...ÿ"` encode as `C3 80`..`C3 BF`, so one readable literal yields every byte `0x80`..`0xBF`
+// at its odd offsets. **The LEAD bytes are the problem.** A codepoint's UTF-8 lead is `0xC2`..`0xF4`,
+// each value requires its own character from its own block, and that is 51 characters — of which
+// **six are unassigned codepoints** (`0xCC` is combining marks, `0xEE` is the Private Use Area, and
+// `0xF1`..`0xF4` are four empty planes). Counted, not estimated.
+//
+// A 51-character table of mixed scripts and invisible codepoints in the standard library is a
+// liability rather than a clever trick: a reviewer cannot read it, `git diff` shows mojibake, and
+// an editor that normalises Unicode silently breaks `from_codepoint` for a whole plane. So it is
+// **not written**, and the decision is recorded here rather than made silently by omission.
+//
+// **What would unblock it: one builtin, and the smallest useful one is `byte_string(n) -> String`**
+// — a one-byte String for `0 <= n <= 255`. Everything else is ordinary Burxt on top of it:
+// `from_codepoint` becomes the four-branch encoder that mirrors `codepoint_at` above,
+// `from_bytes(xs)` becomes a fold, `from_byte` retires `os_byte_as_string` and its `"?"` (§B2), and
+// JSON `\uXXXX` decodes. That is the whole cluster behind one function the compiler already has the
+// machinery for — `substring` builds a String of length 1 today.
+//
+// Recorded, not worked around. Nothing here returns a sentinel or a `"?"` in place of a byte it
+// cannot build.
+//
+// ---- how to check whether this is still true -------------------------------------------
+//
+// Measured on **v0.0.252**. NO ROADMAP ITEM covers the builtin; §D1p lists the three functions as
+// though they were library work, and this note is the argument that one of them is not.
+//
+//     check 1: does a byte-building builtin exist? `grep is_reserved_name src/rust-compiler/typeck.rs`
+//     check 2: `let s: String = "a\xC4b";`               — expect: unknown escape
+//     check 3: a file containing a raw 0xC4 in a literal — expect: not valid UTF-8
+//
+// If check 1 turns up something new, delete this whole block and write the four-branch encoder.
+// ============================================================================

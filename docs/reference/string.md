@@ -38,6 +38,17 @@ A Burxt String is bytes, and the language gives you `len`, `byte_at`, `substring
 | [`next_char`](#next-char) | function | The byte offset one past the codepoint that starts at `at` — where the NEXT one begins. |
 | [`char_at`](#char-at) | function | The `i`'th codepoint, as a one-codepoint String. There is no char type: see the header. |
 | [`is_valid_utf8`](#is-valid-utf8) | function | Is every byte part of a well-formed UTF-8 sequence? |
+| [`is_continuation`](#is-continuation) | function | A continuation byte — `10xxxxxx`, the second and later byte of a multi-byte sequence, and never the first. §D1p asks for |
+| [`codepoint_at`](#codepoint-at) | function | The codepoint at codepoint index `i`, as a number. `codepoint_at("é", 0)` is 233. |
+| [`to_bytes`](#to-bytes) | function | Every byte, as numbers. §D1p asks for it, and the honest note is that its partner `from_bytes` is NOT here — see the gap |
+| [`char_index`](#char-index) | function | The CODEPOINT index of `of`, or None. The companion to `string_find`, which answers a BYTE offset. |
+| [`string_reverse`](#string-reverse) | function | Built in 4 KB chunks rather than one prepend per character, which is the idiom this project has paid for three times (v0 |
+| [`string_to_upper_ascii`](#string-to-upper-ascii) | function | `a`..`z` become `A`..`Z`. Every other byte, ASCII or not, is passed through unchanged. |
+| [`string_to_lower_ascii`](#string-to-lower-ascii) | function | `A`..`Z` become `a`..`z`. Every other byte, ASCII or not, is passed through unchanged. |
+| [`ascii_letter`](#ascii-letter) | function | The one-byte String for an ASCII LETTER code, by table lookup. |
+| [`is_ascii`](#is-ascii) | function | Is every byte below 128? Equivalently: is this text unchanged by any of the byte-wise functions above, and safe to treat |
+| [`all_digits`](#all-digits) | function | Is every byte `0`..`9`? **Not a number check** — no sign, no digit grouping, no bounds. It says what its name says, and  |
+| [`is_alpha`](#is-alpha) | function | Is every byte an ASCII letter? Same ASCII-only limit: `é` is not alphabetic to this function, and a full answer needs th |
 
 ## Functions
 {: #functions}
@@ -113,9 +124,17 @@ It took an `Int` until v0.0.188 — `string_split(text, 44)` for a comma — whi
 
 One spelling per concept, so the byte form is gone rather than kept beside this. A separator is a string; that a one-character string is also a byte is not a second idea.
 
-An EMPTY separator answers the whole text as one piece rather than splitting into characters. Burxt has no character type — a String is bytes — so "split into characters" is not a thing this could mean, and looping forever on a zero-width match is the alternative.
+An EMPTY separator answers the whole text as one piece rather than splitting into characters.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L107)
+~~Burxt has no character type — a String is bytes — so "split into characters" is not a thing this could mean.~~ **That reason expired with A5 (v0.0.250).** A one-codepoint String is exactly what `char_at` answers, so "split into characters" now means something precise. The BEHAVIOUR here is unchanged and the decision is deliberately still open; what follows is the argument, not a ruling.
+
+The case for leaving it: an empty separator has **no forced answer**. It occurs between every pair of characters, and also at the start, at the end, and unboundedly often at each position — so "cut at every occurrence" does not determine a result. Python refuses `"abc".split("")` outright; JavaScript answers UTF-16 code units and cuts emoji in half. Neither is a spelling worth copying.
+
+And when there is more than one right answer, this project's habit is to make the caller pick by NAME — `divide_floor` against `divide_toward_zero`, `shift_right_zeros` against `shift_right_sign`, `string_to_upper_ascii` against a full mapping that does not exist yet. By that habit the codepoint split is a separate `string_chars(text) -> [String]`, six lines over `next_char`, and not a degenerate case of this one. It is not written, because which way this goes is not a call to make inside a comment.
+
+The one thing that would be wrong is silence: looping forever on a zero-width match.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L124)
 
 ### `string_matches_at`
 {: #string-matches-at}
@@ -126,7 +145,7 @@ function string_matches_at(text: String, needle: String, at: Int) -> Bool
 
 Does `needle` sit at `at` in `text`? Compared in place, because `substring` would allocate once per position and a split has no business needing a region.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L133)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L150)
 
 ### `string_lines`
 {: #string-lines}
@@ -137,7 +156,7 @@ function string_lines(text: String) -> [String]
 
 Lines, on either ending. A CRLF file and an LF file split identically, which is the whole reason a multi-character separator had to exist: `"\r\n"` could not be written as a byte.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L150)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L167)
 
 ### `string_to_int`
 {: #string-to-int}
@@ -152,7 +171,7 @@ The number, or the fallback you chose. Use this when a default is genuinely righ
  let port: Int = string_to_int(configured, 8080);
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L183)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L200)
 
 ### `string_parse_int`
 {: #string-parse-int}
@@ -170,7 +189,7 @@ The number, or nothing — for when there is no sensible default and the program
  }
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L197)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L214)
 
 ### `string_join`
 {: #string-join}
@@ -181,7 +200,7 @@ function string_join(pieces: [String], separator: String) -> String
 
 The separator between each piece. The join a program would write, written once.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L227)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L244)
 
 ### `string_repeat`
 {: #string-repeat}
@@ -190,7 +209,7 @@ The separator between each piece. The join a program would write, written once.
 function string_repeat(text: String, times: Int) -> String
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L240)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L257)
 
 ### `char_count`
 {: #char-count}
@@ -203,7 +222,7 @@ How many codepoints, not bytes. `char_count("héllo")` is 5 where `len` is 6.
 
 A continuation byte is `10xxxxxx`, so every byte that is not one begins a codepoint and the count is a single pass with no decoding. Assumes valid UTF-8: see the note above.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L314)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L331)
 
 ### `next_char`
 {: #next-char}
@@ -218,7 +237,7 @@ The width is in the leading byte and nowhere else, which is the property that ma
 
 Total by construction, and both halves of that matter. It always advances at least one byte, so a `while at < len(text)` loop terminates on any input including bytes that are not UTF-8 at all; and it never answers past `len(text)`, so `substring(text, at, next_char(text, at) - at)` is in range even when the last sequence is truncated. An unexpected byte — a stray continuation, an `0xFF` — advances by one, which resynchronises rather than guessing.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L337)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L354)
 
 ### `char_at`
 {: #char-at}
@@ -235,7 +254,7 @@ The second clause calls `char_count`, which is only possible because a contract 
 
 O(n) in `i`, so a loop counting up through it is O(n²). Use `next_char` to walk.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L371)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L388)
 
 ### `is_valid_utf8`
 {: #is-valid-utf8}
@@ -259,5 +278,146 @@ The full rule, not the structural half. A checker that accepted overlong encodin
 
 Assumes nothing. This is the function `spec/ROADMAP-1.0.md` §B5 would need if the declared-and- unenforced UTF-8 invariant were ever enforced at the four entry points — enforcing it is not done here, and having something to enforce it WITH is the part A5 delivers.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L399)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L416)
+
+### `is_continuation`
+{: #is-continuation}
+
+```burxt
+pure function is_continuation(byte: Int) -> Bool
+```
+
+A continuation byte — `10xxxxxx`, the second and later byte of a multi-byte sequence, and never the first. §D1p asks for it by name, and it is one line, but it is the line every other function in this section is built on: `char_count` counts bytes that are NOT this, and `next_char` reads a width only from bytes that are NOT this.
+
+Takes a BYTE, not a String, and so is spelled like `string_is_space` — the two are the same kind of question asked of the same kind of value.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L489)
+
+### `codepoint_at`
+{: #codepoint-at}
+
+```burxt
+pure function codepoint_at(text: String, i: Int) -> Int
+```
+
+The codepoint at codepoint index `i`, as a number. `codepoint_at("é", 0)` is 233.
+
+The companion to `char_at`, which answers the same character as a one-codepoint String. Two functions rather than one because the two answers are used for different things: a String goes into output and a comparison, a number goes into a range test and arithmetic. Neither is derivable from the other without the decode below, so having only one would make every caller write it.
+
+The width comes from `next_char` rather than from the leading byte a second time, which is what makes this total: `next_char` clamps to `len(text)`, so no read below can go past the end even on a truncated final sequence. It ASSUMES valid UTF-8 for its ANSWER — a truncated three-byte sequence decodes as though it were the two bytes that are there, which is a well-defined number and not the codepoint anyone meant. Same standing as `char_count` and `char_at`; see the section header.
+
+O(n) in `i` for the same reason `char_at` is. Walk with `next_char` if you want all of them.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L509)
+
+### `to_bytes`
+{: #to-bytes}
+
+```burxt
+function to_bytes(text: String) -> [Int]
+```
+
+Every byte, as numbers. §D1p asks for it, and the honest note is that its partner `from_bytes` is NOT here — see the gap recorded at the bottom of this file. Bytes come out of a String freely; getting them back in is the thing this language cannot do yet.
+
+`len` and `byte_at` already give a caller this one byte at a time, so this exists for the case where the bytes have to be held: passed to a function, sorted, hashed, compared as a whole.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L549)
+
+### `char_index`
+{: #char-index}
+
+```burxt
+function char_index(text: String, of: String) -> Option<Int>
+```
+
+The CODEPOINT index of `of`, or None. The companion to `string_find`, which answers a BYTE offset.
+
+**Both exist because they answer different questions, and mixing them corrupts text.** A byte offset is what `substring` takes; a codepoint index is what `char_at` takes and what a human counting characters means. In `"héllo"` the `l` is at byte 3 and character 2, and handing 3 to `char_at` reads the wrong character while handing 2 to `substring` splits the `é` in half. The names are the only thing standing between a caller and that bug, which is why neither is called `index_of`.
+
+Matches only on a CODEPOINT BOUNDARY, and that is a real difference from `string_find` rather than an implementation detail: searching `"é"` for the single byte `0xA9` succeeds byte-wise and has no codepoint index to answer, so this walks boundaries and compares from each one. A needle that only occurs straddling a character is reported as absent, which is the truthful answer to the question actually asked.
+
+An EMPTY needle answers `Some(0)`, matching `string_find`'s 0 — every string contains the empty string, at the beginning.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L574)
+
+### `string_reverse`
+{: #string-reverse}
+
+```burxt
+pure function string_reverse(text: String) -> String allocates
+```
+
+Built in 4 KB chunks rather than one prepend per character, which is the idiom this project has paid for three times (v0.0.68, v0.0.77, v0.0.82) and `lib/os.bx` uses for the same reason: a String is immutable, so `out = piece + out` copies everything already collected on every character and turns a reverse into O(n²). The chunk bounds that copy to 4 KB.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L621)
+
+### `string_to_upper_ascii`
+{: #string-to-upper-ascii}
+
+```burxt
+pure function string_to_upper_ascii(text: String) -> String allocates
+```
+
+`a`..`z` become `A`..`Z`. Every other byte, ASCII or not, is passed through unchanged.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L676)
+
+### `string_to_lower_ascii`
+{: #string-to-lower-ascii}
+
+```burxt
+pure function string_to_lower_ascii(text: String) -> String allocates
+```
+
+`A`..`Z` become `a`..`z`. Every other byte, ASCII or not, is passed through unchanged.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L695)
+
+### `ascii_letter`
+{: #ascii-letter}
+
+```burxt
+pure function ascii_letter(code: Int) -> String
+```
+
+The one-byte String for an ASCII LETTER code, by table lookup.
+
+A table rather than arithmetic, because **there is no way to build a String from a byte value in this language** — see the gap at the bottom of the file. `substring` of a literal is the only Int-to-String path there is, and it works here precisely because the 52 letters are the only bytes these two functions ever need to produce.
+
+`requires` rather than a fallback: a code outside the two letter runs is a caller mistake, and answering `"?"` for it is how `os_byte_as_string` came to destroy data silently (roadmap §B2).
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L722)
+
+### `is_ascii`
+{: #is-ascii}
+
+```burxt
+pure function is_ascii(text: String) -> Bool
+```
+
+Is every byte below 128? Equivalently: is this text unchanged by any of the byte-wise functions above, and safe to treat as one byte per character?
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L744)
+
+### `all_digits`
+{: #all-digits}
+
+```burxt
+pure function all_digits(text: String) -> Bool
+```
+
+Is every byte `0`..`9`? **Not a number check** — no sign, no digit grouping, no bounds. It says what its name says, and `string_parse_int` is the one that answers whether the text is an Int. Arabic-Indic and Devanagari digits are NOT digits here, which follows from every byte being ASCII and is the same limit `_ascii` names elsewhere.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L757)
+
+### `is_alpha`
+{: #is-alpha}
+
+```burxt
+pure function is_alpha(text: String) -> Bool
+```
+
+Is every byte an ASCII letter? Same ASCII-only limit: `é` is not alphabetic to this function, and a full answer needs the Unicode category tables that full case mapping needs.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L769)
 

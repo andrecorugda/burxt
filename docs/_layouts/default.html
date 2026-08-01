@@ -83,6 +83,14 @@
   </p>
 </footer>
 
+<!-- The roaming ember. Interior pages only: the landing has the animated lockup and the 404 has the
+     ember standing in the middle of it, and two of them on one screen is a competition rather than a
+     flourish. Both opt out with `no_roam: true`. Decorative, so `alt=""` — a screen reader should
+     skip it, not describe a hopping mascot. -->
+{% unless page.no_roam %}
+<img class="roam" src="{{ site.baseurl }}/assets/burxt-ember-roam.gif" width="520" height="300" alt="" aria-hidden="true">
+{% endunless %}
+
 <div class="scrim" data-close hidden></div>
 
 <!-- The search palette. Inert until docs/assets/search.json loads, which site.js does on the first

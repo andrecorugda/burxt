@@ -12,7 +12,7 @@ written **once, carefully**, instead of forty times.
 
 | Module | What it holds |
 |---|---|
-| [`string.bx`](string.bx) | `string_find`, `string_contains`, `string_starts_with`, `string_ends_with`, `string_trim`, `string_split`, `string_lines`, `string_join`, `string_repeat`, `string_to_int`, `string_parse_int` |
+| [`string.bx`](string.bx) | **bytes:** `string_find`, `string_contains`, `string_starts_with`, `string_ends_with`, `string_trim`, `string_split`, `string_lines`, `string_join`, `string_repeat`, `string_to_int`, `string_parse_int` · **codepoints:** `char_count`, `char_at`, `next_char`, `char_index`, `codepoint_at`, `is_continuation`, `is_valid_utf8`, `to_bytes`, `string_reverse` · **ASCII-only, and the name says so:** `string_to_upper_ascii`, `string_to_lower_ascii`, `is_ascii`, `all_digits`, `is_alpha`. **`from_codepoint`/`from_bytes` are absent** — no Int→String path exists; see the gap at the foot of the file |
 | [`option.bx`](option.bx) | `Option<T>` — absence as a type. `option_or`, `option_is_some`, `option_is_none`. No `unwrap`, on purpose. |
 | [`result.bx`](result.bx) | `Result<T, E>` — failure as a type. `result_or`, `result_is_ok`. Both `match` arms always required. |
 | [`array.bx`](array.bx) | `array_contains`, `array_index_of`, `array_is_sorted`, `array_min`/`max`/`first`/`last`, `array_sum_int`/`sum_money`, and the changing half: `array_swap`, `array_reverse`, `array_sort`, `array_fill`, `array_extend`, `array_remove_at`. **`mutable xs: [T]` in the signature means the call changes YOUR array** |

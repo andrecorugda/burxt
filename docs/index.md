@@ -3,6 +3,7 @@ layout: default
 title: null
 description: A typed, compiled, native language for the way code gets written now — an agent writes it, you scan it, and a mistake costs money. Strict enough that the agent cannot make one, plain enough that you can see it didn't.
 width: wide
+no_roam: true
 ---
 
 <div class="hero" markdown="1">

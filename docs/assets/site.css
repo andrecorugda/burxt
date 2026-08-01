@@ -612,6 +612,48 @@ pre code { background: none; padding: 0; font-size: inherit; }
   text-underline-offset: 3px;
 }
 
+/* ---- the roaming ember -------------------------------------------------------------------------
+ *
+ * A second mascot, and a different job from the one in the hero. This one enters from off the right
+ * edge, hops across making stops, and leaves the same way — the loop is empty-to-empty, so the
+ * corner it lives in is empty for part of every cycle and completely empty once it is done.
+ *
+ * Four decisions, and the reasons matter more than the values.
+ *
+ * **It runs three times, not forever.** The delivered file loops endlessly, and something moving in
+ * the corner of your eye every few seconds for as long as you read is the opposite of a stylesheet
+ * that says "nothing here glows". Three traverses is a visit; endless is a companion nobody asked
+ * for. Because the animation ends empty, stopping leaves no half-hopped ember frozen in the corner —
+ * it leaves nothing. One byte in the GIF's loop count, patched rather than re-encoded.
+ *
+ * **It is transparent, not white-backed.** The opposite of the hero's choice, and for the opposite
+ * reason: this one floats over whatever is beneath it — a code panel is #f5f5f7, the drawer is white
+ * — so a white rectangle would be a visible box. GIF's one-bit alpha does leave a harder edge, but
+ * the frame is shown at 300px from a 520px source and the downscale absorbs it.
+ *
+ * **It cannot be interacted with.** `pointer-events: none`, so it never intercepts a click, and a
+ * z-index below the scrim so an open drawer or search palette covers it rather than the reverse.
+ * The README that came with the asset suggested z-index 50, which would have put a decoration on
+ * top of the search dialog.
+ *
+ * **It is not on a phone.** See the note at the breakpoint. */
+.roam {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  width: clamp(220px, 24vw, 320px);
+  height: auto;
+  z-index: 15;                 /* above the page, below the scrim (20), drawer (25) and bar (30) */
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Decoration with no informational content, so a reader who asked for less motion gets nothing
+ * rather than a still frame of a mascot standing in the corner for no reason. */
+@media (prefers-reduced-motion: reduce) {
+  .roam { display: none; }
+}
+
 /* ---- tables ----------------------------------------------------------------------------------- */
 
 .tablewrap {
@@ -960,6 +1002,12 @@ footer a { color: var(--accent); }
 
 @media (max-width: 620px) {
   .pages .what { display: none; }
+
+  /* No roaming ember on a phone. At any size it can be read at it covers a tenth of the screen
+   * permanently while you scroll, it traverses most of the width, and it sits exactly where a thumb
+   * rests. `pointer-events: none` means it cannot block a tap — but a small screen has no corner to
+   * spare, and a decoration that is in the way is not a decoration. */
+  .roam { display: none; }
 }
 
 @media (max-width: 520px) {

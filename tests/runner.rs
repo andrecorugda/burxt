@@ -4591,6 +4591,56 @@ fn the_mascot_plays_once() {
         );
     }
 
+    // The roaming ember in the corner: three traverses, then the corner stays empty. Same one-byte
+    // rule and the same reason — the delivered file loops forever, and something moving in the corner
+    // of your eye for as long as you read is what this site's stylesheet exists to avoid. It ends
+    // empty, so stopping leaves nothing behind rather than a frozen mascot.
+    for copy in ["assets/burxt-ember-roam.gif", "docs/assets/burxt-ember-roam.gif"] {
+        let gif = fs::read(root.join(copy)).unwrap_or_else(|_| panic!("{} is missing", copy));
+        let marker = b"NETSCAPE2.0";
+        let at = gif
+            .windows(marker.len())
+            .position(|w| w == marker)
+            .unwrap_or_else(|| panic!("{} has no loop count", copy))
+            + marker.len()
+            + 2;
+        let loops = u16::from_le_bytes([gif[at], gif[at + 1]]);
+        assert!(
+            loops > 0 && loops <= 5,
+            "{} traverses {} times. It must be a visit, not a companion: endless motion beside prose \
+             is the thing the stylesheet's own header rules out. Patch the two bytes after \
+             `NETSCAPE2.0\\x03\\x01`.",
+            copy,
+            if loops == 0 { "forever".to_string() } else { loops.to_string() }
+        );
+    }
+    let a = fs::read(root.join("assets/burxt-ember-roam.gif")).unwrap();
+    let b = fs::read(root.join("docs/assets/burxt-ember-roam.gif")).unwrap();
+    assert_eq!(a, b, "assets/ and docs/assets/ hold different copies of the roaming ember");
+
+    // It is decoration laid over the page, so it must never intercept a click and must be invisible
+    // to a screen reader. Both are one attribute each and both are easy to drop in a later edit.
+    for layout in ["docs/_layouts/default.html", "docs/_layouts/doc.html"] {
+        let text = fs::read_to_string(root.join(layout)).unwrap();
+        let Some((_, tail)) = text.split_once("class=\"roam\"") else {
+            panic!("{} no longer carries the roaming ember", layout)
+        };
+        let tag = tail.split('>').next().unwrap_or("");
+        assert!(
+            tag.contains("alt=\"\"") && tag.contains("aria-hidden"),
+            "{}'s roaming ember needs `alt=\"\"` and `aria-hidden` — it is decoration, and a screen \
+             reader should skip it rather than announce a hopping mascot",
+            layout
+        );
+    }
+    let css = fs::read_to_string(root.join("docs/assets/site.css")).unwrap();
+    let roam = css.split(".roam {").nth(1).map(|r| r.split('}').next().unwrap_or("")).unwrap_or("");
+    assert!(
+        roam.contains("pointer-events: none"),
+        "`.roam` must set `pointer-events: none`. It is fixed over the page, so without it a \
+         decoration swallows clicks on whatever is beneath it."
+    );
+
     // Both copies are the same file. `docs/assets/` exists because Pages serves only that directory,
     // and a divergence between them means the site is showing something the brand folder does not.
     let a = fs::read(root.join("assets/burxt-ember.gif")).unwrap();

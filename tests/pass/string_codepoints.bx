@@ -1,0 +1,167 @@
+// The UTF-8 layer on top of A5 — `string_reverse`, ASCII case, `char_index`, `codepoint_at`, and
+// the classification predicates. Every function here is written from `byte_at`, `substring`,
+// `bit_and`, `shift_left` and `len`, so this fixture also records that §D1a and §D1p needed no
+// compiler work once A5 landed.
+//
+// **The text below is real non-ASCII, not ASCII with a comment claiming coverage.** That distinction
+// is the whole point of a UTF-8 fixture: a byte-wise `string_reverse` passes every ASCII test ever
+// written and corrupts the first accented name it is handed. One-, two-, three- and four-byte
+// characters all appear, and so does a COMBINING sequence, because that is the case a
+// codepoint-correct reverse still gets visually wrong and the comment says so.
+//
+// What is deliberately NOT tested, because it does not exist: `from_codepoint`, `from_bytes` and
+// `from_byte`. There is no way to turn a number into a byte of a String in Burxt — see the gap
+// recorded at the bottom of `lib/string.bx`, which measures each step of that claim.
+use "../../lib/string.bx";
+
+region r {
+    // ---- string_reverse: whole codepoints move, their bytes do not ----
+    // "a" is 1 byte, "é" is 2, "中" is 3, the emoji is 4. A byte-wise reverse would put a
+    // continuation byte before its leader and produce something that is not UTF-8 at all.
+    let wide: String = "aé中🙂";
+    print(len(wide));
+    print(char_count(wide));
+    print(string_reverse(wide));
+    // The two properties worth guaranteeing, checked rather than asserted in prose.
+    print(string_reverse(string_reverse(wide)) == wide);
+    print(is_valid_utf8(string_reverse(wide)));
+    // Byte length and codepoint count both survive.
+    print(len(string_reverse(wide)) == len(wide));
+    print(char_count(string_reverse(wide)) == char_count(wide));
+
+    // Degenerate inputs.
+    print(string_reverse("") == "");
+    print(string_reverse("a"));
+    print(string_reverse("🙂"));
+    print(string_reverse("中文") == "文中");
+
+    // A longer mixed string, and one past the 4 KB chunk boundary so the flush path runs. A reverse
+    // that only ever tested short strings would never execute the branch that exists for long ones.
+    let sentence: String = "Señor 中文 αβγ да!";
+    print(string_reverse(sentence));
+    print(string_reverse(string_reverse(sentence)) == sentence);
+    let long_text: String = string_repeat("aé中🙂", 600);
+    print(len(long_text));
+    print(string_reverse(string_reverse(long_text)) == long_text);
+    print(is_valid_utf8(string_reverse(long_text)));
+    print(char_count(string_reverse(long_text)));
+
+    // ---- the limit the name "codepoint-aware" states exactly ----
+    // "e" followed by U+0301 COMBINING ACUTE ACCENT renders as one character and is TWO codepoints.
+    // Reversing puts the accent first, where it attaches to nothing. Still valid UTF-8, still not
+    // what a reader means by reversing. Grapheme clusters need the Unicode break tables.
+    let combining: String = "é";
+    print(len(combining));
+    print(char_count(combining));
+    print(is_valid_utf8(string_reverse(combining)));
+    // The accent is now the FIRST codepoint, which is the whole demonstration.
+    print(codepoint_at(combining, 1));
+    print(codepoint_at(string_reverse(combining), 0));
+    print(string_reverse(string_reverse(combining)) == combining);
+
+    // ---- ASCII case, and the name is the promise ----
+    // Both of these look like they worked, which is exactly why the limit is in the name.
+    print(string_to_upper_ascii("Straße"));
+    print(string_to_lower_ascii("ÉCOLE"));
+    print(string_to_upper_ascii("hello world"));
+    print(string_to_lower_ascii("HELLO WORLD"));
+    print(string_to_upper_ascii("Señor 42!"));
+    print(string_to_lower_ascii("Señor 42!"));
+    // A byte-wise pass CANNOT corrupt a multi-byte character: every byte of one is >= 0x80 and every
+    // ASCII letter is < 0x80. This is the check for that, on text that is mostly non-ASCII.
+    let mixed: String = "中文 abc αβ XYZ 🙂";
+    print(string_to_upper_ascii(mixed));
+    print(string_to_lower_ascii(mixed));
+    print(is_valid_utf8(string_to_upper_ascii(mixed)));
+    print(char_count(string_to_upper_ascii(mixed)) == char_count(mixed));
+    print(len(string_to_upper_ascii(mixed)) == len(mixed));
+    // Idempotent, and round-tripping ASCII-only text is exact.
+    print(string_to_upper_ascii(string_to_upper_ascii(mixed)) == string_to_upper_ascii(mixed));
+    print(string_to_lower_ascii(string_to_upper_ascii("hello")) == "hello");
+    print(string_to_upper_ascii("") == "");
+
+    // ---- char_index answers CODEPOINTS where string_find answers BYTES ----
+    // In "héllo" the first `l` is byte 3 and character 2. Handing 3 to `char_at` reads the wrong
+    // character; handing 2 to `substring` splits the two-byte `é` in half. The names are what
+    // stands between a caller and that bug.
+    let greeting: String = "héllo";
+    print(string_find(greeting, "l"));
+    print(option_or(char_index(greeting, "l"), 0 - 1));
+    print(char_at(greeting, option_or(char_index(greeting, "l"), 0)));
+    print(option_or(char_index(greeting, "h"), 0 - 1));
+    print(option_or(char_index(greeting, "é"), 0 - 1));
+    print(option_or(char_index(greeting, "lo"), 0 - 1));
+    print(option_is_none(char_index(greeting, "z")));
+    // The empty needle, matching `string_find`'s 0: every string contains it, at the beginning.
+    print(option_or(char_index(greeting, ""), 0 - 1));
+    print(option_or(char_index("", ""), 0 - 1));
+    print(option_is_none(char_index("", "a")));
+    // Multi-byte needles, and one past several multi-byte characters.
+    print(option_or(char_index(mixed, "XYZ"), 0 - 1));
+    print(option_or(char_index(mixed, "β"), 0 - 1));
+    print(option_or(char_index(mixed, "🙂"), 0 - 1));
+
+    // ---- codepoint_at: the number, where char_at gives the one-codepoint String ----
+    print(codepoint_at(wide, 0));
+    print(codepoint_at(wide, 1));
+    print(codepoint_at(wide, 2));
+    print(codepoint_at(wide, 3));
+    print(codepoint_at("héllo", 1));
+    // The two views agree: the codepoint number of char i is the codepoint number of the
+    // one-character String at i.
+    print(codepoint_at(wide, 2) == codepoint_at(char_at(wide, 2), 0));
+    print(codepoint_at(wide, 3) == codepoint_at(char_at(wide, 3), 0));
+    // Every character of the mixed string, decoded in one walk.
+    let mutable numbers: String = "";
+    let mutable at: Int = 0;
+    while at < len(mixed) {
+        let ending: Int = next_char(mixed, at);
+        numbers = numbers + to_string(codepoint_at(substring(mixed, at, ending - at), 0)) + " ";
+        at = ending;
+    }
+    print(numbers);
+
+    // ---- is_continuation, the one line everything above is built on ----
+    print(is_continuation(97));
+    print(is_continuation(byte_at("é", 0)));
+    print(is_continuation(byte_at("é", 1)));
+    print(is_continuation(byte_at("🙂", 0)));
+    print(is_continuation(byte_at("🙂", 3)));
+    // A codepoint count IS the count of bytes that are not continuations, which is what makes
+    // `char_count` a single pass. Checked here rather than trusted.
+    let mutable leaders: Int = 0;
+    for i in 0..len(mixed) {
+        if !is_continuation(byte_at(mixed, i)) {
+            leaders += 1;
+        }
+    }
+    print(leaders == char_count(mixed));
+
+    // ---- to_bytes ----
+    let bytes_of: [Int] = to_bytes("aé");
+    print(len(bytes_of));
+    print(bytes_of[0]);
+    print(bytes_of[1]);
+    print(bytes_of[2]);
+    print(len(to_bytes("")));
+    print(len(to_bytes(wide)) == len(wide));
+
+    // ---- classification, ASCII-only and vacuously true of the empty String ----
+    print(is_ascii("hello"));
+    print(is_ascii("héllo"));
+    print(is_ascii(""));
+    print(is_ascii(mixed));
+    print(all_digits("0123456789"));
+    print(all_digits("12a"));
+    print(all_digits("-12"));
+    print(all_digits(""));
+    print(is_alpha("abcXYZ"));
+    print(is_alpha("abc1"));
+    print(is_alpha("Señor"));
+    print(is_alpha(""));
+    // `all_digits` is NOT a number check, and `string_parse_int` is. Both answers on one input.
+    print(all_digits("007"));
+    print(option_or(string_parse_int("007"), 0 - 1));
+    print(all_digits("-7"));
+    print(option_or(string_parse_int("-7"), 0));
+}

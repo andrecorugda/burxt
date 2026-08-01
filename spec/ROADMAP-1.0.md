@@ -575,6 +575,36 @@ marker.** Read from the path rather than run, since the work was reverted — ve
 `codegen.rs` (generalise `i32 @burxt.checked.cint(i64)` to `burxt.checked.<bits>.<signed>`), all of
 stage-1, and fixtures.
 
+### A13 — `byte_string(n)`: one builtin behind a whole cluster (found v0.0.253)
+
+**NEW, and it is the highest leverage-per-line item on this roadmap.** One builtin —
+`byte_string(n) -> String`, a one-byte String for `0 <= n <= 255` — unblocks all of:
+
+- `from_codepoint`, `from_bytes`, `from_byte` (§D1p)
+- **`\uXXXX` decoding in JSON (§B9)**, so Burxt can read real-world JSON
+- retiring `os_byte_as_string`'s lossy `"?"` for every byte ≥ 127 (**§B2**, a silent data-destroying bug)
+
+**Why it is needed was PROVED rather than assumed**, in `lib/string.bx`'s own header, in four measured
+steps: no builtin converts Int to a String byte (the full list is enumerated there); no escape names a
+byte (`\xNN` and `\uXXXX` do not exist — checked against the lexer's refusal); so `substring` of a
+LITERAL is the only Int-to-String path; and **a source file must be valid UTF-8**, so a byte ≥ 0x80 can
+only reach a literal inside a complete multi-byte character.
+
+That last step closes the door. Continuation bytes are cheap — `"ÀÁÂ…ÿ"` yields every byte
+`0x80`..`0xBF`. **The LEAD bytes are the problem**: `0xC2`..`0xF4` needs 51 characters from 51 different
+blocks, of which **six are unassigned codepoints** (`0xCC` combining marks, `0xEE` Private Use Area,
+`0xF1`..`0xF4` four empty planes). Counted, not estimated.
+
+**And the workaround was correctly REFUSED.** A 51-character table of mixed scripts and invisible
+codepoints in the standard library is a liability, not a clever trick: a reviewer cannot read it,
+`git diff` shows mojibake, and an editor that normalises Unicode silently breaks a whole plane. So it
+is not written, and the decision is recorded where the functions would have been rather than made
+silently by omission.
+
+**Everything else is ordinary Burxt on top of it.** `from_codepoint` is the four-branch encoder
+mirroring the existing `codepoint_at`; `from_bytes` is a fold. Size: **S**, and it clears two §B bugs
+and a §D row.
+
 ## B — Urgent bugs, silent wrong answers first
 
 | # | Bug | Size |

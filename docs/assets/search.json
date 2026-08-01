@@ -448,6 +448,83 @@
   "where": "pure function is_valid_utf8(text: String) -> Bool"
  },
  {
+  "kind": "function",
+  "name": "is_continuation",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#is-continuation",
+  "where": "pure function is_continuation(byte: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "codepoint_at",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#codepoint-at",
+  "where": "pure function codepoint_at(text: String, i: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "to_bytes",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#to-bytes",
+  "where": "function to_bytes(text: String) -> [Int]"
+ },
+ {
+  "kind": "function",
+  "name": "char_index",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#char-index",
+  "where": "function char_index(text: String, of: String) -> Option<Int>"
+ },
+ {
+  "kind": "function",
+  "name": "string_reverse",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-reverse",
+  "where": "pure function string_reverse(text: String) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "string_to_upper_ascii",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-to-upper-ascii",
+  "where": "pure function string_to_upper_ascii(text: String) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "string_to_lower_ascii",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-to-lower-ascii",
+  "where": "pure function string_to_lower_ascii(text: String) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "ascii_letter",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#ascii-letter",
+  "where": "pure function ascii_letter(code: Int) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "is_ascii",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#is-ascii",
+  "where": "pure function is_ascii(text: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "all_digits",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#all-digits",
+  "where": "pure function all_digits(text: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "is_alpha",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#is-alpha",
+  "where": "pure function is_alpha(text: String) -> Bool"
+ },
+ {
   "kind": "class",
   "name": "MapEntry",
   "text": "lib/map.bx",
