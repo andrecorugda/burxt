@@ -345,6 +345,23 @@ when asked rather than on every signature forever.
 4. A top-level `let mutable xs: [Int] = [];` compiles (§4), with a pass fixture.
 5. **Measured**, not claimed: a loop building 10,000 Strings has bounded peak RSS under M14 and
    unbounded before it (§3). Recorded in this spec's status block as M12 recorded its numbers.
+
+   **Sharpened before building, v0.0.263, because as written this criterion passes for a version of
+   slice 3 that corrupts memory.** "Bounded after, unbounded before" is satisfied by an analysis that
+   releases *everything* at the end of every block — which is exactly the use-after-free this feature
+   can produce. The criterion needs a **control that must NOT change**, so three programs are measured,
+   not one. Baseline taken on the machine of record before any code changed:
+
+   | program | today | required after slice 3 |
+   |---|---|---|
+   | 100k-iteration loop, `let s: String`, **value does not escape** the body | **5,280 KB** | **~1,408 KB** — this is the win |
+   | the same loop with a hand-written `region each { }` | **1,408 KB** | **unchanged** — slice 3 must not regress what already works |
+   | the same loop where the value **escapes** (`last = s`, an outer binding) | **5,280 KB** | **still 5,280 KB** — Decision 2, promote outward |
+
+   **The third row is the whole test.** A slice 3 that makes it bounded is not a better slice 3; it is
+   a dangling pointer that passes criterion 5 as previously written. The first and third programs
+   differ by one line — `last = s` — so the pair isolates escape analysis and nothing else, which is
+   the property a measurement needs to mean anything.
 6. `allocates nothing` refuses a function that allocates, including transitively, with a fail
    fixture per path — direct, through a call, and through a `dynamic`.
 7. The §5 hole has a fail fixture: an allocating interface method called with no region open is refused.
