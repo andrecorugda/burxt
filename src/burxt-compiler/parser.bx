@@ -1371,7 +1371,22 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
         }
         let found: Int = self.find_function(src, name.start, name.length);
         if found >= 0 {
-            return flag_allocates(self.functions[found].flags) == 1;
+            if flag_allocates(self.functions[found].flags) == 1 {
+                return true;
+            }
+            // ---- B32: the call RELAYS, so the argument's answer is the call's answer -----------
+            //
+            // `pass(built)` allocates nothing and points at everything `built` does. Every rule in
+            // this family asks this one function, so putting the fact here reaches whole-name
+            // assignment, field assignment, element assignment and `return` at once — the same
+            // argument the B26 arm above makes, and the reason a seventh arm was the wrong move
+            // and a fourth PROPERTY was the right one.
+            //
+            // Per parameter, so only the arguments that can come back out are asked. `pick(built,
+            // "literal", true)` is refused because parameter 0 is relayed and `built` is region
+            // storage; `pick("safe", built, ...)` is refused for parameter 1; and a taint passed
+            // in a parameter the callee never returns is not an escape.
+            return self.relayed_argument_allocates(src, found, n.a);
         }
         // A BUILTIN's answer is decided by the cases above and by nothing else — in particular not
         // by its arguments. `substring`, `read_file`, `argument` and `to_string` build a String and
@@ -1452,9 +1467,40 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
         }
         let found: Int = self.find_method(src, holder, n.token);
         if found >= 0 {
-            return flag_allocates(self.methods[found].flags) == 1;
+            if flag_allocates(self.methods[found].flags) == 1 {
+                return true;
+            }
+            // B32 through a receiver: `b.name_of()` returning `self.name` points into `b`. The
+            // receiver is the only thing asked, because a method's ordinary parameters are not
+            // tracked — the hole `record_parameter_growth` already records for growth, kept in
+            // both compilers rather than closed in one.
+            if self.relays_self(found) {
+                return self.expr_allocates(src, n.a);
+            }
+            return false;
         }
         return false;
+    }
+    return false;
+}
+
+// For each parameter the callee hands back, whether what the caller passed in it is region
+// storage. `list_node` is the call's argument list.
+//
+// A mismatched arity is already refused elsewhere, and asking about an argument that does not
+// exist would read past the list, so the pairing is checked rather than assumed — the same guard
+// `check_growing_arguments` keeps for the same reason.
+function (mutable self: Unit) relayed_argument_allocates(src: String, callee: Int,
+                                            list_node: Int) -> Bool {
+    let list: Node = self.nodes[list_node];
+    let mutable i: Int = 0;
+    while i < list.b {
+        if self.relays_parameter(callee, i) {
+            if self.expr_allocates(src, self.children[list.a + i]) {
+                return true;
+            }
+        }
+        i += 1;
     }
     return false;
 }

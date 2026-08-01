@@ -1,0 +1,30 @@
+// B32, and it is the one that says the previous six fixes were the wrong shape.
+//
+//     function pass(s: String) -> String { return s; }
+//     region r { kept = pass(built); }
+//
+// `pass(...)` does not ALLOCATE — it returns something already built — so `expr_allocates`
+// answered false and every rule consulting it went quiet. The value was region storage all the
+// same, and `kept` printed `secret-value` and then `0` once the memory was reused.
+//
+// **The rule tracked allocation when the property it needed was aliasing**: does this value point
+// into the region, however it got there. B20/B21 (growth, field, element), B25 (through a mutable
+// parameter), B26 (through a dynamic), B27 (a pattern binding), B35 (a field read) were each read
+// as one more construct missing from a list, and each fix was correct and insufficient. Six arms in
+// two days. B32 is the property they were all approximating.
+//
+// Closed by a fourth call-graph property — "may this function's return value alias one of its
+// parameters" — sharing the rounds the other three already run in, so it costs no extra pass.
+//
+// The precision matters as much as the catch: a callee returning a LITERAL, or an Int, or a freshly
+// built String, does not alias its argument and must still be accepted. Zero false positives across
+// 133 corpus programs and 173 real ones.
+function pass(s: String) -> String {
+    return s;
+}
+let mutable kept: String = "";
+region r {
+    let built: String = "secret-" + "value";
+    kept = pass(built);
+}
+print(kept);

@@ -520,6 +520,26 @@ class Unit {
     // always the whole binding — there is no position to name.
     grow_parameters: [ParameterGrowth],
     grow_self: [Int],
+    // ---- B32: whose RETURN VALUE may point at one of its parameters ---------------------------
+    //
+    // The fourth call-graph property, and the one that says the other three were the wrong shape.
+    // `grow_parameters` above asks "does this function WRITE INTO a parameter"; this asks "does it
+    // HAND ONE BACK". `function pass(s: String) -> String { return s; }` writes nothing and
+    // allocates nothing, so every rule that asked either question answered no, and
+    // `kept = pass(built)` walked a pointer into a closed region straight out of it.
+    //
+    // Rides in `infer_allocates`'s rounds like B25's pair, for the same reason and by the same
+    // mechanism: `probe_changes` counts an addition here, so one loop converges all four. The
+    // transitivity is real and needs the rounds — `pass2(s) { return pass(s); }` is only a relay
+    // once `pass` is known to be one, which is one round later.
+    //
+    // Per PARAMETER, like `grow_parameters`: `pick(a, b, first)` relays `a` and `b` and not
+    // `first`, and a call passing the taint in `first` is not an escape. `relay_self` holds METHOD
+    // indices for the receiver, which has no position to name — but unlike `grow_self` it does NOT
+    // require `mutable self`, because reading a field off a shared receiver relays it just as well
+    // as writing one.
+    relay_parameters: [ParameterGrowth],
+    relay_self: [Int],
     // The backend's state: the IR text, the constants it referred to, a counter for
     // registers and one for labels, the locals' allocas, and the enclosing loops'
     // labels so `break` and `continue` know where to jump.

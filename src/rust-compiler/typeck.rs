@@ -616,6 +616,67 @@ pub struct TypeChecker {
     current_writable_params: HashMap<String, usize>,
     /// True while checking a method declared `mutable self`.
     current_self_writable: bool,
+
+    // ---- B32: does a call HAND BACK storage it was given? ---------------------
+    //
+    // B20, B21, B25, B26, B27 and B35 were each one construct missing from an enumeration, and
+    // each was closed by adding an arm to `expr_allocates`. This one says the enumeration is the
+    // wrong shape:
+    //
+    // ```text
+    // function pass(s: String) -> String { return s; }
+    // let mutable kept: String = "";
+    // region r { let built: String = "secret-" + "value"; kept = pass(built); }
+    // print(kept);                                  // secret-value, then 0 once reused
+    // ```
+    //
+    // `pass` does not ALLOCATE — it returns bytes somebody else built — so `expr_allocates`
+    // answers false and every escape rule goes quiet. The question the rules need is not "was
+    // this built here?" but "does this point into the open region?", which is ALIASING. A
+    // seventh arm cannot express it, because the aliasing happens in a body somewhere else.
+    //
+    // So it is the same shape as the three properties above: a fact about a callee, worked out
+    // over the call graph before any body is checked, and read at the call site.
+    /// Free functions whose result may point at whatever argument `i` points at. Per index for
+    /// the same reason `grow_params` is: `pick(a, b, first)` that can hand back either one must
+    /// taint on either, and `wrap(fresh, s)` that only ever returns `fresh` must taint on
+    /// neither.
+    relay_params: HashSet<(String, usize)>,
+    /// The same fact for methods, `(receiver, method, source)` — where source `0` is the
+    /// RECEIVER and `i + 1` is argument `i`. One set rather than `grow_self`'s two, because a
+    /// method parameter can be relayed even though it can never be `mutable`: `self.name` and
+    /// a handed-in String reach the caller by the same `return`.
+    relay_methods: HashSet<(String, String, usize)>,
+    probe_relay_params: RefCell<HashSet<(String, usize)>>,
+    probe_relay_methods: RefCell<HashSet<(String, String, usize)>>,
+    /// This body's parameters, name → position — ALL of them, where `current_writable_params`
+    /// holds only the `mutable` ones. Relaying needs every parameter: `pass(s)` hands back an
+    /// immutable one.
+    current_param_positions: HashMap<String, usize>,
+}
+
+/// What one run of `infer_allocates` worked out about the call graph.
+///
+/// Named fields rather than a tuple only because there are six of them now. They are one
+/// value because they are found in one set of rounds and are mutually dependent — see
+/// `infer_allocates`.
+struct CallGraphFacts {
+    fns: HashSet<String>,
+    methods: HashSet<(String, String)>,
+    grow_params: HashSet<(String, usize)>,
+    grow_self: HashSet<(String, String)>,
+    relay_params: HashSet<(String, usize)>,
+    relay_methods: HashSet<(String, String, usize)>,
+}
+
+/// Where a returned value's storage came from, when it came from the caller.
+///
+/// Two cases rather than one index, because a method's receiver is not in its parameter list —
+/// the same split `grow_self` makes, and the reason `relay_methods` numbers `self` as `0`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RelaySource {
+    Receiver,
+    Parameter(usize),
 }
 
 /// The names a program may not declare.
@@ -738,6 +799,11 @@ impl TypeChecker {
             probe_grow_params: RefCell::new(HashSet::new()),
             probe_grow_self: RefCell::new(HashSet::new()),
             current_writable_params: HashMap::new(),
+            relay_params: HashSet::new(),
+            relay_methods: HashSet::new(),
+            probe_relay_params: RefCell::new(HashSet::new()),
+            probe_relay_methods: RefCell::new(HashSet::new()),
+            current_param_positions: HashMap::new(),
             current_self_writable: false,
             probe_fns: RefCell::new(HashSet::new()),
             probe_methods: RefCell::new(HashSet::new()),
@@ -754,11 +820,13 @@ impl TypeChecker {
         // M14: work out which functions allocate before checking anything, so `allocates`
         // need not be written. See `probing` on the struct for why this needs a fixpoint
         // and not a pass.
-        let (fns, methods, grow_params, grow_self) = Self::infer_allocates(prog);
-        self.alloc_fns.extend(fns);
-        self.alloc_methods.extend(methods);
-        self.grow_params.extend(grow_params);
-        self.grow_self.extend(grow_self);
+        let found = Self::infer_allocates(prog);
+        self.alloc_fns.extend(found.fns);
+        self.alloc_methods.extend(found.methods);
+        self.grow_params.extend(found.grow_params);
+        self.grow_self.extend(found.grow_self);
+        self.relay_params.extend(found.relay_params);
+        self.relay_methods.extend(found.relay_methods);
 
         let result = self.check_program_inner(prog);
         if let Err(message) = result {
@@ -940,22 +1008,20 @@ impl TypeChecker {
     /// diagnostics a user sees are exactly the ones they saw before M14, in the same order.
     /// A probe that reported anything would be a second source of truth for error text.
     ///
-    /// It answers TWO questions in one set of rounds, added for B25: which functions allocate,
-    /// and which put that storage into a `mutable` parameter. They share the rounds because they
-    /// share the walk and are mutually monotone — the second reads `expr_allocates`, which reads
-    /// the first — so running them separately would mean two passes converging on each other.
-    fn infer_allocates(
-        prog: &Program,
-    ) -> (
-        HashSet<String>,
-        HashSet<(String, String)>,
-        HashSet<(String, usize)>,
-        HashSet<(String, String)>,
-    ) {
+    /// It answers FOUR questions in one set of rounds — which functions allocate (M14), which
+    /// put that storage into a `mutable` parameter (B25), and which hand a parameter's storage
+    /// back as their result (B32, the two `relay` sets). They share the rounds because they
+    /// share the walk and are mutually monotone: each one reads `expr_allocates`, which reads
+    /// all of them, so running them separately would mean passes converging on each other.
+    /// A relay is only found once its callee's relay is known — `pass2` returns `pass(s)` —
+    /// which is the same one-round-per-link argument the paragraph above makes for `allocates`.
+    fn infer_allocates(prog: &Program) -> CallGraphFacts {
         let mut fns: HashSet<String> = HashSet::new();
         let mut methods: HashSet<(String, String)> = HashSet::new();
         let mut grow_params: HashSet<(String, usize)> = HashSet::new();
         let mut grow_self: HashSet<(String, String)> = HashSet::new();
+        let mut relay_params: HashSet<(String, usize)> = HashSet::new();
+        let mut relay_methods: HashSet<(String, String, usize)> = HashSet::new();
         // One round per link in the longest call chain. The bound is the number of
         // functions, which no chain can exceed without repeating a name, and it is a
         // backstop rather than an expectation — real programs settle in two or three.
@@ -967,24 +1033,32 @@ impl TypeChecker {
             probe.alloc_methods = methods.clone();
             probe.grow_params = grow_params.clone();
             probe.grow_self = grow_self.clone();
+            probe.relay_params = relay_params.clone();
+            probe.relay_methods = relay_methods.clone();
             let _ = probe.check_program_inner(prog);
             let found_fns = probe.probe_fns.borrow().clone();
             let found_methods = probe.probe_methods.borrow().clone();
             let found_params = probe.probe_grow_params.borrow().clone();
             let found_self = probe.probe_grow_self.borrow().clone();
+            let found_relay_params = probe.probe_relay_params.borrow().clone();
+            let found_relay_methods = probe.probe_relay_methods.borrow().clone();
             let grew = !found_fns.is_subset(&fns)
                 || !found_methods.is_subset(&methods)
                 || !found_params.is_subset(&grow_params)
-                || !found_self.is_subset(&grow_self);
+                || !found_self.is_subset(&grow_self)
+                || !found_relay_params.is_subset(&relay_params)
+                || !found_relay_methods.is_subset(&relay_methods);
             fns.extend(found_fns);
             methods.extend(found_methods);
             grow_params.extend(found_params);
             grow_self.extend(found_self);
+            relay_params.extend(found_relay_params);
+            relay_methods.extend(found_relay_methods);
             if !grew {
                 break;
             }
         }
-        (fns, methods, grow_params, grow_self)
+        CallGraphFacts { fns, methods, grow_params, grow_self, relay_params, relay_methods }
     }
 
     /// Does this function build its answer in the caller's region?
@@ -3168,6 +3242,132 @@ impl TypeChecker {
         }
     }
 
+    /// Record that THIS body's `return` may hand back storage it was given. The B32 half of
+    /// the probe, and it mirrors `record_param_growth`: it records while probing and does
+    /// nothing in the real pass, so the fixpoint and the rule read one fact from one place.
+    ///
+    /// Gated on `may_be_region_storage`, and that gate is what keeps the property from
+    /// over-refusing. A getter returning `self.count` hands back a COPY of an Int — nothing
+    /// points anywhere afterwards — so recording it would taint every `let n: Int = c.count()`
+    /// inside a region and refuse a shape that is everywhere. Only a value that can carry a
+    /// pointer into a region can relay one.
+    fn record_relay(&self, returned: &TypedExpr) {
+        if !self.probing || !self.may_be_region_storage(&returned.ty) {
+            return;
+        }
+        let (receiver, name) = self.probe_owner.borrow().clone();
+        if name.is_empty() {
+            return;                   // the top level has no signature to carry the answer
+        }
+        for source in self.relayed_sources(returned) {
+            match (source, receiver.is_empty()) {
+                // A free function has no receiver, so `self` cannot be its answer.
+                (RelaySource::Receiver, false) => {
+                    self.probe_relay_methods.borrow_mut().insert((
+                        receiver.clone(),
+                        name.clone(),
+                        0,
+                    ));
+                }
+                (RelaySource::Receiver, true) => {}
+                (RelaySource::Parameter(i), true) => {
+                    self.probe_relay_params.borrow_mut().insert((name.clone(), i));
+                }
+                (RelaySource::Parameter(i), false) => {
+                    self.probe_relay_methods.borrow_mut().insert((
+                        receiver.clone(),
+                        name.clone(),
+                        i + 1,
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Which of this body's parameters the value could still be pointing at.
+    ///
+    /// The mirror of `expr_allocates`, and the two must stay opposites: that one asks which
+    /// expressions BUILD storage, this one asks which hand back storage they were given, and
+    /// a form is in exactly one of the two. So joining two Strings, `to_string`, `substring`
+    /// and every other builder is deliberately absent — `return "hi " + who` makes a fresh
+    /// String and relays nothing, and treating it as a relay would refuse most of `lib/`.
+    ///
+    /// Reaching THROUGH a value is a relay, because a field, an element and a payload are all
+    /// pointers into the same storage: `return b.name` hands back `b`'s bytes.
+    fn relayed_sources(&self, e: &TypedExpr) -> Vec<RelaySource> {
+        let mut found = Vec::new();
+        self.collect_relayed_sources(e, &mut found);
+        found
+    }
+
+    fn collect_relayed_sources(&self, e: &TypedExpr, found: &mut Vec<RelaySource>) {
+        match &e.kind {
+            TypedExprKind::Var(name) => {
+                if name == "self" {
+                    found.push(RelaySource::Receiver);
+                } else if let Some(i) = self.current_param_positions.get(name) {
+                    found.push(RelaySource::Parameter(*i));
+                }
+            }
+            // Reaching into a value does not copy what it points at.
+            TypedExprKind::Field { base, .. } => self.collect_relayed_sources(base, found),
+            TypedExprKind::Index { base, index, .. }
+            | TypedExprKind::SliceIndex { base, index } => {
+                self.collect_relayed_sources(base, found);
+                self.collect_relayed_sources(index, found);
+            }
+            // `?` hands back the payload of what it unwrapped, so it hands back its sources.
+            TypedExprKind::Try { value, .. } => self.collect_relayed_sources(value, found),
+            // An aggregate built here is fresh, but what it HOLDS is not: `return Box { name: s }`
+            // gives the caller a Box pointing at `s`'s bytes.
+            TypedExprKind::StructLit { fields, .. } => {
+                for f in fields {
+                    self.collect_relayed_sources(f, found);
+                }
+            }
+            TypedExprKind::VariantLit { arguments, .. } => {
+                for a in arguments {
+                    self.collect_relayed_sources(a, found);
+                }
+            }
+            TypedExprKind::ArrayLit(items) | TypedExprKind::SliceLit(items) => {
+                for i in items {
+                    self.collect_relayed_sources(i, found);
+                }
+            }
+            // A relay through a relay. This is the link the fixpoint exists for: `pass2` is
+            // only known to relay once `pass` is, which is one more round.
+            TypedExprKind::Call { name, arguments } => {
+                for (i, a) in arguments.iter().enumerate() {
+                    if self.relay_params.contains(&(name.clone(), i)) {
+                        self.collect_relayed_sources(a, found);
+                    }
+                }
+            }
+            TypedExprKind::MethodCall { receiver, method, base, arguments, .. } => {
+                if self.relay_methods.contains(&(receiver.clone(), method.clone(), 0)) {
+                    self.collect_relayed_sources(base, found);
+                }
+                for (i, a) in arguments.iter().enumerate() {
+                    if self.relay_methods.contains(&(receiver.clone(), method.clone(), i + 1)) {
+                        self.collect_relayed_sources(a, found);
+                    }
+                }
+            }
+            TypedExprKind::DynCall { interface_name, method, base, arguments, .. } => {
+                if self.dyn_call_relays(interface_name, method, 0) {
+                    self.collect_relayed_sources(base, found);
+                }
+                for (i, a) in arguments.iter().enumerate() {
+                    if self.dyn_call_relays(interface_name, method, i + 1) {
+                        self.collect_relayed_sources(a, found);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// A callee's name as the programmer WROTE it.
     ///
     /// `mangle` gives a generic's instantiation a symbol like `add_one$Int`, and a reader who
@@ -3390,6 +3590,18 @@ impl TypeChecker {
         })
     }
 
+    /// Does a call through an interface object hand back storage it was given?
+    ///
+    /// Yes if ANY implementation does, for the reason `dyn_call_allocates` gives: the call site
+    /// cannot know which one runs. `source` is numbered as in `relay_methods` — `0` the
+    /// receiver, `i + 1` argument `i`.
+    fn dyn_call_relays(&self, interface_name: &str, method: &str, source: usize) -> bool {
+        self.impls.iter().any(|(implemented, concrete)| {
+            implemented == interface_name
+                && self.relay_methods.contains(&(concrete.clone(), method.to_string(), source))
+        })
+    }
+
     /// A few words for the thing that allocates, or None when it cannot be named simply.
     fn describe_allocation(&self, e: &TypedExpr) -> Option<String> {
         // The `dynamic` arm comes BEFORE the guard. It no longer has to — `expr_allocates` has a
@@ -3452,15 +3664,37 @@ impl TypeChecker {
             | TypedExprKind::Substring { .. } => true,
             // A call to an `allocates` function or method built its result in OUR
             // region, so it is region storage here and the same escape rules apply.
-            TypedExprKind::Call { name, .. } => self.alloc_fns.contains(name),
-            TypedExprKind::MethodCall { receiver, method, .. } => {
+            //
+            // B32: or it built nothing and handed back what it was GIVEN, which is region
+            // storage here too if the argument was. `pass(built)` allocates nothing and points
+            // straight into the open region, and that was the last way out of every rule below.
+            // The property comes from `infer_allocates`; see `relay_params`.
+            TypedExprKind::Call { name, arguments } => {
+                self.alloc_fns.contains(name)
+                    || arguments.iter().enumerate().any(|(i, a)| {
+                        self.relay_params.contains(&(name.clone(), i)) && self.expr_allocates(a)
+                    })
+            }
+            TypedExprKind::MethodCall { receiver, method, base, arguments, .. } => {
                 self.alloc_methods.contains(&(receiver.clone(), method.clone()))
+                    || (self.relay_methods.contains(&(receiver.clone(), method.clone(), 0))
+                        && self.expr_allocates(base))
+                    || arguments.iter().enumerate().any(|(i, a)| {
+                        self.relay_methods.contains(&(receiver.clone(), method.clone(), i + 1))
+                            && self.expr_allocates(a)
+                    })
             }
             // B26. Same reason as the two arms above, for the call whose callee is not known
             // until run time: if any implementation allocates, the result HERE is region
             // storage and every escape rule below has to see it. See `dyn_call_allocates`.
-            TypedExprKind::DynCall { interface_name, method, .. } => {
+            TypedExprKind::DynCall { interface_name, method, base, arguments, .. } => {
                 self.dyn_call_allocates(interface_name, method)
+                    || (self.dyn_call_relays(interface_name, method, 0)
+                        && self.expr_allocates(base))
+                    || arguments.iter().enumerate().any(|(i, a)| {
+                        self.dyn_call_relays(interface_name, method, i + 1)
+                            && self.expr_allocates(a)
+                    })
             }
             // B34. `?` yields the Ok payload of the value it unwraps, so the answer for the
             // unwrap is the answer for what was unwrapped: the taint has to pass THROUGH it.
@@ -3847,10 +4081,14 @@ impl TypeChecker {
         // growth to whichever function was checked last.
         self.current_writable_params.clear();
         self.current_self_writable = false;
+        // B32: every parameter, `mutable` or not — a relay hands back what it was given and
+        // never writes to it. Rebuilt per body for the same reason the map above is.
+        self.current_param_positions.clear();
         for (i, p) in f.parameters.iter().enumerate() {
             if p.writable {
                 self.current_writable_params.insert(p.name.clone(), i);
             }
+            self.current_param_positions.insert(p.name.clone(), i);
         }
         let mut parameters = Vec::new();
         for p in &f.parameters {
@@ -4044,6 +4282,12 @@ impl TypeChecker {
         // map is empty here by construction and the receiver carries the whole question.
         self.current_writable_params.clear();
         self.current_self_writable = m.receiver_mut;
+        // B32. A method parameter may not be `mutable`, but it can still be RELAYED — handed
+        // straight back by `return` — so unlike the map above this one is not empty here.
+        self.current_param_positions.clear();
+        for (i, p) in m.parameters.iter().enumerate() {
+            self.current_param_positions.insert(p.name.clone(), i);
+        }
         self.env.insert(
             "self".to_string(),
             (Type::Named(m.receiver.clone()), m.receiver_mut),
@@ -5346,6 +5590,12 @@ impl TypeChecker {
                         ret, typed.ty
                     ));
                 }
+                // B32, before the escape rule rather than inside it: this is where the probe
+                // learns whether the function hands its caller's storage back. It has to be
+                // asked on EVERY return, not only the ones a region makes interesting — a
+                // relay is usually written with no region in sight, and its call sites are
+                // what the escape rules below then get right.
+                self.record_relay(&typed);
                 // Escape checking, the expression-level half. Which region the value
                 // was built in decides everything:
                 //

@@ -3904,6 +3904,11 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
         if n.kind == 64 {
             let checked: Int = self.check_tail(src, n, return_type);
         }
+        // B32, and it goes BEFORE the escape rule rather than inside it, for two reasons that are
+        // easy to get wrong. A relay does not allocate, so `expr_allocates` below answers false on
+        // exactly the returns this has to see. And the probing branch inside it `return`s, so
+        // anything written after it is skipped on the rounds that are the only ones recording.
+        let relayed: Int = self.record_return_relay(src, n.a);
         // The escape rule, and the whole of M1 in one condition: a built value may
         // leave a function ONLY when it was built in the CALLER's region — which means
         // `allocates`, and no region of this function's own open around the return.
@@ -4288,6 +4293,189 @@ function (self: Unit) grows_self(method: Int) -> Bool {
         }
     }
     return false;
+}
+
+// ---- B32: the RELAY property, and why it is a fourth property rather than a seventh arm --------
+//
+// Six arms went into `expr_allocates` in two days — an interpolated string, a dyn call, a `?`, a
+// field read, an element read, three builtins — and each was correct. This one cannot be an arm,
+// and the reason is worth stating precisely: an arm answers *"does evaluating this expression
+// allocate"*, and `pass(built)` **does not allocate**. It hands back storage that was already
+// built. The rules were asking about ALLOCATION when the fact they need is ALIASING — does this
+// value point into the region, however it got there — and no number of allocation arms reaches a
+// function whose whole job is to allocate nothing.
+//
+// So: which parameters may a function's return value point at. The callee's body records it,
+// because that is where the `return` is; the CALL SITE turns "parameter 0 is relayed" into "this
+// argument's taint is now the result's taint", because only the caller knows what it passed. The
+// same division of labour as `record_parameter_growth`, and the same reason it needs the fixpoint:
+// a relay through a relay is only visible once the inner one is known.
+//
+// **What it is NOT:** a flat "this function is dangerous". `substring(s, 0, 3)` builds a fresh
+// String out of `s` and relays nothing, so `kept = substring(built, 0, 3)` keeps working — it is
+// refused, but by the arm that already refused it, for allocating. `to_string(x)` likewise. The
+// property is only ever recorded when a `return` walks down to a parameter through links that
+// share storage, so a function that COPIES is untouched.
+function (self: Unit) relays_parameter(owner: Int, parameter: Int) -> Bool {
+    for known in self.relay_parameters {
+        if known.owner == owner && known.parameter == parameter {
+            return true;
+        }
+    }
+    return false;
+}
+
+function (self: Unit) relays_self(method: Int) -> Bool {
+    for known in self.relay_self {
+        if known == method {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Both notes count into `probe_changes`, so the fourth property converges in `infer_allocates`'s
+// existing rounds rather than in a loop of its own. Two loops over one call graph would have to
+// agree about when to stop, which is the argument the B25 note above already makes.
+function (mutable self: Unit) note_relay_parameter(owner: Int, parameter: Int) -> Int {
+    if self.relays_parameter(owner, parameter) {
+        return 0;
+    }
+    push(self.relay_parameters, ParameterGrowth { owner: owner, parameter: parameter });
+    self.probe_changes += 1;
+    return 1;
+}
+
+function (mutable self: Unit) note_relay_self(method: Int) -> Int {
+    if self.relays_self(method) {
+        return 0;
+    }
+    push(self.relay_self, method);
+    self.probe_changes += 1;
+    return 1;
+}
+
+// The recording half: walk a returned expression down to whatever storage it points AT, and if
+// that turns out to be a parameter of the body being walked, say so.
+//
+// The links walked are exactly the ones that SHARE storage rather than copy it, and they are the
+// same set `expr_allocates` recurses through for the same reason: a field read, an element read
+// and `?` all hand back a pointer into cells something else owns. `+` is absent, and its absence
+// is the whole guarantee against over-refusal — `return "seen: " + s` builds a new String and
+// relays nothing, so a function that formats its argument is not a relay.
+//
+// A call is walked through the property being computed, which is what makes it transitive:
+// `return pass(s)` reaches `s` only once `pass` is known to relay parameter 0, one round later.
+//
+// Aggregate LITERALS are deliberately absent — `return Box { name: s }` does hand back a record
+// pointing at `s`, and it is a real hole, left open because closing it here would credit the
+// parameter for a record the caller may only ever read scalars out of, and B36 records what
+// type-blindness in this family already costs. Named rather than fixed, so the next reader does
+// not have to rediscover it.
+function (mutable self: Unit) record_return_relay(src: String, node: Int) -> Int {
+    // Only a probe round records, exactly as `record_parameter_growth` does: the real pass reads
+    // what the rounds settled, so an answer cannot depend on how far the real pass has got.
+    if self.probing == 0 {
+        return 0;
+    }
+    // ---- What is handed back has to be a POINTER for any of this to matter --------------------
+    //
+    // A value that is copied into the caller's cell cannot dangle, so relaying one is not an
+    // escape: `function count_of(p: Pair) -> Int { return p.n; }` hands back seven, not a pointer
+    // into `p`. Everything excluded here is one i64 cell — `emit.bx`'s layout note says it in one
+    // line, *"a Decimal is a scaled i64"* — so the list is a fact about the representation rather
+    // than a guess.
+    //
+    // **This test is why the property adds no false refusals, and it was found by probing rather
+    // than by reading.** Without it, `total = count_of(p)` inside a region was refused for an Int
+    // that could not dangle: measured, on three shapes — an Int field, an Int element, a Bool
+    // field — all three accepted by stage-0 and by stage-1 before this change.
+    //
+    // It does NOT narrow B36. `total = p.n` written out directly is still refused by both
+    // compilers, because that is the field/element ARM being type-blind and B36 says to narrow
+    // that in both or neither. The two are different mechanisms and this one is simply declining
+    // to widen the other: B36's arm stays exactly as wide as it is today.
+    //
+    // Kind 50 is a type PARAMETER and deliberately records. `identity<T>(x: T) -> T` is not known
+    // to hand back a scalar, and a generic identity relay is one of the shapes that has to stay
+    // caught — `L6` in the audit corpus. Kind 0 is unknown and records for the same reason.
+    let handed: Type = self.type_at(node);
+    if handed.kind == 40 || handed.kind == 41 || handed.kind == 43 || handed.kind == 44
+        || handed.kind == 45 || handed.kind == 51 || handed.kind == 52 {
+        return 0;                                    // Int, Bool, CInt, CDouble, Decimal, CPointer
+    }
+    return self.note_relay_root(src, node);
+}
+
+function (mutable self: Unit) note_relay_root(src: String, node: Int) -> Int {
+    if node < 0 {
+        return 0;
+    }
+    let n: Node = self.nodes[node];
+    if n.kind == 5 {                                 // a bare name: the root of the chain
+        let named: Token = self.tokens[n.token];
+        if self.current_method >= 0 {
+            // A method's receiver. NOT gated on `mutable self`, and that is the difference from
+            // `note_grow_self`: growing a receiver needs permission to write it, and reading a
+            // field off one does not. `function (self: Box) name_of() -> String { return
+            // self.name; }` is a plain shared receiver and it relays.
+            if span_equal(src, named.start, named.length, "self") {
+                return self.note_relay_self(self.current_method);
+            }
+            // A method's ordinary parameters are not tracked, mirroring the hole
+            // `record_parameter_growth` records for growth — stage-0 does not track them either,
+            // and the two compilers refusing different programs is the failure the differential
+            // exists to catch.
+            return 0;
+        }
+        if self.current_function < 0 {
+            return 0;                                // the top level returns nothing
+        }
+        let owner: DeclaredFunction = self.functions[self.current_function];
+        let params: Node = self.nodes[owner.parameters];
+        let mutable i: Int = 0;
+        while i < params.b {
+            let param: Node = self.nodes[self.children[params.a + i]];
+            let pname: Token = self.tokens[param.token];
+            // No `mutable` test here, unlike growth: a parameter is a copy of a POINTER, so
+            // handing the pointer back reaches the caller's storage whether or not the callee was
+            // allowed to write through it.
+            if spans_equal(src, pname.start, pname.length, named.start, named.length) {
+                return self.note_relay_parameter(self.current_function, i);
+            }
+            i += 1;
+        }
+        return 0;
+    }
+    if n.kind == 11 || n.kind == 12 || n.kind == 22 {
+        return self.note_relay_root(src, n.a);       // a field, an element, a `?` payload
+    }
+    if n.kind == 13 {                                // a call: transitive through the property
+        let name: Token = self.tokens[n.token];
+        let callee: Int = self.find_function(src, name.start, name.length);
+        if callee < 0 {
+            return 0;                                // a builtin relays nothing; see the note above
+        }
+        let list: Node = self.nodes[n.a];
+        let mutable noted: Int = 0;
+        let mutable i: Int = 0;
+        while i < list.b {
+            if self.relays_parameter(callee, i) {
+                noted += self.note_relay_root(src, self.children[list.a + i]);
+            }
+            i += 1;
+        }
+        return noted;
+    }
+    if n.kind == 14 {                                // a method call, through the receiver
+        let holder: Type = self.type_at(n.a);
+        let found: Int = self.find_method(src, holder, n.token);
+        if found >= 0 && self.relays_self(found) {
+            return self.note_relay_root(src, n.a);
+        }
+        return 0;
+    }
+    return 0;
 }
 
 // B25's refusal: B20's sentence with the CALL named as the cause instead of `push`, because the call
