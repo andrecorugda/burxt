@@ -79,13 +79,13 @@ Burxt is early and built in small, verified increments. It is **not yet ready fo
 
 **The Burxt compiler compiles all 144 pass programs — 0 refused — and every one prints the same bytes as the Rust compiler's build of it** — Decimals, `match`, `return tail`, `external function`, interpolation, generics and maps included.
 
-**And it keeps every runtime guarantee.** "Compiles every program" would read like more than it is on its own, because that measure only covers programs that *succeed*. So a second test runs the 31 programs in `tests/panic/` — a broken contract, an overflow, an index out of range, a `decreases` measure that does not decrease — through stage-1's backend and requires each one to fail. **It keeps 31 of 31**, and that is an equality rather than a floor, so losing one is a failing test.
+**And it keeps every runtime guarantee.** "Compiles every program" would read like more than it is on its own, because that measure only covers programs that *succeed*. So a second test runs the 32 programs in `tests/panic/` — a broken contract, an overflow, an index out of range, a byte outside 0..255, a `decreases` measure that does not decrease — through stage-1's backend and requires each one to fail. **It keeps 32 of 32**, and that is an equality rather than a floor, so losing one is a failing test.
 
 Worth knowing how that number got written down: when the test was first added it was **8 of 21**. Stage-1 had been compiling every program correctly and silently discarding contracts, bounds checks and the termination measure — because every contract fixture in `tests/pass/` has contracts that *succeed*, and a satisfied contract produces identical output whether or not it was ever checked. The gap was shaped exactly like a directory boundary.
 
 The Rust compiler stays as the trust anchor and as the other half of a differential test, so a change to the language has two implementations that must agree or a test fails. Details in [`spec/M4-SELF-HOSTING.md`](spec/M4-SELF-HOSTING.md).
 
-Every push runs **77 invariants**, including that fixpoint, the differential test, 155 pass and 307 fail fixtures, and performance ratios that fail if a known quadratic returns.
+Every push runs **77 invariants**, including that fixpoint, the differential test, 153 pass and 305 fail fixtures, and performance ratios that fail if a known quadratic returns.
 
 **Working today:**
 
