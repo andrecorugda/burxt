@@ -1,0 +1,59 @@
+// Codepoint iteration — roadmap A5, and the fixture records that it needed NO compiler change.
+//
+// `spec/A4.4` calls this its one remaining gap and the roadmap files it under §A, compiler leverage.
+// It is a LIBRARY item: `char_count`, `next_char`, `char_at` and `is_valid_utf8` are written from
+// `byte_at`, `bit_and`, `substring` and `len`, all of which already existed, and both compilers
+// accepted them unchanged. Measured before anything was touched.
+//
+// The mechanism is `diag.bx`'s, and its comment made the argument first: in UTF-8 every byte after
+// the first of a sequence matches `10xxxxxx`, so counting codepoints is counting the bytes that are
+// NOT continuation bytes. No iterator, no char type.
+//
+// **There is no char type and this fixture is what proves the decision costs nothing.** A single
+// codepoint is a one-codepoint String, so `char_at` answers a String and `print`, `==` and `+` need
+// to learn nothing. Every line below uses ordinary String operations on the result.
+use "../../lib/string.bx";
+
+region r {
+    // `len` is BYTES and `char_count` is CODEPOINTS, and the two views are named so a reader can see
+    // which one they are in. This is the distinction `spec/A4.4` wants explicit views for.
+    let greeting: String = "héllo";
+    print(len(greeting));
+    print(char_count(greeting));
+
+    // One codepoint by position. The `é` is two bytes, so every index past it would be wrong under
+    // byte indexing — which is the silent-wrong-index bug the decision exists to prevent.
+    print(char_at(greeting, 0));
+    print(char_at(greeting, 1));
+    print(char_at(greeting, 4));
+
+    // The walk, with a plain `while`. There is no iterator protocol yet (A11) and half of one would
+    // be worse than none, so `next_char` carries the position and the loop stays a loop.
+    let mutable at: Int = 0;
+    let mutable walked: String = "";
+    while at < len(greeting) {
+        let ending: Int = next_char(greeting, at);
+        walked = walked + "[" + substring(greeting, at, ending - at) + "]";
+        at = ending;
+    }
+    print(walked);
+
+    // Widths one to four bytes, in one string: ASCII, Latin-1, CJK, and an emoji outside the BMP.
+    let wide: String = "aé中🙂";
+    print(len(wide));
+    print(char_count(wide));
+    print(char_at(wide, 3));
+
+    // A codepoint is a String, so it composes with everything a String does. Nothing here knows a
+    // codepoint from any other text, which is the saving the no-char-type decision buys.
+    print(char_at(wide, 2) + char_at(wide, 1));
+    print(char_at(greeting, 1) == "é");
+    print(string_repeat(char_at(wide, 2), 3));
+
+    // Validity. Every String a program can WRITE is valid, so the interesting cases are the ones
+    // that arrive from outside — and `is_valid_utf8` is what §B5 would need to enforce the invariant
+    // it currently only declares.
+    print(is_valid_utf8(greeting));
+    print(is_valid_utf8(wide));
+    print(is_valid_utf8(""));
+}

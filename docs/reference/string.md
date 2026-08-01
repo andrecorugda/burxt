@@ -34,6 +34,10 @@ A Burxt String is bytes, and the language gives you `len`, `byte_at`, `substring
 | [`string_parse_int`](#string-parse-int) | function | The number, or nothing — for when there is no sensible default and the program has to say what it does about bad input. |
 | [`string_join`](#string-join) | function | The separator between each piece. The join a program would write, written once. |
 | [`string_repeat`](#string-repeat) | function | — |
+| [`char_count`](#char-count) | function | How many codepoints, not bytes. `char_count("héllo")` is 5 where `len` is 6. |
+| [`next_char`](#next-char) | function | The byte offset one past the codepoint that starts at `at` — where the NEXT one begins. |
+| [`char_at`](#char-at) | function | The `i`'th codepoint, as a one-codepoint String. There is no char type: see the header. |
+| [`is_valid_utf8`](#is-valid-utf8) | function | Is every byte part of a well-formed UTF-8 sequence? |
 
 ## Functions
 {: #functions}
@@ -187,4 +191,73 @@ function string_repeat(text: String, times: Int) -> String
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L240)
+
+### `char_count`
+{: #char-count}
+
+```burxt
+pure function char_count(text: String) -> Int
+```
+
+How many codepoints, not bytes. `char_count("héllo")` is 5 where `len` is 6.
+
+A continuation byte is `10xxxxxx`, so every byte that is not one begins a codepoint and the count is a single pass with no decoding. Assumes valid UTF-8: see the note above.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L314)
+
+### `next_char`
+{: #next-char}
+
+```burxt
+pure function next_char(text: String, at: Int) -> Int
+```
+
+The byte offset one past the codepoint that starts at `at` — where the NEXT one begins.
+
+The width is in the leading byte and nowhere else, which is the property that makes UTF-8 walkable in one direction without a table: `0xxxxxxx` is one byte, `110xxxxx` two, `1110xxxx` three, `11110xxx` four.
+
+Total by construction, and both halves of that matter. It always advances at least one byte, so a `while at < len(text)` loop terminates on any input including bytes that are not UTF-8 at all; and it never answers past `len(text)`, so `substring(text, at, next_char(text, at) - at)` is in range even when the last sequence is truncated. An unexpected byte — a stray continuation, an `0xFF` — advances by one, which resynchronises rather than guessing.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L337)
+
+### `char_at`
+{: #char-at}
+
+```burxt
+pure function char_at(text: String, i: Int) -> String
+```
+
+The `i`'th codepoint, as a one-codepoint String. There is no char type: see the header.
+
+A PRECONDITION rather than an empty String for an index out of range, which is this language's habit and the better answer here — an empty String would be a legal value that silently stands in for a mistake, and a caller comparing it against something would get `false` rather than a refusal. `requires` says the mistake out loud, at the call, naming the value.
+
+The second clause calls `char_count`, which is only possible because a contract clause may call a `pure` function — and that a `pure` FUNCTION may be called from a clause is older than A4. What A4 added is the same for a method, so this composes without needing it.
+
+O(n) in `i`, so a loop counting up through it is O(n²). Use `next_char` to walk.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L371)
+
+### `is_valid_utf8`
+{: #is-valid-utf8}
+
+```burxt
+pure function is_valid_utf8(text: String) -> Bool
+```
+
+Is every byte part of a well-formed UTF-8 sequence?
+
+The full rule, not the structural half. A checker that accepted overlong encodings and surrogates would be a blanket that reads like a rule — the shape that let `?` go unimplemented for its whole life — so the second byte's range depends on the leader, which is where the three exclusions live:
+
+* **overlong**: `C0`/`C1` could only encode something a shorter sequence already can, and `E0`
+
+```burxt
+ and `F0` restrict the second byte for the same reason. Two spellings of one codepoint is how
+ a validator and a decoder come to disagree about a string.
+```
+
+* **surrogates**: `ED A0`..`ED BF` is U+D800..U+DFFF, which UTF-8 does not encode. * **out of range**: past `F4 8F` is above U+10FFFF, which is not a codepoint.
+
+Assumes nothing. This is the function `spec/ROADMAP-1.0.md` §B5 would need if the declared-and- unenforced UTF-8 invariant were ever enforced at the four entry points — enforcing it is not done here, and having something to enforce it WITH is the part A5 delivers.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L399)
 

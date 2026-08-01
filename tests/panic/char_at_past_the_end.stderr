@@ -1,0 +1,1 @@
+`requires i < char_count(text)` failed in `char_at`

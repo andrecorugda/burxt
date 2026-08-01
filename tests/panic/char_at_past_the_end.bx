@@ -1,0 +1,20 @@
+// `char_at` out of range is a PRECONDITION, not an empty String — and this is the fixture that says
+// which, because the alternative is the more tempting one.
+//
+// An empty String would be a legal value standing in silently for a mistake: a caller comparing it
+// against something would get `false` rather than a refusal, and the wrong index would survive to
+// wherever the answer was used. A `requires` says it at the call, quotes the clause, and names the
+// function — which is this language's habit and the reason it has one.
+//
+// The clause reads `i < char_count(text)` and that is a contract calling a `pure` function, which is
+// how a precondition about a CODEPOINT count can exist at all: the check has to walk the bytes, and
+// only `pure` is callable from a clause.
+//
+// `"héllo"` is 6 bytes and 5 codepoints, so index 5 is one past the end — and it is also inside the
+// byte range, which is exactly the confusion the two named views exist to prevent. Under byte
+// indexing this would have quietly answered the sixth byte.
+use "../../lib/string.bx";
+
+region r {
+    print(char_at("héllo", 5));
+}

@@ -420,6 +420,34 @@
   "where": "function string_repeat(text: String, times: Int) -> String"
  },
  {
+  "kind": "function",
+  "name": "char_count",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#char-count",
+  "where": "pure function char_count(text: String) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "next_char",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#next-char",
+  "where": "pure function next_char(text: String, at: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "char_at",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#char-at",
+  "where": "pure function char_at(text: String, i: Int) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "is_valid_utf8",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#is-valid-utf8",
+  "where": "pure function is_valid_utf8(text: String) -> Bool"
+ },
+ {
   "kind": "class",
   "name": "MapEntry",
   "text": "lib/map.bx",

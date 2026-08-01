@@ -246,3 +246,218 @@ function string_repeat(text: String, times: Int) -> String {
     }
     return out;
 }
+
+// ============================================================================
+// CODEPOINTS — roadmap A5, and it needed nothing from the compiler.
+//
+// `spec/A4.4` calls codepoint iteration its one remaining gap and `ROADMAP-1.0.md` files it under
+// §A, compiler leverage. **It is not a compiler item.** Everything below is written from `byte_at`,
+// `bit_and`, `substring` and `len` — the four things this file's header already promises — and both
+// compilers accepted it unchanged on the first try. Measured before anything was touched, which is
+// the only reason it is worth saying: A5 is a LIBRARY item that was mis-filed, and the four
+// functions are the whole of it.
+//
+// `src/burxt-compiler/diag.bx` proved it first and its comment makes the argument: the question is
+// not *"can I iterate codepoints"* but *"can I COUNT them"*, and in UTF-8 every byte after the first
+// of a sequence matches `10xxxxxx`, so a codepoint count is the number of bytes that are **not**
+// continuation bytes. No iterator, no char type, no new scalar.
+//
+// ---- the two decisions this obeys ------------------------------------------------------
+//
+// **No char type.** A single codepoint is a ONE-CODEPOINT STRING, not a new kind of value. So
+// `char_at` answers a String and there is nothing new to teach `print`, `==`, `+` or a `match`
+// about — which is the whole saving. `spec/ROADMAP-1.0.md`'s decisions list says *"no char type, no
+// bare `s[i]`"*, and the second half is why there is no `s[i]` here either.
+//
+// **Explicit views rather than bare indexing.** `spec/A4.4` wants `.bytes()` / `.chars()` because
+// bare indexing *"hides the silent-wrong-index class of bug"* — is `s[3]` the fourth byte or the
+// fourth character? `len`/`byte_at` are the byte view and these are the codepoint view, and a
+// reader can see which one they are in from the NAME rather than from the type.
+//
+// ---- how to walk, and why `next_char` exists ------------------------------------------
+//
+// There is no iterator protocol yet (A11), and half of one would be worse than none, so a walk is a
+// plain `while`:
+//
+//     let mutable at: Int = 0;
+//     while at < len(text) {
+//         let ending: Int = next_char(text, at);
+//         print(substring(text, at, ending - at));
+//         at = ending;
+//     }
+//
+// **`char_at` in a loop is O(n²) and this is not.** `char_at(s, i)` has to walk from the start to
+// find the i'th codepoint, so counting up through it re-walks the prefix every time. `next_char`
+// carries the position forward instead, which is what makes the other three cheap. Use `char_at`
+// when you want ONE codepoint by position; use `next_char` when you want all of them.
+//
+// ---- what these assume about validity -------------------------------------------------
+//
+// `spec/A4.4` declares a String is UTF-8 and `spec/ROADMAP-1.0.md` §B5 records that the invariant is
+// **declared and unenforced** at four entry points. That is not fixed here, so the honest statement
+// is which of these rely on it:
+//
+//   * `char_count` and `char_at` ASSUME validity. On invalid bytes they answer something
+//     well-defined but meaningless — a count of non-continuation bytes is not a codepoint count if
+//     the bytes are not UTF-8.
+//   * `next_char` assumes NOTHING and is total. An unexpected byte advances by one, which is the
+//     standard resynchronisation, and the answer is clamped to `len(s)` so a truncated sequence at
+//     the end cannot walk past it. **It never answers `at`**, which is the property a `while` loop
+//     depends on: a walk cannot hang, whatever the bytes are.
+//   * `is_valid_utf8` assumes nothing — deciding is its job.
+// ============================================================================
+
+// How many codepoints, not bytes. `char_count("héllo")` is 5 where `len` is 6.
+//
+// A continuation byte is `10xxxxxx`, so every byte that is not one begins a codepoint and the count
+// is a single pass with no decoding. Assumes valid UTF-8: see the note above.
+pure function char_count(text: String) -> Int {
+    let mutable found: Int = 0;
+    let mutable i: Int = 0;
+    while i < len(text) {
+        if bit_and(byte_at(text, i), 192) != 128 {
+            found += 1;
+        }
+        i += 1;
+    }
+    return found;
+}
+
+// The byte offset one past the codepoint that starts at `at` — where the NEXT one begins.
+//
+// The width is in the leading byte and nowhere else, which is the property that makes UTF-8 walkable
+// in one direction without a table: `0xxxxxxx` is one byte, `110xxxxx` two, `1110xxxx` three,
+// `11110xxx` four.
+//
+// Total by construction, and both halves of that matter. It always advances at least one byte, so a
+// `while at < len(text)` loop terminates on any input including bytes that are not UTF-8 at all; and
+// it never answers past `len(text)`, so `substring(text, at, next_char(text, at) - at)` is in range
+// even when the last sequence is truncated. An unexpected byte — a stray continuation, an `0xFF` —
+// advances by one, which resynchronises rather than guessing.
+pure function next_char(text: String, at: Int) -> Int {
+    let stop: Int = len(text);
+    if at >= stop {
+        return stop;
+    }
+    let leading: Int = byte_at(text, at);
+    let mutable ending: Int = at + 1;
+    if bit_and(leading, 224) == 192 {
+        ending = at + 2;
+    }
+    if bit_and(leading, 240) == 224 {
+        ending = at + 3;
+    }
+    if bit_and(leading, 248) == 240 {
+        ending = at + 4;
+    }
+    if ending > stop {
+        return stop;
+    }
+    return ending;
+}
+
+// The `i`'th codepoint, as a one-codepoint String. There is no char type: see the header.
+//
+// A PRECONDITION rather than an empty String for an index out of range, which is this language's
+// habit and the better answer here — an empty String would be a legal value that silently stands in
+// for a mistake, and a caller comparing it against something would get `false` rather than a
+// refusal. `requires` says the mistake out loud, at the call, naming the value.
+//
+// The second clause calls `char_count`, which is only possible because a contract clause may call a
+// `pure` function — and that a `pure` FUNCTION may be called from a clause is older than A4. What A4
+// added is the same for a method, so this composes without needing it.
+//
+// O(n) in `i`, so a loop counting up through it is O(n²). Use `next_char` to walk.
+pure function char_at(text: String, i: Int) -> String
+    requires i >= 0
+    requires i < char_count(text)
+{
+    let mutable at: Int = 0;
+    let mutable seen: Int = 0;
+    while seen < i {
+        at = next_char(text, at);
+        seen += 1;
+    }
+    return substring(text, at, next_char(text, at) - at);
+}
+
+// Is every byte part of a well-formed UTF-8 sequence?
+//
+// The full rule, not the structural half. A checker that accepted overlong encodings and surrogates
+// would be a blanket that reads like a rule — the shape that let `?` go unimplemented for its whole
+// life — so the second byte's range depends on the leader, which is where the three exclusions live:
+//
+//   * **overlong**: `C0`/`C1` could only encode something a shorter sequence already can, and `E0`
+//     and `F0` restrict the second byte for the same reason. Two spellings of one codepoint is how
+//     a validator and a decoder come to disagree about a string.
+//   * **surrogates**: `ED A0`..`ED BF` is U+D800..U+DFFF, which UTF-8 does not encode.
+//   * **out of range**: past `F4 8F` is above U+10FFFF, which is not a codepoint.
+//
+// Assumes nothing. This is the function `spec/ROADMAP-1.0.md` §B5 would need if the declared-and-
+// unenforced UTF-8 invariant were ever enforced at the four entry points — enforcing it is not done
+// here, and having something to enforce it WITH is the part A5 delivers.
+pure function is_valid_utf8(text: String) -> Bool {
+    let stop: Int = len(text);
+    let mutable i: Int = 0;
+    while i < stop {
+        let leading: Int = byte_at(text, i);
+        let mutable width: Int = 0;
+        let mutable low: Int = 128;
+        let mutable high: Int = 191;
+        if leading < 128 {
+            width = 1;
+        }
+        if leading >= 194 && leading <= 223 {
+            width = 2;
+        }
+        if leading == 224 {
+            width = 3;
+            low = 160;                               // no overlong three-byte form
+        }
+        if leading >= 225 && leading <= 236 {
+            width = 3;
+        }
+        if leading == 237 {
+            width = 3;
+            high = 159;                              // no surrogate
+        }
+        if leading >= 238 && leading <= 239 {
+            width = 3;
+        }
+        if leading == 240 {
+            width = 4;
+            low = 144;                               // no overlong four-byte form
+        }
+        if leading >= 241 && leading <= 243 {
+            width = 4;
+        }
+        if leading == 244 {
+            width = 4;
+            high = 143;                              // nothing above U+10FFFF
+        }
+        if width == 0 {
+            return false;                            // a continuation byte, or 192, 193, 245..255
+        }
+        if i + width > stop {
+            return false;                            // truncated
+        }
+        let mutable c: Int = 1;
+        while c < width {
+            let byte: Int = byte_at(text, i + c);
+            // The first continuation byte carries the leader's extra restriction; the rest are the
+            // plain `10xxxxxx`.
+            let mutable least: Int = 128;
+            let mutable most: Int = 191;
+            if c == 1 {
+                least = low;
+                most = high;
+            }
+            if byte < least || byte > most {
+                return false;
+            }
+            c += 1;
+        }
+        i += width;
+    }
+    return true;
+}

@@ -275,6 +275,13 @@ diagnostics.
 So: **A** compiler leverage → **B** urgent bugs → **C** the rest of the bar → **D** the library floor →
 **E** security → **F** papercuts → **G** post-1.0 → **H** the release gate.
 
+**One correction to this section's own premise, earned in v0.0.250.** A5 was listed as a `M` compiler
+fix and turned out to need **no compiler change at all** — its four functions are library code over
+`byte_at` and `bit_and`, and both compilers accepted them unchanged on the first try. So §A is not
+"compiler work"; it is "work that unblocks a lot", and at least one row was in the wrong section.
+**Measure a row before scheduling it** has now retired three: A1 (`c_bytes_at`, already shipped), `==`
+on records (already working), and A5 (not a compiler item at all).
+
 **Why A before D, concretely.** If the ~120 library items are written before A2 (`const`), A3 (generic
 `Option`) and A5 (`.chars()`), then `lib/math.bx`, `array_pop` and `string_reverse` get built *around*
 those limits and rebuilt afterwards. A-first means each is written once. And two B items already depend
