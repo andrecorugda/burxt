@@ -402,6 +402,42 @@ when asked rather than on every signature forever.
 9. `docs/guide/04-memory.md` rewritten in the same commit. The current page teaches a chore that no
    longer exists.
 
+## 9b. Decision 3 — ALL-OR-NOTHING PER BLOCK (settled v0.0.272, before building)
+
+**A bump allocator is LIFO and destination propagation is not.** That is the one genuinely hard fact
+in slice 3, and it is the allocator's shape rather than missing code. "Allocate this value into the
+ENCLOSING block" means placing it *below* the current block's mark while that block is still
+allocating *above* it. The instant one value in a block escapes outward, `store next, mark` frees it
+along with everything else.
+
+Three ways out. Naming the choice before building it, per the §A7d precedent:
+
+1. **ALL-OR-NOTHING PER BLOCK — chosen.** A block releases only when the analysis proves that
+   *nothing allocated inside it escapes*. Sound, needs **no allocator change**, and a block that
+   fails the proof simply does not release — which is today's behaviour, and therefore what makes
+   acceptance item 3 (*every existing `tests/pass` program compiles unchanged*) reachable at all.
+   It still delivers §3's headline, because the common case is a loop body building a String that
+   nobody keeps.
+2. Two cursors, or a promotion arena. Changes `burxt.alloc`'s signature and edges toward the runtime
+   bookkeeping §10 forbids.
+3. Copy-down on block exit. Breaks every pointer already handed out. No.
+
+**Why this is now buildable when it was not in August.** The proof obligation in (1) is exactly the
+escape analysis that B20–B37 built: *does any value allocated in this block reach a binding declared
+outside it* — through assignment, growth, a field, an element, a `return`, a `mutable` parameter, a
+`dynamic`, a pattern binding, a field read, or a relay. Slice 3 does not need a new analysis. **It
+needs the analysis that now exists, asked once per block instead of once per assignment.**
+
+That is also why closing that family first was not a detour: without it, per-block release would have
+freed memory that thirteen separate routes could still reach, and each one is a use-after-free the
+suite could not see.
+
+**What stage-0 needs that stage-1 does not.** Stage-1's taint lives on the `Binding` record, which
+already carries `depth`, and `check_block_nodes` already pops by depth — block ownership is a field
+read. Stage-0's is two flat `HashSet<String>` cleared wholesale, so it must become depth-aware before
+nesting can be allowed at all. **M14 §8 has this backwards**: it calls stage-1 "the hard half" on the
+strength of span-named bindings, and spans identify *names* while slice 3 places *allocations*.
+
 ## 10. What this must NOT do
 
 - **NO garbage collector, no reference counting, no runtime.** The guarantee after M14 is identical
