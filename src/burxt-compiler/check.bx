@@ -5900,6 +5900,696 @@ function (mutable self: Unit) check_return_storage(src: String) -> Int {
     return self.problems;
 }
 
+// ================================================================================================
+// A12 / M14 slice 3 — per-block release
+// ================================================================================================
+//
+// One question, asked once per block instead of once per assignment:
+//
+//     does anything allocated inside this block reach a binding declared outside it?
+//
+// If the answer is no, the block's node is marked in `block_release` and `emit_block` takes a bump
+// mark at the opening brace and puts the cursor back at the closing one. If the answer is yes — or
+// if this pass does not RECOGNISE the construct well enough to answer — the block is left exactly
+// as it was, which is the behaviour before A12 existed. That asymmetry is the whole safety
+// argument: a wrong guess costs memory, never correctness (spec/M14-IMPLICIT-REGIONS.md §10, "no
+// guessing inward"), and it is why every unhandled arm below taints rather than falling through.
+//
+// ALL-OR-NOTHING PER BLOCK, per §9b Decision 3. A bump allocator is LIFO, so there is no way to
+// place one value below the current mark while the block keeps allocating above it; the moment one
+// value escapes, restoring the cursor would free it along with everything else. So a block that
+// fails the proof does not release at all.
+//
+// This is a POST-pass over the already-checked bodies, and deliberately not a set of lines added to
+// the checking arms. **It cannot complain.** Nothing here calls `complain_at`, nothing here reads
+// `self.problems`, and it runs after every body is checked — so acceptance item 3 (*every existing
+// `tests/pass` program compiles unchanged*) is true by construction rather than by testing, and the
+// tests then confirm it. That is the shape stage-0 chose two versions ago, mirrored here for the
+// same reason it chose it: an explicit `region` inside an implicitly-releasing block is not
+// "nesting" as far as the checker is concerned, so the rule that refuses nested regions needed no
+// change in either compiler.
+//
+// **The proof obligation is not a new analysis.** B20–B45 built it — does a value allocated here
+// reach a binding declared outside, by assignment, growth, a field, an element, `return`, a
+// `mutable` parameter, a `dynamic`, a pattern binding, a field read, or a relay — and `expr_allocates`
+// is where it is asked. This pass asks that same function, with `placing` set so a bare name reads
+// this pass's scope instead of the checker's; see the arm in parser.bx.
+
+// How deep the walk is, as an index into `rel_frames`. The innermost open block.
+function (self: Unit) rel_depth() -> Int {
+    return len(self.rel_frames) - 1;
+}
+
+// Mark every block INSIDE `owner` as unable to release. An allocation that lands in storage owned
+// by block *k* has to survive until *k* ends, so every block nested in it must leave the cursor
+// alone. -1 — the caller's storage, or a `return` — taints the whole function.
+function (mutable self: Unit) rel_taint(owner: Int) -> Int {
+    let mutable from: Int = 0;
+    if owner >= 0 {
+        from = owner + 1;
+    }
+    let mutable i: Int = from;
+    while i < len(self.rel_frames) {
+        let was: ReleaseFrame = self.rel_frames[i];
+        self.rel_frames[i] = ReleaseFrame { leaks: 1, allocates: was.allocates, base: was.base };
+        i += 1;
+    }
+    return 1;
+}
+
+// Something was built. Every open frame at once, which is why `rel_close` needs no propagation
+// step: an ancestor already knows about anything its children built.
+function (mutable self: Unit) rel_mark_allocates() -> Int {
+    let mutable i: Int = 0;
+    while i < len(self.rel_frames) {
+        let was: ReleaseFrame = self.rel_frames[i];
+        self.rel_frames[i] = ReleaseFrame { leaks: was.leaks, allocates: 1, base: was.base };
+        i += 1;
+    }
+    return 1;
+}
+
+function (mutable self: Unit) rel_declare(start: Int, length: Int, owner: Int,
+                                          allocated: Int) -> Int {
+    push(self.rel_names, OwnedName { start: start, length: length, owner: owner,
+                              allocated: allocated });
+    return 1;
+}
+
+// The innermost name with this span, or -1. Backwards, so an inner block's name wins — Burxt does
+// not shadow, so in practice there is at most one, and searching from the top is what makes that a
+// property of the search rather than a thing to rely on.
+function (self: Unit) rel_find(src: String, start: Int, length: Int) -> Int {
+    let mutable i: Int = len(self.rel_names);
+    while i > 0 {
+        i -= 1;
+        let known: OwnedName = self.rel_names[i];
+        if spans_equal(src, known.start, known.length, start, length) {
+            return i;
+        }
+    }
+    return 0 - 1;
+}
+
+// Whose storage does this name hold? -1 for a name this pass never declared — which means a
+// parameter, or something it did not recognise — and that is the answer that permits nothing.
+//
+// A `const` is the one exception, and it is what makes the two compilers agree rather than a
+// relaxation of anything. **Stage-0's release pass never meets a const as a name**: `check_expr`
+// replaces the `Var` with the folded literal, so by the time its `place_owner` runs the const is a
+// `StrLit`. Stage-1 keeps the name and emits the literal at the use, so without this line a const
+// would read as a name from outside the function — and one later store into a binding built from
+// it would stop the whole body releasing, on a value that lives in `.rodata` and can neither be
+// released nor alias anything that can.
+function (self: Unit) rel_owner_of(src: String, start: Int, length: Int) -> Int {
+    let found: Int = self.rel_find(src, start, length);
+    if found >= 0 {
+        return self.rel_names[found].owner;
+    }
+    if self.find_const(src, start, length) >= 0 {
+        return self.rel_depth();
+    }
+    return 0 - 1;
+}
+
+// What `expr_allocates` reads for a bare name while this pass runs.
+function (self: Unit) rel_allocated(src: String, start: Int, length: Int) -> Bool {
+    let found: Int = self.rel_find(src, start, length);
+    if found < 0 {
+        return false;
+    }
+    return self.rel_names[found].allocated == 1;
+}
+
+function (mutable self: Unit) rel_mark_allocated(src: String, start: Int, length: Int) -> Int {
+    let found: Int = self.rel_find(src, start, length);
+    if found < 0 {
+        return 0;
+    }
+    let was: OwnedName = self.rel_names[found];
+    self.rel_names[found] = OwnedName { start: was.start, length: was.length, owner: was.owner,
+                                 allocated: 1 };
+    return 1;
+}
+
+// The shorter of two lifetimes, with -1 (outside the function) the shortest of all from this pass's
+// point of view — it is the one that permits nothing.
+function rel_shorter(a: Int, b: Int) -> Int {
+    if a < 0 || b < 0 {
+        return 0 - 1;
+    }
+    if a < b {
+        return a;
+    }
+    return b;
+}
+
+// Whose storage could this expression be pointing INTO? The current block, unless it mentions a
+// name that belongs further out — in which case it may well be an alias of that name's buffer, and
+// growing it grows theirs.
+function (mutable self: Unit) rel_place_owner(src: String, node: Int) -> Int {
+    return self.rel_owner_in(src, node, self.rel_depth());
+}
+
+// Every name this expression reads, folded into the shortest lifetime among them. Used only to
+// place storage conservatively, so over-collecting costs a release opportunity and never
+// correctness — and the final arm, which answers -1 for a node kind this walk does not know, is
+// that principle written down: an unrecognised expression is assumed to reach outside.
+function (mutable self: Unit) rel_owner_in(src: String, node: Int, acc: Int) -> Int {
+    if node < 0 || acc < 0 {
+        return acc;
+    }
+    let n: Node = self.nodes[node];
+    if n.kind == 1 || n.kind == 2 || n.kind == 3 || n.kind == 4 || n.kind == 21 {
+        return acc;                                  // a literal, or the value being returned
+    }
+    if n.kind == 5 {                                 // a name
+        let named: Token = self.tokens[n.token];
+        return rel_shorter(acc, self.rel_owner_of(src, named.start, named.length));
+    }
+    if n.kind == 6 || n.kind == 7 || n.kind == 11 || n.kind == 22 {
+        return self.rel_owner_in(src, n.a, acc);     // -e, !e, e.field, e?
+    }
+    if n.kind == 8 || n.kind == 9 || n.kind == 10 || n.kind == 12 {
+        let left: Int = self.rel_owner_in(src, n.a, acc);
+        return self.rel_owner_in(src, n.b, left);
+    }
+    if n.kind == 13 {                                // a call: its arguments
+        return self.rel_owner_in_list(src, n.a, acc);
+    }
+    if n.kind == 14 {                                // a method call: the receiver and the arguments
+        let base: Int = self.rel_owner_in(src, n.a, acc);
+        return self.rel_owner_in_list(src, n.b, base);
+    }
+    if n.kind == 17 || n.kind == 18 {                // an array literal, an interpolated String
+        let mutable folded: Int = acc;
+        let mutable i: Int = 0;
+        while i < n.b {
+            folded = self.rel_owner_in(src, self.children[n.a + i], folded);
+            i += 1;
+        }
+        return folded;
+    }
+    // A class literal. Its children are field PAIRS — kind 18 with the value in `a` and `b` at zero
+    // — not the values themselves, which is one level deeper than an array literal's and the same
+    // trap `expr_allocates` records: reading the pair as if it were the value walks nothing.
+    if n.kind == 19 {
+        let mutable folded: Int = acc;
+        let mutable i: Int = 0;
+        while i < n.b {
+            let pair: Node = self.nodes[self.children[n.a + i]];
+            folded = self.rel_owner_in(src, pair.a, folded);
+            i += 1;
+        }
+        return folded;
+    }
+    return 0 - 1;
+}
+
+function (mutable self: Unit) rel_owner_in_list(src: String, list_node: Int, acc: Int) -> Int {
+    if list_node < 0 {
+        return acc;
+    }
+    let list: Node = self.nodes[list_node];
+    let mutable folded: Int = acc;
+    let mutable i: Int = 0;
+    while i < list.b {
+        folded = self.rel_owner_in(src, self.children[list.a + i], folded);
+        i += 1;
+    }
+    return folded;
+}
+
+// A store THROUGH `place` — the argument of a `push`, a `mutable` parameter, a mutating receiver.
+// Whoever owns that buffer keeps the growth, so the cursor cannot go back past it until they are
+// done; and the name now holds storage built here, so reading it later is reading region storage.
+function (mutable self: Unit) rel_written_through(src: String, place: Int) -> Int {
+    let owner: Int = self.rel_place_owner(src, place);
+    let tainted: Int = self.rel_taint(owner);
+    let root: Int = self.lvalue_root(place);
+    if root >= 0 {
+        let named: Token = self.tokens[self.nodes[root].token];
+        let marked: Int = self.rel_mark_allocated(src, named.start, named.length);
+    }
+    return 1;
+}
+
+// A store INTO `name`, reached however. If what is stored was built here, then whoever owns
+// `name`'s storage keeps it, and no block inside them may release.
+function (mutable self: Unit) rel_store(src: String, name_start: Int, name_length: Int,
+                                        value: Int) -> Int {
+    if !self.expr_allocates(src, value) {
+        return 0;
+    }
+    let owner: Int = self.rel_owner_of(src, name_start, name_length);
+    let tainted: Int = self.rel_taint(owner);
+    return self.rel_mark_allocated(src, name_start, name_length);
+}
+
+// Walk an expression for the ways it can hand storage to somebody who outlives this block, and
+// class what it builds.
+function (mutable self: Unit) rel_scan(src: String, node: Int) -> Int {
+    if node < 0 {
+        return 0;
+    }
+    let n: Node = self.nodes[node];
+    if self.expr_allocates(src, node) {
+        let built: Int = self.rel_mark_allocates();
+    }
+    if n.kind == 13 {
+        return self.rel_scan_call(src, node, n);
+    }
+    if n.kind == 14 {
+        return self.rel_scan_method(src, node, n);
+    }
+    // `?` leaves the function from the middle of a block, carrying an error value the callee built
+    // — which means built HERE, above this block's mark. Releasing on the way out would hand back
+    // freed bytes.
+    if n.kind == 22 {
+        let leaves: Int = self.rel_taint(0 - 1);
+        return self.rel_scan(src, n.a);
+    }
+    if n.kind == 1 || n.kind == 2 || n.kind == 3 || n.kind == 4 || n.kind == 5 || n.kind == 21 {
+        return 1;                                    // a literal, a name, the returned value
+    }
+    if n.kind == 6 || n.kind == 7 || n.kind == 11 {
+        return self.rel_scan(src, n.a);
+    }
+    if n.kind == 8 || n.kind == 9 || n.kind == 10 || n.kind == 12 {
+        let left: Int = self.rel_scan(src, n.a);
+        return self.rel_scan(src, n.b);
+    }
+    if n.kind == 17 || n.kind == 18 {
+        let mutable i: Int = 0;
+        while i < n.b {
+            let walked: Int = self.rel_scan(src, self.children[n.a + i]);
+            i += 1;
+        }
+        return 1;
+    }
+    if n.kind == 19 {
+        let mutable i: Int = 0;
+        while i < n.b {
+            let pair: Node = self.nodes[self.children[n.a + i]];
+            let walked: Int = self.rel_scan(src, pair.a);
+            i += 1;
+        }
+        return 1;
+    }
+    // A node kind this pass has never met. Refuse to guess: taint the function, and every block in
+    // it stops releasing. §10's direction, and it is what makes adding an expression kind safe —
+    // the new kind costs memory until someone teaches this walk about it, rather than silently
+    // inheriting "reaches nobody".
+    return self.rel_taint(0 - 1);
+}
+
+// A call. Three things can carry storage outward through one: `push` growing its first argument,
+// a `mutable` parameter the callee writes into, and the C boundary, where nothing can be proven.
+function (mutable self: Unit) rel_scan_call(src: String, node: Int, n: Node) -> Int {
+    let name: Token = self.tokens[n.token];
+    let list: Node = self.nodes[n.a];
+    // `push` grows the buffer behind its first argument. Stage-0 has this as its own expression
+    // kind; here it is a builtin call, and it is the one builtin that writes through an argument.
+    if span_equal(src, name.start, name.length, "push") && list.b == 2 {
+        let wrote: Int = self.rel_written_through(src, self.children[list.a]);
+        let built: Int = self.rel_mark_allocates();
+        return self.rel_scan_arguments(src, n.a);
+    }
+    let found: Int = self.find_function(src, name.start, name.length);
+    if found >= 0 {
+        // Across the C boundary nothing can be proven: the callee may keep the pointer we handed it
+        // for as long as it likes.
+        if flag_external(self.functions[found].flags) == 1 {
+            let opaque: Int = self.rel_taint(0 - 1);
+            return self.rel_scan_arguments(src, n.a);
+        }
+        let params: Node = self.nodes[self.functions[found].parameters];
+        let mutable i: Int = 0;
+        while i < list.b && i < params.b {
+            let param: Node = self.nodes[self.children[params.a + i]];
+            if param.b == 1 {                        // `b` is the `mutable` flag
+                let wrote: Int = self.rel_written_through(src, self.children[list.a + i]);
+            }
+            i += 1;
+        }
+        return self.rel_scan_arguments(src, n.a);
+    }
+    // A builtin other than `push` answers a value it computed and writes through nothing:
+    // `truncate` only shrinks, and the rest read. Anything else is a callee this pass cannot find,
+    // and an unfindable callee is assumed to write into everything it was given.
+    if builtin_arity(substring(src, name.start, name.length)) < 0 {
+        let unknown: Int = self.rel_taint(0 - 1);
+    }
+    return self.rel_scan_arguments(src, n.a);
+}
+
+// A method call, which is also how an enum variant is constructed and how a `dynamic` is reached.
+function (mutable self: Unit) rel_scan_method(src: String, node: Int, n: Node) -> Int {
+    let base: Node = self.nodes[n.a];
+    // `Enum.Variant(payload)` — the base is a type name rather than a value, so there is no
+    // receiver to write through. Told apart the way `expr_allocates` tells it apart.
+    if base.kind == 5 {
+        let base_name: Token = self.tokens[base.token];
+        let declared: Int = self.find_type(src, base_name.start, base_name.length);
+        if declared >= 0 && self.types[declared].kind == 83 {
+            return self.rel_scan_arguments(src, n.b);
+        }
+    }
+    let holder: Type = self.type_at(n.a);
+    // Behind a vtable, so no call site can see which implementation runs. The receiver is the only
+    // thing an interface signature can say `mutable` about that this pass can place, and the
+    // implementations may disagree about the rest — so the honest answer is the conservative one.
+    if holder.kind == 49 {
+        let opaque: Int = self.rel_taint(0 - 1);
+        let walked: Int = self.rel_scan(src, n.a);
+        return self.rel_scan_arguments(src, n.b);
+    }
+    let found: Int = self.find_method(src, holder, n.token);
+    if found < 0 {
+        let unknown: Int = self.rel_taint(0 - 1);
+        let walked: Int = self.rel_scan(src, n.a);
+        return self.rel_scan_arguments(src, n.b);
+    }
+    if self.methods[found].mutating == 1 {
+        let wrote: Int = self.rel_written_through(src, n.a);
+    }
+    let params: Node = self.nodes[self.methods[found].parameters];
+    let list: Node = self.nodes[n.b];
+    let mutable i: Int = 0;
+    while i < list.b && i < params.b {
+        let param: Node = self.nodes[self.children[params.a + i]];
+        if param.b == 1 {
+            let wrote: Int = self.rel_written_through(src, self.children[list.a + i]);
+        }
+        i += 1;
+    }
+    let walked: Int = self.rel_scan(src, n.a);
+    return self.rel_scan_arguments(src, n.b);
+}
+
+function (mutable self: Unit) rel_scan_arguments(src: String, list_node: Int) -> Int {
+    if list_node < 0 {
+        return 0;
+    }
+    let list: Node = self.nodes[list_node];
+    let mutable i: Int = 0;
+    while i < list.b {
+        let walked: Int = self.rel_scan(src, self.children[list.a + i]);
+        i += 1;
+    }
+    return 1;
+}
+
+// ---- the blocks ------------------------------------------------------------------------------
+
+function (mutable self: Unit) rel_open() -> Int {
+    push(self.rel_frames, ReleaseFrame { leaks: 0, allocates: 0, base: len(self.rel_names) });
+    return 1;
+}
+
+// The closing brace. Drops the names the block declared, and records the verdict on its node.
+//
+// `may_release` is 0 for the body of a `region` the programmer wrote, which already releases at
+// exactly this point — a second mark and a second store would do nothing — and for the top level,
+// which has nothing after it to release into and whose arena the process exit reclaims whole.
+function (mutable self: Unit) rel_close(block: Int, may_release: Int) -> Int {
+    let last: Int = len(self.rel_frames) - 1;
+    let frame: ReleaseFrame = self.rel_frames[last];
+    let popped: Int = truncate(self.rel_frames, last);
+    let dropped: Int = truncate(self.rel_names, frame.base);
+    if may_release == 1 && frame.allocates == 1 && frame.leaks == 0 {
+        return self.note_release(block);
+    }
+    return 0;
+}
+
+function (mutable self: Unit) note_release(block: Int) -> Int {
+    if block < 0 || block >= len(self.block_release) {
+        return 0;
+    }
+    self.block_release[block] = 1;
+    return 1;
+}
+
+// What `emit_block` asks. Out of range is 0, so a Unit that never ran the pass — the LSP's, the
+// schema tool's — emits exactly what it emitted before A12.
+function (self: Unit) block_releases(block: Int) -> Bool {
+    if block < 0 || block >= len(self.block_release) {
+        return false;
+    }
+    return self.block_release[block] == 1;
+}
+
+function (mutable self: Unit) rel_walk_block(src: String, block: Int) -> Int {
+    if block < 0 {
+        return 0;
+    }
+    let node: Node = self.nodes[block];
+    if node.kind != 16 {
+        return self.rel_stmt(src, block);
+    }
+    let mutable i: Int = 0;
+    while i < node.b {
+        let walked: Int = self.rel_stmt(src, self.children[node.a + i]);
+        i += 1;
+    }
+    return node.b;
+}
+
+// A nested block with no bindings of its own: an `if` arm, a `while` body, a `region` body.
+function (mutable self: Unit) rel_block(src: String, block: Int, may_release: Int) -> Int {
+    let opened: Int = self.rel_open();
+    let walked: Int = self.rel_walk_block(src, block);
+    return self.rel_close(block, may_release);
+}
+
+function (mutable self: Unit) rel_stmt(src: String, stmt: Int) -> Int {
+    if stmt < 0 {
+        return 0;
+    }
+    let here: Int = self.rel_depth();
+    let n: Node = self.nodes[stmt];
+
+    if n.kind == 60 {                                // let
+        let scanned: Int = self.rel_scan(src, n.b);
+        let owner: Int = self.rel_place_owner(src, n.b);
+        let mutable built: Int = 0;
+        if self.expr_allocates(src, n.b) {
+            built = 1;
+        }
+        let named: Token = self.tokens[n.token];
+        return self.rel_declare(named.start, named.length, owner, built);
+    }
+
+    if n.kind == 61 {                                // assignment
+        let scanned: Int = self.rel_scan(src, n.b);
+        let target: Node = self.nodes[n.a];
+        // The INDEX of `xs[i] = v` is an ordinary expression and may itself build something.
+        if target.kind != 5 {
+            let walked: Int = self.rel_scan(src, n.a);
+        }
+        let root: Int = self.lvalue_root(n.a);
+        if root < 0 {
+            // A write with no name behind it is not something this pass can place.
+            return self.rel_taint(0 - 1);
+        }
+        let named: Token = self.tokens[self.nodes[root].token];
+        // A whole-name assignment may make the name ALIAS something older than it is; a write
+        // through a field or an index does not rebind the name, so its owner stands.
+        if target.kind == 5 {
+            let found: Int = self.rel_find(src, named.start, named.length);
+            if found >= 0 {
+                let was: OwnedName = self.rel_names[found];
+                self.rel_names[found] = OwnedName { start: was.start, length: was.length,
+                                             owner: rel_shorter(was.owner,
+                                                        self.rel_place_owner(src, n.b)),
+                                             allocated: was.allocated };
+            }
+        }
+        return self.rel_store(src, named.start, named.length, n.b);
+    }
+
+    if n.kind == 62 {                                // print
+        // An interpolation ARGUMENT of a `print` is not joined — the pieces go out in order — so
+        // the pieces are scanned rather than the node, which would answer "this allocates" for a
+        // statement that allocates nothing. Stage-0's `PrintInterp` walks its parts the same way.
+        if n.a < 0 {
+            return 0;
+        }
+        let printed: Node = self.nodes[n.a];
+        if printed.kind == 18 {
+            let mutable i: Int = 0;
+            while i < printed.b {
+                let walked: Int = self.rel_scan(src, self.children[printed.a + i]);
+                i += 1;
+            }
+            return 1;
+        }
+        return self.rel_scan(src, n.a);
+    }
+
+    if n.kind == 63 {                                // return
+        let scanned: Int = self.rel_scan(src, n.a);
+        if self.expr_allocates(src, n.a) {
+            return self.rel_taint(0 - 1);            // whatever is handed back outlives every block
+        }
+        return 1;
+    }
+
+    // `musttail` requires the call to sit immediately before the `ret`, with nothing in between —
+    // and a release is something in between. So no block containing one may release.
+    if n.kind == 64 {                                // return tail
+        let scanned: Int = self.rel_scan(src, n.a);
+        return self.rel_taint(0 - 1);
+    }
+
+    if n.kind == 65 {                                // if
+        let scanned: Int = self.rel_scan(src, n.a);
+        let then_side: Int = self.rel_block(src, n.b, 1);
+        if n.c >= 0 {
+            let else_side: Int = self.rel_block(src, n.c, 1);
+        }
+        return 1;
+    }
+
+    if n.kind == 66 {                                // while
+        let scanned: Int = self.rel_scan(src, n.a);
+        return self.rel_block(src, n.b, 1);
+    }
+
+    if n.kind == 67 || n.kind == 68 {                // break, continue
+        return 1;
+    }
+
+    // A `region` the programmer wrote already releases at this exact point, so there is nothing for
+    // a second wrapper to do — but its body is still a block, and names declared in it belong to it.
+    if n.kind == 69 {
+        return self.rel_block(src, n.a, 0);
+    }
+
+    if n.kind == 70 {                                // an expression statement
+        return self.rel_scan(src, n.a);
+    }
+
+    if n.kind == 71 {                                // match
+        let scanned: Int = self.rel_scan(src, n.a);
+        // A payload name ALIASES the subject's cells — B27's rule — so it takes the subject's owner
+        // and the subject's taint, not this block's.
+        let owner: Int = self.rel_place_owner(src, n.a);
+        let mutable built: Int = 0;
+        if self.expr_allocates(src, n.a) {
+            built = 1;
+        }
+        let mutable i: Int = 0;
+        while i < n.c {
+            let arm: Node = self.nodes[self.children[n.b + i]];
+            let opened: Int = self.rel_open();
+            let mutable p: Int = 0;
+            while p < arm.c {
+                let bound: Token = self.tokens[self.nested_children[arm.b + p]];
+                let named: Int = self.rel_declare(bound.start, bound.length, owner, built);
+                p += 1;
+            }
+            let walked: Int = self.rel_walk_block(src, arm.a);
+            let closed: Int = self.rel_close(arm.a, 1);
+            i += 1;
+        }
+        return 1;
+    }
+
+    if n.kind == 72 {                                // for x in xs
+        let scanned: Int = self.rel_scan(src, n.a);
+        let owner: Int = self.rel_place_owner(src, n.a);
+        let mutable built: Int = 0;
+        if self.expr_allocates(src, n.a) {
+            built = 1;
+        }
+        let named: Token = self.tokens[n.token];
+        let opened: Int = self.rel_open();
+        let bound: Int = self.rel_declare(named.start, named.length, owner, built);
+        let walked: Int = self.rel_walk_block(src, n.b);
+        return self.rel_close(n.b, 1);
+    }
+
+    if n.kind == 74 {                                // for i in a..b
+        let start: Int = self.rel_scan(src, n.a);
+        let stop: Int = self.rel_scan(src, n.c);
+        let named: Token = self.tokens[n.token];
+        let opened: Int = self.rel_open();
+        // The counter is an Int copied into the binding's own slot, so it owns nothing and holds
+        // nothing — `here` rather than the subject's owner, because there is no subject.
+        let bound: Int = self.rel_declare(named.start, named.length, here, 0);
+        let walked: Int = self.rel_walk_block(src, n.b);
+        return self.rel_close(n.b, 1);
+    }
+
+    // `const` is an item, not a statement, and nothing else reaches here.
+    return 0;
+}
+
+// One body. `params` are the names that arrived from outside — their storage is the caller's, so
+// nothing this body does to them may be released here.
+function (mutable self: Unit) rel_body(src: String, index: Int) -> Int {
+    let item: Node = self.nodes[index];
+    let opened: Int = self.rel_open();
+    if item.kind == 81 && flag_associated(item.value) == 0 {
+        let word: Token = self.tokens[self.self_token(item.token)];
+        let receiver: Int = self.rel_declare(word.start, word.length, 0 - 1, 0);
+    }
+    let params: Node = self.nodes[item.a];
+    let mutable p: Int = 0;
+    while p < params.b {
+        let param: Node = self.nodes[self.children[params.a + p]];
+        let name: Token = self.tokens[param.token];
+        let declared: Int = self.rel_declare(name.start, name.length, 0 - 1, 0);
+        p += 1;
+    }
+    let walked: Int = self.rel_walk_block(src, item.b);
+    return self.rel_close(item.b, 1);
+}
+
+// Every body, and then the top level. Runs LAST, once every table this reads is final: the
+// `allocates` flags and the relay and growth sets are filled by `infer_allocates`, and asking any
+// earlier would ask half the program.
+function (mutable self: Unit) place_releases(src: String) -> Int {
+    // One slot per node, filled once rather than grown at each answer.
+    let dropped: Int = truncate(self.block_release, 0);
+    let mutable n: Int = 0;
+    while n < len(self.nodes) {
+        let filled: Int = push(self.block_release, 0);
+        n += 1;
+    }
+    let cleared: Int = truncate(self.rel_frames, 0);
+    let forgotten: Int = truncate(self.rel_names, 0);
+    self.placing = 1;
+    // The top level is a block for scoping and NOT for release: there is nothing after it to
+    // release into, and the process exit reclaims the arena whole. Its inner blocks are, which is
+    // where §3's loop lives.
+    let opened: Int = self.rel_open();
+    let mutable i: Int = 0;
+    while i < len(self.items) {
+        let index: Int = self.items[i];
+        let item: Node = self.nodes[index];
+        if item.kind == 80 || item.kind == 81 {
+            let placed: Int = self.rel_body(src, index);
+        }
+        if item.kind == 85 {                         // an implementation block's methods
+            let mutable k: Int = 0;
+            while k < item.b {
+                let placed: Int = self.rel_body(src, self.children[item.a + k]);
+                k += 1;
+            }
+        }
+        if (item.kind >= 60 && item.kind <= 72) || item.kind == 74 {
+            let walked: Int = self.rel_stmt(src, index);
+        }
+        i += 1;
+    }
+    let closed: Int = self.rel_close(0 - 1, 0);
+    self.placing = 0;
+    return 1;
+}
+
 // Work out which functions and methods allocate, so `allocates` need not be written.
 //
 // A least fixpoint, and it iterates rather than asking once because the answer travels along
@@ -5956,6 +6646,12 @@ function (mutable self: Unit) check(src: String) -> Int {
     // problem is the one a reader is shown.
     let returns: Int = self.check_return_storage(src);
     let checked: Int = self.check_bodies(src);
+    // A12, and it is LAST for two reasons. It reads what the inference settled, so anything earlier
+    // would ask half the program; and it decides only WHERE storage is released, so a program with
+    // an error has nothing for it to decide — the emitter never runs.
+    if self.problems == 0 {
+        let placed: Int = self.place_releases(src);
+    }
     return self.problems;
 }
 

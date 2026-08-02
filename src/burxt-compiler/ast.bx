@@ -194,6 +194,32 @@ class Type {
 class Binding { start: Int, length: Int, bound_type: Type, writable: Int, depth: Int,
                 in_region: Int, holds_region: Int }
 
+// ---- A12 / M14 slice 3: the two records the per-block release pass keeps -----------------------
+//
+// One `{ }` while the pass is inside it. Three facts and no node index, because the pass pushes and
+// pops these in step with the blocks it walks, so the block a frame belongs to is the one whose
+// walk pushed it — the same relationship `check_block_nodes` has with `self.depth`.
+//
+//   leaks      something allocated inside this block is still reachable after it ends
+//   allocates  something was built in here at all — a block that builds nothing has nothing to
+//              release, and wrapping it would be two stores for no reason
+//   base       where `rel_names` stood when this block opened, so the closing brace drops exactly
+//              the names the block declared
+class ReleaseFrame { leaks: Int, allocates: Int, base: Int }
+
+// One name in scope while the pass walks, as a SPAN like every other name in this compiler.
+//
+// `owner` is which block's lifetime the STORAGE behind the name belongs to, as an index into
+// `rel_frames`, or -1 for "outside this function" — a parameter, or anything reached through one.
+// That is NOT the same as where the name was declared, and the difference is a use-after-free:
+// copying a container copies its header and shares its buffer, so `let mine: [Int] = theirs;`
+// declares a name here that grows storage owned there.
+//
+// `allocated` is whether the name holds storage built in this function, as opposed to a literal in
+// `.rodata`, a scalar, or the caller's. A PARAMETER never does — its storage is the caller's, and
+// the caller outlives the call, which is why returning one is safe and must keep being.
+class OwnedName { start: Int, length: Int, owner: Int, allocated: Int }
+
 // A folded `const`: a name for a literal, in scope everywhere in the program.
 //
 // Separate from `Binding` and not a Binding with `depth: 0`, which was the first attempt
@@ -554,6 +580,26 @@ class Unit {
     relay_parameters: [ParameterGrowth],
     relay_self: [Int],
     relay_method_parameters: [ParameterGrowth],
+    // ---- A12 / M14 slice 3: WHERE the storage is released ------------------------------------
+    //
+    // One slot per NODE, like `typed`: 1 when the escape analysis proved that nothing allocated
+    // inside that block reaches a binding declared outside it, so the emitter may take a bump mark
+    // at the opening brace and put the cursor back at the closing one. 0 — the default, and what
+    // every block got before A12 — means the block does not release, which is the behaviour that
+    // makes every existing program keep compiling.
+    //
+    // Indexed by node rather than held as a list of block indices because `emit_block` asks the
+    // question once per block and a list would make that a scan. `typed` chose the same shape for
+    // the same reason, and its comment says so.
+    block_release: [Int],
+    // 1 while the release pass is running, and only then. `expr_allocates` reads a bare name's
+    // taint off `Binding.holds_region`, which is a fact about the CHECKER's binding stack — long
+    // truncated by the time this pass runs. While this is set the same arm reads `rel_names`
+    // instead, so the two halves of "does this expression build something" cannot drift: there is
+    // one function answering it, asked in two contexts.
+    placing: Int,
+    rel_frames: [ReleaseFrame],
+    rel_names: [OwnedName],
     // The backend's state: the IR text, the constants it referred to, a counter for
     // registers and one for labels, the locals' allocas, and the enclosing loops'
     // labels so `break` and `continue` know where to jump.
@@ -578,21 +624,30 @@ class Unit {
     declared: [String],
     loop_condition_labels: [String],
     loop_end_labels: [String],
-    // ---- unwinding a `region` on an EARLY exit -------------------------------------------
+    // ---- unwinding an open release on an EARLY exit ---------------------------------------
     //
-    // The saved bump mark of the region being emitted, as its register name, or "" outside one.
-    // A `region` block is a mark and a store, so reaching the closing brace releases it — but
-    // `return`, `break`, `continue` and `?` all branch PAST that store, and the cursor then keeps
-    // climbing for the life of the process. Measured before this existed: a `continue` out of a
-    // region in a 200,000-iteration loop cost 13,904 KB against stage-0's 1,408 KB, same answer.
+    // The saved bump marks of every block currently being emitted that releases, innermost last,
+    // as their register names. A release is a mark and a store, so reaching the closing brace
+    // releases it — but `return`, `break`, `continue` and `?` all branch PAST that store, and the
+    // cursor then keeps climbing for the life of the process. Measured before this existed: a
+    // `continue` out of a region in a 200,000-iteration loop cost 13,904 KB against stage-0's
+    // 1,408 KB, same answer.
     //
-    // `region_loop_depth` is how many loops were already open when the region opened, and it is
-    // what tells the two `break` cases apart. A jump out of a loop that ENCLOSES the region leaves
-    // the region and must release it; a jump out of a loop INSIDE the region stays put and must
-    // not, or the region would be released while its own body is still reading it. Stage-0 stores
-    // the same fact per loop in `loop_stack`; one Int is enough here because regions do not nest.
-    region_mark: String,
-    region_loop_depth: Int,
+    // **A STACK since A12, and it was one slot before.** The old comment said "regions do not nest,
+    // so the saved value is always empty in practice" — true of the `region` keyword, which the
+    // checker refuses to nest, and false of per-block release, which puts a mark on every block
+    // that qualifies. An explicit `region` inside a releasing loop body is two marks live at once.
+    //
+    // Unwinding reads it the way a bump allocator wants: the cursor goes back to the OUTERMOST mark
+    // being left, one store whatever the depth, because the allocator is LIFO and that mark is
+    // below all the others. Stage-0's `region_marks` and `close_regions_below`, same shape.
+    region_marks: [String],
+    // Parallel to `loop_end_labels`: how deep `region_marks` stood when each loop began, which is
+    // what tells the two `break` cases apart. A jump out of a loop that ENCLOSES a release leaves
+    // it and must release it; a jump out of a loop written INSIDE it stays put and must not, or the
+    // storage would be handed back while the block's own body is still reading it. Stage-0 keeps
+    // the same number per loop in `loop_stack`.
+    loop_region_depths: [Int],
     in_function: Int,
     // Where the program's tokens end, which is not where the token ARRAY ends: an
     // interpolation fragment appends its own, and the parser must not walk into them.

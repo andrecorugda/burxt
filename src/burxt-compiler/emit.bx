@@ -2104,18 +2104,26 @@ function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String)
     return "0";
 }
 
-// Put the bump cursor back, if a `region` is open. Leaving one by `return`, `break`, `continue`
-// or `?` releases it exactly as reaching its closing brace would — and the store at the brace is
-// unreachable from an early exit, so without this the region is simply never released.
+// Put the bump cursor back, if anything releasing is open. Leaving it by `return`, `break`,
+// `continue` or `?` releases it exactly as reaching its closing brace would — and the store at the
+// brace is unreachable from an early exit, so without this it is simply never released.
 //
-// Stage-0's `close_open_region`, and it is one store because that is the whole of a region: the
-// closing brace's own code is the same line. There is nothing to release when no region is open,
-// which is what the empty mark means, and the caller is spared the test.
+// `return` and `?` leave the whole function, so they go back to the OUTERMOST mark this body took:
+// one store whatever the nesting depth, because the allocator is LIFO and that mark is below all
+// the others. Stage-0's `close_open_region`, which is its `close_regions_below(0)` for the same
+// reason.
 function (mutable self: Unit) close_open_region() -> Int {
-    if self.region_mark == "" {
+    return self.close_regions_below(0);
+}
+
+// Put the cursor back to where it stood when the block at `depth` opened, if anything at or beyond
+// that depth is open. What `break` and `continue` need: they leave the blocks opened INSIDE the
+// loop and stay inside the ones that enclose it.
+function (mutable self: Unit) close_regions_below(depth: Int) -> Int {
+    if depth < 0 || depth >= len(self.region_marks) {
         return 0;
     }
-    return self.write_body("  store i64 " + self.region_mark + ", ptr @burxt.bump\n");
+    return self.write_body("  store i64 " + self.region_marks[depth] + ", ptr @burxt.bump\n");
 }
 
 function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int {
@@ -2273,9 +2281,14 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int {
         // A stack, because `break` inside a nested loop leaves the INNER one.
         push(self.loop_condition_labels, cond_label);
         push(self.loop_end_labels, end_label);
+        // How deep the release marks stood when this loop began, so `break` and `continue` can
+        // tell "opened inside the loop" from "encloses the loop". Pushed BEFORE the body, whose
+        // own block may take a mark of its own.
+        push(self.loop_region_depths, len(self.region_marks));
         let body: Int = self.emit_block(src, n.b);
         let dropped_cond: Int = truncate(self.loop_condition_labels, len(self.loop_condition_labels) - 1);
         let dropped_end: Int = truncate(self.loop_end_labels, len(self.loop_end_labels) - 1);
+        let dropped_marks: Int = truncate(self.loop_region_depths, len(self.loop_region_depths) - 1);
         return self.write_body("  br label %" + cond_label + "\n" + end_label + ":\n");
     }
 
@@ -2334,9 +2347,11 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int {
 
         push(self.loop_condition_labels, cond_label);
         push(self.loop_end_labels, end_label);
+        push(self.loop_region_depths, len(self.region_marks));
         let body: Int = self.emit_block(src, n.b);
         let dropped_cond: Int = truncate(self.loop_condition_labels, len(self.loop_condition_labels) - 1);
         let dropped_end: Int = truncate(self.loop_end_labels, len(self.loop_end_labels) - 1);
+        let dropped_marks: Int = truncate(self.loop_region_depths, len(self.loop_region_depths) - 1);
         return self.write_body("  br label %" + cond_label + "\n" + end_label + ":\n");
     }
 
@@ -2399,9 +2414,11 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int {
 
         push(self.loop_condition_labels, range_cond);
         push(self.loop_end_labels, range_end);
+        push(self.loop_region_depths, len(self.region_marks));
         let walked: Int = self.emit_block(src, n.b);
         let popped_cond: Int = truncate(self.loop_condition_labels, len(self.loop_condition_labels) - 1);
         let popped_end: Int = truncate(self.loop_end_labels, len(self.loop_end_labels) - 1);
+        let popped_marks: Int = truncate(self.loop_region_depths, len(self.loop_region_depths) - 1);
         return self.write_body("  br label %" + range_cond + "\n" + range_end + ":\n");
     }
 
@@ -2414,16 +2431,17 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int {
         if n.kind == 68 {
             target = self.loop_condition_labels[depth - 1];
         }
-        // A jump out of the loop that ENCLOSES the open region leaves the region, so it releases
-        // it. A jump out of a loop written INSIDE the region stays within it and must not — and
-        // releasing there would be worse than the leak it fixes, because the region's own body
-        // goes on reading storage the store just handed back. `region_loop_depth` is how many
-        // loops were open when the region opened, so the two are told apart rather than guessed:
-        // the innermost loop is the region's own enclosing one exactly when the count has not
-        // grown since. Stage-0 keeps the same fact per loop entry in `loop_stack`.
-        if depth <= self.region_loop_depth {
-            let released: Int = self.close_open_region();
-        }
+        // Anything opened INSIDE the loop — a `region`, or the loop body itself once A12 proved it
+        // keeps nothing — has to be released by either jump, exactly as `return` does. Anything
+        // that ENCLOSES the loop must not be touched, because the jump stays inside it, and
+        // releasing there would be worse than the leak it fixes: the enclosing body goes on reading
+        // storage the store just handed back. The loop records how deep the marks stood when it
+        // began, so the two cases are told apart rather than guessed.
+        //
+        // Releasing the body's own block here is what makes `continue` in a loop that builds and
+        // discards constant-memory rather than merely usually so. Stage-0 keeps the same number per
+        // loop entry in `loop_stack`.
+        let released: Int = self.close_regions_below(self.loop_region_depths[depth - 1]);
         let jumped: Int = self.write_body("  br label %" + target + "\n");
         // The block after an unconditional branch needs a label, and nothing reaches it.
         let dead: String = self.fresh_label("after");
@@ -2431,21 +2449,12 @@ function (mutable self: Unit) emit_stmt(src: String, node: Int) -> Int {
     }
 
     if n.kind == 69 {                                // region
-        // The mark IS the region: closing it releases every allocation at once.
-        let mark: String = self.fresh();
-        let saved: Int = self.write_body("  " + mark + " = load i64, ptr @burxt.bump\n");
-        // Published for the early exits — `return`, `break`, `continue`, `?` — every one of which
-        // branches past the store below. Saved and restored rather than set, so nothing leaks out
-        // of the block; regions do not nest, so the saved value is always "" in practice and the
-        // save is there to make that a property of the code rather than of the checker.
-        let outer_mark: String = self.region_mark;
-        let outer_loops: Int = self.region_loop_depth;
-        self.region_mark = mark;
-        self.region_loop_depth = len(self.loop_end_labels);
-        let body: Int = self.emit_block(src, n.a);
-        self.region_mark = outer_mark;
-        self.region_loop_depth = outer_loops;
-        return self.write_body("  store i64 " + mark + ", ptr @burxt.bump\n");
+        // A `region` and an A12 release are ONE mechanism, so this is one call: mark, body, store.
+        // `region` is the word the programmer wrote and a release is a block the escape analysis
+        // proved keeps nothing — neither knows anything the other does not, which is the point.
+        // Per-block release adds no runtime machinery; it puts the existing mark-and-restore
+        // somewhere else.
+        return self.emit_released_block(src, n.a);
     }
 
     if n.kind == 71 {                                // match
@@ -2640,10 +2649,42 @@ function (mutable self: Unit) bind_payload(src: String, holder: Type, arm: Node,
     return 0;
 }
 
+// Every `{ }` in the language passes through here, which is why A12 needed one place and not
+// twelve: the mark goes on at the opening brace and the store at the closing one, for a block the
+// checker's release pass proved keeps nothing (`block_releases`). A block it did not prove is
+// emitted exactly as it was before A12 — that asymmetry is the safety argument, and it is why this
+// is a test on a flag rather than a rule with an opinion.
 function (mutable self: Unit) emit_block(src: String, block: Int) -> Int {
     if block < 0 {
         return 0;
     }
+    let n: Node = self.nodes[block];
+    if n.kind != 16 {
+        return self.emit_stmt(src, block);
+    }
+    if self.block_releases(block) {
+        return self.emit_released_block(src, block);
+    }
+    return self.emit_block_body(src, block);
+}
+
+// Mark where the bump pointer stands, run the block, then put the cursor back — the whole block
+// released in O(1), with no per-object free, no refcount and no collector.
+//
+// The mark is published on `region_marks` for the early exits — `return`, `break`, `continue`, `?`
+// — every one of which branches past the store below. A stack, because per-block release nests:
+// an explicit `region` inside a releasing loop body is two marks live at once.
+function (mutable self: Unit) emit_released_block(src: String, block: Int) -> Int {
+    let mark: String = self.fresh();
+    let saved: Int = self.write_body("  " + mark + " = load i64, ptr @burxt.bump\n");
+    let depth: Int = len(self.region_marks);
+    push(self.region_marks, mark);
+    let body: Int = self.emit_block_body(src, block);
+    let popped: Int = truncate(self.region_marks, depth);
+    return self.write_body("  store i64 " + mark + ", ptr @burxt.bump\n");
+}
+
+function (mutable self: Unit) emit_block_body(src: String, block: Int) -> Int {
     let n: Node = self.nodes[block];
     if n.kind != 16 {
         return self.emit_stmt(src, block);
@@ -3534,6 +3575,11 @@ function (mutable self: Unit) emit_function(src: String, index: Int, suffix: Str
     let params: Node = self.nodes[item.a];
     let signature_node: Node = self.nodes[item.c];
     let base: Int = len(self.slots);
+    // A body's release marks are its own: a register name from the last function would name nothing
+    // in this one. Empty already unless a previous body ended by an exit this file does not know
+    // about, and stage-0 clears the same two for the same reason.
+    let no_marks: Int = truncate(self.region_marks, 0);
+    let no_depths: Int = truncate(self.loop_region_depths, 0);
     // Two questions, and they are not the same one. `qualified` asks whether the SYMBOL carries the
     // class's name — true for a method and for an associated function alike, because both are
     // `Account.something`. `is_method` asks whether a RECEIVER arrives, which an associated
@@ -3798,6 +3844,8 @@ function (mutable self: Unit) emit_module(src: String) -> Int {
     let opened: Int = self.open_function("define i32 @main(i32 %argc, ptr %argv) \{\nentry:\n");
     // The arguments are recorded once, where they arrive, so `argument(n)` is a load rather
     // than a parameter threaded through every function that might want it.
+    let clear_marks: Int = truncate(self.region_marks, 0);
+    let clear_depths: Int = truncate(self.loop_region_depths, 0);
     let widened: Int = self.write_body("  %argc64 = sext i32 %argc to i64\n");
     let kept: Int = self.write_body("  store i64 %argc64, ptr @burxt.argc\n");
     let kept_argv: Int = self.write_body("  store ptr %argv, ptr @burxt.argv\n");

@@ -1,7 +1,7 @@
 # Burxt — every block is a region (M14)
 
-> Status: **slices 1 and 2 DONE in both compilers. Slice 3 — per-block release — DONE in stage-0
-> (v0.0.272); stage-1 in progress.**
+> Status: **ALL THREE SLICES DONE IN BOTH COMPILERS.** Slice 3, per-block release — stage-0
+> v0.0.272, stage-1 v0.0.275.
 >
 > ### Slice 3, measured — acceptance criterion 5
 >
@@ -13,6 +13,11 @@
 > | value does **not** escape, no `region` | 5,280 KB | **1,408 KB** |
 > | the same loop with a hand-written `region each { }` | 1,408 KB | **1,408 KB**, unchanged |
 > | value **escapes** (`last = s`) | 5,280 KB | **5,280 KB — stays** |
+>
+> And stage-1, which starts from a higher baseline and lands the same shape: **7,744 → 1,408 KB**
+> non-escaping, 1,408 unchanged with an explicit `region`, and **7,744 — stays** when the value
+> escapes. Corpus 126 of 126, zero false positives, **zero divergence between the compilers**,
+> 167 of 167 `tests/pass` unchanged, fixpoint byte-identical.
 >
 > **An implementation that makes the third row bounded is not a better one; it is a dangling pointer
 > that passes the other two.** The criterion as originally written — *"bounded after, unbounded

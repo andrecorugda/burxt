@@ -1302,8 +1302,24 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
     // untouched and the ALLOCATION INFERENCE does not move — which matters, because this function
     // is what decides whether a function is `allocates`, and a name that suddenly counted as built
     // would re-classify functions that have nothing to do with regions.
+    //
+    // ---- A12: the same question, asked after the binding stack is gone -------------------------
+    //
+    // The per-block release pass runs when every body has been checked, so `self.bindings` no
+    // longer holds anything — but it asks this function about the same expressions, and a name is
+    // exactly where the answer stops being about syntax. So while `placing` is set the taint comes
+    // off `rel_names`, which is that pass's own scope, and every other arm is untouched.
+    //
+    // One function and two tables rather than two functions, and stage-0's own experience is the
+    // argument: its release pass is a SECOND `allocates` beside `expr_allocates`, and while it also
+    // carried its own copy of `may_be_region_storage` that copy answered "no" for a generic
+    // instantiation and `lib/json.bx` printed a truncated document. The copy is gone there for the
+    // reason this branch exists here — a second answer to one question is how the two drift apart.
     if n.kind == 5 {
         let named: Token = self.tokens[n.token];
+        if self.placing == 1 {
+            return self.rel_allocated(src, named.start, named.length);
+        }
         let found: Int = self.find_binding(src, named.start, named.length);
         if found < 0 {
             return false;
