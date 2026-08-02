@@ -2399,10 +2399,19 @@ fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
 /// harness, standing to this one exactly as stage-1 stands to stage-0: not a replacement,
 /// a cross-check, so a fixture cannot quietly mean two different things.
 ///
-/// It needs nothing new from the language. Burxt cannot list a directory — `opendir`
-/// returns a pointer and the memory model has nothing to say about who owns it — so the
-/// shell lists it and the answer comes back through a file. An honest limit, worked
-/// around in the open, and the first thing the standard library will hide.
+/// It needs nothing new from the language. This runner lists directories through the shell,
+/// with the answer coming back in a file.
+///
+/// **That used to be a limit and is not one any more, corrected v0.0.280.** The comment here
+/// said *"Burxt cannot list a directory — `opendir` returns a pointer and the memory model has
+/// nothing to say about who owns it"*, and it was true when written. **The pointer wall opened
+/// in v0.0.196**, and `lib/files.bx` calls `opendir` directly today — `file_is_directory` uses
+/// it rather than forking `test -d`, one syscall against one fork.
+///
+/// So the shell is still used here, and now by choice rather than by necessity: this runner
+/// deliberately depends on as little of `lib/` as possible, because a suite that fails when the
+/// library it is testing fails cannot tell you which one broke. The workaround outlived its
+/// reason by eighty-four versions, and was found by the agent that removed the reason.
 #[test]
 fn the_suite_also_runs_on_burxt() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
