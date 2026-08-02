@@ -1,0 +1,35 @@
+// Becoming an interface object must not launder region storage. Found during A9; OLDER than A9,
+// and it was a live use-after-free.
+//
+// **This program has no generics in it.** It was measured accepted on a pristine v0.0.276 —
+// printing `secret-value`, then garbage once the region's bytes were handed out again — while
+// `kept = b.get()` on the same method and `kept = b.s` on the same field were both REFUSED. The
+// only difference is the hop through the interface object.
+//
+// The taint died at the COERCION, not at the call. `let h: dynamic Holder = b;` asked
+// `expr_allocates` about a `DynCoerce`, that node had no arm, the `_` at the bottom of the match
+// answered `false`, and `h` was never put in `region_locals`. Every rule downstream then asked a
+// correctly implemented question about a value it had been told was safe — which is why the dyn
+// CALL arm looked right in review: it is right, and it was being fed a lie.
+//
+// An interface object BORROWS the storage of the value it refers to — the compiler says exactly
+// that when it insists the source be a variable — so it is region storage precisely when that
+// variable is. One arm, and it is B33's and B34's shape a third time.
+//
+// **What did not catch it, which is the part worth keeping.** Both compilers' suites, the
+// self-hosting fixpoint and the 133-program corpus were all green with this open. The corpus
+// scored 0 divergences because not one of its programs relays region storage out through an
+// interface object. A sweep that reports 100% has stopped being evidence; the probe is the check.
+interface Holder { function get(self) -> String }
+class Box { s: String }
+implement Holder for Box {
+    function (self) get() -> String { return self.s; }
+}
+
+let mutable kept: String = "";
+region r {
+    let b: Box = Box { s: "secret-" + "value" };
+    let h: dynamic Holder = b;
+    kept = h.get();
+}
+print(kept);

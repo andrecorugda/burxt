@@ -396,6 +396,21 @@ pub struct TypeChecker {
     /// rewritten to `dynamic Tax`. Separate from `interfaces`, which holds the signatures and is
     /// not populated until the declaration pass — by which time the rewrite is over.
     interface_names: HashSet<String>,
+    /// `interface Mapper<T> { ... }` — its parameters and its signature set, collected in the
+    /// same pass as `generic_records` and for the same reason: `expand` needs it, and `expand`
+    /// runs before the declaration pass. Roadmap A9.
+    ///
+    /// A generic interface is deliberately NOT in `interface_names`, so a bare `Mapper` is not
+    /// rewritten to `dynamic Mapper`. It has no signature set until a use says what `T` is, and
+    /// the message a reader wants for `x: Mapper` is that it takes an argument — not the
+    /// "unknown interface" the rewrite would produce two passes later.
+    generic_interfaces: HashMap<String, (Vec<TypeParam>, Vec<InterfaceSig>)>,
+    /// Instantiations of generic interfaces, made on demand by `expand`: mangled name ->
+    /// its substituted signature set. A `RefCell` side table for the same reason
+    /// `made_records` is one — `expand` takes `&self` — and it is emptied into `interfaces`
+    /// in the declaration pass, after which every reader sees one table and no rule needs
+    /// to know which half a signature set came from.
+    interfaces_made: RefCell<HashMap<String, Vec<InterfaceSig>>>,
     /// Instantiations of generic enums, made on demand: mangled name -> variants, and
     /// mangled name -> what it was an instantiation OF, so a value's type can be read
     /// back into `(Option, [Int])` when a variant has no payload to infer from.
@@ -776,6 +791,8 @@ impl TypeChecker {
             param_bounds: HashMap::new(),
             declared_type_names: HashSet::new(),
             interface_names: HashSet::new(),
+            generic_interfaces: HashMap::new(),
+            interfaces_made: RefCell::new(HashMap::new()),
             fn_effects: HashMap::new(),
             method_effects: HashMap::new(),
             allowed_effects: Vec::new(),
@@ -1204,6 +1221,49 @@ impl TypeChecker {
         }
         for im in &mut prog.impls {
             self.current_span.set(im.span);
+            // `implement Mapper<Int> for Doubler` becomes an impl of the ordinary interface
+            // `Mapper$Int`, resolved HERE so that every reader below — `check_impl`, the
+            // duplicate-impl set, the vtable emission loop, the method lookup — keeps taking
+            // the plain interface name it has always taken. This is the same trick the rest of
+            // the pass plays with types, applied to the one name that is not one.
+            if !im.interface_arguments.is_empty() {
+                let arguments = std::mem::take(&mut im.interface_arguments);
+                if !self.generic_interfaces.contains_key(&im.interface_name) {
+                    return Err(format!(
+                        "unknown interface `{}` — declare it with `interface {}<...> {{ ... }}`",
+                        im.interface_name, im.interface_name
+                    ));
+                }
+                match self.expand_interface(&im.interface_name, &arguments)? {
+                    Type::Dyn(symbol) => im.interface_name = symbol,
+                    // Arguments that still mention a parameter — `class Box<T> implements
+                    // Mapper<T>`. Nothing is monomorphised yet and there is no instantiation
+                    // to implement, so this is refused rather than silently registering an
+                    // impl under a name no lookup will ever form. A9 does not do generic
+                    // IMPLS; see the deferred note on the roadmap row.
+                    _ => {
+                        return Err(format!(
+                            "`implement {}<...> for {}` must name concrete type arguments — \
+                             a class cannot implement an interface at a type it is still \
+                             generic over.",
+                            im.interface_name, im.type_name
+                        ))
+                    }
+                }
+            } else if self.generic_interfaces.contains_key(&im.interface_name) {
+                // `implement Mapper for Doubler` — the arguments left off. Same sentence the
+                // `Named` arm of `expand` gives for the same mistake in a signature.
+                let (parameters, _) = &self.generic_interfaces[&im.interface_name];
+                return Err(format!(
+                    "`{}` takes {} type argument(s), so write `{}<{}>` rather than `{}` \
+                     on its own.",
+                    im.interface_name,
+                    parameters.len(),
+                    im.interface_name,
+                    parameters.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", "),
+                    im.interface_name
+                ));
+            }
             for m in &mut im.methods {
                 self.current_span.set(m.span);
                 self.expand_fn_types(&mut m.parameters, &mut m.ret, &mut m.body)?;
@@ -1338,6 +1398,89 @@ impl TypeChecker {
     /// An application whose arguments still mention a type parameter is left alone: it is
     /// inside a generic being checked generically, and it becomes concrete when that
     /// generic is instantiated. See spec/M7-GENERICS.md Decision 4.
+    /// Make one instantiation of a generic interface and hand back the `Dyn` that names it.
+    ///
+    /// Shared by the three spellings that reach it — `Mapper<Int>`, `dynamic Mapper<Int>` and
+    /// the `implement Mapper<Int> for D` header — so the mangled name they agree on is
+    /// computed in exactly one place. If the impl header and the parameter type ever disagreed
+    /// about what `Mapper<Int>` is called, the impl would register a vtable nothing looks up
+    /// and the call would fail to resolve at a site that never mentions generics.
+    fn expand_interface(&self, name: &str, arguments: &[Type]) -> Result<Type, String> {
+        let (parameters, methods) = self.generic_interfaces[name].clone();
+        let arguments: Vec<Type> =
+            arguments.iter().map(|a| self.expand(a)).collect::<Result<_, _>>()?;
+        if arguments.len() != parameters.len() {
+            return Err(format!(
+                "`{}` takes {} type argument(s), but {} were given",
+                name,
+                parameters.len(),
+                arguments.len()
+            ));
+        }
+        // Still inside a generic's own body: `Mapper<T>` is not an interface any value has
+        // yet, and it becomes one when the enclosing generic is instantiated. The same bail
+        // the record, enum and tuple arms make, for the same reason.
+        if arguments.iter().any(mentions_param) {
+            return Ok(Type::DynGeneric { name: name.to_string(), arguments });
+        }
+        // An argument naming nothing — `dynamic Mapper<T, U>` in a method whose receiver
+        // declares only `T`, so `U` parsed as an ordinary type name and no declaration
+        // matches it. Caught HERE because the alternative is mangling it into the symbol and
+        // reporting "unknown interface `Mapper$Int$U`", which names a thing the author never
+        // wrote and buries the one word that is actually wrong. A method takes its type
+        // parameters from its receiver, so this is the shape a reader hits first when
+        // reaching for a second one.
+        for a in &arguments {
+            if let Type::Named(n) = a {
+                if !self.declared_type_names.contains(n)
+                    && !self.is_record(n)
+                    && !self.is_enum(n)
+                    && !self.interfaces.contains_key(n)
+                {
+                    return Err(format!(
+                        "`{}` in `{}<...>` names no type. A method's type parameters come \
+                         from its receiver — `function (self: List<T>) ...` declares `T` \
+                         and nothing else.",
+                        n, name
+                    ));
+                }
+            }
+        }
+        let symbol = mangle(name, &arguments);
+        if !self.interfaces_made.borrow().contains_key(&symbol) {
+            // Reserved before it is filled in, so an interface whose own method mentions it —
+            // `interface Chain<T> { function then(self, next: Chain<T>) -> Int }` — cannot make
+            // this recurse forever. The generic-record arm reserves for the same reason; unlike
+            // a class, an interface CAN legally hold itself, because a `Dyn` is a pointer and
+            // has a size no matter what it points at, so this reservation is the whole fix
+            // rather than half of one. `tests/pass/a_generic_interface_may_name_itself.bx`.
+            self.interfaces_made.borrow_mut().insert(symbol.clone(), Vec::new());
+            let map: HashMap<String, Type> = parameters
+                .iter()
+                .map(|p| p.name.clone())
+                .zip(arguments.iter().cloned())
+                .collect();
+            let mut made: Vec<InterfaceSig> = Vec::new();
+            for signature in &methods {
+                let mut made_sig = signature.clone();
+                for p in &mut made_sig.parameters {
+                    p.ty = self.expand(&substitute(&p.ty, &map))?;
+                }
+                made_sig.ret = self.expand(&substitute(&made_sig.ret, &map))?;
+                made.push(made_sig);
+            }
+            self.interfaces_made.borrow_mut().insert(symbol.clone(), made);
+            // So `show` spells it `Mapper<Int>` and never `Mapper$Int`. A reader did not
+            // write the mangled name and must not be shown it — the rule `instance_of`
+            // exists for, and the one an interface would have slipped through, because the
+            // `Dyn` arm of `show` did not consult this map until A9 added it.
+            self.instance_of
+                .borrow_mut()
+                .insert(symbol.clone(), (name.to_string(), arguments.clone()));
+        }
+        Ok(Type::Dyn(symbol))
+    }
+
     fn expand(&self, ty: &Type) -> Result<Type, String> {
         match ty {
             // A bare interface name MEANS a dynamic one. `rule: Tax` is what Java, C#,
@@ -1353,6 +1496,52 @@ impl TypeChecker {
             // and pays no vtable. What went is the ceremony on the DEFAULT.
             Type::Named(name) if self.interface_names.contains(name) => {
                 Ok(Type::Dyn(name.clone()))
+            }
+            // `Mapper` written bare when it takes a parameter. The arm above would have made
+            // it `dynamic Mapper`, and the failure would then surface as "unknown interface
+            // `Mapper`" two passes later — true, and useless, because the interface is right
+            // there. Say the actual thing instead.
+            Type::Named(name) if self.generic_interfaces.contains_key(name) => {
+                let (parameters, _) = &self.generic_interfaces[name];
+                Err(format!(
+                    "`{}` takes {} type argument(s), so write `{}<{}>` rather than `{}` \
+                     on its own.",
+                    name,
+                    parameters.len(),
+                    name,
+                    parameters
+                        .iter()
+                        .map(|p| p.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    name
+                ))
+            }
+            // A generic INTERFACE application, in either spelling: a bare `Mapper<Int>` (which
+            // means a dynamic one, by the same v0.0.155 rule as a bare `Tax`) and an explicit
+            // `dynamic Mapper<Int>` both land here and both leave as `Dyn("Mapper$Int")`.
+            //
+            // This is the generic-record arm below with "make a class" replaced by "make a
+            // signature set", and that parallel is the whole design. The instantiation is an
+            // ordinary interface under a mangled name, so **the vtable is keyed by exactly what
+            // it was always keyed by** — `dyn_interfaces`, `check_impl`, the vtable emission
+            // loop and the method lookup all take an interface NAME, and `Mapper$Int` and
+            // `Mapper$String` are two names. Nothing downstream learned anything.
+            Type::Generic { name, arguments } if self.generic_interfaces.contains_key(name) => {
+                self.expand_interface(name, arguments)
+            }
+            Type::DynGeneric { name, arguments } => {
+                if !self.generic_interfaces.contains_key(name) {
+                    // `dynamic Holder<Int>` where `Holder` is a generic CLASS. Refused with
+                    // the sentence the argument-less `dynamic Holder` already gives, which is
+                    // the entire reason `DynGeneric` is a variant rather than sugar for
+                    // `Generic` — desugaring in the parser made this program compile.
+                    return Err(format!(
+                        "unknown interface `{}` — declare it with `interface {} {{ ... }}`",
+                        name, name
+                    ));
+                }
+                self.expand_interface(name, arguments)
             }
             // A generic RECORD application. Same shape as the enum case below: the concrete
             // instantiation becomes an ordinary nominal record, made once, and after that no
@@ -1907,8 +2096,25 @@ impl TypeChecker {
     }
 
     /// Every expression's span and type, innermost last — the table hover reads.
+    /// Every expression's type, spelled the way the AUTHOR would write it.
+    ///
+    /// Monomorphisation left `Named("Holder$Int")` and, since A9, `Dyn("Mapper$Int")` — names
+    /// nobody typed. The only caller is the language server, and hover puts this text under a
+    /// reader's cursor, so it is exactly the audience `show` and `declared_name` exist to
+    /// protect. **Measured before it was changed:** hovering a `Holder<Int>` on a pristine
+    /// v0.0.276 answered ```` ```burxt\nHolder$Int\n``` ````, so this was a live leak for
+    /// generic CLASSES before A9 added a second way to reach it.
+    ///
+    /// `written_form` hands back the pre-`expand` spelling — `Generic` and `DynGeneric` — which
+    /// are the two variants whose `Display` already prints what was written. No new rendering
+    /// path, and none that could disagree with the one diagnostics use.
     pub fn expr_types(&self) -> Vec<(Span, Type)> {
-        self.expr_types.borrow().clone()
+        let instances = self.instance_of.borrow();
+        self.expr_types
+            .borrow()
+            .iter()
+            .map(|(span, ty)| (*span, written_form(ty, &instances)))
+            .collect()
     }
 
     /// One copy of every method on a generic record, per instantiation of that record.
@@ -1952,16 +2158,30 @@ impl TypeChecker {
                 }
             }
             let mut concrete = specialise_method(&m, &local, &symbol);
+            // BEFORE expanding, not after: expanding an instantiation can refuse, and until
+            // A9 gave it a reason to, the stale span from whatever item was processed last
+            // is what a refusal here would have pointed at.
+            self.current_span.set(concrete.span);
             self.expand_fn_types(
                 &mut concrete.parameters,
                 &mut concrete.ret,
                 &mut concrete.body,
             )?;
-            self.current_span.set(concrete.span);
             let key = (symbol.clone(), concrete.name.clone());
             if self.methods.contains_key(&key) {
                 continue;      // made already, for an earlier use of the same type
             }
+            // The declaration pass validates a hand-written method's types; an instantiation
+            // is made after that pass has run, so nothing validated these until now — and
+            // `validate_type` is what records an interface as `dyn`-used. **This was a live
+            // bug before A9 and independent of it**: a plain `function (self: List<T>)
+            // counted(f: dynamic Step)` compiled to `codegen bug: no signature for Step.apply`
+            // on v0.0.276, because no vtable was emitted for an interface nothing had
+            // registered. Measured on the pristine baseline before this line was added.
+            for p in &concrete.parameters {
+                self.validate_type(&p.ty)?;
+            }
+            self.validate_type(&concrete.ret)?;
             let param_tys: Vec<Type> =
                 concrete.parameters.iter().map(|p| p.ty.clone()).collect();
             self.method_writable.insert(
@@ -2299,6 +2519,29 @@ impl TypeChecker {
             self.declared_type_names.insert(e.name.clone());
         }
         for t in &prog.interfaces {
+            // A GENERIC interface has no signature set until a use says what its arguments
+            // are, exactly as a generic class has no layout — so it is collected here and
+            // its instantiations are made on demand by `expand`. Roadmap A9.
+            if !t.type_parameters.is_empty() {
+                // The declaration pass below cannot make this check for a generic interface,
+                // because it never registers one in `interfaces` — so it is made here, where
+                // the collection happens, rather than left to a map insert that would silently
+                // keep the last one.
+                if self.generic_interfaces.contains_key(&t.name)
+                    || self.interface_names.contains(&t.name)
+                {
+                    self.current_span.set(t.span);
+                    return Err(format!("interface `{}` is defined twice", t.name));
+                }
+                self.generic_interfaces
+                    .insert(t.name.clone(), (t.type_parameters.clone(), t.methods.clone()));
+                self.declared_type_names.insert(t.name.clone());
+                continue;
+            }
+            if self.generic_interfaces.contains_key(&t.name) {
+                self.current_span.set(t.span);
+                return Err(format!("interface `{}` is defined twice", t.name));
+            }
             self.interface_names.insert(t.name.clone());
         }
         // The builtins that reach the world, registered as if they were externs that declared it.
@@ -2394,8 +2637,31 @@ impl TypeChecker {
             );
         }
         // Interfaces: signature sets only, hoisted so impls may precede them.
+        //
+        // The instantiations `expand` made come first, so that from here down there is ONE
+        // table and no rule has to know whether a signature set was written or made. They
+        // cannot collide with a declared name: `$` is not a character an identifier can hold.
+        for (symbol, sigs) in self.interfaces_made.borrow().iter() {
+            self.interfaces.insert(symbol.clone(), sigs.clone());
+        }
         for t in &prog.interfaces {
             self.current_span.set(t.span);
+            // A generic interface itself has no signature set — only its instantiations do,
+            // and those were just merged in above. Mirrors the `type_parameters.is_empty()`
+            // skip that generic classes and generic enums both make in the passes above.
+            if !t.type_parameters.is_empty() {
+                let mut seen: Vec<&str> = Vec::new();
+                for signature in &t.methods {
+                    if seen.contains(&signature.name.as_str()) {
+                        return Err(format!(
+                            "interface `{}` declares the method `{}` twice",
+                            t.name, signature.name
+                        ));
+                    }
+                    seen.push(&signature.name);
+                }
+                continue;
+            }
             if self.interfaces.contains_key(&t.name) {
                 return Err(format!("interface `{}` is defined twice", t.name));
             }
@@ -2898,6 +3164,10 @@ impl TypeChecker {
                 let map: HashMap<String, Type> =
                     parameters.iter().map(|p| p.name.clone()).zip(type_args.iter().cloned()).collect();
                 let mut concrete = specialise(generic, &map, &mangle(&name, &type_args));
+                // Set before the expansion for the reason `instantiate_record_methods` gives:
+                // the expansion can refuse, and a refusal must not point at the last item
+                // some earlier loop happened to touch.
+                self.current_span.set(concrete.span);
                 // Substituting can make a generic application concrete — `Option<T>`
                 // becomes `Option<Int>` — so the instantiation is expanded again here.
                 self.expand_fn_types(
@@ -2905,7 +3175,14 @@ impl TypeChecker {
                     &mut concrete.ret,
                     &mut concrete.body,
                 )?;
-                self.current_span.set(concrete.span);
+                // The same validation an instantiated METHOD needs, and for the same reason:
+                // this copy is made after the declaration pass, so `dynamic Step` in a generic
+                // function's signature registers no vtable without it. See the note in
+                // `instantiate_record_methods`.
+                for p in &concrete.parameters {
+                    self.validate_type(&p.ty)?;
+                }
+                self.validate_type(&concrete.ret)?;
                 // Registered under its mangled name so a recursive generic call inside
                 // the body resolves, and so `allocates`/`pure` carry over.
                 self.fn_writable.insert(
@@ -2978,23 +3255,28 @@ impl TypeChecker {
     /// An impl must satisfy its trait EXACTLY: every declared method present,
     /// same receiver form, same parameter types, same return type.
     fn check_impl(&self, im: &ImplBlock) -> Result<(), String> {
+        // Every message below names the interface as the AUTHOR wrote it. After A9 the
+        // stored name may be a mangled instantiation — `Mapper$Int` — and a reader who
+        // wrote `Mapper<Int>` must never be shown the symbol the compiler made up. The
+        // lookups a few lines down still use the real key; only the prose is translated.
+        let shown_interface = self.shown_type_name(&im.interface_name);
         let sigs = self.interfaces.get(&im.interface_name).ok_or_else(|| {
             format!(
                 "unknown interface `{}` — declare it with `interface {} {{ ... }}`",
-                im.interface_name, im.interface_name
+                shown_interface, shown_interface
             )
         })?;
         if !self.structs.contains_key(&im.type_name) {
             return Err(format!(
                 "`implement {} for {}`: unknown type `{}` — declare it with \
                  `class {} {{ ... }}`",
-                im.interface_name, im.type_name, im.type_name, im.type_name
+                shown_interface, im.type_name, im.type_name, im.type_name
             ));
         }
         if self.impls.contains(&(im.interface_name.clone(), im.type_name.clone())) {
             return Err(format!(
                 "`{}` already implements `{}`",
-                im.type_name, im.interface_name
+                im.type_name, shown_interface
             ));
         }
 
@@ -3009,7 +3291,7 @@ impl TypeChecker {
                     format!(
                         "`class {} implements {}` is missing the method `{}`. Every interface \
                          method must be implemented — Burxt has no default bodies.",
-                        im.type_name, im.interface_name, signature.name
+                        im.type_name, shown_interface, signature.name
                     )
                 })?;
                 if receiver_mut != signature.receiver_mut {
@@ -3017,7 +3299,7 @@ impl TypeChecker {
                         "in `class {} implements {}`, method `{}` declares `{}self` but the \
                          interface declares `{}self`.",
                         im.type_name,
-                        im.interface_name,
+                        shown_interface,
                         signature.name,
                         if receiver_mut { "mutable " } else { "" },
                         if signature.receiver_mut { "mutable " } else { "" }
@@ -3028,7 +3310,7 @@ impl TypeChecker {
                         "in `class {} implements {}`, method `{}` takes {} parameter(s) but the \
                          interface declares {}.",
                         im.type_name,
-                        im.interface_name,
+                        shown_interface,
                         signature.name,
                         param_tys.len(),
                         signature.parameters.len()
@@ -3039,7 +3321,7 @@ impl TypeChecker {
                         return Err(format!(
                             "in `class {} implements {}`, method `{}` parameter {} is {} but the \
                              interface declares {}.",
-                            im.type_name, im.interface_name, signature.name, i + 1, have, want.ty
+                            im.type_name, shown_interface, signature.name, i + 1, have, want.ty
                         ));
                     }
                 }
@@ -3047,7 +3329,7 @@ impl TypeChecker {
                     return Err(format!(
                         "in `class {} implements {}`, method `{}` returns {} but the interface \
                          declares {}.",
-                        im.type_name, im.interface_name, signature.name, ret, signature.ret
+                        im.type_name, shown_interface, signature.name, ret, signature.ret
                     ));
                 }
             }
@@ -3060,10 +3342,10 @@ impl TypeChecker {
                 return Err(format!(
                     "`implement {} for {}` defines `{}`, which is not a method of \
                      `{}`. Its methods are: {}.",
-                    im.interface_name,
+                    shown_interface,
                     im.type_name,
                     m.name,
-                    im.interface_name,
+                    shown_interface,
                     sigs.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")
                 ));
             }
@@ -3071,7 +3353,7 @@ impl TypeChecker {
                 return Err(format!(
                     "in `implement {} for {}`, method `{}` has receiver `self: {}` — \
                      it must be `self: {}`.",
-                    im.interface_name, im.type_name, m.name, m.receiver, im.type_name
+                    shown_interface, im.type_name, m.name, m.receiver, im.type_name
                 ));
             }
         }
@@ -3082,14 +3364,14 @@ impl TypeChecker {
                 format!(
                     "`implement {} for {}` is missing the method `{}`. Every interface \
                      method must be implemented — Burxt has no default bodies.",
-                    im.interface_name, im.type_name, signature.name
+                    shown_interface, im.type_name, signature.name
                 )
             })?;
             if found.receiver_mut != signature.receiver_mut {
                 return Err(format!(
                     "in `implement {} for {}`, method `{}` declares `{}self` but the \
                      interface declares `{}self`.",
-                    im.interface_name,
+                    shown_interface,
                     im.type_name,
                     signature.name,
                     if found.receiver_mut { "mutable " } else { "" },
@@ -3100,7 +3382,7 @@ impl TypeChecker {
                 return Err(format!(
                     "in `implement {} for {}`, method `{}` takes {} parameter(s) but \
                      the interface declares {}.",
-                    im.interface_name,
+                    shown_interface,
                     im.type_name,
                     signature.name,
                     found.parameters.len(),
@@ -3112,7 +3394,7 @@ impl TypeChecker {
                     return Err(format!(
                         "in `implement {} for {}`, method `{}` parameter {} is {} but \
                          the interface declares {}.",
-                        im.interface_name,
+                        shown_interface,
                         im.type_name,
                         signature.name,
                         i + 1,
@@ -3125,7 +3407,7 @@ impl TypeChecker {
                 return Err(format!(
                     "in `implement {} for {}`, method `{}` returns {} but the interface \
                      declares {}.",
-                    im.interface_name, im.type_name, signature.name, found.ret, signature.ret
+                    shown_interface, im.type_name, signature.name, found.ret, signature.ret
                 ));
             }
         }
@@ -3146,7 +3428,7 @@ impl TypeChecker {
             return Err(format!(
                 "a `dynamic {}` must come from a variable — an interface object borrows the \
                  storage of the value it refers to, and an expression has none.",
-                interface_name
+                self.shown_type_name(interface_name)
             ));
         };
         let (src_ty, _) = self
@@ -3174,7 +3456,10 @@ impl TypeChecker {
         if !self.impls.contains(&(interface_name.to_string(), concrete.clone())) {
             return Err(format!(
                 "`{}` does not implement `{}` — add `implement {} for {} {{ ... }}`.",
-                concrete, interface_name, interface_name, concrete
+                concrete,
+                self.shown_type_name(interface_name),
+                self.shown_type_name(interface_name),
+                concrete
             ));
         }
         Ok(TypedExpr {
@@ -3799,6 +4084,33 @@ impl TypeChecker {
                             && self.expr_allocates(a)
                     })
             }
+            // Becoming an interface object BORROWS the storage of the value it refers to —
+            // the compiler says exactly that when it insists the source be a variable — so a
+            // `dynamic Holder` is region storage precisely when the binding behind it is.
+            //
+            // **Without this arm the coercion LAUNDERED the taint, and the result was a live
+            // use-after-free that both compilers' suites, the fixpoint and the 133-program
+            // corpus all passed with open.** Measured on a pristine v0.0.276, with no generics
+            // anywhere in the program:
+            //
+            //     region r {
+            //         let b: Box = Box { s: "secret-" + "value" };
+            //         let h: dynamic Holder = b;
+            //         kept = h.get();          // accepted; prints garbage after the region
+            //     }
+            //
+            // `kept = b.get()` on the same method is REFUSED, and so is `kept = b.s`. The only
+            // difference is the hop through the interface object, and the taint died there:
+            // `let h = b` asked this function about a `DynCoerce`, got the `_` arm's `false`,
+            // and never put `h` in `region_locals`. Every rule downstream then asked a correctly
+            // implemented question about a value it had been told was safe.
+            //
+            // So the DynCall arm above was never the gap — `dyn_call_allocates` fires correctly,
+            // proven by the same program with an allocating method, which IS refused. This is
+            // B33's and B34's shape a third time: a node that passes a value along and answers
+            // `false` because nobody wrote its arm. The `_` at the bottom of this match is where
+            // all three lived.
+            TypedExprKind::DynCoerce { var, .. } => self.region_locals.contains(var),
             // B34. `?` yields the Ok payload of the value it unwraps, so the answer for the
             // unwrap is the answer for what was unwrapped: the taint has to pass THROUGH it.
             // Without this arm `let got: String = make(n)?;` inside a region laundered it, and
@@ -4008,7 +4320,27 @@ impl TypeChecker {
                 seen.pop();
                 answer
             }
-            Type::Param(_) | Type::Dyn(_) => true,
+            // A `Dyn` is YES unconditionally and always has been: an interface object points
+            // at some implementor's instance, the set of implementors is open, and any one of
+            // them may hold a String. `DynGeneric` is the SAME answer for the same reason, and
+            // it is here rather than folded into a `_` because B39/B42 were two arms of this
+            // predicate both answering wrong for generic instantiations and it took three
+            // agents to see.
+            //
+            // **`DynGeneric` is NOT reachable today, and that was measured rather than assumed.**
+            // Flipping this arm to `false` and re-running changes no program's answer: by the
+            // time the escape analysis asks, every `dynamic Mapper<Int>` has been through
+            // `expand` and is a `Dyn`, which the same arm answers. The probe was a generic
+            // function taking `dynamic Sink<T>` whose result escapes a region — refused
+            // identically with the arm true and with it false.
+            //
+            // Kept anyway, and the tuple arm above states the reason in its own words: a wrong
+            // NO here is silent, and "only reachable from one place today" is exactly what was
+            // true of that arm before it wasn't. What a fixture CAN reach is the expanded path —
+            // `tests/fail/a_generic_interface_escapes_its_region.bx`, which pins that a generic
+            // interface is region storage and refuses byte-identically to the non-generic
+            // interface it copies.
+            Type::Param(_) | Type::Dyn(_) | Type::DynGeneric { .. } => true,
             // The scalars, listed rather than left to a `_` arm. A type this predicate
             // has never heard of must not inherit "holds nothing" in silence; that is
             // the same failure as the two arms above, one milestone later.
@@ -5225,7 +5557,9 @@ impl TypeChecker {
                             return Err(format!(
                                 "type mismatch in `let {}`: declared {}, but expression \
                                  has type {}",
-                                name, declared, typed.ty
+                                name,
+                                self.shown(declared),
+                                self.shown(&typed.ty)
                             ));
                         }
                         (declared.clone(), typed)
@@ -5902,7 +6236,7 @@ impl TypeChecker {
                             "print does not know how to show a `dynamic {}` — an interface \
                              object exposes only its trait methods, so call one \
                              and print that.",
-                            t
+                            self.shown_type_name(t)
                         ))
                     }
                     _ => {}
@@ -7649,7 +7983,7 @@ impl TypeChecker {
                             format!(
                                 "`dynamic {}` has no method named `{}`. Its methods \
                                  are: {}.",
-                                interface_name,
+                                self.shown_type_name(&interface_name),
                                 method,
                                 sigs.iter()
                                     .map(|s| s.name.as_str())
@@ -7735,6 +8069,107 @@ impl TypeChecker {
                             interface_name,
                             method: method.clone(),
                             slot: slot as u32,
+                            base: Box::new(typed_base),
+                            arguments: typed_args,
+                        },
+                    });
+                }
+
+                // `f.apply(x)` where `f: dynamic Mapper<T, U>` inside a generic's OWN body,
+                // before any instantiation has made `Mapper<T, U>` concrete.
+                //
+                // This is the `Type::Param` case immediately below, one step along: the bound
+                // says which methods exist, so the body is checked against the interface rather
+                // than against each instantiation — and here the interface is written out
+                // rather than named by a bound. Substituting the interface's declared
+                // parameters with what the signature wrote gives `apply(self, x: T) -> U` with
+                // the ENCLOSING generic's parameters in it, which is exactly the contract the
+                // body should be held to.
+                //
+                // **This arm is what makes a free generic `map` compile**, and without it A9
+                // stops at `map(xs: [Int], ...)`. The abstract body is checked and never
+                // emitted, so the node built here is discarded; every instantiation re-checks
+                // the call with a real `Dyn` through the arm above, which is where the
+                // allocation rule and the vtable slot are settled.
+                if let Type::DynGeneric { name, arguments: type_arguments } =
+                    typed_base.ty.clone()
+                {
+                    let shown_base = typed_base.ty.to_string();
+                    let (parameters, methods) = self
+                        .generic_interfaces
+                        .get(&name)
+                        .cloned()
+                        .ok_or_else(|| format!("unknown interface `{}`", name))?;
+                    let map: HashMap<String, Type> = parameters
+                        .iter()
+                        .map(|p| p.name.clone())
+                        .zip(type_arguments.iter().cloned())
+                        .collect();
+                    let signature = methods
+                        .iter()
+                        .find(|s| s.name == *method)
+                        .ok_or_else(|| {
+                            format!(
+                                "`{}` has no method named `{}`. Its methods are: {}.",
+                                shown_base,
+                                method,
+                                methods
+                                    .iter()
+                                    .map(|s| s.name.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        })?
+                        .clone();
+                    if signature.receiver_mut {
+                        return Err(format!(
+                            "`{}` takes `mutable self`, and calling a mutating method \
+                             through an interface object is not available yet: the \
+                             compiler still cannot tell whether the value behind \
+                             the object was declared mutable. Regions bound its \
+                             LIFETIME, not its mutability. Call it on the concrete \
+                             type.",
+                            method
+                        ));
+                    }
+                    if arguments.len() != signature.parameters.len() {
+                        return Err(format!(
+                            "`{}.{}` takes {} argument(s), but {} were given",
+                            shown_base,
+                            method,
+                            signature.parameters.len(),
+                            arguments.len()
+                        ));
+                    }
+                    let mut typed_args = Vec::new();
+                    for (i, (argument, p)) in
+                        arguments.iter().zip(&signature.parameters).enumerate()
+                    {
+                        let want = substitute(&p.ty, &map);
+                        let typed = self.check_expr(argument, Some(&want))?;
+                        if !self.storable(&typed.ty, &want) {
+                            return Err(format!(
+                                "in the call to `{}.{}`, argument {} must be {}, but it \
+                                 has type {}",
+                                shown_base,
+                                method,
+                                i + 1,
+                                want,
+                                typed.ty
+                            ));
+                        }
+                        typed_args.push(typed);
+                    }
+                    return Ok(TypedExpr {
+                        ty: substitute(&signature.ret, &map),
+                        kind: TypedExprKind::DynCall {
+                            // The un-mangled name: there is no instantiation yet, and this
+                            // node is discarded with the rest of the abstract body. The copy
+                            // that is emitted is built by the `Dyn` arm above, after
+                            // substitution has produced a real `Mapper$Int$String`.
+                            interface_name: name,
+                            method: method.clone(),
+                            slot: 0,
                             base: Box::new(typed_base),
                             arguments: typed_args,
                         },
@@ -8992,6 +9427,17 @@ pub fn substitute(ty: &Type, map: &HashMap<String, Type>) -> Type {
         Type::Tuple(elements) => {
             Type::Tuple(elements.iter().map(|e| substitute(e, map)).collect())
         }
+        // `function (self: List<T>) mapped(f: dynamic Mapper<T>) -> [T]`. A9 walked into the
+        // hole the comment above had already named: without this arm the catch-all copied
+        // `dynamic Mapper<T>` unchanged into every instantiation, so `List<Int>.mapped` asked
+        // for a `dynamic Mapper<T>`, the argument `Doubler` did not match it, and the body's
+        // `f.apply(x)` was refused with "needs a class value". Three messages, none of which
+        // mentioned substitution. Measured on `tests/pass/a_generic_interface_through_a_
+        // generic_method.bx`, which is that program.
+        Type::DynGeneric { name, arguments } => Type::DynGeneric {
+            name: name.clone(),
+            arguments: arguments.iter().map(|a| substitute(a, map)).collect(),
+        },
         other => other.clone(),
     }
 }
@@ -9002,9 +9448,12 @@ pub fn mentions_param(ty: &Type) -> bool {
     match ty {
         Type::Param(_) => true,
         Type::Array { elem, .. } | Type::Slice(elem) => mentions_param(elem),
-        Type::Generic { arguments, .. } | Type::Tuple(arguments) => {
-            arguments.iter().any(mentions_param)
-        }
+        // `DynGeneric` sits with the other two for the reason the `substitute` comment above
+        // gives: the catch-all answers NO in silence, and a wrong NO here means a signature
+        // still holding a `T` is treated as fully concrete.
+        Type::Generic { arguments, .. }
+        | Type::Tuple(arguments)
+        | Type::DynGeneric { arguments, .. } => arguments.iter().any(mentions_param),
         _ => false,
     }
 }
@@ -9018,6 +9467,36 @@ pub fn mentions_param(ty: &Type) -> bool {
 /// Monomorphisation names an instantiation by mangling, and that name must never be what a
 /// message shows — a reader did not write `Option$String` and should not have to learn that
 /// it exists.
+/// A type as the author wrote it, undoing monomorphisation's renaming.
+///
+/// The `Type` counterpart of `show`, which answers a String. Both read `instance_of`, and both
+/// exist for the same reason: a mangled symbol must never reach a reader. This one is for the
+/// places that need a TYPE back rather than text — the language server, which renders the type
+/// itself and then asks `explain` about it.
+pub fn written_form(ty: &Type, instances: &HashMap<String, (String, Vec<Type>)>) -> Type {
+    match ty {
+        Type::Named(n) => match instances.get(n) {
+            Some((of, arguments)) => Type::Generic {
+                name: of.clone(),
+                arguments: arguments.iter().map(|a| written_form(a, instances)).collect(),
+            },
+            None => ty.clone(),
+        },
+        Type::Dyn(n) => match instances.get(n) {
+            Some((of, arguments)) => Type::DynGeneric {
+                name: of.clone(),
+                arguments: arguments.iter().map(|a| written_form(a, instances)).collect(),
+            },
+            None => ty.clone(),
+        },
+        Type::Slice(elem) => Type::Slice(Box::new(written_form(elem, instances))),
+        Type::Array { elem, len } => {
+            Type::Array { elem: Box::new(written_form(elem, instances)), len: *len }
+        }
+        other => other.clone(),
+    }
+}
+
 pub fn show(ty: &Type, instances: &HashMap<String, (String, Vec<Type>)>) -> String {
     match ty {
         Type::Named(n) => match instances.get(n) {
@@ -9026,6 +9505,17 @@ pub fn show(ty: &Type, instances: &HashMap<String, (String, Vec<Type>)>) -> Stri
                 format!("{}<{}>", of, inner.join(", "))
             }
             None => n.clone(),
+        },
+        // The same lookup the `Named` arm makes, and it was missing until A9 put an
+        // instantiation behind a `Dyn`. Without it every message about a generic interface
+        // says `dynamic Mapper$Int` — a name the reader never wrote, which is the exact thing
+        // this function exists to prevent.
+        Type::Dyn(n) => match instances.get(n) {
+            Some((of, arguments)) => {
+                let inner: Vec<String> = arguments.iter().map(|a| show(a, instances)).collect();
+                format!("dynamic {}<{}>", of, inner.join(", "))
+            }
+            None => format!("dynamic {}", n),
         },
         Type::Array { elem, len } => format!("[{}; {}]", show(elem, instances), len),
         Type::Slice(elem) => format!("[{}]", show(elem, instances)),
@@ -9073,6 +9563,29 @@ fn unify(
         // `Option<T>` against `Option$String`: the instantiation remembers what it was
         // made from, so the arguments line up and `T` binds to String.
         (Type::Generic { name: dn, arguments: dargs }, Type::Named(m)) => {
+            match instances.get(m) {
+                Some((of, aargs)) if of == dn && aargs.len() == dargs.len() => {
+                    for (d, a) in dargs.iter().zip(aargs) {
+                        unify(d, a, map, instances, tuples)?;
+                    }
+                    Ok(())
+                }
+                _ => Err(format!(
+                    "expected {}, but this is {}",
+                    show(declared, instances),
+                    show(actual, instances)
+                )),
+            }
+        }
+        // `dynamic Mapper<T>` against the `Dyn("Mapper$Int")` an argument already has — the
+        // interface counterpart of the `Generic`-against-`Named` arm above, and it reads
+        // `instances` for exactly the same reason: `expand` mangled the instantiation, and
+        // `instance_of` is the only route from `Mapper$Int` back to `(Mapper, [Int])`.
+        //
+        // Without it, `relay<T>(m: dynamic Mapper<T>, x: T)` called with a `dynamic Mapper<Int>`
+        // cannot bind `T`, and the call is refused with a message about a type parameter the
+        // caller never wrote.
+        (Type::DynGeneric { name: dn, arguments: dargs }, Type::Dyn(m)) => {
             match instances.get(m) {
                 Some((of, aargs)) if of == dn && aargs.len() == dargs.len() => {
                     for (d, a) in dargs.iter().zip(aargs) {

@@ -1,0 +1,55 @@
+// A generic interface reached through a GENERIC METHOD, at two instantiations. Roadmap A9.
+//
+// **This is the fixture for the case A9 did not think of, and it caught two real defects.**
+//
+// 1. `substitute` ends in a catch-all, and A8's comment on that function had already written down
+//    what that costs — "the two silent holes A8 had to be looked for rather than told about".
+//    A9 walked into the same one: without an arm, `dynamic Mapper<T>` was copied UNCHANGED into
+//    every instantiation, so `List<Int>.mapped` asked for a `dynamic Mapper<T>`, the argument did
+//    not match it, and the body's `f.apply(x)` was refused for not being a class value. Three
+//    messages, none of which mentioned substitution. `mentions_param` had the same hole.
+//
+// 2. A latent bug OLDER than A9 and independent of it: an instantiated method's parameter types
+//    were never validated, and validation is what records an interface as `dyn`-used. So no vtable
+//    was emitted and codegen failed with `codegen bug: no signature for Step.apply` — on a program
+//    with **no generic interface in it at all**. Measured on a pristine v0.0.276 build before the
+//    fix, with a plain `function (self: List<T>) counted(f: dynamic Step)`.
+//
+// Neither was reachable from the concrete form, and neither would have been found by reading.
+interface Mapper<T> { function apply(self, x: T) -> T }
+
+class Doubler { }
+implement Mapper<Int> for Doubler {
+    function (self) apply(x: Int) -> Int { return x * 2; }
+}
+
+class Shout { }
+implement Mapper<String> for Shout {
+    function (self) apply(x: String) -> String { return x + "!"; }
+}
+
+class List<T> { items: [T] }
+
+// The receiver's `T` is what the interface is instantiated at, so ONE method body serves
+// `Mapper<Int>` and `Mapper<String>` and each instantiation dispatches through its own vtable.
+function (self: List<T>) mapped(f: dynamic Mapper<T>) -> [T] {
+    let mutable out: [T] = [];
+    for x in self.items {
+        push(out, f.apply(x));
+    }
+    return out;
+}
+
+let numbers: List<Int> = List { items: [1, 2, 3] };
+let d: Doubler = Doubler { };
+let doubled = numbers.mapped(d);
+for v in doubled {
+    print(v);
+}
+
+let words: List<String> = List { items: ["a", "b"] };
+let s: Shout = Shout { };
+let shouted = words.mapped(s);
+for w in shouted {
+    print(w);
+}

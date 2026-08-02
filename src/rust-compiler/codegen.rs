@@ -1429,6 +1429,9 @@ impl<'ctx> CodeGen<'ctx> {
             // become a wrong number if the boundary rule is ever widened.
             Type::CInt | Type::CDouble | Type::CPointer | Type::Width { .. } => 1,
             Type::Param(_) | Type::Generic { .. } => 1,
+            // Same as `Generic` beside it: gone before codegen, answered anyway rather than
+            // left to a `_`, so widening the boundary rule cannot make this a wrong number.
+            Type::DynGeneric { .. } => 1,
             // A tuple is the anonymous class `expand` made of it long before codegen runs, so
             // a variant payload arrives here as `Named("(Int, String)")` and takes the arm
             // below. Answered by SUMMING rather than with a placeholder for the reason the
@@ -1481,7 +1484,13 @@ impl<'ctx> CodeGen<'ctx> {
             // generic application and a tuple both become the `Named` type of the class
             // `expand` made. Reaching here is a compiler bug, and the checker is what
             // guarantees it cannot.
-            Type::Param(_) | Type::Generic { .. } | Type::Tuple(_) => self.ctx.i64_type().into(),
+            // `DynGeneric` joins the three for the same reason: `expand` turns
+            // `dynamic Mapper<Int>` into `Dyn("Mapper$Int")`, which the `Dyn` arm below
+            // builds, so reaching here is a compiler bug the checker guarantees cannot happen.
+            Type::Param(_)
+            | Type::Generic { .. }
+            | Type::Tuple(_)
+            | Type::DynGeneric { .. } => self.ctx.i64_type().into(),
             Type::Int | Type::Bool | Type::Decimal { .. } => self.ctx.i64_type().into(),
             Type::String => self.ctx.ptr_type(AddressSpace::default()).into(),
             Type::CInt => self.ctx.i32_type().into(),
@@ -1614,6 +1623,12 @@ impl<'ctx> CodeGen<'ctx> {
             }
             Type::Generic { name, .. } => {
                 return Err(format!("codegen bug: `{}<...>` was never instantiated", name))
+            }
+            Type::DynGeneric { name, .. } => {
+                return Err(format!(
+                    "codegen bug: `dynamic {}<...>` was never instantiated",
+                    name
+                ))
             }
             // `expand` turns a tuple into a class before anything is typed, so what reaches
             // print is `Named("(Int, String)")` — and a class has no print form either, which

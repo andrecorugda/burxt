@@ -1,0 +1,59 @@
+// The ACCEPTING half of the dyn-coercion escape rule, and it is the half that keeps the rule
+// honest. Companion to `tests/fail/a_dynamic_coercion_launders_region_storage.bx`.
+//
+// A rule that refuses region storage escaping through an interface object over-refuses far more
+// easily than it under-refuses, and nothing would notice: every fail fixture stays refused either
+// way, and the corpus cannot tell a paranoid compiler from a correct one. So the accepting cases
+// carry the weight, and both of these RUN and print their answers rather than merely compiling.
+//
+// Three shapes, each isolating one input to the rule:
+//
+//   1. The interface object IS tainted, but the method hands back an Int — a copy, not a pointer
+//      into the region. Accepted: `may_be_region_storage` says no for Int, and the relay property
+//      is about what comes OUT.
+//   2. The interface object is NOT tainted — built outside the region — and the method returns a
+//      String. Accepted: the object borrows storage that outlives the block.
+//   3. The value escapes to a name declared INSIDE the region. Accepted: the name and the bytes
+//      die together, which is correct and is the whole reason the rule is about WHERE the target
+//      was declared rather than about the type.
+//
+// If any of these three ever starts failing, the fix for the use-after-free has become a tax on
+// correct programs, and the fail fixture alone would not say so.
+interface Holder<T> { function get(self) -> T }
+interface Sized<T> { function size(self) -> Int }
+
+class Box { s: String }
+implement Holder<String> for Box {
+    function (self) get() -> String { return self.s; }
+}
+
+class Ruler { s: String }
+implement Sized<String> for Ruler {
+    function (self) size() -> Int { return len(self.s); }
+}
+
+// 1. Tainted object, scalar out.
+let mutable measured: Int = 0;
+region one {
+    let r: Ruler = Ruler { s: "secret-" + "value" };
+    let sized: dynamic Sized<String> = r;
+    measured = sized.size();
+}
+print(measured);
+
+// 2. Untainted object, String out.
+let outside: Box = Box { s: "safe" };
+let holder: dynamic Holder<String> = outside;
+let mutable kept: String = "";
+region two {
+    kept = holder.get();
+}
+print(kept);
+
+// 3. Tainted object, String out, into a name declared inside the region.
+region three {
+    let b: Box = Box { s: "inner-" + "value" };
+    let h: dynamic Holder<String> = b;
+    let mine: String = h.get();
+    print(mine);
+}

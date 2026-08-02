@@ -262,7 +262,24 @@ impl Parser {
             self.bump();
             loop {
                 match self.bump() {
-                    Token::Ident(s) => implements.push(s),
+                    // `class Doubler implements Mapper<Int>` — the same instantiation the
+                    // standalone `implement Mapper<Int> for Doubler` writes. Both spellings
+                    // take arguments or neither does; a generic interface implementable by
+                    // one form and not the other would be a rule with a hole in it.
+                    Token::Ident(s) => {
+                        let mut arguments = Vec::new();
+                        if self.at(&Token::Lt) {
+                            self.bump();
+                            loop {
+                                arguments.push(self.parse_type()?);
+                                if !self.more_in_list(&Token::Gt) {
+                                    break;
+                                }
+                            }
+                            self.expect(&Token::Gt)?;
+                        }
+                        implements.push((s, arguments));
+                    }
                     other => {
                         return Err(format!(
                             "expected an interface name after `implements`, found {}",
@@ -348,8 +365,9 @@ impl Parser {
             associated,
             implements
                 .into_iter()
-                .map(|interface_name| ImplBlock {
+                .map(|(interface_name, interface_arguments)| ImplBlock {
                     interface_name,
+                    interface_arguments,
                     type_name: name_for_impls.clone(),
                     methods: Vec::new(),
                     declared_on_class: true,
@@ -438,6 +456,13 @@ impl Parser {
                 ))
             }
         };
+        // `interface Mapper<T>` — the same call a generic class and a generic function make,
+        // so a bound (`<T: Ordered>`) is spelled and refused identically in all three.
+        let type_parameters = self.parse_type_params(&name)?;
+        // In scope for every signature in the body, so the `T` of `apply(self, x: T)` parses
+        // as `Type::Param` and not as a class nobody declared. Set and cleared exactly where
+        // `parse_struct` and `parse_enum` set and clear it.
+        self.type_parameters = type_parameters.iter().map(|p| p.name.clone()).collect();
         self.expect(&Token::LBrace)?;
         let mut methods = Vec::new();
         while !self.at(&Token::RBrace) {
@@ -451,7 +476,13 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace)?;
-        Ok(InterfaceDef { name, methods, span: Span { start, end: self.prev_end().max(start + 1) } })
+        self.type_parameters.clear();
+        Ok(InterfaceDef {
+            name,
+            type_parameters,
+            methods,
+            span: Span { start, end: self.prev_end().max(start + 1) },
+        })
     }
 
     /// One signature inside an interface: `fn m(self) -> T`, or
@@ -533,6 +564,21 @@ impl Parser {
                 ))
             }
         };
+        // `implement Mapper<Int> for Doubler` — implementing a generic interface AT a
+        // concrete instantiation. The arguments travel beside the name rather than mangled
+        // into it, because the parser does not know which names are generic and a message
+        // has to be able to say `Mapper<Int>`, which is what the author wrote.
+        let mut interface_arguments = Vec::new();
+        if self.at(&Token::Lt) {
+            self.bump();
+            loop {
+                interface_arguments.push(self.parse_type()?);
+                if !self.more_in_list(&Token::Gt) {
+                    break;
+                }
+            }
+            self.expect(&Token::Gt)?;
+        }
         if !self.at(&Token::For) {
             return Err(format!(
                 "expected `for` in `implement {} for Type`, found {}",
@@ -563,7 +609,7 @@ impl Parser {
             methods.push(self.parse_method(Some(&type_name))?);
         }
         self.expect(&Token::RBrace)?;
-        Ok(ImplBlock { interface_name, type_name, methods, declared_on_class: false, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok(ImplBlock { interface_name, interface_arguments, type_name, methods, declared_on_class: false, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     // ---- functions ----
@@ -1779,7 +1825,24 @@ impl Parser {
             // `dyn Trait` — the only syntax that asks for dynamic dispatch.
             // If you never write `dyn`, you never pay for a vtable.
             Token::Dyn => match self.bump() {
-                Token::Ident(name) => Ok(Type::Dyn(name)),
+                Token::Ident(name) => {
+                    // `dynamic Mapper<Int>` — an interface object at an instantiation, A9.
+                    // Kept distinct from a bare `Mapper<Int>` until `expand`; see
+                    // `ast::Type::DynGeneric` for the program that measures why.
+                    if self.at(&Token::Lt) {
+                        self.bump();
+                        let mut arguments = Vec::new();
+                        loop {
+                            arguments.push(self.parse_type()?);
+                            if !self.more_in_list(&Token::Gt) {
+                                break;
+                            }
+                        }
+                        self.expect(&Token::Gt)?;
+                        return Ok(Type::DynGeneric { name, arguments });
+                    }
+                    Ok(Type::Dyn(name))
+                }
                 other => Err(format!(
                     "expected an interface name after `dynamic`, found {}",
                     other.describe()

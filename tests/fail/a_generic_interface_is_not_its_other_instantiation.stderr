@@ -1,0 +1,1 @@
+`Doubler` does not implement `Mapper<String>` — add `implement Mapper<String> for Doubler { ... }`.

@@ -1,0 +1,12 @@
+// `Mapper` written bare when it takes a parameter — refused, and refused with the useful
+// sentence. Roadmap A9.
+//
+// A non-generic interface name means a dynamic one, so the obvious implementation lets `Mapper`
+// take that path and fail two passes later as "unknown interface `Mapper`" — true, and useless,
+// because the interface is declared three lines up. The rule is stated where it is known instead.
+interface Mapper<T> { function apply(self, x: T) -> T }
+
+function twice(m: Mapper, x: Int) -> Int {
+    return m.apply(m.apply(x));
+}
+print(twice(1, 2));

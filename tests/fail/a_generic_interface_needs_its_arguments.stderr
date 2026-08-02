@@ -1,0 +1,1 @@
+`Mapper` takes 1 type argument(s), so write `Mapper<T>` rather than `Mapper` on its own.

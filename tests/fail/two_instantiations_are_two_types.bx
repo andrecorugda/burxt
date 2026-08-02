@@ -1,0 +1,20 @@
+// `Holder<Int>` and `Holder<String>` are different types. Found while building A9; older than it.
+//
+// **This was a silent MISCOMPILE in stage-1, not a missing diagnostic.** On a pristine v0.0.276
+// the program below compiled and SEGFAULTED: `same_type` compared a generic application by NAME
+// only, so every instantiation of a generic was the same type to the Burxt-written checker, and
+// an Int was handed back as a String pointer. Stage-0 refused it all along as a type mismatch.
+//
+// Nothing caught it because the differential test's rejection count is a FLOOR in that direction:
+// stage-1 refusing LESS than stage-0 keeps the ratchet green. It surfaced only because A9 needs
+// the same comparison for `Mapper<Int>` against `Mapper<String>` — the interface rides the arm the
+// class already used, so measuring one measured the other.
+//
+// The fix is the arm the tuple case beside it already had: compare the arguments, position by
+// position, after the name agrees. `tests/fail/a_generic_interface_is_not_its_other_
+// instantiation.bx` is the interface half of the same rule.
+class Holder<T> { item: T }
+
+let a: Holder<Int> = Holder { item: 1 };
+let b: Holder<String> = a;
+print(b.item);

@@ -375,6 +375,9 @@ class Unit {
     // Nonzero while parsing an `if`/`while` condition, where a `{` opens the BODY
     // rather than a class literal. The Rust parser carries the same flag.
     impls: [Implementation],
+    // The type arguments each `implement` header wrote, keyed by its item node. See
+    // check.bx's `ImplTrait` for why this is a side table and not two more node slots.
+    impl_traits: [ImplTrait],
     // Every expression's type, indexed by node. See check.bx's type_at for why it is
     // indexed rather than searched.
     typed: [Type],

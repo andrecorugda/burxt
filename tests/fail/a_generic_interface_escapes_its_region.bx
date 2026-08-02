@@ -1,0 +1,30 @@
+// A generic interface must answer the ESCAPE rules, not go quiet behind them. Roadmap A9.
+//
+// **This fixture exists because the predicate it exercises has been wrong twice.** B39 and B42
+// were two arms of `may_be_region_storage` both answering wrong for generic instantiations, and
+// it took three agents to see. A new type that goes green in stage-1 on the first try is this
+// project's most reliable red flag, and a type the escape analysis has never heard of inherits
+// "holds nothing" in silence — which is a use-after-free the compiler reports as success.
+//
+// So the answer is pinned here rather than assumed: a `dynamic Mapper<...>` is region storage,
+// unconditionally, for the same reason a plain `dynamic` is. The object points at some
+// implementor's instance, the set of implementors is open, and any one of them may hold a String.
+//
+// **The measurement that makes this trustworthy is the differential**: the identical program
+// written with a NON-generic interface is refused with the identical sentence. The generic form
+// is neither quieter nor noisier than the form it copies.
+interface Sink<T> { function take(self, x: T) -> T }
+
+class Box { tag: String }
+implement Sink<String> for Box {
+    function (self) take(x: String) -> String { return self.tag + x; }
+}
+
+let mutable kept: String = "";
+region r {
+    let inner: String = "a" + "b";
+    let b: Box = Box { tag: inner };
+    let d: dynamic Sink<String> = b;
+    kept = d.take("z");
+}
+print(kept);

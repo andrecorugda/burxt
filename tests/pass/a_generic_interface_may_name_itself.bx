@@ -1,0 +1,35 @@
+// An interface whose own method takes the interface it is declared in. Roadmap A9.
+//
+// A generic CLASS cannot contain itself — `expand` refuses it, because the instantiation would
+// have to be the same size as the whole class. An INTERFACE can, and the difference is not a
+// special case: a `dynamic` is a fat pointer, so its size is known no matter what it points at.
+//
+// What this pins is the RESERVATION. `expand` inserts the instantiation's name before it
+// substitutes the signatures, exactly as the generic-record arm does, so `Chain<Int>` naming
+// `Chain<Int>` in its own method finds a reservation instead of recursing forever. Without that
+// line the compiler does not refuse this program — it never finishes compiling it, which is the
+// failure a fixture is least likely to be written for and most annoying to diagnose.
+interface Chain<T> {
+    function then(self, next: dynamic Chain<T>, x: T) -> T
+}
+
+class Add { by: Int }
+implement Chain<Int> for Add {
+    function (self) then(next: dynamic Chain<Int>, x: Int) -> Int {
+        return next.then(next, x + self.by);
+    }
+}
+
+// The terminator: it ignores `next` rather than calling on, so the recursion has a floor.
+class Stop { }
+implement Chain<Int> for Stop {
+    function (self) then(next: dynamic Chain<Int>, x: Int) -> Int {
+        return x;
+    }
+}
+
+let stop: Stop = Stop { };
+let end: dynamic Chain<Int> = stop;
+let add: Add = Add { by: 5 };
+let start: dynamic Chain<Int> = add;
+print(start.then(end, 1));

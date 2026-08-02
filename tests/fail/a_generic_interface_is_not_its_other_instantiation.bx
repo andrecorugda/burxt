@@ -1,0 +1,25 @@
+// `Mapper<Int>` and `Mapper<String>` are DIFFERENT types. Roadmap A9, and this is the fixture for
+// the vtable-keying decision.
+//
+// Monomorphising an interface makes each instantiation an ordinary interface under a mangled name,
+// so the question "how is the vtable keyed" answers itself: by the interface name, which is what
+// it was always keyed by, and `Mapper$Int` and `Mapper$String` are two names. Nothing in the
+// vtable machinery learned that generics exist.
+//
+// What that buys is exactly this refusal. A class that implements one instantiation does not
+// implement the other, and passing it where the other is wanted is a type error rather than a
+// call through the wrong slot — which is the failure mode a shared vtable would have produced,
+// silently and at runtime.
+//
+// The message names the interface as the AUTHOR wrote it — `Mapper<String>`, never the mangled
+// `Mapper$String` the compiler made up.
+interface Mapper<T> { function apply(self, x: T) -> T }
+
+class Doubler { }
+implement Mapper<Int> for Doubler {
+    function (self) apply(x: Int) -> Int { return x * 2; }
+}
+
+let d: Doubler = Doubler { };
+let wrong: dynamic Mapper<String> = d;
+print(wrong.apply("hi"));

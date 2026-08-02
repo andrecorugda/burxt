@@ -139,6 +139,25 @@ pub enum Type {
     /// the vtable lives outside the data, which is why the A4.5 layout
     /// guarantee means becoming an interface object never moves a field.
     Dyn(String),
+    /// `dynamic Mapper<Int>` — an interface object at a generic instantiation. Roadmap A9.
+    ///
+    /// **It exists only between parsing and `expand`**, exactly as `Generic` and `Tuple` above
+    /// do. `expand` makes the instantiation — substituting `Int` for `T` through every method
+    /// signature, registering the result under the mangled name — and hands back
+    /// `Dyn("Mapper$Int")`. After that, no rule in this compiler knows a generic interface
+    /// exists: the vtable, the conformance check, the method lookup and `may_be_region_storage`
+    /// all see the `Dyn` they have handled since v0.0.14, and two instantiations are two names.
+    ///
+    /// **Why this is a variant and not just `Generic`.** `dynamic` is sugar — a bare `Mapper<Int>`
+    /// means the same thing, by the same v0.0.155 rule that makes a bare `Tax` mean `dynamic Tax`
+    /// — so desugaring it to `Generic` in the parser was the obvious move. It is wrong, and
+    /// measurably: `dynamic Holder<Int>` where `Holder` is a generic CLASS would then expand to
+    /// the ordinary record `Holder$Int` and be **silently accepted**, while `dynamic Holder`
+    /// without arguments is refused today with "unknown interface `Holder`". A refusal at one
+    /// spelling and acceptance at another is a bug, not a design. Keeping the two apart until
+    /// `expand` is what lets the generic case give the same refusal the bare case gives —
+    /// see `tests/fail/dynamic_on_a_generic_class.bx`, which is that exact program.
+    DynGeneric { name: String, arguments: Vec<Type> },
 }
 
 impl Type {
@@ -181,6 +200,10 @@ impl std::fmt::Display for Type {
                 write!(f, "{}<{}>", name, inner.join(", "))
             }
             Type::Dyn(name) => write!(f, "dynamic {}", name),
+            Type::DynGeneric { name, arguments } => {
+                let inner: Vec<String> = arguments.iter().map(|a| a.to_string()).collect();
+                write!(f, "dynamic {}<{}>", name, inner.join(", "))
+            }
         }
     }
 }
@@ -653,6 +676,15 @@ pub struct InterfaceSig {
 #[derive(Debug, Clone)]
 pub struct InterfaceDef {
     pub name: String,
+    /// `interface Mapper<T> { function apply(self, x: T) -> T }` — what this interface is
+    /// generic over, in order. Empty for the overwhelming majority. Roadmap A9.
+    ///
+    /// An instantiation is MONOMORPHISED, exactly as a generic class is: `expand` turns
+    /// `Mapper<Int>` into `Dyn("Mapper$Int")` and registers a signature set under that
+    /// mangled name. After that pass no rule in the checker knows a generic interface
+    /// exists — the vtable, the method lookup and the conformance check all key off the
+    /// interface NAME they already keyed off, and two instantiations are two names.
+    pub type_parameters: Vec<TypeParam>,
     pub methods: Vec<InterfaceSig>,
     /// Where this item was written, for errors about the item itself.
     pub span: Span,
@@ -664,6 +696,14 @@ pub struct InterfaceDef {
 #[derive(Debug, Clone)]
 pub struct ImplBlock {
     pub interface_name: String,
+    /// `implement Mapper<Int> for Doubler` — the arguments the interface is being
+    /// implemented AT. Empty for a non-generic interface, which is almost all of them.
+    ///
+    /// Kept beside `interface_name` rather than mangled into it by the parser, because the
+    /// parser does not know which names are generic and a message must be able to say
+    /// `Mapper<Int>` — the name the author wrote. `check_program_inner` resolves the pair
+    /// to the mangled symbol once `expand` has made the instantiation.
+    pub interface_arguments: Vec<Type>,
     pub type_name: String,
     pub methods: Vec<MethodDef>,
     /// Synthesized from `class X implements Y`, rather than written as a standalone

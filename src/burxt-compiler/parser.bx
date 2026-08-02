@@ -287,6 +287,35 @@ function (mutable self: Unit) parse_type(src: String) -> Int {
         if !self.at(1) { return self.complain(src, "an interface name after `dynamic`"); }
         let name_tok: Int = self.position;
         let m: Int = self.advance();
+        // `dynamic Mapper<Int>` — an interface object at an instantiation, roadmap A9. The
+        // arguments ride in `a`/`b` pointing into `nested_children`, which is byte for byte
+        // what kind 46 already does for `Option<Int>`: a dynamic type IS a named type that
+        // dispatches, so it needed no new node kind and no new field.
+        //
+        // Gathered first and appended after, for the reason every other nested list here
+        // records: a NESTED application pushes its own arguments while this one is still
+        // parsing, so a start taken before the loop begins inside the inner list.
+        if self.at(35) {                             // '<'
+            let open: Int = self.advance();
+            let mutable gathered: [Int] = [];
+            while true {
+                let argument: Int = self.parse_type(src);
+                if argument < 0 { return -1; }
+                push(gathered, argument);
+                if self.more_in_list(36) {
+                    continue;
+                }
+                break;
+            }
+            if !self.eat(src, 36, "`>` closing the type arguments") { return -1; }
+            let args_start: Int = len(self.nested_children);
+            let mutable g: Int = 0;
+            while g < len(gathered) {
+                push(self.nested_children, gathered[g]);
+                g += 1;
+            }
+            return self.add(49, args_start, len(gathered), 0, 0, name_tok);
+        }
         return self.add(49, 0, 0, 0, 0, name_tok);
     }
     if k == 33 {                                     // '[' — slice or fixed array
@@ -1006,6 +1035,39 @@ function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: No
     }
     let decl: TypeDeclaration = self.types[found];
     let item: Node = self.nodes[decl.node];
+    // `dynamic Mapper<Int>` — bind the interface's `T` to `Int` for this call. Roadmap A9.
+    // The same call a generic class's method makes, because kind 49 carries its arguments in the
+    // same two slots kind 46 does.
+    let bind_base: Int = self.bind_from_application(src, holder);
+    // An argument naming nothing — `dynamic Mapper<T, U>` in a method whose receiver declares only
+    // `T`, so `U` parsed as an ordinary type name and no declaration matches it. Stage-0's
+    // sentence to the byte, so a `.stderr` fixture pins one text for both compilers.
+    //
+    // Checked HERE, at the call, rather than at the signature, because that is where stage-1 has
+    // a token to point at: `bind_from_application` is reached from twenty-five sites across five
+    // files and threading a span through all of them to serve one message would be a worse trade.
+    // The residual is a method declared with a bad argument and never called, which stage-0
+    // refuses and stage-1 lets stand.
+    //
+    // **Restricted to interface arguments deliberately.** The same question about any other
+    // unknown type name is a PRE-EXISTING hole and a much wider one: stage-1 refuses no unknown
+    // type in a signature at all, so `function takes(x: Nope) -> Int` compiles here and stage-0
+    // refuses it. Measured on a pristine v0.0.276 stage-1, so it is older than this milestone and
+    // general to it. What A9 owes is that A9 adds no divergence; the wider hole is reported.
+    let mutable ai: Int = 0;
+    while ai < holder.contract {
+        let argument: Type = self.declared_type(src, self.nested_children[holder.scale + ai]);
+        if argument.kind == 46 {
+            if self.find_type(src, argument.name_start, argument.name_length) < 0 {
+                let complained: Int = self.complain_at(src, call.token,
+                    "`" + substring(src, argument.name_start, argument.name_length)
+                    + "` in `" + substring(src, holder.name_start, holder.name_length)
+                    + "<...>` names no type. A method's type parameters come from its receiver — "
+                    + "`function (self: List<T>) ...` declares `T` and nothing else.");
+            }
+        }
+        ai += 1;
+    }
     let mutable i: Int = 0;
     while i < item.b {
         let sig: Node = self.nodes[self.children[item.a + i]];
@@ -1032,12 +1094,17 @@ function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: No
                 let complained: Int = self.complain_at(src, call.token,
                     "this call passes " + to_string(list.b) + " argument(s), but the "
                     + "method takes " + to_string(sig.c));
-                return self.declared_type(src, sig.a);
+                let answer: Type = self.resolve_deep(src, self.declared_type(src, sig.a), sig.a);
+                let dropped: Int = truncate(self.type_bindings, bind_base);
+                return answer;
             }
             let mutable p: Int = 0;
             while p < sig.c {
                 let param: Node = self.nodes[self.nested_children[sig.b + p]];
-                let want: Type = self.declared_type(src, param.a);
+                // Resolved, so `x: T` in the declaration is compared — and SHOWN — as the `Int`
+                // this instantiation says it is. Resolving only inside `fits` would have left the
+                // message saying "should be T", naming a parameter the caller never wrote.
+                let want: Type = self.resolve_deep(src, self.declared_type(src, param.a), param.a);
                 let got: Type = self.type_of(src, self.children[list.a + p], want);
                 if !is_unknown(got) && !self.fits(src, got, want) {
                     let complained: Int = self.complain_at(src, call.token,
@@ -1068,12 +1135,15 @@ function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: No
                     "`dynamic " + substring(src, holder.name_start, holder.name_length) + "."
                     + substring(src, wanted.start, wanted.length) + "`");
             }
-            return self.declared_type(src, sig.a);
+            let answer: Type = self.resolve_deep(src, self.declared_type(src, sig.a), sig.a);
+            let dropped: Int = truncate(self.type_bindings, bind_base);
+            return answer;
         }
         i += 1;
     }
     let complained: Int = self.complain_at(src, call.token,
         self.show_type(src, holder) + " has no such method");
+    let dropped: Int = truncate(self.type_bindings, bind_base);
     return unknown_type();
 }
 
@@ -1324,12 +1394,47 @@ function (mutable self: Unit) fits(src: String, got: Type, want: Type) -> Bool {
                     want.name_start, want.name_length) {
             if spans_equal(src, candidate.type_start, candidate.type_len,
                         got.name_start, got.name_length) {
-                return true;
+                // The INSTANTIATION has to match too, not just the interface's name. Roadmap A9.
+                //
+                // **Without this stage-1 accepted the program and the binary SEGFAULTED**: a
+                // `Doubler` that implements `Mapper<Int>` satisfied a `dynamic Mapper<String>`,
+                // so a String was handed to a function expecting an Int and the vtable slot ran
+                // on the wrong value. A refusal is safe and a miscompile is not — the same
+                // sentence `declared_type` records about the `dynamic` sugar waiting two versions
+                // for its four crossings.
+                if self.instantiation_matches(src, candidate, want) {
+                    return true;
+                }
             }
         }
         i += 1;
     }
     return false;
+}
+
+// Does this implementation's `<...>` match the arguments the wanted interface was written with?
+// True when neither has any, which is every non-generic interface. Roadmap A9.
+//
+// Compared STRUCTURALLY, argument by argument, because stage-1 never mangles an instantiation
+// into a name — `Mapper<Int>` is a span plus a list of type nodes, here and everywhere else.
+// Stage-0 asks the same question by comparing `Mapper$Int` with `Mapper$String` as strings; the
+// two arrive at the same answer and `tests/fail/a_generic_interface_is_not_its_other_
+// instantiation.bx` is what says so.
+function (mutable self: Unit) instantiation_matches(src: String, candidate: Implementation,
+                                                    want: Type) -> Bool {
+    if candidate.trait_arg_count != want.contract {
+        return false;
+    }
+    let mutable i: Int = 0;
+    while i < candidate.trait_arg_count {
+        let mine: Type = self.declared_type(src, self.nested_children[candidate.trait_args + i]);
+        let theirs: Type = self.declared_type(src, self.nested_children[want.scale + i]);
+        if !self.same_type(src, mine, theirs) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
 }
 
 // Whether evaluating this expression allocates. The aggregate cases are here for the
@@ -3165,10 +3270,17 @@ function (mutable self: Unit) parse_record(src: String) -> Int {
             }
             let interface_tok: Int = self.position;
             let n2: Int = self.advance();
+            let args_start: Int = len(self.nested_children);
+            let args_count: Int = self.parse_trait_arguments(src);
+            if args_count < 0 { return -1; }
             // kind 85 is an implementation block; 0 children, and `value` marks it as
             // declared on the class so the checker knows where to find the methods.
             let block: Int = self.add(85, 0, 0, name_tok, 1, interface_tok);
             push(self.items, block);
+            if args_count > 0 {
+                push(self.impl_traits, ImplTrait { item: block, args_start: args_start,
+                                                   args_count: args_count });
+            }
             more = false;
             if self.at(22) {                             // ','
                 let comma: Int = self.advance();
@@ -3318,6 +3430,14 @@ function (mutable self: Unit) parse_trait(src: String) -> Int {
     if !self.at(1) { return self.complain(src, "an interface name"); }
     let name_tok: Int = self.position;
     let n: Int = self.advance();
+    // `interface Mapper<T> { ... }` — roadmap A9. The identical pair of calls a generic class
+    // and a generic function make, so the parameters go into scope for the signatures below and
+    // `self.generics` answers "is `Mapper` generic, and over what" for interfaces too. That
+    // table is keyed by NAME SPAN and shared by every kind of declaration, which is why an
+    // interface needed no machinery of its own.
+    let declared_params: Int = self.parse_type_params(src);
+    if declared_params < 0 { return -1; }
+    let noted: Int = self.note_generic(name_tok, declared_params);
     if !self.eat(src, 31, "`\{` opening the interface") { return -1; }
     let base: Int = len(self.stack);
     let mutable count: Int = 0;
@@ -3373,12 +3493,48 @@ function (mutable self: Unit) parse_trait(src: String) -> Int {
     return self.add(84, start, count, 0, 0, name_tok);
 }
 
+// The optional `<Int>` after an interface's name in an `implement` header. Roadmap A9.
+//
+// Shared by both spellings — `implement Mapper<Int> for D` and `class D implements Mapper<Int>`
+// — so the two cannot drift. A generic interface implementable by one form and not the other
+// would be a rule with a hole in it, and the hole would be invisible: the class form is the one
+// most programs use, and the standalone form is the one most fixtures test.
+//
+// Answers the count; the start is taken from `nested_children` before the call, because the
+// arguments are appended as they are parsed.
+function (mutable self: Unit) parse_trait_arguments(src: String) -> Int {
+    if !self.at(35) {                                // '<'
+        return 0;
+    }
+    let open: Int = self.advance();
+    let mutable gathered: [Int] = [];
+    while true {
+        let argument: Int = self.parse_type(src);
+        if argument < 0 { return 0 - 1; }
+        push(gathered, argument);
+        if self.more_in_list(36) {
+            continue;
+        }
+        break;
+    }
+    if !self.eat(src, 36, "`>` closing the type arguments") { return 0 - 1; }
+    let mutable g: Int = 0;
+    while g < len(gathered) {
+        push(self.nested_children, gathered[g]);
+        g += 1;
+    }
+    return len(gathered);
+}
+
 // `implement Trait for Type { methods }`
 function (mutable self: Unit) parse_impl(src: String) -> Int {
     if !self.eat(src, 113, "`implement`") { return -1; }
     if !self.at(1) { return self.complain(src, "an interface name"); }
     let trait_tok: Int = self.position;
     let t: Int = self.advance();
+    let args_start: Int = len(self.nested_children);
+    let args_count: Int = self.parse_trait_arguments(src);
+    if args_count < 0 { return -1; }
     if !self.eat(src, 114, "`for`") { return -1; }
     if !self.at(1) { return self.complain(src, "the type implementing the interface"); }
     let type_tok: Int = self.position;
@@ -3394,7 +3550,12 @@ function (mutable self: Unit) parse_impl(src: String) -> Int {
     }
     if !self.eat(src, 32, "`\}` closing the implementation") { return -1; }
     let start: Int = self.commit(base);
-    return self.add(85, start, count, type_tok, 0, trait_tok);
+    let block: Int = self.add(85, start, count, type_tok, 0, trait_tok);
+    if args_count > 0 {
+        push(self.impl_traits, ImplTrait { item: block, args_start: args_start,
+                                           args_count: args_count });
+    }
+    return block;
 }
 
 // `external function name(params) -> Type;` — no body, and none allowed.

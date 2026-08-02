@@ -1,0 +1,28 @@
+// `dynamic Mapper<T, U>` in a method whose receiver declares only `T` — refused, naming `U`.
+// Roadmap A9.
+//
+// A method takes its type parameters from its RECEIVER: `function (self: List<T>) ...` declares
+// `T` and nothing else, so a second parameter written in a signature is not a parameter at all —
+// it parses as an ordinary type name, and no declaration matches it.
+//
+// The reason this is caught where it is caught: the alternative is mangling the unknown name into
+// the instantiation's symbol and reporting `unknown interface \`Mapper$Int$U\``, which names a
+// thing the author never wrote and buries the one word that is actually wrong. Reaching for a
+// second type parameter on a method is the shape a reader hits first, so it gets a real sentence.
+//
+// Two parameters on a FREE generic function are supported and are what `map<T, U>` uses — see
+// `tests/pass/a_free_generic_maps_with_a_generic_interface.bx`.
+interface Mapper<T, U> { function apply(self, x: T) -> U }
+
+class List<T> { items: [T] }
+
+function (self: List<T>) mapped(f: dynamic Mapper<T, U>) -> [U] {
+    let mutable out: [U] = [];
+    for x in self.items {
+        push(out, f.apply(x));
+    }
+    return out;
+}
+
+let numbers: List<Int> = List { items: [1, 2] };
+print(len(numbers.items));

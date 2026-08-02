@@ -1,0 +1,13 @@
+// A generic interface applied to the wrong number of arguments — refused. Roadmap A9.
+//
+// The same sentence, in the same words, that a generic CLASS gives for the same mistake: an
+// interface rides the monomorphisation path a class already had, so the arity check is the one
+// that was already written rather than a second one that could drift from it.
+interface Mapper<T, U> { function apply(self, x: T) -> U }
+
+class Doubler { }
+implement Mapper<Int> for Doubler {
+    function (self) apply(x: Int) -> Int { return x * 2; }
+}
+let d: Doubler = Doubler { };
+print(1);

@@ -123,7 +123,54 @@ function (self: Unit) literal_int_value(node: Int) -> Int {
 
 // An interface implementation: a pair of names, which is all `dynamic` dispatch needs to know.
 // The method table already knows what the type can do.
-class Implementation { trait_start: Int, trait_len: Int, type_start: Int, type_len: Int }
+// `implement Mapper<Int> for D` — which interface, implemented by which type, AT WHICH
+// ARGUMENTS. Roadmap A9.
+//
+// `trait_args`/`trait_arg_count` index `nested_children` and hold the interface's type-argument
+// NODES, the same shape a generic application already uses. Both are 0 for a plain interface,
+// which is why the two spans above did not have to change meaning.
+//
+// Stage-1 never mangles an instantiation into a name — it has none to spell, since every name
+// here is a span in the source. It compares `Mapper<Int>` against `Mapper<String>` STRUCTURALLY,
+// name span first and then argument by argument, which is what `same_instantiation` does. That is
+// the one real difference from stage-0, which monomorphises to `Mapper$Int` and compares strings;
+// the two agree on every answer, and the fixtures are what say so.
+class Implementation { trait_start: Int, trait_len: Int, type_start: Int, type_len: Int,
+                       trait_args: Int, trait_arg_count: Int }
+
+// The type arguments an `implement` header wrote, keyed by the item node they were written on.
+//
+// A side table because a node holds six slots and kind 85 spends all six — kind, the method
+// list's start and count, the implementing type's token, the declared-on-class flag, and the
+// interface's own token. This is the shape stage-1 already reaches for when a declaration needs
+// one more fact than a node can hold; `generics`, `type_param_bounds` and `clause_subjects` are
+// the same answer to the same question.
+class ImplTrait { item: Int, args_start: Int, args_count: Int }
+
+// How many type arguments the `implement` header on this item wrote, and where they start.
+// Zero and zero for a plain interface, which is almost every one of them.
+//
+// Two functions rather than one answering a pair, because stage-1 has no tuples in its own
+// source: it is compiled by stage-0, which has had them since v0.0.276, but the FIXPOINT
+// requires stage-1 to compile this file too and stage-1 is what is being taught tuples nowhere
+// in this milestone. A linear scan over the impl headers a program wrote, which is a handful.
+function (self: Unit) trait_arguments_of(item: Int) -> Int {
+    for held in self.impl_traits {
+        if held.item == item {
+            return held.args_count;
+        }
+    }
+    return 0;
+}
+
+function (self: Unit) trait_argument_start(item: Int) -> Int {
+    for held in self.impl_traits {
+        if held.item == item {
+            return held.args_start;
+        }
+    }
+    return 0;
+}
 
 // ---- B25: one `mutable` parameter that a function GROWS -----------------------------------------
 //
@@ -205,7 +252,26 @@ function (self: Unit) show_type(src: String, t: Type) -> String {
         }
         return "Decimal<" + to_string(t.scale) + ">";
     }
-    if t.kind == 49 { return "dynamic " + substring(src, t.name_start, t.name_length); }
+    // `dynamic Mapper<Int>` — the arguments are part of the name a reader wrote, so they are part
+    // of what a message shows. Roadmap A9. Stage-0 reaches the same text by a different road: it
+    // mangled the instantiation to `Mapper$Int` and `show` looks the arguments back up in
+    // `instance_of` to spell them. Both must print `dynamic Mapper<Int>`, because a `.stderr`
+    // fixture pins one text and both compilers are held to it.
+    if t.kind == 49 {
+        if t.contract > 0 {
+            let mutable spelled: String = "dynamic " + substring(src, t.name_start, t.name_length)
+                                          + "<";
+            let mutable i: Int = 0;
+            while i < t.contract {
+                if i > 0 { spelled += ", "; }
+                spelled += self.show_type(src,
+                    self.declared_type(src, self.nested_children[t.scale + i]));
+                i += 1;
+            }
+            return spelled + ">";
+        }
+        return "dynamic " + substring(src, t.name_start, t.name_length);
+    }
     if t.kind == 50 { return substring(src, t.name_start, t.name_length); }
     return substring(src, t.name_start, t.name_length);
 }
@@ -258,8 +324,14 @@ function (mutable self: Unit) bind_type_arguments(src: String, generic: Int, arg
         // tuple arm and this list had not, so `T` was never bound and the call's return type
         // stayed `T`. The list is what decides which parameters are even ASKED about, which is
         // why a gap in it is silent — nothing complains, the type simply never settles.
+        // 49 — a `dynamic Mapper<T, U>` parameter, roadmap A9. **The third instance of the
+        // omission the two paragraphs above record**, and it behaved exactly as they predict:
+        // `unify` had grown its arm for kind 49 and this list had not, so `U` never settled and
+        // the call was refused with "cannot tell what `U` is" — while stage-0 compiled the same
+        // program. A divergence in what is ACCEPTED, caught by running a pass fixture on both
+        // compilers rather than on the one just changed.
         if declared.kind == 50 || declared.kind == 47 || declared.kind == 48
-           || declared.kind == 46 || declared.kind == 53 {
+           || declared.kind == 46 || declared.kind == 53 || declared.kind == 49 {
             let actual: Type = self.type_of(src, self.children[given.a + i], unknown_type());
             if !is_unknown(actual) {
                 let matched: Bool = self.unify(src, declared, actual);
@@ -509,7 +581,14 @@ function (mutable self: Unit) resolve_deep(src: String, t: Type, at: Int) -> Typ
 // Answers the base to truncate back to, so the caller's bindings survive.
 function (mutable self: Unit) bind_from_application(src: String, holder: Type) -> Int {
     let base: Int = len(self.type_bindings);
-    if holder.kind != 46 || holder.contract <= 0 {
+    // Kind 49 as well as 46, because A9 gave `dynamic Mapper<Int>` the SAME two slots a generic
+    // application already used — arguments in `scale`, count in `contract`. So a dynamic type is
+    // a named type that dispatches, and binding its arguments is this function unchanged rather
+    // than a second copy of it that could disagree.
+    if holder.kind != 46 && holder.kind != 49 {
+        return base;
+    }
+    if holder.contract <= 0 {
         return base;
     }
     let generic: Int = self.generic_named(src, holder.name_start, holder.name_length);
@@ -641,7 +720,20 @@ function (mutable self: Unit) unify(src: String, declared: Type, actual: Type) -
     // Without this, unify handled slices and stopped, so a parameter reachable only through a type
     // argument could not be inferred — which is every constructor, since `-> Map<K, V>` mentions
     // its parameters only there.
-    if declared.kind == 46 && declared.contract > 0 && actual.kind == 46 {
+    // Kind 49 rides this arm too: `dynamic Mapper<T, U>` against `dynamic Mapper<Int, String>`
+    // binds both, and it is the same walk because A9 gave a dynamic type the same two slots.
+    // Roadmap A9.
+    //
+    // **This was a measured divergence, not a precaution.** With the arm restricted to 46,
+    // stage-0 compiled `map<T, U>(xs: [T], f: dynamic Mapper<T, U>)` and stage-1 refused it with
+    // "cannot tell what `U` is from this call" — a difference in what is ACCEPTED, which is
+    // §B15's direction. `tests/pass/a_free_generic_maps_with_a_generic_interface.bx` is the
+    // program that caught it, and it caught it because a pass fixture was run on both compilers
+    // rather than on the one that had just been changed.
+    if declared.kind == 46 || declared.kind == 49 {
+        if declared.contract <= 0 {
+            return self.same_type(src, declared, actual);
+        }
         if declared.contract != actual.contract {
             return false;
         }
@@ -1285,8 +1377,35 @@ function (self: Unit) same_type(src: String, a: Type, b: Type) -> Bool {
         return left.scale == right.scale && left.contract == right.contract;
     }
     if left.kind == 46 || left.kind == 49 || left.kind == 50 {
-        return spans_equal(src, left.name_start, left.name_length,
-                           right.name_start, right.name_length);
+        if !spans_equal(src, left.name_start, left.name_length,
+                        right.name_start, right.name_length) {
+            return false;
+        }
+        // The ARGUMENTS are part of the type, exactly as a tuple's elements are in the arm below
+        // and a fixed array's length is in the arm above. Roadmap A9 needs it — `Mapper<Int>` and
+        // `Mapper<String>` must not be interchangeable, or a value reaches the wrong vtable — but
+        // **the hole was older and wider than A9, and it was a silent miscompile.**
+        //
+        // Measured on a pristine v0.0.276 stage-1: `let a: Holder<Int> = ...; let b: Holder<String>
+        // = a; print(b.item);` compiled and SEGFAULTED, where stage-0 refuses it as a type
+        // mismatch. Comparing the name alone made every instantiation of a generic the same type,
+        // for classes and interfaces alike, so an Int was read back as a String pointer.
+        //
+        // Nothing caught it because the differential test's rejection count is a FLOOR: stage-1
+        // refusing LESS than stage-0 keeps the ratchet green. The same sentence `same_type`'s
+        // element-comparison note already records, one type constructor along.
+        if left.contract != right.contract {
+            return false;
+        }
+        let mutable g: Int = 0;
+        while g < left.contract {
+            if !self.same_type(src, self.declared_type(src, self.nested_children[left.scale + g]),
+                               self.declared_type(src, self.nested_children[right.scale + g])) {
+                return false;
+            }
+            g += 1;
+        }
+        return true;
     }
     // A tuple is STRUCTURAL: two tuples are the same type when their elements are, position
     // by position. There is no name to compare, which is the whole difference from kind 46.
@@ -2197,8 +2316,12 @@ function (mutable self: Unit) collect_declarations(src: String) -> Int {
         }
         if item.kind == 85 {                         // implement Trait for Type { ... }
             let target: Token = self.tokens[item.c];
+            // The `<Int>` of `implement Mapper<Int> for D`, if the header wrote one. Roadmap A9.
+            let written: Int = self.trait_arguments_of(index);
             push(self.impls, Implementation { trait_start: name.start, trait_len: name.length,
-                                    type_start: target.start, type_len: target.length });
+                                    type_start: target.start, type_len: target.length,
+                                    trait_args: self.trait_argument_start(index),
+                                    trait_arg_count: written });
             // The methods inside an implementation are declared exactly as free-standing ones
             // are, so they are collected by the same code rather than by a copy of it.
             let mutable k: Int = 0;
@@ -5436,6 +5559,16 @@ function (mutable self: Unit) check_impl(src: String, index: Int) -> Int {
         return 0;
     }
     let declared: Node = self.nodes[decl.node];
+    // `implement Mapper<Int> for D` — bind the interface's own `T` to `Int` for the whole of
+    // this check. Roadmap A9.
+    //
+    // Every comparison below already goes through `same_type`, which resolves both sides against
+    // `type_bindings`, so binding here is the whole of what conformance needed: `apply(self, x: T)
+    // -> T` becomes `apply(self, x: Int) -> Int` at every one of the four sites that compare a
+    // signature, including the two on the `class X implements Y` path — which is the point of
+    // doing it HERE and not in each of them. That path had already shipped once with a rule the
+    // other path had and it did not, and this milestone was not going to be the second time.
+    let bind_base: Int = self.bind_interface_arguments(src, index, decl.node);
     // `class X implements Y` sets `value` to 1 and carries no children: the class's OWN methods
     // satisfy the interface, so conformance is checked against the method table. A class may also
     // have methods the interface never mentions, which is normal — so the "no extras" rule that
@@ -5488,6 +5621,7 @@ function (mutable self: Unit) check_impl(src: String, index: Int) -> Int {
             }
             s += 1;
         }
+        let dropped: Int = truncate(self.type_bindings, bind_base);
         return 0;
     }
     let mutable i: Int = 0;
@@ -5565,7 +5699,53 @@ function (mutable self: Unit) check_impl(src: String, index: Int) -> Int {
         }
         k += 1;
     }
+    let dropped: Int = truncate(self.type_bindings, bind_base);
     return 1;
+}
+
+// Bind a generic interface's parameters from what an `implement` header wrote: `implement
+// Mapper<Int> for D` binds the interface's `T` to `Int`. Roadmap A9.
+//
+// Answers the base to truncate back to, exactly as `bind_from_application` does — the bindings
+// are scoped to one check and must not leak into the next declaration.
+//
+// **The arity check lives here** rather than beside the other conformance rules, because this is
+// the one place that knows both numbers: what the header wrote and what the declaration takes.
+function (mutable self: Unit) bind_interface_arguments(src: String, item: Int,
+                                                       declaration: Int) -> Int {
+    let base: Int = len(self.type_bindings);
+    let node: Node = self.nodes[declaration];
+    let named: Token = self.tokens[node.token];
+    let generic: Int = self.generic_named(src, named.start, named.length);
+    let written: Int = self.trait_arguments_of(item);
+    if generic < 0 {
+        if written > 0 {
+            let complained: Int = self.complain_at(src, self.nodes[item].token,
+                "`" + substring(src, named.start, named.length)
+                + "` is not generic, so it takes no type arguments — write `"
+                + substring(src, named.start, named.length) + "` on its own.");
+        }
+        return base;
+    }
+    let declared: Generic = self.generics[generic];
+    if written != declared.type_param_count {
+        let complained: Int = self.complain_at(src, self.nodes[item].token,
+            "`" + substring(src, named.start, named.length) + "` takes "
+            + to_string(declared.type_param_count) + " type argument(s), but "
+            + to_string(written) + " were given");
+        return base;
+    }
+    let start: Int = self.trait_argument_start(item);
+    let mutable i: Int = 0;
+    while i < declared.type_param_count {
+        let parameter: Token = self.tokens[self.type_parameters[declared.type_param_start + i]];
+        let argument: Type = self.declared_type(src, self.nested_children[start + i]);
+        push(self.type_bindings, TypeBinding { name_start: parameter.start,
+                                              name_length: parameter.length,
+                                              bound: self.resolve_shallow(src, argument) });
+        i += 1;
+    }
+    return base;
 }
 
 // The shapes a type may not have. Both refusals are about storage: a nested array would

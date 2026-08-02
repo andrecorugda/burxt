@@ -351,6 +351,19 @@ fn explain(ty: &Type) -> Option<String> {
              runtime.",
             t
         )),
+        // The same note for an instantiated one. `expr_types` hands back the written spelling,
+        // so a generic interface arrives here as `DynGeneric` and would otherwise fall to the
+        // `_` arm and lose its explanation — the note being dropped in silence is exactly the
+        // shape of the leak this change was fixing.
+        Type::DynGeneric { name, arguments } => {
+            let inner: Vec<String> = arguments.iter().map(|a| a.to_string()).collect();
+            Some(format!(
+                "A interface object: dispatch to whichever type implements `{}<{}>`, decided \
+                 at runtime.",
+                name,
+                inner.join(", ")
+            ))
+        }
         _ => None,
     }
 }

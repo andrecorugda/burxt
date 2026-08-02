@@ -1,0 +1,26 @@
+// One class may implement a generic interface at ONE instantiation, not two. Roadmap A9.
+//
+// This is the case nobody writes, and it is worth a fixture because the answer was not designed —
+// it fell out, and the fallout is what makes the rest of A9 cheap.
+//
+// A method is keyed by (receiver, name), and has been since v0.0.14. So `Both.apply` is one
+// method whatever interface asked for it, and a second instantiation wanting a second `apply`
+// collides with the first. The refusal is the ordinary duplicate-method one, not a rule A9 wrote.
+//
+// **What that buys is the vtable symbol.** `@burxt.vt.Mapper.Both` names an interface and a
+// concrete type, and the obvious worry about monomorphised interfaces is that `Mapper<Int>` and
+// `Mapper<String>` implemented by the same class would collide there. They cannot, because this
+// program does not compile — so the emitter needed no change at all, in either compiler.
+interface Mapper<T> { function apply(self, x: T) -> T }
+
+class Both { }
+implement Mapper<Int> for Both {
+    function (self) apply(x: Int) -> Int { return x * 2; }
+}
+implement Mapper<String> for Both {
+    function (self) apply(x: String) -> String { return x + "!"; }
+}
+
+let b: Both = Both { };
+let m: dynamic Mapper<Int> = b;
+print(m.apply(3));

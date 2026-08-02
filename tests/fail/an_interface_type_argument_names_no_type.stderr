@@ -1,0 +1,1 @@
+`U` in `Mapper<...>` names no type. A method's type parameters come from its receiver

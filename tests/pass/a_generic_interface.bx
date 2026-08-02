@@ -1,0 +1,57 @@
+// `interface Mapper<T>` — an interface that takes a type parameter. Roadmap A9.
+//
+// **This is the item that decided A10.** `dynamic Trait` was already a function value in all but
+// name — passable, callable, and capturing state in the implementor's fields — and exactly one
+// thing was missing: an interface could only be written for one concrete type. That single gap is
+// why `map`, `filter`, `fold`, `sort_by`, `any`, `all`, `retain`, `partition` and `position` were
+// absent from four libraries at once. Closures would have been a second way to do what this does.
+//
+// **How it is built, because the mechanism is the whole cost.** `expand` monomorphises an
+// interface exactly as it already monomorphised a generic class: `Mapper<Int>` becomes the
+// ordinary interface `Mapper$Int`, its signatures substituted once and registered under that
+// mangled name. After that pass nothing downstream knows a generic interface exists — the vtable,
+// the conformance check, the method lookup and the escape analysis all take an interface NAME,
+// which they always took, and two instantiations are simply two names. That is why this milestone
+// is mostly parser plus one lookup, and why `codegen.rs` needed no new behaviour.
+//
+// **Two instantiations must not share a vtable**, which is what the second half of this program
+// is for: `Mapper<Int>` and `Mapper<String>` are different types with different implementors, and
+// dispatching through one must never reach the other's slot.
+interface Mapper<T> { function apply(self, x: T) -> T }
+
+class Doubler { }
+implement Mapper<Int> for Doubler {
+    function (self) apply(x: Int) -> Int { return x * 2; }
+}
+
+// State captured in the implementor's fields — the half of a closure that matters.
+class AddN { n: Int }
+implement Mapper<Int> for AddN {
+    function (self) apply(x: Int) -> Int { return x + self.n; }
+}
+
+class Shout { }
+implement Mapper<String> for Shout {
+    function (self) apply(x: String) -> String { return x + "!"; }
+}
+
+// Callable through, twice, exactly as `dynamic Step` has been since v0.0.14.
+function twice(m: dynamic Mapper<Int>, x: Int) -> Int {
+    return m.apply(m.apply(x));
+}
+
+let d: Doubler = Doubler { };
+print(twice(d, 3));
+
+let a: AddN = AddN { n: 10 };
+print(twice(a, 1));
+
+// The other instantiation, through its own vtable.
+let s: Shout = Shout { };
+let ms: dynamic Mapper<String> = s;
+print(ms.apply("hi"));
+
+// A bare `Mapper<Int>` means a dynamic one, by the same rule that makes a bare `Tax` mean
+// `dynamic Tax` — so both spellings must reach the same interface and the same vtable.
+let bare: Mapper<Int> = d;
+print(bare.apply(21));

@@ -1,0 +1,69 @@
+// The acceptance demonstration A9 was held to: a working `map` over an array, written with a
+// generic interface, in the form a user would plausibly write it. Roadmap A9 / D2d.
+//
+// If this did not come out clean, A9 had not replaced A10 and closures were back on the roadmap.
+// It comes out clean, and `filter` falls out of the same machinery with a second interface — so
+// the pair below is the evidence for the A10 row's "NOT BUILDING IT".
+//
+// **Read what a closure would have added here: nothing.** `AddN` captures `n` in a field, which is
+// the whole of what a capturing lambda does, and the capture is visible at the construction site
+// rather than implied by which names were in scope. That is the language's case in one program.
+//
+// The one ceremony this form still pays is the binding: an interface object borrows the storage of
+// the value it refers to, so the implementor must be a variable rather than a literal at the call.
+// That rule is older than A9 and applies to `dynamic Step` identically.
+interface Mapper<T> { function apply(self, x: T) -> T }
+interface Predicate<T> { function test(self, x: T) -> Bool }
+
+function map(xs: [Int], f: dynamic Mapper<Int>) -> [Int] {
+    let mutable out: [Int] = [];
+    for x in xs {
+        push(out, f.apply(x));
+    }
+    return out;
+}
+
+function filter(xs: [Int], p: dynamic Predicate<Int>) -> [Int] {
+    let mutable out: [Int] = [];
+    for x in xs {
+        if p.test(x) {
+            push(out, x);
+        }
+    }
+    return out;
+}
+
+class Doubler { }
+implement Mapper<Int> for Doubler {
+    function (self) apply(x: Int) -> Int { return x * 2; }
+}
+
+class AddN { n: Int }
+implement Mapper<Int> for AddN {
+    function (self) apply(x: Int) -> Int { return x + self.n; }
+}
+
+class Above { limit: Int }
+implement Predicate<Int> for Above {
+    function (self) test(x: Int) -> Bool { return x > self.limit; }
+}
+
+let xs: [Int] = [1, 2, 3, 4, 5];
+
+let d: Doubler = Doubler { };
+let doubled = map(xs, d);
+for v in doubled {
+    print(v);
+}
+
+let a: AddN = AddN { n: 100 };
+let shifted = map(xs, a);
+for v in shifted {
+    print(v);
+}
+
+let big: Above = Above { limit: 3 };
+let kept = filter(xs, big);
+for v in kept {
+    print(v);
+}

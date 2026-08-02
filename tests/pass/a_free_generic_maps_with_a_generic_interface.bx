@@ -1,0 +1,76 @@
+// `map<T, U>` — a free generic function over a generic interface, changing the element type.
+// Roadmap A9 / D2d. This is the strongest form A9 reaches, and the one the libraries want.
+//
+// **Two type parameters, and the interface carries both**, so `[Int] -> [String]` and
+// `[String] -> [Int]` are one function with two instantiations rather than two functions.
+//
+// **What makes the body compile is that a generic's body is checked ABSTRACTLY.** The interface's
+// own signatures are known before any instantiation — `apply(self, x: T) -> U` — so substituting
+// the arguments the signature wrote gives the contract the body is held to. That is the same rule
+// a bound already followed (`<T: Ordered>` types its body from the bound, not per instantiation);
+// A9 only had to let a written-out `dynamic Mapper<T, U>` do what a named bound could.
+//
+// **The boundary this fixture also records:** the instantiation is ANNOTATED, not inferred from
+// the implementor. `map(xs, Label { })` does not compile — the compiler will not search the impls
+// to discover that `Label` is a `Mapper<Int, String>`, and it should not guess when a class may
+// implement an interface at more than one instantiation. Writing the type where the value is bound
+// is the same rule `map_new()` follows. Inference from the impl set is deferred, deliberately.
+interface Mapper<T, U> { function apply(self, x: T) -> U }
+interface Predicate<T> { function test(self, x: T) -> Bool }
+
+function map<T, U>(xs: [T], f: dynamic Mapper<T, U>) -> [U] {
+    let mutable out: [U] = [];
+    for x in xs {
+        push(out, f.apply(x));
+    }
+    return out;
+}
+
+function filter<T>(xs: [T], p: dynamic Predicate<T>) -> [T] {
+    let mutable out: [T] = [];
+    for x in xs {
+        if p.test(x) {
+            push(out, x);
+        }
+    }
+    return out;
+}
+
+class Label { }
+implement Mapper<Int, String> for Label {
+    function (self) apply(x: Int) -> String { return "n={x}"; }
+}
+
+class Width { }
+implement Mapper<String, Int> for Width {
+    function (self) apply(x: String) -> Int { return len(x); }
+}
+
+class Odd { }
+implement Predicate<Int> for Odd {
+    function (self) test(x: Int) -> Bool { return remainder(x, 2) == 1; }
+}
+
+let numbers: [Int] = [1, 2, 3, 4];
+
+let label: Label = Label { };
+let as_text: dynamic Mapper<Int, String> = label;
+let texts = map(numbers, as_text);
+for t in texts {
+    print(t);
+}
+
+let words: [String] = ["a", "bbb", "cc"];
+let width: Width = Width { };
+let as_width: dynamic Mapper<String, Int> = width;
+let widths = map(words, as_width);
+for w in widths {
+    print(w);
+}
+
+let odd: Odd = Odd { };
+let is_odd: dynamic Predicate<Int> = odd;
+let odds = filter(numbers, is_odd);
+for v in odds {
+    print(v);
+}

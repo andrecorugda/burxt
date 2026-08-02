@@ -1,0 +1,19 @@
+// `dynamic Holder<Int>` where `Holder` is a generic CLASS — refused. Roadmap A9.
+//
+// **This program is the reason `Type::DynGeneric` is a variant rather than sugar.** `dynamic` is
+// ceremony: a bare `Mapper<Int>` already means a dynamic one, by the same v0.0.155 rule that makes
+// a bare `Tax` mean `dynamic Tax`. So desugaring `dynamic Mapper<Int>` to a plain generic
+// application in the parser was the obvious move, and it is wrong — with it, THIS program expands
+// to the ordinary record `Holder$Int` and is silently accepted, while `dynamic Holder` with no
+// arguments is refused with "unknown interface".
+//
+// A refusal at one spelling and acceptance at another is a bug, not a design. Keeping the two
+// apart until `expand` is what lets the generic case give the same sentence the bare case gives.
+class Holder<T> { item: T }
+
+function unwrap(h: dynamic Holder<Int>) -> Int {
+    return h.item;
+}
+
+let h: Holder<Int> = Holder { item: 7 };
+print(unwrap(h));
