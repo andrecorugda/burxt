@@ -325,6 +325,59 @@ function (mutable self: Unit) parse_type(src: String) -> Int {
         }
         return self.add(47, elem, 0, 0, 0, here);
     }
+    // `(Int, String)` — a tuple, roadmap A8. Node kind 53, elements in `nested_children`
+    // exactly as a generic application's arguments are: a tuple IS an argument list with no
+    // name in front of it, so it reuses the layout rather than adding a field.
+    //
+    // Gathered first and appended after, the `gathered` shape the generic-argument loop above
+    // uses and for the same reason it exists: a NESTED tuple pushes its own elements while
+    // this one is still parsing, so a start taken before the loop would begin inside the
+    // inner list and `((Int, Int), String)` would read its first element as `Int`.
+    if k == 29 {                                     // '('
+        let n: Int = self.advance();
+        if self.at(30) {                             // ')' — `()`
+            let complained: Int = self.complain_at(src, here,
+                "`()` is not a type: a tuple holds two or more values, and Burxt "
+                + "has no unit type for the empty one to be.");
+            let close: Int = self.advance();
+            return -1;
+        }
+        let mutable gathered: [Int] = [];
+        while true {
+            let element: Int = self.parse_type(src);
+            if element < 0 { return -1; }
+            push(gathered, element);
+            if self.more_in_list(30) {               // ',' — a trailing one is allowed
+                continue;
+            }
+            break;
+        }
+        // Complained about BEFORE the `)` is eaten, so the caret lands on the `)` that closed
+        // the type rather than on whatever came after it — the same position stage-0 reports,
+        // which is one fewer row in the corpus's span column (§B17).
+        if len(gathered) < 2 {
+            // `show_type` lives in check.bx and is reachable here because main.bx assembles
+            // every module into one program — the same reason this file names `Token` and
+            // `Node` without a `use`. It is called rather than re-implemented because the
+            // text has to be stage-0's `Type::Display` to the byte, and one renderer cannot
+            // disagree with itself.
+            let only: String = self.show_type(src, self.declared_type(src, gathered[0]));
+            let complained: Int = self.complain_at(src, self.position,
+                "a tuple holds two or more values, so `(" + only + ")` is just `" + only
+                + "` — drop the parentheses. There is no one-value tuple in Burxt: it "
+                + "would differ from a parenthesised type by one comma.");
+            let close: Int = self.advance();
+            return -1;
+        }
+        if !self.eat(src, 30, "`)` closing the tuple type") { return -1; }
+        let start: Int = len(self.nested_children);
+        let mutable g: Int = 0;
+        while g < len(gathered) {
+            push(self.nested_children, gathered[g]);
+            g += 1;
+        }
+        return self.add(53, start, len(gathered), 0, 0, here);
+    }
     if k == 1 {                                      // a named record, enum or trait
         let name_tok: Int = self.position;
         let n: Int = self.advance();
@@ -371,6 +424,20 @@ function (mutable self: Unit) parse_type(src: String) -> Int {
 // every other lookup here: a class has a handful of fields, and a map would be a
 // dependency on machinery the language does not have.
 function (self: Unit) field_type(src: String, holder: Type, name_tok: Int) -> Type {
+    // A tuple's "field name" is a POSITION, and the token after the `.` is the Int literal
+    // that spells it — so the answer is an index into the element list rather than a name
+    // to search for. Everything else about a field access is unchanged, which is why `.0`
+    // needed no expression kind of its own.
+    if holder.kind == 53 {
+        let named: Token = self.tokens[name_tok];
+        if named.kind != 2 {
+            return unknown_type();               // `pair.first` — a name, and a tuple has none
+        }
+        if named.value < 0 || named.value >= holder.contract {
+            return unknown_type();
+        }
+        return self.declared_type(src, self.nested_children[holder.scale + named.value]);
+    }
     if holder.kind != 46 {
         return unknown_type();
     }
@@ -652,7 +719,14 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
             let complained: Int = self.complain_at(src, at,
                 "`to_string` of a String is a copy with a name that says otherwise");
         }
-        if first.kind == 46 || first.kind == 49 || first.kind == 47 || first.kind == 48 {
+        // 53 is a tuple, and it is the THIRD place this same list needed it — `print`, here,
+        // and `check_pieces` below. Stage-0 refuses all three through one `Named` arm, because
+        // by then a tuple IS a class; here it is still a tuple and each list has to say so.
+        // Measured, not reviewed: stage-1 ACCEPTED `to_string(pair)` and returned the tuple's
+        // ADDRESS — a different number every run, in the language whose central claim is that
+        // a program's output is not.
+        if first.kind == 46 || first.kind == 49 || first.kind == 47 || first.kind == 48
+           || first.kind == 53 {
             let complained: Int = self.complain_at(src, at,
                 "`to_string` renders a number, a Bool or a Decimal — " + self.show_type(src, first)
                 + " has no one rendering the language can choose for it");
@@ -1149,7 +1223,10 @@ function (mutable self: Unit) check_pieces(src: String, n: Node) -> Int {
     while i < n.b {
         let piece: Int = self.children[n.a + i];
         let shown: Type = self.type_of(src, piece, unknown_type());
-        if shown.kind == 46 || shown.kind == 47 || shown.kind == 48 || shown.kind == 49 {
+        // 53 — a tuple, for the reason the `to_string` list above records. `"v: {pair}"`
+        // interpolated the tuple's address until this arm existed.
+        if shown.kind == 46 || shown.kind == 47 || shown.kind == 48 || shown.kind == 49
+           || shown.kind == 53 {
             let complained: Int = self.complain_at(src, self.nodes[piece].token,
                 "an interpolated value renders a number, a Bool, a Decimal or a String — "
                 + self.show_type(src, shown) + " has none the language can choose for it");
@@ -1398,6 +1475,31 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
             return false;
         }
         return self.expr_allocates(src, n.a);
+    }
+    // A tuple literal: its children ARE the values, like an array literal's and unlike a class
+    // literal's field pairs. So the loop is the array one, and there is no growable case above
+    // it because a tuple is cells rather than a header.
+    //
+    // **The arm's absence was a live use-after-free and the differential test is what found
+    // it, not review.** With every other A8 rule in place, stage-1 ACCEPTED
+    //
+    //     region r { let p: (Int, String) = (1, "a" + "b"); out = p; }
+    //
+    // — the exact program stage-0 refuses — because the tuple literal is where the join is,
+    // and a literal whose kind this function does not know answers `false`, so the binding was
+    // never marked `holds_region` and the bare name `p` looked clean. Note the shape: the
+    // region rules had already been given their tuple arms and were all correct. It is the
+    // fourth time this function has been the one that did not know about a new node kind,
+    // after an interpolated String, a class literal's pairs, and a field read.
+    if n.kind == 23 {
+        let mutable e: Int = 0;
+        while e < n.b {
+            if self.expr_allocates(src, self.children[n.a + e]) {
+                return true;
+            }
+            e += 1;
+        }
+        return false;
     }
     if n.kind == 17 {                                // an array literal: children ARE the values
         if self.type_at(node).kind == 47 {
@@ -2039,7 +2141,35 @@ function (mutable self: Unit) parse_postfix(src: String) -> Int {
         if self.at(23) {                             // '.'
             let here: Int = self.position;
             let n: Int = self.advance();
-            if !self.at(1) {
+            // `t.0.1` does NOT lex the way it reads, and this arm says so instead of leaving
+            // the reader to work it out from "expected a field or method name". After the
+            // first `.`, `scan_number` sees `0`, then `.`, then the digit `1`, and claims all
+            // three as the decimal `0.1` — the same one-digit lookahead that makes `x.0` a
+            // field access at ONE level makes it impossible at two. Found by writing the
+            // program, not by reading the lexer.
+            if self.at(3) {                          // a decimal literal
+                let d: Token = self.tokens[self.position];
+                let mutable ten: Int = 1;
+                let mutable p: Int = 0;
+                while p < d.scale {
+                    ten = ten * 10;
+                    p += 1;
+                }
+                let outer: String = to_string(divide_floor(d.value, ten));
+                let inner: String = to_string(remainder(d.value, ten));
+                let complained: Int = self.complain_at(src, self.position,
+                    "`." + outer + "." + inner + "` cannot be written: after a `.`, `" + outer
+                    + "." + inner + "` is lexed as one decimal literal rather than two "
+                    + "positions. Bind the inner tuple first — `let inner = t." + outer
+                    + "; inner." + inner + "`.");
+                return -1;
+            }
+            // `pair.0` — a tuple's field name IS its position, and the lexer already produced
+            // it: `scan_number` claims a `.` only when a DIGIT follows, so `x.0` has been
+            // Ident/Dot/Int since before A8 and neither lexer changed. The Int token stands in
+            // for the name token; everything downstream reads the field name as a SPAN, and
+            // the span of that token is the digits.
+            if !self.at(1) && !self.at(2) {
                 return self.complain(src, "a field or method name after `.`");
             }
             let name_tok: Int = self.position;
@@ -2180,10 +2310,43 @@ function (mutable self: Unit) parse_primary(src: String) -> Int {
         if k == 120 { return self.add(4, 0, 0, 0, 1, here); }
         return self.add(4, 0, 0, 0, 0, here);
     }
-    if k == 29 {                                     // '(' grouping
+    if k == 29 {                                     // '(' grouping, or a tuple literal
         let n: Int = self.advance();
         let inner: Int = self.parse_expr(src);
         if inner < 0 { return -1; }
+        // A tuple literal and a parenthesised expression begin identically and are told apart
+        // by the comma — so this stays inside the grouping case rather than becoming one of
+        // its own, and `(a + b)` still costs nothing and still returns the inner node.
+        if self.at(22) {                             // ','
+            let base: Int = len(self.stack);
+            push(self.stack, inner);
+            let mutable count: Int = 1;
+            while self.at(22) {                      // ','
+                let comma: Int = self.advance();
+                // Every other comma-separated list in this parser calls `more_in_list`, which
+                // tolerates a trailing comma. A tuple must not: `(a,)` is how Rust spells a
+                // ONE-value tuple, so accepting it would silently build a different value than
+                // the reader asked for. The one list in the language that says no.
+                if self.at(30) {                     // ')'
+                    let complained: Int = self.complain_at(src, self.position,
+                        "a tuple literal takes no trailing comma. `(a,)` is a one-value tuple "
+                        + "in some other languages and Burxt has none — write `(a, b)` for the "
+                        + "pair, or drop the parentheses for the value.");
+                    let dropped: Int = self.commit(base);
+                    return -1;
+                }
+                let element: Int = self.parse_expr(src);
+                if element < 0 {
+                    let dropped: Int = self.commit(base);
+                    return -1;
+                }
+                push(self.stack, element);
+                count += 1;
+            }
+            if !self.eat(src, 30, "`)` closing the tuple") { return -1; }
+            let start: Int = self.commit(base);
+            return self.add(23, start, count, 0, 0, here);
+        }
         if !self.eat(src, 30, "`)` closing the group") { return -1; }
         return inner;
     }
@@ -3103,21 +3266,38 @@ function (mutable self: Unit) parse_enum(src: String) -> Int {
         if !self.at(1) { return self.complain(src, "a variant name"); }
         let variant_tok: Int = self.position;
         let v: Int = self.advance();
-        let payload_start: Int = len(self.nested_children);
-        let mutable payload: Int = 0;
+        // Gathered first, appended after — the `gathered` shape, and this loop did NOT have it.
+        //
+        // **A pre-existing miscompile, found by A8 and not caused by it.** Taking the start
+        // before the loop looks right and is not: a payload type that pushes into
+        // `nested_children` WHILE this list is being built puts its own entries at
+        // `payload_start`, so the variant reads its first payload out of the middle of them.
+        // `enum Holder { Full(Option<Int>) }` — no tuple anywhere — is read by this parser as
+        // carrying `Int`, and stage-0 accepts it, so stage-1 REFUSED a valid program.
+        // A8 met it because a tuple is the second type that pushes here; the generic
+        // application has done so since generics landed, and the comment on THAT loop in
+        // `parse_type` records the identical fix for the identical reason. The lesson is that
+        // the note stayed where the bug was fixed instead of where the invariant lives.
+        let mutable gathered: [Int] = [];
         if self.at(29) {                             // '(' — a payload
             let p: Int = self.advance();
             while !self.at(30) {
                 let type_node: Int = self.parse_type(src);
                 if type_node < 0 { return -1; }
-                push(self.nested_children, type_node);
-                payload += 1;
+                push(gathered, type_node);
                 if self.more_in_list(30) {
                     continue;
                 }
                 break;
             }
             if !self.eat(src, 30, "`)` closing the payload") { return -1; }
+        }
+        let payload_start: Int = len(self.nested_children);
+        let payload: Int = len(gathered);
+        let mutable g: Int = 0;
+        while g < payload {
+            push(self.nested_children, gathered[g]);
+            g += 1;
         }
         let variant: Int = self.add(92, 0, payload_start, payload, 0, variant_tok);
         push(self.stack, variant);
@@ -3154,8 +3334,14 @@ function (mutable self: Unit) parse_trait(src: String) -> Int {
         }
         if !self.eat(src, 119, "`self`") { return -1; }
         // An interface signature may take parameters after `self`.
-        let extra_start: Int = len(self.nested_children);
-        let mutable extra: Int = 0;
+        //
+        // Gathered first, appended after, for the reason the variant payload above records:
+        // `parse_type` writes into `nested_children` for a generic application and for a
+        // tuple, so a start taken before this loop begins inside whatever the first
+        // parameter's type pushed. Not yet reachable — an interface method taking a
+        // `(Int, String)` or an `Option<Int>` is refused earlier today — which is exactly why
+        // it is fixed here rather than left as the third instance of the same shape.
+        let mutable gathered: [Int] = [];
         while self.at(22) {                          // ',' more parameters
             let c: Int = self.advance();
             if !self.at(1) { return self.complain(src, "a parameter name"); }
@@ -3165,8 +3351,14 @@ function (mutable self: Unit) parse_trait(src: String) -> Int {
             let type_node: Int = self.parse_type(src);
             if type_node < 0 { return -1; }
             let param: Int = self.add(90, type_node, 0, 0, 0, pname);
-            push(self.nested_children, param);
-            extra += 1;
+            push(gathered, param);
+        }
+        let extra_start: Int = len(self.nested_children);
+        let extra: Int = len(gathered);
+        let mutable g: Int = 0;
+        while g < extra {
+            push(self.nested_children, gathered[g]);
+            g += 1;
         }
         if !self.eat(src, 30, "`)`") { return -1; }
         if !self.eat(src, 10, "`->` and a return type") { return -1; }

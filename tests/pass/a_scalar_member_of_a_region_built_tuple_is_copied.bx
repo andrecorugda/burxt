@@ -1,0 +1,14 @@
+// The accepting half of the tuple/region rule, and the half that carries the weight.
+//
+// A tuple holding a String IS region storage; reading its Int member out is a copy and must still
+// be allowed. Every program that should be REFUSED stays refused whether the rule is precise or
+// wildly over-conservative — only the programs that must still COMPILE can tell those apart (B38).
+//
+// This is the same shape as B36, one type later: the field/index arm had to learn that reaching
+// THROUGH region storage does not make the thing you reached FOR region storage.
+let mutable n: Int = 0;
+region r {
+    let built: (Int, String) = (1, "secret-" + "value");
+    n = built.0;
+}
+print(n);

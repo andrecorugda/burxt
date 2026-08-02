@@ -145,6 +145,18 @@ function (mutable self: Unit) layout_cells(src: String, given: Type) -> Int {
         return written.contract
                * self.layout_cells(src, self.declared_type(src, written.scale));
     }
+    // A tuple, roadmap A8 — its elements end to end, in the order written. The class arm below
+    // with the declaration lookup taken out, because a tuple's members ARE its type.
+    if written.kind == 53 {
+        let mutable total: Int = 0;
+        let mutable e: Int = 0;
+        while e < written.contract {
+            total += self.layout_cells(src,
+                         self.declared_type(src, self.nested_children[written.scale + e]));
+            e += 1;
+        }
+        return total;
+    }
     if written.kind == 46 {
         let found: Int = self.find_type(src, written.name_start, written.name_length);
         if found < 0 {
@@ -221,6 +233,22 @@ function (mutable self: Unit) layout_align(src: String, given: Type) -> Int {
     if written.kind == 48 {                          // [T; N] aligns like its element
         return self.layout_align(src, self.declared_type(src, written.scale));
     }
+    // A tuple aligns like its widest-aligning element, exactly as a class does by its widest
+    // field. Which for a tuple of `CInt` alone is 4 — the same one exception this whole
+    // function exists for.
+    if written.kind == 53 {
+        let mutable widest: Int = 1;
+        let mutable e: Int = 0;
+        while e < written.contract {
+            let mine: Int = self.layout_align(src,
+                                self.declared_type(src, self.nested_children[written.scale + e]));
+            if mine > widest {
+                widest = mine;
+            }
+            e += 1;
+        }
+        return widest;
+    }
     if written.kind == 46 {
         let found: Int = self.find_type(src, written.name_start, written.name_length);
         if found < 0 {
@@ -273,6 +301,21 @@ function (mutable self: Unit) layout_bytes(src: String, given: Type) -> Int {
         let stride: Int = round_up(self.layout_bytes(src, element),
                                   self.layout_align(src, element));
         return stride * written.contract;
+    }
+    // A tuple: pad up to each element's own alignment, place it, advance — then round the whole
+    // thing up to its own alignment, which is what makes an array of tuples correctly strided.
+    // Character for character the class walk below, over positions instead of fields, because
+    // A4.5's rule is declaration order and a tuple has no other order it could have.
+    if written.kind == 53 {
+        let mutable size: Int = 0;
+        let mutable e: Int = 0;
+        while e < written.contract {
+            let mine: Type = self.declared_type(src, self.nested_children[written.scale + e]);
+            size = round_up(size, self.layout_align(src, mine));
+            size += self.layout_bytes(src, mine);
+            e += 1;
+        }
+        return round_up(size, self.layout_align(src, written));
     }
     if written.kind == 46 {
         let found: Int = self.find_type(src, written.name_start, written.name_length);
@@ -365,6 +408,20 @@ function (self: Unit) layout_type_name(src: String, given: Type) -> String {
     if written.kind == 48 {
         return "[" + self.layout_type_name(src, self.declared_type(src, written.scale)) + "; "
                + to_string(written.contract) + "]";
+    }
+    // A tuple RECURSES rather than falling through to `show_type`, for the reason the slice arm
+    // above gives: `show_type` renders an element straight from its node, so a `(T, Int)` inside
+    // `Bag<String>` would come out as `(T, Int)` with the binding in scope never consulted.
+    if written.kind == 53 {
+        let mutable out: String = "(";
+        let mutable e: Int = 0;
+        while e < written.contract {
+            if e > 0 { out += ", "; }
+            out += self.layout_type_name(src,
+                       self.declared_type(src, self.nested_children[written.scale + e]));
+            e += 1;
+        }
+        return out + ")";
     }
     if written.kind != 46 || written.contract <= 0 {
         return self.show_type(src, written);
@@ -461,6 +518,20 @@ function (mutable self: Unit) layout_bind_args(src: String, name_start: Int, nam
 // the same asymmetry `layout_bind_args` describes.
 function (self: Unit) layout_name_with(src: String, name_start: Int, name_length: Int,
                                       held: [Type], from: Int, count: Int) -> String {
+    // A TUPLE entry, marked by `name_start < 0`: it has no declaration and therefore no name
+    // span, so its identity is its spelling — which is exactly the name stage-0 files it under.
+    // See `Type::Tuple` in `ast.rs`: the anonymous class behind `(Int, String)` IS called
+    // `(Int, String)`, so the two reports can only agree if this side spells it the same way.
+    if name_start < 0 {
+        let mutable spelled: String = "(";
+        let mutable e: Int = 0;
+        while e < count {
+            if e > 0 { spelled += ", "; }
+            spelled += self.layout_type_name(src, held[from + e]);
+            e += 1;
+        }
+        return spelled + ")";
+    }
     let mutable out: String = substring(src, name_start, name_length);
     let mutable i: Int = 0;
     while i < count {
@@ -470,19 +541,45 @@ function (self: Unit) layout_name_with(src: String, name_start: Int, name_length
     return out;
 }
 
+// A kind-53 Type whose elements are the ones held in an array — the tuple counterpart of
+// `layout_bind_args`, and the same asymmetry it describes: a tuple discovered as a DEPENDENCY
+// has no node of its own, because its elements were resolved through bindings that are gone by
+// the time it is emitted. `node_for` is what makes one, exactly as it does for a slice element
+// the checker resolved. Answers a kind-0 unknown when an element has no token to point at,
+// which the caller reads as "skip this row" rather than printing a size for a type it could not
+// name.
+function (mutable self: Unit) layout_tuple_holder(held: [Type], from: Int, count: Int,
+                                                 at: Int) -> Type {
+    let start: Int = len(self.nested_children);
+    let mutable e: Int = 0;
+    while e < count {
+        let node: Int = self.node_for(held[from + e], at);
+        if node < 0 {
+            return unknown_type();
+        }
+        let noted: Int = push(self.nested_children, node);
+        e += 1;
+    }
+    return Type { kind: 53, scale: start, contract: count, name_start: 0, name_length: 0 };
+}
+
 // One class's rows: the header line, then a line per field. `holder` is the type to size, and
 // `name` is what to call it — the two differ for an instantiation, which is sized as
 // `Pair<Point>` and called `Pair$Point`.
-function (mutable self: Unit) layout_one(src: String, name: String, holder: Type,
-                                        item: Node) -> Int {
+// The members come from `member_count`/`member_type` in `emit.bx` rather than from a
+// declaration node, and that is what lets one function print a class and a tuple. Reused rather
+// than branched here, because those two are also what `class_equal` walks — and a comparison
+// that stepped members in a different order from the one this reports would be a layout the
+// report could not see. One answer to "what are this aggregate\'s members, in order".
+function (mutable self: Unit) layout_one(src: String, name: String, holder: Type) -> Int {
     print(name + ": size " + to_string(self.layout_bytes(src, holder)) + " align "
           + to_string(self.layout_align(src, holder)));
     let restore: Int = self.bind_from_application(src, holder);
+    let members: Int = self.member_count(src, holder);
     let mutable offset: Int = 0;
     let mutable f: Int = 0;
-    while f < item.b {
-        let field: Node = self.nodes[self.children[item.a + f]];
-        let mine: Type = self.declared_type(src, field.a);
+    while f < members {
+        let mine: Type = self.member_type(src, holder, f);
         offset = round_up(offset, self.layout_align(src, mine));
         print("  +" + to_string(offset) + " " + self.layout_type_name(src, mine)
               + " (" + to_string(self.layout_bytes(src, mine)) + " bytes)");
@@ -558,7 +655,7 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
                 let whole: Type = Type { kind: 46, scale: 0, contract: 0,
                                         name_start: named.start, name_length: named.length };
                 let fields: Int = self.layout_one(src,
-                                     substring(src, named.start, named.length), whole, item);
+                                     substring(src, named.start, named.length), whole);
                 shown += 1;
             }
         }
@@ -613,6 +710,91 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
                 }
             }
         }
+        // A TUPLE type node, roadmap A8. Seeded in the SAME ascending-index pass as the
+        // generic applications above, because stage-0 creates both from one `expand` walk and
+        // they interleave there — a separate pass appending tuples at the end would put every
+        // tuple after every instantiation, which is only right when a program has one kind.
+        if n.kind == 53 {
+            let applied: Type = self.declared_type(src, node);
+            let mutable concrete: Bool = true;
+            let mutable a: Int = 0;
+            while a < applied.contract {
+                let element: Type = self.resolve_shallow(src,
+                                        self.declared_type(src, self.nested_children[applied.scale + a]));
+                if element.kind == 50 {
+                    concrete = false;                // `(T, Int)` inside a generic: not a type yet
+                }
+                a += 1;
+            }
+            if concrete {
+                let from: Int = len(held);
+                a = 0;
+                while a < applied.contract {
+                    push(held, self.resolve_shallow(src,
+                             self.declared_type(src, self.nested_children[applied.scale + a])));
+                    a += 1;
+                }
+                push(stack_start, 0 - 1);            // the tuple marker: no declaration span
+                push(stack_length, 0);
+                push(stack_from, from);
+                push(stack_count, applied.contract);
+                push(opened, 0);
+            }
+        }
+        node += 1;
+    }
+
+    // ---- tuple LITERALS, and why they are a SECOND pass rather than part of the first ------
+    //
+    // `let p = (1, "a");` writes no tuple TYPE anywhere, so the loop above cannot see it — the
+    // only record of the type is the literal's own node. Stage-0 makes that class in
+    // `check_expr` rather than in `expand_program`, so it lands in `made_record_order` after
+    // EVERY annotated tuple in the file regardless of where the literal was written. Measured,
+    // not assumed: a probe with an un-annotated literal above three annotated tuples reports it
+    // last in stage-0. So the pass boundary here is not tidiness, it is that ordering.
+    node = 0;
+    while node < len(self.nodes) {
+        let n: Node = self.nodes[node];
+        if n.kind == 23 {
+            let literal: Type = self.type_at(node);
+            // The SAME concreteness filter the type-node pass applies, and leaving it off here
+            // was not a missing row but a wrong one: `function twice<T>(x: T) -> (T, T)` has a
+            // tuple literal in its body whose recorded type is `(T, T)`, and this printed
+            // `(T, T): size 16 align 8` — a laid-out size for a type no value has. A type
+            // parameter is not a type; stage-0 reports the INSTANTIATION instead — `(String,
+            // String)` for `twice("a")` — and that row is one this side does not produce.
+            //
+            // **That gap is PRE-EXISTING and not about tuples**, measured with no tuple in
+            // sight: `class Box<T>` instantiated only through `function make<T>(x: T) ->
+            // Box<T>` gives stage-0 a `Box$String` row and stage-1 nothing at all. Stage-1
+            // never monomorphises, so an instantiation that exists only inside a generic
+            // function's specialised copy has no node here to be found from. Reporting the
+            // wrong row was A8's to fix; reporting the missing one is that gap's.
+            let mutable concrete: Bool = literal.kind == 53;
+            let mutable a: Int = 0;
+            while a < literal.contract {
+                let element: Type = self.resolve_shallow(src,
+                                        self.declared_type(src, self.nested_children[literal.scale + a]));
+                if element.kind == 50 {
+                    concrete = false;
+                }
+                a += 1;
+            }
+            if concrete {
+                let from: Int = len(held);
+                a = 0;
+                while a < literal.contract {
+                    push(held, self.resolve_shallow(src,
+                             self.declared_type(src, self.nested_children[literal.scale + a])));
+                    a += 1;
+                }
+                push(stack_start, 0 - 1);
+                push(stack_length, 0);
+                push(stack_from, from);
+                push(stack_count, literal.contract);
+                push(opened, 0);
+            }
+        }
         node += 1;
     }
 
@@ -661,6 +843,55 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
 
         if opened[top] == 0 {
             opened[top] = 1;
+            // A TUPLE's dependencies are its ELEMENTS, and it has them: `((Int, Int), String)`
+            // needs `(Int, Int)` emitted first, which is the order stage-0 produces for free
+            // because `expand` resolves a tuple's elements before it registers the tuple. An
+            // element that is itself a tuple or a concrete instantiation is pushed here; one
+            // that is a scalar is nothing to emit.
+            if name_start < 0 {
+                let mutable e: Int = 0;
+                while e < count {
+                    let mutable inner: Type = self.resolve_shallow(src, held[from + e]);
+                    while inner.kind == 47 || inner.kind == 48 {
+                        inner = self.resolve_shallow(src, self.declared_type(src, inner.scale));
+                    }
+                    if inner.kind == 53 {
+                        let at: Int = len(held);
+                        let mutable a: Int = 0;
+                        while a < inner.contract {
+                            push(held, self.resolve_shallow(src, self.declared_type(src,
+                                         self.nested_children[inner.scale + a])));
+                            a += 1;
+                        }
+                        push(stack_start, 0 - 1);
+                        push(stack_length, 0);
+                        push(stack_from, at);
+                        push(stack_count, inner.contract);
+                        push(opened, 0);
+                    }
+                    if inner.kind == 46 && inner.contract > 0
+                       && self.generic_named(src, inner.name_start, inner.name_length) >= 0
+                       && self.layout_is_concrete(src, inner) {
+                        let sub: Int = self.find_type(src, inner.name_start, inner.name_length);
+                        if sub >= 0 && self.types[sub].kind == 82 {
+                            let at: Int = len(held);
+                            let mutable a: Int = 0;
+                            while a < inner.contract {
+                                push(held, self.resolve_shallow(src, self.declared_type(src,
+                                             self.nested_children[inner.scale + a])));
+                                a += 1;
+                            }
+                            push(stack_start, inner.name_start);
+                            push(stack_length, inner.name_length);
+                            push(stack_from, at);
+                            push(stack_count, inner.contract);
+                            push(opened, 0);
+                        }
+                    }
+                    e += 1;
+                }
+                continue;
+            }
             // Its dependencies: every field type that is itself a concrete generic class
             // application once this instantiation's arguments are in scope. Pushed AFTER this
             // entry, so they pop — and emit — first.
@@ -678,6 +909,23 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
                                                   self.declared_type(src, field.a));
                     while inner.kind == 47 || inner.kind == 48 {
                         inner = self.resolve_shallow(src, self.declared_type(src, inner.scale));
+                    }
+                    // A field whose type is a TUPLE: `class Row { pair: (Int, String) }`
+                    // inside `Holder<Int>` makes that tuple's class the same way a generic
+                    // field does, and it has to be emitted before the class that holds it.
+                    if inner.kind == 53 {
+                        let at: Int = len(held);
+                        let mutable a: Int = 0;
+                        while a < inner.contract {
+                            push(held, self.resolve_shallow(src, self.declared_type(src,
+                                         self.nested_children[inner.scale + a])));
+                            a += 1;
+                        }
+                        push(stack_start, 0 - 1);
+                        push(stack_length, 0);
+                        push(stack_from, at);
+                        push(stack_count, inner.contract);
+                        push(opened, 0);
                     }
                     if inner.kind == 46 && inner.contract > 0
                        && self.generic_named(src, inner.name_start, inner.name_length) >= 0
@@ -706,6 +954,24 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
         }
 
         // Second visit: every dependency is emitted, so this one is next.
+        if name_start < 0 {
+            let holder: Type = self.layout_tuple_holder(held, from, count, 0);
+            if holder.kind == 53 {
+                let fields: Int = self.layout_one(src, name, holder);
+                shown += 1;
+            }
+            push(done_name, name);
+            push(done_start, name_start);
+            push(done_length, name_length);
+            push(done_from, from);
+            push(done_count, count);
+            let tcut: Int = truncate(stack_start, top);
+            let tcut2: Int = truncate(stack_length, top);
+            let tcut3: Int = truncate(stack_from, top);
+            let tcut4: Int = truncate(stack_count, top);
+            let tcut5: Int = truncate(opened, top);
+            continue;
+        }
         let declared: Int = self.find_type(src, name_start, name_length);
         if declared >= 0 {
             let item: Node = self.nodes[self.types[declared].node];
@@ -713,7 +979,7 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
                                                     held, from, count);
             let whole: Type = Type { kind: 46, scale: 0, contract: 0,
                                     name_start: name_start, name_length: name_length };
-            let fields: Int = self.layout_one(src, name, whole, item);
+            let fields: Int = self.layout_one(src, name, whole);
             let dropped: Int = truncate(self.type_bindings, restore);
             shown += 1;
         }

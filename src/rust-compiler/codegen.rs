@@ -1429,6 +1429,12 @@ impl<'ctx> CodeGen<'ctx> {
             // become a wrong number if the boundary rule is ever widened.
             Type::CInt | Type::CDouble | Type::CPointer | Type::Width { .. } => 1,
             Type::Param(_) | Type::Generic { .. } => 1,
+            // A tuple is the anonymous class `expand` made of it long before codegen runs, so
+            // a variant payload arrives here as `Named("(Int, String)")` and takes the arm
+            // below. Answered by SUMMING rather than with a placeholder for the reason the
+            // width arm above gives: an arm that agrees with its neighbours cannot become a
+            // wrong number if something ever reaches it.
+            Type::Tuple(elements) => elements.iter().map(|t| self.payload_cells(t)).sum(),
             Type::Slice(_) => 3,
             Type::Array { elem, len } => self.payload_cells(elem) * (*len as u32),
             Type::Dyn(_) => 2,
@@ -1471,10 +1477,11 @@ impl<'ctx> CodeGen<'ctx> {
             // generic per instantiation — so reaching here is a compiler bug, not a
             // program error. Represented as an i64 so the panic is a diagnostic rather
             // than a crash; the checker is what guarantees it never happens.
-            // Both are gone before codegen runs: a parameter is substituted, and a
-            // generic application becomes the `Named` type of its instantiation. Reaching
-            // here is a compiler bug, and the checker is what guarantees it cannot.
-            Type::Param(_) | Type::Generic { .. } => self.ctx.i64_type().into(),
+            // All three are gone before codegen runs: a parameter is substituted, and a
+            // generic application and a tuple both become the `Named` type of the class
+            // `expand` made. Reaching here is a compiler bug, and the checker is what
+            // guarantees it cannot.
+            Type::Param(_) | Type::Generic { .. } | Type::Tuple(_) => self.ctx.i64_type().into(),
             Type::Int | Type::Bool | Type::Decimal { .. } => self.ctx.i64_type().into(),
             Type::String => self.ctx.ptr_type(AddressSpace::default()).into(),
             Type::CInt => self.ctx.i32_type().into(),
@@ -1607,6 +1614,13 @@ impl<'ctx> CodeGen<'ctx> {
             }
             Type::Generic { name, .. } => {
                 return Err(format!("codegen bug: `{}<...>` was never instantiated", name))
+            }
+            // `expand` turns a tuple into a class before anything is typed, so what reaches
+            // print is `Named("(Int, String)")` — and a class has no print form either, which
+            // is the refusal the CHECKER gives. This arm is the same unreachable-by-
+            // construction case the two above are.
+            Type::Tuple(_) => {
+                return Err("codegen bug: a tuple was never made into its class".to_string())
             }
             // The checker refuses this, and for a reason worth restating here: an address differs
             // between runs, so printing one would make a program's output non-reproducible. Reaching

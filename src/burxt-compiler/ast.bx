@@ -61,6 +61,18 @@ class Keyword { word: String, code: Int }
 //   8 binary (a op b, op in `value`)             9 comparison
 //  10 logical            11 field access        12 index
 //  13 call               14 method call
+//  23 tuple literal — `(1, "a")`, roadmap A8. Children in `children`, start in `a` and count
+//     in `b`, exactly as a call's arguments are held. A field access on a tuple is kind 11
+//     like any other: the position IS the field name, and the token after the `.` is an Int
+//     literal whose `value` is the position. So `.0` cost no expression kind at all —
+//     the literal is the only new one A8 needed.
+//     **23, and the number was checked rather than assumed** — the same care `..` needed for
+//     its 42. 15 reads as the next free one from the list above and is NOT free: it is the
+//     generic LIST node (a call's arguments, a signature's parameters, a contract's clauses),
+//     which this comment never mentioned because it only enumerates expressions. 16..22 are
+//     taken as well. Verified by `grep -o "self\.add([0-9]*"` over all five files, not by
+//     reading this banner — which is the point: a banner is a summary, and A8 nearly took a
+//     number out of it that another node already owned.
 //  21 the value being returned, for a contract bracket on the return type
 //  22 `e?` — the success payload, or return the failure from the enclosing function (inner in `a`)
 // Type kinds:
@@ -69,6 +81,15 @@ class Keyword { word: String, code: Int }
 //  49 dynamic   50 type parameter
 //  A named type may be a generic APPLICATION: `a` is the start of its type-argument
 //  nodes in `nested_children` and `b` is how many.
+//  53 TUPLE — `(Int, String)`, roadmap A8. `a` is the start of its ELEMENT type nodes in
+//     `nested_children` and `b` is how many, which is byte for byte the layout kind 46
+//     already uses for a generic application: a tuple IS an argument list with no name on
+//     the front. Nothing new had to be stored, so `Type` did not grow a field.
+//     **53, not 49 and not 52+1 by luck.** 51 is CPointer and 52 is a sized width; 53 is
+//     the next free type kind and it sits OUTSIDE the `kind >= 40 && kind <= 48` run that
+//     `declared_type` reads. That run is why CPointer was silently unrecognised for a
+//     version (see `declared_type`), so a kind added above it needs its own arm there and
+//     in every other range test — checked by grep, not by assumption.
 // Statement kinds:
 //  60 let (name token in `token`, type in `a`, value in `b`, writable in `value`)
 //  61 assign            62 print               63 return            64 tail return

@@ -104,6 +104,30 @@ pub enum Type {
     /// concrete one with `Named` of the instantiation's mangled name, so everything
     /// after it (layout, `match`, codegen) sees an ordinary nominal type.
     Generic { name: String, arguments: Vec<Type> },
+    /// `(Int, String)` — a tuple: a class whose fields have positions instead of names.
+    ///
+    /// **It exists only between parsing and `expand`, exactly as `Generic` above does, and that
+    /// is the whole design.** `expand` registers `(Int, String)` in `made_records` as an ordinary
+    /// nominal class with the fields `0: Int, 1: String` and hands back `Named("(Int, String)")`.
+    /// After that no rule in this compiler knows tuples exist: layout, sret, `byval`, copying,
+    /// `may_be_region_storage`, `==` and the language server all see a class they already handle.
+    ///
+    /// **Measured before it was written, because the alternative was a new aggregate kind.**
+    /// `Type::Named` is matched at 36 sites in `typeck.rs` and 19 in `codegen.rs`; a tuple that
+    /// survived to codegen would need an arm beside most of them. `Type::Generic`, which dies at
+    /// `expand`, is matched at 19 and 3 — and the 3 are monomorphisation plumbing a tuple never
+    /// reaches. The typed AST is already POSITIONAL — `TypedExprKind::StructLit { fields }` and
+    /// `Field { index }` — so a tuple lowers to the nodes codegen has emitted since v0.0.1 and
+    /// `codegen.rs` needed no change at all.
+    ///
+    /// **The instantiation's symbol is the tuple's own spelling, `(Int, String)`.** A mangled
+    /// `Tuple$Int$String` would be a name the reader never wrote, which is exactly what
+    /// `declared_name` and `show` exist to prevent — and unlike a generic, where the reader at
+    /// least wrote `Wrapper`, a tuple has no written name to fall back to. `(`, `,` and a space
+    /// cannot occur in a declared class name, so the symbol cannot collide with one: the same
+    /// argument `mangle` makes for `$`. It also means the messages that DON'T route through
+    /// `show` — and there are several — print the right thing anyway.
+    Tuple(Vec<Type>),
     /// A type PARAMETER, inside a generic's own body and signature — the `T` of
     /// `fn largest<T>(xs: [T]) -> T`. It is not a type any value has: every one is
     /// replaced by a concrete type before codegen, one copy per instantiation.
@@ -148,6 +172,10 @@ impl std::fmt::Display for Type {
             Type::Slice(elem) => write!(f, "[{}]", elem),
             Type::Array { elem, len } => write!(f, "[{}; {}]", elem, len),
             Type::Param(name) => write!(f, "{}", name),
+            Type::Tuple(elements) => {
+                let inner: Vec<String> = elements.iter().map(|e| e.to_string()).collect();
+                write!(f, "({})", inner.join(", "))
+            }
             Type::Generic { name, arguments } => {
                 let inner: Vec<String> = arguments.iter().map(|a| a.to_string()).collect();
                 write!(f, "{}<{}>", name, inner.join(", "))
@@ -290,6 +318,13 @@ pub enum ExprKind {
     Field { base: Box<Expr>, field: String },
     /// Method call: `item.total()`.
     MethodCall { base: Box<Expr>, method: String, arguments: Vec<Expr> },
+    /// A tuple literal: `(1, "a")`. Two or more elements — one is a parenthesised
+    /// expression and zero is nothing at all.
+    ///
+    /// The ONE new expression kind A8 costs. The checker types the elements, builds
+    /// `Type::Tuple`, expands it to the anonymous class, and emits an ordinary
+    /// `TypedExprKind::StructLit` — so codegen never learns the word.
+    TupleLit(Vec<Expr>),
     /// An array literal `[10.00, 5.99, 4.01]` — only valid as a `let`
     /// initializer with a declared array type.
     ArrayLit(Vec<Expr>),

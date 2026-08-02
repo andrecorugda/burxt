@@ -496,6 +496,7 @@ fn render(e: &Expr, parameters: &[Param]) -> String {
             format!("{}[{}]", render(base, parameters), render(index, parameters))
         }
         ExprKind::ArrayLit(items) => format!("[{}]", list(items, parameters)),
+        ExprKind::TupleLit(items) => format!("({})", list(items, parameters)),
         ExprKind::StructLit { name, fields } => {
             let mut inner: Vec<String> = fields
                 .iter()

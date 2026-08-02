@@ -68,7 +68,7 @@ function (self: Unit) is_exit_call(src: String, node: Int) -> Bool {
 // interface object. Only these may be `mutable` parameters, because only these have a caller-side
 // home the callee can reach.
 function is_aggregate_type(t: Type) -> Bool {
-    return t.kind == 46 || t.kind == 47 || t.kind == 48 || t.kind == 49;
+    return t.kind == 46 || t.kind == 47 || t.kind == 48 || t.kind == 49 || t.kind == 53;
 }
 
 function decimal_type(scale: Int, contract: Int) -> Type {
@@ -157,6 +157,19 @@ function (self: Unit) show_type(src: String, t: Type) -> String {
         return "[" + self.show_type(src, self.declared_type(src, t.scale)) + "; "
                + to_string(t.contract) + "]";
     }
+    // A tuple: its elements, in parentheses. Stage-0 gets this from `Type::Tuple`'s
+    // `Display`, and the two spellings have to match to the byte — a `.stderr` fixture pins
+    // one text and both compilers produce it.
+    if t.kind == 53 {
+        let mutable spelled: String = "(";
+        let mutable e: Int = 0;
+        while e < t.contract {
+            if e > 0 { spelled += ", "; }
+            spelled += self.show_type(src, self.declared_type(src, self.nested_children[t.scale + e]));
+            e += 1;
+        }
+        return spelled + ")";
+    }
     if t.kind == 46 && t.contract > 0 {
         // A generic application: the name, then its arguments.
         let mutable out: String = substring(src, t.name_start, t.name_length) + "<";
@@ -240,8 +253,13 @@ function (mutable self: Unit) bind_type_arguments(src: String, generic: Int, arg
         // happened to find `T` already bound by an enclosing call. Scoping the lookup to the current
         // call (see `type_binding_floor`) removed that accident and the gap showed immediately, which
         // is the useful shape of a fix: it made a second bug visible rather than hiding it.
+        // 53 — a TUPLE parameter, `first<T>(p: (T, Int))`. The same omission the comment above
+        // records for kind 46, one type along and found the same way: `unify` had grown its
+        // tuple arm and this list had not, so `T` was never bound and the call's return type
+        // stayed `T`. The list is what decides which parameters are even ASKED about, which is
+        // why a gap in it is silent — nothing complains, the type simply never settles.
         if declared.kind == 50 || declared.kind == 47 || declared.kind == 48
-           || declared.kind == 46 {
+           || declared.kind == 46 || declared.kind == 53 {
             let actual: Type = self.type_of(src, self.children[given.a + i], unknown_type());
             if !is_unknown(actual) {
                 let matched: Bool = self.unify(src, declared, actual);
@@ -431,6 +449,41 @@ function (mutable self: Unit) resolve_deep(src: String, t: Type, at: Int) -> Typ
         return Type { kind: 46, scale: start, contract: here.contract,
                       name_start: here.name_start, name_length: here.name_length };
     }
+    // A tuple whose elements mention a parameter: `(T, Int)` inside `zip<T, U>` has to BECOME
+    // `(String, Int)` for whoever receives it, because they no longer hold the bindings. The
+    // same walk the generic application above does, and it is here because leaving it out was
+    // measured rather than reasoned: `zip` type-checked in stage-0 and in stage-1 answered
+    // `(T, U)` at the CALL SITE, so `p.0 + " is "` was refused as "cannot combine T and
+    // String". A field of `Pair<String>` declared `(T, Int)` failed the same way.
+    if here.kind == 53 {
+        let mutable changed: Bool = false;
+        let mutable i: Int = 0;
+        while i < here.contract {
+            let written: Type = self.declared_type(src, self.nested_children[here.scale + i]);
+            let settled: Type = self.resolve_deep(src, written, at);
+            if !type_identical(settled, written) {
+                changed = true;
+            }
+            i += 1;
+        }
+        if !changed {
+            return here;
+        }
+        let start: Int = len(self.nested_children);
+        i = 0;
+        while i < here.contract {
+            let written: Type = self.declared_type(src, self.nested_children[here.scale + i]);
+            let settled: Type = self.resolve_deep(src, written, at);
+            let node: Int = self.node_for(settled, at);
+            if node < 0 {
+                return here;                         // no token to point at: leave it written
+            }
+            let noted: Int = push(self.nested_children, node);
+            i += 1;
+        }
+        return Type { kind: 53, scale: start, contract: here.contract,
+                      name_start: 0, name_length: 0 };
+    }
     if here.kind != 47 && here.kind != 48 {
         return here;
     }
@@ -558,6 +611,31 @@ function (mutable self: Unit) unify(src: String, declared: Type, actual: Type) -
         }
         return self.unify(src, self.declared_type(src, declared.scale),
                           self.declared_type(src, actual.scale));
+    }
+    // A tuple, element by element — `(T, Int)` against `(String, Int)` binds `T`.
+    //
+    // **The two compilers pay very different prices for this arm, and that is worth
+    // recording because it nearly became a divergence.** Here the elements are simply
+    // there: stage-1 never monomorphises, so a tuple stays a tuple with its element nodes
+    // beside it. Stage-0 has already replaced `(String, Int)` with the anonymous class it
+    // made of it, so its `unify` had to be given a second map to find the elements again —
+    // and the first version of A8 left that unbuilt and had stage-0 REFUSE instead. That
+    // would have been a difference in what is ACCEPTED, which is §B15's direction. The map
+    // was cheaper than the divergence.
+    if declared.kind == 53 {
+        if declared.contract != actual.contract {
+            return false;
+        }
+        let mutable e: Int = 0;
+        while e < declared.contract {
+            let want: Type = self.declared_type(src, self.nested_children[declared.scale + e]);
+            let got: Type = self.declared_type(src, self.nested_children[actual.scale + e]);
+            if !self.unify(src, want, got) {
+                return false;
+            }
+            e += 1;
+        }
+        return true;
     }
     // A named APPLICATION, argument by argument: `Map<K, V>` against `Map<String, Int>` binds both.
     // Without this, unify handled slices and stopped, so a parameter reachable only through a type
@@ -1210,6 +1288,28 @@ function (self: Unit) same_type(src: String, a: Type, b: Type) -> Bool {
         return spans_equal(src, left.name_start, left.name_length,
                            right.name_start, right.name_length);
     }
+    // A tuple is STRUCTURAL: two tuples are the same type when their elements are, position
+    // by position. There is no name to compare, which is the whole difference from kind 46.
+    //
+    // **This arm is load-bearing and its absence would have been silent.** The fall-through
+    // below is `return true` — it exists for the scalar kinds, where the kind IS the type —
+    // so without this `(Int, String)` and `(String, Int)` would be the same type, and so
+    // would `(Int, Int)` and `(Int, Int, Int)`. The count is checked FIRST for that second
+    // pair: `(Int, Int)` against `(Int, Int, Int)` agrees on every element it has.
+    if left.kind == 53 {
+        if left.contract != right.contract {
+            return false;
+        }
+        let mutable e: Int = 0;
+        while e < left.contract {
+            if !self.same_type(src, self.declared_type(src, self.nested_children[left.scale + e]),
+                               self.declared_type(src, self.nested_children[right.scale + e])) {
+                return false;
+            }
+            e += 1;
+        }
+        return true;
+    }
     return true;
 }
 
@@ -1268,6 +1368,16 @@ function (self: Unit) declared_type(src: String, node: Int) -> Type {
         // `contract` the declared length. Reusing two fields rather than widening a
         // record that is copied at every comparison in the checker.
         return Type { kind: n.kind, scale: n.a, contract: n.b,
+                    name_start: 0, name_length: 0 };
+    }
+    // A tuple, roadmap A8 — `scale` is the start of its ELEMENT type nodes in
+    // `nested_children` and `contract` is how many, the same two slots a generic
+    // application uses for its arguments. It needs its own arm for the reason the block
+    // below spells out: 53 is outside the 40..48 run, so without this every tuple would be
+    // UNKNOWN and every rule about one would go quiet — which is exactly what happened to
+    // CPointer at kind 51.
+    if n.kind == 53 {
+        return Type { kind: 53, scale: n.a, contract: n.b,
                     name_start: 0, name_length: 0 };
     }
     // 51 is CPointer, which sits outside the 40..48 run because the scalar kinds were numbered
@@ -2638,6 +2748,46 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
         return expected;
     }
 
+    // `(1, "a")` — a tuple literal, roadmap A8. Its type comes from its ELEMENTS, which is
+    // the difference from an array literal above: an array literal needs the declared type
+    // to know what it is, a tuple literal is its own answer and `let p = (1, "a");` works
+    // with no annotation at all.
+    //
+    // `expected` is still pushed down element-wise, and that is not a nicety: a decimal
+    // literal takes its scale from the type it is stored into, so without it
+    // `let p: (Decimal<2>, String) = (1.50, "x");` would settle on `Decimal<2>` by luck
+    // rather than by contract, and `(1.5, "x")` into a `Decimal<2>` would be a scale
+    // mismatch instead of the widening it is.
+    if n.kind == 23 {
+        let mutable elements: [Int] = [];
+        let mutable i: Int = 0;
+        while i < n.b {
+            let mutable want: Type = unknown_type();
+            if expected.kind == 53 && expected.contract == n.b {
+                want = self.declared_type(src, self.nested_children[expected.scale + i]);
+            }
+            let got: Type = self.type_of(src, self.children[n.a + i], want);
+            // A type nobody wrote down has no node, and a tuple holds its elements AS
+            // nodes — the same wall `node_for` was built for when a slice's element had to
+            // be resolved. An element with no node leaves the tuple untypeable, and an
+            // unknown type is the safe answer because it silences the rules that would
+            // otherwise be guessing.
+            let stored: Int = self.node_for(got, n.token);
+            if stored < 0 {
+                return unknown_type();
+            }
+            push(elements, stored);
+            i += 1;
+        }
+        let start: Int = len(self.nested_children);
+        let mutable e: Int = 0;
+        while e < len(elements) {
+            let noted: Int = push(self.nested_children, elements[e]);
+            e += 1;
+        }
+        return Type { kind: 53, scale: start, contract: n.b, name_start: 0, name_length: 0 };
+    }
+
     if n.kind == 12 {                                // xs[i]
         let holder: Type = self.type_of(src, n.a, unknown_type());
         let index: Type = self.type_of(src, n.b, simple_type(40));
@@ -2978,6 +3128,26 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
         let field: Type = self.resolve_deep(src, declared, n.token);
         let dropped: Int = truncate(self.type_bindings, base);
         if is_unknown(field) {
+            // A tuple has POSITIONS, not names, and the message has to say so: `has no such
+            // field` would send a reader looking for a `class` declaration that was never
+            // written, and it is also the only answer someone who wrote `pair.first` would
+            // get — which does not tell them a NAME is the wrong shape of thing here.
+            if holder.kind == 53 {
+                let mutable positions: String = "";
+                let mutable e: Int = 0;
+                while e < holder.contract {
+                    if e > 0 { positions += ", "; }
+                    positions += "`." + to_string(e) + "`";
+                    e += 1;
+                }
+                let named: Token = self.tokens[n.token];
+                let complained: Int = self.complain_at(src, n.token,
+                    "`" + self.show_type(src, holder) + "` is a tuple of "
+                    + to_string(holder.contract) + " values, so it has no `."
+                    + substring(src, named.start, named.length) + "`. Its positions are "
+                    + positions + ", counting from zero.");
+                return unknown_type();
+            }
             let complained: Int = self.complain_at(src, n.token,
                 self.show_type(src, holder) + " has no such field");
         }
@@ -3119,7 +3289,8 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
                 }
             }
             let got: Type = self.type_of(src, inner, unknown_type());
-            if got.kind == 46 || got.kind == 47 || got.kind == 48 || got.kind == 49 {
+            if got.kind == 46 || got.kind == 47 || got.kind == 48 || got.kind == 49
+               || got.kind == 53 {
                 let complained: Int = self.complain_at(src, n.token,
                     "`old` of " + self.show_type(src, got) + " would need a copy of the whole "
                     + "value at entry, which is not built: name the fields instead");
@@ -3828,7 +3999,14 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
                 + "copied, passed and returned — not printed, which needs to know what the "
                 + "value IS");
         }
-        if shown.kind == 46 || shown.kind == 49 || shown.kind == 47 || shown.kind == 48 {
+        // 53 is a tuple, and it belongs in this list for exactly the reason a class does: it
+        // holds more than one value and the language has no rendering to choose between them.
+        // Stage-0 refuses it through its `Named` arm, because by then the tuple IS a class;
+        // here it is still a tuple, so it has to be named. Its absence was found by the
+        // differential test, not by reading: stage-1 ACCEPTED `print(pair)` and printed the
+        // tuple's ADDRESS.
+        if shown.kind == 46 || shown.kind == 49 || shown.kind == 47 || shown.kind == 48
+           || shown.kind == 53 {
             let complained: Int = self.complain_at(src, n.token,
                 "`print` renders a number, a Bool, a Decimal or a String — "
                 + self.show_type(src, shown) + " has no one rendering the language can choose "
@@ -5049,7 +5227,8 @@ function (mutable self: Unit) check_clauses(src: String, index: Int, signature: 
             // `result` is bound here and nowhere else. It is not a keyword: a
             // parameter may still be called `result`, and then it collides, which is
             // an error about the collision rather than a silent shadowing.
-            if return_type.kind == 46 || return_type.kind == 47 || return_type.kind == 48 {
+            if return_type.kind == 46 || return_type.kind == 47 || return_type.kind == 48
+               || return_type.kind == 53 {
                 let complained: Int = self.complain_at(src, clause.token,
                     "`ensures` cannot see the result of a function returning "
                     + self.show_type(src, return_type) + ": it travels through the caller's storage, "
@@ -5148,7 +5327,12 @@ function (mutable self: Unit) check_tail(src: String, n: Node, return_type: Type
             "a `tail` call inside a `region` would jump past the region's close, and "
             + "the bytes would never be released");
     }
-    if return_type.kind == 46 || return_type.kind == 47 || return_type.kind == 48 {
+    // 53 — a tuple. The most consequential of the three lists this sweep added it to: the other
+    // two are diagnostics, and this one is SOUNDNESS. A tuple returns through the caller's sret
+    // storage exactly as a class does, and a `tail` call replaces the frame that owns it.
+    // Stage-0 refuses; stage-1 accepted, which is a miscompile rather than a missing message.
+    if return_type.kind == 46 || return_type.kind == 47 || return_type.kind == 48
+       || return_type.kind == 53 {
         let complained: Int = self.complain_at(src, n.token,
             "a `tail` call cannot return " + self.show_type(src, return_type) + ": an aggregate travels "
             + "through the caller's storage, and the frame that owns it is the one being "
@@ -5670,6 +5854,30 @@ function (mutable self: Unit) region_allocated(src: String, t: Type) -> Bool {
     if t.kind == 48 {                                // a fixed array is tainted by its element
         return self.region_allocated(src, self.declared_type(src, t.scale));
     }
+    // A tuple is tainted by any element, exactly as a class is by any field — it IS a class
+    // with positions instead of names. `(Int, [Int])` is always region storage because the
+    // growable array is; `(Int, String)` is not, because a String may be a literal in
+    // `.rodata`. That last distinction is the whole reason this predicate and
+    // `may_be_region_storage` below are two functions and not one.
+    //
+    // **DEFENCE IN DEPTH, and explicitly NOT claimed as measured** — the same standing this
+    // file's sibling gives B39's `Generic` arm. This predicate has ONE caller,
+    // `check_return_storage`, which is skipped whenever the function is `allocates`; and any
+    // function that BUILDS a tuple holding a growable array is inferred `allocates`, so no
+    // program reaches here with a tuple. Mutation-tested and it survived, which is the honest
+    // result: the arm is correct and currently unreachable. It is kept because the day the
+    // rule is asked earlier — of a parameter, a field, a method return — a missing arm would
+    // answer "not region storage" in silence, which is how B39's two holes lived.
+    if t.kind == 53 {
+        let mutable e: Int = 0;
+        while e < t.contract {
+            if self.region_allocated(src, self.declared_type(src, self.nested_children[t.scale + e])) {
+                return true;
+            }
+            e += 1;
+        }
+        return false;
+    }
     if t.kind != 46 || t.contract > 0 {
         return false;                                // not a named type, or a generic application
     }
@@ -5773,6 +5981,25 @@ function (mutable self: Unit) may_be_region_storage(src: String, written: Type) 
     }
     if t.kind == 48 {                                // a fixed array: its element decides
         return self.may_be_region_storage(src, self.declared_type(src, t.scale));
+    }
+    // A tuple: any element decides, exactly as any field of a class does.
+    //
+    // **This arm is the B39 hole in A8's shape, and it had to be written rather than
+    // inherited.** The line below answers `false` for every kind it does not name, and 53 is
+    // not 46 — so without this a `(Int, String)` matched out of a `region` would have been
+    // "one i64 cell, copied", the taint would never have been applied, and the program would
+    // have run and printed the next region's bytes. Proven by mutation in both compilers:
+    // break this arm and `tests/fail/a_tuple_holding_a_string_escapes_its_region.bx` is
+    // ACCEPTED and runs.
+    if t.kind == 53 {
+        let mutable e: Int = 0;
+        while e < t.contract {
+            if self.may_be_region_storage(src, self.declared_type(src, self.nested_children[t.scale + e])) {
+                return true;
+            }
+            e += 1;
+        }
+        return false;
     }
     if t.kind != 46 {
         return false;                                // Int, Bool, CInt, CDouble, Decimal, CPointer,

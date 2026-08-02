@@ -1,0 +1,22 @@
+// A8 — tuples. The point of the feature is the last two lines: a function returning two
+// values without inventing a record to carry them.
+//
+// It is what `zip`, `enumerate`, `char_indices`, `split_at`, `divmod` and `split_once` were all
+// waiting on — six library functions blocked on one type, which is why A8 sat above them in §A.
+//
+// Positional access rather than destructuring, chosen because it is fewer moving parts: `match`
+// already binds patterns, so destructuring can be added later without changing what this fixture
+// pins. Mixed member types on purpose — a tuple of two Ints would not have caught a layout that
+// assumed uniform members.
+function split(n: Int) -> (Int, Int) {
+    let half: Int = divide_floor(n, 2);
+    return (half, n - half);
+}
+
+let pair: (Int, String) = (1, "a");
+print(pair.0);
+print(pair.1);
+
+let halves: (Int, Int) = split(7);
+print(halves.0);
+print(halves.1);

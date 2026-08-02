@@ -402,6 +402,16 @@ pub struct TypeChecker {
     made_enums: RefCell<HashMap<String, Vec<(String, Vec<Type>)>>>,
     made_order: RefCell<Vec<TypedEnum>>,
     instance_of: RefCell<HashMap<String, (String, Vec<Type>)>>,
+    /// The anonymous class behind a tuple: its symbol -> its element types, in order.
+    ///
+    /// A SECOND map beside `instance_of` rather than an entry in it, and the reason is that
+    /// `instance_of` answers "what generic was this made from", which for a tuple is nothing.
+    /// Folding tuples in would have meant giving each one a fake owner name, and `show` reads
+    /// that same map to spell a type back — so the price of one saved field would have been a
+    /// wrong name in every message that printed a tuple. `unify` is the only reader: it needs
+    /// a route from `Named("(String, Int)")` back to its elements, or `(T, Int)` cannot bind
+    /// `T` and the two compilers disagree about a program.
+    tuple_of: RefCell<HashMap<String, Vec<Type>>>,
     /// Every `(generic, type arguments)` pair reached, in discovery order, and the set
     /// already recorded so a pair is emitted once. Checking an instantiation can add
     /// more — a generic calling a generic — so this is drained to a fixpoint.
@@ -773,6 +783,7 @@ impl TypeChecker {
             made_enums: RefCell::new(HashMap::new()),
             made_order: RefCell::new(Vec::new()),
             instance_of: RefCell::new(HashMap::new()),
+            tuple_of: RefCell::new(HashMap::new()),
             wanted: RefCell::new(Vec::new()),
             seen_instantiations: RefCell::new(HashSet::new()),
             alloc_fns: HashSet::new(),
@@ -1399,6 +1410,40 @@ impl TypeChecker {
                 }
                 Ok(Type::Named(symbol))
             }
+            // A tuple becomes an anonymous class, made once, named by its own spelling. After
+            // this point nothing in the compiler knows tuples exist — see `ast::Type::Tuple`
+            // for the measurement that chose this over a new aggregate kind.
+            //
+            // The shape is deliberately the generic-record arm above with the two generic
+            // parts removed: there is no declaration to substitute into and no `instance_of`
+            // entry, because a tuple is not an instantiation OF anything. What stays is the
+            // part that matters — `made_records` so every lookup finds it, and
+            // `made_record_order` so codegen emits the LLVM type.
+            Type::Tuple(elements) => {
+                let elements: Vec<Type> =
+                    elements.iter().map(|e| self.expand(e)).collect::<Result<_, _>>()?;
+                // Still inside a generic's own body: `(T, String)` is not a type any value
+                // has yet, and it becomes one when the generic is instantiated. Exactly the
+                // `mentions_param` bail the two arms above make, for the same reason.
+                if elements.iter().any(mentions_param) {
+                    return Ok(Type::Tuple(elements));
+                }
+                let symbol = self.tuple_symbol(&elements);
+                if !self.is_record(&symbol) {
+                    let made: Vec<(String, Type)> = elements
+                        .iter()
+                        .enumerate()
+                        .map(|(i, t)| (i.to_string(), t.clone()))
+                        .collect();
+                    self.made_records.borrow_mut().insert(symbol.clone(), made.clone());
+                    self.made_record_order.borrow_mut().push(TypedStruct {
+                        name: symbol.clone(),
+                        fields: elements.clone(),
+                    });
+                    self.tuple_of.borrow_mut().insert(symbol.clone(), elements.clone());
+                }
+                Ok(Type::Named(symbol))
+            }
             Type::Generic { name, arguments } => {
                 let (parameters, variants) = self.generic_enums.get(name).cloned().ok_or_else(|| {
                     if self.declared_type_names.contains(name) {
@@ -1572,7 +1617,8 @@ impl TypeChecker {
             }
             let actual = self.check_expr(argument, None)?.ty;
             let instances = self.instance_of.borrow().clone();
-            unify(declared, &actual, &mut map, &instances).map_err(|why| {
+            let tuples = self.tuple_of.borrow().clone();
+            unify(declared, &actual, &mut map, &instances, &tuples).map_err(|why| {
                 format!("in `{}.{}`, payload {}: {}", enum_name, variant, i + 1, why)
             })?;
         }
@@ -1773,6 +1819,7 @@ impl TypeChecker {
             }
         }
         let instances = self.instance_of.borrow().clone();
+        let tuples = self.tuple_of.borrow().clone();
         for (fname, declared) in &fields {
             if !mentions_param(declared) {
                 continue;
@@ -1789,7 +1836,7 @@ impl TypeChecker {
             // A field whose value cannot be typed on its own says nothing here. The real
             // error, if there is one, comes from checking the field against its type below.
             let Ok(typed) = self.check_expr(value, None) else { continue };
-            unify(declared, &typed.ty, &mut map, &instances)
+            unify(declared, &typed.ty, &mut map, &instances, &tuples)
                 .map_err(|why| format!("in `{}.{}`: {}", name, fname, why))?;
         }
         let mut type_args = Vec::with_capacity(parameters.len());
@@ -3905,6 +3952,18 @@ impl TypeChecker {
     fn may_be_region_storage_within(&self, ty: &Type, seen: &mut Vec<String>) -> bool {
         match ty {
             Type::String | Type::Slice(_) => true,
+            // A tuple, still written as one — inside a generic, before `expand` has turned
+            // it into the anonymous class the `Named` arm below already answers for.
+            //
+            // **This arm is not dead and it is not defence in depth.** `(T, Int)` inside a
+            // generic body reaches here with `T` a `Param`, which the `Param` arm answers
+            // YES to; without this arm the `_` this replaces would have said NO, and B39's
+            // whole lesson is that a wrong NO here is silent. The expanded case is the one
+            // a fixture can reach today and it goes through `Named` -> `made_records`; this
+            // is the one that goes quiet first when a rule starts asking earlier.
+            Type::Tuple(elements) => {
+                elements.iter().any(|t| self.may_be_region_storage_within(t, seen))
+            }
             Type::Named(n) => {
                 if seen.iter().any(|s| s == n) {
                     return false;
@@ -4128,6 +4187,25 @@ impl TypeChecker {
     /// through `instance_of`; these two wrappers are just the places that have to ask.
     fn shown(&self, ty: &Type) -> String {
         show(ty, &self.instance_of.borrow())
+    }
+
+    /// The name the anonymous class behind a tuple is filed under: the tuple as it was
+    /// written, `(Int, String)`.
+    ///
+    /// Built from `shown` rather than `Display`, so an element that is itself a generic
+    /// instantiation comes back as `Wrapper<Int>` and not `Wrapper$Int` — the mangled
+    /// spelling would otherwise leak into the tuple's name and out of it into every message
+    /// that prints one.
+    fn tuple_symbol(&self, elements: &[Type]) -> String {
+        let inner: Vec<String> = elements.iter().map(|e| self.shown(e)).collect();
+        format!("({})", inner.join(", "))
+    }
+
+    /// Is this class one the reader wrote, or the anonymous one behind a tuple? Asked by
+    /// name, because "field" and "position" are different words and a message that uses the
+    /// wrong one sends the reader looking for a declaration that does not exist.
+    fn is_tuple_symbol(name: &str) -> bool {
+        name.starts_with('(')
     }
 
     fn shown_type_name(&self, symbol: &str) -> String {
@@ -7136,7 +7214,8 @@ impl TypeChecker {
                         }
                         let actual = self.check_expr(argument, None)?.ty;
                         let instances = self.instance_of.borrow().clone();
-                        unify(declared, &actual, &mut map, &instances).map_err(|why| {
+                        let tuples = self.tuple_of.borrow().clone();
+                        unify(declared, &actual, &mut map, &instances, &tuples).map_err(|why| {
                             self.blame(argument.span);
                             format!("in the call to `{}`, argument {}: {}", name, i + 1, why)
                         })?;
@@ -7154,11 +7233,12 @@ impl TypeChecker {
                     if type_parameters.iter().any(|p| !map.contains_key(&p.name)) {
                         if let Some(want) = expected {
                             let instances = self.instance_of.borrow().clone();
+                            let tuples = self.tuple_of.borrow().clone();
                             // A failure is not an error here. The expectation may legitimately be
                             // unrelated — a call whose result is discarded, or one inside a bigger
                             // expression — and the real complaint is the one below, which names the
                             // parameter that is still unknown.
-                            let _ = unify(&ret, want, &mut map, &instances);
+                            let _ = unify(&ret, want, &mut map, &instances, &tuples);
                         }
                     }
                     let mut type_args = Vec::with_capacity(type_parameters.len());
@@ -7454,6 +7534,56 @@ impl TypeChecker {
                     ty: literal_ty,
                     kind: TypedExprKind::StructLit { name: name.clone(), fields: typed_fields },
                 })
+            }
+
+            // `(1, "a")`. The elements are typed left to right, the tuple type is built from
+            // what they came out as, and `expand` turns that into the anonymous class — so
+            // the value this produces is an ordinary `StructLit` and codegen learns nothing.
+            //
+            // `expected` is pushed DOWN element-wise when it is a tuple of the same arity,
+            // which is what makes `let pair: (Decimal<2>, String) = (1.50, "a");` work: a
+            // decimal literal takes its scale from the type it is being stored into, and
+            // with no expectation `1.50` would be `Decimal<2>` by luck rather than by
+            // contract. A mismatched arity is left to the ordinary `storable` refusal below,
+            // where the message can name both types.
+            ExprKind::TupleLit(elements) => {
+                // A declared type has already been through `expand`, so the expectation
+                // arrives as the anonymous class rather than as `Type::Tuple` — the
+                // `Named` arm is the one that fires in practice, and both are here because
+                // a tuple reached from inside a generic has not been expanded yet.
+                let pushed: Vec<Type> = match expected {
+                    Some(Type::Tuple(want)) if want.len() == elements.len() => want.clone(),
+                    Some(Type::Named(symbol)) if Self::is_tuple_symbol(symbol) => self
+                        .fields_of(symbol)
+                        .filter(|fields| fields.len() == elements.len())
+                        .map(|fields| fields.into_iter().map(|(_, t)| t).collect())
+                        .unwrap_or_default(),
+                    _ => Vec::new(),
+                };
+                let mut typed = Vec::new();
+                let mut types = Vec::new();
+                for (i, element) in elements.iter().enumerate() {
+                    let want = pushed.get(i).cloned();
+                    let t = self.check_expr(element, want.as_ref())?;
+                    types.push(t.ty.clone());
+                    typed.push(t);
+                }
+                let ty = self.expand(&Type::Tuple(types))?;
+                let symbol = match &ty {
+                    Type::Named(symbol) => symbol.clone(),
+                    // Still generic: `(T, Int)` inside `zip<T, U>`'s own body, where there is
+                    // no class to make yet because there is no type to make it of.
+                    //
+                    // The name is the tuple as WRITTEN, and this node is never emitted — a
+                    // generic's own body is checked (M7: the signature is the contract) and
+                    // then thrown away; codegen only ever sees the `specialise`d copies, where
+                    // every parameter has been substituted and `expand` has made the class.
+                    // The generic record literal one arm up does exactly this and for exactly
+                    // this reason: inside `Box<T>` its type is `Box<T>` and its `StructLit`
+                    // names `Box`, which is no instantiation either.
+                    other => other.to_string(),
+                };
+                Ok(TypedExpr { ty, kind: TypedExprKind::StructLit { name: symbol, fields: typed } })
             }
 
             ExprKind::Field { base, field } => {
@@ -8115,6 +8245,28 @@ impl TypeChecker {
 
     /// Resolve `.field` on a value of type `ty` to (positional index, type).
     fn resolve_field(&self, ty: &Type, field: &str) -> Result<(u32, Type), String> {
+        // A tuple whose elements still mention a type parameter — `p.0` inside `zip<T, U>`.
+        // It has no anonymous class yet, so there is nothing for the `Named` path to look up,
+        // but the POSITION is known regardless of what `T` turns out to be. Answering it here
+        // is what lets a generic's body read the tuple it built, which is the whole of what
+        // `zip` and `enumerate` need. `private` cannot apply: a tuple has no declaration to
+        // declare it in.
+        if let Type::Tuple(elements) = ty {
+            return match field.parse::<usize>() {
+                Ok(i) if i < elements.len() => Ok((i as u32, elements[i].clone())),
+                _ => Err(format!(
+                    "`{}` is a tuple of {} values, so it has no `.{}`. Its positions are {}, \
+                     counting from zero.",
+                    ty,
+                    elements.len(),
+                    field,
+                    (0..elements.len())
+                        .map(|i| format!("`.{}`", i))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )),
+            };
+        }
         let name = match ty {
             Type::Named(n) => n,
             other => {
@@ -8146,6 +8298,23 @@ impl TypeChecker {
             .position(|(n, _)| n == field)
             .map(|i| (i as u32, fields[i].1.clone()))
             .ok_or_else(|| {
+                // A tuple has POSITIONS, not names, and the ordinary message would send a
+                // reader looking for a `class` declaration that was never written. It also
+                // has to answer the reader who wrote `pair.first` — the word `field` alone
+                // would not tell them that a name is the wrong shape of thing here.
+                if Self::is_tuple_symbol(name) {
+                    return format!(
+                        "`{}` is a tuple of {} values, so it has no `.{}`. Its positions \
+                         are {}, counting from zero.",
+                        name,
+                        fields.len(),
+                        field,
+                        (0..fields.len())
+                            .map(|i| format!("`.{}`", i))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
                 format!(
                     "`{}` has no field named `{}`. Its fields are: {}.",
                     self.shown_type_name(name),
@@ -8647,7 +8816,7 @@ fn mentions(e: &Expr, name: &str) -> bool {
         ExprKind::MethodCall { base, arguments, .. } => mentions(base, name) || any(arguments),
         ExprKind::StructLit { fields, .. } => fields.iter().any(|(_, v)| mentions(v, name)),
         ExprKind::Field { base, .. } => mentions(base, name),
-        ExprKind::ArrayLit(items) => any(items),
+        ExprKind::ArrayLit(items) | ExprKind::TupleLit(items) => any(items),
         ExprKind::Index { base, index } => mentions(base, name) || mentions(index, name),
         ExprKind::InterpStr(parts) => parts.iter().any(|p| match p {
             InterpPart::Expr(x) => mentions(x, name),
@@ -8814,6 +8983,15 @@ pub fn substitute(ty: &Type, map: &HashMap<String, Type>) -> Type {
             name: name.clone(),
             arguments: arguments.iter().map(|a| substitute(a, map)).collect(),
         },
+        // A tuple written inside a generic — `function pair_up<T>(t: T) -> (T, Int)`. The
+        // `other` arm below would have copied it unchanged and left the `T` in the return
+        // type, so the instantiation would have had a parameter in a signature that
+        // `expand` then refused. Neither this nor `mentions_param` below is flagged by the
+        // compiler, because both end in a catch-all: they are the two silent holes A8 had
+        // to be looked for rather than told about.
+        Type::Tuple(elements) => {
+            Type::Tuple(elements.iter().map(|e| substitute(e, map)).collect())
+        }
         other => other.clone(),
     }
 }
@@ -8824,7 +9002,9 @@ pub fn mentions_param(ty: &Type) -> bool {
     match ty {
         Type::Param(_) => true,
         Type::Array { elem, .. } | Type::Slice(elem) => mentions_param(elem),
-        Type::Generic { arguments, .. } => arguments.iter().any(mentions_param),
+        Type::Generic { arguments, .. } | Type::Tuple(arguments) => {
+            arguments.iter().any(mentions_param)
+        }
         _ => false,
     }
 }
@@ -8858,12 +9038,14 @@ pub fn show(ty: &Type, instances: &HashMap<String, (String, Vec<Type>)>) -> Stri
 }
 
 type Instances = HashMap<String, (String, Vec<Type>)>;
+type Tuples = HashMap<String, Vec<Type>>;
 
 fn unify(
     declared: &Type,
     actual: &Type,
     map: &mut HashMap<String, Type>,
     instances: &Instances,
+    tuples: &Tuples,
 ) -> Result<(), String> {
     match (declared, actual) {
         (Type::Param(name), concrete) => {
@@ -8885,16 +9067,16 @@ fn unify(
             Ok(())
         }
         (Type::Array { elem: d, len: dl }, Type::Array { elem: a, len: al }) if dl == al => {
-            unify(d, a, map, instances)
+            unify(d, a, map, instances, tuples)
         }
-        (Type::Slice(d), Type::Slice(a)) => unify(d, a, map, instances),
+        (Type::Slice(d), Type::Slice(a)) => unify(d, a, map, instances, tuples),
         // `Option<T>` against `Option$String`: the instantiation remembers what it was
         // made from, so the arguments line up and `T` binds to String.
         (Type::Generic { name: dn, arguments: dargs }, Type::Named(m)) => {
             match instances.get(m) {
                 Some((of, aargs)) if of == dn && aargs.len() == dargs.len() => {
                     for (d, a) in dargs.iter().zip(aargs) {
-                        unify(d, a, map, instances)?;
+                        unify(d, a, map, instances, tuples)?;
                     }
                     Ok(())
                 }
@@ -8905,6 +9087,40 @@ fn unify(
                 )),
             }
         }
+        // Two tuples that are both still written as tuples: a generic calling a generic,
+        // where neither side has been expanded yet. Element by element, exactly as the
+        // slice and array arms above.
+        (Type::Tuple(d), Type::Tuple(a)) if d.len() == a.len() => {
+            for (d, a) in d.iter().zip(a) {
+                unify(d, a, map, instances, tuples)?;
+            }
+            Ok(())
+        }
+        // `(T, Int)` against the anonymous class the argument's tuple became — the tuple
+        // counterpart of the `Generic`-against-`Named` arm above, and it needs `tuples` for
+        // exactly the reason that one needs `instances`: `expand` has already turned
+        // `(String, Int)` into `Named("(String, Int)")`, so the elements have to be looked
+        // up rather than read off.
+        //
+        // **This arm exists because the alternative was a divergence.** Stage-1 never
+        // monomorphises — a tuple stays a tuple with its elements beside it — so it can
+        // bind `T` here with no lookup at all, and it does. Leaving stage-0 to refuse what
+        // stage-1 accepts would have been a difference in what is ACCEPTED, which is §B15's
+        // direction and the one this project has paid for most. Threading one more map was
+        // cheaper than that.
+        (Type::Tuple(d), Type::Named(m)) => match tuples.get(m) {
+            Some(a) if a.len() == d.len() => {
+                for (d, a) in d.iter().zip(a) {
+                    unify(d, a, map, instances, tuples)?;
+                }
+                Ok(())
+            }
+            _ => Err(format!(
+                "expected {}, but this is {}",
+                show(declared, instances),
+                show(actual, instances)
+            )),
+        },
         (d, a) if d == a => Ok(()),
         (d, a) => Err(format!(
             "expected {}, but this is {}",

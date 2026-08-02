@@ -1,0 +1,14 @@
+// A8 met the escape rules, and this fixture exists because a NEW TYPE going green on its first
+// try is this project's most reliable red flag: an unknown type silences every rule, and the
+// suite then reports the silence as success. A7 shipped that way once — integer widths lexed,
+// parsed, and were invisible to every check behind them.
+//
+// So a tuple holding a String is region storage, and carrying one out of the region it was built
+// in is refused — by the same sentence every other escape route gets, because it is the same rule
+// rather than a new one bolted on for tuples.
+let mutable kept: (Int, String) = (0, "");
+region r {
+    let built: (Int, String) = (1, "secret-" + "value");
+    kept = built;
+}
+print(kept.1);

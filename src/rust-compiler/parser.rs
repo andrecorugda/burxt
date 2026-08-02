@@ -1293,6 +1293,13 @@ impl Parser {
             self.bump();
             let seg = match self.bump() {
                 Token::Ident(f) => f,
+                // `p.0 = 7;` — a tuple position on the left of an assignment. The same
+                // spelling the READ side accepts, and it has to be accepted here or the
+                // language would let you read a position and not write one, for no reason
+                // a reader could name. It costs one arm because `AssignField` already
+                // carries the path as strings and resolves it through `resolve_field`,
+                // which is where "0" is already a field name.
+                Token::Int(n) if n >= 0 => n.to_string(),
                 other => return Err(format!("expected a field name after '.', found {}", other.describe())),
             };
             if self.at(&Token::LParen) {
@@ -1809,6 +1816,40 @@ impl Parser {
                 self.expect(&Token::RBracket)?;
                 Ok(Type::Array { elem: Box::new(elem), len })
             }
+            // `(Int, String)` — a tuple. Arity two or more, and both ends of that are
+            // refusals rather than silences: `()` is a type with no values, which Burxt has
+            // no use for and no way to build, and `(Int)` is a reader writing parentheses
+            // around a type. Rust answers the second with `(Int,)`, a trailing comma that
+            // changes the type — exactly the one-character difference `ForRange` refuses
+            // `..=` for. So a one-element tuple is unspellable here, on purpose.
+            Token::LParen => {
+                if self.at(&Token::RParen) {
+                    return Err(
+                        "`()` is not a type: a tuple holds two or more values, and Burxt \
+                         has no unit type for the empty one to be."
+                            .to_string(),
+                    );
+                }
+                let mut elements = vec![self.parse_type()?];
+                while self.at(&Token::Comma) {
+                    self.bump();
+                    elements.push(self.parse_type()?);
+                }
+                // Raised BEFORE the `)` is eaten, so the caret lands on the `)` that closed the
+                // thing being complained about rather than on whatever followed it. Stage-1
+                // points at the same token, and a span the two compilers agree on is one fewer
+                // row in the corpus's span column (§B17).
+                if elements.len() < 2 {
+                    return Err(format!(
+                        "a tuple holds two or more values, so `({})` is just `{}` — drop the \
+                         parentheses. There is no one-value tuple in Burxt: it would differ \
+                         from a parenthesised type by one comma.",
+                        elements[0], elements[0]
+                    ));
+                }
+                self.expect(&Token::RParen)?;
+                Ok(Type::Tuple(elements))
+            }
             other => Err(format!("expected a type, found {}", other.describe())),
         }
     }
@@ -1966,6 +2007,35 @@ impl Parser {
             self.bump();
             let name = match self.bump() {
                 Token::Ident(f) => f,
+                // `pair.0` — a tuple's field name IS its position, and the lexer already
+                // produced it: `lex_number` claims a `.` only when a DIGIT follows, so
+                // `x.0` was Ident/Dot/Int before A8 existed and neither lexer changed.
+                //
+                // The position is carried as the STRING "0", which is what makes this
+                // reuse `ExprKind::Field` rather than add a kind: a declared field name
+                // comes from an `Ident`, so it can never be a run of digits, and the two
+                // can never collide in `fields_of`.
+                Token::Int(n) if n >= 0 => n.to_string(),
+                // `t.0.1` does NOT lex the way it reads, and this is the arm that says so
+                // instead of letting the reader work it out. After the first `.`,
+                // `lex_number` sees `0`, then `.`, then the digit `1`, and claims all three
+                // as the decimal `0.1` — the same lookahead that makes `x.0` work at one
+                // level makes it impossible at two. Found by writing the program, not by
+                // reading the lexer.
+                Token::Decimal(unscaled, scale) if scale > 0 => {
+                    let ten: i64 = 10i64.pow(scale);
+                    return Err(format!(
+                        "`.{}.{}` cannot be written: after a `.`, `{}.{}` is lexed as one \
+                         decimal literal rather than two positions. Bind the inner tuple \
+                         first — `let inner = t.{}; inner.{}`.",
+                        unscaled / ten,
+                        unscaled % ten,
+                        unscaled / ten,
+                        unscaled % ten,
+                        unscaled / ten,
+                        unscaled % ten
+                    ));
+                }
                 other => return Err(format!("expected a field or method name after '.', found {}", other.describe())),
             };
             if self.at(&Token::LParen) {
@@ -1997,6 +2067,38 @@ impl Parser {
             let saved = self.allow_struct_lit;
             self.allow_struct_lit = true;
             let e = self.parse_expr();
+            // A tuple literal and a parenthesised expression begin identically and are told
+            // apart by the comma, which is why this lives here rather than in a case of its
+            // own: `(a + b)` must keep costing nothing and keep ITS OWN span.
+            let e = if e.is_ok() && self.at(&Token::Comma) {
+                let mut elements = vec![e?];
+                let mut trailing = false;
+                while self.at(&Token::Comma) {
+                    self.bump();
+                    if self.at(&Token::RParen) {
+                        trailing = true;
+                        break;
+                    }
+                    elements.push(self.parse_expr()?);
+                }
+                // Every other comma-separated list in Burxt tolerates a trailing comma
+                // (`more_in_list`). A tuple must not, and this is the one place the
+                // difference is worth the extra branch: `(a,)` is how Rust spells a
+                // ONE-value tuple, so accepting it here would silently build a two-value
+                // one from a reader who meant something else.
+                if trailing {
+                    self.allow_struct_lit = saved;
+                    return Err(
+                        "a tuple literal takes no trailing comma. `(a,)` is a one-value \
+                         tuple in some other languages and Burxt has none — write `(a, b)` \
+                         for the pair, or drop the parentheses for the value."
+                            .to_string(),
+                    );
+                }
+                Ok(self.expr(ExprKind::TupleLit(elements), start))
+            } else {
+                e
+            };
             self.allow_struct_lit = saved;
             let e = e?;
             self.expect(&Token::RParen)?;

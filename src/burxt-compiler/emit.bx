@@ -288,6 +288,19 @@ function (mutable self: Unit) cells_of(src: String, written: Type) -> Int {
     if bound_type.kind == 48 {                               // [T; N]
         return bound_type.contract * self.cells_of(src, self.declared_type(src, bound_type.scale));
     }
+    // A tuple is its elements laid end to end, in the order written — the same walk the
+    // class branch above does over fields, with the positions standing in for the names.
+    // Declaration-order layout is A4.5's rule and a tuple has no other order to choose.
+    if bound_type.kind == 53 {
+        let mutable total: Int = 0;
+        let mutable e: Int = 0;
+        while e < bound_type.contract {
+            total += self.cells_of(src,
+                self.declared_type(src, self.nested_children[bound_type.scale + e]));
+            e += 1;
+        }
+        return total;
+    }
     if bound_type.kind == 49 {
         // An interface object is a FAT POINTER: the value, and the table of the interface's
         // methods. Two cells, always, whatever the concrete type behind it is — which is
@@ -300,6 +313,22 @@ function (mutable self: Unit) cells_of(src: String, written: Type) -> Int {
 // Where a field starts, in cells, and -1 when the holder has no such field. The walk is
 // the same one `cells_of` does, which is why the two cannot disagree about a layout.
 function (mutable self: Unit) offset_of(src: String, holder: Type, name: Token) -> Int {
+    // A tuple: the position IS the name, so the walk sums the elements before it rather than
+    // comparing spans. Same walk as below, same guarantee that layout and offset cannot
+    // disagree — `cells_of` and this function step over the same list in the same order.
+    if holder.kind == 53 {
+        if name.kind != 2 || name.value < 0 || name.value >= holder.contract {
+            return -1;
+        }
+        let mutable offset: Int = 0;
+        let mutable e: Int = 0;
+        while e < name.value {
+            offset += self.cells_of(src,
+                self.declared_type(src, self.nested_children[holder.scale + e]));
+            e += 1;
+        }
+        return offset;
+    }
     let found: Int = self.find_type(src, holder.name_start, holder.name_length);
     if found < 0 {
         return -1;
@@ -347,8 +376,13 @@ function (self: Unit) is_aggregate_written(src: String, written: Type) -> Bool {
     return self.is_aggregate(self.resolve_shallow(src, written));
 }
 
+// A tuple is 53, and it belongs here for the same reason a class does: its value IS its
+// address, so a mention loads no cells and an assignment copies them. Leaving it out would
+// not have been a missing feature — it would have stored the tuple's ADDRESS into a field
+// sized for its cells, which is the exact miscompile `field_type_here` was written to stop.
 function (self: Unit) is_aggregate(bound_type: Type) -> Bool {
-    return bound_type.kind == 46 || bound_type.kind == 48 || bound_type.kind == 49;
+    return bound_type.kind == 46 || bound_type.kind == 48 || bound_type.kind == 49
+        || bound_type.kind == 53;
 }
 
 function (self: Unit) find_slot(src: String, start: Int, length: Int) -> Int {
@@ -751,6 +785,35 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
         return reg;
     }
 
+    // `(1, "a")` — a tuple literal. The class literal above with the field lookup taken out:
+    // the elements go in the order written, at the offsets `offset_of` computes from the same
+    // list, and an element that is itself an aggregate is COPIED rather than referenced —
+    // which is the one thing in this block that is not obvious and the one that would have
+    // made `((1, 2), "x")` share the inner tuple's storage instead of holding a copy.
+    if n.kind == 23 {
+        let mine: Type = self.type_at(node);
+        let storage: String = self.scratch(self.cells_of(src, mine));
+        let mutable offset: Int = 0;
+        let mutable i: Int = 0;
+        while i < n.b {
+            let element: Type = self.declared_type(src, self.nested_children[mine.scale + i]);
+            let value: String = self.emit_value_for(src, element, self.children[n.a + i]);
+            let at: String = self.fresh();
+            let stepped: Int = self.write_body("  " + at + " = getelementptr i64, ptr " + storage
+                                      + ", i64 " + to_string(offset) + "\n");
+            if self.is_aggregate_written(src, element) {
+                let copied: Int = self.copy_cells(src, at, value, self.cells_of(src, element));
+            } else {
+                let stored: Int = self.write_body("  store i64 " + value + ", ptr " + at + "\n");
+            }
+            offset += self.cells_of(src, element);
+            i += 1;
+        }
+        let reg: String = self.fresh();
+        let visited: Int = self.write_body("  " + reg + " = ptrtoint ptr " + storage + " to i64\n");
+        return reg;
+    }
+
     if n.kind == 17 {                                // an array literal
         let mine: Type = self.type_at(node);
         if mine.kind == 47 {                         // [T] — a header in the region
@@ -966,7 +1029,13 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
         //
         // Not memcmp either: a String field holds a POINTER, and two equal strings need not live at
         // the same address, so comparing the cells would be the same bug one level down.
-        if subject.kind == 46 {
+        // 53 is a tuple, and it is here because the note above turned out to be a prediction:
+        // *"before v0.0.184 this fell through to the integer path, which compared the two
+        // ADDRESSES — so `a == b` on two identical Points answered false, and the checker
+        // accepted it."* A tuple did exactly that, measured — `(1, 2) == (1, 2)` printed
+        // `false` in stage-1 and `true` in stage-0 — and no rule in the checker could see it,
+        // because both compilers agreed the program was fine.
+        if subject.kind == 46 || subject.kind == 53 {
             let bit: String = self.class_equal(src, subject, left, right);
             if n.value == 13 {                       // `!=`
                 let flipped: String = self.fresh();
@@ -1407,14 +1476,53 @@ function (mutable self: Unit) emit_piece(src: String, node: Int) -> String {
 //
 // Ands the field results rather than branching: a class has a handful of fields, each comparison is a
 // few instructions, and a branch per field would cost more to emit than it could ever save.
-function (mutable self: Unit) class_equal(src: String, holder: Type, left: String,
-                                right: String) -> String {
+// How many members an aggregate has, and the type of the i-th one — a class's fields by
+// declaration order, a tuple's elements by position.
+//
+// Two named functions rather than a branch inside every walk, because the walks that ask this
+// (`class_equal` here, and the layout pair `cells_of`/`offset_of`) must agree about the order
+// or a comparison reads one member against another. A4.5 says declaration order; for a tuple
+// there is no other order there could be.
+function (mutable self: Unit) member_count(src: String, holder: Type) -> Int {
+    if holder.kind == 53 {
+        return holder.contract;
+    }
     let found: Int = self.find_type(src, holder.name_start, holder.name_length);
     if found < 0 {
-        return "0";
+        return 0;
+    }
+    return self.nodes[self.types[found].node].b;
+}
+
+function (mutable self: Unit) member_type(src: String, holder: Type, which: Int) -> Type {
+    if holder.kind == 53 {
+        return self.declared_type(src, self.nested_children[holder.scale + which]);
+    }
+    let found: Int = self.find_type(src, holder.name_start, holder.name_length);
+    if found < 0 {
+        return unknown_type();
     }
     let item: Node = self.nodes[self.types[found].node];
+    return self.declared_type(src, self.nodes[self.children[item.a + which]].a);
+}
+
+function (mutable self: Unit) class_equal(src: String, holder: Type, left: String,
+                                right: String) -> String {
+    // A TUPLE takes exactly this path, and that is the point of `member_count`/`member_type`
+    // below: it is a class with positions instead of names, so the comparison is the same
+    // walk over the same layout. Without it a tuple fell through to the integer path in
+    // `emit_expr` and compared the two ADDRESSES — which is word for word the bug the note on
+    // that arm records for classes before v0.0.184, arriving again on the next aggregate the
+    // language grew. It answered `false` for two equal tuples and the checker accepted it;
+    // found by DIFFING THE OUTPUT of the two compilers, not by reading either.
+    if holder.kind != 46 && holder.kind != 53 {
+        return "0";
+    }
+    if holder.kind == 46 && self.find_type(src, holder.name_start, holder.name_length) < 0 {
+        return "0";
+    }
     let restore: Int = self.bind_from_application(src, holder);
+    let members: Int = self.member_count(src, holder);
     let left_ptr: String = self.fresh();
     let cast_l: Int = self.write_body("  " + left_ptr + " = inttoptr i64 " + left + " to ptr\n");
     let right_ptr: String = self.fresh();
@@ -1422,9 +1530,8 @@ function (mutable self: Unit) class_equal(src: String, holder: Type, left: Strin
     let mutable all: String = "1";
     let mutable offset: Int = 0;
     let mutable f: Int = 0;
-    while f < item.b {
-        let field: Node = self.nodes[self.children[item.a + f]];
-        let held: Type = self.resolve_shallow(src, self.declared_type(src, field.a));
+    while f < members {
+        let held: Type = self.resolve_shallow(src, self.member_type(src, holder, f));
         let at_l: String = self.fresh();
         let step_l: Int = self.write_body("  " + at_l + " = getelementptr i64, ptr " + left_ptr
                                  + ", i64 " + to_string(offset) + "\n");
@@ -1432,8 +1539,8 @@ function (mutable self: Unit) class_equal(src: String, holder: Type, left: Strin
         let step_r: Int = self.write_body("  " + at_r + " = getelementptr i64, ptr " + right_ptr
                                  + ", i64 " + to_string(offset) + "\n");
         let mutable one: String = "1";
-        if held.kind == 46 {
-            // A nested class is stored INLINE — its cells sit right here, so the cell at this offset
+        if held.kind == 46 || held.kind == 53 {
+            // A nested class or tuple is stored INLINE — its cells sit right here, so the cell at this offset
             // is its FIRST FIELD and not a pointer to it. The address is what the recursion wants.
             //
             // Loading it instead was the first version, and it segfaulted immediately: for
