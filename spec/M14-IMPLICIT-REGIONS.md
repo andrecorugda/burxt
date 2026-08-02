@@ -1,7 +1,28 @@
 # Burxt — every block is a region (M14)
 
-> Status: **slice 1 DONE in BOTH compilers (stage-0 v0.0.142, stage-1 v0.0.144) — `allocates` is
-> inferred. Slices 2–3 pending.**
+> Status: **slices 1 and 2 DONE in both compilers. Slice 3 — per-block release — DONE in stage-0
+> (v0.0.272); stage-1 in progress.**
+>
+> ### Slice 3, measured — acceptance criterion 5
+>
+> Three programs, and the third is the test. Rows one and three differ by **one line**, so the pair
+> isolates escape analysis and nothing else.
+>
+> | 100,000-iteration loop building a String | before | stage-0 after |
+> |---|---|---|
+> | value does **not** escape, no `region` | 5,280 KB | **1,408 KB** |
+> | the same loop with a hand-written `region each { }` | 1,408 KB | **1,408 KB**, unchanged |
+> | value **escapes** (`last = s`) | 5,280 KB | **5,280 KB — stays** |
+>
+> **An implementation that makes the third row bounded is not a better one; it is a dangling pointer
+> that passes the other two.** The criterion as originally written — *"bounded after, unbounded
+> before"* — was satisfied by exactly that, which is why it was sharpened before any code was written.
+>
+> What made slice 3 buildable was not new analysis. The proof obligation *is* the escape analysis, and
+> when this was last scoped that analysis had **thirteen holes, eleven of them live use-after-frees**
+> (B20–B45). Per-block release on top of it would have freed memory that thirteen routes could still
+> reach, with a green suite throughout. It is now 126 of 126 on a 133-program adversarial corpus with
+> zero false positives and zero divergence between the compilers.
 >
 > | | |
 > |---|---|

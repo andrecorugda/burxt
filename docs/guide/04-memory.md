@@ -198,7 +198,39 @@ outside a `region` was a compile error, so every file opened with a wrapper it n
 That is gone.
 ([Why, and what it cost to find out](https://github.com/andrecorugda/burxt/blob/main/spec/M14-IMPLICIT-REGIONS.md).)
 
-**`region` is a second tray, for work you want off your hands early:**
+**Every block already gives the tray back.** When a block ends, anything built inside it that
+nothing outside can still reach is released — one assignment to a pointer, exactly as the picture
+above shows. You do not write anything to get that:
+
+```burxt
+let mutable width: Int = 0;
+let mutable i: Int = 0;
+while i < 100000 {
+    let label: String = "row {i}";      // built here
+    width = len(label);                 // only the LENGTH escapes
+    i += 1;
+}
+```
+
+A hundred thousand Strings are built and a hundred thousand are released, because the loop body can
+prove none of them leaves. Measured on that exact program: **1,408 KB, flat**. Before per-block
+release it was **5,280 KB and climbing** — the memory grew with the loop, and a long-running server
+would eventually have hit the wall.
+
+**The proof is what makes it safe, and it is the same rule as everywhere else in this page**: a value
+may not outlive the block it was built in. If something *does* escape, the block simply keeps its
+memory — the behaviour you had before — rather than freeing something you can still reach. Change one
+line of that loop:
+
+```burxt
+    last = label;                        // now the String escapes
+```
+
+and the loop is back to 5,280 KB, on purpose. **A block that cannot prove it is safe to release does
+not release.** The failure direction is memory, never a dangling pointer.
+
+**`region` is still here, and it is now for the case the compiler cannot prove.** It is a promise you
+make instead of one the compiler derives:
 
 ```burxt
 region r {
@@ -207,6 +239,10 @@ region r {
 }
 // everything built inside is gone here
 ```
+
+Reach for it when a block holds something the analysis has to be conservative about, or when you want
+a scope narrower than the block structure gives you. Most programs no longer need it at all —
+[`examples/pos/`](https://github.com/andrecorugda/burxt/blob/main/examples/pos/) has none.
 
 **A function that builds a value builds it in its caller's region.** A body has no tray of its own,
 which sounds like it would make a helper that formats a message impossible to write. It does not:
