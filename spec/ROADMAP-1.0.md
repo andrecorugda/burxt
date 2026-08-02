@@ -791,9 +791,31 @@ lands with stage-1's half, in one version, as §A0 requires of every row.
 
 ## D — The standard-library floor: full Rust `str` + `Vec` parity
 
-**D0 comes first, before a single function is written:** decide the **`Builder`** shape. `out = out + b`
-is O(n²) and this project has paid for that three times (v0.0.68, v0.0.77, v0.0.82). Every one of the
-~100 functions below must be run-based, or the library ships 80 quadratic appends.
+**D0 — DECIDED v0.0.279, and measured rather than chosen: a CHUNK LIST joined PAIRWISE.**
+
+Accumulate into a `[String]`, flush the pending piece when it passes ~128 bytes, and join by repeated
+**pairwise** merge. Never `out = out + piece` in a loop, and never a left fold at the end.
+
+The numbers come from this week's compiler work rather than from theory, which is why this is a
+decision and not a preference:
+
+| | before | after |
+|---|---|---|
+| `self.globals`, one flat String appended per string literal (**B29**) | 1,132 MB | **169 MB**, 5.4× faster, byte-identical output |
+| escaping one 8,000-byte literal to IR, quadratic in *that literal's* length (**B30**) | 100 MB | **9 MB**, flat where it had been quadratic |
+
+Three things that generalise to every function below:
+
+- **The join must be pairwise.** Folding left rebuilds the whole prefix at every step, which is the
+  same quadratic you just escaped, one level up.
+- **Measure the flush point; do not inherit it.** `write_body` went 512 → 128 for another 9 MB, while
+  `write_module`'s threshold turned out **inert**, because its caller already fed it 512-byte pieces.
+- **A String's `len` walks it**, so never leave `len(s)` in a loop condition — that alone made the
+  lexer quadratic once.
+
+`join_chunks` in `src/burxt-compiler/emit.bx` is the reference implementation. This project has now
+paid for this four times (v0.0.68, v0.0.77, v0.0.82, and B29/B30 this week); the fourth time cost
+963 MB in the compiler's own memory.
 
 ### D1 — writable today, no compiler change
 
