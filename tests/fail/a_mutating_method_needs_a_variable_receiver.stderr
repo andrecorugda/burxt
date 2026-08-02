@@ -1,0 +1,1 @@
+`bump` is a mutating method (`function (mutable self: dynamic Bump) ...`); it can only be called on a variable, not an expression.

@@ -337,6 +337,26 @@ pub struct TypedProgram {
 pub struct TypeChecker {
     /// variable name -> (type, is mutable)
     env: HashMap<String, (Type, bool)>,
+    /// A11. For a `dynamic` binding, the variable whose storage it borrows.
+    ///
+    /// An interface object is `{data, vtable}` and `data` IS the source binding's slot — see
+    /// `DynCoerce` in `codegen.rs`, which copies nothing. So `let it: dynamic Iterator<Int> = c`
+    /// makes `it` a second NAME for `c`, and every rule that reasons about a name has to be able
+    /// to get back to the one that owns the bytes: `it` may be declared inside a region while
+    /// `c` is declared outside it, and it is `c` that the growth lands in.
+    ///
+    /// **Why a side table rather than a word in the type or in the object.** The coercion site
+    /// knows the answer, so nothing has to be carried at runtime — widening the fat pointer
+    /// would change layout, ABI and `layout.bx`'s reported sizes to record a fact the compiler
+    /// already has. And it is not part of the TYPE: two `dynamic Iterator<Int>` values are the
+    /// same type whether or not their sources were `mutable`, and must stay assignable.
+    ///
+    /// Kept in step with `env`: saved and restored by `check_block`, cleared for each body. A
+    /// `let` always writes or removes its own name (below), so no entry can go stale — and the
+    /// entry is only ever consulted for a `Dyn`-typed receiver. Absent means "not known", which
+    /// is the honest answer for a `dynamic` PARAMETER: its source is in another frame, and the
+    /// call-site rule for a `mutable` parameter is what stands in for it there.
+    dyn_source: HashMap<String, String>,
     /// `const` name -> the literal it folded to, with its declared type.
     ///
     /// Separate from `env` and NEVER cleared, which is the whole point: `env` is saved and
@@ -779,6 +799,7 @@ impl TypeChecker {
     pub fn new() -> Self {
         TypeChecker {
             env: HashMap::new(),
+            dyn_source: HashMap::new(),
             consts: HashMap::new(),
             fns: HashMap::new(),
             generics: HashMap::new(),
@@ -3482,6 +3503,17 @@ impl TypeChecker {
     /// fact that decides it — whether this name is a parameter.
     fn how_to_make_writable(&self, name: &str, ty: &Type) -> String {
         let shown = self.shown(ty);
+        // The RECEIVER, which is neither a `let` nor a parameter and had the same defect as both:
+        // it was told to write `let mutable self`, which is not a thing anyone can write. Found by
+        // A11's sweep — stage-1 records parameters by DEPTH and `self` sits at that depth, so the
+        // two compilers gave two wrong answers instead of one, which is how a divergence starts.
+        if name == "self" {
+            return format!(
+                "It is the RECEIVER: declare the method `function (mutable self: {}) ...` to \
+                 allow it.",
+                shown
+            );
+        }
         if !self.current_params.contains(name) {
             return format!("Declare it `let mutable {}: {}` to allow it.", name, shown);
         }
@@ -3986,6 +4018,71 @@ impl TypeChecker {
             implemented == interface_name
                 && self.relay_methods.contains(&(concrete.clone(), method.to_string(), source))
         })
+    }
+
+    /// Does a call through an interface object GROW its receiver — B25's question, asked of a
+    /// vtable slot instead of a named class.
+    ///
+    /// The third member of the `dyn_call_allocates` / `dyn_call_relays` family and the same
+    /// answer for the same reason: yes if ANY implementation does, because the call site cannot
+    /// know which one runs. A11 is what makes it reachable — before it, no mutating method could
+    /// be called through a `dynamic` at all, so `grow_self` had never been asked this way.
+    fn dyn_call_grows_self(&self, interface_name: &str, method: &str) -> bool {
+        self.impls.iter().any(|(implemented, concrete)| {
+            implemented == interface_name
+                && self.grow_self.contains(&(concrete.clone(), method.to_string()))
+        })
+    }
+
+    /// A11. The rule for calling a `mutable self` method through an interface object, and the
+    /// whole of what A11 adds.
+    ///
+    /// This used to be a flat refusal whose sentence said the compiler *"still cannot tell
+    /// whether the value behind the object was declared mutable"*. It can: the fat pointer's
+    /// data half IS the source binding's storage (`DynCoerce` in `codegen.rs` copies nothing),
+    /// the coercion site knows whether that binding was `mutable`, and `dyn_source` remembers
+    /// it. Nothing had to be added to the object, so the layout and the ABI are unchanged —
+    /// which was worth measuring before widening a two-word value that `layout.bx` reports on.
+    ///
+    /// The rule is the CONCRETE one, unchanged and reused down to its wording: the receiver must
+    /// be a variable, and that variable must be writable. The only thing the interface adds is a
+    /// second name for the value, and the answer to that is to hand the caller back the name
+    /// that owns the bytes — a growth inside a region has to be tested against `c`, not against
+    /// the `it` that borrows it.
+    ///
+    /// **Aliasing, decided and recorded rather than deferred.** Two interface objects over one
+    /// mutable value is legal here, and so is using the value's own name alongside them. It is
+    /// sound for the reason a second name for one object is always sound in Burxt: there is no
+    /// concurrency, a class instance never moves, and every path writes the same field slots the
+    /// concrete call would write. What aliasing WOULD break is a rule that reasons about one
+    /// name while the bytes belong to another — which is exactly the case `dyn_source` closes,
+    /// and the reason it is not optional.
+    fn dyn_mutating_receiver(
+        &self,
+        shown_receiver: &str,
+        method: &str,
+        base: &Expr,
+    ) -> Result<String, String> {
+        let ExprKind::Var(name) = &base.kind else {
+            return Err(format!(
+                "`{}` is a mutating method (`function (mutable self: {}) ...`); \
+                 it can only be called on a variable, not an expression.",
+                method, shown_receiver
+            ));
+        };
+        let (ty, mutable) = self
+            .env
+            .get(name)
+            .ok_or_else(|| format!("unknown variable: {}", name))?;
+        if !*mutable {
+            return Err(format!(
+                "cannot call the mutating method `{}` on `{}`: it was declared immutable. {}",
+                method,
+                name,
+                self.how_to_make_writable(name, ty)
+            ));
+        }
+        Ok(self.dyn_source.get(name).cloned().unwrap_or_else(|| name.clone()))
     }
 
     /// A few words for the thing that allocates, or None when it cannot be named simply.
@@ -4711,6 +4808,7 @@ impl TypeChecker {
         // to. That is what lets a constructor build a value with private fields.
         self.current_receiver = f.name.split_once('.').map(|(holder, _)| holder.to_string());
         self.env.clear();
+        self.dyn_source.clear();
         self.current_params.clear();
         self.region_locals.clear();
         // B25: which parameters a growth found in this body can be attributed to. Rebuilt per
@@ -4859,6 +4957,7 @@ impl TypeChecker {
         self.in_pure = None;
         self.current_signature = None;
         self.env.clear();
+        self.dyn_source.clear();
         self.region_locals.clear();
 
         // Only prove the return paths if the body actually checked. A statement
@@ -4914,6 +5013,7 @@ impl TypeChecker {
         // and a private method called from outside compiled cleanly.
         let outer_receiver = self.current_receiver.replace(m.receiver.clone());
         self.env.clear();
+        self.dyn_source.clear();
         self.region_locals.clear();
         // B25. A method may not declare a `mutable` parameter — only `mutable self` — so the
         // map is empty here by construction and the receiver carries the whole question.
@@ -5029,6 +5129,7 @@ impl TypeChecker {
         self.current_ret = None;
         self.in_caller_region = false;
         self.env.clear();
+        self.dyn_source.clear();
         self.region_locals.clear();
 
         if !block_returns(&body) {
@@ -5444,6 +5545,11 @@ impl TypeChecker {
     /// following a statement that always returns.
     fn check_block(&mut self, stmts: &[Stmt]) -> Result<Vec<TypedStmt>, String> {
         let saved = self.env.clone();
+        // A11: `dyn_source` is scoped exactly as `env` is, and here only. The other three
+        // places that insert a name — a match arm's payload, a `for` element, a `for` range's
+        // counter — cannot be a `dynamic` bound from a coercion, and each of their bodies is a
+        // block, so every `let` still passes through here.
+        let saved_dyn = self.dyn_source.clone();
         let mut out: Vec<TypedStmt> = Vec::new();
         let errors_before = self.errors.len();
         for s in stmts {
@@ -5474,6 +5580,7 @@ impl TypeChecker {
             }
         }
         self.env = saved;
+        self.dyn_source = saved_dyn;
         let _ = errors_before;
         Ok(out)
     }
@@ -5589,6 +5696,81 @@ impl TypeChecker {
                 if self.current_region.is_some() {
                     self.region_scope.insert(name.clone());
                 }
+                // A11. An interface object borrows the storage of the value behind it, so this
+                // `let` gives that value a second name. Two things follow, and both are settled
+                // here because this is the one place that knows the source AND the new binding's
+                // `mutable`.
+                //
+                // **The permission may not be upgraded.** `let mutable it: dynamic I = d` with
+                // `d` immutable would hand out through `it` exactly the write `d.method()` was
+                // refused — the same bytes, one word of laundering. So a `mutable` interface
+                // object may only be built from a `mutable` value. The other direction is fine
+                // and stays legal: an immutable `let` over a mutable value simply cannot write.
+                //
+                // **The source is remembered**, because every escape rule is about a NAME and
+                // from here on the reader will write `it`. See `dyn_source`.
+                match &typed.kind {
+                    TypedExprKind::DynCoerce { var, .. } => {
+                        // `coerce_dyn` already refused an unknown name, so the entry is here.
+                        let (source_ty, source_mutable) = self
+                            .env
+                            .get(var)
+                            .cloned()
+                            .ok_or_else(|| self.unknown_name(var))?;
+                        if *mutable && !source_mutable {
+                            return Err(format!(
+                                "`let mutable {}: {}` would borrow `{}`, which was declared \
+                                 immutable — an interface object points at the storage of the \
+                                 value behind it, so a `mutable` one could change `{}` through \
+                                 `{}`. {} Or drop `mutable` from `{}`.",
+                                name,
+                                self.shown(&bound),
+                                var,
+                                var,
+                                name,
+                                self.how_to_make_writable(var, &source_ty),
+                                name
+                            ));
+                        }
+                        self.dyn_source.insert(name.clone(), var.clone());
+                    }
+                    // `let b: dynamic I = a` where `a` is ALREADY an interface object: no
+                    // coercion happens, the fat pointer is copied, and both names reach the one
+                    // value — so the source travels with the copy, and so does the ceiling on
+                    // what may be written through it. Without this arm the rule above is one
+                    // `let` away from being stepped around, which is B27's shape exactly.
+                    TypedExprKind::Var(from) if matches!(bound, Type::Dyn(_)) => {
+                        let from_mutable = self.env.get(from).map(|(_, m)| *m).unwrap_or(false);
+                        if *mutable && !from_mutable {
+                            return Err(format!(
+                                "`let mutable {}: {}` would copy `{}`, which was declared \
+                                 immutable — both names reach the one value behind the interface \
+                                 object, so a `mutable` copy could change what `{}` may not. {} \
+                                 Or drop `mutable` from `{}`.",
+                                name,
+                                self.shown(&bound),
+                                from,
+                                from,
+                                self.how_to_make_writable(from, &bound),
+                                name
+                            ));
+                        }
+                        match self.dyn_source.get(from).cloned() {
+                            Some(root) => {
+                                self.dyn_source.insert(name.clone(), root);
+                            }
+                            // Anything whose source this frame cannot name — a `dynamic`
+                            // PARAMETER, above all. `remove` rather than leave, so a name can
+                            // never inherit a previous block's answer.
+                            None => {
+                                self.dyn_source.remove(name);
+                            }
+                        }
+                    }
+                    _ => {
+                        self.dyn_source.remove(name);
+                    }
+                }
                 self.env.insert(name.clone(), (bound.clone(), *mutable));
                 Ok(TypedStmt::Let { name: name.clone(), ty: bound, value: typed })
             }
@@ -5676,6 +5858,59 @@ impl TypeChecker {
                         ));
                     }
                     self.region_locals.insert(name.clone());
+                }
+                // A11, the `let`'s rules asked again where the same thing can happen a second
+                // time: `d = other` re-points an interface object. `d` is `mutable` or this
+                // statement was already refused above, so the source must be `mutable` too, and
+                // whatever `d` borrowed before is no longer what it borrows.
+                if matches!(declared, Type::Dyn(_)) {
+                    match &typed.kind {
+                        TypedExprKind::DynCoerce { var, .. } => {
+                            let (source_ty, source_mutable) = self
+                                .env
+                                .get(var)
+                                .cloned()
+                                .ok_or_else(|| self.unknown_name(var))?;
+                            if !source_mutable {
+                                return Err(format!(
+                                    "`{}` may be written through, so it may not be pointed at \
+                                     `{}`, which was declared immutable — the assignment would \
+                                     let `{}` change `{}`. {}",
+                                    name,
+                                    var,
+                                    name,
+                                    var,
+                                    self.how_to_make_writable(var, &source_ty)
+                                ));
+                            }
+                            self.dyn_source.insert(name.clone(), var.clone());
+                        }
+                        TypedExprKind::Var(from) => {
+                            if !self.env.get(from).map(|(_, m)| *m).unwrap_or(false) {
+                                return Err(format!(
+                                    "`{}` may be written through, so it may not be pointed at \
+                                     `{}`, which was declared immutable — the assignment would \
+                                     let `{}` change what `{}` may not. {}",
+                                    name,
+                                    from,
+                                    name,
+                                    from,
+                                    self.how_to_make_writable(from, &declared)
+                                ));
+                            }
+                            match self.dyn_source.get(from).cloned() {
+                                Some(root) => {
+                                    self.dyn_source.insert(name.clone(), root);
+                                }
+                                None => {
+                                    self.dyn_source.remove(name);
+                                }
+                            }
+                        }
+                        _ => {
+                            self.dyn_source.remove(name);
+                        }
+                    }
                 }
                 Ok(TypedStmt::Assign { name: name.clone(), value: typed })
             }
@@ -7992,16 +8227,25 @@ impl TypeChecker {
                             )
                         })?;
                     let signature = sigs[slot].clone();
+                    // A11: a mutating method through an interface object. See
+                    // `dyn_mutating_receiver` for the rule and why it needs no runtime word.
                     if signature.receiver_mut {
-                        return Err(format!(
-                            "`{}` takes `mutable self`, and calling a mutating method \
-                             through an interface object is not available yet: the \
-                             compiler still cannot tell whether the value behind \
-                             the object was declared mutable. Regions bound its \
-                             LIFETIME, not its mutability. Call it on the concrete \
-                             type.",
-                            method
-                        ));
+                        let shown_receiver = self.shown(&typed_base.ty);
+                        let root =
+                            self.dyn_mutating_receiver(&shown_receiver, method, base)?;
+                        // B25 through a vtable, and the reason `root` is a name rather than the
+                        // receiver's spelling: the growth lands in the value the object borrows,
+                        // which may be declared in a different scope than the object is.
+                        if self.dyn_call_grows_self(&interface_name, method) {
+                            self.record_param_growth(&root);
+                            if let Some(open) = self.declared_outside_open_region(&root) {
+                                return Err(Self::growing_an_outer_binding(
+                                    &root,
+                                    &open,
+                                    &format!("{}.{}(...)", shown_receiver, method),
+                                ));
+                            }
+                        }
                     }
                     if arguments.len() != signature.parameters.len() {
                         return Err(format!(
@@ -8121,16 +8365,16 @@ impl TypeChecker {
                             )
                         })?
                         .clone();
+                    // A11, the abstract half. This arm checks a free generic's body against the
+                    // interface it wrote out, so the receiver is that body's own parameter and
+                    // the question is the same one: was it declared `mutable`. Every
+                    // instantiation re-checks the call through the `Dyn` arm above, which is
+                    // where the growth rule is applied against a real implementation list.
                     if signature.receiver_mut {
-                        return Err(format!(
-                            "`{}` takes `mutable self`, and calling a mutating method \
-                             through an interface object is not available yet: the \
-                             compiler still cannot tell whether the value behind \
-                             the object was declared mutable. Regions bound its \
-                             LIFETIME, not its mutability. Call it on the concrete \
-                             type.",
-                            method
-                        ));
+                        // The name is discarded here on purpose: this body is checked and never
+                        // emitted, and the growth rule needs a real implementation list, which
+                        // an abstract `Mapper<T, U>` does not have.
+                        self.dyn_mutating_receiver(&shown_base, method, base)?;
                     }
                     if arguments.len() != signature.parameters.len() {
                         return Err(format!(
@@ -8329,14 +8573,22 @@ impl TypeChecker {
                         .get(name)
                         .ok_or_else(|| format!("unknown variable: {}", name))?;
                     if !*mutable {
+                        // Through `how_to_make_writable` like the other seven, and it was NOT
+                        // before: this site hardcoded the `let mutable` form, so a mutating
+                        // method on an immutable PARAMETER advised changing a `let` that does
+                        // not exist. The dyn path A11 adds asks the same question, and one
+                        // question with two answers is how the two drift.
+                        let ty = self
+                            .env
+                            .get(name)
+                            .map(|(t, _)| t.clone())
+                            .unwrap_or_else(|| Type::Named(receiver.clone()));
                         return Err(format!(
                             "cannot call the mutating method `{}` on `{}`: it was \
-                             declared immutable. Declare it `let mutable {}: {}` to \
-                             allow it.",
+                             declared immutable. {}",
                             method,
                             name,
-                            name,
-                            self.shown_type_name(&receiver)
+                            self.how_to_make_writable(name, &ty)
                         ));
                     }
                     // B25 through `self`, which is the same hole and had to be measured rather

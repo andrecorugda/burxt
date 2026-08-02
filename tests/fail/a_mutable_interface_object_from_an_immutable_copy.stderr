@@ -1,0 +1,1 @@
+`let mutable e: dynamic Bump` would copy `d`, which was declared immutable — both names reach the one value behind the interface object, so a `mutable` copy could change what `d` may not. Declare it `let mutable d: dynamic Bump` to allow it. Or drop `mutable` from `e`.

@@ -1,0 +1,16 @@
+// A11. The same laundering one `let` further along, which is the shape B27 was: a rule that
+// covers the coercion and not the COPY can be stepped around in a line. `d` is already an
+// interface object, so `let mutable e = d` coerces nothing — it copies the fat pointer, and both
+// names reach the one value. The ceiling on what may be written has to travel with the copy.
+interface Bump { function bump(mutable self) -> Int }
+class Cell { n: Int }
+implement Bump for Cell {
+    function (mutable self) bump() -> Int {
+        self.n = self.n + 1;
+        return self.n;
+    }
+}
+let mutable c: Cell = Cell { n: 0 };
+let d: dynamic Bump = c;
+let mutable e: dynamic Bump = d;
+print(e.bump());

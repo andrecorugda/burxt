@@ -1073,20 +1073,77 @@ function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: No
         let sig: Node = self.nodes[self.children[item.a + i]];
         let named: Token = self.tokens[sig.token];
         if spans_equal(src, named.start, named.length, wanted.start, wanted.length) {
-            // A MUTATING method through an interface object is not available yet, and the limit is
-            // the emitter's: a `dynamic` value is a fat pointer that BORROWS its referent, so the
-            // vtable would have to carry a writable receiver and nothing arranges that. Named rather
-            // than half-supported — stage-1 accepted the call and the write went to the borrowed
-            // copy, which is a silent wrong answer rather than a missing feature.
-            // Only through an interface OBJECT. A static bound monomorphises to the concrete
-            // type and its receiver is the caller's own value, so `mutable self` is reachable there
-            // and refusing it would be a false refusal — the worse direction of the two.
+            // ---- A11: a MUTATING method through an interface object ---------------------
+            //
+            // This used to be a flat refusal, and the sentence said an interface object borrows
+            // its referent *"so there is nothing for the change to reach"*. That was wrong about
+            // the mechanism: the fat pointer's data half IS the source binding's storage, and a
+            // method receiver is a plain pointer in both compilers, so the write always reached
+            // exactly the right place. What was missing was the PERMISSION — whether the value
+            // behind the object had been declared `mutable` — and the coercion site knows it.
+            //
+            // So the rule is the concrete one, reused: the receiver must be a variable, and that
+            // variable must be writable. Nothing was added to the object, so the layout and the
+            // ABI are untouched and `layout` reports the same two words.
+            //
+            // `borrowed` is still what tells the two callers apart, and only for the growth rule
+            // below: a static bound monomorphises to the caller's own value and there is no
+            // second name to reason about.
             if sig.value == 1 && borrowed == 1 {
-                let complained: Int = self.complain_at(src, call.token,
-                    "`" + substring(src, named.start, named.length) + "` takes `mutable self`, and "
-                    + "calling a mutating method through an interface object is not available yet: "
-                    + "an interface object borrows the value it refers to, so there is nothing for "
-                    + "the change to reach. Call it on the concrete type.");
+                // A BARE NAME, not `lvalue_root`. The difference is `h.inner.bump()`: a place
+                // reached through a field is an lvalue root, but the field's own type says
+                // nothing about whether what it holds may be written, and stage-0 refuses it by
+                // asking for a plain variable. Using `lvalue_root` here would have accepted it
+                // and diverged silently — which was measured on the first build, not reasoned
+                // about. The concrete path in check.bx has the same gap and it is older than
+                // A11; this arm does not inherit it.
+                let mutable root: Int = 0 - 1;
+                if self.nodes[call.a].kind == 5 {
+                    root = call.a;
+                }
+                if root < 0 {
+                    let complained: Int = self.complain_at(src, call.token,
+                        "`" + substring(src, named.start, named.length)
+                        + "` is a mutating method (`function (mutable self: "
+                        + self.show_type(src, holder) + ") ...`); it can only be called on a "
+                        + "variable, not an expression.");
+                } else {
+                    let base: Token = self.tokens[self.nodes[root].token];
+                    let bound: Int = self.find_binding(src, base.start, base.length);
+                    // `!= 1`: 1 is the only code that means writable. See `Binding` in ast.bx.
+                    if bound >= 0 && self.bindings[bound].writable != 1 {
+                        let complained: Int = self.complain_at(src, call.token,
+                            "cannot call the mutating method `"
+                            + substring(src, named.start, named.length) + "` on `"
+                            + substring(src, base.start, base.length)
+                            + "`: it was declared immutable. " + self.writable_advice(src, bound));
+                    }
+                    // B25 through a vtable, which A11 is what makes reachable at all — before it
+                    // no mutating method could be called through a `dynamic`, so `grows_self` had
+                    // never been asked this way. Two things have to be right: the interface names
+                    // no body, so the question is asked of every implementation the way
+                    // `any_implementation_allocates` asks its own; and the growth lands in the
+                    // value the object BORROWS, which may be declared in a different scope than
+                    // the object is. `dyn_owner` is the name that owns the bytes.
+                    if self.any_implementation_grows_self(src, holder, named) {
+                        let mutable owner: Int = bound;
+                        if bound >= 0 && self.bindings[bound].dyn_owner >= 0 {
+                            owner = self.bindings[bound].dyn_owner;
+                        }
+                        if owner >= 0 {
+                            let held: Binding = self.bindings[owner];
+                            let grown: Int = self.record_parameter_growth(src, held.start,
+                                                                  held.length);
+                            if self.region_depth > 0 && held.in_region == 0 {
+                                let complained: Int = self.complain_at(src, call.token,
+                                    self.growing_an_outer_binding(src,
+                                        substring(src, held.start, held.length),
+                                        self.show_type(src, holder) + "."
+                                        + substring(src, named.start, named.length) + "(...)"));
+                            }
+                        }
+                    }
+                }
             }
             // An interface signature's parameters live in `nested_children`, after the receiver.
             let list: Node = self.nodes[call.b];
@@ -1187,6 +1244,32 @@ function (self: Unit) any_implementation_relays_self(src: String, holder: Type,
             let found: Int = self.find_method_named(src, candidate.type_start, candidate.type_len,
                                 wanted.start, wanted.length);
             if found >= 0 && self.relays_self(found) {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    return false;
+}
+
+// B25 through a `dynamic`, and the third member of this family: does ANY implementation of this
+// interface's method GROW its receiver? Same iteration over the same table as
+// `any_implementation_allocates`, same reason for the answer — the call site cannot know which
+// implementation runs, so the conservative one is the only sound one. Stage-0's
+// `dyn_call_grows_self`.
+//
+// A11 is what makes it reachable: until a mutating method could be called through an interface
+// object, `grows_self` had no way to be asked here at all.
+function (self: Unit) any_implementation_grows_self(src: String, holder: Type,
+                                               wanted: Token) -> Bool {
+    let mutable i: Int = 0;
+    while i < len(self.impls) {
+        let candidate: Implementation = self.impls[i];
+        if spans_equal(src, candidate.trait_start, candidate.trait_len,
+                    holder.name_start, holder.name_length) {
+            let found: Int = self.find_method_named(src, candidate.type_start, candidate.type_len,
+                                wanted.start, wanted.length);
+            if found >= 0 && self.grows_self(found) {
                 return true;
             }
         }
@@ -1356,7 +1439,7 @@ function (mutable self: Unit) bind_arm(src: String, holder: Type, arm: Node) -> 
                 let payload_type: Type = self.resolve_deep(src, stated, arm.token);
                 push(self.bindings, Binding { start: name.start, length: name.length,
                                       bound_type: payload_type, writable: 0, depth: self.depth + 1,
-                                      in_region: 0, holds_region: 0 });
+                                      in_region: 0, holds_region: 0, dyn_owner: 0 - 1 });
                 p += 1;
             }
             let dropped: Int = truncate(self.type_bindings, bound_base);

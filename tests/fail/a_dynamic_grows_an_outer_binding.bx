@@ -1,0 +1,19 @@
+// B25 asked through a vtable, which A11 is what makes reachable: before it, no mutating method
+// could be called through a `dynamic` at all, so `grow_self` had never been asked this way.
+//
+// Two things have to be right for this to be refused. The interface names no body, so the
+// question "does this grow its receiver" is answered the way `dyn_call_allocates` answers its
+// own — yes if ANY implementation does. And the growth lands in `bag`, not in `d`, so the
+// region test is applied to the binding the object BORROWS. The reader only ever wrote `d`; the
+// message names `bag`, because `bag` is what would be left reading released bytes.
+interface Adder { function add(mutable self, v: Int) -> Int }
+class Bag { items: [Int] }
+implement Adder for Bag {
+    function (mutable self) add(v: Int) -> Int allocates { push(self.items, v); return v; }
+}
+let mutable bag: Bag = Bag { items: [] };
+let mutable d: dynamic Adder = bag;
+region r {
+    let a: Int = d.add(11);
+}
+print(bag.items[0]);

@@ -1,0 +1,1 @@
+cannot call the mutating method `next` on `it`: it was declared immutable. It is a PARAMETER, and a parameter is a copy unless the signature says otherwise: declare it `mutable it: dynamic Iterator<Int>`, which also tells every caller that this call changes what they passed.

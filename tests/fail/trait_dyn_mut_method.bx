@@ -1,5 +1,12 @@
-// Calling a mutating method through an interface object is deferred: the compiler
-// cannot yet tell whether the borrowed value is itself mutable.
+// A11. A mutating method through an interface object works now — and this is the half that must
+// still be refused: `d` was declared `let`, not `let mutable`, so nothing may be written through
+// it. The value behind it IS mutable, which is the point of the fixture: the permission travels
+// with the name the reader wrote, and `c.bump()` on the line below would be fine.
+//
+// Until A11 the refusal here was a blanket one whose sentence said the compiler *"still cannot
+// tell whether the value behind the object was declared mutable"*. It can — the fat pointer's
+// data half is `c`'s own storage and the coercion site knows how `c` was declared — so what is
+// left is the ordinary immutability rule, in the ordinary words.
 interface Bumpable {
     function bump(mutable self) -> Int
 }

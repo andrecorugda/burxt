@@ -1,1 +1,1 @@
-calling a mutating method through an interface object is not available yet
+cannot call the mutating method `bump` on `d`: it was declared immutable. Declare it `let mutable d: dynamic Bumpable` to allow it.

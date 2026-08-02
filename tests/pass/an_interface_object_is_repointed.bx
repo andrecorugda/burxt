@@ -1,0 +1,20 @@
+// A11. An interface object is a value, so a `mutable` one can be pointed somewhere else — and
+// after that the writes land in the new value and the old one is left where it was. Both cells
+// are `mutable`, which is what the assignment rule requires; the refusing half is
+// `tests/fail/an_interface_object_may_not_be_pointed_at_an_immutable_value.bx`.
+interface Bump { function bump(mutable self) -> Int }
+class Cell { n: Int }
+implement Bump for Cell {
+    function (mutable self) bump() -> Int {
+        self.n = self.n + 1;
+        return self.n;
+    }
+}
+let mutable one: Cell = Cell { n: 0 };
+let mutable two: Cell = Cell { n: 10 };
+let mutable d: dynamic Bump = one;
+print(d.bump());
+d = two;
+print(d.bump());
+print(one.n);
+print(two.n);

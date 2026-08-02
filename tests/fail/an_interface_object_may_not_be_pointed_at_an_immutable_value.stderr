@@ -1,0 +1,1 @@
+`d` may be written through, so it may not be pointed at `frozen`, which was declared immutable — the assignment would let `d` change `frozen`. Declare it `let mutable frozen: Cell` to allow it.

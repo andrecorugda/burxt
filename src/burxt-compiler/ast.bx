@@ -212,8 +212,22 @@ class Type {
 // `push(i, x)` and a mutating method through on a loop variable. So all five now say `== 1` or
 // `!= 1`, each with a one-line pointer back here: refuse_immutable_write and two sites in
 // check.bx, one in parser.bx, and the assignment rule that distinguishes 0 from 2 by hand.
+// `dyn_owner` is A11, and it is the one thing a `dynamic` binding knows that no other binding
+// does: WHICH binding's storage it borrows, as an index into `bindings`, or -1 for "not known
+// here". An interface object is `{data, vtable}` and the data half IS the source binding's slot,
+// so `let mutable it: dynamic Iterator<Int> = c;` makes `it` a second name for `c` — and every
+// escape rule in this compiler is about a NAME. The growth a mutating call performs lands in `c`,
+// which may be declared outside the region `it` was declared inside, so the rule has to be asked
+// about `c`. A reader who only ever wrote `it` is told about `bag` for exactly this reason; see
+// tests/fail/a_dynamic_coerced_inside_a_region_grows_an_outer_binding.bx.
+//
+// An INDEX rather than a span, because the answer is wanted as a Binding — its `in_region`, its
+// `writable`, its name — and the index is stable for as long as the borrower lives: the source is
+// declared first and in an enclosing-or-equal scope, so `truncate` at a closing brace can never
+// drop it while this binding is still there. -1 for a `dynamic` PARAMETER, whose source is in
+// another frame and is the caller's business.
 class Binding { start: Int, length: Int, bound_type: Type, writable: Int, depth: Int,
-                in_region: Int, holds_region: Int }
+                in_region: Int, holds_region: Int, dyn_owner: Int }
 
 // ---- A12 / M14 slice 3: the two records the per-block release pass keeps -----------------------
 //
@@ -345,6 +359,16 @@ class Unit {
     types: [TypeDeclaration],
     // Block depth, so a binding leaves scope at the closing brace.
     depth: Int,
+    // The depth at which THIS body's parameters — and a method's `self` — were pushed, or -1
+    // outside a body. A binding at exactly this depth is a parameter and nothing else can be:
+    // `check_body` pushes them, then the body's block pushes one more level, so every local is
+    // deeper.
+    //
+    // It exists for one sentence, and it is the same sentence stage-0 factored
+    // `how_to_make_writable` out to get right: "declare it `let mutable x`" names a `let` a
+    // parameter does not have. Stage-1 had no way to ask the question at all, so it told every
+    // reader to change a `let` that may not exist — see `writable_advice` in check.bx.
+    param_depth: Int,
     problems: Int,
     // ---- the FIRST problem, carried out to whoever asked ----------------------------------
     //

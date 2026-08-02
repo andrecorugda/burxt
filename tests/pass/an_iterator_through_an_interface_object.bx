@@ -1,0 +1,70 @@
+// A11, and the program the milestone exists for: a real iterator, driven to exhaustion through
+// an interface object.
+//
+// Everything here except one thing was already legal. A9 gave `interface Iterator<T>` its type
+// parameter; `Option<T>` is ordinary Burxt declared right here, not a builtin; `Counter` is an
+// ordinary class. The one missing capability was that `next` must take `mutable self` — an
+// iterator that cannot advance is not one — and a `mutable self` method could not be called
+// through a `dynamic`. So A11 is exactly "mutability tracking through a `dynamic`", and it is a
+// COMPILE-TIME fact: the interface object is still the same two words, `{data, vtable}`, and
+// `layout` reports the same size it always did.
+//
+// Why nothing had to change in the emitter: a method receiver is always a plain pointer (see
+// `declare_method`), chosen so a direct call and a vtable call cannot disagree about the ABI,
+// and `DynCoerce` copies nothing — the data half IS `c`'s storage. The write always went to the
+// right place; the typechecker simply refused to allow it.
+// `Option<T>` is NOT built in and does not need to be — it is four lines of ordinary Burxt, and
+// `lib/option.bx` is where a real program gets it (`use "../../lib/option.bx";`, verified to work
+// with this iterator in both compilers). Declared here so the fixture depends on nothing but the
+// language.
+enum Option<T> { None, Some(T) }
+
+interface Iterator<T> { function next(mutable self) -> Option<T> }
+
+class Counter { at: Int, stop: Int }
+
+implement Iterator<Int> for Counter {
+    function (mutable self) next() -> Option<Int> {
+        if self.at >= self.stop { return Option.None; }
+        let v: Int = self.at;
+        self.at = self.at + 1;
+        return Option.Some(v);
+    }
+}
+
+// The demonstration: 0 + 1 + 2.
+let mutable c: Counter = Counter { at: 0, stop: 3 };
+let mutable it: dynamic Iterator<Int> = c;
+let mutable total: Int = 0;
+let mutable going: Int = 1;
+while going == 1 {
+    match it.next() {
+        Some(v) => { total = total + v; }
+        None => { going = 0; }
+    }
+}
+print(total);
+
+// And the advance reached `c` itself, which is the claim worth pinning: the object borrowed
+// `c`'s storage rather than a copy of it, so driving the iterator moved the value the caller
+// still holds.
+print(c.at);
+
+// A generic DRIVER, which is what an iterator protocol is for — the loop written once against
+// the interface. `mutable it:` is how a signature says "this call advances what you passed",
+// and the caller's own value must be `mutable` for the argument to be accepted at all.
+function drain(mutable it: dynamic Iterator<Int>) -> Int {
+    let mutable sum: Int = 0;
+    let mutable more: Int = 1;
+    while more == 1 {
+        match it.next() {
+            Some(v) => { sum = sum + v; }
+            None => { more = 0; }
+        }
+    }
+    return sum;
+}
+
+let mutable second: Counter = Counter { at: 0, stop: 4 };
+print(drain(second));
+print(second.at);

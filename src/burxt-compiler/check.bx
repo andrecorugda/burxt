@@ -1168,6 +1168,48 @@ function (self: Unit) lvalue_text(src: String, node: Int) -> String {
     return "this";
 }
 
+// How to make `bindings[found]` writable — the advice half of every "declared immutable"
+// message. Stage-0's `how_to_make_writable`, to the byte.
+//
+// One function because there are several of those messages and the wrong half of each is the
+// same: "declare it `let mutable x`" names a `let` that a PARAMETER does not have and cannot be
+// given. Stage-1 could not even ask the question — nothing recorded which bindings were
+// parameters — so it said the unfollowable thing every time, and the divergence from stage-0 was
+// invisible because no fixture put a parameter in front of one of these rules. `param_depth`
+// exists for this and nothing else.
+//
+// **Three sentences, and which one is right is decided by two facts**: whether the name is a
+// parameter, and whether the type crosses by pointer or by copy. On a scalar parameter even
+// `mutable` would not help — the value is copied at the boundary — so the advice is to take a
+// copy here on purpose, which is what the reader actually wants.
+function (self: Unit) writable_advice(src: String, found: Int) -> String {
+    let held: Binding = self.bindings[found];
+    let named: String = substring(src, held.start, held.length);
+    let shown: String = self.show_type(src, held.bound_type);
+    // The RECEIVER first, and it is the branch that made this function necessary in BOTH
+    // compilers rather than one: `self` is pushed at `param_depth` here, so without this arm
+    // stage-1 called it a parameter while stage-0 called it a `let`, and both were unfollowable.
+    if named == "self" {
+        return "It is the RECEIVER: declare the method `function (mutable self: " + shown
+             + ") ...` to allow it.";
+    }
+    if held.depth != self.param_depth {
+        return "Declare it `let mutable " + named + ": " + shown + "` to allow it.";
+    }
+    if is_aggregate_type(held.bound_type) {
+        return "It is a PARAMETER, and a parameter is a copy unless the signature says "
+             + "otherwise: declare it `mutable " + named + ": " + shown + "`, which also tells "
+             + "every caller that this call changes what they passed.";
+    }
+    let mutable article: String = "a";
+    if held.bound_type.kind == 40 {
+        article = "an";
+    }
+    return "It is a PARAMETER, and " + article + " " + shown + " is copied when it crosses — so "
+         + "changing it here could not reach the caller anyway. Take a copy you own: "
+         + "`let mutable own: " + shown + " = " + named + ";`";
+}
+
 // Refuse a write through an immutable name. Answers 1 when it complained.
 //
 // Stage-1 checked mutability for `name = value` and NOWHERE else until v0.0.223, so `a[0] = 9` and
@@ -1188,8 +1230,7 @@ function (mutable self: Unit) refuse_immutable_write(src: String, target: Int) -
     let named: String = substring(src, base.start, base.length);
     let complained: Int = self.complain_at(src, self.nodes[root].token,
         "cannot assign to `" + self.lvalue_text(src, target) + "`: `" + named
-        + "` was declared immutable. Declare it `let mutable " + named + ": "
-        + self.show_type(src, self.bindings[found].bound_type) + "` to allow it.");
+        + "` was declared immutable. " + self.writable_advice(src, found));
     return 1;
 }
 
@@ -3180,9 +3221,8 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
                     let named: String = substring(src, base.start, base.length);
                     let complained: Int = self.complain_at(src, n.token,
                         "cannot call the mutating method `" + substring(src, m.start, m.length)
-                        + "` on `" + named + "`: it was declared immutable. Declare it "
-                        + "`let mutable " + named + ": " + self.show_type(src, holder)
-                        + "` to allow it.");
+                        + "` on `" + named + "`: it was declared immutable. "
+                        + self.writable_advice(src, bound));
                 }
                 // B25 through `self`, which is the same hole wearing the receiver's name:
                 // `function (mutable self: Bag) add(v: Int) { push(self.items, v); }` called on an
@@ -3583,8 +3623,7 @@ function (mutable self: Unit) check_against_params(src: String, at: Int, list_no
                     let complained: Int = self.complain_at(src, at,
                         "argument " + to_string(i + 1) + " is declared `mutable`, so this call can "
                         + "change it — cannot modify `" + named + "`: it was declared immutable. "
-                        + "Declare it `let mutable " + named + ": "
-                        + self.show_type(src, self.bindings[bound].bound_type) + "` to allow it.");
+                        + self.writable_advice(src, bound));
                 }
             }
         }
@@ -3651,7 +3690,8 @@ function (mutable self: Unit) taint_aliased_bindings(src: String, base: Int, sou
         }
         self.bindings[i] = Binding { start: was.start, length: was.length,
                               bound_type: was.bound_type, writable: was.writable,
-                              depth: was.depth, in_region: 1, holds_region: holds };
+                              depth: was.depth, in_region: 1, holds_region: holds,
+                              dyn_owner: was.dyn_owner };
         i += 1;
     }
     return 1;
@@ -3780,10 +3820,62 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
                 given_region_bytes = 1;
             }
         }
+        // A11. An interface object borrows the storage of the value behind it, so this `let`
+        // gives that value a SECOND NAME, and the two facts that follow are settled here because
+        // this is the only place that knows both the source and the new binding's `mutable`.
+        //
+        // **The permission may not be upgraded.** `let mutable it: dynamic I = d` with `d`
+        // immutable would hand out through `it` exactly the write `d.method()` is refused — the
+        // same bytes, one word of laundering. The other direction stays legal: an immutable `let`
+        // over a mutable value simply cannot write.
+        //
+        // **The source is remembered**, in `dyn_owner`, because from here on the reader writes
+        // `it` and every escape rule is about a name. See `Binding` in ast.bx.
+        let mutable borrows: Int = 0 - 1;
+        if declared.kind == 49 {
+            let root: Int = self.lvalue_root(n.b);
+            if root >= 0 {
+                let from: Token = self.tokens[self.nodes[root].token];
+                let source: Int = self.find_binding(src, from.start, from.length);
+                if source >= 0 {
+                    let held: Binding = self.bindings[source];
+                    // Already an interface object: no coercion happens, the fat pointer is
+                    // copied, and the copy reaches the same value — so the source travels with
+                    // it. Without this the rule below is one `let` away from being stepped
+                    // around, which is B27's shape exactly.
+                    borrows = source;
+                    if held.bound_type.kind == 49 {
+                        borrows = held.dyn_owner;
+                    }
+                    // `!= 1`: 1 is the only code that means writable. See `Binding` in ast.bx.
+                    if n.value == 1 && held.writable != 1 {
+                        let named: String = substring(src, from.start, from.length);
+                        let mine: String = substring(src, name.start, name.length);
+                        if held.bound_type.kind == 49 {
+                            let complained: Int = self.complain_at(src, n.token,
+                                "`let mutable " + mine + ": " + self.show_type(src, declared)
+                                + "` would copy `" + named + "`, which was declared immutable — "
+                                + "both names reach the one value behind the interface object, so "
+                                + "a `mutable` copy could change what `" + named + "` may not. "
+                                + self.writable_advice(src, source) + " Or drop `mutable` from `"
+                                + mine + "`.");
+                        } else {
+                            let complained: Int = self.complain_at(src, n.token,
+                                "`let mutable " + mine + ": " + self.show_type(src, declared)
+                                + "` would borrow `" + named + "`, which was declared immutable — "
+                                + "an interface object points at the storage of the value behind "
+                                + "it, so a `mutable` one could change `" + named + "` through `"
+                                + mine + "`. " + self.writable_advice(src, source)
+                                + " Or drop `mutable` from `" + mine + "`.");
+                        }
+                    }
+                }
+            }
+        }
         push(self.bindings, Binding { start: name.start, length: name.length,
                               bound_type: declared, writable: n.value, depth: self.depth,
                               in_region: declared_in_region,
-                              holds_region: given_region_bytes });
+                              holds_region: given_region_bytes, dyn_owner: borrows });
         return 1;
     }
 
@@ -3820,7 +3912,8 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
         let base: Int = len(self.bindings);
         self.depth += 1;
         push(self.bindings, Binding { start: name.start, length: name.length, bound_type: element,
-                              writable: 0, depth: self.depth, in_region: 0, holds_region: 0 });
+                              writable: 0, depth: self.depth, in_region: 0, holds_region: 0,
+                              dyn_owner: 0 - 1 });
         // B27: the element aliases the array's storage, so it is region storage when the array is.
         // `n.a` is the holder, already typed just above, so the answer comes off the `typed` cache.
         let tainted: Int = self.taint_aliased_bindings(src, base, n.a);
@@ -3920,7 +4013,7 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
         self.depth += 1;
         push(self.bindings, Binding { start: name.start, length: name.length,
                               bound_type: simple_type(40), writable: 2, depth: self.depth,
-                              in_region: 0, holds_region: 0 });
+                              in_region: 0, holds_region: 0, dyn_owner: 0 - 1 });
         self.loop_depth += 1;
         let body: Int = self.check_block_nodes(src, n.b, return_type);
         self.loop_depth -= 1;
@@ -3992,7 +4085,7 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
                     self.bindings[owner] = Binding { start: was.start, length: was.length,
                                           bound_type: was.bound_type, writable: was.writable,
                                           depth: was.depth, in_region: was.in_region,
-                                          holds_region: 1 };
+                                          holds_region: 1, dyn_owner: was.dyn_owner };
                 }
             }
         }
@@ -4085,8 +4178,49 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
                     self.bindings[found] = Binding { start: was.start, length: was.length,
                                           bound_type: was.bound_type, writable: was.writable,
                                           depth: was.depth, in_region: was.in_region,
-                                          holds_region: 1 };
+                                          holds_region: 1, dyn_owner: was.dyn_owner };
                 }
+            }
+            // A11, the `let`'s rules asked at the second place a program can ask them: `d = other`
+            // re-points an interface object. B20/B21's shape is exactly this — one of the ways to
+            // reach a place had the rule and the others did not — so the assignment gets both
+            // halves, the refusal and the re-recording of what `d` now borrows.
+            //
+            // Only for a binding that is actually writable: an immutable one was refused above,
+            // and complaining twice about one statement names the wrong cause second.
+            if found >= 0 && self.bindings[found].writable == 1
+               && self.bindings[found].bound_type.kind == 49 {
+                let mutable now: Int = 0 - 1;
+                let root: Int = self.lvalue_root(n.b);
+                if root >= 0 {
+                    let from: Token = self.tokens[self.nodes[root].token];
+                    let source: Int = self.find_binding(src, from.start, from.length);
+                    if source >= 0 {
+                        let held: Binding = self.bindings[source];
+                        now = source;
+                        if held.bound_type.kind == 49 {
+                            now = held.dyn_owner;
+                        }
+                        if held.writable != 1 {
+                            let mine: String = substring(src, name.start, name.length);
+                            let named: String = substring(src, from.start, from.length);
+                            let mutable what: String = "change `" + named + "`";
+                            if held.bound_type.kind == 49 {
+                                what = "change what `" + named + "` may not";
+                            }
+                            let complained: Int = self.complain_at(src, target.token,
+                                "`" + mine + "` may be written through, so it may not be pointed "
+                                + "at `" + named + "`, which was declared immutable — the "
+                                + "assignment would let `" + mine + "` " + what + ". "
+                                + self.writable_advice(src, source));
+                        }
+                    }
+                }
+                let was: Binding = self.bindings[found];
+                self.bindings[found] = Binding { start: was.start, length: was.length,
+                                      bound_type: was.bound_type, writable: was.writable,
+                                      depth: was.depth, in_region: was.in_region,
+                                      holds_region: was.holds_region, dyn_owner: now };
             }
         }
         return 1;
@@ -5140,6 +5274,11 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int {
     let item: Node = self.nodes[index];
     let base: Int = len(self.bindings);
     self.depth += 1;
+    // A11's half of the depth bookkeeping: everything pushed at THIS depth is a parameter or a
+    // receiver, and the body's own block goes one deeper. That is the only way to tell a
+    // parameter from a local here, and one sentence needs it — see `writable_advice`.
+    let outer_param_depth: Int = self.param_depth;
+    self.param_depth = self.depth;
     // The markers are the body's rules: `allocates` means the caller's region is in
     // effect throughout, `pure` means the world is off limits.
     let outer_caller: Int = self.in_caller_region;
@@ -5174,7 +5313,8 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int {
                               bound_type: Type { kind: 46, scale: 0, contract: 0,
                                        name_start: receiver.start,
                                        name_length: receiver.length },
-                              writable: writable, depth: self.depth, in_region: 0, holds_region: 0 });
+                              writable: writable, depth: self.depth, in_region: 0,
+                              holds_region: 0, dyn_owner: 0 - 1 });
     }
     let params: Node = self.nodes[item.a];
     let mutable p: Int = 0;
@@ -5215,7 +5355,8 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int {
         }
         push(self.bindings, Binding { start: name.start, length: name.length,
                               bound_type: declared, writable: param.b,
-                              depth: self.depth, in_region: 0, holds_region: 0 });
+                              depth: self.depth, in_region: 0, holds_region: 0,
+                              dyn_owner: 0 - 1 });
         p += 1;
     }
     let return_type: Type = self.declared_type(src, signature.c);
@@ -5322,6 +5463,7 @@ function (mutable self: Unit) check_body(src: String, index: Int) -> Int {
     self.effects_owner = outer_owner;
     let dropped: Int = truncate(self.bindings, base);
     self.depth -= 1;
+    self.param_depth = outer_param_depth;
     self.in_caller_region = outer_caller;
     self.in_pure = outer_pure;
     self.current_generic = outer_generic;
@@ -5361,7 +5503,8 @@ function (mutable self: Unit) check_clauses(src: String, index: Int, signature: 
             let spelling: Int = find_text(src, "result");
             if spelling >= 0 {
                 push(self.bindings, Binding { start: spelling, length: 6,
-                                      bound_type: return_type, writable: 0, depth: self.depth, in_region: 0, holds_region: 0 });
+                                      bound_type: return_type, writable: 0, depth: self.depth,
+                                      in_region: 0, holds_region: 0, dyn_owner: 0 - 1 });
             }
         }
         let got: Type = self.type_of(src, clause.a, simple_type(41));

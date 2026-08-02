@@ -1,0 +1,17 @@
+// A11 kept the concrete rule's first half as well as its second: a mutating method writes
+// through its receiver, so the receiver has to be a name the compiler can check the permission
+// of. `h.inner` is a place, not a binding, and `Holder` says nothing about whether what it holds
+// may be written. Refused in the same words the concrete path uses, with the interface named
+// where a class name would be.
+interface Bump { function bump(mutable self) -> Int }
+class Cell { n: Int }
+implement Bump for Cell {
+    function (mutable self) bump() -> Int {
+        self.n = self.n + 1;
+        return self.n;
+    }
+}
+class Holder { inner: dynamic Bump }
+let mutable c: Cell = Cell { n: 0 };
+let mutable h: Holder = Holder { inner: c };
+print(h.inner.bump());

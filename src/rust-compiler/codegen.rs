@@ -2644,8 +2644,14 @@ impl<'ctx> CodeGen<'ctx> {
                     .into_pointer_value();
 
                 // Rebuild the callee's type: (receiver ptr, parameters...) -> ret.
-                // Typeck refused mutating methods here, so the receiver is the
-                // byval form — the callee copies from `data`.
+                //
+                // The receiver is a plain pointer, mutating or not — see `declare_method`,
+                // which made that choice so a direct call and a vtable call cannot disagree
+                // about the ABI. **That is why A11 needed nothing here.** `data` is the source
+                // binding's own storage (see `DynCoerce` below, which copies nothing), so a
+                // `mutable self` slot reached through this call writes the caller's value,
+                // exactly as the direct call does. The typechecker decides whether it MAY; the
+                // emitter was already able.
                 let (param_tys, ret_ty) = self
                     .interface_slots
                     .get(interface_name)

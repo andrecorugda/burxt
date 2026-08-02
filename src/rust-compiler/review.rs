@@ -401,11 +401,22 @@ fn collect(prog: &Program) -> BTreeMap<String, Promise> {
 /// Parameter TYPES and the return type — never the parameter names. Renaming a parameter changes
 /// no promise, and reporting it would be noise; noise is how a reviewer learns to skim past the
 /// one line that mattered.
+///
+/// **`mutable` is part of the shape, and it was missing.** Found while sweeping the tools for
+/// A11: adding `mutable` to a parameter changes the promise twice over — the call may now change
+/// what the caller passed, and the caller may now only pass something writable — and this file's
+/// own claim is that *"a change that alters no signature cannot alter what the program
+/// promises"*. Both compilers reported `no promise changed` for exactly that edit. It predates
+/// A11 by the whole life of `mutable` parameters; A11 is what made it matter, because
+/// `mutable it: dynamic Iterator<Int>` is how a driver says it advances the iterator it is given.
 fn shape_of(parameters: &[Param], ret: &Type) -> String {
     let mut s = String::from("(");
     for (i, p) in parameters.iter().enumerate() {
         if i > 0 {
             s.push_str(", ");
+        }
+        if p.writable {
+            s.push_str("mutable ");
         }
         let _ = write!(s, "{}", p.ty);
     }

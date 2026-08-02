@@ -1,0 +1,30 @@
+// A11 met the escape rules, which is the pairing that had to be probed rather than assumed:
+// A9 shipped a use-after-free because nothing in the suite, the fixpoint or the corpus had a
+// program of the new shape.
+//
+// Here the element is a String built inside `next`, the iterator is driven inside a region, and
+// the element is assigned to a binding declared OUTSIDE it. The bytes are the region's; `kept`
+// outlives them. Two rules have to meet for this to be caught — the call through the vtable
+// must count as allocating (any implementation that allocates makes it so) and the `match`
+// binding must carry that taint — and A11 is what lets a program reach both at once.
+enum Option<T> { None, Some(T) }
+interface Iterator<T> { function next(mutable self) -> Option<T> }
+class Words { at: Int }
+implement Iterator<String> for Words {
+    function (mutable self) next() -> Option<String> {
+        if self.at >= 2 { return Option.None; }
+        let v: String = "w" + to_string(self.at);
+        self.at = self.at + 1;
+        return Option.Some(v);
+    }
+}
+let mutable kept: String = "";
+let mutable w: Words = Words { at: 0 };
+let mutable it: dynamic Iterator<String> = w;
+region r {
+    match it.next() {
+        Some(s) => { kept = s; }
+        None => { }
+    }
+}
+print(kept);

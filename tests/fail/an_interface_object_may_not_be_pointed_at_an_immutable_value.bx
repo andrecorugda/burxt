@@ -1,0 +1,18 @@
+// A11, the assignment form of the laundering rule. `d = frozen` re-points an interface object,
+// and re-pointing it at an immutable value would give `d` a write that `frozen` was declared not
+// to allow. Same question as the `let`, asked at the second place a program can ask it — the
+// shape B20/B21 came in, where one of the ways to reach a place had a rule and the others
+// did not.
+interface Bump { function bump(mutable self) -> Int }
+class Cell { n: Int }
+implement Bump for Cell {
+    function (mutable self) bump() -> Int {
+        self.n = self.n + 1;
+        return self.n;
+    }
+}
+let mutable one: Cell = Cell { n: 0 };
+let frozen: Cell = Cell { n: 10 };
+let mutable d: dynamic Bump = one;
+d = frozen;
+print(d.bump());

@@ -1,0 +1,24 @@
+// A11 through a signature. A generic driver written against `dynamic Iterator<Int>` must say
+// that it advances what it was given: `mutable it:` is the word, and it is the same word a
+// `mutable` parameter has always used. Without it the parameter is an ordinary immutable name
+// and the mutating call is refused — and the advice names the parameter form, because there is
+// no `let` here to change.
+enum Option<T> { None, Some(T) }
+interface Iterator<T> { function next(mutable self) -> Option<T> }
+class Counter { at: Int, stop: Int }
+implement Iterator<Int> for Counter {
+    function (mutable self) next() -> Option<Int> {
+        if self.at >= self.stop { return Option.None; }
+        let v: Int = self.at;
+        self.at = self.at + 1;
+        return Option.Some(v);
+    }
+}
+function drain(it: dynamic Iterator<Int>) -> Int {
+    match it.next() {
+        Some(v) => { return v; }
+        None => { return 0 - 1; }
+    }
+}
+let mutable c: Counter = Counter { at: 0, stop: 4 };
+print(drain(c));

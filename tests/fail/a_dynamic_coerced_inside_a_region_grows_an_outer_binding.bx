@@ -1,0 +1,17 @@
+// The same growth with the coercion moved INSIDE the region, which is the spelling that would
+// slip past a rule asking about the interface object's own name: `d` is declared inside `r`, so
+// `d` is not an outer binding at all. `bag` is, and `bag` is where the bytes land.
+//
+// This is the fixture that says why the checker remembers the source rather than testing the
+// name in front of the dot.
+interface Adder { function add(mutable self, v: Int) -> Int }
+class Bag { items: [Int] }
+implement Adder for Bag {
+    function (mutable self) add(v: Int) -> Int allocates { push(self.items, v); return v; }
+}
+let mutable bag: Bag = Bag { items: [] };
+region r {
+    let mutable d: dynamic Adder = bag;
+    let a: Int = d.add(11);
+}
+print(bag.items[0]);

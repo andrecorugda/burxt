@@ -1,0 +1,42 @@
+// A11 with the escape rules the other way round: the accepting half of
+// `tests/fail/an_iterator_element_escapes_its_region.bx`, and the pair is what tells a correct
+// rule from a paranoid one. The element is region storage, so it may be bound and read INSIDE
+// the region — it dies with the bytes it points at, which is correct — and only assignment to a
+// binding that outlives the region is refused.
+enum Option<T> { None, Some(T) }
+interface Iterator<T> { function next(mutable self) -> Option<T> }
+class Words { at: Int }
+implement Iterator<String> for Words {
+    function (mutable self) next() -> Option<String> {
+        if self.at >= 3 { return Option.None; }
+        let v: String = "w" + to_string(self.at);
+        self.at = self.at + 1;
+        return Option.Some(v);
+    }
+}
+let mutable w: Words = Words { at: 0 };
+let mutable it: dynamic Iterator<String> = w;
+region r {
+    let mutable going: Int = 1;
+    while going == 1 {
+        match it.next() {
+            Some(s) => { print(s); }
+            None => { going = 0; }
+        }
+    }
+}
+// A growable array grown through an interface object, with everything declared inside the
+// region — the accepting half of `tests/fail/a_dynamic_grows_an_outer_binding.bx`.
+interface Adder { function add(mutable self, v: Int) -> Int }
+class Bag { items: [Int] }
+implement Adder for Bag {
+    function (mutable self) add(v: Int) -> Int allocates { push(self.items, v); return v; }
+}
+region s {
+    let mutable bag: Bag = Bag { items: [] };
+    let mutable d: dynamic Adder = bag;
+    let a: Int = d.add(11);
+    let b: Int = d.add(22);
+    print(bag.items[0]);
+    print(bag.items[1]);
+}

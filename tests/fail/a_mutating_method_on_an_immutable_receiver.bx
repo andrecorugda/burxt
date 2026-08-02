@@ -1,0 +1,13 @@
+// `peek` does not declare `mutable self`, so it may not call something that does — the same
+// immutability rule every other name obeys, applied to the receiver.
+//
+// The fixture is here for its ADVICE. Every "declared immutable" message ends by saying how to
+// allow it, and for `self` both compilers used to name a `let mutable self` that cannot be
+// written: there is no `let` for a receiver, and the word goes in the clause. Found while
+// sweeping for A11, where stage-1 began answering "it is a PARAMETER" — a second wrong answer to
+// a question that had one, which is how two compilers start disagreeing.
+class Cell { n: Int }
+function (mutable self: Cell) bump() -> Int { self.n = self.n + 1; return self.n; }
+function (self: Cell) peek() -> Int { return self.bump(); }
+let mutable c: Cell = Cell { n: 0 };
+print(c.peek());

@@ -1,0 +1,1 @@
+`let mutable d: dynamic Bump` would borrow `b`, which was declared immutable — an interface object points at the storage of the value behind it, so a `mutable` one could change `b` through `d`. Declare it `let mutable b: Cell` to allow it. Or drop `mutable` from `d`.

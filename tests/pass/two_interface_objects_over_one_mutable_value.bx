@@ -1,0 +1,39 @@
+// A11, the aliasing case — decided rather than deferred.
+//
+// An interface object borrows storage, so `a` and `b` are two more names for `c`. That is new:
+// before A11 nothing could be WRITTEN through either of them, so one value with three names was
+// only ever read three ways.
+//
+// It is allowed, and the reason is that a second name for one object is already sound in Burxt.
+// There is no concurrency; a class instance never moves; and every path here writes the same
+// field slots `c.bump()` writes, through the same pointer, so the three names cannot disagree
+// about what the value is. The counter goes 1, 2, 3 whichever name asks.
+//
+// What aliasing WOULD break is a rule that reasons about one name while the bytes belong to
+// another — a growth attributed to `a` when it lands in `c`. That is not left to luck: the
+// checker remembers which binding each interface object borrows (`dyn_source`) and the escape
+// rules are asked about THAT name. See `tests/fail/a_dynamic_grows_an_outer_binding.bx`, where
+// the refusal names `bag` and the reader only ever wrote `d`.
+interface Bump { function bump(mutable self) -> Int }
+
+class Cell { n: Int }
+
+implement Bump for Cell {
+    function (mutable self) bump() -> Int {
+        self.n = self.n + 1;
+        return self.n;
+    }
+}
+
+let mutable c: Cell = Cell { n: 0 };
+let mutable a: dynamic Bump = c;
+let mutable b: dynamic Bump = c;
+print(a.bump());
+print(b.bump());
+print(c.bump());
+print(c.n);
+
+// An immutable interface object over the same mutable value is still legal and still cannot
+// write: the permission is on the name, and this name does not have it.
+let watcher: dynamic Bump = c;
+print(c.n);
