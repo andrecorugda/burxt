@@ -934,7 +934,7 @@ impl TypeChecker {
                     "`pure function {}` may not {}: a pure function's result must depend \
                      only on its arguments, which is the whole of what `pure` \
                      promises. Pass the value in as a parameter instead.",
-                    name, what
+                    Self::shown_fn_name(name), what
                 )
             }
         })
@@ -2530,9 +2530,12 @@ impl TypeChecker {
             // copy question deferred with collections. Parameters are fine.
             if matches!(f.ret, Type::Array { .. }) {
                 return Err(format!(
+                    // B41. `a class HOLDING IT`, which is stage-1's wording and the clearer
+                    // one: "return a class" alone reads as "return some other thing", and
+                    // the advice is to wrap the array, not to abandon it.
                     "function `{}` cannot return an array yet — returning one needs \
                      whole-array binding, which arrives with collections. Return \
-                     a class, or fill an array the caller owns.",
+                     a class holding it, or fill an array the caller owns.",
                     f.name
                 ));
             }
@@ -3146,23 +3149,24 @@ impl TypeChecker {
     /// cannot follow costs more than a short one, so the advice is computed in one place from the one
     /// fact that decides it — whether this name is a parameter.
     fn how_to_make_writable(&self, name: &str, ty: &Type) -> String {
+        let shown = self.shown(ty);
         if !self.current_params.contains(name) {
-            return format!("Declare it `let mutable {}: {}` to allow it.", name, ty);
+            return format!("Declare it `let mutable {}: {}` to allow it.", name, shown);
         }
         if crate::codegen::is_aggregate(ty) {
             return format!(
                 "It is a PARAMETER, and a parameter is a copy unless the signature says otherwise: \
                  declare it `mutable {}: {}`, which also tells every caller that this call changes \
                  what they passed.",
-                name, ty
+                name, shown
             );
         }
         format!(
             "It is a PARAMETER, and {} {} is copied when it crosses — so changing it here could not \
              reach the caller anyway. Take a copy you own: `let mutable own: {} = {};`",
             ty.article(),
-            ty,
-            ty,
+            shown,
+            shown,
             name
         )
     }
@@ -3675,12 +3679,14 @@ impl TypeChecker {
             return None;
         }
         match &e.kind {
-            TypedExprKind::Call { name, .. } => {
-                Some(format!("`{}(...)` builds its answer in the caller's region", name))
-            }
+            TypedExprKind::Call { name, .. } => Some(format!(
+                "`{}(...)` builds its answer in the caller's region",
+                Self::shown_fn_name(name)
+            )),
             TypedExprKind::MethodCall { receiver, method, .. } => Some(format!(
                 "`{}.{}(...)` builds its answer in the caller's region",
-                receiver, method
+                self.shown_type_name(receiver),
+                method
             )),
             TypedExprKind::Binary { op: BinOp::Add, lhs, .. } if lhs.ty == Type::String => {
                 Some("joining two Strings builds a new one".to_string())
@@ -3811,12 +3817,16 @@ impl TypeChecker {
             TypedExprKind::Field { base, .. } => {
                 self.may_be_region_storage(&e.ty) && self.expr_allocates(base)
             }
-            // The INDEX cannot make an element region storage, whatever it computed on
-            // the way — so once the element type says no, neither operand is asked.
-            TypedExprKind::Index { base, index, .. }
-            | TypedExprKind::SliceIndex { base, index } => {
-                self.may_be_region_storage(&e.ty)
-                    && (self.expr_allocates(base) || self.expr_allocates(index))
+            // B45. The INDEX is not asked at all, and gating it was not enough.
+            //
+            // `kept = made[idx()]` where `made` was built OUTSIDE the region was refused
+            // because `idx()` allocates on its way to an Int. But what comes back from an
+            // index is an element of the BASE; nothing the subscript computed is in it.
+            // Keeping the term inside B36's gate only hid the false refusal behind a
+            // scalar element type — with `[String]` it fired again. Dropped, which is what
+            // the report asked for and what stage-1 already does.
+            TypedExprKind::Index { base, .. } | TypedExprKind::SliceIndex { base, .. } => {
+                self.may_be_region_storage(&e.ty) && self.expr_allocates(base)
             }
             _ => false,
         }
@@ -3920,10 +3930,16 @@ impl TypeChecker {
                 answer
             }
             Type::Array { elem, .. } => self.may_be_region_storage_within(elem, seen),
+            // The ARGUMENTS are deliberately not asked on their own. Substitution binds
+            // them and the fields are read THROUGH them, so an argument that reaches
+            // storage already shows up as a field — and an argument that reaches no field
+            // is a PHANTOM parameter, where asking would condemn a type that stores
+            // nothing. `class Tagged<T> { n: Int }` is one Int in the layout whatever `T`
+            // is, and `Tagged<String>` must stay copyable out of a region. Stage-1 shipped
+            // that false refusal in v0.0.272 and dropped the same loop in v0.0.273; this
+            // arm is unreachable in stage-0 today, which is exactly why it would have sat
+            // here wrong and unnoticed.
             Type::Generic { name, arguments } => {
-                if arguments.iter().any(|t| self.may_be_region_storage_within(t, seen)) {
-                    return true;
-                }
                 let key = format!("{}", ty);
                 if seen.iter().any(|s| *s == key) {
                     return false;
@@ -4103,12 +4119,39 @@ impl TypeChecker {
     }
 
     /// Render a struct's fields as `name: Type, ...` for error messages.
+    /// B28. The source spelling of a type, for a message a person reads.
+    ///
+    /// An instantiation is keyed internally by a MANGLED symbol — `Holder$Int` — and that
+    /// symbol leaked into eight diagnostics. A reader never wrote `$`, cannot search their
+    /// file for it, and has no way to learn that it means `<`: it is a compiler-internal
+    /// key appearing where a source spelling belongs. `show` already knows the way back,
+    /// through `instance_of`; these two wrappers are just the places that have to ask.
+    fn shown(&self, ty: &Type) -> String {
+        show(ty, &self.instance_of.borrow())
+    }
+
+    fn shown_type_name(&self, symbol: &str) -> String {
+        show(&Type::Named(symbol.to_string()), &self.instance_of.borrow())
+    }
+
+    /// The same, for a FUNCTION: `grow$Int` is one instantiation of `grow`, and `grow` is
+    /// the name in the file. No arguments are added back — the reader wrote none, and the
+    /// message is about the function they wrote.
+    fn shown_fn_name(name: &str) -> &str {
+        match name.split_once('$') {
+            Some((declared, _)) => declared,
+            None => name,
+        }
+    }
+
     fn field_list(&self, name: &str) -> String {
-        self.structs
-            .get(name)
+        // `fields_of`, not `structs`, or an INSTANTIATION lists no fields at all —
+        // `Holder$Int has no field named nope. Its fields are: .` was the measured output,
+        // and the empty list is the half of that message that was supposed to help.
+        self.fields_of(name)
             .map(|fs| {
                 fs.iter()
-                    .map(|(n, t)| format!("{}: {}", n, t))
+                    .map(|(n, t)| format!("{}: {}", n, self.shown(t)))
                     .collect::<Vec<_>>()
                     .join(", ")
             })
@@ -4380,7 +4423,7 @@ impl TypeChecker {
                         "`{}` never calls itself, so `decreases {}` has nothing to \
                          check. A reader would take it to mean something; drop it, or \
                          make the recursion real.",
-                        f.name, clause.text
+                        Self::shown_fn_name(&f.name), clause.text
                     ));
                 }
                 let measure = self.check_expr(&clause.cond, Some(&Type::Int))?;
@@ -5025,6 +5068,28 @@ impl TypeChecker {
         Ok(out)
     }
 
+    /// B17. Where the caret goes on a statement that writes to a name: **the name**,
+    /// not the whole line.
+    ///
+    /// The two compilers already agreed on the message and on the line and column; they
+    /// disagreed on the LENGTH, stage-0 underlining `kept = "a" + "b";` where stage-1
+    /// underlines `kept`. Stage-1's is the better one — the caret should sit on the thing
+    /// the reader has to change — and it is the half an editor squiggles and the language
+    /// server returns, so it is not cosmetic.
+    ///
+    /// The name is the statement's first token in all four spellings, `kept`, `acc +=`,
+    /// `b.name` and `g.items[0]`, so the span is derivable and nothing in the AST has to
+    /// carry a second one. For a path the ROOT is blamed, which is stage-1's answer too:
+    /// `b` is the binding that outlives the region, and `.name` is not the problem.
+    ///
+    /// Set through `current_span` rather than `blame`, deliberately: `blame` also claims
+    /// the position, and an error found INSIDE the value must still be able to take it.
+    /// `k = 1 + missing` points at `missing` in both compilers and has to keep doing so.
+    fn blame_target(&self, s: &Stmt, name: &str) {
+        let start = s.span.start as usize;
+        self.current_span.set(Span::new(start, start + name.len()));
+    }
+
     fn check_stmt(&mut self, s: &Stmt) -> Result<TypedStmt, String> {
         // Remember where we are. Errors below are returned as plain messages and
         // the position is attached once, at the boundary — so a nested statement
@@ -5116,6 +5181,7 @@ impl TypeChecker {
                 Ok(TypedStmt::Let { name: name.clone(), ty: bound, value: typed })
             }
             StmtKind::Assign { name, value } => {
+                self.blame_target(s, name);
                 // Before the env lookup, because a const is not in `env` and "unknown
                 // variable: LIMIT" is the wrong sentence for a name that is right there at
                 // the top of the file.
@@ -5202,6 +5268,7 @@ impl TypeChecker {
                 Ok(TypedStmt::Assign { name: name.clone(), value: typed })
             }
             StmtKind::AssignField { name, path, value } => {
+                self.blame_target(s, name);
                 let lvalue = format!("{}.{}", name, path.join("."));
                 let (mut cur_ty, mutable) = self
                     .env
@@ -5254,6 +5321,7 @@ impl TypeChecker {
                 Ok(TypedStmt::AssignField { name: name.clone(), indices, value: typed })
             }
             StmtKind::AssignFieldIndex { name, path, index, value } => {
+                self.blame_target(s, name);
                 let lvalue = format!("{}.{}", name, path.join("."));
                 let (mut cur_ty, mutable) = self
                     .env
@@ -5317,6 +5385,7 @@ impl TypeChecker {
                 })
             }
             StmtKind::AssignIndex { name, index, value } => {
+                self.blame_target(s, name);
                 let (declared, mutable) = self
                     .env
                     .get(name)
@@ -5763,6 +5832,8 @@ impl TypeChecker {
                 Ok(TypedStmt::Print { value: typed, to_stderr: *to_stderr })
             }
             StmtKind::Return(e) => {
+                // The keyword, for the same reason and to the same length stage-1 uses.
+                self.blame_target(s, "return");
                 let ret = self.current_ret.clone().ok_or_else(|| {
                     "`return` only makes sense inside a function".to_string()
                 })?;
@@ -5872,6 +5943,23 @@ impl TypeChecker {
             }
         }
         result
+    }
+
+    /// B17, for a CALL: the caret goes on the callee, not on the call and its arguments.
+    ///
+    /// A call expression begins at its callee name, so this needs nothing the AST does not
+    /// already carry. `blame` rather than a bare `current_span.set`, because this fires
+    /// from inside the expression checker and the wrapper there would otherwise claim the
+    /// whole `push(xs, 11)`.
+    ///
+    /// The METHOD spelling is deliberately not done here: stage-1 underlines `add` in
+    /// `bag.add(11)`, which starts after the receiver's text, and deriving that offset
+    /// would mean assuming there is exactly one character between the receiver and the
+    /// name. `bag . add(11)` would put the caret in the wrong place, silently. That one
+    /// needs a real span on the method name, which lives in the parser.
+    fn blame_callee(&self, call: Span, name: &str) {
+        let start = call.start as usize;
+        self.blame(Span::new(start, start + name.len()));
     }
 
     fn check_expr_kind(&self, e: &Expr, expected: Option<&Type>) -> Result<TypedExpr, String> {
@@ -6352,6 +6440,7 @@ impl TypeChecker {
                         // call site is the only place that can see whose binding it is.
                         self.record_param_growth(root);
                         if let Some(open) = self.declared_outside_open_region(root) {
+                            self.blame_callee(e.span, "push");
                             return Err(format!(
                                 "`{}` was declared outside `region {}`, so it cannot grow inside \
                                  it — `push` builds a new buffer in the region, and the bytes are \
@@ -7223,6 +7312,7 @@ impl TypeChecker {
                                 // this is the link that makes the fixpoint transitive.
                                 self.record_param_growth(root);
                                 if let Some(open) = self.declared_outside_open_region(root) {
+                                    self.blame_callee(e.span, Self::declared_name(name));
                                     return Err(Self::growing_an_outer_binding(
                                         root,
                                         &open,
@@ -7319,7 +7409,7 @@ impl TypeChecker {
                     if !declared.iter().any(|(n, _)| n == given) {
                         return Err(format!(
                             "`{}` has no field named `{}`. Its fields are: {}.",
-                            name,
+                            self.shown_type_name(name),
                             given,
                             self.field_list(name)
                         ));
@@ -7327,7 +7417,8 @@ impl TypeChecker {
                     if fields.iter().filter(|(g, _)| g == given).count() > 1 {
                         return Err(format!(
                             "in `{} {{ ... }}`, the field `{}` is given twice",
-                            name, given
+                            self.shown_type_name(name),
+                            given
                         ));
                     }
                 }
@@ -7351,7 +7442,10 @@ impl TypeChecker {
                         return Err(format!(
                             "in `{} {{ ... }}`, the field `{}` must be {}, but its \
                              value has type {}",
-                            name, fname, fty, typed.ty
+                            self.shown_type_name(name),
+                            fname,
+                            self.shown(fty),
+                            self.shown(&typed.ty)
                         ));
                     }
                     typed_fields.push(typed);
@@ -7607,7 +7701,8 @@ impl TypeChecker {
                     .ok_or_else(|| {
                         format!(
                             "`{}` has no method named `{}`.",
-                            receiver, method
+                            self.shown_type_name(&receiver),
+                            method
                         )
                     })?;
                 // A4: purity is transitive through a method call. A pure thing — a `pure`
@@ -7673,7 +7768,10 @@ impl TypeChecker {
                             "cannot call the mutating method `{}` on `{}`: it was \
                              declared immutable. Declare it `let mutable {}: {}` to \
                              allow it.",
-                            method, name, name, receiver
+                            method,
+                            name,
+                            name,
+                            self.shown_type_name(&receiver)
                         ));
                     }
                     // B25 through `self`, which is the same hole and had to be measured rather
@@ -7688,7 +7786,11 @@ impl TypeChecker {
                             return Err(Self::growing_an_outer_binding(
                                 name,
                                 &open,
-                                &format!("{}.{}(...)", receiver, method),
+                                &format!(
+                                    "{}.{}(...)",
+                                    self.shown_type_name(&receiver),
+                                    method
+                                ),
                             ));
                         }
                     }
@@ -7739,7 +7841,7 @@ impl TypeChecker {
                 if arguments.len() != param_tys.len() {
                     return Err(format!(
                         "method `{}.{}` takes {} argument(s), but {} were given",
-                        receiver,
+                        self.shown_type_name(&receiver),
                         method,
                         param_tys.len(),
                         arguments.len()
@@ -7752,11 +7854,11 @@ impl TypeChecker {
                         return Err(format!(
                             "in the call to `{}.{}`, argument {} must be {}, \
                              but it has type {}",
-                            receiver,
+                            self.shown_type_name(&receiver),
                             method,
                             i + 1,
-                            param_ty,
-                            typed.ty
+                            self.shown(param_ty),
+                            self.shown(&typed.ty)
                         ));
                     }
                     typed_args.push(typed);
@@ -8046,7 +8148,7 @@ impl TypeChecker {
             .ok_or_else(|| {
                 format!(
                     "`{}` has no field named `{}`. Its fields are: {}.",
-                    name,
+                    self.shown_type_name(name),
                     field,
                     self.field_list(name)
                 )
