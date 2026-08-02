@@ -1,0 +1,126 @@
+// lib/hash.bx — the two checksums, against the values their specifications publish.
+//
+// **These are NOT cryptographic and the fixture says so in its output**, because a `.stdout` full
+// of hex is exactly the kind of evidence that gets skimmed as "hashing works". CRC-32 detects a
+// flipped bit on a wire. FNV-1a spreads keys across buckets and fingerprints a value the same way
+// in every version. Neither survives an adversary for one second: given an FNV-1a answer, an input
+// producing it is a few lines of arithmetic away.
+//
+// **CRC-32 was promoted here out of `tests/pass/bits.bx`** — `spec/ROADMAP-1.0.md` §E4, and the
+// cheapest item on that board because the code was already written and already checked against the
+// standard's value. That fixture keeps its own copy on purpose: it exists to show a reader that
+// `bit_*` alone is enough to build a real checksum, and importing the answer from a library would
+// delete the demonstration. This file checks the library's copy against the same published values,
+// so the two cannot drift silently.
+//
+// The check value 0xCBF43926 for `"123456789"` is written into the CRC-32/ISO-HDLC specification
+// for precisely this purpose: it is the number an implementation quotes to prove itself.
+use "../../lib/hash.bx";
+
+function vector(label: String, actual: String, expected: String) -> Bool {
+    if actual == expected {
+        print(label + " = " + actual);
+        return true;
+    }
+    print(label + " MISMATCH");
+    print("  expected " + expected);
+    print("  actual   " + actual);
+    return false;
+}
+
+print("CRC-32 and FNV-1a are CHECKSUMS. Neither is cryptographic.");
+
+// ---- CRC-32/ISO-HDLC ----
+vector("crc32 of 123456789", hash_hex_int(crc32_text("123456789"), 4), "cbf43926");
+vector("crc32 of the empty string", hash_hex_int(crc32_text(""), 4), "00000000");
+vector("crc32 of a", hash_hex_int(crc32_text("a"), 4), "e8b7be43");
+vector("crc32 of The quick brown fox jumps over the lazy dog", hash_hex_int(crc32_text("The quick brown fox jumps over the lazy dog"), 4), "414fa339");
+
+// The check value the specification prints, compared as the Int it is rather than as text —
+// the same comparison `tests/pass/bits.bx` makes, so a reviewer can see the two agree.
+print(crc32_text("123456789") == 0xCBF43926);
+print(crc32_text("a") == 0xE8B7BE43);
+print(crc32_text("The quick brown fox jumps over the lazy dog") == 0x414FA339);
+print(crc32(to_bytes("123456789")) == crc32_text("123456789"));
+
+// A CRC-32 is never negative: the final mask keeps it inside 32 bits, so it is safe as an
+// array index or a file field without a further test.
+print(crc32_text("") >= 0);
+print(crc32_text("The quick brown fox jumps over the lazy dog") >= 0);
+
+// ---- FNV-1a, against the reference vectors ----
+// The empty input answers the offset basis unchanged, which is the definition and the first
+// thing a wrong constant breaks.
+vector("fnv1a_32 of the empty string", hash_hex_int(fnv1a_32_text(""), 4), "811c9dc5");
+vector("fnv1a_32 of a", hash_hex_int(fnv1a_32_text("a"), 4), "e40c292c");
+vector("fnv1a_32 of b", hash_hex_int(fnv1a_32_text("b"), 4), "e70c2de5");
+vector("fnv1a_32 of c", hash_hex_int(fnv1a_32_text("c"), 4), "e60c2c52");
+vector("fnv1a_32 of foobar", hash_hex_int(fnv1a_32_text("foobar"), 4), "bf9cf968");
+vector("fnv1a_32 of chongo was here!\\n", hash_hex_int(fnv1a_32_text("chongo was here!\n"), 4), "d49930d5");
+
+vector("fnv1a_64 of the empty string", hash_hex_int(fnv1a_64_text(""), 8), "cbf29ce484222325");
+vector("fnv1a_64 of a", hash_hex_int(fnv1a_64_text("a"), 8), "af63dc4c8601ec8c");
+vector("fnv1a_64 of b", hash_hex_int(fnv1a_64_text("b"), 8), "af63df4c8601f1a5");
+vector("fnv1a_64 of c", hash_hex_int(fnv1a_64_text("c"), 8), "af63de4c8601eff2");
+vector("fnv1a_64 of foobar", hash_hex_int(fnv1a_64_text("foobar"), 8), "85944171f73967e8");
+vector("fnv1a_64 of chongo was here!\\n", hash_hex_int(fnv1a_64_text("chongo was here!\n"), 8), "46810940eff5f915");
+
+// **`fnv1a_64` answers a NEGATIVE Int for most inputs and that is not a bug.** A u64 above
+// 2^63 is stored as the i64 with the same bits; `hash_hex_int` prints the bits. The offset
+// basis itself, 0xcbf29ce484222325, is one of them — which is why the empty-input line above
+// is the load-bearing one.
+print(fnv1a_64_text("") == 0xCBF29CE484222325);
+print(fnv1a_64_text("") < 0);
+print(fnv1a_32_text("") == 0x811C9DC5);
+print(fnv1a_32_text("") >= 0);
+
+// The byte-array and text forms are the same function.
+print(fnv1a_64(to_bytes("foobar")) == fnv1a_64_text("foobar"));
+print(fnv1a_32(to_bytes("foobar")) == fnv1a_32_text("foobar"));
+
+// ---- the 64-bit multiply the 64-bit FNV needs ----
+// Sixteen-bit limbs, and the cases that matter are the ones that overflow: a product above
+// 2^64 must keep the low 64 bits rather than trapping, which `*` would do.
+print(hash_multiply_wrapping_64(6, 7) == 42);
+print(hash_multiply_wrapping_64(0, 12345) == 0);
+print(hash_multiply_wrapping_64(1, 0 - 1) == 0 - 1);
+// 2^32 squared is 2^64 exactly: every bit that survives is above the register, so the answer
+// is zero. A trapping `*` would have refused this and a 32-bit split would have got it wrong.
+print(hash_multiply_wrapping_64(0x100000000, 0x100000000) == 0);
+print(hash_multiply_wrapping_64(0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF) == 1);
+print(hash_hex_int(hash_multiply_wrapping_64(0x0123456789ABCDEF, 0xFEDCBA9876543210), 8) == "2236d88fe5618cf0");
+print(hash_multiply_wrapping_64(0xCBF29CE484222325, 1099511628211) == -5808590958014384161);
+
+// ---- hash_hex_int, since three of the lines above depend on it ----
+print(hash_hex_int(0, 1));
+print(hash_hex_int(255, 1));
+print(hash_hex_int(255, 4));
+print(hash_hex_int(0 - 1, 8));
+print(hash_hex_int(0xDEADBEEF, 4));
+
+// ---- hash_equals_constant_time ----
+// Reads every byte of both, always: the early exit is what leaks how many bytes of a forged
+// MAC were right. Lengths are compared normally, because a digest length is not a secret.
+let a: [Int] = [1, 2, 3];
+let b: [Int] = [1, 2, 3];
+let c: [Int] = [1, 2, 4];
+let d: [Int] = [1, 2];
+let empty: [Int] = [];
+print(hash_equals_constant_time(a, b));
+print(hash_equals_constant_time(a, c));
+print(hash_equals_constant_time(a, d));
+print(hash_equals_constant_time(empty, empty));
+print(hash_equals_constant_time(empty, a));
+// The differing byte in the LAST position is the case an early-exit version gets right by
+// accident and a broken accumulator gets wrong.
+let e: [Int] = [9, 2, 3];
+print(hash_equals_constant_time(a, e));
+
+// ---- hash_hex over a whole digest, since every fixture here leans on it ----
+let bytes: [Int] = [0, 1, 15, 16, 127, 128, 254, 255];
+print(hash_hex(bytes));
+// Inside brackets because the empty String is a real answer here and a bare `print("")` in a
+// `.stdout` is indistinguishable from a blank line someone left behind.
+print("[" + hash_hex(empty) + "]");
+print(len(hash_hex(sha256_text("abc"))));
+print(len(hash_hex(sha512_text("abc"))));

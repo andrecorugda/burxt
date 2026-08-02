@@ -1,0 +1,19 @@
+// `pbkdf2_sha256` requires at least one iteration, and this pins that the requirement is LIVE.
+//
+// It matters more here than a precondition usually does. Zero iterations is not a strange input —
+// it is what an unset config value, a failed `string_to_int` (which answers its fallback rather
+// than complaining) or an uninitialised field all produce. A PBKDF2 that accepted it would answer
+// an empty derived key or a raw HMAC, either of which *looks* like a key, hexes like a key, and
+// stores like a key. That is the silent wrong answer this language exists to refuse, and in the
+// one module where the wrong answer is a password everybody's.
+//
+// The count is COMPUTED through a loop so the checker cannot fold it away and refuse the program
+// at compile time. A literal zero is caught earlier, which is better and is a different test.
+use "../../lib/hash.bx";
+
+let mutable iterations: Int = 600000;
+for i in 0..1 {
+    iterations = 0;
+}
+let key: [Int] = pbkdf2_sha256_text("password", "salt", iterations, 32);
+print(len(key));

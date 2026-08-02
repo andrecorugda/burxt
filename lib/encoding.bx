@@ -1,0 +1,481 @@
+// ============================================================================
+// lib/encoding.bx — hex, base64 and base64url, and every decoder REFUSES rather than guesses.
+//
+//     use "lib/encoding.bx";
+//
+//     print(encoding_hex_encode(digest));                  // two lowercase digits per byte
+//     print(encoding_base64_encode(digest));               // padded, `+` and `/`
+//     print(encoding_base64url_encode(digest));            // unpadded, `-` and `_`
+//
+//     match encoding_base64_decode(from_the_wire) {
+//         None => { print("that was not base64"); }
+//         Some(bytes) => { received(bytes); }
+//     }
+//
+// ---- the one decision that shapes the whole file -------------------------------------------
+//
+// **A decoder answers `Option`, and it says None for anything it was not given.** Not the bytes it
+// could salvage, not an empty array, not the input with the bad characters dropped. A base64
+// decoder that skips what it does not recognise is the exact shape of the silent wrong answer this
+// language exists to refuse: the caller gets a shorter key, a truncated signature or half a
+// message, and every one of those looks like data rather than like an error.
+//
+// Concretely, all four of these are refusals rather than best-effort answers:
+//
+//     encoding_base64_decode("Zm9v YmFy")   None — a space is not in the alphabet
+//     encoding_base64_decode("Zm9vYmF")     None — 7 characters is not a whole number of quanta
+//     encoding_base64_decode("Zg=v")        None — padding in the middle
+//     encoding_base64_decode("Zh==")        None — "f" is "Zg==", and "Zh==" is the same byte
+//                                                  spelled with four bits of junk left over
+//
+// The last one is the one people argue about, so it is argued here rather than in a commit
+// message. RFC 4648 §3.5 lets a decoder either reject non-canonical trailing bits or ignore them,
+// and **ignoring them means one byte string has 16 different spellings** — which breaks every use
+// where the encoded form is the identity: a cache key, a deduplication set, a signed token, an
+// `==` between two fingerprints. So they are checked, and `Zh==` is refused.
+//
+// ---- what is NOT accepted, said out loud so nobody discovers it -----------------------------
+//
+// **Whitespace and line breaks are refused, including a trailing newline.** MIME (RFC 2045) wraps
+// base64 at 76 columns and PEM at 64, so a certificate body or an email attachment does NOT decode
+// here as it stands. That is deliberate — a decoder that skips whitespace also skips it in the
+// middle of a quantum, which turns a corrupted transfer into a plausible-looking answer. The fix
+// at the call site is one line and a reviewer can see it:
+//
+//     let flat: String = string_replace(string_replace(pem, "\n", ""), "\r", "");
+//
+// **The two alphabets are kept apart.** `encoding_base64_decode` refuses `-` and `_`, and
+// `encoding_base64url_decode` refuses `+` and `/`. A decoder that took either would accept a
+// string that is neither dialect, and would silently paper over a caller that encoded with the
+// wrong one.
+//
+// ---- padding: standard pads, url does not, and both decoders say why ------------------------
+//
+// `encoding_base64_encode` always pads and its decoder REQUIRES padding: RFC 4648 §3.2 makes
+// padding mandatory unless the data length is known by other means, and a length is exactly what
+// is not known when bytes arrive from somewhere else.
+//
+// `encoding_base64url_encode` does NOT pad, because `=` has to be percent-escaped in a query
+// string and is illegal in a JWT, and every real user of base64url — JWT (RFC 7515 §2), WebAuthn,
+// URL-safe identifiers — omits it. `encoding_base64url_decode` accepts **both**: unpadded because
+// that is what this module emits, padded because RFC 4648 §5 permits it and other implementations
+// send it. What it does not accept is a length that no encoding could have produced: after any
+// padding is removed, a remainder of 1 character modulo 4 is refused, because one base64 character
+// carries six bits and no whole number of bytes is six bits long.
+//
+// ---- bytes are `[Int]`, and the `_text` twin exists for the other half of the world ----------
+//
+// The primary form of every function here works in `[Int]`, because that is what a hash digest,
+// `file_read_bytes`, `c_bytes_at` and `secure_random_bytes` all answer, and encoding is a byte
+// operation. The `_text` twin takes or answers a `String` for the case where the bytes came from
+// `file_read` or are going into one.
+//
+// A Burxt String really does hold arbitrary bytes — it carries its length in a header rather than
+// ending at the first NUL — so `from_bytes([104, 0, 105])` is three bytes long and the middle one
+// is a NUL. That is checked in `tests/pass/encoding_library.bx` rather than assumed, because the
+// whole `_text` half of this module would be quietly wrong if it were not so.
+//
+// ---- §D0: a chunk list joined pairwise, and the threshold was measured ----------------------
+//
+// Encoding produces one small String per output character and there is no way around that — the
+// alphabet lookup is a `substring`. What there IS a way around is the flat `out = out + c` fold,
+// which copies the whole answer once per character and made this project's compiler cost 1,132 MB
+// where it now costs 169. So characters accumulate into a `chunk`, the chunk is pushed onto a
+// `[String]` when it passes `ENCODING_CHUNK` bytes, and the list is joined by repeated PAIRWISE
+// merge — `string_join_chunks`, which is `emit.bx`'s reference implementation under its public
+// name.
+//
+// **The size of that difference, measured on this module rather than quoted from B29.** Base64 of
+// a 64 KB input, peak RSS by `/usr/bin/time -f "%M"`, the only change being whether the loop
+// flushes into a chunk list or keeps appending to one flat String:
+//
+//     flat fold, out = out + piece      937,552 KB      0.45 s
+//     chunk list joined pairwise          6,864 KB      0.00 s
+//
+// 137× the memory for 64 KB, and it is quadratic, so 1 MB flat would not finish. That is the whole
+// argument for §D0 in one table.
+//
+// **The threshold was measured here rather than inherited**, because §D0 says one that worked for
+// another caller is inert or wrong for the next. Base64 of 1 MB, peak RSS, best of three:
+//
+//     ENCODING_CHUNK      8      16      24      32      48      64      96     128
+//     peak RSS (MB)      99      95      93      94      95      97     101     106
+//
+// The curve is flat from 16 to 48 and the minimum is at 24, by 0.6% over 32. **32 is chosen on
+// that tie**, because it is `lib/string.bx`'s `STRING_CHUNK` and a second unexplained number in a
+// second file is worth more than half a percent. Below 16 the pairwise merge has too many pieces
+// to join; above 64 the chunk itself is being copied too many times as it grows.
+//
+// The floor under all of this is about 90 MB for a 1 MB input, and it is not the fold: it is one
+// small String allocation per output character, which the alphabet lookup needs and which nothing
+// in this language can currently avoid. It is named here so nobody re-tunes the threshold looking
+// for it.
+//
+// `len(s)` on a String is one load from its header and not a scan, but the input length is still
+// hoisted out of every loop condition below — the habit is what §D0 asks for, and the array `len`
+// in a `while` is a real read either way.
+// ============================================================================
+
+use "option.bx";
+use "string.bx";
+
+// ---- the alphabets, written out so a reader can count them ---------------------------------
+//
+// RFC 4648 §4 (standard) and §5 (URL and filename safe). The two differ in exactly the last two
+// characters, and both are 64 long — which is worth being able to check by eye, since an alphabet
+// with a typo in it encodes and decodes consistently and is wrong only against everybody else.
+const ENCODING_BASE64_ALPHABET: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const ENCODING_BASE64URL_ALPHABET: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const ENCODING_HEX_ALPHABET: String = "0123456789abcdef";
+
+// The two bytes that tell the alphabets apart, named rather than left as 43 and 47 in a call.
+const ENCODING_PLUS: Int = 43;      // '+'
+const ENCODING_SLASH: Int = 47;     // '/'
+const ENCODING_MINUS: Int = 45;     // '-'
+const ENCODING_UNDERSCORE: Int = 95;// '_'
+const ENCODING_EQUALS: Int = 61;    // '='
+
+// §D0's flush point, measured in this module rather than inherited — see the table in the header.
+const ENCODING_CHUNK: Int = 32;
+
+// Every element is a byte. A precondition rather than a mask: `bit_and(b, 255)` would encode 256
+// as a NUL and hand back something that decodes cleanly and is not what the caller had.
+//
+// It costs one extra walk of the array per call, which is what a precondition costs and what it
+// is for. Callers whose bytes come from `to_bytes`, `c_bytes_at`, `file_read_bytes` or
+// `secure_random_bytes` cannot fail it; a caller who built the array by hand can.
+pure function encoding_bytes_in_range(xs: [Int]) -> Bool {
+    let count: Int = len(xs);
+    let mutable i: Int = 0;
+    while i < count {
+        if xs[i] < 0 || xs[i] > 255 {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+// ============================================================================
+// HEX
+//
+// Lowercase out, either case in. RFC 4648 §8 defines base16 as uppercase and explicitly allows a
+// decoder to accept both; every other tool in the world prints lowercase, so that is what is
+// printed, and both are read. The asymmetry is deliberate and is the only one in this file.
+// ============================================================================
+
+// One hex digit's value, or -1. `-1` rather than an `Option` because this is the inner loop of the
+// decoder and the caller checks the sign on the next line — an `Option` per character would
+// allocate nothing but would cost a `match` per nibble to say the same thing.
+pure function encoding_hex_value(byte: Int) -> Int {
+    if byte >= 48 && byte <= 57 {
+        return byte - 48;
+    }
+    if byte >= 97 && byte <= 102 {
+        return byte - 87;
+    }
+    if byte >= 65 && byte <= 70 {
+        return byte - 55;
+    }
+    return -1;
+}
+
+// Bytes to lowercase hex. Two characters per byte, always — a leading zero is never dropped,
+// because a hex string whose length is not twice its byte count cannot be decoded back.
+function encoding_hex_encode(bytes: [Int]) -> String
+    requires encoding_bytes_in_range(bytes)
+{
+    let count: Int = len(bytes);
+    let mutable pieces: [String] = [];
+    let mutable chunk: String = "";
+    let mutable i: Int = 0;
+    while i < count {
+        let byte: Int = bytes[i];
+        chunk += substring(ENCODING_HEX_ALPHABET, shift_right_zeros(byte, 4), 1)
+               + substring(ENCODING_HEX_ALPHABET, bit_and(byte, 15), 1);
+        if len(chunk) >= ENCODING_CHUNK {
+            push(pieces, chunk);
+            chunk = "";
+        }
+        i += 1;
+    }
+    if len(chunk) > 0 {
+        push(pieces, chunk);
+    }
+    return string_join_chunks(pieces);
+}
+
+// The same, for bytes that arrived as a String.
+function encoding_hex_encode_text(text: String) -> String {
+    return encoding_hex_encode(to_bytes(text));
+}
+
+// Hex back to bytes, or None. Refused: an odd number of characters, and any character that is not
+// a hex digit — which includes a space, a trailing newline and the `0x` a caller might leave on.
+function encoding_hex_decode(text: String) -> Option<[Int]> {
+    let count: Int = len(text);
+    if remainder(count, 2) != 0 {
+        return Option.None;
+    }
+    let mutable out: [Int] = [];
+    let mutable i: Int = 0;
+    while i < count {
+        let high: Int = encoding_hex_value(byte_at(text, i));
+        let low: Int = encoding_hex_value(byte_at(text, i + 1));
+        if high < 0 || low < 0 {
+            return Option.None;
+        }
+        push(out, bit_or(shift_left(high, 4), low));
+        i += 2;
+    }
+    return Option.Some(out);
+}
+
+// Hex back to a String. `None` for exactly the inputs `encoding_hex_decode` refuses; it makes no
+// UTF-8 promise about what it answers, the same way `from_bytes` does not.
+function encoding_hex_decode_text(text: String) -> Option<String> {
+    match encoding_hex_decode(text) {
+        None => {
+            return Option.None;
+        }
+        Some(bytes) => {
+            return Option.Some(from_bytes(bytes));
+        }
+    }
+}
+
+// ============================================================================
+// BASE64 and BASE64URL
+//
+// One encoder and one decoder, each taking the two characters that distinguish the alphabets and
+// whether padding applies. The public names below are three-line wrappers over them, which is the
+// arrangement that keeps the argument for the tricky parts — the trailing quantum and the
+// canonical-bits check — in ONE place a reviewer can read once.
+// ============================================================================
+
+// One base64 character's value, or -1. `sixty_two` and `sixty_three` are the alphabet's last two
+// characters as bytes, so this function decides the dialect and refuses the other one: given
+// `'+'` and `'/'` it answers -1 for `-` and `_`, and the other way round.
+pure function encoding_base64_value(byte: Int, sixty_two: Int, sixty_three: Int) -> Int {
+    if byte >= 65 && byte <= 90 {
+        return byte - 65;           // 'A'..'Z' -> 0..25
+    }
+    if byte >= 97 && byte <= 122 {
+        return byte - 97 + 26;      // 'a'..'z' -> 26..51
+    }
+    if byte >= 48 && byte <= 57 {
+        return byte - 48 + 52;      // '0'..'9' -> 52..61
+    }
+    if byte == sixty_two {
+        return 62;
+    }
+    if byte == sixty_three {
+        return 63;
+    }
+    return -1;
+}
+
+// The shared encoder. `alphabet` must be 64 characters; `pad` decides whether the final quantum is
+// filled out to four characters with `=`.
+function encoding_base64_encode_with(bytes: [Int], alphabet: String, pad: Bool) -> String
+    requires len(alphabet) == 64
+    requires encoding_bytes_in_range(bytes)
+{
+    let count: Int = len(bytes);
+    let mutable pieces: [String] = [];
+    let mutable chunk: String = "";
+    let mutable i: Int = 0;
+
+    // Whole three-byte groups: 24 bits in, four six-bit characters out.
+    while i + 3 <= count {
+        let trio: Int = bit_or(bit_or(shift_left(bytes[i], 16), shift_left(bytes[i + 1], 8)),
+                               bytes[i + 2]);
+        chunk += substring(alphabet, shift_right_zeros(trio, 18), 1)
+               + substring(alphabet, bit_and(shift_right_zeros(trio, 12), 63), 1)
+               + substring(alphabet, bit_and(shift_right_zeros(trio, 6), 63), 1)
+               + substring(alphabet, bit_and(trio, 63), 1);
+        if len(chunk) >= ENCODING_CHUNK {
+            push(pieces, chunk);
+            chunk = "";
+        }
+        i += 3;
+    }
+
+    // The tail, which is where base64 implementations go wrong. One byte left gives eight bits,
+    // which is two characters and four bits of padding INSIDE the second character; two bytes give
+    // sixteen bits, which is three characters and two bits inside the third. Those spare bits are
+    // written as zero, and the decoder below refuses anything else.
+    let left: Int = count - i;
+    if left == 1 {
+        let one: Int = shift_left(bytes[i], 16);
+        chunk += substring(alphabet, shift_right_zeros(one, 18), 1)
+               + substring(alphabet, bit_and(shift_right_zeros(one, 12), 63), 1);
+        if pad {
+            chunk += "==";
+        }
+    }
+    if left == 2 {
+        let two: Int = bit_or(shift_left(bytes[i], 16), shift_left(bytes[i + 1], 8));
+        chunk += substring(alphabet, shift_right_zeros(two, 18), 1)
+               + substring(alphabet, bit_and(shift_right_zeros(two, 12), 63), 1)
+               + substring(alphabet, bit_and(shift_right_zeros(two, 6), 63), 1);
+        if pad {
+            chunk += "=";
+        }
+    }
+
+    if len(chunk) > 0 {
+        push(pieces, chunk);
+    }
+    return string_join_chunks(pieces);
+}
+
+// The shared decoder. Every refusal in this module's header is one of the `return Option.None`
+// lines below, and they are in the order the header lists them.
+function encoding_base64_decode_with(text: String,
+                                     sixty_two: Int,
+                                     sixty_three: Int,
+                                     padding_required: Bool) -> Option<[Int]> {
+    let count: Int = len(text);
+    let mutable out: [Int] = [];
+    if count == 0 {
+        return Option.Some(out);
+    }
+
+    // How much padding is on the end. At most two: three `=` would mean a quantum carrying no
+    // data at all, which no encoder emits.
+    let mutable pads: Int = 0;
+    if byte_at(text, count - 1) == ENCODING_EQUALS {
+        pads = 1;
+        if count >= 2 && byte_at(text, count - 2) == ENCODING_EQUALS {
+            pads = 2;
+        }
+    }
+
+    // Padding, when present, means the whole string is a whole number of four-character quanta —
+    // that is the only thing padding is for. This is also what refuses `"Zg="` and `"Zg==="`.
+    if pads > 0 && remainder(count, 4) != 0 {
+        return Option.None;
+    }
+    if padding_required && remainder(count, 4) != 0 {
+        return Option.None;
+    }
+
+    let data: Int = count - pads;
+    let leftover: Int = remainder(data, 4);
+    // Six bits is not a whole number of bytes, so a lone trailing character is not short data —
+    // it is not base64.
+    if leftover == 1 {
+        return Option.None;
+    }
+
+    // The full quanta. A `=` anywhere in here scores -1 like any other character outside the
+    // alphabet, which is how padding in the middle is refused without a separate scan.
+    let mutable i: Int = 0;
+    while i + 4 <= data {
+        let a: Int = encoding_base64_value(byte_at(text, i), sixty_two, sixty_three);
+        let b: Int = encoding_base64_value(byte_at(text, i + 1), sixty_two, sixty_three);
+        let c: Int = encoding_base64_value(byte_at(text, i + 2), sixty_two, sixty_three);
+        let d: Int = encoding_base64_value(byte_at(text, i + 3), sixty_two, sixty_three);
+        if a < 0 || b < 0 || c < 0 || d < 0 {
+            return Option.None;
+        }
+        let quad: Int = bit_or(bit_or(shift_left(a, 18), shift_left(b, 12)),
+                               bit_or(shift_left(c, 6), d));
+        push(out, bit_and(shift_right_zeros(quad, 16), 255));
+        push(out, bit_and(shift_right_zeros(quad, 8), 255));
+        push(out, bit_and(quad, 255));
+        i += 4;
+    }
+
+    // Two characters left: twelve bits carrying one byte, so the low FOUR bits of the second
+    // character are spare and must be zero. This is the canonical-form check the header argues
+    // for, and it is what refuses `"Zh=="` while accepting `"Zg=="`.
+    if leftover == 2 {
+        let a: Int = encoding_base64_value(byte_at(text, i), sixty_two, sixty_three);
+        let b: Int = encoding_base64_value(byte_at(text, i + 1), sixty_two, sixty_three);
+        if a < 0 || b < 0 {
+            return Option.None;
+        }
+        if bit_and(b, 15) != 0 {
+            return Option.None;
+        }
+        push(out, bit_or(shift_left(a, 2), shift_right_zeros(b, 4)));
+    }
+
+    // Three characters left: eighteen bits carrying two bytes, so the low TWO bits of the third
+    // character are spare and must be zero.
+    if leftover == 3 {
+        let a: Int = encoding_base64_value(byte_at(text, i), sixty_two, sixty_three);
+        let b: Int = encoding_base64_value(byte_at(text, i + 1), sixty_two, sixty_three);
+        let c: Int = encoding_base64_value(byte_at(text, i + 2), sixty_two, sixty_three);
+        if a < 0 || b < 0 || c < 0 {
+            return Option.None;
+        }
+        if bit_and(c, 3) != 0 {
+            return Option.None;
+        }
+        push(out, bit_or(shift_left(a, 2), shift_right_zeros(b, 4)));
+        push(out, bit_and(bit_or(shift_left(b, 4), shift_right_zeros(c, 2)), 255));
+    }
+
+    return Option.Some(out);
+}
+
+// ---- standard base64: `+/`, always padded ---------------------------------------------------
+
+// The precondition is repeated on the public wrappers rather than left to the kernel, because the
+// signature a caller reads is this one — it is what `burxt mcp-schema` publishes and what a
+// contract failure names. The second walk of the array costs about 3 ms per megabyte against the
+// encode's 90, which is what a precondition is worth.
+function encoding_base64_encode(bytes: [Int]) -> String
+    requires encoding_bytes_in_range(bytes)
+{
+    return encoding_base64_encode_with(bytes, ENCODING_BASE64_ALPHABET, true);
+}
+
+function encoding_base64_encode_text(text: String) -> String {
+    return encoding_base64_encode(to_bytes(text));
+}
+
+function encoding_base64_decode(text: String) -> Option<[Int]> {
+    return encoding_base64_decode_with(text, ENCODING_PLUS, ENCODING_SLASH, true);
+}
+
+function encoding_base64_decode_text(text: String) -> Option<String> {
+    match encoding_base64_decode(text) {
+        None => {
+            return Option.None;
+        }
+        Some(bytes) => {
+            return Option.Some(from_bytes(bytes));
+        }
+    }
+}
+
+// ---- base64url: `-_`, unpadded out, either way in --------------------------------------------
+
+function encoding_base64url_encode(bytes: [Int]) -> String
+    requires encoding_bytes_in_range(bytes)
+{
+    return encoding_base64_encode_with(bytes, ENCODING_BASE64URL_ALPHABET, false);
+}
+
+function encoding_base64url_encode_text(text: String) -> String {
+    return encoding_base64url_encode(to_bytes(text));
+}
+
+function encoding_base64url_decode(text: String) -> Option<[Int]> {
+    return encoding_base64_decode_with(text, ENCODING_MINUS, ENCODING_UNDERSCORE, false);
+}
+
+function encoding_base64url_decode_text(text: String) -> Option<String> {
+    match encoding_base64url_decode(text) {
+        None => {
+            return Option.None;
+        }
+        Some(bytes) => {
+            return Option.Some(from_bytes(bytes));
+        }
+    }
+}

@@ -1,0 +1,14 @@
+// `panic(why)` — the one the other three are written in terms of.
+//
+// Two things this fixture pins. The message goes to **stderr**, so a program's stdout stays the
+// program's output and a dying message does not corrupt whatever is downstream of the pipe. And the
+// exit code is **70**, the same code the runtime uses for a failed `requires` or an overflow: a
+// shell should not have to tell "the program asserted something false" apart from "the language
+// caught something false". The prefix `burxt panic:` is what distinguishes them, for a reader.
+use "../../lib/result.bx";
+
+region main {
+    print("the output so far");
+    panic("the ledger did not balance");
+    print("this line is never reached");
+}

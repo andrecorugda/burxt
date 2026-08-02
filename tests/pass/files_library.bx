@@ -1,0 +1,336 @@
+// lib/files.bx — roadmap §D1m, and §B1 and §B3 with it.
+//
+// **§B1 is the headline, and measuring it changed what it says.** The row claims `file_read` of a
+// missing file answers `""`, indistinguishable from an empty file. It does not: it **ends the
+// process**, which `tests/panic/file_read_of_a_missing_file.bx` pins. So the bug was not a silent
+// wrong answer, it was that there was no way to read a file that might not be there — and
+// `file_read_maybe` answers `None` for missing, unreadable *and* a directory, `Some("")` for a file
+// that is genuinely empty, and stops nothing. That block is first below.
+//
+// Everything here happens inside a directory `file_temp_directory` made, mode 0700, under `TMPDIR`
+// or `/tmp` — never in the repository and never on a name another process could be using. The
+// directory is taken apart at the end, which also exercises `file_walk` + `file_delete` +
+// `file_remove_directory`: the three-line recipe that exists instead of a recursive delete.
+//
+// Nothing machine-specific is printed. Paths appear only as the part after the scratch root.
+use "../../lib/files.bx";
+
+// For the TMPDIR case at the very bottom. Declared here rather than pulled in with `lib/os.bx`,
+// so this fixture exercises `lib/files.bx` and nothing else.
+external function setenv(name: String, value: String, overwrite: i32) -> CInt touches input;
+
+function say(label: String, answer: Option<String>) -> Bool {
+    match answer {
+        None => {
+            print(label + ": none");
+            return false;
+        }
+        Some(text) => {
+            print(label + ": some [" + text + "]");
+            return true;
+        }
+    }
+}
+
+function say_int(label: String, answer: Option<Int>) -> Bool {
+    match answer {
+        None => {
+            print(label + ": none");
+            return false;
+        }
+        Some(value) => {
+            print(label + ": some " + to_string(value));
+            return true;
+        }
+    }
+}
+
+// Every path under `root`, printed with `root` cut off the front, so the output is the same on
+// every machine. Sorted already — `file_walk` promises that.
+function say_walk(label: String, root: String, answer: Option<[String]>) -> Bool {
+    match answer {
+        None => {
+            print(label + ": none");
+            return false;
+        }
+        Some(paths) => {
+            let count: Int = len(paths);
+            print(label + ": " + to_string(count) + " entries");
+            let cut: Int = len(root);
+            let mutable i: Int = 0;
+            while i < count {
+                let whole: String = paths[i];
+                print("  " + substring(whole, cut, len(whole) - cut));
+                i += 1;
+            }
+            return true;
+        }
+    }
+}
+
+region main {
+    let mutable root: String = "";
+    match file_temp_directory("filetest") {
+        None => {
+            // No private scratch directory means the test cannot run honestly, and saying so is
+            // better than testing something else. The stdout will not match, which is the point.
+            print("could not make a private scratch directory");
+        }
+        Some(made) => {
+            root = made;
+        }
+    }
+    print(file_is_directory(root));
+
+    let empty: String = root + "/empty";
+    let filled: String = root + "/filled";
+    let missing: String = root + "/missing";
+    let wrote_empty: Int = file_write(empty, "");
+    let wrote_filled: Int = file_write(filled, "hello, world\n");
+    print(wrote_empty);
+    print(wrote_filled);
+
+    // ---- §B1 ---------------------------------------------------------------------------------
+    //
+    // `file_read(missing)` is NOT called here, and that is the finding rather than an omission:
+    // it does not answer `""` the way §B1 says, it ends the process. `tests/panic/
+    // file_read_of_a_missing_file.bx` is the measurement. All this side can show is that
+    // `file_read` of an empty file answers the empty string — the answer a missing file was
+    // supposed to be confusable with, and never got as far as giving.
+    print("-- file_read of an empty file");
+    print("empty:   [" + file_read(empty) + "]");
+    print("-- file_read_maybe answers all four, and none of them stop the program");
+    let saw_missing: Bool = say("missing", file_read_maybe(missing));
+    let saw_empty: Bool = say("empty  ", file_read_maybe(empty));
+    let saw_filled: Bool = say("filled ", file_read_maybe(filled));
+    // A directory is not a readable file, and `fopen` alone would have said it was.
+    let saw_dir: Bool = say("dir    ", file_read_maybe(root));
+
+    // ---- size ---------------------------------------------------------------------------------
+    print("-- size");
+    let size_empty: Bool = say_int("empty  ", file_size(empty));
+    let size_filled: Bool = say_int("filled ", file_size(filled));
+    let size_missing: Bool = say_int("missing", file_size(missing));
+    // Not `Some(9223372036854775807)`, which is what `fseek` to the end of a directory answers.
+    let size_dir: Bool = say_int("dir    ", file_size(root));
+
+    // ---- a path with a space in it --------------------------------------------------------------
+    print("-- a path with a space");
+    let spaced: String = root + "/two words";
+    let wrote_spaced: Int = file_write(spaced, "spaced out");
+    let saw_spaced: Bool = say("read ", file_read_maybe(spaced));
+    let size_spaced: Bool = say_int("size ", file_size(spaced));
+    print(file_exists(spaced));
+    print(file_is_file(spaced));
+
+    // ---- what each of the three questions answers, for each of the three kinds of path ---------
+    print("-- exists / is_file / is_directory");
+    print("file:    " + to_string(file_exists(filled)) + " " + to_string(file_is_file(filled)) + " " + to_string(file_is_directory(filled)));
+    print("dir:     " + to_string(file_exists(root)) + " " + to_string(file_is_file(root)) + " " + to_string(file_is_directory(root)));
+    print("missing: " + to_string(file_exists(missing)) + " " + to_string(file_is_file(missing)) + " " + to_string(file_is_directory(missing)));
+
+    // ---- read_bytes, through fread and c_bytes_at ------------------------------------------------
+    print("-- read_bytes");
+    match file_read_bytes(filled) {
+        None => {
+            print("bytes: none");
+        }
+        Some(bytes) => {
+            print("bytes: " + to_string(len(bytes)));
+            print("first: " + to_string(bytes[0]));
+            print("last:  " + to_string(bytes[len(bytes) - 1]));
+        }
+    }
+    print(option_is_some(file_read_bytes(empty)));
+    print(option_is_none(file_read_bytes(missing)));
+    print(option_is_none(file_read_bytes(root)));
+
+    // ---- copy, move, append, delete ---------------------------------------------------------
+    print("-- copy / move / append");
+    let copy_path: String = root + "/copied";
+    print(file_copy(filled, copy_path));
+    let saw_copy: Bool = say("copy ", file_read_maybe(copy_path));
+    // `cp` without `-R` refuses a directory, and the refusal arrives as `false`.
+    print(file_copy(root, root + "/impossible"));
+    print(file_copy(missing, root + "/also-impossible"));
+
+    let moved: String = root + "/moved";
+    print(file_move(copy_path, moved));
+    print(option_is_none(file_read_maybe(copy_path)));
+    let saw_moved: Bool = say("moved", file_read_maybe(moved));
+
+    let appended: Int = file_append(moved, "and again\n");
+    let saw_appended: Bool = say_int("size after append", file_size(moved));
+    print(file_delete(moved));
+    print(option_is_none(file_read_maybe(moved)));
+    // Deleting what is not there is a stated failure, not a silent success.
+    print(file_delete(missing));
+
+    // ---- listing and walking ------------------------------------------------------------------
+    print("-- walk");
+    let empty_dir: String = root + "/empty-dir";
+    print(file_make_directory(empty_dir));
+    // `Some([])` for a directory with nothing in it, `None` for one that is not there. Those are
+    // different facts and this is the pair that says so.
+    let walked_empty: Bool = say_walk("empty dir", root, file_walk(empty_dir));
+    print(option_is_none(file_walk(root + "/never-existed")));
+    // A file is not a directory, and walking one is a question with no answer.
+    print(option_is_none(file_walk(filled)));
+
+    let nested: String = root + "/tree";
+    print(file_make_directory(nested + "/one/two"));
+    let leaf: Int = file_write(nested + "/one/two/leaf", "deep\n");
+    let mid: Int = file_write(nested + "/one/beside", "shallow\n");
+    let walked_nested: Bool = say_walk("nested", root, file_walk(nested));
+
+    print("-- list_directory of the same nested directory, one level only");
+    let names: [String] = file_list_directory(nested + "/one");
+    let mutable n: Int = 0;
+    while n < len(names) {
+        print("  " + names[n]);
+        n += 1;
+    }
+
+    // ---- temp files, twice, not colliding ----------------------------------------------------
+    print("-- temp");
+    let first: String = option_or(file_temp_path("twice"), "");
+    let second: String = option_or(file_temp_path("twice"), "");
+    print(len(first) > 0 && len(second) > 0);
+    print(first != second);
+    // Neither exists yet: what `file_temp_path` reserves is the private directory around the name,
+    // which is what makes the name safe to use.
+    print(file_exists(first));
+    print(file_is_directory(substring(first, 0, len(first) - 6)));
+    let used_first: Int = file_write(first, "one");
+    let used_second: Int = file_write(second, "two");
+    let read_first: Bool = say("first ", file_read_maybe(first));
+    let read_second: Bool = say("second", file_read_maybe(second));
+    print(file_temp_release(first));
+    print(file_temp_release(second));
+    print(file_exists(first));
+    // A path this library did not hand out is refused rather than removed.
+    print(file_temp_release("/etc/hosts"));
+    print(file_exists("/etc/hosts"));
+    // A plain name is required: a prefix with a slash in it would put the directory elsewhere.
+    print(option_is_none(file_temp_path("a/b")));
+    print(option_is_none(file_temp_directory("..")));
+    print(option_is_none(file_temp_directory("")));
+
+    // ---- bytes that a String path would have to be trusted with ------------------------------
+    //
+    // A NUL in the middle and a 0xFF at the end: the two bytes that break a C string and a
+    // sign-extending reader respectively. `write_bytes` puts them there and `file_read_bytes`
+    // brings back the same five numbers.
+    print("-- binary round trip");
+    let mutable raw: [Int] = [];
+    let b0: Int = push(raw, 65);
+    let b1: Int = push(raw, 0);
+    let b2: Int = push(raw, 10);
+    let b3: Int = push(raw, 200);
+    let b4: Int = push(raw, 255);
+    let binary: String = root + "/binary";
+    print(write_bytes(binary, raw));
+    match file_read_bytes(binary) {
+        None => {
+            print("binary: none");
+        }
+        Some(back) => {
+            print(len(back));
+            let mutable same: Bool = len(back) == len(raw);
+            let mutable k: Int = 0;
+            while k < len(back) {
+                if back[k] != raw[k] {
+                    same = false;
+                }
+                k += 1;
+            }
+            print(same);
+        }
+    }
+    let size_binary: Bool = say_int("size ", file_size(binary));
+    // A character device has no length to measure, and reading it stops when it stops. `/dev/null`
+    // is the one every POSIX machine has and the only one safe to read to the end of.
+    print(option_is_some(file_read_bytes("/dev/null")));
+
+    // ---- the one hole in shell quoting -------------------------------------------------------
+    //
+    // A single quote inside a path cannot be quoted with single quotes, and `file_quote` refuses
+    // rather than mishandling it. The path is never reached, so `file_exists` answers false for a
+    // file that may well be there.
+    //
+    // **The refusal is on stderr and so is absent from the expectation below**, which is the point
+    // of the change that put it there: a library's diagnostic in a caller's stdout is data
+    // corruption, and this fixture would have had to encode it as expected output.
+    print("-- a path holding a single quote");
+    print(file_exists(root + "/it's here"));
+    // `file_is_directory` goes through `opendir` and not the shell, so the quote is not its
+    // problem: it answers the truth about a path the shell cannot be handed.
+    print(file_is_directory(root + "/it's here"));
+
+    // ---- taking the scratch directory apart ---------------------------------------------------
+    //
+    // This is the recipe that exists instead of a recursive delete: name the tree, delete the
+    // leaves first, then the directories. `file_walk` sorts, so a directory always comes before
+    // its own contents — going backwards puts the contents first.
+    print("-- cleanup");
+    match file_walk(root) {
+        None => {
+            print("nothing to clean, which should not happen");
+        }
+        Some(paths) => {
+            let mutable i: Int = len(paths) - 1;
+            while i >= 0 {
+                if file_is_directory(paths[i]) {
+                    let gone_dir: Bool = file_remove_directory(paths[i]);
+                } else {
+                    let gone: Bool = file_delete(paths[i]);
+                }
+                i -= 1;
+            }
+        }
+    }
+    print(file_remove_directory(root));
+    print(file_exists(root));
+
+    // ---- TMPDIR is honoured, and a relative one is not ----------------------------------------
+    //
+    // Last, because it moves where every later scratch directory goes. A build in a sandbox sets
+    // `TMPDIR` precisely so that nothing lands in a shared `/tmp`, and a library that ignored it
+    // would scatter files where the sandbox cannot see them.
+    //
+    // `setenv` is declared here rather than reached for through `lib/os.bx`, so this fixture keeps
+    // testing `lib/files.bx` and nothing else.
+    print("-- TMPDIR");
+    let mutable elsewhere: String = "";
+    match file_temp_directory("tmpdir-home") {
+        None => {
+            print("no scratch directory for the TMPDIR case");
+        }
+        Some(made) => {
+            elsewhere = made;
+        }
+    }
+    let set_home: Int = setenv("TMPDIR", elsewhere, 1);
+    print(set_home);
+    match file_temp_directory("inside") {
+        None => {
+            print("TMPDIR was set and nothing could be made in it");
+        }
+        Some(inner) => {
+            // The new directory is under the one TMPDIR names, and its name is what the library
+            // builds rather than anything the caller passed.
+            print(file_starts_with(inner, elsewhere + "/burxt-inside-"));
+            print(file_remove_directory(inner));
+        }
+    }
+    // A relative TMPDIR is ignored: honouring it would put scratch files in whatever directory the
+    // program happened to be started in, which is the one place a caller has files of their own.
+    let set_relative: Int = setenv("TMPDIR", "relative-and-wrong", 1);
+    print(set_relative);
+    print(file_temp_base());
+    // And an empty one falls back the same way.
+    let set_empty: Int = setenv("TMPDIR", "", 1);
+    print(set_empty);
+    print(file_temp_base());
+    print(file_remove_directory(elsewhere));
+}

@@ -57,20 +57,23 @@
 //
 // ---- what is NOT here, and why ----------------------------------------------------------
 //
-// **No `checked_*` is `pure`, and all three should be.** `Option.Some(x)` reads as a method call on the
-// enum, and a method cannot be declared `pure` yet, so a function that only reads its arguments is
-// refused the word that says exactly that. The same gap `lib/array.bx` records for `array_index_of`,
-// hit for the same reason. The fix is in the `pure` checker, not here, and the workaround —
-// returning a sentinel `Int` — is the thing `Option` exists to refuse. Recorded, not worked around.
+// **`checked_*` and `pure` — the limit this section used to record is GONE, and the record outlived
+// it.** The text here said no `checked_*` could be `pure`, because `Option.Some(x)` read as a method
+// call on the enum and a method could not be declared `pure`. All three carry `pure` today, in the
+// declarations below, and have for long enough that nobody remembers the version that fixed it.
+// A stale limitation is worse than a stale claim of completeness: nobody re-tests what a comment
+// says does not work, so it stays "impossible" until someone tries it by accident.
 //
 // **No floats, so no `sqrt`, `log`, `sin` or `exp`.** Burxt has `Int` and `Decimal<N>` and neither is a
 // float, by design (spec/DESIGN.md). `math_isqrt` is the integer square root and it is EXACT; there is
 // no approximate one to reach for by accident.
 //
-// **No `Decimal` versions of anything.** `math_min`/`math_max`/`math_clamp` are generic and already
-// take `Decimal<N>` and `String`, but `abs`, `sign` and `is_zero` on a Decimal need the zero of that
-// scale — `$0.00` and `0.0000` are different values — and a generic has no way to name it. Those are
-// D1i's per-scale helpers, a separate module's work.
+// **No `Decimal` versions of anything, and there is now a module that has them.**
+// `math_min`/`math_max`/`math_clamp` are generic and already take `Decimal<N>` and `String` at every
+// scale — so §D1i's `min` and `max` are these, and `lib/decimal.bx` deliberately does not repeat
+// them. `abs`, `sign` and `is_zero` on a Decimal need the zero of that scale — `$0.00` and `0.0000`
+// are different values — and a generic has no way to name it, so those are per-scale in
+// **`lib/decimal.bx`**, along with `money_split` and the rounding.
 //
 // **No `divmod`.** It needs a two-value return, which is D2c behind A8.
 // ============================================================================

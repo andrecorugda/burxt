@@ -1,0 +1,43 @@
+true
+true
+true
+true
+written
+true
+written again
+true
+true
+true
+false
+false
+true
+[inherited]
+true
+true
+true
+true
+0
+7
+255
+137
+0
+7
+137
+139
+-1
+out [to-stdout
+]
+err [to-stderr
+]
+3
+both [first
+second
+]
+quiet [] [] 0
+true
+true
+127
+[one
+two
+three
+]

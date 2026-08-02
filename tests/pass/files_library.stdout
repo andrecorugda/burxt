@@ -1,0 +1,96 @@
+true
+0
+13
+-- file_read of an empty file
+empty:   []
+-- file_read_maybe answers all four, and none of them stop the program
+missing: none
+empty  : some []
+filled : some [hello, world
+]
+dir    : none
+-- size
+empty  : some 0
+filled : some 13
+missing: none
+dir    : none
+-- a path with a space
+read : some [spaced out]
+size : some 10
+true
+true
+-- exists / is_file / is_directory
+file:    true true false
+dir:     true false true
+missing: false false false
+-- read_bytes
+bytes: 13
+first: 104
+last:  10
+true
+true
+true
+-- copy / move / append
+true
+copy : some [hello, world
+]
+false
+false
+true
+true
+moved: some [hello, world
+]
+size after append: some 23
+true
+true
+false
+-- walk
+true
+empty dir: 0 entries
+true
+true
+true
+nested: 4 entries
+  /tree/one
+  /tree/one/beside
+  /tree/one/two
+  /tree/one/two/leaf
+-- list_directory of the same nested directory, one level only
+  beside
+  two
+-- temp
+true
+true
+false
+true
+first : some [one]
+second: some [two]
+true
+true
+false
+false
+true
+true
+true
+true
+-- binary round trip
+5
+5
+true
+size : some 5
+true
+-- a path holding a single quote
+false
+false
+-- cleanup
+true
+false
+-- TMPDIR
+0
+true
+true
+0
+/tmp
+0
+/tmp
+true

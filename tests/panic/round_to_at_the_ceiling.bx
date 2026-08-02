@@ -1,0 +1,16 @@
+// `decimal2_round_to` within a penny of the top of the range, where rounding UP has nowhere to go.
+//
+// The largest `Decimal<2>` is $92,233,720,368,547,758.07. Rounded to one place that is
+// ...758.10, which is seven pennies past the largest value there is. So it traps —
+// `burxt runtime error: arithmetic overflow` — and that is the right answer rather than a gap: the
+// alternatives are wrapping to a large NEGATIVE amount, or clamping to a number nobody asked for,
+// and both are a wrong answer delivered quietly.
+//
+// The line before it is the same call one place coarser, which does fit and prints. It is here so
+// this fixture proves the trap is about the boundary rather than about the function being broken.
+use "../../lib/decimal.bx";
+
+region main {
+    print(decimal2_round_to(decimal2_from_cents(9223372036854775807), 0));
+    print(decimal2_round_to(decimal2_from_cents(9223372036854775807), 1));
+}

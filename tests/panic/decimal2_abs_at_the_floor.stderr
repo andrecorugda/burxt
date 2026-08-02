@@ -1,0 +1,1 @@
+`requires value > decimal2_from_cents(INT_MIN)` failed in `decimal2_abs`

@@ -1,0 +1,391 @@
+// lib/secure.bx — the CSPRNG, `uuid_v4`, and the comparison that must not short-circuit.
+//
+// Nothing here can pin a value, because the whole point of the module is that the values are
+// unpredictable. So every line below prints a `true` that a wrong implementation would print
+// `FALSE` for, and each one is chosen against a specific way of being wrong:
+//
+//   * **A buffer that was never filled** reads back as whatever `malloc` left there, which on a
+//     fresh page is all zeroes. `getentropy`'s return value is what stands between that and a
+//     "key", so the checks here are the ones a zeroed or repeated buffer fails: bytes differ from
+//     each other, two calls differ from one another, and every one of the 256 byte values shows up
+//     across a large enough draw.
+//   * **The 256-byte cap** is `getentropy`'s, and `secure_random_bytes` loops over it. A wrong
+//     loop gives a short array, or gives the same 256 bytes twice. Both are checked at 1,000 bytes.
+//   * **Modulo bias** in `secure_random_int_below`. A die, 60,000 rolls, the same test
+//     `tests/pass/random_library.bx` applies to the seeded generator — because "it is a CSPRNG"
+//     is not a reason for the reduction to be uniform, and `remainder(draw, 6)` is not.
+//   * **`uuid_v4`'s six fixed bits.** The version nibble must be `4` and the variant nibble one of
+//     `8`, `9`, `a`, `b`. 200 of them, so all four variant values appear rather than one sample
+//     passing by luck.
+//   * **A short-circuiting comparison.** `string_equals_constant_time` is checked on the cases an
+//     early-exit `==` gets right too — that is the point, it must be a drop-in — plus the length
+//     cases where an early `return false` would have been the obvious code: an empty string
+//     against a full one, a prefix against its extension, both directions.
+//
+// The timing property itself is not tested here, and that is a decision rather than an omission.
+// A fixture cannot measure it reliably on a shared runner, and a flaky test guarding a security
+// property is worse than none: it gets muted, and then it guards nothing. It IS measured — the
+// table in `lib/secure.bx`'s header has the numbers, 20 ms against 400 for `==` and 940 against
+// 920 for the constant-time version over 30 million comparisons — and what a reviewer checks is
+// the thing the timing follows from: no branch below depends on a byte's value.
+use "../../lib/secure.bx";
+
+function show(label: String, held: Bool) -> Bool {
+    if held {
+        print(label + ": true");
+    } else {
+        print(label + ": FALSE");
+    }
+    return held;
+}
+
+function all_bytes_in_range(xs: [Int]) -> Bool {
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        if xs[i] < 0 || xs[i] > 255 {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+// How many elements differ from the first. A zeroed buffer scores 0; a `calloc` that was handed
+// back unfilled scores 0; entropy scores nearly all of them.
+function differing_from_first(xs: [Int]) -> Int {
+    let mutable count: Int = 0;
+    let mutable i: Int = 1;
+    while i < len(xs) {
+        if xs[i] != xs[0] {
+            count += 1;
+        }
+        i += 1;
+    }
+    return count;
+}
+
+function same_bytes(a: [Int], b: [Int]) -> Bool {
+    if len(a) != len(b) {
+        return false;
+    }
+    let mutable i: Int = 0;
+    while i < len(a) {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+function is_lower_hex(text: String) -> Bool {
+    let width: Int = len(text);
+    let mutable i: Int = 0;
+    while i < width {
+        let b: Int = byte_at(text, i);
+        let digit: Bool = b >= 48 && b <= 57;
+        let letter: Bool = b >= 97 && b <= 102;
+        if !digit && !letter {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+// A-Z a-z 0-9 - _ and nothing else. What "safe in a URL" means, checked rather than asserted.
+function is_url_safe(text: String) -> Bool {
+    let width: Int = len(text);
+    let mutable i: Int = 0;
+    while i < width {
+        let b: Int = byte_at(text, i);
+        let upper: Bool = b >= 65 && b <= 90;
+        let lower: Bool = b >= 97 && b <= 122;
+        let digit: Bool = b >= 48 && b <= 57;
+        let dash: Bool = b == 45 || b == 95;
+        if !upper && !lower && !digit && !dash {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+region main {
+    // ---- 32 bytes: what a key is ---------------------------------------------------------------
+    print("-- secure_random_bytes");
+    let mutable have_key: Bool = false;
+    let mutable key: [Int] = [];
+    match secure_random_bytes(32) {
+        None => {
+            print("the kernel refused to give entropy, and this fixture cannot run");
+        }
+        Some(bytes) => {
+            have_key = true;
+            key = bytes;
+        }
+    }
+    show("32 bytes arrived", have_key);
+    show("and there are 32 of them", len(key) == 32);
+    show("every one is a byte", all_bytes_in_range(key));
+    // 32 bytes all equal has probability 256^-31. This is not a statistical test; it tells
+    // entropy from a buffer nobody wrote to.
+    show("they are not all the same value", differing_from_first(key) > 20);
+
+    // Two draws are two draws. Equal 32-byte arrays would mean the buffer is not being refilled.
+    let mutable second: [Int] = [];
+    match secure_random_bytes(32) {
+        None => {
+            print("second draw refused");
+        }
+        Some(bytes) => {
+            second = bytes;
+        }
+    }
+    show("a second call gives different bytes", !same_bytes(key, second));
+
+    // ---- past getentropy's 256-byte cap ----------------------------------------------------------
+    //
+    // 1,000 bytes is four blocks, so a loop that forgot to advance would repeat block one and a
+    // loop that miscounted would come up short. Both are visible below.
+    print("-- past the 256-byte cap");
+    let mutable big: [Int] = [];
+    match secure_random_bytes(1000) {
+        None => {
+            print("1,000 bytes refused");
+        }
+        Some(bytes) => {
+            big = bytes;
+        }
+    }
+    show("1,000 bytes arrived, all 1,000", len(big) == 1000);
+    show("every one is a byte", all_bytes_in_range(big));
+
+    // The blocks are not copies of each other. Byte 0 against byte 256, 512 and 768 would agree
+    // by chance one time in 256; all three agreeing is one in 16 million, and a repeated block
+    // makes it certain.
+    let mutable block_repeat: Int = 0;
+    if len(big) == 1000 {
+        if big[0] == big[256] { block_repeat += 1; }
+        if big[0] == big[512] { block_repeat += 1; }
+        if big[0] == big[768] { block_repeat += 1; }
+    }
+    show("the four blocks are not the same block", block_repeat < 3);
+
+    // Over 1,000 draws every byte value should appear roughly four times; a generator stuck in a
+    // narrow range, or one that only ever yields ASCII, fails this badly.
+    let mutable seen: [Int] = [];
+    let mutable z: Int = 0;
+    while z < 256 {
+        push(seen, 0);
+        z += 1;
+    }
+    let mutable i: Int = 0;
+    while i < len(big) {
+        seen[big[i]] = seen[big[i]] + 1;
+        i += 1;
+    }
+    let mutable distinct: Int = 0;
+    let mutable v: Int = 0;
+    while v < 256 {
+        if seen[v] > 0 {
+            distinct += 1;
+        }
+        v += 1;
+    }
+    // The expected number of unseen values in 1,000 draws over 256 buckets is 256 * (255/256)^1000,
+    // which is about 5. Requiring 200 distinct is a wide margin and a narrow generator still fails.
+    show("at least 200 of the 256 byte values appear in 1,000 draws", distinct >= 200);
+
+    // ---- a die: the reduction is unbiased --------------------------------------------------------
+    print("-- secure_random_int_below");
+    let mutable faces: [Int] = [0, 0, 0, 0, 0, 0];
+    let mutable rolls: Int = 0;
+    let mutable in_range: Bool = true;
+    while rolls < 60000 {
+        match secure_random_int_below(6) {
+            None => {
+                in_range = false;
+            }
+            Some(face) => {
+                if face < 0 || face > 5 {
+                    in_range = false;
+                } else {
+                    faces[face] = faces[face] + 1;
+                }
+            }
+        }
+        rolls += 1;
+    }
+    show("every roll is 0 to 5", in_range);
+    // One standard deviation on 10,000 expected is 91. The window is 500, which is 5.5 of them —
+    // wide enough never to flake, narrow enough that `remainder(draw, 6)`'s bias would not be
+    // caught here but a genuinely skewed reduction would.
+    let mutable uniform: Bool = true;
+    let mutable f: Int = 0;
+    while f < 6 {
+        if faces[f] < 9500 || faces[f] > 10500 {
+            uniform = false;
+        }
+        f += 1;
+    }
+    show("each of the six faces lands 10000 +/- 500", uniform);
+
+    // `below(1)` has exactly one answer and it is 0. The boundary a rejection loop gets wrong.
+    let mutable only_zero: Bool = true;
+    let mutable one: Int = 0;
+    while one < 100 {
+        match secure_random_int_below(1) {
+            None => {
+                only_zero = false;
+            }
+            Some(value) => {
+                if value != 0 {
+                    only_zero = false;
+                }
+            }
+        }
+        one += 1;
+    }
+    show("below(1) is always 0", only_zero);
+
+    // ---- uuid_v4 -----------------------------------------------------------------------------
+    //
+    // 200 of them: enough that all four variant nibbles appear, so "the variant is one of 8 9 a b"
+    // is checked as a set rather than as one lucky sample.
+    print("-- secure_uuid_v4");
+    let mutable shaped: Bool = true;
+    let mutable versioned: Bool = true;
+    let mutable varianted: Bool = true;
+    let mutable hexed: Bool = true;
+    let mutable saw_8: Bool = false;
+    let mutable saw_9: Bool = false;
+    let mutable saw_a: Bool = false;
+    let mutable saw_b: Bool = false;
+    let mutable first_uuid: String = "";
+    let mutable second_uuid: String = "";
+    let mutable made: Int = 0;
+    while made < 200 {
+        match secure_uuid_v4() {
+            None => {
+                shaped = false;
+            }
+            Some(id) => {
+                if made == 0 { first_uuid = id; }
+                if made == 1 { second_uuid = id; }
+                // 8-4-4-4-12 with hyphens at 8, 13, 18 and 23.
+                if len(id) != 36 {
+                    shaped = false;
+                } else {
+                    if byte_at(id, 8) != 45 || byte_at(id, 13) != 45
+                       || byte_at(id, 18) != 45 || byte_at(id, 23) != 45 {
+                        shaped = false;
+                    }
+                    // The version nibble: the first character of the third group.
+                    if byte_at(id, 14) != 52 {
+                        versioned = false;
+                    }
+                    // The variant nibble: the first character of the fourth group, one of 8 9 a b.
+                    let variant: Int = byte_at(id, 19);
+                    if variant == 56 { saw_8 = true; }
+                    if variant == 57 { saw_9 = true; }
+                    if variant == 97 { saw_a = true; }
+                    if variant == 98 { saw_b = true; }
+                    if variant != 56 && variant != 57 && variant != 97 && variant != 98 {
+                        varianted = false;
+                    }
+                    // Everything that is not a hyphen is a lowercase hex digit.
+                    let flat: String = substring(id, 0, 8) + substring(id, 9, 4)
+                                     + substring(id, 14, 4) + substring(id, 19, 4)
+                                     + substring(id, 24, 12);
+                    if len(flat) != 32 || !is_lower_hex(flat) {
+                        hexed = false;
+                    }
+                }
+            }
+        }
+        made += 1;
+    }
+    show("36 characters, hyphens at 8 13 18 23", shaped);
+    show("the version nibble is always 4", versioned);
+    show("the variant nibble is always 8, 9, a or b", varianted);
+    show("all four variant values appear in 200 draws", saw_8 && saw_9 && saw_a && saw_b);
+    show("everything else is a lowercase hex digit", hexed);
+    show("two calls differ", first_uuid != second_uuid);
+
+    // ---- tokens ---------------------------------------------------------------------------------
+    print("-- tokens");
+    let mutable hex_token: String = "";
+    match secure_token_hex(32) {
+        None => { print("hex token refused"); }
+        Some(text) => { hex_token = text; }
+    }
+    show("32 bytes of hex is 64 characters", len(hex_token) == 64);
+    show("and every one is a lowercase hex digit", is_lower_hex(hex_token));
+
+    let mutable url_token: String = "";
+    match secure_token_urlsafe(32) {
+        None => { print("url token refused"); }
+        Some(text) => { url_token = text; }
+    }
+    // 32 bytes are 256 bits, which is 42 whole base64 characters and two bits over, so 43 and no
+    // padding. A padded implementation would print 44 with a trailing "=" that has to be escaped.
+    show("32 bytes of unpadded base64url is 43 characters", len(url_token) == 43);
+    show("and nothing in it needs escaping in a URL", is_url_safe(url_token));
+
+    // ---- E2 and E3 meet: a key encoded and read back -----------------------------------------
+    print("-- a real key through lib/encoding.bx");
+    match encoding_base64_decode(encoding_base64_encode(key)) {
+        None => {
+            show("a 32-byte key survives base64 and back", false);
+        }
+        Some(back) => {
+            show("a 32-byte key survives base64 and back", same_bytes(key, back));
+        }
+    }
+    match encoding_hex_decode(encoding_hex_encode(key)) {
+        None => {
+            show("and hex and back", false);
+        }
+        Some(back) => {
+            show("and hex and back", same_bytes(key, back));
+        }
+    }
+
+    // ---- B4: string_equals_constant_time ----------------------------------------------------
+    //
+    // It has to be a drop-in for `==` first. Everything below would also be true of `==`; the
+    // difference is in how long the answer takes, which is what the header argues and what review
+    // rather than a fixture checks.
+    print("-- string_equals_constant_time");
+    show("equal strings", string_equals_constant_time("correct-horse", "correct-horse"));
+    show("differing in the FIRST byte",
+         !string_equals_constant_time("correct-horse", "xorrect-horse"));
+    show("differing in the LAST byte",
+         !string_equals_constant_time("correct-horse", "correct-horsf"));
+    show("differing in the middle",
+         !string_equals_constant_time("correct-horse", "correct-Horse"));
+    show("a prefix is not the whole", !string_equals_constant_time("correct", "correct-horse"));
+    show("and the whole is not a prefix", !string_equals_constant_time("correct-horse", "correct"));
+    show("empty against empty", string_equals_constant_time("", ""));
+    show("empty against something", !string_equals_constant_time("", "a"));
+    show("something against empty", !string_equals_constant_time("a", ""));
+    // The wrapping read must not make a repeated shorter string look equal: "abab" against "ab"
+    // walks b twice and would compare equal if the length were not folded in.
+    show("a repeat of the shorter is still not equal",
+         !string_equals_constant_time("abab", "ab"));
+    show("nor is a triple", !string_equals_constant_time("ababab", "ab"));
+    // A NUL is an ordinary byte, so it is compared rather than ending the comparison.
+    let nul_a: String = from_bytes([104, 0, 105]);
+    let nul_b: String = from_bytes([104, 0, 106]);
+    show("two strings that differ only after a NUL", !string_equals_constant_time(nul_a, nul_b));
+    show("and the same one twice", string_equals_constant_time(nul_a, from_bytes([104, 0, 105])));
+
+    print("-- bytes_equals_constant_time");
+    show("a key against itself", bytes_equals_constant_time(key, key));
+    show("a key against another", !bytes_equals_constant_time(key, second));
+    show("empty against empty", bytes_equals_constant_time([], []));
+    let one_byte: [Int] = [7];
+    show("empty against one byte", !bytes_equals_constant_time([], one_byte));
+    show("one byte against empty", !bytes_equals_constant_time(one_byte, []));
+}

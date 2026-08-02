@@ -1,0 +1,202 @@
+// lib/decimal.bx — §D1i, everything except `money_split`, which has its own fixture.
+//
+// The interesting cases are the ones that separate a decimal library that is exact from one that
+// is nearly right: the two ends of the i64 range, ties under half-even rounding, and whether a
+// negative answer mirrors the positive one. Happy paths are here for shape; the edges are the test.
+use "../../lib/decimal.bx";
+
+// Round-trip a penny count through the search and back, so a failure names the count.
+function trip(cents: Int) -> Bool {
+    return decimal2_cents(decimal2_from_cents(cents)) == cents;
+}
+
+region main {
+    // ============================================================
+    // decimal2_cents — the search that stands in for the cast this language does not have
+    // ============================================================
+    print(decimal2_cents($19.99));
+    print(decimal2_cents($0.00));
+    print(decimal2_cents($0.01));
+    print(decimal2_cents(0.00 - 0.01));
+    print(decimal2_cents(0.00 - 19.99));
+
+    // BOTH ENDS OF THE RANGE. The first version of the descent started at INT_MIN for every input
+    // and answered -1 for every positive one, because 63 bits reach half an i64. These two lines
+    // are what caught it.
+    print(decimal2_cents($92233720368547758.07));
+    print(decimal2_cents(decimal2_from_cents(-9223372036854775807 - 1)));
+
+    // A sweep of the round trip, including across zero.
+    let mutable trips: Bool = true;
+    for c in 0..2001 {
+        if !trip(c - 1000) {
+            trips = false;
+        }
+    }
+    print(trips);
+    print(trip(9223372036854775807));
+    print(trip(-9223372036854775807 - 1));
+    print(trip(1000000000000));
+
+    // ============================================================
+    // is_zero, abs, sign
+    // ============================================================
+    print(decimal2_is_zero($0.00));
+    print(decimal2_is_zero($0.01));
+    print(decimal2_is_zero(0.00 - 0.01));
+
+    print(decimal2_abs($19.99));
+    print(decimal2_abs(0.00 - 19.99));
+    print(decimal2_abs($0.00));
+    // The largest magnitude that HAS an absolute value. One penny further down and the
+    // precondition refuses, because the answer is not a Decimal<2>.
+    print(decimal2_abs(0.00 - 92233720368547758.07));
+
+    print(decimal2_sign($0.01));
+    print(decimal2_sign(0.00 - 0.01));
+    print(decimal2_sign($0.00));
+    // sign does NOT trap at the bottom of the range, because nothing is negated.
+    print(decimal2_sign(decimal2_from_cents(-9223372036854775807 - 1)));
+
+    // ============================================================
+    // decimal2_round_to — HALF-EVEN, and the ties are the whole point
+    // ============================================================
+    // To one place. 0.05 and 0.25 go DOWN (0 and 2 are even), 0.15 and 0.35 go UP.
+    print(decimal2_round_to($0.05, 1));
+    print(decimal2_round_to($0.15, 1));
+    print(decimal2_round_to($0.25, 1));
+    print(decimal2_round_to($0.35, 1));
+    // Not ties: the nearer neighbour wins whichever it is.
+    print(decimal2_round_to($0.24, 1));
+    print(decimal2_round_to($0.26, 1));
+
+    // The same four negated. Half-even is symmetric about zero, and this says so.
+    print(decimal2_round_to(0.00 - 0.05, 1));
+    print(decimal2_round_to(0.00 - 0.15, 1));
+    print(decimal2_round_to(0.00 - 0.25, 1));
+    print(decimal2_round_to(0.00 - 0.35, 1));
+
+    // To whole units. 0.50 and 2.50 go down, 1.50 and 3.50 go up.
+    print(decimal2_round_to($0.50, 0));
+    print(decimal2_round_to($1.50, 0));
+    print(decimal2_round_to($2.50, 0));
+    print(decimal2_round_to($3.50, 0));
+    print(decimal2_round_to($19.99, 0));
+    print(decimal2_round_to(0.00 - 19.99, 0));
+
+    // Two places is the identity, and it costs nothing to say so.
+    print(decimal2_round_to($19.99, 2));
+    print(decimal2_round_to(0.00 - 0.01, 2));
+
+    // Rounding is symmetric, checked rather than eyeballed, over every penny in a range.
+    let mutable symmetric: Bool = true;
+    for c in 0..401 {
+        let value: Decimal<2> = decimal2_from_cents(c - 200);
+        let zero: Decimal<2> = $0.00;
+        if decimal2_round_to(zero - value, 1) != zero - decimal2_round_to(value, 1) {
+            symmetric = false;
+        }
+        if decimal2_round_to(zero - value, 0) != zero - decimal2_round_to(value, 0) {
+            symmetric = false;
+        }
+    }
+    print(symmetric);
+
+    // ============================================================
+    // decimal2_percent_of
+    // ============================================================
+    // Exact, no rounding needed: 100.00 * 0.0825 is 8.250000 on the nose.
+    print(decimal2_percent_of($100.00, 8.25%));
+    print(decimal2_percent_of($19.99, 8.25%));
+    print(decimal2_percent_of($100.00, 100%));
+    print(decimal2_percent_of($100.00, 0%));
+
+    // HALF A PENNY, four times, and the even neighbour wins each one:
+    // 0.01 -> 0.005 -> 0.00, 0.03 -> 0.015 -> 0.02, 0.05 -> 0.025 -> 0.02, 0.07 -> 0.035 -> 0.04.
+    // A naive round-half-up gives 0.01, 0.02, 0.03, 0.04 and drifts a penny upward per tie over a
+    // ledger; that drift is the reason banker's rounding exists.
+    print(decimal2_percent_of($0.01, 50%));
+    print(decimal2_percent_of($0.03, 50%));
+    print(decimal2_percent_of($0.05, 50%));
+    print(decimal2_percent_of($0.07, 50%));
+
+    // And negated.
+    print(decimal2_percent_of(0.00 - 0.03, 50%));
+    print(decimal2_percent_of(0.00 - 0.07, 50%));
+    print(decimal2_percent_of(0.00 - 19.99, 8.25%));
+
+    // A rate above 100% is an ordinary rate.
+    print(decimal2_percent_of($100.00, 250%));
+    // And a rate can be negative — a discount stated as one.
+    let discount: Decimal<4> = 0.0000 - 0.1000;
+    print(decimal2_percent_of($100.00, discount));
+
+    // ============================================================
+    // divide_round_half_even — the integer kernel, on its own
+    // ============================================================
+    // It answers the QUOTIENT. Returning the rounded multiple instead was the first version, and
+    // it made percent_of answer 82,500.00 for 8.25% of 100.00 — the fixture caught it, the
+    // reading did not.
+    print(divide_round_half_even(5, 10));
+    print(divide_round_half_even(15, 10));
+    print(divide_round_half_even(25, 10));
+    print(divide_round_half_even(0 - 5, 10));
+    print(divide_round_half_even(0 - 15, 10));
+    print(divide_round_half_even(0 - 25, 10));
+    print(divide_round_half_even(4, 10));
+    print(divide_round_half_even(6, 10));
+    print(divide_round_half_even(0, 10));
+    // A step of 1 is the identity, and there is no tie to break.
+    print(divide_round_half_even(7, 1));
+    print(divide_round_half_even(0 - 7, 1));
+
+    // ============================================================
+    // SCALE 4 — rates
+    // ============================================================
+    print(decimal4_ticks(8.25%));
+    print(decimal4_ticks(100%));
+    print(decimal4_ticks(0.0000));
+    print(decimal4_ticks(0.0000 - 0.0001));
+    print(decimal4_from_ticks(825));
+    print(decimal4_is_zero(0.0000));
+    print(decimal4_is_zero(0.0001));
+    print(decimal4_abs(0.0000 - 8.2500));
+    print(decimal4_sign(0.0000 - 0.0001));
+    print(decimal4_sign(0.0000));
+
+    // ============================================================
+    // SCALE 6 — where money times a rate lands
+    // ============================================================
+    let amount: Decimal<2> = $19.99;
+    let rate: Decimal<4> = 8.25%;
+    let exact: Decimal<6> = amount * rate;
+    print(exact);
+    print(decimal6_ticks(exact));
+    print(decimal6_from_ticks(1649175));
+    print(decimal6_is_zero(0.000000));
+    print(decimal6_ticks(0.000000 - 0.000001));
+
+    // ============================================================
+    // SCALE 7 — lib/vector.bx's scale
+    // ============================================================
+    print(decimal7_ticks(0.0000001));
+    print(decimal7_ticks(1.0000000));
+    print(decimal7_ticks(0.0000000 - 1.0000000));
+    print(decimal7_from_ticks(10000000));
+    print(decimal7_is_zero(0.0000000));
+    print(decimal7_abs(0.0000000 - 0.5000000));
+    print(decimal7_sign(0.0000000 - 0.5000000));
+    print(decimal7_sign(0.0000000));
+
+    // ============================================================
+    // min and max are NOT in this module, and this is why
+    // ============================================================
+    // §D1i lists them per-scale. `math_min<T: Ordered>` already takes every scale, so writing
+    // `decimal2_min` would be a fourth copy of a function that works. Proved here rather than
+    // asserted in a comment.
+    print(math_min($19.99, $4.50));
+    print(math_max($19.99, $4.50));
+    print(math_min(0.0000000 - 1.0000000, 0.5000000));
+    print(math_max(8.2500, 0.0100));
+    print(math_clamp($50.00, $0.00, $19.99));
+}

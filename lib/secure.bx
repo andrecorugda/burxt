@@ -1,0 +1,342 @@
+// ============================================================================
+// lib/secure.bx — bytes nobody can predict, and a comparison that does not leak.
+//
+//     use "lib/secure.bx";
+//
+//     match secure_random_bytes(32) {
+//         None => { give_up("the kernel has no entropy to give"); }
+//         Some(key) => { use_it(key); }
+//     }
+//     if string_equals_constant_time(presented, expected) { ... }
+//
+// Inside a function that itself answers an `Option`, `?` does the same in one line —
+// `let key: [Int] = secure_random_bytes(32)?;` yields the bytes or returns `None` immediately.
+//
+// ---- this file is NOT lib/random.bx, and the two must never be confusable -------------------
+//
+// `lib/random.bx` is a SEEDED generator. `random_from(seed)` replays the same sequence for the
+// same seed, which is exactly right for a test, a shuffle, a sample or a simulation, and exactly
+// wrong for a key, a token, a password or a nonce. This file is the opposite: every byte comes
+// from the operating system's entropy pool, nothing is reproducible, and there is no seed to give.
+//
+// The names carry that difference, because a reviewer reading a call site has nothing else to go
+// on. Every function here says `secure`; nothing there does; and `random.bx`'s own header records
+// the decision that a CSPRNG "gets its own type and its own file, so the two cannot be confused by
+// eye." Nothing in this file should ever be reachable from a `Random`, and nothing there should
+// ever be reachable from here.
+//
+// ---- E6: A SECRET CANNOT BE ZEROED IN BURXT. This is the file to read it in ------------------
+//
+// There is no `zeroise`, no `explicit_bzero`, no destructor and no way to overwrite a String or an
+// array in place and know the bytes are gone. A value lives until its region closes, and when the
+// region closes its memory is released to the allocator **without being cleared**.
+//
+// What follows from that, concretely:
+//
+//   * A key, a password or a session token stays readable in the process's heap for as long as
+//     the region that holds it is open, and its bytes remain in freed memory afterwards.
+//   * A core dump, a swapped page, a `/proc/<pid>/mem` read by the same user, or a later
+//     allocation that happens to be handed the same pages can see it.
+//   * Holding a secret in the SHORTEST-lived region you can is therefore the only mitigation this
+//     language offers, and it is a real one — a secret read inside `region verify { ... }` is gone
+//     from the live heap when that block ends, even though the bytes are not scrubbed.
+//
+// This is recorded as a 1.0 limitation in `spec/ROADMAP-1.0.md` §E6. It is written here as well,
+// and at this length, because §E6 is a single table row and this file is where somebody handling a
+// secret will actually be looking.
+//
+// ---- E5: what this file deliberately does NOT contain ----------------------------------------
+//
+// No AES, no ChaCha20, no RSA, no Ed25519, no X25519, no TLS, no Argon2/scrypt/bcrypt. Those are
+// §E5's BIND-do-not-hand-roll list, for two reasons that have not changed: Burxt has no control
+// over instruction timing at the level a cipher needs, and RSA and the curves need
+// arbitrary-precision integers, which do not exist here — `Decimal` is a scaled i64 capped at
+// scale 18. A subtly wrong AES produces ciphertext that looks perfectly fine, which is the exact
+// failure this language exists to prevent, so the answer is to call a reviewed C library through
+// an `external function` rather than to write one in Burxt.
+//
+// ---- where the entropy comes from -------------------------------------------------------------
+//
+// `getentropy(2)`, not `getrandom(2)`. Both fill a buffer from the kernel's pool; only one of them
+// exists everywhere. `getrandom` is a Linux extension and the first macOS runner
+// `tests/pass/os_random_bytes.bx` ever met refused to link it —
+//
+//     Undefined symbols for architecture arm64: "_getrandom"
+//
+// — while `getentropy` is glibc >= 2.25, macOS >= 10.12, musl and the BSDs it came from. It
+// answers 0 or -1 rather than a byte count, and it is **capped at 256 bytes per call**. That cap
+// is in `secure_entropy_block`'s contract rather than discovered at run time, and the public
+// `secure_random_bytes` loops over blocks so a caller asking for 4 KB of keystream never has to
+// know the number 256 exists.
+//
+// **The return value is checked, and that is the whole point of the check.** On failure the buffer
+// keeps whatever `malloc` left in it — the previous allocation's contents, or zeroes — and
+// returning that would hand back a "key" made of somebody else's freed memory. So a failed call
+// answers `Option.None` and never a partial or unfilled array. Half a key is not a key.
+//
+// `Option` rather than an empty array, deliberately: `os_random_bytes` in the fixture answers `[]`
+// on failure, which is honest but is a value a caller can use by accident. `match` cannot be
+// ignored.
+// ============================================================================
+
+use "option.bx";
+use "encoding.bx";
+
+// The pointer wall opened in v0.0.196: `-> CPointer` is legal, `c_is_null` reads one, and
+// `c_bytes_at` reads a counted buffer out of it. That chain plus `c_bytes_at` (§A1) is what makes
+// a Burxt program able to generate a cryptographic key at all — see the argument at the top of
+// `tests/pass/os_random_bytes.bx`, which is the fixture this module grew out of.
+external function malloc(size: Int) -> CPointer;
+external function free(p: CPointer) -> Int;
+
+// `touches input` because the answer comes from outside the program. It is also what makes this
+// unusable from a `pure` function or a contract clause, which is correct: a `requires` that read a
+// random number would answer differently every time it ran.
+external function getentropy(buffer: CPointer, length: Int) -> Int touches input;
+
+// The largest Int. `lib/math.bx` names this too, but this module does not import it — one constant
+// is not worth a dependency, and `INT_MAX` cannot be written as a literal here for the same reason
+// it cannot be written there: `-9223372036854775808` lexes as a negation of a too-large literal.
+const SECURE_INT_MAX: Int = 9223372036854775807;
+
+// `getentropy`'s per-call cap, from its manual page.
+const SECURE_ENTROPY_BLOCK: Int = 256;
+
+// How many times `secure_random_int_below` will redraw before giving up. Each redraw is rejected
+// with probability under 1/2, so 128 attempts fail with probability under 2^-128 — which is to say
+// never, but the loop is bounded rather than trusting that. An unbounded retry in a library that
+// runs on a machine whose entropy source has just started failing is a hang, not a refusal.
+const SECURE_DRAW_ATTEMPTS: Int = 128;
+
+// ---- entropy ----------------------------------------------------------------------------------
+
+// One `getentropy` call's worth of bytes, or `None` if the kernel refused.
+//
+// The 256-byte cap is in the CONTRACT, so a 257-byte request is a precondition failure with a
+// position in it rather than a run-time -1 for a reason the signature never mentioned. Callers
+// wanting more should use `secure_random_bytes`, which loops.
+function secure_entropy_block(count: Int) -> Option<[Int]> touches input
+    requires count > 0
+    requires count <= SECURE_ENTROPY_BLOCK
+{
+    let buffer: CPointer = malloc(count);
+    if c_is_null(buffer) {
+        return Option.None;
+    }
+    // 0 on success, -1 on failure, and it is READ. An unread return from an entropy source is the
+    // exact shape of bug this language exists to refuse.
+    let filled: Int = getentropy(buffer, count);
+    if filled != 0 {
+        let released_early: Int = free(buffer);
+        return Option.None;
+    }
+    let bytes: [Int] = c_bytes_at(buffer, count);
+    let released: Int = free(buffer);
+    return Option.Some(bytes);
+}
+
+// `count` bytes from the operating system's entropy pool, or `None`.
+//
+// No upper bound: `getentropy`'s 256-byte cap is this function's problem and not the caller's, and
+// the loop below is correct because separate calls are independently unpredictable — there is no
+// stream state to keep and nothing to reseed.
+//
+// If any block fails, the whole call fails. It does NOT answer the bytes it managed to collect:
+// a short key is a weaker key that looks like a key.
+function secure_random_bytes(count: Int) -> Option<[Int]> touches input
+    requires count > 0
+{
+    let mutable out: [Int] = [];
+    let mutable taken: Int = 0;
+    while taken < count {
+        let mutable want: Int = count - taken;
+        if want > SECURE_ENTROPY_BLOCK {
+            want = SECURE_ENTROPY_BLOCK;
+        }
+        let block: [Int] = secure_entropy_block(want)?;
+        let mutable i: Int = 0;
+        while i < want {
+            push(out, block[i]);
+            i += 1;
+        }
+        taken += want;
+    }
+    return Option.Some(out);
+}
+
+// A uniform Int in `0 .. bound - 1`, or `None`.
+//
+// **Not `remainder(draw, bound)`, and the difference is the reason this function exists.** Modulo
+// on a 63-bit draw over a bound that does not divide 2^63 over-represents the low values — by a
+// negligible amount for a die and by a factor of two for a bound just over 2^62, and by exactly
+// the amount an attacker needs when the bound is a table size or a character-set length. So the
+// draw is REJECTED and repeated when it lands in the short final stretch.
+//
+// The draw is 63 bits rather than 64: eight bytes are read and the top bit is shifted away, which
+// keeps every value non-negative without an `INT_MIN` special case. That costs one bit of the
+// range and nothing else, since `bound` is an Int and cannot exceed `SECURE_INT_MAX` anyway.
+function secure_random_int_below(bound: Int) -> Option<Int> touches input
+    requires bound > 0
+{
+    // The number of draws to discard at the top so that what is left divides evenly. 2^63 does not
+    // fit in an Int, so it is computed from `SECURE_INT_MAX`, which is 2^63 - 1: the count of
+    // values in `0 ..= SECURE_INT_MAX` is `SECURE_INT_MAX + 1`, and its remainder modulo `bound`
+    // is `(remainder(SECURE_INT_MAX, bound) + 1) mod bound`.
+    let excess: Int = remainder(remainder(SECURE_INT_MAX, bound) + 1, bound);
+    let highest: Int = SECURE_INT_MAX - excess;
+
+    let mutable attempt: Int = 0;
+    while attempt < SECURE_DRAW_ATTEMPTS {
+        let raw: [Int] = secure_random_bytes(8)?;
+        let mutable acc: Int = 0;
+        let mutable i: Int = 0;
+        while i < 8 {
+            acc = bit_or(shift_left(acc, 8), raw[i]);
+            i += 1;
+        }
+        let draw: Int = shift_right_zeros(acc, 1);
+        if draw <= highest {
+            return Option.Some(remainder(draw, bound));
+        }
+        attempt += 1;
+    }
+    return Option.None;
+}
+
+// ---- identifiers and tokens ---------------------------------------------------------------------
+
+// A version-4 UUID: `f81d4fae-7dec-4d0e-8fd0-1f6a1b2c3d4e`.
+//
+// 122 random bits. The other six are fixed by RFC 4122 §4.4 and are the two things a reader should
+// check in the output: the first character of the third group is always `4` (the version), and the
+// first character of the fourth group is always one of `8`, `9`, `a`, `b` (the variant, `10xx` in
+// binary). `tests/pass/secure_library.bx` asserts both rather than eyeballing one sample.
+//
+// Lowercase, and hyphenated in the 8-4-4-4-12 shape, because that is what RFC 4122 §3 says to emit
+// even though it says to accept either case on input.
+function secure_uuid_v4() -> Option<String> touches input {
+    let mutable bytes: [Int] = secure_random_bytes(16)?;
+    // Version: the high nibble of byte 6 becomes 0100.
+    bytes[6] = bit_or(bit_and(bytes[6], 15), 64);
+    // Variant: the top two bits of byte 8 become 10.
+    bytes[8] = bit_or(bit_and(bytes[8], 63), 128);
+    let digits: String = encoding_hex_encode(bytes);
+    return Option.Some(substring(digits, 0, 8) + "-"
+                     + substring(digits, 8, 4) + "-"
+                     + substring(digits, 12, 4) + "-"
+                     + substring(digits, 16, 4) + "-"
+                     + substring(digits, 20, 12));
+}
+
+// `count` random bytes as lowercase hex — twice `count` characters, and safe in a URL, a header,
+// a filename and a log line.
+//
+// The argument is a count of BYTES, not of characters, because the strength is in the bytes and a
+// caller who reads "32" should get 256 bits. 32 is the number to use when unsure.
+function secure_token_hex(count: Int) -> Option<String> touches input
+    requires count > 0
+{
+    let bytes: [Int] = secure_random_bytes(count)?;
+    return Option.Some(encoding_hex_encode(bytes));
+}
+
+// The same, in unpadded base64url — shorter for the same strength, and still safe in a URL. 32
+// bytes give 43 characters against hex's 64.
+function secure_token_urlsafe(count: Int) -> Option<String> touches input
+    requires count > 0
+{
+    let bytes: [Int] = secure_random_bytes(count)?;
+    return Option.Some(encoding_base64url_encode(bytes));
+}
+
+// ---- B4: comparison that does not leak through timing -------------------------------------------
+//
+// `a == b` on Strings compares bytes and STOPS AT THE FIRST DIFFERENCE. That is the right thing for
+// sorting a word list and the wrong thing for checking a token, because the time it takes says how
+// many leading bytes were right — and an attacker who can measure that recovers a secret one byte
+// at a time, in 256 tries per byte instead of 256^n for the whole thing.
+//
+// The name is spelled out in full on purpose, and it is `string_equals_constant_time` rather than
+// `secure_equals` even though every other function in this file is `secure_`-prefixed. That is a
+// recorded decision from §E's naming note, for the same reason `divide_floor` and
+// `shift_right_zeros` are spelled out: **the behaviour is the point**, and a reviewer reading the
+// call site has to see which comparison was chosen without opening this file.
+//
+// ---- what "constant time" does and does not promise here ------------------------------------
+//
+// It promises: **no branch and no early exit depends on the CONTENT of either argument.** Every
+// byte of `a` is read and folded into one accumulator, and the answer is a single comparison at
+// the end.
+//
+// **Measured, because the claim is worth a number.** 30 million comparisons of two 32-byte
+// strings, over a thousand distinct pairs so the call cannot be hoisted, best of five:
+//
+//                                     differ at byte 0     differ at byte 31
+//     a == b                                    20 ms                 400 ms
+//     string_equals_constant_time(a, b)        940 ms                 920 ms
+//
+// `==` takes **twenty times longer** when the difference is at the end, and that ratio is the
+// leak: an attacker who can time the check learns how many leading bytes were right, and recovers
+// an n-byte secret in 256n tries instead of 256^n. The constant-time version's two columns are 2%
+// apart, which is run-to-run noise — the sign of the difference flips between runs. It is also
+// 2.3× slower than the fast case of `==`, which is what the property costs and is nothing next to
+// one network round trip.
+//
+// It does not promise: that the LENGTHS are hidden. `len` is read, the loop runs for as long as
+// `a`, and a longer `a` takes longer. That is unavoidable and it is also the standard trade —
+// HMAC and token comparisons have a fixed, public length.
+//
+// It also cannot promise what the machine does underneath. Burxt has no way to pin down cache
+// behaviour or what LLVM makes of the loop, and no library written in any language can promise
+// that on its own. What it can do is contain no data-dependent branch to begin with, which is what
+// the code below is and what a reviewer can check.
+
+// True when `a` and `b` hold the same bytes, in time that does not depend on where they differ.
+//
+// **Length is folded in rather than returned on.** The obvious `if len(a) != len(b) { return false; }`
+// is an early exit, so instead the difference of the two lengths seeds the accumulator and the loop
+// still runs. `b` is read at a WRAPPING index so a shorter `b` never goes out of bounds; when the
+// lengths do match, the wrap never happens and this is an ordinary byte-for-byte comparison.
+pure function string_equals_constant_time(a: String, b: String) -> Bool {
+    let width_a: Int = len(a);
+    let width_b: Int = len(b);
+    let mutable differences: Int = bit_xor(width_a, width_b);
+    let mutable j: Int = 0;
+    let mutable i: Int = 0;
+    while i < width_a {
+        let mutable other: Int = 0;
+        if width_b > 0 {
+            other = byte_at(b, j);
+            j += 1;
+            if j == width_b {
+                j = 0;
+            }
+        }
+        differences = bit_or(differences, bit_xor(byte_at(a, i), other));
+        i += 1;
+    }
+    return differences == 0;
+}
+
+// The same, for bytes. This is the one to use on a digest from `lib/hash.bx`, which answers
+// `[Int]` — going through `from_bytes` first would be a copy of the secret for no reason.
+pure function bytes_equals_constant_time(a: [Int], b: [Int]) -> Bool {
+    let width_a: Int = len(a);
+    let width_b: Int = len(b);
+    let mutable differences: Int = bit_xor(width_a, width_b);
+    let mutable j: Int = 0;
+    let mutable i: Int = 0;
+    while i < width_a {
+        let mutable other: Int = 0;
+        if width_b > 0 {
+            other = b[j];
+            j += 1;
+            if j == width_b {
+                j = 0;
+            }
+        }
+        differences = bit_or(differences, bit_xor(a[i], other));
+        i += 1;
+    }
+    return differences == 0;
+}

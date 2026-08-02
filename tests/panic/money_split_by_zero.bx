@@ -1,0 +1,19 @@
+// `money_split(total, 0)` has no answer, and `requires parts > 0` says so at the call.
+//
+// Not an `Option<[Decimal<2>]>` and not an empty array: "split this nought ways" is a question
+// with no answer rather than a question whose answer is nothing, which is the distinction
+// `lib/array.bx`'s `array_min` draws for the same reason. An empty array would be a legal value
+// standing in for a mistake, and the caller summing it would get $0.00 and never know.
+//
+// The count is COMPUTED so the checker cannot fold it away and refuse the program at compile time —
+// this fixture is about the runtime contract.
+use "../../lib/decimal.bx";
+
+region main {
+    let mutable parts: Int = 3;
+    for i in 0..3 {
+        parts = parts - 1;
+    }
+    let split: [Decimal<2>] = money_split($100.00, parts);
+    print(len(split));
+}

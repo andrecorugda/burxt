@@ -1,0 +1,361 @@
+// lib/csv.bx — the cases that decide a CSV library.
+//
+// `a,b,c` parsing into three fields is not one of them; nothing was ever wrong about that. What
+// decides a CSV library is the quoted comma, the doubled quote, the newline inside quotes, the
+// trailing empty field, the blank line, CRLF, and the row that is not the width of the header —
+// and then whether **parse, write, parse again** gives back what it started with.
+//
+// Every one of those is below, each paired with the decision in `lib/csv.bx`'s header that it
+// pins. Where a decision could reasonably have gone the other way, the line says so.
+//
+// ---- how the output is written ----
+//
+// Fields are printed inside `[...]` and records inside `<...>`, because **an empty answer is a
+// real answer here** — a trailing empty field, an all-empty row and a zero-field row are three
+// separate cases and a bare `print("")` cannot tell them apart. CR and LF are printed as `<CR>`
+// and `<LF>` for the same reason: this file's whole subject is which byte ended what, and a
+// `.stdout` in which a carriage return is invisible would pass while being wrong.
+use "../../lib/csv.bx";
+
+// A String with its line-ending bytes made visible.
+function visible(text: String) -> String {
+    let mutable chunks: [String] = [];
+    let mutable i: Int = 0;
+    while i < len(text) {
+        let b: Int = byte_at(text, i);
+        if b == 13 {
+            let cr: Int = push(chunks, "<CR>");
+        } else if b == 10 {
+            let lf: Int = push(chunks, "<LF>");
+        } else {
+            let plain: Int = push(chunks, byte_as_string(b));
+        }
+        i += 1;
+    }
+    return string_join_chunks(chunks);
+}
+
+// Every record and every field of a parse, or the refusal.
+function show(label: String, text: String) -> Bool {
+    match csv_parse(text) {
+        Error(why) => { print(label + " -> REFUSED: " + why); }
+        Ok(rows) => {
+            let mutable out: String = label + " -> " + to_string(len(rows)) + ":";
+            let mutable i: Int = 0;
+            while i < len(rows) {
+                out += " <";
+                let mutable j: Int = 0;
+                while j < rows[i].count() {
+                    if j > 0 {
+                        out += "|";
+                    }
+                    out += "[" + visible(rows[i].fields[j]) + "]";
+                    j += 1;
+                }
+                out += ">";
+                i += 1;
+            }
+            print(out);
+        }
+    }
+    return true;
+}
+
+// Parse, write, parse, write. **The test that matters.** Both halves are checked: the two
+// documents must be byte-identical, AND the two parses must hold the same fields — either alone
+// can pass while the library is wrong, because a writer that drops the same thing twice produces
+// two identical wrong documents.
+function round_trip(label: String, text: String) -> Bool {
+    match csv_parse(text) {
+        Error(why) => {
+            print(label + " -> REFUSED: " + why);
+            return false;
+        }
+        Ok(first) => {
+            let once: String = csv_render(first);
+            match csv_parse(once) {
+                Error(why) => {
+                    print(label + " -> the output does not parse: " + why);
+                    return false;
+                }
+                Ok(second) => {
+                    let twice: String = csv_render(second);
+                    let mutable same: Bool = once == twice;
+                    if len(first) != len(second) {
+                        same = false;
+                    }
+                    let mutable i: Int = 0;
+                    while i < len(first) && i < len(second) {
+                        if first[i].count() != second[i].count() {
+                            same = false;
+                        }
+                        let mutable j: Int = 0;
+                        while j < first[i].count() && j < second[i].count() {
+                            if first[i].fields[j] != second[i].fields[j] {
+                                same = false;
+                            }
+                            j += 1;
+                        }
+                        i += 1;
+                    }
+                    if same {
+                        print(label + " round-trips: " + visible(once));
+                    } else {
+                        print(label + " DIFFERS: " + visible(once) + " vs " + visible(twice));
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
+region main {
+    // ---- reading: the seven cases that decide it ----
+
+    // A comma inside quotes is data, not a separator. The case CSV exists for.
+    show("quoted comma", "a,\"b,c\",d\n");
+    // A doubled quote inside a quoted field is one literal quote.
+    show("doubled quote", "\"say \"\"hi\"\"\",x\n");
+    // The whole field is one quote, written as two doubled quotes inside a pair.
+    show("field is one quote", "\"\"\"\",x\n");
+    // A newline inside quotes does NOT end the record. The reason a CSV parser cannot be
+    // `string_lines` followed by `string_split`, which is how most of them start life.
+    show("newline in quotes", "\"one\ntwo\",z\n");
+    // And a CRLF inside quotes stays a CRLF, un-normalised — the rule that makes round-trip exact.
+    show("crlf in quotes", "\"one\r\ntwo\",z\r\n");
+    // A trailing delimiter means a trailing EMPTY field, not a missing one: `a,b,` is three.
+    show("trailing empty field", "a,b,\n");
+    // A byte-empty line is skipped rather than becoming a record of one empty field, so the
+    // newline every file ends with does not add a phantom record.
+    show("empty line in the middle", "a\n\nb\n");
+    show("two trailing newlines", "a\n\n");
+    // CRLF as the record terminator, which is what RFC 4180 actually specifies.
+    show("crlf terminators", "a,b\r\nc,d\r\n");
+    // A row wider and a row narrower than the first. `csv_parse` keeps them as they are.
+    show("ragged rows", "a,b,c\nd,e\nf,g,h,i\n");
+
+    // ---- reading: the cases nobody writes a test for ----
+
+    // No terminator at the end of the file at all.
+    show("no trailing newline", "a,b");
+    // Nothing at all, and nothing but a newline. Both are zero records, not one empty one.
+    show("empty document", "");
+    show("only a newline", "\n");
+    // A quoted empty field IS a record — the escape hatch that makes a one-empty-field row
+    // expressible, and the reason `csv_render` writes one that way.
+    show("quoted empty field", "\"\"\n");
+    show("all fields empty", ",,\n");
+    // A lone CR is a data byte, not a terminator. Deciding the other way would split a record
+    // whenever a text box picked up a stray carriage return.
+    show("lone cr is data", "a\rb\n");
+    // A quote in an UNQUOTED field is an ordinary byte: nothing gave it a meaning there.
+    show("quote inside an unquoted field", "a\"b,c\n");
+    // A space before the quote means the field is not quoted at all, so the quotes are data.
+    show("space then quote", " \"a\"\n");
+    // Spaces are never trimmed. A spreadsheet that wrote a space meant one.
+    show("spaces are kept", " a , b \n");
+    // Excel writes a UTF-8 BOM. Left in, it becomes part of the first header's name and
+    // `csv_column(header, "id")` fails for a reason invisible in every listing of the file.
+    show("leading utf-8 bom is stripped",
+         byte_as_string(0xEF) + byte_as_string(0xBB) + byte_as_string(0xBF) + "id,name\n1,x\n");
+
+    // ---- reading: the two refusals ----
+    show("unterminated quote", "\"abc\n");
+    show("junk after a closing quote", "\"a\"b\n");
+
+    // ---- a different delimiter, which is the same code path ----
+    match csv_parse_delimited("a;b,c;d\n", CSV_SEMICOLON) {
+        Error(why) => { print("semicolon -> REFUSED: " + why); }
+        Ok(rows) => {
+            print("semicolon -> " + to_string(rows[0].count()) + " fields, middle ["
+                        + rows[0].fields[1] + "]");
+        }
+    }
+    match csv_parse_delimited("a\tb,c\td\n", CSV_TAB) {
+        Error(why) => { print("tab -> REFUSED: " + why); }
+        Ok(rows) => {
+            print("tab -> " + to_string(rows[0].count()) + " fields, middle ["
+                        + rows[0].fields[1] + "]");
+        }
+    }
+
+    // ---- ROUND TRIP: parse, write, parse, write ----
+    round_trip("plain", "a,b,c\n1,2,3\n");
+    round_trip("quoted comma", "a,\"b,c\",d\n");
+    round_trip("doubled quote", "\"say \"\"hi\"\"\",x\n");
+    round_trip("field is one quote", "\"\"\"\",x\n");
+    round_trip("newline in quotes", "\"one\ntwo\",z\n");
+    round_trip("crlf in quotes", "\"one\r\ntwo\",z\r\n");
+    round_trip("trailing empty field", "a,b,\n");
+    round_trip("empty line", "a\n\nb\n");
+    round_trip("crlf file becomes lf", "a,b\r\nc,d\r\n");
+    round_trip("ragged rows", "a,b,c\nd,e\nf,g,h,i\n");
+    round_trip("no trailing newline gains one", "a,b");
+    round_trip("empty document", "");
+    round_trip("one empty field", "\"\"\n");
+    round_trip("all fields empty", ",,\n");
+    round_trip("lone cr gets quoted", "a\rb\n");
+    round_trip("unquoted quote gets quoted", "a\"b,c\n");
+    round_trip("spaces survive", " a , b \n");
+
+    // ---- writing: the case the round-trip above cannot reach ----
+    //
+    // A record with NO fields. No document can contain one — every line holds at least one field,
+    // possibly empty — so only a program can build it, and `csv_render` has to decide. It writes
+    // `""`, the same as a one-empty-field record, because the alternative is a byte-empty line
+    // which reading skips: the record would vanish. The record COUNT survives the round-trip even
+    // though the width does not, and that is the trade, stated rather than discovered.
+    let mutable built: [CsvRow] = [];
+    let none: [String] = [];
+    let added_none: Int = push(built, CsvRow { fields: none, offset: 0 });
+    let mutable blank: [String] = [];
+    let added_blank_field: Int = push(blank, "");
+    let added_blank: Int = push(built, CsvRow { fields: blank, offset: 0 });
+    let mutable ordinary: [String] = [];
+    let added_x: Int = push(ordinary, "x");
+    let added_ordinary: Int = push(built, CsvRow { fields: ordinary, offset: 0 });
+    let written: String = csv_render(built);
+    print("no-field and empty-field rows write as: " + visible(written));
+    match csv_parse(written) {
+        Error(why) => { print("and do not read back: " + why); }
+        Ok(back) => {
+            print("and read back as " + to_string(len(back)) + " records, widths "
+                        + to_string(back[0].count()) + " " + to_string(back[1].count()) + " "
+                        + to_string(back[2].count()));
+        }
+    }
+
+    // ---- writing: delimiter and line ending ----
+    let mutable awkward: [String] = [];
+    let f1: Int = push(awkward, "plain");
+    let f2: Int = push(awkward, "has,comma");
+    let f3: Int = push(awkward, "has\"quote");
+    let f4: Int = push(awkward, "has\nnewline");
+    let f5: Int = push(awkward, "has;semicolon");
+    let mutable one_row: [CsvRow] = [];
+    let only: Int = push(one_row, CsvRow { fields: awkward, offset: 0 });
+    print("lf comma:   " + visible(csv_render(one_row)));
+    print("crlf comma: " + visible(csv_render_delimited(one_row, CSV_COMMA, true)));
+    // With a semicolon delimiter the comma no longer forces quotes and the semicolon now does —
+    // quoting is a property of the delimiter, not a fixed list of characters.
+    print("lf semi:    " + visible(csv_render_delimited(one_row, CSV_SEMICOLON, false)));
+
+    // `csv_quote` on its own, for a caller streaming a row at a time.
+    print("[" + csv_quote("plain", CSV_COMMA) + "]");
+    print("[" + csv_quote("", CSV_COMMA) + "]");
+    print("[" + csv_quote("a,b", CSV_COMMA) + "]");
+    print("[" + csv_quote("a\"b", CSV_COMMA) + "]");
+    print("[" + csv_quote("a,b", CSV_SEMICOLON) + "]");
+    print("[" + visible(csv_quote("a\rb", CSV_COMMA)) + "]");
+    print("[" + csv_quote(" padded ", CSV_COMMA) + "]");
+
+    // ---- CsvRow.offset: where each record began in the source ----
+    //
+    // The point of a BYTE offset rather than a line number, in one fixture: the second record
+    // below starts on line 2 and the third on line 4, because record 2 holds a quoted newline.
+    // Anything counting `\n` would report the wrong place for record 3, and would do it only in
+    // files that contain the very construct that makes CSV hard.
+    match csv_parse("a,b\n\"two\nlines\",c\nlast,row\n") {
+        Error(why) => { print(why); }
+        Ok(placed) => {
+            let mutable o: Int = 0;
+            while o < len(placed) {
+                print("record " + to_string(o + 1) + " begins at byte "
+                            + to_string(placed[o].offset));
+                o += 1;
+            }
+            // And the offset really does point at the record's first byte.
+            print(placed[2].fields[0]);
+        }
+    }
+
+    // ---- the ragged decision, which is the one worth arguing with ----
+    //
+    // `csv_parse` keeps a short row short. `csv_parse_rectangular` REFUSES the file rather than
+    // padding it, because padding invents an empty String in some column, and in a money file the
+    // column that goes quietly empty is as likely to be the amount as the note.
+    match csv_parse("a,b,c\nd,e\n") {
+        Error(why) => { print(why); }
+        Ok(ragged) => {
+            match csv_widths_agree(ragged) {
+                None => { print("widths agree"); }
+                Some(why) => { print("widths disagree: " + why); }
+            }
+        }
+    }
+    match csv_parse_rectangular("a,b,c\nd,e\n") {
+        Error(why) => { print("rectangular refuses: " + why); }
+        Ok(rows) => { print("rectangular accepted " + to_string(len(rows))); }
+    }
+    match csv_parse_rectangular("a,b\nc,d\n") {
+        Error(why) => { print("rectangular refuses: " + why); }
+        Ok(rows) => { print("rectangular accepted " + to_string(len(rows))); }
+    }
+    // An empty file is rectangular: there is no record to disagree with.
+    match csv_parse_rectangular("") {
+        Error(why) => { print("rectangular refuses: " + why); }
+        Ok(rows) => { print("rectangular accepted " + to_string(len(rows))); }
+    }
+
+    // ---- reading a file by column name ----
+    match csv_parse("id,name,amount\n7,Acme,19.99\n8,\"Bee, Ltd\",5.00\n") {
+        Error(why) => { print(why); }
+        Ok(sheet) => {
+            let header: CsvRow = sheet[0];
+            match csv_column(header, "amount") {
+                None => { print("no amount column"); }
+                Some(at) => {
+                    print("amount is column " + to_string(at));
+                    let mutable row: Int = 1;
+                    while row < len(sheet) {
+                        match sheet[row].at(at) {
+                            None => { print("record " + to_string(row) + " is short"); }
+                            Some(value) => { print("  " + value); }
+                        }
+                        row += 1;
+                    }
+                }
+            }
+            // Exact bytes: no trimming and no case folding, so this is absent.
+            match csv_column(header, "Amount") {
+                None => { print("`Amount` is not `amount`"); }
+                Some(at) => { print("case-folded, which it should not"); }
+            }
+            // `at` past the end of a record answers None rather than trapping — the other half of
+            // keeping ragged rows ragged.
+            match sheet[1].at(9) {
+                None => { print("field 9 of a 3-field record: None"); }
+                Some(value) => { print("field 9 answered something"); }
+            }
+        }
+    }
+
+    // ---- it scales: §D0, and this is the loop the decision was made for ----
+    //
+    // 20,000 records built and written. The flat `out = out + piece` this file refuses runs out of
+    // the 4 GB region arena before 5,000 — measured, and the numbers are in `lib/csv.bx`'s header.
+    // Here the assertion is only that the output is the exact length it should be, which is what
+    // catches a chunk lost in the pairwise join.
+    let mutable many: [CsvRow] = [];
+    let mutable n: Int = 0;
+    while n < 20000 {
+        let mutable fields: [String] = [];
+        let a: Int = push(fields, "INV-" + to_string(100000 + n));
+        let b: Int = push(fields, "Acme, Limited");
+        let c: Int = push(fields, "19.99");
+        let d: Int = push(many, CsvRow { fields: fields, offset: 0 });
+        n += 1;
+    }
+    let big: String = csv_render(many);
+    // Each line is `INV-1nnnnn,"Acme, Limited",19.99` — 10 + 1 + 15 + 1 + 5 + 1 = 33 bytes.
+    print(len(big) == 20000 * 33);
+    match csv_parse(big) {
+        Error(why) => { print("20000 records do not read back: " + why); }
+        Ok(read_back) => {
+            print(len(read_back));
+            print(read_back[19999].fields[0]);
+            print(read_back[19999].fields[1]);
+        }
+    }
+}

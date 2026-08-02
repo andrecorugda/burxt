@@ -1,0 +1,22 @@
+// `next_below(0)` has no answer, and `requires bound > 0` says so at the call.
+//
+// The alternative every other library takes is to return 0, and it is the worst available lie:
+// 0 is not below 0, and it is a valid-looking subscript into the empty array the caller is almost
+// certainly holding — `next_below(len(xs))` on a collection that turned out to have no rows. The
+// bad index then traps one frame later, or does not trap at all because some other array is being
+// indexed with it.
+//
+// `random_choice` is the same question in a form that HAS an honest answer, and it gives one:
+// `Option.None`, tested in tests/pass/random_library.bx. Absence of an answer and absence of an
+// element are different things, and this pair is where the difference is visible.
+//
+// The bound is COMPUTED so the checker cannot fold it and refuse the program at compile time; this
+// fixture is about the runtime contract.
+use "../../lib/random.bx";
+
+region main {
+    let mutable rows: [Int] = [];
+    let bound: Int = len(rows);
+    let mutable rng: Random = random_from(1);
+    print(rng.next_below(bound));
+}

@@ -1,0 +1,26 @@
+// `next_between(high, low)` — the arguments the wrong way round — is REFUSED rather than silently
+// swapped.
+//
+// An inverted range contains no values, so there is nothing truthful to answer. And swapping them
+// would be worse than a wrong number: it would make the mistake permanently invisible, since the
+// program would then work, and the day the two bounds came from data rather than literals it would
+// quietly sample the wrong interval.
+//
+// `low == high` is NOT this case and is not an error — a range of one value has an answer, it is
+// that value, and tests/pass/random_library.bx pins it. This fixture is the boundary one step past
+// that one.
+//
+// The bounds are COMPUTED so the checker cannot fold them and refuse at compile time.
+use "../../lib/random.bx";
+
+region main {
+    let mutable low: Int = 0;
+    let mutable high: Int = 0;
+    let mutable i: Int = 0;
+    while i < 5 {
+        low += 1;
+        i += 1;
+    }
+    let mutable rng: Random = random_from(1);
+    print(rng.next_between(low, high));
+}

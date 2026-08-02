@@ -1,0 +1,19 @@
+// The one `Decimal<2>` with no absolute value.
+//
+// The two's-complement range is asymmetric — one more value below zero than above — so the
+// magnitude of the smallest `Decimal<2>` is not a `Decimal<2>`. `lib/math.bx`'s `math_abs` records
+// the same wall for `Int`, and every other language gets this wrong: C's `abs(INT_MIN)` is
+// undefined behaviour and Rust's `i32::abs` wraps in release, both of which return a NEGATIVE
+// number from a function whose whole promise is a non-negative one.
+//
+// Here it stops at the call, naming the clause. The value has no literal either — the lexer refuses
+// `-92233720368547758.08` as too large — so it is built from its penny count.
+use "../../lib/decimal.bx";
+
+region main {
+    let floor_value: Decimal<2> = decimal2_from_cents(INT_MIN);
+    // One penny above it is fine, and printing it first proves the refusal below is about the
+    // boundary rather than about the function being broken.
+    print(decimal2_abs(decimal2_from_cents(INT_MIN + 1)));
+    print(decimal2_abs(floor_value));
+}

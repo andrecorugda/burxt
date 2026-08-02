@@ -1,0 +1,121 @@
+// money_split — the canonical exact-money problem, and the property that IS the test.
+//
+// Splitting $100.00 three ways has no answer in a float language: 33.333333... three times is
+// $99.999999, and rounding each to $33.33 loses a penny that a ledger will look for. The rule here
+// is largest-remainder allocation, and the thing worth asserting is not any particular split but
+// the INVARIANT: **the parts sum to exactly the total, on every input.**
+//
+// So the last check below is a sweep — every total from -$2.00 to $2.00 against every part count
+// from 1 to 13, 5,213 splits, each one summed and compared. Examples are shown first because a
+// reader wants to see the shape; the sweep is what makes the claim.
+use "../../lib/decimal.bx";
+use "../../lib/array.bx";
+use "../../lib/string.bx";
+
+// The property, asked once so it can be asked 5,213 times.
+function sums_exactly(total: Decimal<2>, parts: Int) -> Bool {
+    let split: [Decimal<2>] = money_split(total, parts);
+    if len(split) != parts {
+        return false;
+    }
+    return array_sum_money(split) == total;
+}
+
+function show(split: [Decimal<2>]) -> Int {
+    let mutable line: [String] = [];
+    for i in 0..len(split) {
+        push(line, to_string(split[i]));
+    }
+    print(string_join(line, " "));
+    return 0;
+}
+
+region main {
+    // ---- the headline: $100.00 three ways ----
+    // 33.34 + 33.33 + 33.33 = 100.00. One part carries the odd penny; it is not thrown away and
+    // it is not invented twice.
+    show(money_split($100.00, 3));
+    print(sums_exactly($100.00, 3));
+
+    // ---- by seven: 10000 = 7 * 1428 + 4, so four parts carry an extra penny ----
+    show(money_split($100.00, 7));
+    print(sums_exactly($100.00, 7));
+
+    // ---- by one: the total back, with no special case in the code ----
+    show(money_split($100.00, 1));
+    print(sums_exactly($100.00, 1));
+
+    // ---- a total of zero ----
+    show(money_split($0.00, 5));
+    print(sums_exactly($0.00, 5));
+
+    // ---- NEGATIVE, and it mirrors the positive split exactly ----
+    // -33.34 -33.33 -33.33, not -33.33 -33.33 -33.34. A credit note has to cancel the invoice it
+    // reverses line for line, which only holds if the two splits are negations of each other.
+    show(money_split(0.00 - 100.00, 3));
+    print(sums_exactly(0.00 - 100.00, 3));
+
+    // The mirror stated as a check rather than left to the eye.
+    let plus: [Decimal<2>] = money_split($100.00, 7);
+    let minus: [Decimal<2>] = money_split(0.00 - 100.00, 7);
+    let mutable mirrors: Bool = true;
+    for i in 0..7 {
+        let zero: Decimal<2> = $0.00;
+        if minus[i] != zero - plus[i] {
+            mirrors = false;
+        }
+    }
+    print(mirrors);
+
+    // ---- MORE PARTS THAN PENNIES ----
+    // Two pennies five ways. Three payees get nothing, and nothing is a legal share — the
+    // alternative would be inventing three pennies or refusing a question that has an answer.
+    show(money_split($0.02, 5));
+    print(sums_exactly($0.02, 5));
+
+    // One penny three ways.
+    show(money_split($0.01, 3));
+    print(sums_exactly($0.01, 3));
+
+    // A negative penny three ways: the odd penny goes to the front, negative.
+    show(money_split(0.00 - 0.01, 3));
+    print(sums_exactly(0.00 - 0.01, 3));
+
+    // ---- no remainder at all ----
+    print(sums_exactly($1.00, 100));
+    print(sums_exactly($1.00, 4));
+
+    // ---- THE SWEEP: every total in -$2.00..$2.00 by every part count in 1..13 ----
+    // 401 totals * 13 part counts = 5,213 splits, every one summed back to its total. This is the
+    // property, and it is checked rather than argued.
+    let mutable held: Bool = true;
+    let mutable checked: Int = 0;
+    for c in 0..401 {
+        let total: Decimal<2> = decimal2_from_cents(c - 200);
+        for p in 0..13 {
+            if !sums_exactly(total, p + 1) {
+                held = false;
+            }
+            checked += 1;
+        }
+    }
+    print(checked);
+    print(held);
+
+    // ---- a total far from zero, where a float would already have lost the plot ----
+    // $92,233,720,368,547,758.07 is the largest Decimal<2> there is. Split seven ways it still
+    // sums back exactly, because nothing here ever leaves the integers.
+    print(sums_exactly($92233720368547758.07, 7));
+    print(sums_exactly($92233720368547758.07, 3));
+    print(sums_exactly($92233720368547758.07, 1));
+
+    // ---- THE MOST NEGATIVE TOTAL, which is the case an implementation that negated would trap on ----
+    // There is one more value below zero than above it, so `-total` does not exist for this one. It
+    // has no literal either — the lexer refuses `-92233720368547758.08` as too large — so it is
+    // built from its penny count. `money_split` never negates anything, which is why this is
+    // ordinary rather than a special case.
+    let floor_total: Decimal<2> = decimal2_from_cents(-9223372036854775807 - 1);
+    print(sums_exactly(floor_total, 3));
+    print(sums_exactly(floor_total, 1));
+    print(sums_exactly(floor_total, 13));
+}

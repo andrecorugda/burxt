@@ -1,0 +1,114 @@
+// lib/hash.bx — PBKDF2-HMAC-SHA256.
+//
+// ============================================================================
+// WHICH VECTORS, AND WHY NOT RFC 6070
+// ============================================================================
+//
+// **RFC 6070's vectors are PBKDF2-HMAC-SHA1 and cannot be used here**, because `lib/hash.bx` does
+// not implement SHA-1 and deliberately will not: SHA-1 is broken for every purpose that needs a
+// hash to be one, and shipping it to satisfy a test document would be the tail wagging the dog.
+//
+// So this uses two independent authorities, and says which is which at every line:
+//
+//   1. **The published PBKDF2-HMAC-SHA256 set** — the SHA-2 companion to RFC 6070 that circulates
+//      with it and appears in most library suites: the same five (password, salt, count, length)
+//      tuples RFC 6070 uses, with SHA-256 answers. Marked `published`.
+//   2. **The DEFINITION, checked against `hmac_sha256` in this same file.** PBKDF2 with one
+//      iteration is *exactly* `hmac_sha256(password, salt || 00000001)`, and with two it is that
+//      value xored with its own HMAC. Marked `by definition`. **These hold whether or not any
+//      remembered constant is right**, which is the point of having them: they catch a
+//      transcription error in the vectors above, and the vectors above catch a shared mistake in
+//      both implementations here.
+//
+// The block-boundary cases matter as much as they do for SHA itself: a 32-byte output is one
+// block, so `dkLen` of 40 and 16 are what prove the block loop and the final truncation.
+use "../../lib/hash.bx";
+
+function vector(label: String, actual: String, expected: String) -> Bool {
+    if actual == expected {
+        print(label + " = " + actual);
+        return true;
+    }
+    print(label + " MISMATCH");
+    print("  expected " + expected);
+    print("  actual   " + actual);
+    return false;
+}
+
+// ---- published: password / salt, the RFC 6070 tuples with SHA-256 answers ----
+vector("published, password+salt, 1 iterations, 32 bytes",
+       hash_hex(pbkdf2_sha256_text("password", "salt", 1, 32)),
+       "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b");
+vector("published, password+salt, 2 iterations, 32 bytes",
+       hash_hex(pbkdf2_sha256_text("password", "salt", 2, 32)),
+       "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43");
+vector("published, password+salt, 4096 iterations, 32 bytes",
+       hash_hex(pbkdf2_sha256_text("password", "salt", 4096, 32)),
+       "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a");
+
+// ---- published: a 24-byte password, a 36-byte salt, and 40 bytes out ----
+// **40 bytes is two blocks**, so this is the case that proves the outer loop and the
+// big-endian block index appended to the salt. A wrong byte order there produces a first
+// block that is right and a second that is not.
+vector("published, long password and salt, 4096 iterations, 40 bytes",
+       hash_hex(pbkdf2_sha256_text("passwordPASSWORDpassword", "saltSALTsaltSALTsaltSALTsaltSALTsalt", 4096, 40)),
+       "348c89dbcbd32b2f32d814b8116e84cf2b17347ebc1800181c4e2a1fb8dd53e1c635518c7dac47e9");
+
+// ---- published: embedded NUL bytes, and 16 bytes out ----
+// A NUL inside a password is where a library that hands its input to C quietly truncates.
+// A Burxt String carries its length, so `"pass\0word"` really is nine bytes, and the print
+// below says so rather than trusting it. 16 bytes out also exercises the truncation of the
+// final 32-byte block.
+print("the NUL password is " + to_string(len("pass\0word")) + " bytes and the salt is " + to_string(len("sa\0lt")));
+vector("published, NUL in password and salt, 4096 iterations, 16 bytes",
+       hash_hex(pbkdf2_sha256_text("pass\0word", "sa\0lt", 4096, 16)),
+       "89b69d0516f829893c696226650a8687");
+
+// ---- by definition: one iteration IS one HMAC ----
+// `T1 = HMAC(P, S || INT(1))`, and with c = 1 that is the whole answer. Built here from
+// `hmac_sha256` directly, so the two sides of this comparison share no code beyond SHA-256.
+let mutable seed: [Int] = [];
+let salt_bytes: [Int] = to_bytes("salt");
+for i in 0..len(salt_bytes) {
+    push(seed, salt_bytes[i]);
+}
+push(seed, 0);
+push(seed, 0);
+push(seed, 0);
+push(seed, 1);
+let by_hand: [Int] = hmac_sha256(to_bytes("password"), seed);
+let by_pbkdf2: [Int] = pbkdf2_sha256_text("password", "salt", 1, 32);
+print(hash_equals_constant_time(by_hand, by_pbkdf2));
+
+// ---- by definition: two iterations is U1 xor U2 ----
+let second: [Int] = hmac_sha256(to_bytes("password"), by_hand);
+let mutable xored: [Int] = [];
+for i in 0..len(by_hand) {
+    push(xored, bit_xor(by_hand[i], second[i]));
+}
+print(hash_equals_constant_time(xored, pbkdf2_sha256_text("password", "salt", 2, 32)));
+
+// ---- by definition: a shorter request is a prefix of a longer one ----
+// PBKDF2 truncates rather than re-deriving, so the first 16 bytes of a 32-byte answer are
+// the 16-byte answer. Not a published vector; a property, and it catches an off-by-one in
+// the truncation that no single published length would.
+let long_key: [Int] = pbkdf2_sha256_text("password", "salt", 100, 64);
+let short_key: [Int] = pbkdf2_sha256_text("password", "salt", 100, 20);
+let mutable prefix: [Int] = [];
+for i in 0..20 {
+    push(prefix, long_key[i]);
+}
+print(hash_equals_constant_time(prefix, short_key));
+print(len(long_key));
+print(len(short_key));
+
+// ---- by definition: more iterations is a different key, not a longer computation of the same ----
+print(hash_equals_constant_time(pbkdf2_sha256_text("password", "salt", 1, 32),
+                               pbkdf2_sha256_text("password", "salt", 2, 32)));
+print(hash_equals_constant_time(pbkdf2_sha256_text("password", "salt", 1, 32),
+                               pbkdf2_sha256_text("password", "pepper", 1, 32)));
+
+// ---- a 41-byte output: not a multiple of the digest, so the last block is cut mid-way ----
+vector("by definition check on a 41-byte output",
+       hash_hex(pbkdf2_sha256_text("password", "salt", 10, 41)),
+       "653cc888d937efe22810a5cbdb25a5bd82e2ebb27a800f85cfa360a6d925198e8badf3162ba1be51a8");

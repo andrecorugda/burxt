@@ -1,0 +1,109 @@
+// §D1o — the error helpers in lib/result.bx.
+//
+// Four things are worth checking here and none of them is the happy path:
+//
+//   * `option_ok_or` in a FREE GENERIC with two type parameters, which the roadmap called blocked
+//     on A3 long after A3 landed. If this file compiles, that row was stale.
+//   * `result_context` NESTED, because context is added as a call stack unwinds and one layer
+//     proves nothing.
+//   * `result_context` on an `Ok`, which must pass through untouched — the case that is easy to
+//     get wrong by rebuilding the value.
+//   * `assert_that` on a claim that HOLDS, so the fixture proves it is not a no-op in the other
+//     direction. The failing side is `tests/panic/assert_that_fails.bx`; it cannot be here,
+//     because a program that stops has no more stdout.
+use "../../lib/result.bx";
+use "../../lib/string.bx";
+
+class User { id: Int, name: String }
+
+function find_user(id: Int) -> Option<User> {
+    if id == 7 {
+        return Option.Some(User { id: 7, name: "ada" });
+    }
+    return Option.None;
+}
+
+// The generic bridge, used at a CLASS payload rather than a scalar — `Option<Point>` has worked
+// since v0.0.118 and this is the same layout question one level up.
+function user_or_reason(id: Int) -> Result<User, String> {
+    return option_ok_or(find_user(id), "no user " + to_string(id));
+}
+
+// A failure two layers deep, so the context accumulates the way it does in real code.
+function read_field(id: Int) -> Result<String, String> {
+    let found: Result<User, String> = result_context(user_or_reason(id), "looking up the owner");
+    match found {
+        Ok(user) => { return Result.Ok(user.name); }
+        Error(why) => { return Result.Error(why); }
+    }
+}
+
+function describe(r: Result<String, String>) -> String {
+    match r {
+        Ok(value) => { return "ok " + value; }
+        Error(why) => { return "error " + why; }
+    }
+}
+
+// `?` still works on top of all of it, which is the point of these being ordinary functions rather
+// than compiler features: the operator recognises the VARIANT name and knows nothing about this file.
+function shout(id: Int) -> Result<String, String> {
+    let name: String = result_context(read_field(id), "rendering row " + to_string(id))?;
+    return Result.Ok(string_to_upper_ascii(name));
+}
+
+region main {
+    // ---- result_is_error, and its complement ----
+    let good: Result<Int, String> = Result.Ok(5);
+    let bad: Result<Int, String> = Result.Error("nope");
+    print(result_is_error(good));
+    print(result_is_error(bad));
+    print(result_is_ok(good));
+    print(result_is_ok(bad));
+
+    // ---- option_ok_or, both variants, at a class payload ----
+    print(describe(read_field(7)));
+    print(describe(read_field(3)));
+
+    // The generic at a payload that is NOT a String, and an error type that is not a String
+    // either — `E` is an Int here, which is what makes the two parameters worth having.
+    // The `Option.None` needs a home that names `T` before it is passed — a bare one in an
+    // argument is refused, because the parameter is `Option<T>` and `T` is what is being asked.
+    let missing: Option<Int> = Option.None;
+    let coded: Result<Int, Int> = option_ok_or(missing, 404);
+    print(result_is_error(coded));
+    print(result_or(coded, 0 - 1));
+    let present: Result<Int, Int> = option_ok_or(Option.Some(11), 404);
+    print(result_or(present, 0 - 1));
+
+    // ---- result_context NESTED: three layers, in the order they were added ----
+    // Outermost first, which is the order a reader wants — what was being done, then what went
+    // wrong inside it, and so on down to the reason.
+    print(describe(shout(3)));
+
+    // ---- an Ok passes through every layer UNTOUCHED ----
+    print(describe(shout(7)));
+    let ok42: Result<Int, String> = Result.Ok(42);
+    let plain: Result<Int, String> = result_context(ok42, "this must not appear");
+    print(result_or(plain, 0));
+
+    // An empty context is not special-cased, and this says what it does rather than leaving a
+    // reader to guess: the separator is still there.
+    let failed: Result<String, String> = Result.Error("reason");
+    print(describe(result_context(failed, "")));
+
+    // ---- assert_that, on a claim that holds ----
+    // The return is 0 and it is ignorable, so this reads as a statement.
+    assert_that(true, "true is true");
+    let quiet: Int = assert_that(1 + 1 == 2, "arithmetic still works");
+    print(quiet);
+
+    // The shape it is FOR: a relationship between two locals that no signature can state.
+    let parts: [Int] = [3, 3, 4];
+    let mutable total: Int = 0;
+    for i in 0..len(parts) {
+        total += parts[i];
+    }
+    assert_that(total == 10, "the parts sum to the total");
+    print(total);
+}

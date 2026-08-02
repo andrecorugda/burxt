@@ -67,6 +67,11 @@ function option_is_none<T>(o: Option<T>) -> Bool {
 // There is no `map`. It needs a function as a value, and a closure needs an
 // owner for its captured state — see spec/M10-ERGONOMICS.md §3.
 //
+// `option_ok_or(o, why)` — an absence turned into a stated reason — is in
+// **lib/result.bx**, not here, because it hands back a `Result` and a caller who
+// can use the answer already has that file open. It also keeps this module the
+// one with no imports, which is why every other module can import it.
+//
 // `?` does work here: in a function that itself answers with an `Option`,
 // `let at: Int = index_of(xs, 8)?;` yields the value or returns `None` immediately. It
 // recognises absence by the variant name `None`, so nothing in the compiler needs

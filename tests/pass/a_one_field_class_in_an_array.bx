@@ -1,0 +1,85 @@
+// A class with EXACTLY ONE field, held in a growable array. B52.
+//
+// Stage-1 printed `140732521483360` where stage-0 printed `7` — the address of the scratch
+// struct, read back as the field. `burxt check` was silent in both compilers, the IR
+// assembled, it linked, and it ran. A silent wrong answer in about the most ordinary
+// declaration the language has.
+//
+// **Three near-identical declarations are pinned here on purpose, and this is why.** The
+// fault was in the `burxt.push` runtime helper, which decided whether its argument was the
+// element or the ADDRESS of the element by testing `elem > 1` — the element's cell count.
+// The reader, `emit_element`, decided the same question from the element's TYPE. Those two
+// agree for every shape anyone had written down, and disagree for exactly one: an aggregate
+// occupying a single cell. So `{ n: Int }` stored a stack pointer as the number,
+// `{ s: String }` stored one and then printed the bytes it happened to point at, and
+// `{ fields: [String] }` segfaulted as soon as the inner array was bound to a local.
+//
+// Adding ANY second field made each of these programs correct, and taking the class out of
+// the array made it correct. That is the whole reason nothing in this directory caught it
+// for the backend's entire life: **nothing here had ever put a one-field class in an array.**
+// The suite cannot see what nobody wrote.
+//
+// An enum with no payload is a single cell too — a tag and nothing else — so it is the same
+// defect wearing different clothes, and it failed differently enough to be worth its own
+// lines: it printed NOTHING, because the tag it compared against was a pointer and no arm
+// matched. A wrong answer at least looks wrong.
+//
+// Both writers are exercised (an array literal, and `push` into an empty one) and all four
+// readers (`xs[i].f`, binding the element to a local, `for`, and passing the array to a
+// function), because the writer and the reader are the two halves that disagreed.
+class Counted { n: Int }
+class Named { s: String }
+class Holder { fields: [String] }
+enum Tag { Low, High }
+
+function sum_of(rows: [Counted]) -> Int {
+    let mutable total: Int = 0;
+    let mutable i: Int = 0;
+    while i < len(rows) {
+        total += rows[i].n;
+        i += 1;
+    }
+    return total;
+}
+
+region main {
+    // One Int field. Written by a literal, read inline.
+    let mutable counts: [Counted] = [Counted { n: 7 }, Counted { n: 8 }];
+    print(counts[0].n);
+    print(counts[1].n);
+
+    // The same array, written by `push` into an empty one, and read three more ways.
+    let mutable more: [Counted] = [];
+    push(more, Counted { n: 3 });
+    push(more, Counted { n: 4 });
+    let first: Counted = more[0];
+    print(first.n);
+    for one in more {
+        print(one.n);
+    }
+    print(sum_of(more));
+
+    // One String field. The pointer used to be stored where the String belonged, so this
+    // printed whatever bytes the stack held.
+    let mutable names: [Named] = [Named { s: "alpha" }, Named { s: "beta" }];
+    print(names[1].s);
+    print(names[0].s == "alpha");
+
+    // One field that is itself a growable array. Reading it inline gave a pointer; binding
+    // it to a local and indexing that local was the segfault.
+    let mutable holders: [Holder] = [Holder { fields: ["one", "two"] }];
+    let held: [String] = holders[0].fields;
+    print(held[1]);
+    print(len(holders[0].fields));
+
+    // An enum with no payload: one cell, and the arm that used to match was none of them.
+    let mutable tags: [Tag] = [Tag.High, Tag.Low];
+    match tags[0] {
+        Low => { print(100); }
+        High => { print(200); }
+    }
+    match tags[1] {
+        Low => { print(100); }
+        High => { print(200); }
+    }
+}

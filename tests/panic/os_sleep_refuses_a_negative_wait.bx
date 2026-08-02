@@ -1,0 +1,20 @@
+// `os_sleep(-1)` is a caller's bug, and the contract says so rather than silently returning.
+//
+// A negative wait has no meaning: it is not "wait nothing", it is arithmetic that went wrong
+// somewhere above — a deadline subtracted the wrong way round, or a backoff that underflowed. The
+// loop inside `os_sleep` would run zero times and answer `true`, which reports success for a wait
+// that never happened, and the caller would then poll in a tight loop wondering why.
+//
+// The value is COMPUTED so the checker cannot fold it into a compile-time refusal; what is being
+// pinned is the runtime contract.
+use "../../lib/os.bx";
+
+region main {
+    let mutable deadline: Int = 0;
+    let mutable now: Int = 0;
+    for i in 0..5 {
+        now = i;
+    }
+    let waited: Bool = os_sleep(deadline - now);
+    print(waited);
+}

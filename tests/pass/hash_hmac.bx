@@ -1,0 +1,149 @@
+// lib/hash.bx — HMAC-SHA-256 and HMAC-SHA-512 against every test case in RFC 4231.
+//
+// **All seven cases, both digests, no selection.** RFC 4231 has seven and this runs seven, because
+// the interesting ones are 4, 6 and 7 and a suite that stops at 2 tests only the easy path:
+//
+//   * **case 4's key is 25 bytes of 0x01..0x19** — a short key, zero-padded to the block size. An
+//     implementation that pads with anything else passes cases 1 and 2 by accident.
+//   * **cases 6 and 7 use a 131-byte key**, longer than SHA-256's 64-byte block and longer than
+//     SHA-512's 128-byte one. **That key must be HASHED first and the digest used as the key.**
+//     This is the path people get wrong, and it is wrong in a way nothing else catches: every
+//     shorter key still works.
+//   * **case 7's message is 152 bytes**, so the inner hash is multi-block on top of the long key.
+//   * **case 5 is a truncation case** — RFC 4231 publishes only the first 128 bits, so only the
+//     first 16 bytes are compared, and the fixture says so rather than inventing the rest.
+//
+// **Two cases here are NOT from RFC 4231 and are labelled as such**: an empty key and an empty
+// message. The RFC has neither, and both are shapes a caller will produce — an empty key must be
+// zero-padded to a full block like any other short key, not treated as an error, and an empty
+// message must still be MACd. Their expected values come from OpenSSL via Python's `hmac`, which is
+// stated rather than passed off as published.
+//
+// The last section checks the property that is the whole reason HMAC exists rather than
+// `sha256(key + message)`: **length extension**. It does not attempt the attack — it shows the two
+// constructions differ, which is the observable part.
+use "../../lib/hash.bx";
+
+function vector(label: String, actual: String, expected: String) -> Bool {
+    if actual == expected {
+        print(label + " = " + actual);
+        return true;
+    }
+    print(label + " MISMATCH");
+    print("  expected " + expected);
+    print("  actual   " + actual);
+    return false;
+}
+
+// Byte arrays a String literal cannot spell: 0xaa repeated 131 times, 0x01..0x19 counting up.
+// Filling an array the caller owns, because a function with no region-carrying parameter may not
+// return `[Int]`.
+function repeated_byte(mutable into: [Int], value: Int, times: Int) -> Int {
+    for i in 0..times {
+        push(into, value);
+    }
+    return len(into);
+}
+
+function counting_bytes(mutable into: [Int], first: Int, last: Int) -> Int {
+    for value in first..last {
+        push(into, value);
+    }
+    return len(into);
+}
+
+// The first `count` bytes of `digest` — RFC 4231's case 5 publishes 128 bits of a 256-bit answer.
+function first_bytes(mutable into: [Int], digest: [Int], count: Int) -> Int {
+    for i in 0..count {
+        push(into, digest[i]);
+    }
+    return len(into);
+}
+
+// ---- RFC 4231 case 1: 20-byte key of 0x0b ----
+let mutable key1: [Int] = [];
+repeated_byte(key1, 0x0b, 20);
+let data1: [Int] = to_bytes("Hi There");
+vector("hmac_sha256 case 1", hash_hex(hmac_sha256(key1, data1)), "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7");
+vector("hmac_sha512 case 1", hash_hex(hmac_sha512(key1, data1)), "87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cdedaa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854");
+
+// ---- case 2: a four-byte ASCII key, the one every tutorial uses ----
+vector("hmac_sha256 case 2", hash_hex(hmac_sha256_text("Jefe", "what do ya want for nothing?")), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+vector("hmac_sha512 case 2", hash_hex(hmac_sha512_text("Jefe", "what do ya want for nothing?")), "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea2505549758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737");
+
+// ---- case 3: 20 bytes of 0xaa, 50 bytes of 0xdd ----
+let mutable key3: [Int] = [];
+repeated_byte(key3, 0xaa, 20);
+let mutable data3: [Int] = [];
+repeated_byte(data3, 0xdd, 50);
+vector("hmac_sha256 case 3", hash_hex(hmac_sha256(key3, data3)), "773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe");
+vector("hmac_sha512 case 3", hash_hex(hmac_sha512(key3, data3)), "fa73b0089d56a284efb0f0756c890be9b1b5dbdd8ee81a3655f83e33b2279d39bf3e848279a722c806b485a47e67c807b946a337bee8942674278859e13292fb");
+
+// ---- case 4: the 25-byte counting key, 0x01 through 0x19 ----
+let mutable key4: [Int] = [];
+counting_bytes(key4, 1, 26);
+let mutable data4: [Int] = [];
+repeated_byte(data4, 0xcd, 50);
+print("case 4 key is " + to_string(len(key4)) + " bytes, first " + to_string(key4[0]) + " last " + to_string(key4[24]));
+vector("hmac_sha256 case 4", hash_hex(hmac_sha256(key4, data4)), "82558a389a443c0ea4cc819899f2083a85f0faa3e578f8077a2e3ff46729665b");
+vector("hmac_sha512 case 4", hash_hex(hmac_sha512(key4, data4)), "b0ba465637458c6990e5a8c5f61d4af7e576d97ff94b872de76f8050361ee3dba91ca5c11aa25eb4d679275cc5788063a5f19741120c4f2de2adebeb10a298dd");
+
+// ---- case 5: truncated to 128 bits, which is all the RFC publishes ----
+let mutable key5: [Int] = [];
+repeated_byte(key5, 0x0c, 20);
+let full256: [Int] = hmac_sha256(key5, to_bytes("Test With Truncation"));
+let mutable short256: [Int] = [];
+first_bytes(short256, full256, 16);
+vector("hmac_sha256 case 5, first 128 bits", hash_hex(short256), "a3b6167473100ee06e0c796c2955552b");
+let full512: [Int] = hmac_sha512(key5, to_bytes("Test With Truncation"));
+let mutable short512: [Int] = [];
+first_bytes(short512, full512, 16);
+vector("hmac_sha512 case 5, first 128 bits", hash_hex(short512), "415fad6271580a531d4179bc891d87a6");
+
+// ---- cases 6 and 7: a 131-byte key, longer than either block size ----
+// **This is the case that decides whether the key path is right.** 131 > 64 and 131 > 128, so
+// both digests must hash the key down first. An implementation that truncates it, or that
+// zero-pads past the block, passes everything above and fails here.
+let mutable key6: [Int] = [];
+repeated_byte(key6, 0xaa, 131);
+print("case 6 key is " + to_string(len(key6)) + " bytes, longer than both block sizes");
+let data6: [Int] = to_bytes("Test Using Larger Than Block-Size Key - Hash Key First");
+vector("hmac_sha256 case 6", hash_hex(hmac_sha256(key6, data6)), "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54");
+vector("hmac_sha512 case 6", hash_hex(hmac_sha512(key6, data6)), "80b24263c7c1a3ebb71493c1dd7be8b49b46d1f41b4aeec1121b013783f8f3526b56d037e05f2598bd0fd2215d6a1e5295e64f73f63f0aec8b915a985d786598");
+let data7: [Int] = to_bytes("This is a test using a larger than block-size key and a larger than block-size data. The key needs to be hashed before being used by the HMAC algorithm.");
+print("case 7 message is " + to_string(len(data7)) + " bytes");
+vector("hmac_sha256 case 7", hash_hex(hmac_sha256(key6, data7)), "9b09ffa71b942fcb27635fbcd5b0e944bfdc63644f0713938a7f51535c3a35e2");
+vector("hmac_sha512 case 7", hash_hex(hmac_sha512(key6, data7)), "e37b6a775dc87dbaa4dfa9f96e5e3ffddebd71f8867289865df5a32d20cdc944b6022cac3c4982b10d5eeb55c3e4de15134676fb6de0446065c97440fa8c6a58");
+
+// ---- NOT RFC 4231: an empty key and an empty message ----
+// Expected values from OpenSSL through Python's `hmac`. Said plainly because a vector whose
+// provenance is unstated is worth nothing.
+let empty: [Int] = [];
+vector("hmac_sha256 with an empty key", hash_hex(hmac_sha256(empty, to_bytes("message"))), "eb08c1f56d5ddee07f7bdf80468083da06b64cf4fac64fe3a90883df5feacae4");
+vector("hmac_sha512 with an empty key", hash_hex(hmac_sha512(empty, to_bytes("message"))), "08fce52f6395d59c2a3fb8abb281d74ad6f112b9a9c787bcea290d94dadbc82b2ca3e5e12bf2277c7fedbb0154d5493e41bb7459f63c8e39554ea3651b812492");
+vector("hmac_sha256 of an empty message", hash_hex(hmac_sha256(to_bytes("key"), empty)), "5d5d139563c95b5967b9bd9a8c9b233a9dedb45072794cd232dc1b74832607d0");
+vector("hmac_sha256 of everything empty", hash_hex(hmac_sha256(empty, empty)), "b613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad");
+
+// ---- a key of exactly the block size is padded with nothing, and is not hashed ----
+let mutable key64: [Int] = [];
+repeated_byte(key64, 0x41, 64);
+vector("hmac_sha256 with a 64-byte key", hash_hex(hmac_sha256(key64, to_bytes("boundary"))), "b7ded5f6df6b4ca4e3442d48b1300bbd497f82ebe99306c2c8da9c1beb09de74");
+let mutable key65: [Int] = [];
+repeated_byte(key65, 0x41, 65);
+vector("hmac_sha256 with a 65-byte key", hash_hex(hmac_sha256(key65, to_bytes("boundary"))), "7c5c7ef59c13e8b0dcd256d639d15ecd4304d09d306fb0fdc9c9d101e5ebb044");
+
+// ---- why HMAC and not sha256(key + message) ----
+// The naive construction is a length-extension forgery waiting to happen: anyone holding the
+// digest and the key LENGTH can extend the message without the key. Not attempted here — what
+// is shown is that the two constructions are different functions, so nobody reads the naive one
+// as an equivalent shorthand.
+let naive: [Int] = sha256(to_bytes("secretmessage"));
+let proper: [Int] = hmac_sha256(to_bytes("secret"), to_bytes("message"));
+print(hash_equals_constant_time(naive, proper));
+
+// ---- comparing a MAC: the function whose name is its warning ----
+let again: [Int] = hmac_sha256(to_bytes("secret"), to_bytes("message"));
+print(hash_equals_constant_time(proper, again));
+let other: [Int] = hmac_sha256(to_bytes("secret"), to_bytes("messagf"));
+print(hash_equals_constant_time(proper, other));
+print(hash_equals_constant_time(proper, short256));

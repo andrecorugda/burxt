@@ -1,0 +1,30 @@
+low bit balanced (4096 +/- 200): true
+no period 2 (lag 1 near 4095): true
+no period 4 (lag 2 near 4095): true
+every die face 10000 +/- 500: true
+next_below and next_between stay inside: true
+next_below(1) is always 0: true
+next_between(17, 17) is 17: true
+and drew nothing: the sequence is where it was: true
+next_between(0, 1) reaches both ends: true
+next_between(-1, 1) reaches the middle: true
+the full Int range does not trap, and spans zero: true
+the same seed replays the same sequence: true
+two seeds agree nowhere in 100 draws: true
+seed 0 does not stick at zero: true
+seed 1 starts warm: no tiny first outputs: true
+0
+0
+1
+42
+shuffling 0 and 1 elements consumed no randomness: true
+200
+shuffle keeps every element exactly once: true
+shuffle moved almost everything: true
+all 60000 shuffles produced one of the six orderings: true
+each ordering 10000 +/- 500 — the biased shuffle misses by 1100: true
+choice of nothing: None
+a failed choice drew nothing: true
+choice always answers a member: true
+choice reaches every member: true
+9

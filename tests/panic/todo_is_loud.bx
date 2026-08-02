@@ -1,0 +1,21 @@
+// `todo()` is a stub that STOPS, and that is the whole argument for it.
+//
+// The alternative — returning 0, or "", or an empty array — is a placeholder that passes every
+// test that touches it and is discovered by a wrong number in a report weeks later. This one is
+// discovered by the first thing that reaches it.
+//
+// `return todo();` type-checks wherever an `Int` is wanted, so a half-written function still
+// compiles and still cannot lie.
+use "../../lib/result.bx";
+
+function annual_rate_for(band: Int) -> Int {
+    if band == 1 {
+        return 20;
+    }
+    return todo();
+}
+
+region main {
+    print(annual_rate_for(1));
+    print(annual_rate_for(2));
+}

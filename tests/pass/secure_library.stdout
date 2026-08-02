@@ -1,0 +1,50 @@
+-- secure_random_bytes
+32 bytes arrived: true
+and there are 32 of them: true
+every one is a byte: true
+they are not all the same value: true
+a second call gives different bytes: true
+-- past the 256-byte cap
+1,000 bytes arrived, all 1,000: true
+every one is a byte: true
+the four blocks are not the same block: true
+at least 200 of the 256 byte values appear in 1,000 draws: true
+-- secure_random_int_below
+every roll is 0 to 5: true
+each of the six faces lands 10000 +/- 500: true
+below(1) is always 0: true
+-- secure_uuid_v4
+36 characters, hyphens at 8 13 18 23: true
+the version nibble is always 4: true
+the variant nibble is always 8, 9, a or b: true
+all four variant values appear in 200 draws: true
+everything else is a lowercase hex digit: true
+two calls differ: true
+-- tokens
+32 bytes of hex is 64 characters: true
+and every one is a lowercase hex digit: true
+32 bytes of unpadded base64url is 43 characters: true
+and nothing in it needs escaping in a URL: true
+-- a real key through lib/encoding.bx
+a 32-byte key survives base64 and back: true
+and hex and back: true
+-- string_equals_constant_time
+equal strings: true
+differing in the FIRST byte: true
+differing in the LAST byte: true
+differing in the middle: true
+a prefix is not the whole: true
+and the whole is not a prefix: true
+empty against empty: true
+empty against something: true
+something against empty: true
+a repeat of the shorter is still not equal: true
+nor is a triple: true
+two strings that differ only after a NUL: true
+and the same one twice: true
+-- bytes_equals_constant_time
+a key against itself: true
+a key against another: true
+empty against empty: true
+empty against one byte: true
+one byte against empty: true

@@ -3,13 +3,21 @@
 //
 //     use "lib/os.bx";
 //
-// Arguments, the clock, running a command, and exiting with a code. Each one wraps
-// a C function whose signature Burxt can actually describe — ints and strings in,
-// an int out. Anything returning a pointer is absent, and the guide's chapter on
-// the C boundary says why.
+// Arguments, the environment, the clock, the process itself, and running a command.
+//
+// This header used to end *"anything returning a pointer is absent, and the guide's chapter on the
+// C boundary says why"*, and it had been false since v0.0.196: `getenv` returns a `CPointer` four
+// lines below, and `getcwd` does too. **What is still absent is a struct behind a pointer** —
+// `uname(2)` fills one, `nanosleep` takes one, `clock_gettime` fills one — because `c_bytes_at`
+// reads C's memory and nothing in Burxt writes it. That is why `os_platform` shells out to `uname`
+// and `os_sleep` calls `usleep`, and each of those says so where it is.
 // ============================================================================
 
 use "option.bx";
+// For scratch files that are private and unguessable — see `os_capture`. `lib/files.bx` owns that
+// machinery because it is a filesystem question, and this file is one of its two customers.
+// The dependency runs one way only: nothing in `lib/files.bx` calls anything here.
+use "files.bx";
 
 external function system(command: String) -> CInt touches commands;
 external function time(unused: Int) -> Int touches clock;
@@ -17,6 +25,29 @@ external function getchar() -> CInt touches input;
 // The pointer wall's first customer (v0.0.196). `getenv` hands back a `char*` that C owns for the
 // life of the process, so Burxt copies the bytes and never keeps the pointer — see `os_env`.
 external function getenv(name: String) -> CPointer touches input;
+external function setenv(name: String, value: String, overwrite: i32) -> CInt touches input;
+external function getpid() -> CInt touches input;
+// `getcwd(buffer, size)` fills a buffer the CALLER owns and answers it back, or NULL. That shape is
+// why the cwd is reachable at all: nothing here has to free memory C allocated, and the one
+// allocation is `malloc`'d and freed in the same function.
+external function getcwd(buffer: CPointer, size: Int) -> CPointer touches files;
+// **`usleep` and not `nanosleep`, and it is not a preference** — see `os_sleep`.
+//
+// `u32`, because `useconds_t` is an UNSIGNED int. Declaring it `Int` would redeclare `@usleep` with
+// an `i64` parameter, and declaring it `i32` would be the right width and the wrong sign — §A7's
+// widths trap a value that does not fit, so the sign is the difference between a caller's mistake
+// being caught and being reinterpreted. Nothing here ever passes a negative anyway: `os_sleep`
+// refuses one in its contract, one level up, where the caller can read it.
+external function usleep(microseconds: u32) -> CInt touches clock;
+external function malloc(size: Int) -> CPointer;
+external function free(p: CPointer) -> Int;
+
+// What `PATH_MAX` is on Linux, and more than macOS's 1024. A path longer than this answers None
+// rather than a truncated directory, because a truncated path is a different directory.
+const OS_PATH_MAX: Int = 4096;
+// `usleep`'s domain is strictly less than one million microseconds, so a longer wait is sliced.
+const OS_SLEEP_SLICE_MS: Int = 900;
+const OS_MICROSECONDS_PER_MILLISECOND: Int = 1000;
 
 // The arguments the program was started with. Index 0 is the program's own path,
 // as it is everywhere else.
@@ -46,18 +77,109 @@ function os_now() -> Int touches clock {
     return time(0);
 }
 
-// Run a command through the shell and answer its exit code. `system` reports a
-// wait status; the exit code is its high byte.
+// Run a command through the shell and answer its exit code.
 function os_run(command: String) -> Int touches commands {
-    return divide_floor(system(command), 256);
+    return os_exit_code(system(command));
 }
 
-// Run a command and answer what it printed. The output travels through a file
-// because a pipe would mean `popen`, which answers a pointer.
-function os_capture(command: String) -> String touches commands, files {
-    let scratch: String = "/tmp/burxt-os-capture";
-    let status: Int = system(command + " > " + scratch + " 2>&1");
-    return read_file(scratch);
+// A wait status turned into the number a shell would report.
+//
+// **This used to be `divide_floor(status, 256)` and that lost a whole category of failure.** A
+// command killed by a signal has an exit status of zero in its high byte, so a program terminated
+// by SIGSEGV or SIGKILL — or by the timeout that was supposed to bound it — reported **success**.
+// The low seven bits are the signal, and `sh` reports `128 + signal` for exactly this reason, so
+// that is what this answers: 137 for SIGKILL, 139 for a segfault.
+//
+// `-1` when the command did not run at all, which is what `system` answers when the fork failed.
+// It is the one value no exited process can produce.
+pure function os_exit_code(status: Int) -> Int {
+    if status < 0 {
+        return -1;
+    }
+    let signal: Int = bit_and(status, 127);
+    if signal != 0 {
+        return 128 + signal;
+    }
+    return bit_and(divide_floor(status, 256), 255);
+}
+
+// Everything one command left behind: what it printed, what it complained about, and how it ended.
+//
+// Three fields rather than three functions, because running the command three times to ask three
+// questions would run it three times — and a command with an effect is not a question you may ask
+// twice.
+class Capture { output: String, errors: String, code: Int }
+
+// Run a command and answer what it printed **on standard output and standard error separately**,
+// with its exit code. Roadmap §D1q.
+//
+// `os_capture` below merges the two with `2>&1`, and merging is destructive: a caller that wants
+// the output of `git rev-parse` cannot tell the hash from the warning that came with it, and a
+// caller checking whether anything went wrong has nothing to check. Both streams get their own
+// file here, in a directory nobody else can enter.
+//
+// **What is lost by separating them is the interleaving.** `2>&1` puts both streams in one file in
+// the order the process wrote them; two files cannot say which line came first. That is the trade,
+// and `os_capture` is still the right call when the order is the thing you want to see.
+//
+// A command that could not be run at all — no private scratch directory — answers empty strings
+// and `-1`, the same code `os_run` uses for a command that never started.
+//
+// **The command is wrapped in `( ... )`, and `os_capture` had been silently wrong for want of it.**
+// A redirection binds to ONE command, so `sh -c "echo a; echo b > f"` writes only `b` to the file
+// and prints `a` to the terminal the program is running in. Every captured command containing a
+// `;`, a `&&` or a `||` — which is most of the interesting ones — had all but its last piece
+// escape the capture and land on the caller's own output. Found by giving this function a
+// two-statement command in its first test, which is the case nobody had written.
+function os_capture_status(command: String) -> Capture touches commands, files, input {
+    let mutable answer: Capture = Capture { output: "", errors: "", code: -1 };
+    match file_temp_directory("capture") {
+        None => {
+            return answer;
+        }
+        Some(directory) => {
+            let out: String = directory + "/out";
+            let err: String = directory + "/err";
+            let status: Int = system("( " + command + " ) > " + file_quote(out) + " 2> " + file_quote(err));
+            answer = Capture {
+                output: read_file(out),
+                errors: read_file(err),
+                code: os_exit_code(status)
+            };
+            let dropped_out: Bool = file_delete(out);
+            let dropped_err: Bool = file_delete(err);
+            let dropped_dir: Bool = file_remove_directory(directory);
+            return answer;
+        }
+    }
+}
+
+// Run a command and answer what it printed, standard output and standard error **merged in the
+// order the process wrote them**. The output travels through a file because a pipe would mean
+// `popen`, which answers a pointer whose lifetime Burxt would have to reason about.
+//
+// Kept beside `os_capture_status` rather than replaced by it: interleaving is a real thing to
+// want, and it is the half two separate files cannot reconstruct. What this cannot tell you is
+// whether the command succeeded — `os_capture_status` is the one to reach for then.
+//
+// §B3: the scratch path used to be the constant `/tmp/burxt-os-capture`. Two copies of a program
+// overwrote each other's output, and anyone on the machine could leave a symlink on that name for
+// the redirect to truncate. It is now a fresh 0700 directory per call.
+//
+// The `( ... )` is not decoration — see `os_capture_status` above for the capture this function was
+// losing without it.
+function os_capture(command: String) -> String touches commands, files, input {
+    match file_temp_path("capture") {
+        None => {
+            return "";
+        }
+        Some(scratch) => {
+            let status: Int = system("( " + command + " ) > " + file_quote(scratch) + " 2>&1");
+            let text: String = read_file(scratch);
+            let dropped: Bool = file_temp_release(scratch);
+            return text;
+        }
+    }
 }
 
 // One byte of standard input, or -1 at the end. The whole of the input, a byte at
@@ -151,6 +273,143 @@ function os_env(name: String) -> Option<String> touches input {
 // no default arguments — and because the two really are different questions.
 function os_env_or(name: String, fallback: String) -> String touches input {
     return option_or(os_env(name), fallback);
+}
+
+// Set an environment variable for this process and every child it starts afterwards.
+//
+// **Overwrites**, always. `setenv`'s third argument chooses, and a library that exposed the choice
+// would make `os_set_env` a question rather than an instruction; a caller who wants "only if
+// unset" has `os_env` right above and can say so in a line a reviewer can read.
+//
+// `false` when the name is unusable — empty, or containing `=`, which is `setenv`'s own refusal —
+// or when the allocation for the copy failed. It does **not** change the environment of the shell
+// that started the program: no process can do that, and it is worth saying because it is the first
+// thing people expect this to do.
+//
+// `touches input` and not an effect of its own. The environment is process state that Burxt has no
+// effect for, and `input` is the one that already names it — `os_env` reads through the same
+// effect, and reading and writing the same place should not be filed apart. Whether process state
+// deserves its own effect is spec/FAR-HORIZON-ROADMAP.md M2, the same open question `os_env` points
+// at.
+function os_set_env(name: String, value: String) -> Bool touches input {
+    return setenv(name, value, 1) == 0;
+}
+
+// The process's own id.
+//
+// Small, and reused by the kernel once the process is gone, so it is a fine way to keep two
+// concurrent programs from choosing the same scratch name and **not** a secret. `lib/files.bx`
+// puts it in a temp directory's name for the first reason and relies on `mkdir` for the second —
+// see §B3 there, which is the row this function closed.
+function os_pid() -> Int touches input {
+    return getpid();
+}
+
+// The directory the process is running in, or a stated absence.
+//
+// `None` when the path does not fit in `OS_PATH_MAX`, or when the directory has been deleted out
+// from under the process — a real thing that happens to long-running programs, and the reason this
+// answers `Option` rather than `""`.
+//
+// The buffer is this function's: `getcwd` fills memory the caller owns, so nothing here has to
+// free something C allocated, and `c_string_at` copies the bytes out before the `free`.
+function os_cwd() -> Option<String> touches files {
+    let buffer: CPointer = malloc(OS_PATH_MAX);
+    if c_is_null(buffer) {
+        return Option.None;
+    }
+    let answered: CPointer = getcwd(buffer, OS_PATH_MAX);
+    if c_is_null(answered) {
+        let released_early: Int = free(buffer);
+        return Option.None;
+    }
+    let directory: String = c_string_at(buffer);
+    let released: Int = free(buffer);
+    return Option.Some(directory);
+}
+
+// Which operating system this is: `"linux"`, `"macos"`, or `uname -s` lowercased.
+//
+// **It shells out**, one `uname` per call, and a caller asking in a loop should ask once. There is
+// no cheaper answer available: nothing in the language exposes the target it was compiled for, and
+// `uname(2)` fills a struct through a pointer, which is the wall Burxt still has.
+//
+// Two decisions worth stating. `darwin` comes back as `"macos"`, because that is the name the
+// roadmap, CI and every caller use, and a library that made everyone remember the kernel's name
+// would be pedantry with a cost. **Everything else comes back as what the machine said**, in
+// lower case, rather than `"unknown"` — a FreeBSD box answering `"freebsd"` is legible, and
+// answering `"unknown"` throws away the one fact that was available.
+//
+// Empty when `uname` is not on the PATH, which is a stated failure rather than a guess.
+function os_platform() -> String touches commands, files, input {
+    // `tr` does the lowercasing, so this file does not grow an ASCII case table it would be the
+    // second copy of — `lib/string.bx` has `string_to_lower_ascii` and this file does not depend
+    // on it, deliberately.
+    let seen: Capture = os_capture_status("uname -s | tr '[:upper:]' '[:lower:]'");
+    if seen.code != 0 {
+        return "";
+    }
+    let name: String = os_trim_ascii(seen.output);
+    if name == "darwin" {
+        return "macos";
+    }
+    return name;
+}
+
+// Wait, and let the rest of the machine get on with it. Roadmap §D1r.
+//
+// Every retry loop, every poll of a file that another process is writing, and every backoff in
+// this language spun the CPU flat out before this existed, because there was no way to yield.
+//
+// **`usleep` and not `nanosleep`, and the reason is the C boundary rather than taste.**
+// `nanosleep(const struct timespec *, struct timespec *)` takes a two-field struct BY POINTER, and
+// Burxt can hold a pointer but cannot build a struct behind one: `c_bytes_at` reads C's memory and
+// nothing writes it. `poll(NULL, 0, ms)` is the other usual trick and needs a null pointer
+// literal, which the language has no way to spell. `sleep(3)` takes whole seconds, which is not
+// what a poll loop needs. That leaves `usleep`, which is obsolescent in POSIX.1-2008 and present
+// everywhere in practice — and if it ever is not, this is the one function that changes.
+//
+// `usleep`'s argument must be **under one million**, so a longer wait is sliced into 900 ms pieces.
+// That is the loop below, and it is the whole of it.
+//
+// **A signal cuts the wait short and answers `false`**, having slept less than asked. It is not
+// retried, because "sleep at least this long" and "return when something happened" are different
+// intents and only the caller knows which one it had.
+function os_sleep(milliseconds: Int) -> Bool touches clock
+    requires milliseconds >= 0
+{
+    let mutable remaining: Int = milliseconds;
+    while remaining > 0 {
+        let mutable slice: Int = remaining;
+        if slice > OS_SLEEP_SLICE_MS {
+            slice = OS_SLEEP_SLICE_MS;
+        }
+        if usleep(slice * OS_MICROSECONDS_PER_MILLISECOND) != 0 {
+            return false;
+        }
+        remaining -= slice;
+    }
+    return true;
+}
+
+// Spaces, tabs, carriage returns and newlines off both ends. Local rather than `lib/string.bx`'s
+// `string_trim`, for the reason the whole of this file is: `use "lib/os.bx"` should pull in the
+// operating system and not two thousand lines of string handling.
+function os_trim_ascii(text: String) -> String {
+    let size: Int = len(text);
+    let mutable from: Int = 0;
+    let mutable to: Int = size;
+    while from < to && os_is_space(byte_at(text, from)) {
+        from += 1;
+    }
+    while to > from && os_is_space(byte_at(text, to - 1)) {
+        to -= 1;
+    }
+    return substring(text, from, to - from);
+}
+
+function os_is_space(b: Int) -> Bool {
+    return b == 32 || b == 9 || b == 10 || b == 13;
 }
 
 // `os_byte_as_string(byte)` used to be DECLARED HERE, and it was roadmap §B2: a table of the

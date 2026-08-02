@@ -1,0 +1,18 @@
+// `assert_that` on a claim that does not hold. The other half of `tests/pass/error_helpers.bx`,
+// which can only show the passing side — a program that stops writes no more stdout.
+//
+// The shape is the one the function is FOR: a relationship between two locals that no signature
+// can state, checked halfway down a body. A `requires` clause would be stronger where one fits,
+// and lib/result.bx's §D1o section says so; there is no signature here to hang it on.
+use "../../lib/result.bx";
+
+region main {
+    let parts: [Int] = [3, 3, 4];
+    let mutable total: Int = 0;
+    for i in 0..len(parts) {
+        total += parts[i];
+    }
+    print(total);
+    assert_that(total == 11, "the parts sum to the total");
+    print("this line is never reached");
+}

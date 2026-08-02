@@ -1,0 +1,488 @@
+// ============================================================================
+// lib/decimal.bx — the helpers a money language is judged on.
+//
+//     use "lib/decimal.bx";
+//
+// Burxt's headline is that `$0.10 / 3` is a question you have to answer rather than one the
+// machine answers wrongly for you. This file is where that promise gets cashed: **`money_split`**
+// splits a total into parts whose sum is the total, exactly, on every input — the canonical
+// exact-money problem, and the first function a reader comes looking for.
+//
+// ============================================================================
+// WHY THIS FILE IS PER-SCALE, AND NOT GENERIC
+// ============================================================================
+//
+// `Decimal<2>` and `Decimal<7>` are different types, and **a scale cannot be a type parameter** —
+// `Decimal<S>` is not a thing you can write. So `abs`, `is_zero` and the rest are named per scale:
+// `decimal2_abs`, `decimal7_abs`. Two other routes were considered and both fail for the same
+// reason, which is worth stating so nobody re-derives it:
+//
+//   * **`T: Ordered` does not help.** The constraint gives `<` and `==` and nothing else. `abs`
+//     needs the ZERO of the scale to compare against and the negation to produce, and a type
+//     parameter cannot name either — `0`, `$0.00` and `0.0000000` are three different values.
+//     `lib/math.bx`'s `math_sign` records the same wall for the same reason.
+//   * **There is no arithmetic constraint.** The language has exactly `Ordered` and `Equatable`.
+//     A generic body cannot multiply.
+//
+// **`math_min` and `math_max` are NOT repeated here**, and that is the one place the per-scale rule
+// does not bite. They need only `<`, so `math_min<T: Ordered>` in `lib/math.bx` already takes
+// `Decimal<2>`, `Decimal<7>` and every other scale — `math_min($19.99, $4.50)` compiles today.
+// §D1i lists `min` and `max`; they were already written, generically, and duplicating them
+// per scale would be four wrong copies of one right function.
+//
+// The scales here are the ones this repository actually uses: **2** (money, the full family),
+// **4** (a rate — `8.25%` is a `Decimal<4>`), **6** (where a `Decimal<2>` times a `Decimal<4>`
+// lands, exactly), and **7** (`lib/vector.bx`'s embedding scale). Another scale needs another
+// dozen lines, and they are dull lines; the shape to copy is right here.
+//
+// ============================================================================
+// THE ONE HARD PART: REACHING THE UNSCALED INTEGER
+// ============================================================================
+//
+// A `Decimal<2>` **is** an i64 count of pennies. There is no way to get at that integer from
+// Burxt: `as scaled` exists but is FFI-only, a marshaller for an `external function` parameter,
+// and `spec/FAR-HORIZON-ROADMAP.md` records the gap as a papercut with no fix scheduled.
+//
+// Every function below that has to round, divide or distribute needs that integer, because
+// rounding rules are integer rules. So `decimal2_cents` finds it by **binary search over the
+// count**, comparing `$0.01 * n` against the value — the same trick `lib/vector.bx`'s
+// `magnitude_of_squared` uses, and exact for the same reason: both sides are the same Decimal
+// type, and the comparison of two scaled i64s is exact.
+//
+// The search is a **bit descent** rather than a low/high bisection, and that is not a flourish:
+// a low/high midpoint over the full i64 range overflows on `low + high`, and the offset form
+// `low + (high - low) / 2` overflows on `high - low`. Building the answer one bit at a time from
+// the top never forms a value outside the range at all.
+//
+// **The sign is chosen first, and it has to be.** Sixty-three bits reach `2^63` values, and an
+// i64 holds `2^64`. Starting at `0` the descent covers `[0, INT_MAX]`; starting at `INT_MIN` it
+// covers `[INT_MIN, -1]`. Starting at `INT_MIN` for everything — which was the first version
+// written here — silently returns `-1` for every positive input, and the fixture that caught it
+// is `tests/pass/decimal_helpers.bx`'s check of `$100.00`. Measured exact at both extremes:
+// `decimal2_cents($92233720368547758.07)` is `9223372036854775807`, and the negative of it is
+// `-9223372036854775807`.
+//
+// Sixty-three iterations, each one Decimal multiply and one compare. That is the price of a cast
+// this language does not have, it is paid once per conversion, and it buys an answer that is
+// exact rather than close.
+// ============================================================================
+
+// For `math_sign`, which `money_split` uses to send the leftover pennies in the direction of the
+// total. `lib/math.bx` brings `lib/option.bx` with it.
+use "math.bx";
+
+// ============================================================================
+// SCALE 2 — MONEY
+// ============================================================================
+
+// The number of pennies in `value`. `decimal2_cents($19.99)` is `1999`, and
+// `decimal2_cents(-$0.01)` is `-1`.
+//
+// Exact for every `Decimal<2>` including both extremes of the range. See the header for why this
+// is a search rather than a cast, and why the sign is decided before the descent starts.
+pure function decimal2_cents(value: Decimal<2>) -> Int {
+    let penny: Decimal<2> = $0.01;
+    let zero: Decimal<2> = $0.00;
+    // Sixty-three bits cover half the i64 range, so which half is chosen here rather than found.
+    let mutable found: Int = 0;
+    if value < zero {
+        found = INT_MIN;
+    }
+    let mutable bit: Int = 4611686018427387904;              // 2^62, the top bit of a positive Int
+    while bit > 0 {
+        // `found + bit` is inside the range in both halves, so this never overflows, and
+        // `penny * n` has scaled value `n`, so that does not either.
+        if penny * (found + bit) <= value {
+            found = found + bit;
+        }
+        bit = divide_floor(bit, 2);
+    }
+    return found;
+}
+
+// The inverse: a count of pennies as money. `decimal2_from_cents(1999)` is `$19.99`.
+//
+// The `penny * n` shape `lib/json.bx` already uses, named so the round trip has two ends a reader
+// can see. **This is the only multiplication in the file that can trap**, and only when `cents`
+// is the full i64 range — which is exactly when the answer does not exist.
+pure function decimal2_from_cents(cents: Int) -> Decimal<2> {
+    let penny: Decimal<2> = $0.01;
+    return penny * cents;
+}
+
+// ---- the three that need the zero of the scale ------------------------------------------
+
+// Is this exactly zero? `$0.00`, and nothing else — there is no epsilon here and there will not
+// be one, because there is no float to wobble. That is the entire argument for this language, so
+// a tolerance would be a lie about the arithmetic.
+pure function decimal2_is_zero(value: Decimal<2>) -> Bool {
+    let zero: Decimal<2> = $0.00;
+    return value == zero;
+}
+
+// The distance from zero. **`requires` the value is not the most negative one**, for the reason
+// `math_abs` states: the two's-complement range is asymmetric, so the magnitude of the smallest
+// `Decimal<2>` is not a `Decimal<2>`. A precondition rather than a wrong answer.
+//
+// The clause compares against `decimal2_from_cents(INT_MIN)` — one multiply — rather than against
+// `decimal2_cents(value)`, which would run the sixty-three-step search on every call to say the
+// same thing. A contract clause is code and costs what code costs.
+pure function decimal2_abs(value: Decimal<2>) -> Decimal<2>
+    requires value > decimal2_from_cents(INT_MIN)
+{
+    let zero: Decimal<2> = $0.00;
+    if value < zero {
+        return zero - value;
+    }
+    return value;
+}
+
+// -1, 0 or 1. No precondition and none needed: nothing is negated, so the most negative value
+// answers -1 rather than trapping. The `Int` return matches `math_sign`.
+pure function decimal2_sign(value: Decimal<2>) -> Int {
+    let zero: Decimal<2> = $0.00;
+    if value < zero {
+        return -1;
+    }
+    if value > zero {
+        return 1;
+    }
+    return 0;
+}
+
+// ---- rounding, written out where a reviewer can read it ---------------------------------
+
+// `value` rounded to `places` decimal places, still typed `Decimal<2>`. `places` is 0, 1 or 2:
+// whole currency units, tenths, or the identity.
+//
+// **HALF-EVEN**, which is `RoundHalfEven` — the language's own contract, the one financial
+// reporting asks for, and the one that does not drift upward over a long ledger. To one place,
+// `$0.05` is `$0.00` and `$0.15` is `$0.20`: both are exact ties, and the tie goes to the EVEN
+// neighbour rather than always upward. Half-up would round both up, and a ledger full of ties
+// rounded one way gains a penny per tie.
+//
+// **Why this exists when the language has `Decimal<2, RoundHalfEven>`**: a contract governs an
+// operation that NARROWS a scale, and there is no narrowing here — the answer stays at scale 2,
+// it just has zeroes at the end. `$1.005` is not a `Decimal<2>` in the first place. So the
+// language's rounding cannot express this, and the arithmetic is done on the penny count where
+// the tie rule is four visible lines instead of a keyword.
+//
+// **It also keeps the contract off the caller.** A `Decimal<2, RoundHalfEven>` cannot be passed
+// to anything typed plain `Decimal<2>` — `array_sum_money` would refuse it — so a helper that
+// returned one would poison every value that passed through it. Every function here answers a
+// plain `Decimal<2>` for that reason.
+//
+// **Within a penny of the top of the range, rounding UP has nowhere to go, and this traps** —
+// `burxt runtime error: arithmetic overflow`, measured, in `tests/panic/round_to_at_the_ceiling.bx`.
+// That is the language's own trap and it is the right answer: the rounded value does not exist as a
+// `Decimal<2>`, so the alternatives are wrapping to a large negative number or clamping to a value
+// nobody asked for. No `requires` guards it, because stating the condition would mean naming both
+// the step and the leftover in the signature, and the trap already says the same thing at the same
+// moment with a better message.
+pure function decimal2_round_to(value: Decimal<2>, places: Int) -> Decimal<2>
+    requires places >= 0
+    requires places <= 2
+{
+    if places == 2 {
+        return value;
+    }
+    let mutable step: Int = 100;                              // places == 0: whole units
+    if places == 1 {
+        step = 10;
+    }
+    return decimal2_from_cents(divide_round_half_even(decimal2_cents(value), step) * step);
+}
+
+// `rate` of `amount`, rounded half-even to the penny. `decimal2_percent_of($100.00, 8.25%)` is
+// `$8.25` exactly, with nothing to round.
+//
+// The interesting case is half a penny. `decimal2_percent_of($0.01, 50%)` is `$0.00` and
+// `decimal2_percent_of($0.03, 50%)` is `$0.02` — both are ties, and each goes to the even penny
+// count rather than both going up. Half-up would answer `$0.01` and `$0.02`, which is a penny
+// created out of nothing on every other tie.
+//
+// **The multiplication is done in Decimal, not in Int, and that is deliberate.** `amount * rate`
+// is an exact `Decimal<6>` and the language traps if that product overflows; doing it as
+// `cents * ticks` in Int would silently need an overflow guard this function would then have to
+// answer for. Letting the language trap keeps one rule for overflow instead of two.
+//
+// A `Decimal<4>` for the rate because that is what a percent literal is: `8.25%` is `0.0825`
+// held at scale 4, per `spec/A4.7-SIGNATURE-GRAMMAR.md`.
+pure function decimal2_percent_of(amount: Decimal<2>, rate: Decimal<4>) -> Decimal<2> {
+    let exact: Decimal<6> = amount * rate;
+    // Scale 6 is four places past the penny, so the divisor is 10^4.
+    return decimal2_from_cents(divide_round_half_even(decimal6_ticks(exact), 10000));
+}
+
+// ============================================================================
+// money_split — THE ONE THIS FILE EXISTS FOR
+// ============================================================================
+
+// `total` divided into `parts`, as pennies, such that **the parts sum to exactly the total**.
+//
+// `money_split($100.00, 3)` is `[$33.34, $33.33, $33.33]`. Not `$33.33` three times, which loses
+// a penny; not `$33.34` three times, which invents one; and not a float, which does both
+// depending on the total. This is **largest-remainder allocation**: every part gets the whole
+// share, and the pennies left over go one each to the parts at the front. It is the same rule an
+// invoice, a payroll run and a Hare-quota seat allocation use, and it is the reason a money type
+// is worth having at all — the property is not "close", it is EQUAL, and
+// `tests/pass/money_split.bx` asserts the sum on every case rather than checking examples.
+//
+// **The name has no `decimal2_` prefix, breaking `lib/README.md`'s rule on purpose.** The same
+// exception `math.bx` makes for `INT_MAX`: this is the name the problem already has, in every
+// language and every accounting textbook, and a reader looking for it will type it. The scale is
+// in the word `money`, which in this library means two places everywhere else too
+// (`array_sum_money`, `check_money`, `json_money`).
+//
+// ---- negatives mirror positives, and that took choosing --------------------------------
+//
+// `money_split(-$1.00, 3)` is `[-$0.34, -$0.33, -$0.33]` — the exact negation of the positive
+// split. A refund of a charge is split the same way the charge was, which is the only behaviour
+// that lets a credit note cancel an invoice line for line.
+//
+// Getting that meant **truncating division and not floor division**. `divide_floor(-100, 3)` is
+// -34 with remainder 2, which hands the extra penny to the parts at the BACK and breaks the
+// mirror. `divide_toward_zero(-100, 3)` is -33 with remainder -1, and the remainder carries the
+// sign, so "add one more penny in the direction of the total" is one line for both signs. It
+// also means nothing is ever negated, so the most negative total does not trap.
+//
+// ---- the edges, all of which are ordinary here -----------------------------------------
+//
+//   * **`parts` larger than the penny count.** `money_split($0.02, 5)` is
+//     `[$0.01, $0.01, $0.00, $0.00, $0.00]`. Zero is a legal share; three payees getting nothing
+//     is the truthful answer to "split two pennies five ways".
+//   * **A total of zero** gives `parts` zeroes, and they sum to zero.
+//   * **`parts` of 1** gives the total back, which the remainder handles without a special case:
+//     the remainder of anything by 1 is 0.
+//   * **`parts` of 0** is refused by `requires`. "Split this nought ways" has no answer, and
+//     `lib/array.bx`'s `array_min` records the same call for the same reason.
+function money_split(total: Decimal<2>, parts: Int) -> [Decimal<2>]
+    requires parts > 0
+{
+    let cents: Int = decimal2_cents(total);
+    // Truncating, so `extra` carries the sign of the total — see the note above.
+    let share: Int = divide_toward_zero(cents, parts);
+    let extra: Int = remainder(cents, parts);                 // strictly fewer than `parts` of them
+    let step: Int = math_sign(cents);                         // the direction the extra penny goes
+    let mutable given: Int = 0;
+    if extra < 0 {
+        given = 0 - extra;                                    // safe: |extra| < parts, never INT_MIN
+    } else {
+        given = extra;
+    }
+    let mutable out: [Decimal<2>] = [];
+    for i in 0..parts {
+        let mutable each: Int = share;
+        if i < given {
+            each = share + step;
+        }
+        push(out, decimal2_from_cents(each));
+    }
+    return out;
+}
+
+// ============================================================================
+// SCALE 4 — RATES
+// ============================================================================
+//
+// `8.25%` is a `Decimal<4>`. These are the same three functions the money scale has, and the
+// header says why they cannot be one generic set.
+
+// The count of ten-thousandths. `decimal4_ticks(8.25%)` is `825`.
+pure function decimal4_ticks(value: Decimal<4>) -> Int {
+    let tick: Decimal<4> = 0.0001;
+    let zero: Decimal<4> = 0.0000;
+    let mutable found: Int = 0;
+    if value < zero {
+        found = INT_MIN;
+    }
+    let mutable bit: Int = 4611686018427387904;
+    while bit > 0 {
+        if tick * (found + bit) <= value {
+            found = found + bit;
+        }
+        bit = divide_floor(bit, 2);
+    }
+    return found;
+}
+
+pure function decimal4_from_ticks(ticks: Int) -> Decimal<4> {
+    let tick: Decimal<4> = 0.0001;
+    return tick * ticks;
+}
+
+pure function decimal4_is_zero(value: Decimal<4>) -> Bool {
+    let zero: Decimal<4> = 0.0000;
+    return value == zero;
+}
+
+pure function decimal4_abs(value: Decimal<4>) -> Decimal<4>
+    requires value > decimal4_from_ticks(INT_MIN)
+{
+    let zero: Decimal<4> = 0.0000;
+    if value < zero {
+        return zero - value;
+    }
+    return value;
+}
+
+pure function decimal4_sign(value: Decimal<4>) -> Int {
+    let zero: Decimal<4> = 0.0000;
+    if value < zero {
+        return -1;
+    }
+    if value > zero {
+        return 1;
+    }
+    return 0;
+}
+
+// ============================================================================
+// SCALE 6 — WHERE MONEY TIMES A RATE LANDS
+// ============================================================================
+//
+// A `Decimal<2>` times a `Decimal<4>` is an exact `Decimal<6>`, so this scale is not chosen — it
+// is where the arithmetic already goes. `decimal2_percent_of` is its only caller today, and it
+// is public because anyone doing tax, interest or commission by hand ends up holding one.
+
+// The count of millionths.
+pure function decimal6_ticks(value: Decimal<6>) -> Int {
+    let tick: Decimal<6> = 0.000001;
+    let zero: Decimal<6> = 0.000000;
+    let mutable found: Int = 0;
+    if value < zero {
+        found = INT_MIN;
+    }
+    let mutable bit: Int = 4611686018427387904;
+    while bit > 0 {
+        if tick * (found + bit) <= value {
+            found = found + bit;
+        }
+        bit = divide_floor(bit, 2);
+    }
+    return found;
+}
+
+pure function decimal6_from_ticks(ticks: Int) -> Decimal<6> {
+    let tick: Decimal<6> = 0.000001;
+    return tick * ticks;
+}
+
+pure function decimal6_is_zero(value: Decimal<6>) -> Bool {
+    let zero: Decimal<6> = 0.000000;
+    return value == zero;
+}
+
+// ============================================================================
+// SCALE 7 — lib/vector.bx's EMBEDDING SCALE
+// ============================================================================
+
+// The count of ten-millionths. The integer `magnitude_of_squared` searches for by hand; this is
+// the same search named once, and `lib/vector.bx` predates it.
+pure function decimal7_ticks(value: Decimal<7>) -> Int {
+    let tick: Decimal<7> = 0.0000001;
+    let zero: Decimal<7> = 0.0000000;
+    let mutable found: Int = 0;
+    if value < zero {
+        found = INT_MIN;
+    }
+    let mutable bit: Int = 4611686018427387904;
+    while bit > 0 {
+        if tick * (found + bit) <= value {
+            found = found + bit;
+        }
+        bit = divide_floor(bit, 2);
+    }
+    return found;
+}
+
+pure function decimal7_from_ticks(ticks: Int) -> Decimal<7> {
+    let tick: Decimal<7> = 0.0000001;
+    return tick * ticks;
+}
+
+pure function decimal7_is_zero(value: Decimal<7>) -> Bool {
+    let zero: Decimal<7> = 0.0000000;
+    return value == zero;
+}
+
+pure function decimal7_abs(value: Decimal<7>) -> Decimal<7>
+    requires value > decimal7_from_ticks(INT_MIN)
+{
+    let zero: Decimal<7> = 0.0000000;
+    if value < zero {
+        return zero - value;
+    }
+    return value;
+}
+
+pure function decimal7_sign(value: Decimal<7>) -> Int {
+    let zero: Decimal<7> = 0.0000000;
+    if value < zero {
+        return -1;
+    }
+    if value > zero {
+        return 1;
+    }
+    return 0;
+}
+
+// ============================================================================
+// THE INTEGER KERNEL
+// ============================================================================
+
+// `n / step`, rounded to the nearest whole, ties to the EVEN one. `divide_round_half_even(15, 10)`
+// is 2 and `divide_round_half_even(25, 10)` is also 2 — both ties, and both go to the even
+// neighbour rather than both going up.
+//
+// Written once, in Int, and shared by every scale — which is the payoff of converting to the
+// unscaled count first: the rounding rule exists in exactly one place, so there is one thing to
+// read and one thing to be wrong.
+//
+// **It answers the QUOTIENT, not the rounded multiple**, because both callers want the quotient
+// and only one of them wants it multiplied back up. Returning the multiple was the first version
+// and it made `decimal2_percent_of($100.00, 8.25%)` answer `$82,500.00` — a factor of 10,000,
+// which is exactly the kind of mistake a fixture catches and a reading does not.
+//
+// `divide_floor` rather than truncation here, and unlike `money_split` that is the right choice:
+// flooring makes the leftover non-negative for negative `n` too, so "is this a tie" is one
+// comparison instead of two. -5 with step 10 gives quotient -1 and leftover 5, a tie, and the
+// even neighbour is 0 — which is `decimal2_round_to(-$0.05, 1)` being `$0.00`, the mirror of the
+// positive case. Half-even is symmetric about zero, and `tests/pass/decimal_helpers.bx` checks
+// that over every penny in a range rather than on the four examples above.
+pure function divide_round_half_even(n: Int, step: Int) -> Int
+    requires step > 0
+{
+    let quotient: Int = divide_floor(n, step);
+    let leftover: Int = n - quotient * step;                  // always 0 <= leftover < step
+    let doubled: Int = leftover * 2;
+    if doubled > step {
+        return quotient + 1;
+    }
+    if doubled < step {
+        return quotient;
+    }
+    // An exact tie. The even quotient wins, which is the whole of "banker's rounding".
+    if remainder(quotient, 2) == 0 {
+        return quotient;
+    }
+    return quotient + 1;
+}
+
+// ============================================================================
+// WHAT IS NOT HERE
+// ============================================================================
+//
+// **No `decimal2_min`/`decimal2_max`.** `math_min`/`math_max` in `lib/math.bx` are generic over
+// `Ordered` and already take every Decimal scale. See the header.
+//
+// **No `money_split_by_weights`.** Allocating $100.00 across shares of 1:2:3 is the same
+// largest-remainder rule with the quota scaled by each weight, and it is the obvious next
+// function — it is absent because nothing here needed it yet and an untested function is worse
+// than a missing one. The shape is `money_split`'s, with `share` computed per weight and the
+// leftover pennies going to the largest fractional remainders rather than to the front.
+//
+// **No division of one Decimal by another.** `Decimal / Decimal` needs a rounding contract and
+// the language already provides it: `let third: Decimal<2, RoundHalfEven> = total / 3;`. A
+// wrapper would only hide which contract was chosen, and choosing it is the caller's job.
+// ============================================================================

@@ -1,0 +1,71 @@
+-- base64, RFC 4648 section 10
+"" -> ""
+"f" -> "Zg=="
+"fo" -> "Zm8="
+"foo" -> "Zm9v"
+"foob" -> "Zm9vYg=="
+"fooba" -> "Zm9vYmE="
+"foobar" -> "Zm9vYmFy"
+-- base64 decoded back
+"" -> ""
+"Zg==" -> "f"
+"Zm8=" -> "fo"
+"Zm9v" -> "foo"
+"Zm9vYg==" -> "foob"
+"Zm9vYmE=" -> "fooba"
+"Zm9vYmFy" -> "foobar"
+-- base16, RFC 4648 section 10, lowercased
+"" -> ""
+"f" -> "66"
+"fo" -> "666f"
+"foo" -> "666f6f"
+"foob" -> "666f6f62"
+"fooba" -> "666f6f6261"
+"foobar" -> "666f6f626172"
+"666F6F626172" (the RFC's own uppercase) -> "foobar"
+"666f6F626172" (mixed case) -> "foobar"
+-- base64url
+"[251, 255, 191]" -> "+/+/"
+"[251, 255, 191]" -> "-_-_"
+"fooba" -> "Zm9vYmE"
+"f" -> "Zg"
+"foob" -> "Zm9vYg"
+unpadded "Zm9vYmE" -> "fooba"
+padded   "Zm9vYmE=" -> "fooba"
+-- what a decoder must refuse
+a space inside      "Zm9v YmFy": refused
+a trailing newline  "Zm9vYmFy\n": refused
+seven characters    "Zm9vYmF": refused
+padding in the mid  "Zg=v": refused
+one pad too few     "Zg=": refused
+three pads          "Zg===": refused
+nothing but padding "====": refused
+non-canonical bits  "Zh==": refused
+non-canonical bits  "Zm9=": refused
+url alphabet to std "-_-_": refused
+std alphabet to url "+/+/": refused
+base64 needs padding "Zm9vYmE": refused
+one character alone  "Z": refused
+five characters      "Zm9vY": refused
+odd hex              "666": refused
+not hex              "66gg": refused
+an 0x prefix         "0x66": refused
+hex with a space     "66 6f": refused
+"" decodes to zero bytes rather than being refused: true
+-- round trip, every byte value 0 to 255
+each byte on its own, through all three codecs: true
+all 256 at once, through all three codecs: true
+every length from 0 to 32 round trips: true
+-- NUL
+a String holds a NUL: len is 3: true
+and the middle byte is 0: true
+base64 of "h\0i" is "aABp": true
+hex of "h\0i" is "680069": true
+and it decodes back to the same three bytes: true
+-- the shape of a 32-byte key
+44
+43
+64
+B0SBvvs4dbLvLGmm4yBdmtcUUY7LCEWCv/w5drPwLWo=
+B0SBvvs4dbLvLGmm4yBdmtcUUY7LCEWCv_w5drPwLWo
+074481befb3875b2ef2c69a6e3205d9ad714518ecb084582bffc3976b3f02d6a

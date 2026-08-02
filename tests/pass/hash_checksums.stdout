@@ -1,0 +1,51 @@
+CRC-32 and FNV-1a are CHECKSUMS. Neither is cryptographic.
+crc32 of 123456789 = cbf43926
+crc32 of the empty string = 00000000
+crc32 of a = e8b7be43
+crc32 of The quick brown fox jumps over the lazy dog = 414fa339
+true
+true
+true
+true
+true
+true
+fnv1a_32 of the empty string = 811c9dc5
+fnv1a_32 of a = e40c292c
+fnv1a_32 of b = e70c2de5
+fnv1a_32 of c = e60c2c52
+fnv1a_32 of foobar = bf9cf968
+fnv1a_32 of chongo was here!\n = d49930d5
+fnv1a_64 of the empty string = cbf29ce484222325
+fnv1a_64 of a = af63dc4c8601ec8c
+fnv1a_64 of b = af63df4c8601f1a5
+fnv1a_64 of c = af63de4c8601eff2
+fnv1a_64 of foobar = 85944171f73967e8
+fnv1a_64 of chongo was here!\n = 46810940eff5f915
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+00
+ff
+000000ff
+ffffffffffffffff
+deadbeef
+true
+false
+false
+true
+false
+false
+00010f107f80feff
+[]
+64
+128

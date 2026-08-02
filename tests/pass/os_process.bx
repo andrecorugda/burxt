@@ -1,0 +1,107 @@
+// lib/os.bx — the process and its environment. Roadmap §D1q, and §B3 with it.
+//
+// Five things this language could not ask about a running program until now: what its own pid is,
+// what directory it is in, what machine it is on, how to change a variable a child will inherit,
+// and — the one with teeth — **what a command printed on stderr as distinct from stdout, and
+// whether it succeeded.**
+//
+// `os_capture` merged the two with `2>&1`, so a caller could not tell a hash from the warning
+// printed beside it and had nothing at all to check for failure. Both halves are pinned below.
+//
+// Nothing machine-specific is printed. The pid, the cwd and the platform name differ on every
+// machine, so what is asserted about each is the shape of the answer, not the answer.
+use "../../lib/os.bx";
+
+region main {
+    // ---- pid: §B3's missing piece ------------------------------------------------------------
+    //
+    // Two calls agree, and the number is a real pid. That is all that can be said portably, and it
+    // is what `lib/files.bx` needs it for — a scratch name two concurrent programs will not share.
+    print(os_pid() > 0);
+    print(os_pid() == os_pid());
+
+    // ---- the environment, written as well as read --------------------------------------------
+    print(option_is_none(os_env("BURXT_SET_BY_THIS_TEST")));
+    print(os_set_env("BURXT_SET_BY_THIS_TEST", "written"));
+    print(os_env_or("BURXT_SET_BY_THIS_TEST", "unset"));
+    // Overwriting is what "set" means here, and it is not conditional on the variable being unset.
+    print(os_set_env("BURXT_SET_BY_THIS_TEST", "written again"));
+    print(os_env_or("BURXT_SET_BY_THIS_TEST", "unset"));
+    // An empty value is a real value, and it is not the same as unset — the distinction `os_env`
+    // exists for, now reachable from both sides.
+    print(os_set_env("BURXT_SET_BY_THIS_TEST", ""));
+    print(option_is_some(os_env("BURXT_SET_BY_THIS_TEST")));
+    print(os_env_or("BURXT_SET_BY_THIS_TEST", "unset") == "");
+    // `setenv` refuses a name holding `=`, and the refusal arrives as false rather than as a
+    // variable with a surprising name.
+    print(os_set_env("BURXT=BAD", "x"));
+    print(os_set_env("", "x"));
+
+    // A child inherits what was set. This is the reason `os_set_env` is worth having at all.
+    print(os_set_env("BURXT_FOR_THE_CHILD", "inherited"));
+    let child: Capture = os_capture_status("printf %s \"$BURXT_FOR_THE_CHILD\"");
+    print("[" + child.output + "]");
+
+    // ---- the working directory ---------------------------------------------------------------
+    match os_cwd() {
+        None => {
+            print("cwd: none");
+        }
+        Some(directory) => {
+            // Absolute, non-empty, and no trailing newline — the three things a caller relies on.
+            print(len(directory) > 0 && byte_at(directory, 0) == 47);
+            print(byte_at(directory, len(directory) - 1) != 10);
+        }
+    }
+
+    // ---- the platform ------------------------------------------------------------------------
+    //
+    // The value differs per machine, so what is checked is that it is one of the names this
+    // project runs on, lower case, and with the newline `uname` leaves already gone.
+    let platform: String = os_platform();
+    print(platform == "linux" || platform == "macos");
+    print(len(platform) > 0 && byte_at(platform, len(platform) - 1) != 10);
+
+    // ---- exit codes, including the category that used to read as success ----------------------
+    print(os_run("true"));
+    print(os_run("exit 7"));
+    print(os_run("exit 255"));
+    // **A command killed by a signal.** `divide_floor(status, 256)` answered 0 for this — success —
+    // because the exit byte of a signalled process is zero. 137 is 128 + SIGKILL, which is what a
+    // shell reports and what a caller checking for failure needs to see.
+    print(os_run("kill -9 $$"));
+    // The pure core, so the mapping can be read without running anything.
+    print(os_exit_code(0));
+    print(os_exit_code(1792));
+    print(os_exit_code(9));
+    print(os_exit_code(11));
+    print(os_exit_code(-1));
+
+    // ---- capture, with the two streams kept apart --------------------------------------------
+    let split: Capture = os_capture_status("echo to-stdout; echo to-stderr 1>&2; exit 3");
+    print("out [" + split.output + "]");
+    print("err [" + split.errors + "]");
+    print(split.code);
+
+    // **The `( ... )` wrapper, and why it is not decoration.** A redirection binds to one command,
+    // so without the subshell only the LAST piece of a `;`-separated command was captured and
+    // everything before it escaped onto the caller's own stdout. Two statements is the smallest
+    // case that shows it, and it is the case nobody had written.
+    let two: Capture = os_capture_status("echo first; echo second");
+    print("both [" + two.output + "]");
+
+    // A command that says nothing says nothing, rather than answering an absence.
+    let quiet: Capture = os_capture_status("true");
+    print("quiet [" + quiet.output + "] [" + quiet.errors + "] " + to_string(quiet.code));
+
+    // A command that does not exist: the shell says so on stderr and answers 127.
+    let absent: Capture = os_capture_status("burxt-no-such-command-4c1b9e");
+    print(len(absent.output) == 0);
+    print(len(absent.errors) > 0);
+    print(absent.code);
+
+    // ---- the merging capture, still merging ---------------------------------------------------
+    //
+    // Kept because interleaving is a real thing to want, and two files cannot reconstruct it.
+    print("[" + os_capture("echo one; echo two 1>&2; echo three") + "]");
+}

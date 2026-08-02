@@ -337,6 +337,55 @@
  },
  {
   "kind": "function",
+  "name": "result_is_error",
+  "text": "lib/result.bx",
+  "url": "/reference/result.html#result-is-error",
+  "where": "function result_is_error<T, E>(r: Result<T, E>) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "result_context",
+  "text": "lib/result.bx",
+  "url": "/reference/result.html#result-context",
+  "where": "function result_context<T>(r: Result<T, String>, context: String) -> Result<T, String>"
+ },
+ {
+  "kind": "function",
+  "name": "option_ok_or",
+  "text": "lib/result.bx",
+  "url": "/reference/result.html#option-ok-or",
+  "where": "function option_ok_or<T, E>(o: Option<T>, why: E) -> Result<T, E>"
+ },
+ {
+  "kind": "function",
+  "name": "assert_that",
+  "text": "lib/result.bx",
+  "url": "/reference/result.html#assert-that",
+  "where": "function assert_that(held: Bool, why: String) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "panic",
+  "text": "lib/result.bx",
+  "url": "/reference/result.html#panic",
+  "where": "function panic(why: String) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "todo",
+  "text": "lib/result.bx",
+  "url": "/reference/result.html#todo",
+  "where": "function todo() -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "unreachable",
+  "text": "lib/result.bx",
+  "url": "/reference/result.html#unreachable",
+  "where": "function unreachable(why: String) -> Int"
+ },
+ {
+  "kind": "function",
   "name": "string_join_chunks",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-join-chunks",
@@ -1156,6 +1205,27 @@
  },
  {
   "kind": "function",
+  "name": "file_read_maybe",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-read-maybe",
+  "where": "function file_read_maybe(path: String) -> Option<String> touches files"
+ },
+ {
+  "kind": "function",
+  "name": "file_read_bytes",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-read-bytes",
+  "where": "function file_read_bytes(path: String) -> Option<[Int]> touches files"
+ },
+ {
+  "kind": "function",
+  "name": "file_size",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-size",
+  "where": "function file_size(path: String) -> Option<Int> touches files"
+ },
+ {
+  "kind": "function",
   "name": "file_write",
   "text": "lib/files.bx",
   "url": "/reference/files.html#file-write",
@@ -1177,6 +1247,20 @@
  },
  {
   "kind": "function",
+  "name": "file_is_directory",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-is-directory",
+  "where": "function file_is_directory(path: String) -> Bool touches files"
+ },
+ {
+  "kind": "function",
+  "name": "file_is_file",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-is-file",
+  "where": "function file_is_file(path: String) -> Bool touches commands, files"
+ },
+ {
+  "kind": "function",
   "name": "file_delete",
   "text": "lib/files.bx",
   "url": "/reference/files.html#file-delete",
@@ -1191,6 +1275,13 @@
  },
  {
   "kind": "function",
+  "name": "file_copy",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-copy",
+  "where": "function file_copy(from: String, to: String) -> Bool touches commands"
+ },
+ {
+  "kind": "function",
   "name": "file_make_directory",
   "text": "lib/files.bx",
   "url": "/reference/files.html#file-make-directory",
@@ -1198,10 +1289,52 @@
  },
  {
   "kind": "function",
+  "name": "file_remove_directory",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-remove-directory",
+  "where": "function file_remove_directory(path: String) -> Bool touches files"
+ },
+ {
+  "kind": "function",
   "name": "file_list_directory",
   "text": "lib/files.bx",
   "url": "/reference/files.html#file-list-directory",
-  "where": "function file_list_directory(directory: String) -> [String] touches commands, files"
+  "where": "function file_list_directory(directory: String) -> [String] touches commands, files, input"
+ },
+ {
+  "kind": "function",
+  "name": "file_walk",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-walk",
+  "where": "function file_walk(directory: String) -> Option<[String]> touches commands, files, input"
+ },
+ {
+  "kind": "function",
+  "name": "file_temp_directory",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-temp-directory",
+  "where": "function file_temp_directory(prefix: String) -> Option<String> touches files, input"
+ },
+ {
+  "kind": "function",
+  "name": "file_temp_path",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-temp-path",
+  "where": "function file_temp_path(prefix: String) -> Option<String> touches files, input"
+ },
+ {
+  "kind": "function",
+  "name": "file_temp_release",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-temp-release",
+  "where": "function file_temp_release(path: String) -> Bool touches files, input"
+ },
+ {
+  "kind": "function",
+  "name": "file_temp_base",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-temp-base",
+  "where": "function file_temp_base() -> String touches input"
  },
  {
   "kind": "function",
@@ -1216,6 +1349,27 @@
   "text": "lib/files.bx",
   "url": "/reference/files.html#file-split-lines",
   "where": "function file_split_lines(text: String) -> [String]"
+ },
+ {
+  "kind": "function",
+  "name": "file_last_slash",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-last-slash",
+  "where": "function file_last_slash(path: String) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "file_starts_with",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-starts-with",
+  "where": "function file_starts_with(text: String, prefix: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "file_is_plain_name",
+  "text": "lib/files.bx",
+  "url": "/reference/files.html#file-is-plain-name",
+  "where": "function file_is_plain_name(name: String) -> Bool"
  },
  {
   "kind": "function",
@@ -1254,10 +1408,31 @@
  },
  {
   "kind": "function",
+  "name": "os_exit_code",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-exit-code",
+  "where": "pure function os_exit_code(status: Int) -> Int"
+ },
+ {
+  "kind": "class",
+  "name": "Capture",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#capture",
+  "where": "class Capture { output: String, errors: String, code: Int }"
+ },
+ {
+  "kind": "function",
+  "name": "os_capture_status",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-capture-status",
+  "where": "function os_capture_status(command: String) -> Capture touches commands, files, input"
+ },
+ {
+  "kind": "function",
   "name": "os_capture",
   "text": "lib/os.bx",
   "url": "/reference/os.html#os-capture",
-  "where": "function os_capture(command: String) -> String touches commands, files"
+  "where": "function os_capture(command: String) -> String touches commands, files, input"
  },
  {
   "kind": "function",
@@ -1293,6 +1468,55 @@
   "text": "lib/os.bx",
   "url": "/reference/os.html#os-env-or",
   "where": "function os_env_or(name: String, fallback: String) -> String touches input"
+ },
+ {
+  "kind": "function",
+  "name": "os_set_env",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-set-env",
+  "where": "function os_set_env(name: String, value: String) -> Bool touches input"
+ },
+ {
+  "kind": "function",
+  "name": "os_pid",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-pid",
+  "where": "function os_pid() -> Int touches input"
+ },
+ {
+  "kind": "function",
+  "name": "os_cwd",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-cwd",
+  "where": "function os_cwd() -> Option<String> touches files"
+ },
+ {
+  "kind": "function",
+  "name": "os_platform",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-platform",
+  "where": "function os_platform() -> String touches commands, files, input"
+ },
+ {
+  "kind": "function",
+  "name": "os_sleep",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-sleep",
+  "where": "function os_sleep(milliseconds: Int) -> Bool touches clock"
+ },
+ {
+  "kind": "function",
+  "name": "os_trim_ascii",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-trim-ascii",
+  "where": "function os_trim_ascii(text: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "os_is_space",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-is-space",
+  "where": "function os_is_space(b: Int) -> Bool"
  },
  {
   "kind": "keyword",

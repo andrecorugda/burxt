@@ -1,0 +1,70 @@
+quoted comma -> 1: <[a]|[b,c]|[d]>
+doubled quote -> 1: <[say "hi"]|[x]>
+field is one quote -> 1: <["]|[x]>
+newline in quotes -> 1: <[one<LF>two]|[z]>
+crlf in quotes -> 1: <[one<CR><LF>two]|[z]>
+trailing empty field -> 1: <[a]|[b]|[]>
+empty line in the middle -> 2: <[a]> <[b]>
+two trailing newlines -> 1: <[a]>
+crlf terminators -> 2: <[a]|[b]> <[c]|[d]>
+ragged rows -> 3: <[a]|[b]|[c]> <[d]|[e]> <[f]|[g]|[h]|[i]>
+no trailing newline -> 1: <[a]|[b]>
+empty document -> 0:
+only a newline -> 0:
+quoted empty field -> 1: <[]>
+all fields empty -> 1: <[]|[]|[]>
+lone cr is data -> 1: <[a<CR>b]>
+quote inside an unquoted field -> 1: <[a"b]|[c]>
+space then quote -> 1: <[ "a"]>
+spaces are kept -> 1: <[ a ]|[ b ]>
+leading utf-8 bom is stripped -> 2: <[id]|[name]> <[1]|[x]>
+unterminated quote -> REFUSED: a quoted field opened at byte 0 was never closed
+junk after a closing quote -> REFUSED: unexpected text after a quoted field, at byte 3
+semicolon -> 3 fields, middle [b,c]
+tab -> 3 fields, middle [b,c]
+plain round-trips: a,b,c<LF>1,2,3<LF>
+quoted comma round-trips: a,"b,c",d<LF>
+doubled quote round-trips: "say ""hi""",x<LF>
+field is one quote round-trips: """",x<LF>
+newline in quotes round-trips: "one<LF>two",z<LF>
+crlf in quotes round-trips: "one<CR><LF>two",z<LF>
+trailing empty field round-trips: a,b,<LF>
+empty line round-trips: a<LF>b<LF>
+crlf file becomes lf round-trips: a,b<LF>c,d<LF>
+ragged rows round-trips: a,b,c<LF>d,e<LF>f,g,h,i<LF>
+no trailing newline gains one round-trips: a,b<LF>
+empty document round-trips: 
+one empty field round-trips: ""<LF>
+all fields empty round-trips: ,,<LF>
+lone cr gets quoted round-trips: "a<CR>b"<LF>
+unquoted quote gets quoted round-trips: "a""b",c<LF>
+spaces survive round-trips:  a , b <LF>
+no-field and empty-field rows write as: ""<LF>""<LF>x<LF>
+and read back as 3 records, widths 1 1 1
+lf comma:   plain,"has,comma","has""quote","has<LF>newline",has;semicolon<LF>
+crlf comma: plain,"has,comma","has""quote","has<LF>newline",has;semicolon<CR><LF>
+lf semi:    plain;has,comma;"has""quote";"has<LF>newline";"has;semicolon"<LF>
+[plain]
+[]
+["a,b"]
+["a""b"]
+[a,b]
+["a<CR>b"]
+[ padded ]
+record 1 begins at byte 0
+record 2 begins at byte 4
+record 3 begins at byte 18
+last
+widths disagree: record 2 (at byte 6) has 2 fields where record 1 has 3
+rectangular refuses: record 2 (at byte 6) has 2 fields where record 1 has 3
+rectangular accepted 2
+rectangular accepted 0
+amount is column 2
+  19.99
+  5.00
+`Amount` is not `amount`
+field 9 of a 3-field record: None
+true
+20000
+INV-119999
+Acme, Limited

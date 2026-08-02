@@ -1,0 +1,25 @@
+// `secure_random_bytes(0)` has no honest answer, and `requires count > 0` says so at the call.
+//
+// The tempting alternative is an empty array, and it is the worst available lie in this particular
+// module: a caller writing `secure_random_bytes(key_length)` where `key_length` came out of a
+// config file as 0 would get a "key" of no bytes, encode it to the empty string, store it, and
+// have a program that works. Every comparison against it would succeed. `lib/secure.bx` answers
+// `Option.None` when the KERNEL refuses — that is a real failure with a real cause — but a request
+// for zero bytes is the caller's mistake and belongs in the signature where a reviewer reads it.
+//
+// The count is COMPUTED so the checker cannot fold it and refuse the program at compile time; this
+// fixture is about the runtime contract.
+use "../../lib/secure.bx";
+
+region main {
+    let mutable nothing: [Int] = [];
+    let count: Int = len(nothing);
+    match secure_random_bytes(count) {
+        None => {
+            print("refused");
+        }
+        Some(bytes) => {
+            print(len(bytes));
+        }
+    }
+}

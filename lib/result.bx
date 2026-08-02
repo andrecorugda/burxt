@@ -8,7 +8,16 @@
 // read without saying what happens when it is an error.
 //
 // A LIBRARY file, like lib/option.bx: `Result<T, E>` is three lines of Burxt.
+//
+// It also holds the §D1o error helpers, at the foot of the file: `option_ok_or`, which turns an
+// absence into a stated reason, and the four that stop the program when there is no caller who
+// could act on a failure. The section there argues for why they sit next to the type that exists
+// to avoid them.
 // ============================================================================
+
+// For `option_ok_or`. The dependency runs this way round and not the other: `lib/option.bx` is
+// imported by every module here and stays free of imports itself.
+use "option.bx";
 
 // Either an answer or a reason there is none. `E` is usually a String while a
 // program is young and an enum once its failures are worth naming.
@@ -48,6 +57,173 @@ function result_is_ok<T, E>(r: Result<T, E>) -> Bool {
         Ok(value) => { return true; }
         Error(why) => { return false; }
     }
+}
+
+// The other half, and it is not `!result_is_ok(r)` at the call site by accident: a condition
+// spelled `if result_is_error(r)` reads the way the reader is thinking, and a `!` in front of a
+// predicate is the single easiest thing to miss in a diff.
+function result_is_error<T, E>(r: Result<T, E>) -> Bool {
+    match r {
+        Ok(value) => { return false; }
+        Error(why) => { return true; }
+    }
+}
+
+// ---- adding context to a failure -------------------------------------------
+//
+// "no such file" is a true answer and a useless one; "reading the config: no such file" is the
+// same answer with the thing that was being attempted in front of it. This is what `?` will not do
+// for you — see the note at the foot of this file on why converting an error type is a decision an
+// operator must not make silently — so it is spelled out, once, here.
+
+// `context` and `": "` in front of the failure, if there is one. An `Ok` passes through untouched.
+//
+//     let text: String = result_context(read_config(path), "reading " + path)?;
+//
+// **`String` errors only, and that is a real limit rather than an oversight.** A generic `E` cannot
+// be concatenated — nothing in the language says an arbitrary `E` has any text in it — and the
+// alternative, an interface with a `describe()` method, would make every enum-typed failure in a
+// program implement it before this function could be called on any of them. A program whose
+// failures have grown into an enum has outgrown this helper and should write its own `match`, which
+// is the same advice `result_or` gives.
+//
+// Two `+` for one call and no loop, so §D0's chunk rule does not apply — that rule is about
+// building a String piece by piece in a loop, and this is a single concatenation of three pieces.
+function result_context<T>(r: Result<T, String>, context: String) -> Result<T, String> {
+    match r {
+        Ok(value) => { return Result.Ok(value); }
+        Error(why) => { return Result.Error(context + ": " + why); }
+    }
+}
+
+// ---- the bridge from lib/option.bx -----------------------------------------
+
+// An absence, given a reason. `Option<T>` says there is nothing there; `Result<T, E>` says why, and
+// this is the one-line conversion between them.
+//
+//     let user: User = option_ok_or(find_user(id), "no user " + to_string(id))?;
+//
+// **It lives here rather than in `lib/option.bx`** because it hands back a `Result`: a caller who
+// can use the answer already has this file open, and `lib/option.bx` stays the module with no
+// dependencies — every other module in this library imports it.
+//
+// The reason is taken BY VALUE, like `option_or`'s fallback, so a caller building an expensive
+// message pays for it whether or not the Option was empty. Burxt has no closures, so a lazy
+// version would need a function value it does not have; `lib/fn.bx`'s interfaces could stand in,
+// and the ceremony would cost more than the message.
+//
+// **This was listed as blocked on A3** — `Option.None` in a free generic — for long enough that the
+// row went stale. A3 had been working since v0.0.241, and the fixture proves it here rather than
+// the roadmap claiming it.
+function option_ok_or<T, E>(o: Option<T>, why: E) -> Result<T, E> {
+    match o {
+        None => { return Result.Error(why); }
+        Some(value) => { return Result.Ok(value); }
+    }
+}
+
+// ============================================================================
+// §D1o — WHEN THERE IS NO CALLER TO TELL
+// ============================================================================
+//
+// Everything above this line is failure as a VALUE: the caller is handed a `Result` and the
+// compiler makes them say what happens next. That is the right answer almost every time, and it is
+// why `unwrap` is absent from this file and from `lib/option.bx`.
+//
+// The four functions below are the other case, and it is narrow: **the program's own invariant is
+// broken, so there is no sensible next step and nobody who could take it.** A parser that reaches a
+// branch its own grammar says is impossible has not encountered a failure — it has discovered that
+// it is wrong about itself, and returning `Result.Error("impossible")` to a caller who can only
+// print it is theatre.
+//
+// They live in this file, next to the type that exists to avoid them, ON PURPOSE. Both options are
+// then in front of a reader at the same time, together with the argument for preferring the first —
+// which is exactly the choice `panic` in another module, with no `Result` in view, would let
+// somebody skip.
+//
+// **All four end the process with code 70**, the same code the runtime uses for a failed `requires`
+// or an arithmetic overflow. A shell, a CI job and a test runner should not have to tell "the
+// program asserted something false" apart from "the language caught something false" — both mean
+// the program was wrong about itself and stopped instead of continuing. The MESSAGE distinguishes
+// them: the runtime says `burxt runtime error:` and these say `burxt panic:`, so a reader knows
+// which layer noticed.
+//
+// The message goes to **stderr**, for `lib/log.bx`'s reason: a program's stdout belongs to the
+// program's output, and a dying message on it corrupts whatever is downstream of the pipe.
+//
+// ---- four unprefixed names, and the collision is the point ----
+//
+// `lib/README.md`'s rule is that every function carries its module — `string_find`, not `find` —
+// because there is no namespacing and a short name would collide with a program's own. These four
+// break it, the same way `math.bx`'s `INT_MAX` does and for the same reason: `panic`, `todo`,
+// `unreachable` and `assert_that` are the names these things have in every language a reader has
+// used, and a reader looking for them will type them.
+//
+// The cost is real and worth stating rather than glossing: `use "lib/result.bx"` puts `panic` and
+// `todo` into a program's one flat namespace, and anything importing a module that imports this one
+// gets them too. **A collision is a compile error, never a silent shadow** — which is the whole
+// reason the prefix rule exists — so a program that already has its own `todo` finds out at build
+// time, in one line, and either renames or wanted this one. When modules get namespaces the
+// question disappears.
+//
+// ---- what a `requires` clause does better, and when to use one instead ----
+//
+// `requires parts > 0` on the function is stronger than `assert_that(parts > 0, ...)` inside it,
+// and where a precondition fits it should win. The clause is part of the SIGNATURE: `burxt review`
+// can see it change, `burxt mcp-schema` publishes it, and the failure names the clause and the
+// function rather than a string somebody wrote. `assert_that` is for what a signature cannot say —
+// a relationship between two locals halfway down a body, or a claim about data that has just been
+// read.
+
+// Stop unless `held`. The message says what was expected, and it should say the expectation rather
+// than the symptom: `assert_that(total == sum, "the ledger balances")` beats `"bad total"`.
+//
+// **It returns `Int` rather than nothing** — Burxt has no void — and the return is ignorable, so
+// `assert_that(...)` reads as a statement. The value is always 0; there is no other value it could
+// have, because the alternative to returning is not returning.
+function assert_that(held: Bool, why: String) -> Int {
+    if held {
+        return 0;
+    }
+    return panic("assertion failed: " + why);
+}
+
+// Stop, saying why. The one the other three are written in terms of.
+//
+// The `return 0` after `exit(70)` is unreachable and the compiler requires it anyway: `exit` is a
+// statement rather than an expression — `return exit(70);` is refused, because a call that ends the
+// process has no value to give — and every path out of a function that promises an `Int` has to
+// produce one. Left as a bare `0` rather than dressed up, because a reader should be able to see in
+// one line that nothing here is doing anything clever.
+function panic(why: String) -> Int {
+    print_error("burxt panic: " + why);
+    exit(70);
+    return 0;
+}
+
+// A path that is not written yet. `return todo();` type-checks anywhere an `Int` is wanted, and
+// stops loudly the first time anything reaches it.
+//
+// **Loud is the whole point, and it is what distinguishes this from the alternatives.** A stub that
+// returns `0`, or an empty String, or an empty array, is a placeholder that PASSES — it will be
+// discovered by a wrong number in a report six weeks later rather than by the first test that
+// touches it. This one cannot be discovered late.
+//
+// No message argument, because the useful information is the file and line, and the message would
+// only ever restate the function's own name.
+function todo() -> Int {
+    return panic("not written yet");
+}
+
+// A branch the program's own logic says cannot happen. Distinct from `todo()` in what it CLAIMS:
+// `todo()` says "I have not written this"; `unreachable(why)` says "I have proved nothing can get
+// here", and `why` is where that proof goes — `unreachable("the lexer only emits these four kinds")`
+// tells whoever arrives which belief turned out to be false.
+//
+// The commonest honest use is the arm after an exhaustive test that the type system cannot see is
+// exhaustive. If a `match` covers it, use the `match`: it is checked, and this is not.
+function unreachable(why: String) -> Int {
+    return panic("reached a place the program says is unreachable: " + why);
 }
 
 // ---- What is deliberately absent -------------------------------------------

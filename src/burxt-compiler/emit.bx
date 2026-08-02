@@ -376,6 +376,16 @@ function (self: Unit) is_aggregate_written(src: String, written: Type) -> Bool {
     return self.is_aggregate(self.resolve_shallow(src, written));
 }
 
+// `burxt.push`'s third argument, as the operand to write: "1" when a value of this type arrives
+// as an ADDRESS, "0" when it arrives as itself. The same question `is_aggregate_written` answers
+// for the reader, spelled once so a push and the `xs[i]` that reads it back cannot disagree.
+function (self: Unit) by_ref_flag(src: String, element: Type) -> String {
+    if self.is_aggregate_written(src, element) {
+        return "1";
+    }
+    return "0";
+}
+
 // A tuple is 53, and it belongs here for the same reason a class does: its value IS its
 // address, so a mention loads no cells and an assignment copies them. Leaving it out would
 // not have been a missing feature — it would have stored the tuple's ADDRESS into a field
@@ -826,7 +836,8 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
                 let value: String = self.emit_expr(src, self.children[n.a + k]);
                 let pushed: String = self.fresh();
                 let added: Int = self.write_body("  " + pushed + " = call i64 @burxt.push(i64 "
-                                        + reg + ", i64 " + value + ")\n");
+                                        + reg + ", i64 " + value + ", i64 "
+                                        + self.by_ref_flag(src, element) + ")\n");
                 k += 1;
             }
             return reg;
@@ -2062,8 +2073,16 @@ function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String)
         return "0";
     }
     if called == "push" {
+        // What the ELEMENT's type is, not how many cells it takes, decides whether `second` is
+        // the value or its address — the reasoning is on `burxt.push`. The checker proved the
+        // first argument is a `[T]`; the guard is for the impossible input, not for a real one.
+        let holder: Type = self.type_at(self.children[list.a]);
+        let mutable by_ref: String = "0";
+        if holder.kind == 47 {
+            by_ref = self.by_ref_flag(src, self.declared_type(src, holder.scale));
+        }
         let visited: Int = self.write_body("  " + reg + " = call i64 @burxt.push(i64 " + first
-                                  + ", i64 " + second + ")\n");
+                                  + ", i64 " + second + ", i64 " + by_ref + ")\n");
         return reg;
     }
     if called == "truncate" {
@@ -4323,7 +4342,22 @@ function runtime_ir() -> String {
         + "  %elemp = getelementptr i64, ptr %p, i64 3\n"
         + "  store i64 %elem, ptr %elemp\n"
         + "  ret i64 %h\n\}\n\n"
-        + "define i64 @burxt.push(i64 %xs, i64 %value) \{\n"
+        // `%by_ref` says what `%value` IS: 1 means it is the ADDRESS of the element's cells and
+        // they are copied in, 0 means it is the element itself and it is stored.
+        //
+        // **It is a parameter because it cannot be derived here, and deriving it is the bug this
+        // argument exists to close.** The test used to be `%elem > 1` — wide elements arrive by
+        // address, narrow ones by value — and that reads as a safe proxy right up to the one shape
+        // where it is not: an aggregate of EXACTLY ONE cell. `class R \{ n: Int \}` has one cell,
+        // so a `[R]` literal passed the address of the scratch struct and this stored the ADDRESS
+        // as the element. Reading `rows[0].n` then printed a stack pointer, `burxt check` was
+        // silent, the IR assembled, and stage-0 printed 7. B52.
+        //
+        // The reader — `emit_element` — never used the proxy: it asks `is_aggregate_written`, a
+        // fact of the TYPE. So the writer inferred from a count what the reader knew from the
+        // declaration, and the two agreed for every shape anyone had written down. Passing the
+        // fact makes them the same question asked once.
+        + "define i64 @burxt.push(i64 %xs, i64 %value, i64 %by_ref) \{\n"
         + "entry:\n"
         + "  %p = inttoptr i64 %xs to ptr\n"
         + "  %capp = getelementptr i64, ptr %p, i64 1\n"
@@ -4360,7 +4394,7 @@ function runtime_ir() -> String {
         + "  %dp = inttoptr i64 %data to ptr\n"
         + "  %offset = mul i64 %len, %elem\n"
         + "  %slot = getelementptr i64, ptr %dp, i64 %offset\n"
-        + "  %wide = icmp sgt i64 %elem, 1\n"
+        + "  %wide = icmp ne i64 %by_ref, 0\n"
         + "  br i1 %wide, label %copy, label %store_one\n"
         + "copy:\n"
         + "  %vp = inttoptr i64 %value to ptr\n"
@@ -4590,7 +4624,7 @@ function runtime_ir() -> String {
         + "  %bat = getelementptr i8, ptr %bsrc, i64 %i\n"
         + "  %bb = load i8, ptr %bat\n"
         + "  %bw = zext i8 %bb to i64\n"
-        + "  %bpushed = call i64 @burxt.push(i64 %xs, i64 %bw)\n"
+        + "  %bpushed = call i64 @burxt.push(i64 %xs, i64 %bw, i64 0)\n"
         + "  %bnext = add i64 %i, 1\n"
         + "  store i64 %bnext, ptr %ip\n"
         + "  br label %bloop\n"

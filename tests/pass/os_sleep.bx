@@ -1,0 +1,31 @@
+// `os_sleep(ms)` — roadmap §D1r, and the reason it was a blocker rather than a nicety.
+//
+// Before this there was no way for a Burxt program to yield. Every retry loop, every poll of a
+// file another process is writing, and every backoff spun a core flat out, so the language could
+// not politely wait for anything.
+//
+// Two things are checked, and the second is the one worth having: that a wait longer than
+// `usleep`'s one-second domain still works, because it is sliced into 900 ms pieces and the loop
+// that does the slicing is the only real code in the function.
+//
+// The clock is `os_now()`, which is whole seconds, so the assertions are `>=` rather than equal —
+// a test that pinned an exact elapsed time would fail on a loaded machine and would be measuring
+// the machine rather than the function.
+use "../../lib/os.bx";
+
+region main {
+    // Nothing to wait for is not an error, and it returns immediately.
+    print(os_sleep(0));
+
+    // Under one slice: a single `usleep`.
+    print(os_sleep(50));
+
+    // **Over a second**, so the slicing loop runs twice — 900 ms and then 200 ms. `usleep` refuses
+    // an argument of a million or more, which is exactly what a naive `os_sleep(1100)` would hand
+    // it, and this is the case that catches that.
+    let before: Int = os_now();
+    print(os_sleep(1100));
+    let after: Int = os_now();
+    // At least one whole second of clock has passed. It may be two, if the wait straddled a tick.
+    print(after - before >= 1);
+}

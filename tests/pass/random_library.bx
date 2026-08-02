@@ -1,0 +1,339 @@
+// lib/random.bx — the cases that decide a generator, not the ones that decide nothing.
+//
+// A pseudo-random generator is the easiest library in the world to get wrong invisibly, because
+// the naive test — "it printed different numbers" — is passed by a counter. So nothing here checks
+// that the values differ. What it checks is the six things a wrong generator gets wrong while
+// still printing different numbers:
+//
+//   1. **The low bit.** An LCG's bit 0 alternates with period 2 and its output still looks random
+//      in decimal. Measured here as balance and as serial agreement at lag 1 and lag 2.
+//   2. **Uniformity over a small range**, where modulo bias lives. A die, 60,000 rolls.
+//   3. **The shuffle's distribution over PERMUTATIONS**, not over elements. The famous wrong
+//      Fisher-Yates draws from the whole array each step; every element still ends up present, so
+//      a test that checks the elements survive passes it. Over three elements it skews the six
+//      orderings by ±11%, which is what the count below is sized to see.
+//   4. **Reproducibility**, which is the whole reason the constructor is named `random_from`.
+//   5. **The warm-up.** From seed 1 raw xorshift64 answers 1082269761 first — thirty bits out of
+//      sixty-four — and a caller drawing a percentage would never notice.
+//   6. **The boundaries**: `next_below(1)`, `next_between(lo, lo)`, both ends of an inclusive
+//      range, and the whole `Int` range at once, where the width is 2^64 - 1 and does not fit.
+//
+// The two REFUSALS — `next_below(0)` and `next_between(5, 4)` — are contract failures and so
+// cannot live in a pass fixture. They are `tests/panic/random_below_zero.bx` and
+// `tests/panic/random_inverted_range.bx`.
+//
+// Every count printed here is exact and reproducible: the generator is seeded, so a `.stdout` full
+// of `true` is a `.stdout` that would change the day the algorithm did.
+use "../../lib/random.bx";
+
+function show(label: String, held: Bool) -> Bool {
+    if held {
+        print(label + ": true");
+    } else {
+        print(label + ": FALSE");
+    }
+    return held;
+}
+
+region main {
+    // ---- 1. the low bit: balance, and no period at lag 1 or lag 2 ----
+    //
+    // `next_below(2)` is bit 0 of the raw output, because the mask for a spread of 1 is 1. 8,192
+    // draws: the count of ones should be near 4,096 (one standard deviation is 45), and each of
+    // the two serial-agreement counts near half of 8,191. A period-2 sequence scores 0 on the
+    // first agreement and 8,190 on the second; a period-4 one scores 4,095 on both, which is why
+    // both lags are here rather than one.
+    let mutable bits: Random = random_from(1);
+    let mutable ones: Int = 0;
+    let mutable agree_1: Int = 0;
+    let mutable agree_2: Int = 0;
+    let mutable prev_1: Int = -1;
+    let mutable prev_2: Int = -1;
+    let mutable i: Int = 0;
+    while i < 8192 {
+        let b: Int = bits.next_below(2);
+        if b == 1 { ones += 1; }
+        if prev_1 >= 0 && b == prev_1 { agree_1 += 1; }
+        if prev_2 >= 0 && b == prev_2 { agree_2 += 1; }
+        prev_2 = prev_1;
+        prev_1 = b;
+        i += 1;
+    }
+    show("low bit balanced (4096 +/- 200)", ones > 3896 && ones < 4296);
+    show("no period 2 (lag 1 near 4095)", agree_1 > 3895 && agree_1 < 4295);
+    show("no period 4 (lag 2 near 4095)", agree_2 > 3895 && agree_2 < 4295);
+
+    // ---- 2. a die, 60,000 rolls: uniform, and therefore no modulo bias ----
+    //
+    // Six is not a power of two, so `next % 6` would over-represent the low faces. One standard
+    // deviation on 10,000 expected is 91; the window is 500, which is 5.5 of them.
+    let mutable die: Random = random_from(42);
+    let mutable faces: [Int] = [0, 0, 0, 0, 0, 0];
+    let mutable rolls: Int = 0;
+    while rolls < 60000 {
+        let f: Int = die.next_below(6);
+        faces[f] += 1;
+        rolls += 1;
+    }
+    let mutable even_faces: Bool = true;
+    let mutable f: Int = 0;
+    while f < 6 {
+        if faces[f] < 9500 || faces[f] > 10500 { even_faces = false; }
+        f += 1;
+    }
+    show("every die face 10000 +/- 500", even_faces);
+
+    // ---- 3. every value is in range, always ----
+    let mutable ranged: Random = random_from(7);
+    let mutable in_range: Bool = true;
+    let mutable r: Int = 0;
+    while r < 5000 {
+        let below: Int = ranged.next_below(1000);
+        if below < 0 || below >= 1000 { in_range = false; }
+        let between: Int = ranged.next_between(-5, 5);
+        if between < -5 || between > 5 { in_range = false; }
+        r += 1;
+    }
+    show("next_below and next_between stay inside", in_range);
+
+    // ---- 4. the boundaries of a range ----
+    //
+    // `next_below(1)` has one legal answer and must always give it; `next_between(lo, lo)` has one
+    // legal answer and must not consume randomness to find it. The second is checked by drawing
+    // afterwards and comparing with a generator that never made the call at all.
+    let mutable one: Random = random_from(99);
+    let mutable always_zero: Bool = true;
+    let mutable k: Int = 0;
+    while k < 200 {
+        if one.next_below(1) != 0 { always_zero = false; }
+        k += 1;
+    }
+    show("next_below(1) is always 0", always_zero);
+
+    let mutable point: Random = random_from(31);
+    let mutable untouched: Random = random_from(31);
+    let mutable same_point: Bool = true;
+    let mutable p: Int = 0;
+    while p < 50 {
+        if point.next_between(17, 17) != 17 { same_point = false; }
+        p += 1;
+    }
+    show("next_between(17, 17) is 17", same_point);
+    show("and drew nothing: the sequence is where it was",
+         point.next() == untouched.next());
+
+    // Inclusive at BOTH ends — the decision `next_between` records. A two-value range must produce
+    // both values, and a three-value range all three; an exclusive upper end would never show the
+    // top one, and that is invisible in any test that only checks the range.
+    let mutable ends: Random = random_from(5);
+    let mutable saw_low: Bool = false;
+    let mutable saw_high: Bool = false;
+    let mutable saw_middle: Bool = false;
+    let mutable e: Int = 0;
+    while e < 300 {
+        let two: Int = ends.next_between(0, 1);
+        if two == 0 { saw_low = true; }
+        if two == 1 { saw_high = true; }
+        let three: Int = ends.next_between(-1, 1);
+        if three == 0 { saw_middle = true; }
+        e += 1;
+    }
+    show("next_between(0, 1) reaches both ends", saw_low && saw_high);
+    show("next_between(-1, 1) reaches the middle", saw_middle);
+
+    // The whole Int range, where `high - low` is 2^64 - 1 and no Int holds it. This is the case
+    // the wrapping arithmetic in `next_between` exists for, and the one a subtraction would trap
+    // on. It must not trap, and it must be able to answer on both sides of zero.
+    let mutable wide: Random = random_from(1234567);
+    let mutable saw_negative: Bool = false;
+    let mutable saw_positive: Bool = false;
+    let mutable w: Int = 0;
+    while w < 200 {
+        let any: Int = wide.next_between(-9223372036854775807 - 1, 9223372036854775807);
+        if any < 0 { saw_negative = true; }
+        if any > 0 { saw_positive = true; }
+        w += 1;
+    }
+    show("the full Int range does not trap, and spans zero", saw_negative && saw_positive);
+
+    // ---- 5. reproducible, which is the point of the name ----
+    let mutable first: Random = random_from(2026);
+    let mutable again: Random = random_from(2026);
+    let mutable identical: Bool = true;
+    let mutable s: Int = 0;
+    while s < 100 {
+        if first.next() != again.next() { identical = false; }
+        s += 1;
+    }
+    show("the same seed replays the same sequence", identical);
+
+    // Two different seeds must not agree. Not "must differ somewhere" — across 100 draws a correct
+    // generator agrees at a given position with probability 2^-64, so the expected number of
+    // agreements is zero and anything above it is a finding.
+    let mutable seed_a: Random = random_from(1);
+    let mutable seed_b: Random = random_from(2);
+    let mutable collisions: Int = 0;
+    let mutable c: Int = 0;
+    while c < 100 {
+        if seed_a.next() == seed_b.next() { collisions += 1; }
+        c += 1;
+    }
+    show("two seeds agree nowhere in 100 draws", collisions == 0);
+
+    // Seed 0 is xorshift's fixed point and would stick at zero forever. It is remapped, and the
+    // proof is that the generator moves at all.
+    let mutable zero: Random = random_from(0);
+    let mutable zero_moves: Bool = false;
+    let mutable z: Int = 0;
+    while z < 10 {
+        if zero.next() != 0 { zero_moves = true; }
+        z += 1;
+    }
+    show("seed 0 does not stick at zero", zero_moves);
+
+    // ---- 6. the warm-up ----
+    //
+    // Without it, seed 1's first raw output is 1082269761 — positive, under 2^31, and small enough
+    // that `next_below(1000000000)` would answer a suspiciously round-looking number twice in a
+    // row. With it, the first three outputs use the whole register. `math_abs` is not used: the
+    // point is the MAGNITUDE of the bits, so the raw value is compared against 2^32 in both
+    // directions.
+    let mutable warm: Random = random_from(1);
+    let mutable big_enough: Bool = true;
+    let mutable warm_i: Int = 0;
+    while warm_i < 3 {
+        let raw: Int = warm.next();
+        if raw > -4294967296 && raw < 4294967296 { big_enough = false; }
+        warm_i += 1;
+    }
+    show("seed 1 starts warm: no tiny first outputs", big_enough);
+
+    // ---- 7. shuffle: the small arrays, which draw nothing ----
+    let mutable shuffler: Random = random_from(8);
+    let mutable mirror: Random = random_from(8);
+    let mutable nothing: [Int] = [];
+    print(random_shuffle(shuffler, nothing));
+    print(len(nothing));
+    let mutable single: [Int] = [42];
+    print(random_shuffle(shuffler, single));
+    print(single[0]);
+    show("shuffling 0 and 1 elements consumed no randomness",
+         shuffler.next() == mirror.next());
+
+    // ---- 8. shuffle: it is a permutation, and it moves things ----
+    let mutable deck: [Int] = [];
+    let mutable d: Int = 0;
+    while d < 200 {
+        let grew: Int = push(deck, d);
+        d += 1;
+    }
+    let mutable cards: Random = random_from(4321);
+    let dealt: Int = random_shuffle(cards, deck);
+    print(dealt);
+    // Every value still present exactly once: sum and a seen-array, because a sum alone is fooled
+    // by any swap of two values with the same total.
+    let mutable seen: [Int] = [];
+    let mutable fill: Int = 0;
+    while fill < 200 {
+        let grew: Int = push(seen, 0);
+        fill += 1;
+    }
+    let mutable v: Int = 0;
+    while v < 200 {
+        seen[deck[v]] += 1;
+        v += 1;
+    }
+    let mutable each_once: Bool = true;
+    let mutable q: Int = 0;
+    while q < 200 {
+        if seen[q] != 1 { each_once = false; }
+        q += 1;
+    }
+    show("shuffle keeps every element exactly once", each_once);
+    // And it actually moved: a shuffle leaving everything where it was is a shuffle that did
+    // nothing, and the expected number of fixed points in a random permutation is 1 regardless of
+    // size, so a threshold of 20 out of 200 is enormously generous and still catches a no-op.
+    let mutable fixed: Int = 0;
+    let mutable g: Int = 0;
+    while g < 200 {
+        if deck[g] == g { fixed += 1; }
+        g += 1;
+    }
+    show("shuffle moved almost everything", fixed < 20);
+
+    // ---- 9. the shuffle is UNBIASED over permutations ----
+    //
+    // The test the wrong Fisher-Yates fails. Three elements have six orderings; drawing the swap
+    // partner from the whole array instead of from `0..i` gives 27 equally likely paths over those
+    // six, so two orderings come up 5/27 of the time and the others 4/27 — a skew of about 11%.
+    // 60,000 shuffles put one standard deviation at 91, so the correct generator lands inside
+    // ±500 and the biased one misses by 1,100.
+    let mutable trials: Random = random_from(20260802);
+    let mutable orders: [Int] = [0, 0, 0, 0, 0, 0];
+    let mutable t: Int = 0;
+    while t < 60000 {
+        let mutable three: [Int] = [0, 1, 2];
+        let mixed: Int = random_shuffle(trials, three);
+        // The permutation as a base-3 number, which for these six values is 5, 7, 11, 15, 19, 21 —
+        // so an index is derived rather than tabulated.
+        let code: Int = three[0] * 9 + three[1] * 3 + three[2];
+        if code == 5 { orders[0] += 1; }
+        if code == 7 { orders[1] += 1; }
+        if code == 11 { orders[2] += 1; }
+        if code == 15 { orders[3] += 1; }
+        if code == 19 { orders[4] += 1; }
+        if code == 21 { orders[5] += 1; }
+        t += 1;
+    }
+    let mutable even_orders: Bool = true;
+    let mutable counted: Int = 0;
+    let mutable o: Int = 0;
+    while o < 6 {
+        counted += orders[o];
+        if orders[o] < 9500 || orders[o] > 10500 { even_orders = false; }
+        o += 1;
+    }
+    show("all 60000 shuffles produced one of the six orderings", counted == 60000);
+    show("each ordering 10000 +/- 500 — the biased shuffle misses by 1100", even_orders);
+
+    // ---- 10. choice ----
+    let mutable picker: Random = random_from(77);
+    let mutable quiet: Random = random_from(77);
+    let empty: [Int] = [];
+    match random_choice(picker, empty) {
+        None => { print("choice of nothing: None"); }
+        Some(value) => { print("choice of nothing: Some"); }
+    }
+    show("a failed choice drew nothing", picker.next() == quiet.next());
+
+    let three_things: [String] = ["red", "green", "blue"];
+    let mutable chooser: Random = random_from(6);
+    let mutable saw_red: Bool = false;
+    let mutable saw_green: Bool = false;
+    let mutable saw_blue: Bool = false;
+    let mutable always_member: Bool = true;
+    let mutable ch: Int = 0;
+    while ch < 300 {
+        match random_choice(chooser, three_things) {
+            None => { always_member = false; }
+            Some(colour) => {
+                if colour == "red" { saw_red = true; }
+                else if colour == "green" { saw_green = true; }
+                else if colour == "blue" { saw_blue = true; }
+                else { always_member = false; }
+            }
+        }
+        ch += 1;
+    }
+    show("choice always answers a member", always_member);
+    show("choice reaches every member", saw_red && saw_green && saw_blue);
+
+    // A one-element array: `next_below(1)` under the covers, so this is the boundary that would
+    // trap if `choice` had been written with `next_below(len(xs) - 1)`.
+    let alone: [Int] = [9];
+    let mutable solo: Random = random_from(3);
+    match random_choice(solo, alone) {
+        None => { print("choice of one: None"); }
+        Some(value) => { print(value); }
+    }
+}

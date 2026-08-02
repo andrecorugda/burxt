@@ -1,0 +1,277 @@
+// lib/encoding.bx — the RFC's own vectors, and the inputs a decoder must REFUSE.
+//
+// Two halves, and the second is the one that matters.
+//
+// **The vectors.** RFC 4648 §10 publishes a seven-line ladder for every codec it defines, and the
+// ladder is not arbitrary: `""`, `"f"`, `"fo"`, `"foo"`, `"foob"`, `"fooba"`, `"foobar"` walks
+// every remainder of the input length modulo the codec's group size, which is exactly where
+// base64 implementations go wrong. Each line below prints its own answer AND compares it against
+// the RFC's literal, so a broken implementation shows as `WRONG` in the output rather than as a
+// `.stdout` somebody regenerated. The pin and the assertion are both here on purpose — a pinned
+// file records what happened, and only the comparison records what should have.
+//
+// **The refusals.** A base64 decoder that guesses is worse than one that does not exist, because
+// the caller gets a short key or half a message and both look like data. So every rejection this
+// module's header claims is exercised here: a character outside the alphabet, a length no encoding
+// could produce, padding in the middle, padding of the wrong width, the other dialect's alphabet,
+// and non-canonical trailing bits — `"Zh=="` and `"Zg=="` are the same byte, and only one of them
+// is a spelling of it.
+//
+// **The property.** Encode-then-decode returns the original for every byte value 0 to 255,
+// including NUL, one byte at a time and all 256 at once. A Burxt String carries its length in a
+// header rather than ending at the first NUL, so a NUL is an ordinary byte here — that is checked
+// directly rather than assumed, because the whole `_text` half of the module rests on it.
+use "../../lib/encoding.bx";
+
+// A vector line: the answer, and whether it is the RFC's answer.
+function vector(input: String, expected: String, actual: String) -> Int {
+    if actual == expected {
+        print("\"" + input + "\" -> \"" + actual + "\"");
+    } else {
+        print("\"" + input + "\" -> \"" + actual + "\"   WRONG, the RFC says \"" + expected + "\"");
+    }
+    return 0;
+}
+
+function show(label: String, held: Bool) -> Bool {
+    if held {
+        print(label + ": true");
+    } else {
+        print(label + ": FALSE");
+    }
+    return held;
+}
+
+// A decoder that answered something is a decoder that failed this test.
+function refuses(label: String, answer: Option<[Int]>) -> Int {
+    match answer {
+        None => {
+            print(label + ": refused");
+        }
+        Some(bytes) => {
+            print(label + ": ACCEPTED " + to_string(len(bytes)) + " bytes, and should not have");
+        }
+    }
+    return 0;
+}
+
+function decoded_text(label: String, answer: Option<String>) -> Int {
+    match answer {
+        None => {
+            print(label + ": refused");
+        }
+        Some(text) => {
+            print(label + " -> \"" + text + "\"");
+        }
+    }
+    return 0;
+}
+
+function same_bytes(a: [Int], b: [Int]) -> Bool {
+    if len(a) != len(b) {
+        return false;
+    }
+    let mutable i: Int = 0;
+    while i < len(a) {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+// Encode, decode, and answer whether what came back is what went in.
+function round_trips(bytes: [Int]) -> Bool {
+    match encoding_base64_decode(encoding_base64_encode(bytes)) {
+        None => {
+            return false;
+        }
+        Some(back) => {
+            if !same_bytes(bytes, back) {
+                return false;
+            }
+        }
+    }
+    match encoding_base64url_decode(encoding_base64url_encode(bytes)) {
+        None => {
+            return false;
+        }
+        Some(back) => {
+            if !same_bytes(bytes, back) {
+                return false;
+            }
+        }
+    }
+    match encoding_hex_decode(encoding_hex_encode(bytes)) {
+        None => {
+            return false;
+        }
+        Some(back) => {
+            if !same_bytes(bytes, back) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+region main {
+    // ---- RFC 4648 §10, base64 -------------------------------------------------------------
+    print("-- base64, RFC 4648 section 10");
+    let b0: Int = vector("", "", encoding_base64_encode_text(""));
+    let b1: Int = vector("f", "Zg==", encoding_base64_encode_text("f"));
+    let b2: Int = vector("fo", "Zm8=", encoding_base64_encode_text("fo"));
+    let b3: Int = vector("foo", "Zm9v", encoding_base64_encode_text("foo"));
+    let b4: Int = vector("foob", "Zm9vYg==", encoding_base64_encode_text("foob"));
+    let b5: Int = vector("fooba", "Zm9vYmE=", encoding_base64_encode_text("fooba"));
+    let b6: Int = vector("foobar", "Zm9vYmFy", encoding_base64_encode_text("foobar"));
+
+    // ---- the same ladder, read back ---------------------------------------------------------
+    print("-- base64 decoded back");
+    let d0: Int = decoded_text("\"\"", encoding_base64_decode_text(""));
+    let d1: Int = decoded_text("\"Zg==\"", encoding_base64_decode_text("Zg=="));
+    let d2: Int = decoded_text("\"Zm8=\"", encoding_base64_decode_text("Zm8="));
+    let d3: Int = decoded_text("\"Zm9v\"", encoding_base64_decode_text("Zm9v"));
+    let d4: Int = decoded_text("\"Zm9vYg==\"", encoding_base64_decode_text("Zm9vYg=="));
+    let d5: Int = decoded_text("\"Zm9vYmE=\"", encoding_base64_decode_text("Zm9vYmE="));
+    let d6: Int = decoded_text("\"Zm9vYmFy\"", encoding_base64_decode_text("Zm9vYmFy"));
+
+    // ---- RFC 4648 §10, base16 — lowercase out, either case in --------------------------------
+    //
+    // The RFC prints base16 in uppercase. This module prints lowercase, because every other tool
+    // in the world does and because §8 explicitly lets a decoder take both — so the encode column
+    // is the RFC's vector lowercased, and the decode line below reads the RFC's own uppercase.
+    print("-- base16, RFC 4648 section 10, lowercased");
+    let h0: Int = vector("", "", encoding_hex_encode_text(""));
+    let h1: Int = vector("f", "66", encoding_hex_encode_text("f"));
+    let h2: Int = vector("fo", "666f", encoding_hex_encode_text("fo"));
+    let h3: Int = vector("foo", "666f6f", encoding_hex_encode_text("foo"));
+    let h4: Int = vector("foob", "666f6f62", encoding_hex_encode_text("foob"));
+    let h5: Int = vector("fooba", "666f6f6261", encoding_hex_encode_text("fooba"));
+    let h6: Int = vector("foobar", "666f6f626172", encoding_hex_encode_text("foobar"));
+    let hu: Int = decoded_text("\"666F6F626172\" (the RFC's own uppercase)",
+                               encoding_hex_decode_text("666F6F626172"));
+    let hm: Int = decoded_text("\"666f6F626172\" (mixed case)",
+                               encoding_hex_decode_text("666f6F626172"));
+
+    // ---- base64url: two characters differ, and the padding is gone ---------------------------
+    //
+    // The `foobar` ladder never reaches index 62 or 63, so it cannot tell the two alphabets
+    // apart. These three bytes are chosen to land on exactly those two indices, twice each:
+    // 0xFB 0xFF 0xBF is 111110 111111 111110 111111.
+    print("-- base64url");
+    let variant: [Int] = [251, 255, 191];
+    let v1: Int = vector("[251, 255, 191]", "+/+/", encoding_base64_encode(variant));
+    let v2: Int = vector("[251, 255, 191]", "-_-_", encoding_base64url_encode(variant));
+    let u5: Int = vector("fooba", "Zm9vYmE", encoding_base64url_encode_text("fooba"));
+    let u1: Int = vector("f", "Zg", encoding_base64url_encode_text("f"));
+    let u4: Int = vector("foob", "Zm9vYg", encoding_base64url_encode_text("foob"));
+    let up: Int = decoded_text("unpadded \"Zm9vYmE\"", encoding_base64url_decode_text("Zm9vYmE"));
+    let ud: Int = decoded_text("padded   \"Zm9vYmE=\"", encoding_base64url_decode_text("Zm9vYmE="));
+
+    // ---- the refusals ------------------------------------------------------------------------
+    print("-- what a decoder must refuse");
+    let r1: Int = refuses("a space inside      \"Zm9v YmFy\"", encoding_base64_decode("Zm9v YmFy"));
+    let r2: Int = refuses("a trailing newline  \"Zm9vYmFy\\n\"", encoding_base64_decode("Zm9vYmFy\n"));
+    let r3: Int = refuses("seven characters    \"Zm9vYmF\"", encoding_base64_decode("Zm9vYmF"));
+    let r4: Int = refuses("padding in the mid  \"Zg=v\"", encoding_base64_decode("Zg=v"));
+    let r5: Int = refuses("one pad too few     \"Zg=\"", encoding_base64_decode("Zg="));
+    let r6: Int = refuses("three pads          \"Zg===\"", encoding_base64_decode("Zg==="));
+    let r7: Int = refuses("nothing but padding \"====\"", encoding_base64_decode("===="));
+    let r8: Int = refuses("non-canonical bits  \"Zh==\"", encoding_base64_decode("Zh=="));
+    let r9: Int = refuses("non-canonical bits  \"Zm9=\"", encoding_base64_decode("Zm9="));
+    let ra: Int = refuses("url alphabet to std \"-_-_\"", encoding_base64_decode("-_-_"));
+    let rb: Int = refuses("std alphabet to url \"+/+/\"", encoding_base64url_decode("+/+/"));
+    let rc: Int = refuses("base64 needs padding \"Zm9vYmE\"", encoding_base64_decode("Zm9vYmE"));
+    let rd: Int = refuses("one character alone  \"Z\"", encoding_base64url_decode("Z"));
+    let re: Int = refuses("five characters      \"Zm9vY\"", encoding_base64url_decode("Zm9vY"));
+    let rf: Int = refuses("odd hex              \"666\"", encoding_hex_decode("666"));
+    let rg: Int = refuses("not hex              \"66gg\"", encoding_hex_decode("66gg"));
+    let rh: Int = refuses("an 0x prefix         \"0x66\"", encoding_hex_decode("0x66"));
+    let ri: Int = refuses("hex with a space     \"66 6f\"", encoding_hex_decode("66 6f"));
+
+    // The one that is NOT a refusal, so the refusals above mean something.
+    match encoding_base64_decode("") {
+        None => {
+            show("\"\" decodes to zero bytes rather than being refused", false);
+        }
+        Some(nothing) => {
+            show("\"\" decodes to zero bytes rather than being refused", len(nothing) == 0);
+        }
+    }
+
+    // ---- the property: every byte value survives the round trip ------------------------------
+    print("-- round trip, every byte value 0 to 255");
+    let mutable all: [Int] = [];
+    let mutable value: Int = 0;
+    let mutable each_alone: Bool = true;
+    while value < 256 {
+        push(all, value);
+        let one: [Int] = [value];
+        if !round_trips(one) {
+            each_alone = false;
+        }
+        value += 1;
+    }
+    show("each byte on its own, through all three codecs", each_alone);
+    show("all 256 at once, through all three codecs", round_trips(all));
+
+    // Every input length modulo 3 for base64 and modulo 2 for hex, over real byte values rather
+    // than over text: the ladder above only ever tested ASCII.
+    let mutable lengths_hold: Bool = true;
+    let mutable width: Int = 0;
+    while width <= 32 {
+        let mutable piece: [Int] = [];
+        let mutable k: Int = 0;
+        while k < width {
+            push(piece, remainder(k * 37 + 11, 256));
+            k += 1;
+        }
+        if !round_trips(piece) {
+            lengths_hold = false;
+        }
+        width += 1;
+    }
+    show("every length from 0 to 32 round trips", lengths_hold);
+
+    // ---- NUL is an ordinary byte, and the `_text` half depends on it -------------------------
+    print("-- NUL");
+    let with_nul: [Int] = [104, 0, 105];
+    let as_text: String = from_bytes(with_nul);
+    show("a String holds a NUL: len is 3", len(as_text) == 3);
+    show("and the middle byte is 0", byte_at(as_text, 1) == 0);
+    let nul_b64: String = encoding_base64_encode_text(as_text);
+    show("base64 of \"h\\0i\" is \"aABp\"", nul_b64 == "aABp");
+    show("hex of \"h\\0i\" is \"680069\"", encoding_hex_encode_text(as_text) == "680069");
+    match encoding_base64_decode_text(nul_b64) {
+        None => {
+            show("and it decodes back", false);
+        }
+        Some(back) => {
+            show("and it decodes back to the same three bytes",
+                 len(back) == 3 && byte_at(back, 0) == 104 && byte_at(back, 1) == 0
+                                && byte_at(back, 2) == 105);
+        }
+    }
+
+    // ---- a length worth having: 32 random-looking bytes is what a key is ----------------------
+    //
+    // Not random here — a fixture must be reproducible — but the SHAPE of the thing this module
+    // exists for: 32 bytes are 44 base64 characters with one `=`, 43 unpadded base64url
+    // characters, and 64 hex digits. Those three numbers are what a caller sees, and getting any
+    // of them wrong is a visible bug in a URL or a header.
+    print("-- the shape of a 32-byte key");
+    let mutable key: [Int] = [];
+    let mutable n: Int = 0;
+    while n < 32 {
+        push(key, remainder(n * 61 + 7, 256));
+        n += 1;
+    }
+    print(to_string(len(encoding_base64_encode(key))));
+    print(to_string(len(encoding_base64url_encode(key))));
+    print(to_string(len(encoding_hex_encode(key))));
+    print(encoding_base64_encode(key));
+    print(encoding_base64url_encode(key));
+    print(encoding_hex_encode(key));
+}

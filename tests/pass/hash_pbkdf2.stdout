@@ -1,0 +1,14 @@
+published, password+salt, 1 iterations, 32 bytes = 120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b
+published, password+salt, 2 iterations, 32 bytes = ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43
+published, password+salt, 4096 iterations, 32 bytes = c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a
+published, long password and salt, 4096 iterations, 40 bytes = 348c89dbcbd32b2f32d814b8116e84cf2b17347ebc1800181c4e2a1fb8dd53e1c635518c7dac47e9
+the NUL password is 9 bytes and the salt is 5
+published, NUL in password and salt, 4096 iterations, 16 bytes = 89b69d0516f829893c696226650a8687
+true
+true
+true
+64
+20
+false
+false
+by definition check on a 41-byte output = 653cc888d937efe22810a5cbdb25a5bd82e2ebb27a800f85cfa360a6d925198e8badf3162ba1be51a8

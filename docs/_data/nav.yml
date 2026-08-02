@@ -408,5 +408,7 @@
       steps:
         - name: "What is in it"
           id: what-is-in-it
+        - name: "Types"
+          id: types
         - name: "Functions"
           id: functions

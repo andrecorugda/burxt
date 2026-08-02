@@ -1,0 +1,20 @@
+// `unreachable(why)` claims something stronger than `todo()`: not "I have not written this" but
+// "I have proved nothing can get here". `why` is where the proof goes, so whoever arrives learns
+// which belief turned out to be false rather than only that one did.
+//
+// This fixture reaches it, which is the point — the claim below is wrong, and the program says so
+// with the claim itself in the message instead of carrying on with a made-up answer.
+use "../../lib/result.bx";
+
+// The digits are meant to be 0..9 and the caller is meant to have checked. It has not.
+function digit_weight(digit: Int) -> Int {
+    if digit >= 0 && digit <= 9 {
+        return digit * 3;
+    }
+    return unreachable("digits are validated before they get here");
+}
+
+region main {
+    print(digit_weight(4));
+    print(digit_weight(11));
+}

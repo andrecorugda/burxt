@@ -1,0 +1,22 @@
+// What roadmap §B1 actually does, which is not what §B1 says it does.
+//
+// The row reads *"`file_read` of a missing file answers `""` — indistinguishable from an empty
+// file"*, and `lib/files.bx`'s own comment said the same thing for as long as the row existed.
+// **Neither is true.** `read_file` on a path it cannot open does not answer; it ends the process
+// with exit 70, and this fixture is the measurement that says so.
+//
+// That makes the bug worse rather than smaller: a silent wrong answer can be checked for
+// afterwards, and a program that has stopped cannot check for anything. There was simply **no way
+// to read a file that might not be there** — `src/burxt-compiler/lsp.bx` had already worked that
+// out for itself and refuses to use the module loader because of it.
+//
+// `file_read_maybe` is the fix and `tests/pass/files_library.bx` is where it is exercised. This
+// fixture stays because a `pass` test cannot pin behaviour that terminates the program, and
+// because the next person to read §B1 should find the correction next to the claim.
+use "../../lib/files.bx";
+
+region main {
+    // Nothing creates this path, and the name is long enough that nothing else will.
+    let text: String = file_read("burxt-no-such-file-4c1b9e7a2d");
+    print(len(text));
+}

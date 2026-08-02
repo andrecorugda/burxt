@@ -1,0 +1,24 @@
+// An encoder must not mask. `encoding_hex_encode` requires every element to be a byte, and 256 is
+// not one.
+//
+// The alternative is `bit_and(value, 255)`, which encodes 256 as a NUL and 300 as `,` — and hands
+// back a hex string that decodes cleanly into bytes the caller never had. That is the silent wrong
+// answer in its purest form: no error, no truncation, a plausible result, and a difference that
+// only shows up when somebody compares the decoded bytes against the original array somewhere else
+// entirely.
+//
+// The value is COMPUTED so the checker cannot fold it and refuse the program at compile time; this
+// fixture is about the runtime contract.
+use "../../lib/encoding.bx";
+
+region main {
+    let mutable values: [Int] = [];
+    let mutable i: Int = 0;
+    while i < 4 {
+        push(values, i * 64);
+        i += 1;
+    }
+    // 0, 64, 128 and 192 are bytes. The next one would be 256, and this one is it.
+    push(values, 4 * 64);
+    print(encoding_hex_encode(values));
+}
