@@ -5631,6 +5631,263 @@ function (mutable self: Unit) check_applications(src: String) -> Int {
     return 1;
 }
 
+// ---- B37: does a value of this type have its STORAGE in a region? ------------------------------
+//
+// A different question from `expr_allocates`, which asks about an expression: this one asks about a
+// TYPE, and it is the one the return rule below needs, because a signature is checked before any
+// body is read and there is no expression yet to ask about.
+//
+// A growable array IS the region — `[Int]` is a pointer into arena bytes, which is why the array
+// literal arm of `expr_allocates` answers `true` on kind 47 without looking at what is in it. A
+// String is NOT: a literal lives in `.rodata` and a join lives in a region, and both are `String`,
+// so this must answer `no` for it or every `-> String` in the standard library stops compiling.
+// That asymmetry is stage-0's `region_allocated`, mirrored line for line, and it is the reason
+// stage-0 refuses `-> [Int]` and accepts `-> String`. Measured, both.
+//
+// A class is tainted by any FIELD that is: `class Bag { items: [Int] }` returned by value hands
+// back the pointer inside it. An ENUM is not, and neither is a generic APPLICATION — stage-0 looks
+// only in its `structs` table and has no arm for `Type::Generic`, so `Holder<T>` holding `[T]` is
+// accepted there and must be accepted here. Both measured against stage-0 before this was written,
+// which is the only reason the two exclusions are here rather than a recursion that looked tidier.
+//
+// **The generic exclusion is stage-0's approximation and is kept, not endorsed.** The same blind
+// spot in the neighbouring `may_be_region_storage` IS a hole — see the proof on that function — and
+// this one is left matching stage-0 only because B37 is about giving stage-1 a rule it did not have,
+// where agreeing on the verdict is the whole deliverable. The one shape tried against it,
+// `function make() -> Bag<Int>` building inside an inner region, is refused by both compilers
+// through the return-statement rule instead, so the gap is not reachable there. That is one probe,
+// not a proof.
+//
+// The `walked_types` guard is `embeds_by_value`'s, for the same reason and with the same shape.
+// Stage-0 has no guard because a containment cycle never reaches it — but stage-1 does not refuse a
+// MUTUAL cycle (`class A { b: B }  class B { a: A }` hangs stage-1 today, and stage-0 refuses it
+// with `containment cycle: A -> B -> A`; reported, not fixed here). A guard that costs six lines
+// beats a walk that recurses forever on a program the compiler already mishandles.
+function (mutable self: Unit) region_allocated(src: String, t: Type) -> Bool {
+    if t.kind == 47 {
+        return true;                                 // a growable array lives in a region
+    }
+    if t.kind == 48 {                                // a fixed array is tainted by its element
+        return self.region_allocated(src, self.declared_type(src, t.scale));
+    }
+    if t.kind != 46 || t.contract > 0 {
+        return false;                                // not a named type, or a generic application
+    }
+    let found: Int = self.find_type(src, t.name_start, t.name_length);
+    if found < 0 {
+        // NO, where `may_be_region_storage` below answers YES to the same question, and the
+        // asymmetry is deliberate. That one gates a refusal OFF, so an unknown answering no would
+        // silence a rule. This one gates a refusal ON, so an unknown answering yes would invent
+        // one — on a program that is already refused for naming a type that does not exist.
+        return false;
+    }
+    let decl: TypeDeclaration = self.types[found];
+    if decl.kind != 82 {
+        return false;                                // an enum or a trait: stage-0 asks only classes
+    }
+    let mutable w: Int = 0;
+    while w < len(self.walked_types) {
+        if self.walked_types[w] == found {
+            return false;                            // already entered; not a fresh path
+        }
+        w += 1;
+    }
+    let depth: Int = len(self.walked_types);
+    let added: Int = push(self.walked_types, found);
+    let item: Node = self.nodes[decl.node];
+    let mutable answer: Bool = false;
+    let mutable f: Int = 0;
+    while f < item.b {
+        let field: Node = self.nodes[self.children[item.a + f]];
+        if self.region_allocated(src, self.declared_type(src, field.a)) {
+            answer = true;
+        }
+        f += 1;
+    }
+    let dropped: Int = truncate(self.walked_types, depth);
+    return answer;
+}
+
+// ---- B36: COULD a value of this type be region storage? ----------------------------------------
+//
+// A different question from `region_allocated` above, and the difference is `String`: a literal
+// lives in `.rodata` and a join lives in a region, and both are `String`. `region_allocated` asks
+// whether the type is ALWAYS in a region and must answer NO for a String, or every `-> String`
+// signature stops compiling. This one asks whether it COULD be, and must answer YES for the same
+// String, or `kept = b.name` reads bytes the region released. Two questions, two answers, one type.
+//
+// Stage-0's `may_be_region_storage`, mirrored — its own comment says what the shape is for: *"only
+// to keep the taint OFF names that cannot dangle... false positives are as much a failure as false
+// negatives here."* A type parameter and a `dynamic` answer YES because neither says what the
+// storage is, which is M14 §10: a wrong guess must cost memory rather than correctness.
+//
+// ---- the generic application, and why it asks the DECLARATION with the arguments put in --------
+//
+// The arguments alone are not enough. A field that is a String whatever T is never appears among
+// them, and the first version of this predicate — arguments only, which is what stage-0's
+// `Type::Generic` arm did — accepted a use-after-free. Measured, built and run:
+//
+//     class Wrapper<T> { t: T, note: String }      class Outer { inner: Wrapper<Int> }
+//     region r { let o: Outer = Outer { inner: Wrapper { t: 1, note: "hello-" + "world" } };
+//                kept = o.inner; }                 // `Wrapper<Int>`: every ARGUMENT is an Int
+//     region second { let noise: String = "XXXXXXXXXXXX" + "YYYYYYYYYYYY"; print(noise); }
+//     print(kept.note);                            // printed the SECOND region's bytes
+//
+// The declaration is not enough either, and reading it UNSUBSTITUTED is a false refusal rather than
+// a hole — `class Holder<T> { one: T }` read as `Holder<Int>` has a field of kind 50, which answers
+// yes on its own, so the second version refused a program stage-0 accepts. Measured too, and it is
+// why `bind_from_application` is here: the arguments are bound, the fields are read THROUGH those
+// bindings by `resolve_shallow` at the top of this function, and `one: T` becomes `one: Int`.
+//
+// Both halves are stage-0's as well — `b32-stage0` fixed the same predicate from the other side in
+// the same hour, through `fields_of` and `generic_body_holds_storage`, and `a12-stage0` had already
+// written the reason down beside `could_hold_storage`: a generic INSTANTIATION resolves through a
+// different table, so the naive lookup answers "holds nothing" and `lib/json.bx` printed a
+// truncated document until that stopped being believed. Three finds, one predicate.
+//
+// The `walked_types` guard is keyed on the DECLARATION where stage-0 keys on the formatted type, so
+// `Holder<Int>` nested inside `Holder<String>` stops one step earlier here. The two can only differ
+// on a type that contains ITSELF by value, which both compilers refuse before this runs.
+//
+// **Kind 0 is UNKNOWN and answers YES**, and so does a name `find_type` cannot resolve. A type the
+// checker could not work out must not silence a rule: an unknown that answered `no` would turn every
+// unresolved field read into an acceptance, which is exactly how the hole above stayed invisible.
+// Stage-0 reached the same conclusion in its own words — *"unresolvable answering NO is exactly how
+// the two holes above stayed invisible."*
+function (mutable self: Unit) may_be_region_storage(src: String, written: Type) -> Bool {
+    // FIRST, so every arm below sees what the parameter stands for rather than the parameter. A
+    // field declared `one: T` inside a `Holder<Int>` is an Int here, and reaching the kind 50 arm
+    // with it unresolved is the false refusal described above.
+    let t: Type = self.resolve_shallow(src, written);
+    if t.kind == 42 || t.kind == 47 {
+        return true;                                 // a String, a growable array
+    }
+    if t.kind == 49 || t.kind == 50 || t.kind == 0 {
+        return true;                                 // a `dynamic`, an ABSTRACT parameter, an unknown
+    }
+    if t.kind == 48 {                                // a fixed array: its element decides
+        return self.may_be_region_storage(src, self.declared_type(src, t.scale));
+    }
+    if t.kind != 46 {
+        return false;                                // Int, Bool, CInt, CDouble, Decimal, CPointer,
+    }                                                // a sized width — one i64 cell, copied
+    // Taken BEFORE anything is pushed, and every exit below truncates back to it.
+    let bindings_base: Int = len(self.type_bindings);
+    if t.contract > 0 {                              // a generic application: its ARGUMENTS first
+        let mutable a: Int = 0;
+        while a < t.contract {
+            let argument: Type = self.declared_type(src, self.nested_children[t.scale + a]);
+            if self.may_be_region_storage(src, argument) {
+                return true;                         // nothing pushed yet, so nothing to undo
+            }
+            a += 1;
+        }
+        // Then the declaration, with the arguments bound. No floor move: `bind_from_application`
+        // resolves each argument under the bindings ALREADY in scope before pushing it, which is
+        // what makes `Nested<Point>` holding a `Pair<T>` come out as `Pair<Point>` rather than
+        // rebinding `T` to itself. The match-arm caller binds it exactly this way.
+        let bound: Int = self.bind_from_application(src, t);
+    }
+    let found: Int = self.find_type(src, t.name_start, t.name_length);
+    if found < 0 {
+        let dropped: Int = truncate(self.type_bindings, bindings_base);
+        return true;                                 // a name this compiler cannot resolve
+    }
+    let decl: TypeDeclaration = self.types[found];
+    let mutable w: Int = 0;
+    while w < len(self.walked_types) {
+        if self.walked_types[w] == found {
+            let dropped: Int = truncate(self.type_bindings, bindings_base);
+            return false;                            // already entered; not a fresh path
+        }
+        w += 1;
+    }
+    let depth: Int = len(self.walked_types);
+    let added: Int = push(self.walked_types, found);
+    let item: Node = self.nodes[decl.node];
+    let mutable answer: Bool = false;
+    if decl.kind == 82 {                             // a class: every field
+        let mutable f: Int = 0;
+        while f < item.b {
+            let field: Node = self.nodes[self.children[item.a + f]];
+            if self.may_be_region_storage(src, self.declared_type(src, field.a)) {
+                answer = true;
+            }
+            f += 1;
+        }
+    }
+    if decl.kind == 83 {                             // an enum: every variant's every payload
+        let mutable v: Int = 0;
+        while v < item.b {
+            let variant: Node = self.nodes[self.children[item.a + v]];
+            let mutable p: Int = 0;
+            while p < variant.c {
+                let carried: Type = self.declared_type(src, self.nested_children[variant.b + p]);
+                if self.may_be_region_storage(src, carried) {
+                    answer = true;
+                }
+                p += 1;
+            }
+            v += 1;
+        }
+    }
+    let dropped: Int = truncate(self.walked_types, depth);
+    let unbound: Int = truncate(self.type_bindings, bindings_base);
+    return answer;
+}
+
+// ---- B37: a function may not hand its region back, and stage-1 had no such rule ----------------
+//
+// `function same(xs: [String]) -> [String] { return xs; }` was ACCEPTED by stage-1 and refused by
+// stage-0 at the declaration — a whole rule missing rather than a wording difference, and verified
+// with **no `region` anywhere in the program**, so it is independent of the escape family that
+// `expr_allocates` serves. The direction is worth holding on to: stage-0 is the stricter one here,
+// which is the opposite of B33 and B34. Neither compiler is reliably the conservative one.
+//
+// UNLESS the function allocates. `allocates` says the storage belongs to the CALLER's region and
+// therefore outlives the call by construction, so `function make() -> [Int] allocates` is fine —
+// and so is one that plainly builds its answer without saying the word, because `infer_allocates`
+// works that out. That is why this is a PASS of its own between the inference and the bodies
+// rather than a line in `collect_declarations`: the answer does not exist yet when declarations are
+// collected, and stage-0 has exactly the same ordering problem, solved with `!self.probing` on a
+// declaration pass it runs twice.
+//
+// Before the bodies, because `complain_at` records only the FIRST problem and that is the one
+// `diag.bx` renders. `L15_relay_returns_a_slice_param` in the audit corpus was refused by both
+// compilers for DIFFERENT reasons — stage-0 by this rule at the declaration, stage-1 by the relay
+// rule at the assignment inside the body — and running this pass first is what makes the two agree
+// on the reason as well as the verdict.
+//
+// Functions only. A method returning `[Int]` is accepted by BOTH compilers, measured — stage-0's
+// rule lives in `for f in &prog.fns` and never sees a method or an `external`. Widening it here
+// would be stage-1 being cleverer alone, which is the thing B36 and B37 both exist to stop.
+function (mutable self: Unit) check_return_storage(src: String) -> Int {
+    let mutable i: Int = 0;
+    while i < len(self.items) {
+        let index: Int = self.items[i];
+        let item: Node = self.nodes[index];
+        if item.kind == 80 {
+            let name: Token = self.tokens[item.token];
+            let found: Int = self.find_function(src, name.start, name.length);
+            if found >= 0 {
+                // The STORED signature, not the node's flags: the probe writes `allocates` back
+                // there, and reading the node would see only what was literally written.
+                let declared: DeclaredFunction = self.functions[found];
+                if flag_allocates(declared.flags) == 0
+                    && self.region_allocated(src, declared.return_type) {
+                    let complained: Int = self.complain_at(src, item.token,
+                        "function `" + substring(src, name.start, name.length)
+                        + "` cannot return " + self.show_type(src, declared.return_type)
+                        + ", because its storage lives in a region and would not outlive it. "
+                        + "Fill an array the caller owns, or return a scalar summary.");
+                }
+            }
+        }
+        i += 1;
+    }
+    return self.problems;
+}
+
 // Work out which functions and methods allocate, so `allocates` need not be written.
 //
 // A least fixpoint, and it iterates rather than asking once because the answer travels along
@@ -5682,6 +5939,10 @@ function (mutable self: Unit) check(src: String) -> Int {
     // the answer has to exist before the first body is read. That ordering is the only reason
     // `allocates` was ever required — the compiler always computed it.
     let inferred: Int = self.infer_allocates(src);
+    // B37, and the ORDER is the rule: after the inference, because `allocates` excuses the
+    // signature; before the bodies, because stage-0 refuses at the declaration and only the first
+    // problem is the one a reader is shown.
+    let returns: Int = self.check_return_storage(src);
     let checked: Int = self.check_bodies(src);
     return self.problems;
 }

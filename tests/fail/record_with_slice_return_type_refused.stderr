@@ -1,0 +1,1 @@
+function `same` cannot return Bag, because its storage lives in a region and would not outlive it. Fill an array the caller owns, or return a scalar summary.

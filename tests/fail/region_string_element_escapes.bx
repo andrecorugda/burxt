@@ -1,0 +1,7 @@
+let mutable kept: String = "";
+region r {
+    let mutable made: [String] = [];
+    push(made, "a" + "b");
+    kept = made[0];
+}
+print(kept);

@@ -1,0 +1,7 @@
+class Pair { label: String, n: Int }
+let mutable kept: String = "";
+region r {
+    let b: Pair = Pair { label: "a" + "b", n: 1 };
+    kept = b.label;
+}
+print(kept);

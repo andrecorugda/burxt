@@ -1,0 +1,9 @@
+class Wrapper<T> { t: T, note: String }
+class Outer { inner: Wrapper<Int> }
+
+let mutable kept: Wrapper<Int> = Wrapper { t: 0, note: "" };
+region r {
+    let o: Outer = Outer { inner: Wrapper { t: 1, note: "a" + "b" } };
+    kept = o.inner;
+}
+print(kept.note);

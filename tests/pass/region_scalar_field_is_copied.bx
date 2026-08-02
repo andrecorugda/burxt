@@ -1,0 +1,7 @@
+class Pair { label: String, n: Int }
+let mutable total: Int = 0;
+region r {
+    let b: Pair = Pair { label: "a" + "b", n: 41 + 1 };
+    total = b.n;
+}
+print("{total}");

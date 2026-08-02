@@ -1332,15 +1332,42 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
     //     region r { let b: Box = Box { name: "a" + "b" }; h.tag = b.name; }   // prints ab, then 0
     //     region r { ... push(made, "a" + "b"); kept = made[0]; }              // prints ab, then ""
     //
-    // Type-blind, and deliberately so: `total = b.n` for an Int field of a record built in the
-    // region is refused here, and an Int is copied so it could not dangle. Stage-0 refuses it too,
-    // measured — and the two compilers agreeing conservatively is worth more than either being
-    // cleverer alone, which is M14 §2's Decision 2 in the small. Recorded rather than quietly
-    // corrected, so whoever narrows it narrows BOTH.
+    // ---- B36: and it asks what the reached-for thing IS, which it did not ----------------------
+    //
+    // The arm was TYPE-BLIND when it landed, so `total = b.n` for an Int field of a record built in
+    // the region was refused — and an Int is one i64 cell, copied into the caller's slot, so it
+    // could not dangle. That was taken deliberately rather than missed: stage-0 refused it too, and
+    // two compilers agreeing conservatively beats either being cleverer alone.
+    //
+    // Now narrowed, and the row says narrow it in BOTH compilers or neither. The recursion answers
+    // *"is the thing you reached THROUGH region storage"*, which is necessary and not sufficient;
+    // `may_be_region_storage` answers *"could the thing you reached FOR be a pointer"*, and a read
+    // has to be both. A field of type String is a pointer into the record and stays refused; a field
+    // of type Int is a copy and is now accepted.
+    //
+    // One place the two do NOT yet agree, and it is deliberate: on a generic APPLICATION this gate
+    // is stricter than stage-0's helper, because that helper has a measured hole there. The proof
+    // and the reasoning are on `may_be_region_storage` in `check.bx`; the short version is that a
+    // false refusal is a program someone rewrites and a false acceptance is a use-after-free.
+    //
+    // The gate is a fact about the representation, not a guess — measured before it was written: a
+    // class value is copied INLINE, nested class fields included, so a field whose leaves are all
+    // scalars is a copy too.
+    //
+    //     class Inner { n: Int }   class Outer { inner: Inner, s: String }
+    //     let mutable a: Outer = Outer { inner: Inner { n: 1 }, s: "x" };
+    //     let mutable b: Outer = a;  b.inner.n = 99;  print("{a.inner.n}");   // prints 1
+    //
+    // Stage-1 asks only `n.a` where stage-0's Index arm also asks its INDEX. Left as it was, because
+    // narrowing and mirroring are two changes and this row is the first one; noted so the next
+    // reader does not take the difference for a decision.
     //
     // The inference does not move: `holds_region` is only ever set while a region is open, so
     // `return b.name` in an ordinary function still answers exactly what it answered before.
     if n.kind == 11 || n.kind == 12 {
+        if !self.may_be_region_storage(src, self.type_at(node)) {
+            return false;
+        }
         return self.expr_allocates(src, n.a);
     }
     if n.kind == 17 {                                // an array literal: children ARE the values

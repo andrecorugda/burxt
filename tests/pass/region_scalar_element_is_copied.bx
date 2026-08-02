@@ -1,0 +1,7 @@
+let mutable first: Int = 0;
+region r {
+    let mutable made: [Int] = [];
+    push(made, 41 + 1);
+    first = made[0];
+}
+print("{first}");

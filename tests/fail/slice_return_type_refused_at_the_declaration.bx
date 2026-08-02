@@ -1,0 +1,2 @@
+function same(xs: [String]) -> [String] { return xs; }
+print("k");

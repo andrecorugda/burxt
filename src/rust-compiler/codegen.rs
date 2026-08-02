@@ -122,8 +122,10 @@ pub struct CodeGen<'ctx> {
     /// point: the value has to be the one from BEFORE the body ran.
     old_slots: Vec<(PointerValue<'ctx>, Type)>,
     /// The enclosing loops of the statement being generated: where `continue` goes,
-    /// where `break` goes, and what region was open when the loop started.
-    loop_stack: Vec<(inkwell::basic_block::BasicBlock<'ctx>, inkwell::basic_block::BasicBlock<'ctx>, Option<IntValue<'ctx>>)>,
+    /// where `break` goes, and how deep `region_marks` stood when the loop started —
+    /// which is what lets a jump tell a block opened INSIDE the loop from one that
+    /// encloses it.
+    loop_stack: Vec<(inkwell::basic_block::BasicBlock<'ctx>, inkwell::basic_block::BasicBlock<'ctx>, usize)>,
     /// How many `for` loops have been lowered, so each hidden index gets its own name.
     desugared_loops: usize,
     /// The postconditions of the function being generated, with the name of that
@@ -132,9 +134,19 @@ pub struct CodeGen<'ctx> {
     current_ensures: Vec<(crate::typeck::TypedContract, String)>,
     /// argc and argv, stashed by `main` so any function can read them
     arguments: Option<(inkwell::values::GlobalValue<'ctx>, inkwell::values::GlobalValue<'ctx>)>,
-    /// the bump-cursor mark of the region currently open, so a `return` from
-    /// inside it releases the region on the way out. One level, per M1.
-    region_mark: Option<IntValue<'ctx>>,
+    /// The bump-cursor marks of the regions open here, outermost first, so a `return`
+    /// from inside them releases every one on the way out.
+    ///
+    /// A Vec since A12, and one entry per releasing block rather than the single slot
+    /// M1 needed for a `region`. The allocator is unchanged and so is the mechanism:
+    /// each entry is where the cursor stood, and putting it back IS the deallocation.
+    /// Because the cursor is LIFO, restoring the OUTERMOST of several marks releases
+    /// all of them at once — which is why leaving by `return` needs one store and not
+    /// one per level.
+    ///
+    /// Per function: emptied on entry to each body, so a mark can never be restored
+    /// from inside a different frame.
+    region_marks: Vec<IntValue<'ctx>>,
     /// struct name -> its LLVM struct type (named `bx.<name>`)
     struct_types: HashMap<String, StructType<'ctx>>,
     /// struct name -> field types in declaration order (for GEP walks)
@@ -181,7 +193,7 @@ impl<'ctx> CodeGen<'ctx> {
             interface_slots: HashMap::new(),
             current_sret: None,
             arguments: None,
-            region_mark: None,
+            region_marks: Vec::new(),
             current_ensures: Vec::new(),
             loop_stack: Vec::new(),
             desugared_loops: 0,
@@ -359,6 +371,9 @@ impl<'ctx> CodeGen<'ctx> {
         let entry = self.ctx.append_basic_block(main_fn, "entry");
         self.builder.position_at_end(entry);
         self.vars.clear();
+        // A body starts with no mark of its own: a region is released inside the frame
+        // that opened it, never across a call.
+        self.region_marks.clear();
 
         let (argc_g, argv_g) = self.args_globals();
         let argc = main_fn.get_nth_param(0).unwrap().into_int_value();
@@ -395,6 +410,9 @@ impl<'ctx> CodeGen<'ctx> {
         let entry = self.ctx.append_basic_block(llf, "entry");
         self.builder.position_at_end(entry);
         self.vars.clear();
+        // A body starts with no mark of its own: a region is released inside the frame
+        // that opened it, never across a call.
+        self.region_marks.clear();
 
         // An aggregate return arrives as a hidden sret pointer in slot 0.
         let ret_is_agg = is_aggregate(&f.ret);
@@ -767,26 +785,20 @@ impl<'ctx> CodeGen<'ctx> {
                 self.vars = saved;
                 r
             }
+            // Mark where the bump pointer stands, run the body, then reset to the mark
+            // — the whole block released in O(1), with no per-object free, no refcount,
+            // and no collector.
+            //
+            // The two spellings are one mechanism. `Region` is the word the programmer
+            // wrote; `Release` is an ordinary block the escape analysis proved keeps
+            // nothing (A12). Neither knows anything the other does not, which is the
+            // point: per-block release adds no runtime machinery, it only puts the
+            // existing mark-and-restore somewhere else.
             TypedStmt::Region { name, body } => {
-                // Mark where the bump pointer stands, run the body, then reset
-                // to the mark — the whole region released in O(1), with no
-                // per-object free, no refcount, and no collector.
                 let _ = name;
-                let mark = self.build_region_open()?;
-                let saved = self.vars.clone();
-                // A `return` inside the body has to put the cursor back too, so
-                // the mark is reachable from there. One level of nesting, per
-                // the M1 spec, so one slot is enough.
-                let outer_mark = self.region_mark.replace(mark);
-                let r = body.iter().try_for_each(|s| self.gen_stmt(s));
-                self.vars = saved;
-                self.region_mark = outer_mark;
-                r?;
-                if self.current_block_open() {
-                    self.build_region_close(mark)?;
-                }
-                Ok(())
+                self.gen_released_block(body)
             }
+            TypedStmt::Release { body } => self.gen_released_block(body),
             TypedStmt::Match { value, arms } => {
                 let err = |e: inkwell::builder::BuilderError| e.to_string();
                 let i64t = self.ctx.i64_type();
@@ -887,19 +899,20 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(())
             }
             // `break` and `continue` are jumps to blocks the enclosing loop set up.
-            // If a `region` was opened INSIDE the loop, leaving it by either jump has
-            // to release it, exactly as `return` does — but a region that ENCLOSES the
-            // loop must not be touched, because the jump stays inside it. The loop
-            // classes what was open when it started, so the two cases are
-            // distinguishable rather than guessed.
+            // Anything opened INSIDE the loop — a `region`, or the loop body itself
+            // once A12 proved it keeps nothing — has to be released by either jump,
+            // exactly as `return` does. Anything that ENCLOSES the loop must not be
+            // touched, because the jump stays inside it. The loop records the depth it
+            // started at, so the two cases are distinguishable rather than guessed.
+            //
+            // Releasing the body's own block here is what makes `continue` in a loop
+            // that builds and discards constant-memory rather than merely usually so.
             TypedStmt::Break | TypedStmt::Continue => {
-                let (cond_bb, end_bb, mark_at_entry) = *self
+                let (cond_bb, end_bb, depth_at_entry) = *self
                     .loop_stack
                     .last()
                     .ok_or("codegen bug: `break` outside a loop")?;
-                if self.region_mark.is_some() && mark_at_entry.is_none() {
-                    self.close_open_region()?;
-                }
+                self.close_regions_below(depth_at_entry)?;
                 let target = if matches!(stmt, TypedStmt::Break) { end_bb } else { cond_bb };
                 self.builder
                     .build_unconditional_branch(target)
@@ -1108,10 +1121,10 @@ impl<'ctx> CodeGen<'ctx> {
             .map_err(err)?;
 
         self.builder.position_at_end(body_bb);
-        // What `break` and `continue` inside this body will jump to, plus the region
-        // that was open before the loop — so a jump can tell "opened inside the loop"
-        // from "encloses the loop".
-        self.loop_stack.push((cond_bb, end_bb, self.region_mark));
+        // What `break` and `continue` inside this body will jump to, plus how many
+        // regions were already open — so a jump can tell "opened inside the loop" from
+        // "encloses the loop".
+        self.loop_stack.push((cond_bb, end_bb, self.region_marks.len()));
         let generated = self.gen_block(body);
         self.loop_stack.pop();
         generated?;
@@ -1274,6 +1287,9 @@ impl<'ctx> CodeGen<'ctx> {
         let entry = self.ctx.append_basic_block(llf, "entry");
         self.builder.position_at_end(entry);
         self.vars.clear();
+        // A body starts with no mark of its own: a region is released inside the frame
+        // that opened it, never across a call.
+        self.region_marks.clear();
 
         let ret_is_agg = is_aggregate(&m.ret);
         self.current_sret = if ret_is_agg {
@@ -4313,6 +4329,26 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(new_len.into())
     }
 
+    /// A block that releases what it built: take the mark, run the body, put the
+    /// cursor back if control reaches the closing brace.
+    ///
+    /// It may not — a `return`, a `break`, a `continue` or a `?` leaves early, and each
+    /// of those puts the cursor back itself, reading this mark off `region_marks`. That
+    /// is the only reason the stack exists: an early exit has to know what to undo.
+    fn gen_released_block(&mut self, body: &[TypedStmt]) -> Result<(), String> {
+        let mark = self.build_region_open()?;
+        let saved = self.vars.clone();
+        self.region_marks.push(mark);
+        let r = body.iter().try_for_each(|s| self.gen_stmt(s));
+        self.vars = saved;
+        self.region_marks.pop();
+        r?;
+        if self.current_block_open() {
+            self.build_region_close(mark)?;
+        }
+        Ok(())
+    }
+
     /// `open` is just "remember where the cursor is".
     fn build_region_open(&mut self) -> Result<IntValue<'ctx>, String> {
         // Opening a region brings its allocator into the module: a region and
@@ -4497,12 +4533,23 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
-    /// Leaving a region by `return` releases it exactly as reaching its closing
-    /// brace would. Without this the bump cursor kept climbing for the life of
-    /// the process, so a function that returned from inside a region leaked its
-    /// region on every call.
+    /// Leaving by `return` releases every open region exactly as reaching their
+    /// closing braces would. Without this the bump cursor kept climbing for the life
+    /// of the process, so a function that returned from inside a region leaked it on
+    /// every call.
+    ///
+    /// The cursor goes back to the OUTERMOST mark this body took — one store, whatever
+    /// the nesting depth, because the allocator is LIFO and that mark is below all the
+    /// others.
     fn close_open_region(&mut self) -> Result<(), String> {
-        if let Some(mark) = self.region_mark {
+        self.close_regions_below(0)
+    }
+
+    /// Put the cursor back to where it stood when the region at `depth` opened, if any
+    /// region at or beyond that depth is open. What `break` and `continue` need: they
+    /// leave the blocks opened INSIDE the loop and stay inside the ones that enclose it.
+    fn close_regions_below(&mut self, depth: usize) -> Result<(), String> {
+        if let Some(mark) = self.region_marks.get(depth).copied() {
             self.build_region_close(mark)?;
         }
         Ok(())

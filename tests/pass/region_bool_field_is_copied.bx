@@ -1,0 +1,7 @@
+class Flagged { note: String, ok: Bool }
+let mutable seen: Bool = false;
+region r {
+    let f: Flagged = Flagged { note: "a" + "b", ok: true };
+    seen = f.ok;
+}
+print("{seen}");

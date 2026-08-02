@@ -1,0 +1,8 @@
+class Inner { s: String }
+class Outer { inner: Inner }
+let mutable got: Inner = Inner { s: "" };
+region r {
+    let o: Outer = Outer { inner: Inner { s: "a" + "b" } };
+    got = o.inner;
+}
+print(got.s);

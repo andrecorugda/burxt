@@ -1,0 +1,8 @@
+class Bag { items: [Int] }
+class Holder { bag: Bag, s: String }
+let mutable kept: Bag = Bag { items: [] };
+region r {
+    let h: Holder = Holder { bag: Bag { items: [1, 2] }, s: "a" + "b" };
+    kept = h.bag;
+}
+print("{len(kept.items)}");

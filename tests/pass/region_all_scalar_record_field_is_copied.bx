@@ -1,0 +1,8 @@
+class Inner { n: Int }
+class Outer { inner: Inner, s: String }
+let mutable got: Inner = Inner { n: 0 };
+region r {
+    let o: Outer = Outer { inner: Inner { n: 41 + 1 }, s: "a" + "b" };
+    got = o.inner;
+}
+print("{got.n}");

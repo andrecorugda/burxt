@@ -1,0 +1,11 @@
+function first_of<T>(x: T, fallback: T) -> T {
+    let mutable kept: T = fallback;
+    region r {
+        let mutable ys: [T] = [];
+        push(ys, x);
+        kept = ys[0];
+    }
+    return kept;
+}
+
+print(first_of("a" + "b", "no"));

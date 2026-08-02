@@ -186,6 +186,16 @@ pub enum TypedStmt {
     Print { value: TypedExpr, to_stderr: bool },
     /// `region name { .. }`: open a region, run the body, release as a unit.
     Region { name: String, body: Vec<TypedStmt> },
+    /// An ORDINARY block that the escape analysis proved keeps nothing — so it
+    /// releases at its closing brace exactly as a `region` does. M14 slice 3 / A12.
+    ///
+    /// Not `Region`, and the difference is the point: a `region` is something the
+    /// programmer wrote and every rule about it is a rule about their word. This is a
+    /// placement the compiler chose, it carries no name, and it exists only where
+    /// `place_releases` proved that nothing allocated inside reaches a binding declared
+    /// outside. A block that fails the proof is simply left alone, which is exactly the
+    /// behaviour before this variant existed — that is what makes M14 additive.
+    Release { body: Vec<TypedStmt> },
     /// `for name in iterable { body }`. The element type and whether the array is fixed
     /// or growable are settled by the checker, so codegen only has to walk it.
     For { name: String, elem: Type, iterable: TypedExpr, body: Vec<TypedStmt> },
@@ -413,6 +423,12 @@ pub struct TypeChecker {
     /// Read at the CALL site, because that is where the caller's obligation is: a `mutable`
     /// parameter changes the caller's value, so the caller has to be holding one that may change.
     fn_writable: HashMap<String, Vec<bool>>,
+    /// The same, per method. `methods` records only `receiver_mut`, because until A12
+    /// nothing outside `check_method` needed to know which of a method's own parameters
+    /// were `mutable`. Per-block release does: a `mutable` parameter is the ONLY way a
+    /// callee can write into storage its caller owns, so it is exactly the question
+    /// "can this call put something in a place that outlives this block?".
+    method_writable: HashMap<(String, String), Vec<bool>>,
     /// The names bound as PARAMETERS of the function being checked.
     ///
     /// Only used to give followable advice. `cannot modify x` used to suggest `let mutable x`, which
@@ -773,6 +789,7 @@ impl TypeChecker {
             extern_names: HashSet::new(),
             extern_parameters: HashMap::new(),
             fn_writable: HashMap::new(),
+            method_writable: HashMap::new(),
             current_params: std::collections::HashSet::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
@@ -1900,6 +1917,10 @@ impl TypeChecker {
             }
             let param_tys: Vec<Type> =
                 concrete.parameters.iter().map(|p| p.ty.clone()).collect();
+            self.method_writable.insert(
+                key.clone(),
+                concrete.parameters.iter().map(|p| p.writable).collect(),
+            );
             self.methods.insert(
                 key,
                 (concrete.receiver_mut, param_tys, concrete.ret.clone()),
@@ -2706,6 +2727,8 @@ impl TypeChecker {
             if m.is_pure {
                 self.pure_methods.insert(key.clone());
             }
+            self.method_writable
+                .insert(key.clone(), m.parameters.iter().map(|p| p.writable).collect());
             self.methods.insert(key, (m.receiver_mut, param_tys, m.ret.clone()));
         }
 
@@ -2875,6 +2898,30 @@ impl TypeChecker {
         enums.extend(self.made_order.borrow().iter().cloned());
         let mut structs = structs;
         structs.extend(self.made_record_order.borrow().iter().cloned());
+
+        // A12 / M14 slice 3. LAST, once every body is checked and every table the escape
+        // analysis reads is final — `alloc_fns`, `alloc_methods` and the relay sets are
+        // filled by a fixpoint that runs before the real pass, and generic instantiations
+        // are checked in the loop above, so asking any earlier would ask half the program.
+        //
+        // Nothing here can refuse: it only decides WHERE a release goes.
+        let mut fns = fns;
+        for f in &mut fns {
+            let params: Vec<String> = f.parameters.iter().map(|(n, _)| n.clone()).collect();
+            let body = std::mem::take(&mut f.body);
+            f.body = self.place_releases(&params, body, true);
+        }
+        let mut methods = methods;
+        for m in &mut methods {
+            let mut params: Vec<String> = vec!["self".to_string()];
+            params.extend(m.parameters.iter().map(|(n, _)| n.clone()));
+            let body = std::mem::take(&mut m.body);
+            m.body = self.place_releases(&params, body, true);
+        }
+        // The top level is not wrapped — there is nothing after it to release into, and
+        // the process exit reclaims the arena whole. Its inner blocks are, which is where
+        // the loop in §3 lives.
+        let stmts = self.place_releases(&[], stmts, false);
         Ok(TypedProgram { structs, enums, externs, fns, methods, vtables, stmts })
     }
 
@@ -3532,6 +3579,7 @@ impl TypeChecker {
                 }
                 TypedStmt::While { body, .. }
                 | TypedStmt::Region { body, .. }
+                | TypedStmt::Release { body }
                 | TypedStmt::For { body, .. }
                 | TypedStmt::ForRange { body, .. } => self.collect_allocations(body, into),
                 TypedStmt::Match { arms, .. } => {
@@ -3557,7 +3605,9 @@ impl TypeChecker {
                 .or_else(|| self.first_allocation(then_block))
                 .or_else(|| else_block.as_ref().and_then(|b| self.first_allocation(b))),
             TypedStmt::While { body, .. } => self.first_allocation(body),
-            TypedStmt::Region { body, .. } => self.first_allocation(body),
+            TypedStmt::Region { body, .. } | TypedStmt::Release { body } => {
+                self.first_allocation(body)
+            }
             TypedStmt::For { body, .. } => self.first_allocation(body),
             // The BOUNDS cannot allocate — both are Ints — so only the body is walked.
             TypedStmt::ForRange { body, .. } => self.first_allocation(body),
@@ -3735,12 +3785,38 @@ impl TypeChecker {
             // A name bound to region storage IS region storage. Without this, `return s`
             // slipped past the rule that refuses `return "a" + "b"` — see `region_locals`.
             TypedExprKind::Var(name) => self.region_locals.contains(name),
-            TypedExprKind::Field { base, .. } => self.expr_allocates(base),
-            TypedExprKind::Index { base, index, .. } => {
-                self.expr_allocates(base) || self.expr_allocates(index)
+            // B36. Reaching INTO region storage does not always come back with region
+            // storage, and until v0.0.272 these three arms could not tell the difference:
+            // they asked only whether the thing reached THROUGH held any, so
+            // `total = b.n` and `total = made[0]` were refused for an `Int`.
+            //
+            // The narrowing asks the reached-for thing's own type. `b.n` yields an Int,
+            // which is a COPY of a scalar and has nowhere to dangle from; `b.label`
+            // yields a String, which is the same bytes and still cannot leave.
+            //
+            // Sound for an aggregate field too, and that took measuring rather than
+            // reasoning: a class value is copied INLINE, nested fields included, so
+            //
+            //     class Inner { n: Int }   class Outer { inner: Inner, s: String }
+            //     let mutable b: Outer = a;  b.inner.n = 99;  print(a.inner.n);   // 1
+            //
+            // — reading an all-scalar aggregate out of a region-built parent copies its
+            // bytes out. Which is why `may_be_region_storage` is the right predicate here
+            // and a flat "is it a scalar?" would refuse correct programs.
+            //
+            // **The whole-name spellings are untouched, and that is the line between a
+            // narrowing and a hole.** `kept = made` and `kept = b` never reach these arms
+            // — they are `Var`, caught one arm up by `region_locals` — so both are still
+            // refused. Measured, not assumed: the fixtures are the four rows of B36.
+            TypedExprKind::Field { base, .. } => {
+                self.may_be_region_storage(&e.ty) && self.expr_allocates(base)
             }
-            TypedExprKind::SliceIndex { base, index } => {
-                self.expr_allocates(base) || self.expr_allocates(index)
+            // The INDEX cannot make an element region storage, whatever it computed on
+            // the way — so once the element type says no, neither operand is asked.
+            TypedExprKind::Index { base, index, .. }
+            | TypedExprKind::SliceIndex { base, index } => {
+                self.may_be_region_storage(&e.ty)
+                    && (self.expr_allocates(base) || self.expr_allocates(index))
             }
             _ => false,
         }
@@ -3776,27 +3852,135 @@ impl TypeChecker {
     ///
     /// A type parameter and a `dynamic` answer YES: neither says what the storage is, and
     /// M14 §10 is explicit that a wrong guess must cost memory rather than correctness.
+    ///
+    /// ### Two holes, in two arms, fixed together in v0.0.272 — B39 and B42
+    ///
+    /// A generic reaches this in one of two shapes depending on whether it has been
+    /// monomorphised yet, and **each shape had its own way of answering "no" to a type
+    /// that holds a String.** Fixing either alone leaves the other open and looks fixed:
+    ///
+    /// * `Named("Wrapper$Int")` — an INSTANTIATION, which lives in `made_records` /
+    ///   `made_enums` and not in `structs` / `enums`. The old arm consulted only the
+    ///   latter two and fell through to `false`. Found from A12: `lib/json.bx` printed a
+    ///   truncated document because a block holding a `Result$Json$String` was released.
+    ///
+    /// * `Generic { name: "Wrapper", arguments: [Int] }` — the old arm asked only the
+    ///   ARGUMENTS, and the arguments say nothing about a field that is a `String`
+    ///   whatever `T` is:
+    ///
+    ///   ```text
+    ///   class Wrapper<T> { t: T, note: String }
+    ///   enum Holder<T> { Empty, Full(T) }
+    ///   region r { let w: Wrapper<Int> = Wrapper { t: 1, note: "secret-" + "value" };
+    ///              match Holder.Full(w) { Full(x) => { kept = x; } Empty => { } } }
+    ///   print(kept.note);        // printed the NEXT region's bytes
+    ///   ```
+    ///
+    ///   Every argument is an `Int`, so the payload was not tainted, so `kept = x` was
+    ///   accepted. **This one was live** — stage-0 compiled and ran it.
+    ///
+    /// So the declaration is consulted too, with the arguments substituted in. Substituted
+    /// rather than merely walked, because `Option<Int>` genuinely holds nothing: answering
+    /// on the parameters alone would make every `Option` region storage and refuse correct
+    /// programs, and a false positive is as much a failure here as a false negative.
+    ///
+    /// `seen` breaks the cycle a self-referential application would otherwise spin on —
+    /// `List<Int>` whose payload is `List<Int>`. Answering `false` for a type already
+    /// being asked about is right rather than merely terminating: the recursion returns to
+    /// it only through a field, and that field's OTHER siblings are what decide.
     fn may_be_region_storage(&self, ty: &Type) -> bool {
+        self.may_be_region_storage_within(ty, &mut Vec::new())
+    }
+
+    fn may_be_region_storage_within(&self, ty: &Type, seen: &mut Vec<String>) -> bool {
         match ty {
             Type::String | Type::Slice(_) => true,
             Type::Named(n) => {
-                if let Some(fields) = self.structs.get(n) {
-                    return fields.iter().any(|(_, t)| self.may_be_region_storage(t));
+                if seen.iter().any(|s| s == n) {
+                    return false;
                 }
-                if let Some(variants) = self.enums.get(n) {
-                    return variants
-                        .iter()
-                        .any(|(_, payload)| payload.iter().any(|t| self.may_be_region_storage(t)));
-                }
-                false
+                seen.push(n.clone());
+                // `fields_of` and `variants_of` resolve an instantiation as readily as a
+                // declaration, which is the whole of the first fix.
+                let answer = match (self.fields_of(n), self.variants_of(n)) {
+                    (Some(fields), _) => {
+                        fields.iter().any(|(_, t)| self.may_be_region_storage_within(t, seen))
+                    }
+                    (None, Some(variants)) => variants.iter().any(|(_, payload)| {
+                        payload.iter().any(|t| self.may_be_region_storage_within(t, seen))
+                    }),
+                    // Not a class, not an enum, not an instantiation of either.
+                    // `validate_type` refuses such a name, so this is unreachable in a
+                    // program that checks — and the answer for an unreachable case must
+                    // still be the safe one, because "unresolvable" answering NO is
+                    // exactly how the two holes above stayed invisible.
+                    (None, None) => true,
+                };
+                seen.pop();
+                answer
             }
-            Type::Array { elem, .. } => self.may_be_region_storage(elem),
-            Type::Generic { arguments, .. } => {
-                arguments.iter().any(|t| self.may_be_region_storage(t))
+            Type::Array { elem, .. } => self.may_be_region_storage_within(elem, seen),
+            Type::Generic { name, arguments } => {
+                if arguments.iter().any(|t| self.may_be_region_storage_within(t, seen)) {
+                    return true;
+                }
+                let key = format!("{}", ty);
+                if seen.iter().any(|s| *s == key) {
+                    return false;
+                }
+                seen.push(key);
+                let answer = self.generic_body_holds_storage(name, arguments, seen);
+                seen.pop();
+                answer
             }
             Type::Param(_) | Type::Dyn(_) => true,
-            _ => false,
+            // The scalars, listed rather than left to a `_` arm. A type this predicate
+            // has never heard of must not inherit "holds nothing" in silence; that is
+            // the same failure as the two arms above, one milestone later.
+            Type::Int
+            | Type::Bool
+            | Type::CInt
+            | Type::Width { .. }
+            | Type::CPointer
+            | Type::CDouble
+            | Type::Decimal { .. } => false,
         }
+    }
+
+    /// The fields (or variant payloads) a generic declares, with this application's
+    /// arguments put in for its parameters. `class Wrapper<T> { t: T, note: String }`
+    /// applied to `Int` holds an `Int` and a `String`, and it is the second that matters.
+    fn generic_body_holds_storage(
+        &self,
+        name: &str,
+        arguments: &[Type],
+        seen: &mut Vec<String>,
+    ) -> bool {
+        if let Some((parameters, fields)) = self.generic_records.get(name) {
+            let map = Self::argument_map(parameters, arguments);
+            return fields
+                .iter()
+                .any(|(_, t)| self.may_be_region_storage_within(&substitute(t, &map), seen));
+        }
+        if let Some((parameters, variants)) = self.generic_enums.get(name) {
+            let map = Self::argument_map(parameters, arguments);
+            return variants.iter().any(|(_, payload)| {
+                payload
+                    .iter()
+                    .any(|t| self.may_be_region_storage_within(&substitute(t, &map), seen))
+            });
+        }
+        // An application of something this checker has no declaration for. It is refused
+        // elsewhere; here the honest answer is the conservative one.
+        true
+    }
+
+    fn argument_map(parameters: &[TypeParam], arguments: &[Type]) -> HashMap<String, Type> {
+        parameters
+            .iter()
+            .map(|p| p.name.clone())
+            .zip(arguments.iter().cloned())
+            .collect()
     }
 
     /// A Named type must refer to a declared struct; CInt never leaves the
@@ -8389,7 +8573,7 @@ fn stmt_diverges(s: &TypedStmt) -> bool {
         TypedStmt::Match { arms, .. } => {
             !arms.is_empty() && arms.iter().all(|a| block_diverges(&a.body))
         }
-        TypedStmt::Region { body, .. } => block_diverges(body),
+        TypedStmt::Region { body, .. } | TypedStmt::Release { body } => block_diverges(body),
         // A `for` over an empty array — or an empty range, `0..0` — runs zero times, so
         // neither form can be what makes control leave a block.
         TypedStmt::For { .. } | TypedStmt::ForRange { .. } => false,
@@ -8420,7 +8604,7 @@ fn stmt_returns(s: &TypedStmt) -> bool {
         // second `return` after the block and then called it unreachable —
         // there was no way to write a function that returns from inside a
         // region.
-        TypedStmt::Region { body, .. } => block_returns(body),
+        TypedStmt::Region { body, .. } | TypedStmt::Release { body } => block_returns(body),
         // **`For` used to answer `block_returns(body)` here, and that was a CRASH.** A `for` whose
         // body returns was treated as returning on every path — but a `for` over an EMPTY array runs
         // zero times, so the path that skips the loop falls out of the function with no `return`.
@@ -8739,4 +8923,712 @@ fn specialise_method(m: &MethodDef, map: &HashMap<String, Type>, receiver: &str)
     out.ret = substitute(&out.ret, map);
     substitute_in_block(&mut out.body, map);
     out
+}
+
+// ===========================================================================
+// M14 slice 3 / A12 — per-block release
+// ===========================================================================
+//
+// One question, asked once per block instead of once per assignment:
+//
+//     does anything allocated inside this block reach a binding declared outside it?
+//
+// If the answer is no, the block gets a `TypedStmt::Release` wrapper and codegen
+// puts the bump cursor back at its closing brace. If the answer is yes — or if this
+// pass does not RECOGNISE the construct well enough to answer — the block is left
+// exactly as it was, which is the behaviour before A12 existed. That asymmetry is
+// the whole safety argument: a wrong guess costs memory, never correctness
+// (spec/M14-IMPLICIT-REGIONS.md §10, "no guessing inward").
+//
+// ALL-OR-NOTHING PER BLOCK, per §9b Decision 3. A bump allocator is LIFO, so there is
+// no way to place one value below the current mark while the block keeps allocating
+// above it; the moment one value escapes, restoring the cursor would free it along
+// with everything else. So a block that fails the proof does not release at all.
+//
+// This is a POST-pass over the already-checked body, and deliberately not a set of
+// lines added to the checking arms. It cannot refuse anything, it cannot change a
+// diagnostic, and it cannot change which programs compile — so acceptance item 3
+// ("every existing `tests/pass` program compiles unchanged") is true by construction
+// rather than by testing, and the tests then confirm it.
+
+/// What is known about one name while the pass walks a body.
+#[derive(Clone, Copy)]
+struct Owned {
+    /// Which block's lifetime the STORAGE behind this name belongs to. `None` means
+    /// "outside this function" — a parameter, or anything reached through one.
+    ///
+    /// Not the same as where the name was DECLARED, and the difference is a
+    /// use-after-free: copying a container copies its header and shares its buffer, so
+    /// `let mine: [Int] = theirs;` declares a name here that grows storage owned there.
+    owner: Option<usize>,
+    /// Does this name hold storage built in this function (as opposed to a literal in
+    /// `.rodata`, a scalar, or the caller's)? A PARAMETER never does — its storage is
+    /// the caller's, and the caller outlives the call, which is why returning one is
+    /// safe and must keep being.
+    allocated: bool,
+}
+
+#[derive(Default)]
+struct Frame {
+    /// Names declared directly in this block, removed again when it closes — so two
+    /// sibling blocks that use the same name cannot inherit each other's answers.
+    declared: Vec<String>,
+    /// Something allocated inside this block is reachable after it ends.
+    leaks: bool,
+    /// Anything at all was built in here. A block that allocates nothing has nothing
+    /// to release, and wrapping it would be two stores for no reason.
+    allocates: bool,
+}
+
+struct ReleasePass<'a> {
+    tc: &'a TypeChecker,
+    frames: Vec<Frame>,
+    names: HashMap<String, Owned>,
+}
+
+impl<'a> ReleasePass<'a> {
+    fn depth(&self) -> usize {
+        self.frames.len() - 1
+    }
+
+    /// Mark every block INSIDE `owner` as unable to release. An allocation that lands
+    /// in storage owned by block *k* has to survive until *k* ends, so every block
+    /// nested in it must leave the cursor alone. `None` — the caller's storage, or a
+    /// `return` — taints the whole function.
+    fn taint(&mut self, owner: Option<usize>) {
+        let from = match owner {
+            None => 0,
+            Some(d) => d + 1,
+        };
+        for f in self.frames.iter_mut().skip(from) {
+            f.leaks = true;
+        }
+    }
+
+    fn mark_allocates(&mut self) {
+        for f in self.frames.iter_mut() {
+            f.allocates = true;
+        }
+    }
+
+    fn declare(&mut self, name: &str, owner: Option<usize>, allocated: bool) {
+        if let Some(f) = self.frames.last_mut() {
+            f.declared.push(name.to_string());
+        }
+        self.names.insert(name.to_string(), Owned { owner, allocated });
+    }
+
+    fn owner_of(&self, name: &str) -> Option<usize> {
+        self.names.get(name).and_then(|o| o.owner)
+    }
+
+    fn allocated(&self, name: &str) -> bool {
+        self.names.get(name).is_some_and(|o| o.allocated)
+    }
+
+    /// The shorter of two lifetimes, with `None` (outside the function) the shortest of
+    /// all from this pass's point of view — it is the one that permits nothing.
+    fn shorter(a: Option<usize>, b: Option<usize>) -> Option<usize> {
+        match (a, b) {
+            (Some(x), Some(y)) => Some(x.min(y)),
+            _ => None,
+        }
+    }
+
+    /// Whose storage could this expression be pointing INTO? The current block, unless
+    /// it mentions a name that belongs further out — in which case it may well be an
+    /// alias of that name's buffer, and growing it grows theirs.
+    fn place_owner(&self, e: &TypedExpr) -> Option<usize> {
+        let mut acc = Some(self.depth());
+        let mut vars = Vec::new();
+        self.collect_vars(e, &mut vars);
+        for v in vars {
+            acc = Self::shorter(acc, self.owner_of(&v));
+        }
+        acc
+    }
+
+    /// Every name this expression reads. Used only to place storage conservatively, so
+    /// over-collecting costs a release opportunity and never correctness.
+    fn collect_vars(&self, e: &TypedExpr, out: &mut Vec<String>) {
+        use TypedExprKind as K;
+        match &e.kind {
+            K::Var(n) => out.push(n.clone()),
+            K::DynCoerce { var, .. } => out.push(var.clone()),
+            K::IntLit(_)
+            | K::DecimalLit { .. }
+            | K::BoolLit(_)
+            | K::StrLit(_)
+            | K::ArgCount
+            | K::Old(_) => {}
+            K::Neg(i)
+            | K::Not(i)
+            | K::Arg(i)
+            | K::ReadFile(i)
+            | K::CIsNull(i)
+            | K::CStringAt(i)
+            | K::ByteAsString(i)
+            | K::ToString(i)
+            | K::Hash(i)
+            | K::StrLen(i)
+            | K::SliceLen(i)
+            | K::Field { base: i, .. }
+            | K::Try { value: i, .. } => self.collect_vars(i, out),
+            K::Truncate { place: a, length: b }
+            | K::WriteFile { path: a, contents: b }
+            | K::WriteBytes { path: a, buffer: b }
+            | K::CBytesAt { pointer: a, count: b }
+            | K::ByteAt { s: a, index: b }
+            | K::IntDiv { lhs: a, rhs: b, .. }
+            | K::Logical { lhs: a, rhs: b, .. }
+            | K::Binary { lhs: a, rhs: b, .. }
+            | K::Compare { lhs: a, rhs: b, .. }
+            | K::Push { place: a, value: b }
+            | K::SliceIndex { base: a, index: b }
+            | K::Index { base: a, index: b, .. } => {
+                self.collect_vars(a, out);
+                self.collect_vars(b, out);
+            }
+            K::Substring { source, at, len } => {
+                self.collect_vars(source, out);
+                self.collect_vars(at, out);
+                self.collect_vars(len, out);
+            }
+            K::Bit { lhs, rhs, .. } => {
+                self.collect_vars(lhs, out);
+                if let Some(r) = rhs {
+                    self.collect_vars(r, out);
+                }
+            }
+            K::Call { arguments, .. }
+            | K::VariantLit { arguments, .. }
+            | K::StructLit { fields: arguments, .. }
+            | K::ArrayLit(arguments)
+            | K::SliceLit(arguments) => {
+                for a in arguments {
+                    self.collect_vars(a, out);
+                }
+            }
+            K::MethodCall { base, arguments, .. } | K::DynCall { base, arguments, .. } => {
+                self.collect_vars(base, out);
+                for a in arguments {
+                    self.collect_vars(a, out);
+                }
+            }
+        }
+    }
+
+    /// Does this expression produce storage built in this function?
+    ///
+    /// The type is asked FIRST, and it settles most of it: a value whose type cannot
+    /// hold region storage cannot carry an escape, whatever it was computed from. That
+    /// is `may_be_region_storage`, the same predicate B27 uses, and it answers yes for
+    /// a type parameter and a `dynamic` because neither says what the storage is.
+    ///
+    /// This pass carried its OWN copy of that predicate for a day, because the shared one
+    /// answered "no" for a generic instantiation and `lib/json.bx` printed a truncated
+    /// document. The copy is gone: B39 and B42 fixed the real one in both its arms, and a
+    /// second answer to one question is how the two drift apart again.
+    ///
+    /// The match below has no `_` arm on purpose. A new expression kind should not
+    /// silently inherit "does not allocate" — it should stop the build until someone
+    /// says which it is.
+    fn allocates(&self, e: &TypedExpr) -> bool {
+        use TypedExprKind as K;
+        if !self.tc.may_be_region_storage(&e.ty) {
+            return false;
+        }
+        match &e.kind {
+            // A literal String lives in `.rodata`; nothing was built.
+            K::StrLit(_) | K::IntLit(_) | K::DecimalLit { .. } | K::BoolLit(_) | K::ArgCount => {
+                false
+            }
+            // An `old(...)` capture is a copy taken on entry, before this body ran.
+            K::Old(_) => false,
+            K::Var(n) => self.allocated(n),
+            K::DynCoerce { var, .. } => self.allocated(var),
+            // Built here, every time.
+            K::SliceLit(_)
+            | K::Push { .. }
+            | K::ReadFile(_)
+            | K::CStringAt(_)
+            | K::CBytesAt { .. }
+            | K::ByteAsString(_)
+            | K::Substring { .. }
+            | K::Arg(_) => true,
+            K::ToString(v) => v.ty != Type::Bool,
+            K::Binary { op: BinOp::Add, lhs, rhs }
+                if lhs.ty == Type::String && rhs.ty == Type::String =>
+            {
+                true
+            }
+            K::Binary { lhs, rhs, .. } => self.allocates(lhs) || self.allocates(rhs),
+            K::Call { name, arguments } => {
+                self.tc.alloc_fns.contains(name)
+                    || arguments.iter().enumerate().any(|(i, a)| {
+                        self.tc.relay_params.contains(&(name.clone(), i)) && self.allocates(a)
+                    })
+            }
+            K::MethodCall { receiver, method, base, arguments, .. } => {
+                self.tc.alloc_methods.contains(&(receiver.clone(), method.clone()))
+                    || (self.tc.relay_methods.contains(&(
+                        receiver.clone(),
+                        method.clone(),
+                        0,
+                    )) && self.allocates(base))
+                    || arguments.iter().enumerate().any(|(i, a)| {
+                        self.tc.relay_methods.contains(&(
+                            receiver.clone(),
+                            method.clone(),
+                            i + 1,
+                        )) && self.allocates(a)
+                    })
+            }
+            // Behind a vtable, so no call site can see which implementation runs: the
+            // answer has to hold for all of them. Same rule §5 settled for `allocates`.
+            K::DynCall { interface_name, method, base, arguments, .. } => {
+                self.tc.dyn_call_allocates(interface_name, method)
+                    || (self.tc.dyn_call_relays(interface_name, method, 0)
+                        && self.allocates(base))
+                    || arguments.iter().enumerate().any(|(i, a)| {
+                        self.tc.dyn_call_relays(interface_name, method, i + 1)
+                            && self.allocates(a)
+                    })
+            }
+            K::Try { value, .. } => self.allocates(value),
+            K::StructLit { fields, .. } => fields.iter().any(|f| self.allocates(f)),
+            K::VariantLit { arguments, .. } => arguments.iter().any(|a| self.allocates(a)),
+            K::ArrayLit(items) => items.iter().any(|i| self.allocates(i)),
+            K::Field { base, .. } => self.allocates(base),
+            K::Index { base, index, .. } | K::SliceIndex { base, index } => {
+                self.allocates(base) || self.allocates(index)
+            }
+            // Reached only when the TYPE could hold storage, which for these means a
+            // generic or a `dynamic` slipped through. Answer yes: §10 says a wrong
+            // guess costs memory.
+            K::Neg(_)
+            | K::Not(_)
+            | K::Truncate { .. }
+            | K::WriteFile { .. }
+            | K::WriteBytes { .. }
+            | K::IntDiv { .. }
+            | K::Bit { .. }
+            | K::CIsNull(_)
+            | K::ByteAt { .. }
+            | K::Hash(_)
+            | K::StrLen(_)
+            | K::SliceLen(_)
+            | K::Logical { .. }
+            | K::Compare { .. } => true,
+        }
+    }
+
+    /// Walk an expression for the ways it can hand storage to somebody who outlives
+    /// this block, and class what it builds.
+    fn scan(&mut self, e: &TypedExpr) {
+        use TypedExprKind as K;
+        if self.allocates(e) {
+            self.mark_allocates();
+        }
+        match &e.kind {
+            // `push` grows the buffer behind `place`. Whoever owns that buffer keeps
+            // the growth, so the cursor cannot go back past it until they are done.
+            K::Push { place, value } => {
+                let owner = self.place_owner(place);
+                self.taint(owner);
+                if let Some(root) = Self::root_name(place) {
+                    self.mark_allocated(&root);
+                }
+                self.mark_allocates();
+                self.scan(place);
+                self.scan(value);
+            }
+            K::Call { name, arguments } => {
+                if self.tc.extern_names.contains(name) {
+                    // Across the C boundary nothing can be proven: the callee may keep
+                    // the pointer we handed it for as long as it likes.
+                    self.taint(None);
+                } else {
+                    match self.fn_writable(name).cloned() {
+                        Some(writable) => {
+                            for (i, a) in arguments.iter().enumerate() {
+                                if writable.get(i).copied().unwrap_or(true) {
+                                    let owner = self.place_owner(a);
+                                    self.taint(owner);
+                                    if let Some(root) = Self::root_name(a) {
+                                        self.mark_allocated(&root);
+                                    }
+                                }
+                            }
+                        }
+                        // A callee whose signature this pass cannot find. Assume it
+                        // writes into everything it was given.
+                        None => self.taint(None),
+                    }
+                }
+                for a in arguments {
+                    self.scan(a);
+                }
+            }
+            K::MethodCall { receiver, method, receiver_mut, base, arguments } => {
+                if *receiver_mut {
+                    let owner = self.place_owner(base);
+                    self.taint(owner);
+                    if let Some(root) = Self::root_name(base) {
+                        self.mark_allocated(&root);
+                    }
+                }
+                match self.tc.method_writable.get(&(receiver.clone(), method.clone())).cloned() {
+                    Some(writable) => {
+                        for (i, a) in arguments.iter().enumerate() {
+                            if writable.get(i).copied().unwrap_or(true) {
+                                let owner = self.place_owner(a);
+                                self.taint(owner);
+                                if let Some(root) = Self::root_name(a) {
+                                    self.mark_allocated(&root);
+                                }
+                            }
+                        }
+                    }
+                    None => self.taint(None),
+                }
+                self.scan(base);
+                for a in arguments {
+                    self.scan(a);
+                }
+            }
+            K::DynCall { interface_name, method, base, arguments, .. } => {
+                match self
+                    .tc
+                    .interfaces
+                    .get(interface_name)
+                    .and_then(|sigs| sigs.iter().find(|s| &s.name == method))
+                    .cloned()
+                {
+                    Some(sig) => {
+                        if sig.receiver_mut {
+                            let owner = self.place_owner(base);
+                            self.taint(owner);
+                            if let Some(root) = Self::root_name(base) {
+                                self.mark_allocated(&root);
+                            }
+                        }
+                        for (i, a) in arguments.iter().enumerate() {
+                            if sig.parameters.get(i).map(|p| p.writable).unwrap_or(true) {
+                                let owner = self.place_owner(a);
+                                self.taint(owner);
+                                if let Some(root) = Self::root_name(a) {
+                                    self.mark_allocated(&root);
+                                }
+                            }
+                        }
+                    }
+                    None => self.taint(None),
+                }
+                self.scan(base);
+                for a in arguments {
+                    self.scan(a);
+                }
+            }
+            // `?` leaves the function from the middle of a block, carrying an error
+            // value that was built by the callee — which means built HERE, above this
+            // block's mark. Releasing on the way out would hand back freed bytes.
+            K::Try { value, .. } => {
+                self.taint(None);
+                self.scan(value);
+            }
+            _ => {
+                let mut children = Vec::new();
+                Self::children(e, &mut children);
+                for c in children {
+                    self.scan(c);
+                }
+            }
+        }
+    }
+
+    fn mark_allocated(&mut self, name: &str) {
+        if let Some(slot) = self.names.get_mut(name) {
+            slot.allocated = true;
+        }
+    }
+
+    /// A function's `mutable` flags, with the same fallback the call-site check uses:
+    /// an instantiation `f$Int` inherits the generic's, because `mutable` is written on
+    /// the declaration and substitution only replaces types.
+    fn fn_writable(&self, name: &str) -> Option<&Vec<bool>> {
+        self.tc.fn_writable.get(name).or_else(|| {
+            name.split_once('$').and_then(|(generic, _)| self.tc.fn_writable.get(generic))
+        })
+    }
+
+    /// The binding a place expression ultimately reaches through.
+    fn root_name(e: &TypedExpr) -> Option<String> {
+        match &e.kind {
+            TypedExprKind::Var(n) => Some(n.clone()),
+            TypedExprKind::DynCoerce { var, .. } => Some(var.clone()),
+            TypedExprKind::Field { base, .. }
+            | TypedExprKind::Index { base, .. }
+            | TypedExprKind::SliceIndex { base, .. } => Self::root_name(base),
+            _ => None,
+        }
+    }
+
+    fn children<'e>(e: &'e TypedExpr, out: &mut Vec<&'e TypedExpr>) {
+        use TypedExprKind as K;
+        match &e.kind {
+            K::IntLit(_)
+            | K::DecimalLit { .. }
+            | K::BoolLit(_)
+            | K::StrLit(_)
+            | K::Var(_)
+            | K::DynCoerce { .. }
+            | K::ArgCount
+            | K::Old(_) => {}
+            K::Neg(i)
+            | K::Not(i)
+            | K::Arg(i)
+            | K::ReadFile(i)
+            | K::CIsNull(i)
+            | K::CStringAt(i)
+            | K::ByteAsString(i)
+            | K::ToString(i)
+            | K::Hash(i)
+            | K::StrLen(i)
+            | K::SliceLen(i)
+            | K::Field { base: i, .. }
+            | K::Try { value: i, .. } => out.push(i),
+            K::Truncate { place: a, length: b }
+            | K::WriteFile { path: a, contents: b }
+            | K::WriteBytes { path: a, buffer: b }
+            | K::CBytesAt { pointer: a, count: b }
+            | K::ByteAt { s: a, index: b }
+            | K::IntDiv { lhs: a, rhs: b, .. }
+            | K::Logical { lhs: a, rhs: b, .. }
+            | K::Binary { lhs: a, rhs: b, .. }
+            | K::Compare { lhs: a, rhs: b, .. }
+            | K::Push { place: a, value: b }
+            | K::SliceIndex { base: a, index: b }
+            | K::Index { base: a, index: b, .. } => {
+                out.push(a);
+                out.push(b);
+            }
+            K::Substring { source, at, len } => {
+                out.push(source);
+                out.push(at);
+                out.push(len);
+            }
+            K::Bit { lhs, rhs, .. } => {
+                out.push(lhs);
+                if let Some(r) = rhs {
+                    out.push(r);
+                }
+            }
+            K::Call { arguments, .. }
+            | K::VariantLit { arguments, .. }
+            | K::StructLit { fields: arguments, .. }
+            | K::ArrayLit(arguments)
+            | K::SliceLit(arguments) => out.extend(arguments.iter()),
+            K::MethodCall { base, arguments, .. } | K::DynCall { base, arguments, .. } => {
+                out.push(base);
+                out.extend(arguments.iter());
+            }
+        }
+    }
+
+    /// A store into `name`, reached however. If what is stored was built here, then
+    /// whoever owns `name`'s storage keeps it, and no block inside them may release.
+    fn store(&mut self, name: &str, value: &TypedExpr) {
+        if self.allocates(value) {
+            let owner = self.owner_of(name);
+            self.taint(owner);
+            self.mark_allocated(name);
+        }
+    }
+
+    fn walk(&mut self, stmts: Vec<TypedStmt>) -> Vec<TypedStmt> {
+        stmts.into_iter().map(|s| self.stmt(s)).collect()
+    }
+
+    /// A block, with the bindings the enclosing construct opens it with (a loop
+    /// variable, a `match` arm's payload). Those bindings take their storage from the
+    /// expression the construct evaluated BEFORE the block began, so their owner is the
+    /// enclosing block — not this one.
+    fn block(
+        &mut self,
+        stmts: Vec<TypedStmt>,
+        may_release: bool,
+        binds: &[(String, Option<usize>, bool)],
+    ) -> Vec<TypedStmt> {
+        self.frames.push(Frame::default());
+        for (name, owner, allocated) in binds {
+            self.declare(name, *owner, *allocated);
+        }
+        let body = self.walk(stmts);
+        let frame = self.frames.pop().expect("a frame was pushed");
+        for n in &frame.declared {
+            self.names.remove(n);
+        }
+        // `allocates` needs no propagating: `mark_allocates` sets every open frame at
+        // once, so an ancestor already knows about anything its children built.
+        if may_release && frame.allocates && !frame.leaks {
+            vec![TypedStmt::Release { body }]
+        } else {
+            body
+        }
+    }
+
+    fn stmt(&mut self, s: TypedStmt) -> TypedStmt {
+        let here = self.depth();
+        match s {
+            TypedStmt::Let { name, ty, value } => {
+                self.scan(&value);
+                let owner = self.place_owner(&value);
+                let allocated = self.allocates(&value);
+                self.declare(&name, owner, allocated);
+                TypedStmt::Let { name, ty, value }
+            }
+            TypedStmt::Assign { name, value } => {
+                self.scan(&value);
+                // The name may now alias something older than it is.
+                let owner = Self::shorter(self.owner_of(&name), self.place_owner(&value));
+                if let Some(slot) = self.names.get_mut(&name) {
+                    slot.owner = owner;
+                }
+                self.store(&name, &value);
+                TypedStmt::Assign { name, value }
+            }
+            TypedStmt::AssignField { name, indices, value } => {
+                self.scan(&value);
+                self.store(&name, &value);
+                TypedStmt::AssignField { name, indices, value }
+            }
+            TypedStmt::AssignFieldIndex { name, indices, len, index, value } => {
+                self.scan(&index);
+                self.scan(&value);
+                self.store(&name, &value);
+                TypedStmt::AssignFieldIndex { name, indices, len, index, value }
+            }
+            TypedStmt::AssignIndex { name, len, index, value } => {
+                self.scan(&index);
+                self.scan(&value);
+                self.store(&name, &value);
+                TypedStmt::AssignIndex { name, len, index, value }
+            }
+            TypedStmt::ExprStmt(e) => {
+                self.scan(&e);
+                TypedStmt::ExprStmt(e)
+            }
+            TypedStmt::Exit(e) => {
+                self.scan(&e);
+                TypedStmt::Exit(e)
+            }
+            TypedStmt::Print { value, to_stderr } => {
+                self.scan(&value);
+                TypedStmt::Print { value, to_stderr }
+            }
+            TypedStmt::PrintInterp { parts, to_stderr } => {
+                for p in &parts {
+                    if let TypedInterpPart::Expr(e) = p {
+                        self.scan(e);
+                    }
+                }
+                TypedStmt::PrintInterp { parts, to_stderr }
+            }
+            // Whatever is handed back outlives every block in this function.
+            TypedStmt::Return(e) => {
+                self.scan(&e);
+                if self.allocates(&e) {
+                    self.taint(None);
+                }
+                TypedStmt::Return(e)
+            }
+            // `musttail` requires the call to sit immediately before the `ret`, with
+            // nothing in between — and a release is something in between. So no block
+            // containing one may release.
+            TypedStmt::TailReturn { name, arguments } => {
+                for a in &arguments {
+                    self.scan(a);
+                }
+                self.taint(None);
+                TypedStmt::TailReturn { name, arguments }
+            }
+            TypedStmt::Break => TypedStmt::Break,
+            TypedStmt::Continue => TypedStmt::Continue,
+            TypedStmt::While { cond, body } => {
+                self.scan(&cond);
+                let body = self.block(body, true, &[]);
+                TypedStmt::While { cond, body }
+            }
+            TypedStmt::If { cond, then_block, else_block } => {
+                self.scan(&cond);
+                let then_block = self.block(then_block, true, &[]);
+                let else_block = else_block.map(|b| self.block(b, true, &[]));
+                TypedStmt::If { cond, then_block, else_block }
+            }
+            TypedStmt::For { name, elem, iterable, body } => {
+                self.scan(&iterable);
+                let owner = self.place_owner(&iterable);
+                let allocated = self.allocates(&iterable);
+                let body = self.block(body, true, &[(name.clone(), owner, allocated)]);
+                TypedStmt::For { name, elem, iterable, body }
+            }
+            TypedStmt::ForRange { name, start, end, body } => {
+                self.scan(&start);
+                self.scan(&end);
+                let body = self.block(body, true, &[(name.clone(), Some(here), false)]);
+                TypedStmt::ForRange { name, start, end, body }
+            }
+            TypedStmt::Match { value, arms } => {
+                self.scan(&value);
+                let owner = self.place_owner(&value);
+                let allocated = self.allocates(&value);
+                let arms = arms
+                    .into_iter()
+                    .map(|a| {
+                        let binds: Vec<(String, Option<usize>, bool)> = a
+                            .bindings
+                            .iter()
+                            .map(|(n, _)| (n.clone(), owner, allocated))
+                            .collect();
+                        TypedArm {
+                            tag: a.tag,
+                            bindings: a.bindings,
+                            body: self.block(a.body, true, &binds),
+                        }
+                    })
+                    .collect();
+                TypedStmt::Match { value, arms }
+            }
+            // A `region` the programmer wrote already releases at this exact point, so
+            // there is nothing for a second wrapper to do — but its body is still a
+            // block, and names declared in it still belong to it.
+            TypedStmt::Region { name, body } => {
+                let body = self.block(body, false, &[]);
+                TypedStmt::Region { name, body }
+            }
+            // This pass runs once per body.
+            TypedStmt::Release { body } => TypedStmt::Release { body },
+        }
+    }
+}
+
+impl TypeChecker {
+    /// Place a `Release` on every block that provably keeps nothing. `params` are the
+    /// names that arrived from outside — their storage is the caller's, so nothing this
+    /// body does to them may be released here.
+    ///
+    /// `may_release` is false for the top level, which has nothing after it to release
+    /// into, and true for a function or method body.
+    fn place_releases(
+        &self,
+        params: &[String],
+        body: Vec<TypedStmt>,
+        may_release: bool,
+    ) -> Vec<TypedStmt> {
+        let mut pass = ReleasePass { tc: self, frames: Vec::new(), names: HashMap::new() };
+        let binds: Vec<(String, Option<usize>, bool)> =
+            params.iter().map(|p| (p.clone(), None, false)).collect();
+        pass.block(body, may_release, &binds)
+    }
 }

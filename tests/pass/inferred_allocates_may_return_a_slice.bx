@@ -1,0 +1,2 @@
+function make() -> [Int] { let mutable xs: [Int] = []; push(xs, 1); return xs; }
+region r { let ys: [Int] = make(); print("{len(ys)}"); }
