@@ -1,0 +1,201 @@
+// Roadmap D1e — `slice`, `copy`, `concat`, `insert_at`, `count_of`, `binary_search`, `equals`,
+// `dedup`. The plain half of the array module: no interfaces, nothing that needed A9.
+//
+// ---- the one that is not obvious ---------------------------------------------------------
+//
+// **`array_copy` exists because assigning an array does not copy it.** That is measured here, first,
+// before anything else, because it is the fact the rest of the file depends on and the one a reader
+// coming from a value-semantics language will assume the other way round:
+//
+//     let mutable b: [Int] = a;
+//     b[0] = 99;                     // a[0] is 99 now
+//
+// An array value carries a pointer to its buffer, assignment copies the value, so two names see one
+// buffer. Every function in `lib/array.bx` that answers a NEW array therefore builds it with `push`,
+// and `array_sort_by`'s scratch array is built element by element for exactly this reason — starting
+// it from an assignment would have it overwrite the input it was reading.
+//
+// ---- what else this is built to catch ----------------------------------------------------
+//
+//   * `array_dedup` on UNSORTED input, where it removes nothing. It is `uniq`, adjacent-only, and
+//     that is the shape of function this project keeps getting wrong: correct for the sorted case
+//     somebody wrote, silent for the unsorted case nobody did. `[1, 2, 1]` is pinned so the behaviour
+//     cannot drift into the other one unnoticed.
+//   * `array_binary_search` on DUPLICATES, where it must answer the first match rather than whichever
+//     one the halving happened to land on.
+//   * `array_slice` where `from == to`, the empty slice a narrowing loop's last step produces.
+//   * `array_insert_at` at index `len(xs)`, which appends — the ordinary case of an in-order insert
+//     loop, not an edge to refuse.
+use "../../lib/array.bx";
+
+function show_ints(xs: [Int]) -> String {
+    if len(xs) == 0 {
+        return "(empty)";
+    }
+    // Pairwise, per D0. See `tests/pass/array_higher_order.bx` for the reasoning; a six-element test
+    // does not need it and a fixture should not model the shape it forbids.
+    let mutable level: [String] = [];
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        push(level, to_string(xs[i]));
+        i += 1;
+    }
+    while len(level) > 1 {
+        let mutable next: [String] = [];
+        let mutable j: Int = 0;
+        while j + 1 < len(level) {
+            push(next, level[j] + " " + level[j + 1]);
+            j += 2;
+        }
+        if j < len(level) {
+            push(next, level[j]);
+        }
+        level = next;
+    }
+    return level[0];
+}
+
+region main {
+    // ---- the aliasing fact, measured before anything relies on it ----
+    print("aliasing");
+    let mutable original: [Int] = [1, 2, 3];
+    let mutable shared: [Int] = original;
+    shared[0] = 99;
+    print(original[0]);                                  // 99 — assignment SHARES the buffer
+
+    let mutable independent: [Int] = array_copy(original);
+    independent[0] = 7;
+    print(original[0]);                                  // 99 — unchanged, because copy is a copy
+    print(independent[0]);                               // 7
+    let nothing: [Int] = [];
+    print(len(array_copy(nothing)));                     // 0 — copying nothing is legal
+
+    // ---- slice, end-exclusive ----
+    print("slice");
+    let letters: [Int] = [10, 20, 30, 40, 50];
+    print(show_ints(array_slice(letters, 1, 3)));         // 20 30 — `to` is NOT included
+    print(show_ints(array_slice(letters, 0, len(letters))));   // the whole thing
+    print(show_ints(array_slice(letters, 2, 2)));         // (empty) — from == to is legal
+    print(show_ints(array_slice(letters, 0, 0)));         // (empty)
+    print(show_ints(array_slice(letters, 4, 5)));         // 50 — the last element
+    print(show_ints(array_slice(nothing, 0, 0)));        // (empty)
+    // A slice does not alias: changing it leaves the source alone.
+    let mutable taken: [Int] = array_slice(letters, 1, 3);
+    taken[0] = 0;
+    print(letters[1]);                                   // 20
+
+    // ---- concat ----
+    print("concat");
+    let one_two: [Int] = [1, 2];
+    let three_four: [Int] = [3, 4];
+    print(show_ints(array_concat(one_two, three_four)));  // 1 2 3 4
+    print(show_ints(array_concat(nothing, three_four)));  // 3 4
+    print(show_ints(array_concat(one_two, nothing)));     // 1 2
+    print(show_ints(array_concat(nothing, nothing)));     // (empty)
+    // Neither argument changes — the difference between this and `array_extend`.
+    let mutable left: [Int] = [1, 2];
+    let right: [Int] = [3];
+    let joined: [Int] = array_concat(left, right);
+    print(len(left));                                    // 2
+    print(len(joined));                                  // 3
+
+    // ---- insert_at ----
+    print("insert_at");
+    let mutable growing: [Int] = [1, 2, 3];
+    print(array_insert_at(growing, 0, 0));               // 4 — at the front
+    print(show_ints(growing));                           // 0 1 2 3
+    print(array_insert_at(growing, 4, 9));               // 5 — at len(xs), which APPENDS
+    print(show_ints(growing));                           // 0 1 2 3 9
+    print(array_insert_at(growing, 2, 7));               // 6 — in the middle
+    print(show_ints(growing));                           // 0 1 7 2 3 9
+    let mutable from_nothing: [Int] = [];
+    print(array_insert_at(from_nothing, 0, 5));          // 1 — into an empty array
+    print(show_ints(from_nothing));                      // 5
+
+    // ---- count_of ----
+    print("count_of");
+    let repeated: [Int] = [3, 1, 3, 3, 2];
+    print(array_count_of(repeated, 3));                  // 3
+    print(array_count_of(repeated, 1));                  // 1
+    print(array_count_of(repeated, 8));                  // 0 — absent, not an error
+    print(array_count_of(nothing, 3));                   // 0
+
+    // ---- equals, order-sensitive ----
+    print("equals");
+    let one_two_three: [Int] = [1, 2, 3];
+    let also_one_two_three: [Int] = [1, 2, 3];
+    let two_one: [Int] = [2, 1];
+    let just_a_one: [Int] = [1];
+    print(array_equals(one_two_three, also_one_two_three));   // true
+    print(array_equals(one_two, two_one));               // false — ORDER matters
+    print(array_equals(one_two, one_two_three));         // false — length first
+    print(array_equals(nothing, nothing));              // true — nothing equals nothing
+    print(array_equals(nothing, just_a_one));            // false
+    // Equal contents in two different buffers, which is the case a pointer comparison would fail.
+    let one: [Int] = [4, 5];
+    let other: [Int] = array_copy(one);
+    print(array_equals(one, other));                     // true
+
+    // ---- binary_search, which requires a sorted array ----
+    print("binary_search");
+    let sorted: [Int] = [1, 3, 5, 7, 9, 11];
+    print(option_or(array_binary_search(sorted, 1), 0 - 1));      // 0 — the first element
+    print(option_or(array_binary_search(sorted, 11), 0 - 1));     // 5 — the last
+    print(option_or(array_binary_search(sorted, 7), 0 - 1));      // 3 — the middle
+    print(option_or(array_binary_search(sorted, 4), 0 - 1));      // -1 — absent, between two present
+    print(option_or(array_binary_search(sorted, 0), 0 - 1));      // -1 — below everything
+    print(option_or(array_binary_search(sorted, 20), 0 - 1));     // -1 — above everything
+    let just_a_five: [Int] = [5];
+    print(option_or(array_binary_search(nothing, 1), 0 - 1));    // -1 — nothing to find
+    print(option_or(array_binary_search(just_a_five, 5), 0 - 1)); // 0 — one element, present
+    print(option_or(array_binary_search(just_a_five, 4), 0 - 1)); // -1 — one element, absent
+    // **DUPLICATES: the FIRST match, not whichever one the halving landed on.** A plain binary search
+    // stops on any of them, which makes the answer depend on the array's length rather than its
+    // contents — deterministic and useless, because inserting an unrelated element changes it.
+    let with_duplicates: [Int] = [1, 2, 2, 2, 2, 3];
+    print(option_or(array_binary_search(with_duplicates, 2), 0 - 1));   // 1
+    let all_same: [Int] = [4, 4, 4, 4];
+    print(option_or(array_binary_search(all_same, 4), 0 - 1));          // 0
+    // Every length from 2 to 7, so no arm of the halving goes untested.
+    let n2: [Int] = [1, 2];
+    let n3: [Int] = [1, 2, 3];
+    let n4: [Int] = [1, 2, 3, 4];
+    let n5: [Int] = [1, 2, 3, 4, 5];
+    let n6: [Int] = [1, 2, 3, 4, 5, 6];
+    let n7: [Int] = [1, 2, 3, 4, 5, 6, 7];
+    print(option_or(array_binary_search(n2, 2), 0 - 1));         // 1
+    print(option_or(array_binary_search(n3, 3), 0 - 1));         // 2
+    print(option_or(array_binary_search(n4, 1), 0 - 1));         // 0
+    print(option_or(array_binary_search(n5, 4), 0 - 1));         // 3
+    print(option_or(array_binary_search(n6, 6), 0 - 1));         // 5
+    print(option_or(array_binary_search(n7, 5), 0 - 1));         // 4
+
+    // ---- dedup: ADJACENT duplicates only ----
+    print("dedup");
+    let mutable runs: [Int] = [1, 1, 2, 2, 2, 3, 1];
+    print(array_dedup(runs));                            // 4
+    print(show_ints(runs));                              // 1 2 3 1 — the trailing 1 SURVIVES
+    // **Unsorted input: nothing is removed.** This is the pinned case. `array_dedup` is `uniq`, and a
+    // caller who wanted all-distinct wanted `array_sort` first, or `lib/set.bx`.
+    let mutable unsorted: [Int] = [1, 2, 1];
+    print(array_dedup(unsorted));                        // 3 — no change
+    print(show_ints(unsorted));                          // 1 2 1
+    let mutable every_one_same: [Int] = [5, 5, 5, 5];
+    print(array_dedup(every_one_same));                  // 1
+    print(show_ints(every_one_same));                    // 5
+    let mutable all_distinct: [Int] = [1, 2, 3];
+    print(array_dedup(all_distinct));                    // 3
+    print(show_ints(all_distinct));                      // 1 2 3
+    let mutable just_one: [Int] = [8];
+    print(array_dedup(just_one));                        // 1
+    let mutable nothing_at_all: [Int] = [];
+    print(array_dedup(nothing_at_all));                  // 0
+    let mutable two_same: [Int] = [6, 6];
+    print(array_dedup(two_same));                        // 1
+    print(show_ints(two_same));                          // 6
+    // Sorted first, then deduped — the composition that DOES give all-distinct.
+    let mutable messy: [Int] = [3, 1, 3, 2, 1];
+    let sorted_count: Int = array_sort(messy);
+    print(array_dedup(messy));                           // 3
+    print(show_ints(messy));                             // 1 2 3
+}

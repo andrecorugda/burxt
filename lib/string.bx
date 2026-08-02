@@ -11,10 +11,132 @@
 
 use "option.bx";
 
+// ============================================================================
+// BUILDING TEXT IN A LOOP — §D0, and it is a decision rather than a preference.
+//
+// **A chunk list, joined PAIRWISE.** Accumulate pieces into a pending String, push it into a
+// `[String]` once it passes `STRING_CHUNK` bytes, and join the list by repeated pairwise merge.
+// Every function in this file that builds a String does exactly this, and the three measurements
+// below are why it is not up to the author of the next one.
+//
+// A Burxt String is immutable, so `out += piece` allocates a whole new String holding everything
+// collected so far. Doing that per piece is quadratic. Measured on this compiler, building 100 KB
+// one byte at a time in a region:
+//
+//     out += piece, flat                     4 GB arena EXHAUSTED, process dead, 2.71 s
+//     a pending chunk flushed into a flat String at 4096      202 MB, 0.06 s
+//     a chunk list joined pairwise, flushed at 32              10 MB, 0.00 s
+//
+// The middle row is the idiom this file used until now — `string_reverse`, the two case functions
+// and `from_bytes` all had it — and it is 20× the chunk list, because the flat `done` it flushes
+// into is still quadratic in the number of flushes. Halving the work is not the same as changing
+// the shape.
+//
+// **The join must be pairwise.** Folding left rebuilds the whole prefix at every step, which is
+// the same quadratic one level up.
+//
+// ---- the threshold is MEASURED, and the number here is not emit.bx's ----------------------
+//
+// `src/burxt-compiler/emit.bx` flushes at 128 and `write_module`'s threshold turned out inert.
+// Neither number transfers, because **the right threshold depends on the size of the piece being
+// appended**, and every function in this file appends ONE BYTE or one codepoint where the emitter
+// appends whole IR lines. Building 1 MB one byte at a time:
+//
+//     no pending chunk, one list entry per byte    66 MB
+//     flush at 16                                 40 MB
+//     flush at 32                                 46 MB
+//     flush at 64                                 60 MB
+//     flush at 128                                90 MB
+//     flush at 512                               275 MB
+//     flush at 4096                            2,021 MB
+//
+// Two costs pull against each other: the pending chunk is quadratic in the threshold, so a large
+// one is dear; and the pairwise join costs one full copy per merge pass, so a small threshold buys
+// a longer list and more passes. The optimum is flat across 16..32 and the analysis says why —
+// for a piece of `p` bytes and output `n`, the pending cost is `n * T / (2p)` and the join is
+// `n * log2(n / T)`. **32 is chosen over the marginally better 16 because it halves the list for
+// the callers that append 2-, 3- and 4-byte codepoints, at a measured 6 MB per megabyte.**
+//
+// ---- a Builder CLASS was tried, and the language refused it -------------------------------
+//
+// The obvious tidy-up is `class Builder { pieces: [String], pending: String }` with an `add`
+// method, putting the discipline in one place instead of six lines per function. **It cannot be
+// written**, and the reason is a real rule rather than a gap:
+//
+//   * `add` must take `mutable self`, and **`pure` and `mutable self` are mutually exclusive** —
+//     the compiler says so and gives the reason: a contract clause may call a `pure` method, so
+//     allowing both would let a precondition rewrite the value it is checking.
+//   * Purity is transitive, so a `pure` function may not call a non-`pure` method. Most functions
+//     in this file are `pure` and that is worth keeping: it is what lets them appear in a
+//     `requires` clause, as `char_count` does in `char_at`'s.
+//   * A constructor function cannot return one either — a class holding an array is region
+//     storage, so `function builder() -> Builder` is refused for escaping its region.
+//
+// So the six lines are written out. Recorded because it is exactly the change someone would make
+// again on principle, and the third bullet alone would send them looking for a compiler bug.
+//
+// ---- one thing D0 says that this file MEASURED as no longer true ---------------------------
+//
+// `spec/ROADMAP-1.0.md` §D0's third bullet says *"a String's `len` walks it, so never leave
+// `len(s)` in a loop condition"*, and a comment in `src/burxt-compiler/emit.bx` says the same. **It
+// does not walk it.** `build_str_len` in `src/rust-compiler/codegen.rs` loads the length from the
+// eight bytes before the first byte — one load, no scan — and its own comment dates the change:
+// *"this was a `strlen` until v0.0.120, which is why reading n bytes cost n²"*.
+//
+// Measured rather than read: summing every byte of a 1.3 MB String with `while k < len(chunk)` in
+// the condition takes 0.00 s, and is indistinguishable from the same loop with the length hoisted.
+// A scan per iteration would be 1.7 × 10^12 byte reads and would take minutes.
+//
+// The advice is harmless and the functions here hoist the length anyway, because it reads better
+// and costs nothing. But the REASON given for it is stale by 159 versions, and a stale reason is
+// worse than none: it is the kind of note that gets cited to justify contorting the next function.
+// The `len` warning is the one part of D0 not to inherit. Flagged here rather than corrected in the
+// spec, which this file does not own.
+// ============================================================================
+
+// The flush point. See the sweep above; it is 32 because that was measured, not because it is a
+// round number.
+const STRING_CHUNK: Int = 32;
+
+// A list of pieces into the one String they spell, by repeated PAIRWISE merge.
+//
+// Public, because it is the other half of the idiom above: a caller writing its own loop needs
+// this to finish, and a private one would mean every caller re-deriving the merge — which is how
+// the left fold gets written by accident.
+//
+// `log2(n)` passes, each copying every byte exactly once, so `n log n` bytes moved in total
+// against the flat fold's `n²`. The `while len(joined) > 1` shape is `join_chunks` in
+// `src/burxt-compiler/emit.bx`, which is the reference implementation and was measured first.
+//
+// It does not mutate its argument: the first pass READS `chunks` and writes a fresh `merged`, and
+// `joined` is rebound rather than pushed into. That matters because an array is a handle — pushing
+// into `joined` on the first pass would grow the caller's own list.
+pure function string_join_chunks(chunks: [String]) -> String {
+    if len(chunks) == 0 {
+        return "";
+    }
+    let mutable joined: [String] = chunks;
+    while len(joined) > 1 {
+        let mutable merged: [String] = [];
+        let mutable i: Int = 0;
+        while i + 1 < len(joined) {
+            push(merged, joined[i] + joined[i + 1]);
+            i += 2;
+        }
+        // An odd one out rides to the next pass unmerged rather than being folded into the last
+        // pair, which would make that pair two pieces wide and the pass uneven.
+        if i < len(joined) {
+            push(merged, joined[i]);
+        }
+        joined = merged;
+    }
+    return joined[0];
+}
+
 // Where `needle` first appears in `text`, or -1. The naive scan, deliberately:
 // a compiler's lexer does not search, and a program that needs Boyer-Moore knows
 // it does. Simple until measured.
-function string_find(text: String, needle: String) -> Int {
+pure function string_find(text: String, needle: String) -> Int {
     let n: Int = len(needle);
     if n == 0 {
         return 0;
@@ -39,11 +161,11 @@ function string_find(text: String, needle: String) -> Int {
     return 0 - 1;
 }
 
-function string_contains(text: String, needle: String) -> Bool {
+pure function string_contains(text: String, needle: String) -> Bool {
     return string_find(text, needle) >= 0;
 }
 
-function string_starts_with(text: String, prefix: String) -> Bool {
+pure function string_starts_with(text: String, prefix: String) -> Bool {
     if len(prefix) > len(text) {
         return false;
     }
@@ -57,7 +179,7 @@ function string_starts_with(text: String, prefix: String) -> Bool {
     return true;
 }
 
-function string_ends_with(text: String, suffix: String) -> Bool {
+pure function string_ends_with(text: String, suffix: String) -> Bool {
     let n: Int = len(suffix);
     if n > len(text) {
         return false;
@@ -74,7 +196,7 @@ function string_ends_with(text: String, suffix: String) -> Bool {
 }
 
 // Whitespace removed from both ends: space, tab, newline, carriage return.
-function string_trim(text: String) -> String {
+pure function string_trim(text: String) -> String {
     let mutable from: Int = 0;
     while from < len(text) && string_is_space(byte_at(text, from)) {
         from += 1;
@@ -86,7 +208,7 @@ function string_trim(text: String) -> String {
     return substring(text, from, to - from);
 }
 
-function string_is_space(byte: Int) -> Bool {
+pure function string_is_space(byte: Int) -> Bool {
     return byte == 32 || byte == 9 || byte == 10 || byte == 13;
 }
 
@@ -147,7 +269,7 @@ function string_split(text: String, separator: String) -> [String] {
 
 // Does `needle` sit at `at` in `text`? Compared in place, because `substring` would allocate once per
 // position and a split has no business needing a region.
-function string_matches_at(text: String, needle: String, at: Int) -> Bool {
+pure function string_matches_at(text: String, needle: String, at: Int) -> Bool {
     let width: Int = len(needle);
     if at < 0 || at + width > len(text) {
         return false;
@@ -211,55 +333,77 @@ function string_to_int(text: String, fallback: Int) -> Int {
 //         None    => { print("not a number: " + field); }
 //         Some(n) => { print(n * 2); }
 //     }
-function string_parse_int(text: String) -> Option<Int> {
-    if len(text) == 0 {
-        return Option.None;
-    }
-    let mutable i: Int = 0;
-    let mutable negative: Bool = false;
-    if byte_at(text, 0) == 45 {
-        negative = true;
-        i = 1;
-    }
-    // `-` alone is not a number, which the old version read as 0.
-    if i >= len(text) {
-        return Option.None;
-    }
-    let mutable value: Int = 0;
-    while i < len(text) {
-        let b: Int = byte_at(text, i);
-        if b < 48 || b > 57 {
-            return Option.None;
-        }
-        value = value * 10 + (b - 48);
-        i += 1;
-    }
-    if negative {
-        return Option.Some(0 - value);
-    }
-    return Option.Some(value);
+//
+// **One line on top of `string_parse_int_base`, since v0.0.279, and that is a bug fix rather than a
+// tidy-up.** The hand-written base-10 accumulator this used to hold was `value = value * 10 + digit`
+// with no overflow guard, and Burxt's `*` traps — so `string_parse_int("99999999999999999999")`
+// did not answer None, it **ended the process** with `arithmetic overflow` and exit code 70.
+// Measured. See the §D1d section header for why that was worse than the silent 0 this function was
+// fixed for in v0.0.152, and for how the guard below it works.
+pure function string_parse_int(text: String) -> Option<Int> {
+    return string_parse_int_base(text, 10);
 }
 
 // The separator between each piece. The join a program would write, written once.
+//
+// The §D0 chunk list. This was `out += separator + pieces[i]` until the D1 work measured it, which
+// made joining a 100 KB document out of its lines cost the square of its length — in the one
+// function a program reaches for precisely because it has a lot of pieces.
 function string_join(pieces: [String], separator: String) -> String {
-    if len(pieces) == 0 {
+    let count: Int = len(pieces);
+    if count == 0 {
         return "";
     }
-    let mutable out: String = pieces[0];
-    let mutable i: Int = 1;
-    while i < len(pieces) {
-        out += separator + pieces[i];
+    let mutable chunks: [String] = [];
+    let mutable chunk: String = "";
+    let mutable i: Int = 0;
+    while i < count {
+        if i > 0 {
+            chunk += separator;
+        }
+        chunk += pieces[i];
+        if len(chunk) >= STRING_CHUNK {
+            push(chunks, chunk);
+            chunk = "";
+        }
         i += 1;
     }
-    return out;
+    if len(chunk) > 0 {
+        push(chunks, chunk);
+    }
+    return string_join_chunks(chunks);
 }
 
-function string_repeat(text: String, times: Int) -> String {
+// `text` repeated `times` over. `string_repeat("ab", 3)` is `"ababab"`.
+//
+// **By DOUBLING, not by a chunk list, and this is the one place in the file where the chunk list is
+// not the right answer.** `out += text` in a loop was the original and is quadratic. A chunk list
+// would fix that and copy `n log(times)` bytes; doubling copies `2n` and needs no list at all,
+// because a repeat is the one builder that already knows every piece is identical. The same binary
+// decomposition `math_pow` uses: `doubled` holds `text` repeated a power-of-two number of times,
+// and the bits of `times` say which powers to keep.
+//
+// `times <= 0` answers `""` rather than refusing. Zero copies of something is a real and useful
+// answer — it is what `string_pad_start` asks for when the text already fills the width — and a
+// negative count is the same question asked clumsily. This is the case where a fallback is right
+// and a `requires` would make every caller guard a value it does not care about.
+pure function string_repeat(text: String, times: Int) -> String {
+    if times <= 0 || len(text) == 0 {
+        return "";
+    }
     let mutable out: String = "";
-    let mutable i: Int = 0;
-    while i < times {
-        out += text;
-        i += 1;
+    let mutable doubled: String = text;
+    let mutable left: Int = times;
+    while left > 0 {
+        if remainder(left, 2) == 1 {
+            out = out + doubled;
+        }
+        left = divide_toward_zero(left, 2);
+        // Guarded, so the last pass does not double a String it will never use — which for a large
+        // `text` is the difference between the answer's size and twice it.
+        if left > 0 {
+            doubled = doubled + doubled;
+        }
     }
     return out;
 }
@@ -615,25 +759,41 @@ function char_index(text: String, of: String) -> Option<Int> {
 //
 // ---- the cost ----
 //
-// Built in 4 KB chunks rather than one prepend per character, which is the idiom this project has
-// paid for three times (v0.0.68, v0.0.77, v0.0.82) and `lib/os.bx` uses for the same reason: a
-// String is immutable, so `out = piece + out` copies everything already collected on every
-// character and turns a reverse into O(n²). The chunk bounds that copy to 4 KB.
-pure function string_reverse(text: String) -> String allocates {
-    let mutable done: String = "";
+// The §D0 chunk list, and this function is where the difference between it and the 4 KB two-level
+// version it replaced is easiest to see. A String is immutable, so `out = piece + out` copies
+// everything collected so far on every character and turns a reverse into O(n²); a pending chunk
+// bounds that copy, but flushing it into a flat `done` is quadratic again in the number of flushes.
+// Both levels have to be a list. See the section at the top of this file for the numbers.
+//
+// **The chunks come out in reverse order and are reversed again to join**, which is the one thing
+// here that is not the plain idiom: each chunk holds its own bytes already reversed, so the whole
+// answer is the LAST chunk first.
+pure function string_reverse(text: String) -> String {
+    let stop: Int = len(text);
+    let mutable pieces: [String] = [];
     let mutable chunk: String = "";
     let mutable at: Int = 0;
-    while at < len(text) {
+    while at < stop {
         let ending: Int = next_char(text, at);
-        // PREPEND: the piece read last ends up first.
+        // PREPEND: the piece read last ends up first. Bounded by STRING_CHUNK, so this copy is a
+        // constant rather than the length of everything collected.
         chunk = substring(text, at, ending - at) + chunk;
-        if len(chunk) >= 4096 {
-            done = chunk + done;
+        if len(chunk) >= STRING_CHUNK {
+            push(pieces, chunk);
             chunk = "";
         }
         at = ending;
     }
-    return chunk + done;
+    if len(chunk) > 0 {
+        push(pieces, chunk);
+    }
+    let mutable backwards: [String] = [];
+    let mutable k: Int = len(pieces);
+    while k > 0 {
+        k -= 1;
+        push(backwards, pieces[k]);
+    }
+    return string_join_chunks(backwards);
 }
 
 // ---- case, and the name is the decision -------------------------------------------------
@@ -673,42 +833,79 @@ pure function string_reverse(text: String) -> String allocates {
 // codepoint walk, unlike `string_reverse`. The fixture checks it on real non-ASCII text rather than
 // asserting it here.
 
+// ---- how both of these copy, which is not one byte at a time -----------------------------
+//
+// The §D0 chunk list, plus one thing worth stating because it changes the cost by two orders of
+// magnitude on real text: **the bytes that do NOT change are copied as whole RUNS.** `run` marks
+// where the current untouched stretch began, and only a letter that actually maps flushes it with
+// a single `substring`.
+//
+// The consequence is that the cost tracks how much text CHANGES rather than how long it is.
+// `string_to_upper_ascii` on text that is already upper case — or on any text with no ASCII
+// lower-case letters at all, which includes every all-CJK string — does exactly one `substring`
+// and one push, whatever its length. A per-byte loop would have copied it a byte at a time and
+// paid the pending-chunk quadratic for nothing.
+
 // `a`..`z` become `A`..`Z`. Every other byte, ASCII or not, is passed through unchanged.
-pure function string_to_upper_ascii(text: String) -> String allocates {
-    let mutable done: String = "";
+pure function string_to_upper_ascii(text: String) -> String {
+    let stop: Int = len(text);
+    let mutable pieces: [String] = [];
     let mutable chunk: String = "";
-    for i in 0..len(text) {
+    let mutable run: Int = 0;
+    let mutable i: Int = 0;
+    while i < stop {
         let byte: Int = byte_at(text, i);
         if byte >= 97 && byte <= 122 {
+            if i > run {
+                chunk += substring(text, run, i - run);
+            }
             chunk += ascii_letter(byte - 32);
-        } else {
-            chunk += substring(text, i, 1);
+            run = i + 1;
+            if len(chunk) >= STRING_CHUNK {
+                push(pieces, chunk);
+                chunk = "";
+            }
         }
-        if len(chunk) >= 4096 {
-            done += chunk;
-            chunk = "";
-        }
+        i += 1;
     }
-    return done + chunk;
+    if stop > run {
+        chunk += substring(text, run, stop - run);
+    }
+    if len(chunk) > 0 {
+        push(pieces, chunk);
+    }
+    return string_join_chunks(pieces);
 }
 
 // `A`..`Z` become `a`..`z`. Every other byte, ASCII or not, is passed through unchanged.
-pure function string_to_lower_ascii(text: String) -> String allocates {
-    let mutable done: String = "";
+pure function string_to_lower_ascii(text: String) -> String {
+    let stop: Int = len(text);
+    let mutable pieces: [String] = [];
     let mutable chunk: String = "";
-    for i in 0..len(text) {
+    let mutable run: Int = 0;
+    let mutable i: Int = 0;
+    while i < stop {
         let byte: Int = byte_at(text, i);
         if byte >= 65 && byte <= 90 {
+            if i > run {
+                chunk += substring(text, run, i - run);
+            }
             chunk += ascii_letter(byte + 32);
-        } else {
-            chunk += substring(text, i, 1);
+            run = i + 1;
+            if len(chunk) >= STRING_CHUNK {
+                push(pieces, chunk);
+                chunk = "";
+            }
         }
-        if len(chunk) >= 4096 {
-            done += chunk;
-            chunk = "";
-        }
+        i += 1;
     }
-    return done + chunk;
+    if stop > run {
+        chunk += substring(text, run, stop - run);
+    }
+    if len(chunk) > 0 {
+        push(pieces, chunk);
+    }
+    return string_join_chunks(pieces);
 }
 
 // The one-byte String for an ASCII LETTER code.
@@ -863,19 +1060,27 @@ pure function from_codepoint(code: Int) -> String allocates
 // `is_valid_utf8(from_bytes(xs))` says it in one line where a reader can see it. This is also the
 // only way to build a deliberately BINARY String — which `write_bytes` then writes out.
 //
-// Chunked, not `out += b`, for the reason three earlier functions in this file carry: appending to a
-// String copies it, so byte-at-a-time is O(n²). The project has paid for that three times.
-pure function from_bytes(xs: [Int]) -> String allocates {
-    let mutable done: String = "";
+// The §D0 chunk list, not `out += b`, for the reason the section at the top of this file measures:
+// appending to a String copies it, so byte-at-a-time is O(n²) and a flat flush target is O(n²) in
+// the flushes. There is no run to copy wholesale here — every byte is a separate `[Int]` element
+// and has to be converted — so this is the plain idiom.
+pure function from_bytes(xs: [Int]) -> String {
+    let count: Int = len(xs);
+    let mutable pieces: [String] = [];
     let mutable chunk: String = "";
-    for i in 0..len(xs) {
+    let mutable i: Int = 0;
+    while i < count {
         chunk += byte_as_string(xs[i]);
-        if len(chunk) >= 4096 {
-            done += chunk;
+        if len(chunk) >= STRING_CHUNK {
+            push(pieces, chunk);
             chunk = "";
         }
+        i += 1;
     }
-    return done + chunk;
+    if len(chunk) > 0 {
+        push(pieces, chunk);
+    }
+    return string_join_chunks(pieces);
 }
 
 // `from_byte` is NOT here, and §D1p's third name is answered rather than dropped: it would be
@@ -885,3 +1090,925 @@ pure function from_bytes(xs: [Int]) -> String allocates {
 // the difference is. Named here because "we decided it is the same function" and "we forgot" look
 // identical from the outside.
 // ============================================================================
+
+// ============================================================================
+// §D1a — CASE, and the naming rule the section above already stated
+//
+// `string_to_upper_ascii` and `string_to_lower_ascii` are above, with the argument for why `_ascii`
+// is in the name rather than in a footnote. Everything here inherits that limit and the same
+// reasoning: **non-ASCII passes through unchanged, and the name is where a caller learns it.**
+//
+// The two comparison functions allocate NOTHING. That is the point of having them: the obvious way
+// to compare case-insensitively is `string_to_lower_ascii(a) == string_to_lower_ascii(b)`, which
+// builds two whole Strings in the caller's region to answer a Bool — and in a loop over a word list
+// that is the region cost of the entire input, twice, for an answer that needs no memory at all.
+// ============================================================================
+
+// One byte, case-folded for comparison: `A`..`Z` become `a`..`z` and every other byte, ASCII or
+// not, is itself.
+//
+// Takes a BYTE, like `string_is_space`, and is the shared kernel of the three `_ignore_case`
+// functions. Folding to LOWER rather than upper is arbitrary for ASCII — the two agree on every
+// comparison — and is chosen to match what `equals_ignore_case` would do in every other language.
+pure function string_fold_ascii(byte: Int) -> Int {
+    if byte >= 65 && byte <= 90 {
+        return byte + 32;
+    }
+    return byte;
+}
+
+// Same text, ASCII case ignored. Allocates nothing; see the section note.
+//
+// **A length check first, and it is a real shortcut rather than an optimisation.** ASCII folding
+// never changes a byte's length, so two Strings that differ only in ASCII case have the same byte
+// length — which means an early `false` on differing lengths cannot be wrong.
+pure function string_equals_ignore_case(a: String, b: String) -> Bool {
+    let width: Int = len(a);
+    if width != len(b) {
+        return false;
+    }
+    let mutable i: Int = 0;
+    while i < width {
+        if string_fold_ascii(byte_at(a, i)) != string_fold_ascii(byte_at(b, i)) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+// -1, 0 or 1: is `a` before, equal to, or after `b`?
+//
+// **Byte-wise, and for UTF-8 that IS codepoint order** — a designed property of the encoding rather
+// than a coincidence, and the reason this needs no codepoint walk. A shorter String that is a
+// prefix of a longer one sorts first, which is the ordinary lexicographic rule.
+//
+// Three-way rather than the `<` the language already has, because a sort or a binary search wants
+// one comparison and not two. It is *not* a second spelling of `<`: `a < b` answers one of the
+// three questions and this answers which of the three it is.
+pure function string_compare(a: String, b: String) -> Int {
+    let width_a: Int = len(a);
+    let width_b: Int = len(b);
+    let mutable shared: Int = width_a;
+    if width_b < shared {
+        shared = width_b;
+    }
+    let mutable i: Int = 0;
+    while i < shared {
+        let x: Int = byte_at(a, i);
+        let y: Int = byte_at(b, i);
+        if x < y {
+            return 0 - 1;
+        }
+        if x > y {
+            return 1;
+        }
+        i += 1;
+    }
+    if width_a < width_b {
+        return 0 - 1;
+    }
+    if width_a > width_b {
+        return 1;
+    }
+    return 0;
+}
+
+// `string_compare`, with ASCII case folded away. Allocates nothing.
+//
+// Note what this is NOT: a case-insensitive ORDER for non-ASCII text. `"Ä"` and `"ä"` compare
+// unequal here and always will without the Unicode tables. The `_ascii` limit again.
+pure function string_compare_ignore_case(a: String, b: String) -> Int {
+    let width_a: Int = len(a);
+    let width_b: Int = len(b);
+    let mutable shared: Int = width_a;
+    if width_b < shared {
+        shared = width_b;
+    }
+    let mutable i: Int = 0;
+    while i < shared {
+        let x: Int = string_fold_ascii(byte_at(a, i));
+        let y: Int = string_fold_ascii(byte_at(b, i));
+        if x < y {
+            return 0 - 1;
+        }
+        if x > y {
+            return 1;
+        }
+        i += 1;
+    }
+    if width_a < width_b {
+        return 0 - 1;
+    }
+    if width_a > width_b {
+        return 1;
+    }
+    return 0;
+}
+
+// `string_find`, with ASCII case folded away. A BYTE offset, like `string_find`, and -1 for absent.
+// Allocates nothing — the point of it existing beside `string_find` rather than callers lowering
+// both sides first.
+pure function string_find_ignore_case(text: String, needle: String) -> Int {
+    let width: Int = len(needle);
+    if width == 0 {
+        return 0;
+    }
+    let stop: Int = len(text);
+    let mutable i: Int = 0;
+    while i + width <= stop {
+        let mutable k: Int = 0;
+        let mutable same: Bool = true;
+        while k < width && same {
+            if string_fold_ascii(byte_at(text, i + k)) != string_fold_ascii(byte_at(needle, k)) {
+                same = false;
+            }
+            k += 1;
+        }
+        if same {
+            return i;
+        }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+// First character upper-cased, **and the rest lower-cased**. `string_capitalise("jOHN")` is
+// `"John"`, not `"JOHN"`.
+//
+// ---- the decision, because there are two defensible answers ----
+//
+// Lower-casing the tail is Python's `capitalize` and it is chosen here for one reason: it is the
+// only answer that makes this and `string_title_case` agree, and a pair of functions that disagree
+// about what "capitalise" means is worse than either choice. `"jOHN sMITH"` has to become
+// `"John Smith"` under `title_case` — nobody wants `"JOHN SMITH"` — so `capitalise` on one word
+// must do the same thing to be its single-word case.
+//
+// A caller who wants *only* the first character touched has two lines and no ambiguity:
+//
+//     let head: String = string_to_upper_ascii(char_at(name, 0));
+//     let rest: String = substring(name, len(head), len(name) - len(head));
+//
+// ---- the empty and multi-byte cases ----
+//
+// The empty String answers itself. A first character that is multi-byte is unchanged, because
+// `_ascii` case mapping touches no byte >= 128 — and this splits the text at BYTE 1, so a
+// two-byte `é` is briefly two invalid halves that concatenate back to exactly what they were.
+// Nothing inspects the halves, and the answer is correct; the fixture checks it on `"élan"`.
+pure function string_capitalise(text: String) -> String {
+    let stop: Int = len(text);
+    if stop == 0 {
+        return text;
+    }
+    let first: Int = byte_at(text, 0);
+    let mutable head: String = substring(text, 0, 1);
+    if first >= 97 && first <= 122 {
+        head = ascii_letter(first - 32);
+    }
+    return head + string_to_lower_ascii(substring(text, 1, stop - 1));
+}
+
+// The first character of every word upper-cased and the rest lower-cased, ASCII only.
+//
+// ---- what counts as a word boundary, which is the whole content of this function ----
+//
+// A word STARTS at a byte that is word-ish and follows one that is not. Word-ish means ASCII
+// alphanumeric **or any byte >= 128**, and that second clause is the case a naive version gets
+// wrong rather than a detail:
+//
+//   * Every byte of a multi-byte UTF-8 character is >= 128. Treating those as non-word-ish would
+//     make the byte AFTER a `é` a word start — so `"élan"` would come out `"éLan"`. Measured on
+//     exactly that input before the clause was added.
+//   * So `é` is word-ish here even though this function cannot case-map it. That is the honest
+//     ASCII-limited answer: it does not claim to know the character's case, only that it is part
+//     of a word and does not end one.
+//
+// Punctuation and digits therefore behave like this, all of which the fixture pins:
+//
+//     "o'brien"      ->  "O'Brien"      an apostrophe ends a word, as it does in Python
+//     "3rd place"    ->  "3rd Place"    a digit is word-ish, so `r` is not a word start
+//     "hello-world"  ->  "Hello-World"
+//
+// The apostrophe case is the one people disagree about. It is recorded rather than argued: a rule
+// that made `'` word-ish would give `"O'brien"`, and neither is wrong for every name.
+pure function string_title_case(text: String) -> String {
+    let stop: Int = len(text);
+    let mutable pieces: [String] = [];
+    let mutable chunk: String = "";
+    let mutable in_word: Bool = false;
+    let mutable i: Int = 0;
+    while i < stop {
+        let byte: Int = byte_at(text, i);
+        let wordish: Bool = string_is_alnum(byte) || byte >= 128;
+        let mutable mapped: Int = byte;
+        if wordish && !in_word {
+            if byte >= 97 && byte <= 122 {
+                mapped = byte - 32;
+            }
+        } else {
+            if byte >= 65 && byte <= 90 {
+                mapped = byte + 32;
+            }
+        }
+        chunk += byte_as_string(mapped);
+        in_word = wordish;
+        if len(chunk) >= STRING_CHUNK {
+            push(pieces, chunk);
+            chunk = "";
+        }
+        i += 1;
+    }
+    if len(chunk) > 0 {
+        push(pieces, chunk);
+    }
+    return string_join_chunks(pieces);
+}
+
+// ============================================================================
+// §D1a — REPLACE
+//
+// Left to right, non-overlapping, and **the replacement is never rescanned.** That last one is the
+// case a wrong implementation passes every ordinary test on and then hangs or explodes:
+//
+//     string_replace("aaa", "a", "aa")   ->  "aaaaaa"    six, not an infinite loop
+//     string_replace("x", "x", "xx")     ->  "xx"        not "xxxx", not forever
+//
+// The scan advances past the MATCHED text in the source and never looks at what was written, so a
+// replacement containing the pattern is inert by construction rather than by a guard. Both are in
+// the fixture, because "we thought about it" and "we tested it" are different claims.
+//
+// An EMPTY pattern answers the text unchanged, which is the same call `string_split` makes for an
+// empty separator and for the same reason: an empty match occurs between every pair of characters
+// and unboundedly often at each position, so "replace every occurrence" does not determine a
+// result. `string_count` answers 0 for it too, so the three agree — a program can ask "how many,
+// then replace them all" and not be surprised.
+// ============================================================================
+
+// Every occurrence of `from` becomes `to`. The bytes between matches are copied as whole RUNS, so
+// a replace that matches rarely costs about one pass whatever the text's length.
+pure function string_replace(text: String, from: String, to: String) -> String {
+    let width: Int = len(from);
+    if width == 0 {
+        return text;
+    }
+    let stop: Int = len(text);
+    let mutable pieces: [String] = [];
+    let mutable chunk: String = "";
+    let mutable run: Int = 0;
+    let mutable i: Int = 0;
+    while i + width <= stop {
+        if string_matches_at(text, from, i) {
+            if i > run {
+                chunk += substring(text, run, i - run);
+            }
+            chunk += to;
+            // PAST the match in the SOURCE. This is the line that makes a replacement containing
+            // the pattern inert.
+            i += width;
+            run = i;
+            if len(chunk) >= STRING_CHUNK {
+                push(pieces, chunk);
+                chunk = "";
+            }
+        } else {
+            i += 1;
+        }
+    }
+    if stop > run {
+        chunk += substring(text, run, stop - run);
+    }
+    if len(chunk) > 0 {
+        push(pieces, chunk);
+    }
+    return string_join_chunks(pieces);
+}
+
+// The FIRST occurrence of `from` becomes `to`; the rest of the text is untouched.
+//
+// Not `string_replace` with a counter, because it needs no builder at all: one `find` and two
+// substrings, which is three allocations regardless of how long the text is.
+pure function string_replace_first(text: String, from: String, to: String) -> String {
+    if len(from) == 0 {
+        return text;
+    }
+    let at: Int = string_find(text, from);
+    if at < 0 {
+        return text;
+    }
+    let after: Int = at + len(from);
+    return substring(text, 0, at) + to + substring(text, after, len(text) - after);
+}
+
+// ============================================================================
+// §D1a — PAD AND TRIM
+//
+// **`pad` counts CODEPOINTS and `trim` counts bytes**, and that split is deliberate rather than
+// sloppy. Padding exists to line a column up, so it has to count what a reader counts: padding
+// `"café"` to 6 with byte arithmetic would add 1 space instead of 2, because the `é` is two bytes,
+// and the column would be visibly wrong. Trimming removes ASCII whitespace, and every whitespace
+// byte is one byte, so there is nothing for a codepoint walk to add.
+//
+// This is the `string_find` / `char_index` distinction from earlier in the file, applied to a
+// different pair of functions: the units are in the DOCUMENTATION and the behaviour, because the
+// types cannot tell them apart.
+// ============================================================================
+
+// `fill` repeated on the LEFT until the text is `width` codepoints wide. Already wide enough, or
+// wider, answers the text unchanged — never truncates.
+//
+// **`fill` must be exactly one codepoint**, as a `requires` rather than a silent truncation: a
+// two-character fill cannot in general reach a given width at all (`"ab"` can pad to an even number
+// of columns and no odd one), so there is no correct answer to give and refusing at the call is the
+// only honest option.
+pure function string_pad_start(text: String, width: Int, fill: String) -> String
+    requires char_count(fill) == 1
+{
+    let have: Int = char_count(text);
+    if have >= width {
+        return text;
+    }
+    return string_repeat(fill, width - have) + text;
+}
+
+// `fill` repeated on the RIGHT until the text is `width` codepoints wide. Same contract as
+// `string_pad_start`.
+pure function string_pad_end(text: String, width: Int, fill: String) -> String
+    requires char_count(fill) == 1
+{
+    let have: Int = char_count(text);
+    if have >= width {
+        return text;
+    }
+    return text + string_repeat(fill, width - have);
+}
+
+// Whitespace removed from the START only — space, tab, newline, carriage return, the same four
+// `string_trim` uses. One `substring`, so it allocates once whatever it removes.
+pure function string_trim_start(text: String) -> String {
+    let stop: Int = len(text);
+    let mutable from: Int = 0;
+    while from < stop && string_is_space(byte_at(text, from)) {
+        from += 1;
+    }
+    return substring(text, from, stop - from);
+}
+
+// Whitespace removed from the END only.
+pure function string_trim_end(text: String) -> String {
+    let mutable to: Int = len(text);
+    while to > 0 && string_is_space(byte_at(text, to - 1)) {
+        to -= 1;
+    }
+    return substring(text, 0, to);
+}
+
+// The text without `prefix`, or **the text unchanged** if it does not start with it.
+//
+// Rust answers an `Option` here and this does not, and the reason is that the question "did it have
+// the prefix?" already has a function: `string_starts_with`. An `Option` would make every caller
+// who knows the answer write a `match` to get back to the String, and the two-function form lets a
+// caller who cares ask and a caller who does not just strip. `string_split_once` answers an
+// `Option` because there the "absent" case has no sensible String to return.
+pure function string_strip_prefix(text: String, prefix: String) -> String {
+    if !string_starts_with(text, prefix) {
+        return text;
+    }
+    let width: Int = len(prefix);
+    return substring(text, width, len(text) - width);
+}
+
+// The text without `suffix`, or the text unchanged. Same call as `string_strip_prefix`.
+pure function string_strip_suffix(text: String, suffix: String) -> String {
+    if !string_ends_with(text, suffix) {
+        return text;
+    }
+    return substring(text, 0, len(text) - len(suffix));
+}
+
+// ============================================================================
+// §D1b — SEARCH AND SPLIT
+//
+// Everything here answers BYTE offsets, like `string_find` and unlike `char_index`, and the note at
+// `char_index` is the argument for why the two families are named apart.
+//
+// ---- what the three search functions answer for an EMPTY needle ----
+//
+// It is the same question in three places and the answers have to agree, so they are stated
+// together rather than one at a time:
+//
+//     string_find(text, "")            0        it is there, at the beginning
+//     string_find_from(text, "", 7)    7        it is there, where you started looking
+//     string_rfind(text, "")           len      it is there, at the end
+//     string_count(text, "")           0        "how many" has no forced answer — see below
+//
+// The first three are forced: the empty String occurs at every position, so the first, the first at
+// or after `from`, and the last are exactly 0, `from` and `len`. `string_count` is the one that is
+// not forced, and 0 is chosen so that it agrees with `string_replace` and `string_split`, both of
+// which treat an empty pattern as matching nothing. Python and Rust answer n+1 here; this file
+// prefers three functions that agree with each other over three that each agree with Python.
+// ============================================================================
+
+// Where `needle` first appears at or after `from`, or -1. `from` below 0 is read as 0.
+//
+// This is what a loop over every occurrence needs, and without it a caller writes
+// `string_find(substring(text, from, ...), needle) + from` — which allocates a copy of the rest of
+// the text on every iteration and makes the loop quadratic. That is the whole reason it exists.
+pure function string_find_from(text: String, needle: String, from: Int) -> Int {
+    let stop: Int = len(text);
+    let width: Int = len(needle);
+    let mutable i: Int = from;
+    if i < 0 {
+        i = 0;
+    }
+    if width == 0 {
+        if i > stop {
+            return stop;
+        }
+        return i;
+    }
+    while i + width <= stop {
+        if string_matches_at(text, needle, i) {
+            return i;
+        }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+// Where `needle` LAST appears, or -1. Scanned from the right, so it stops at the first hit rather
+// than finding every occurrence and keeping the last.
+pure function string_rfind(text: String, needle: String) -> Int {
+    let stop: Int = len(text);
+    let width: Int = len(needle);
+    if width == 0 {
+        return stop;
+    }
+    let mutable i: Int = stop - width;
+    while i >= 0 {
+        if string_matches_at(text, needle, i) {
+            return i;
+        }
+        i -= 1;
+    }
+    return 0 - 1;
+}
+
+// How many NON-OVERLAPPING occurrences of `needle`. `string_count("aaaa", "aa")` is 2, not 3.
+//
+// Non-overlapping because that is what `string_replace` does, and a `count` that disagreed with the
+// `replace` beside it would be a trap: a caller sizing something by `count` and then calling
+// `replace` would get a different number of substitutions than it was told.
+pure function string_count(text: String, needle: String) -> Int {
+    let width: Int = len(needle);
+    if width == 0 {
+        return 0;
+    }
+    let stop: Int = len(text);
+    let mutable found: Int = 0;
+    let mutable i: Int = 0;
+    while i + width <= stop {
+        if string_matches_at(text, needle, i) {
+            found += 1;
+            i += width;
+        } else {
+            i += 1;
+        }
+    }
+    return found;
+}
+
+// Split on RUNS of whitespace, dropping empty pieces. What `split` on a single space cannot do.
+//
+// `string_split(" a  b ", " ")` answers five pieces, three of them empty. This answers `["a", "b"]`,
+// which is what every program reading a table, a log line or a command line actually wants — and
+// the difference is not a convenience: a caller using `string_split` on space has to filter the
+// empties itself, and the version that forgets is a program that breaks on a double space.
+//
+// Leading and trailing whitespace therefore produce NO empty piece, and `""` and `"   "` both
+// answer an empty list. This is Python's `.split()` with no argument, and Rust's
+// `split_whitespace` — the one shape everybody agrees on.
+function string_split_space(text: String) -> [String] {
+    let stop: Int = len(text);
+    let mutable pieces: [String] = [];
+    let mutable i: Int = 0;
+    while i < stop {
+        while i < stop && string_is_space(byte_at(text, i)) {
+            i += 1;
+        }
+        if i < stop {
+            let from: Int = i;
+            while i < stop && !string_is_space(byte_at(text, i)) {
+                i += 1;
+            }
+            push(pieces, substring(text, from, i - from));
+        }
+    }
+    return pieces;
+}
+
+// The text cut at the FIRST separator, as a `(before, after)` pair — or None if the separator is
+// not there.
+//
+// **An `Option`, unlike `string_strip_prefix`, and the difference is that there is no sensible pair
+// to answer when the separator is absent.** `("key", "")` would be a lie about a line with no `=`
+// in it, and it is exactly the lie that turns a malformed config file into a program with an empty
+// password. This is the shape a `key=value` reader wants:
+//
+//     match string_split_once(line, "=") {
+//         None       => { print_error("no = in: " + line); }
+//         Some(pair) => { set(pair.0, pair.1); }
+//     }
+//
+// The separator itself is in NEITHER half. An empty separator answers None, agreeing with the rest
+// of the file.
+function string_split_once(text: String, separator: String) -> Option<(String, String)> {
+    let width: Int = len(separator);
+    if width == 0 {
+        return Option.None;
+    }
+    let at: Int = string_find(text, separator);
+    if at < 0 {
+        return Option.None;
+    }
+    let after: Int = at + width;
+    return Option.Some((substring(text, 0, at),
+                        substring(text, after, len(text) - after)));
+}
+
+// `string_split`, scanned from the RIGHT, pieces answered last-first.
+//
+// **It is NOT `string_split`'s answer reversed, and that is measured rather than assumed.** For a
+// separator that can overlap itself, which occurrences match depends on which end you start from:
+//
+//     string_split("aaa", "aa")            ->  ["", "a"]   matched at 0; "a" is the TAIL
+//     that list, reversed                  ->  ["a", ""]
+//     string_rsplit("aaa", "aa")           ->  ["", "a"]   matched at 1; "a" is the HEAD
+//
+// So the two lists differ — `["a", ""]` against `["", "a"]` — and even where they print alike the
+// pieces mean opposite things: the empty one is the tail of a left scan and the head of a right
+// one. The fixture prints all three lists side by side rather than leaving that to this comment.
+//
+// For an ordinary non-overlapping separator this IS `string_split` read backwards, which is the
+// common case and the reason to have it: the last field of a dotted name is
+// `string_rsplit(name, ".")[0]`, with no need to know how many fields there were.
+function string_rsplit(text: String, separator: String) -> [String] {
+    let mutable pieces: [String] = [];
+    let width: Int = len(separator);
+    let stop: Int = len(text);
+    if width == 0 {
+        push(pieces, text);
+        return pieces;
+    }
+    let mutable to: Int = stop;
+    let mutable i: Int = stop - width;
+    while i >= 0 {
+        if string_matches_at(text, separator, i) {
+            let after: Int = i + width;
+            push(pieces, substring(text, after, to - after));
+            to = i;
+            i -= width;
+        } else {
+            i -= 1;
+        }
+    }
+    push(pieces, substring(text, 0, to));
+    return pieces;
+}
+
+// `string_split`, with the empty pieces dropped.
+//
+// The difference matters most at the ends. `string_split("a,,b,", ",")` answers
+// `["a", "", "b", ""]` — four fields, which is what a CSV reader must see — and this answers
+// `["a", "b"]`, which is what a reader of a `PATH`-style list wants. Two functions because the two
+// callers need different things and neither can be derived from the other cheaply by hand: a
+// caller who filters `string_split` themselves and forgets is a program that breaks on `"a,,b"`.
+function string_split_no_empty(text: String, separator: String) -> [String] {
+    let pieces: [String] = string_split(text, separator);
+    let count: Int = len(pieces);
+    let mutable out: [String] = [];
+    let mutable i: Int = 0;
+    while i < count {
+        if len(pieces[i]) > 0 {
+            push(out, pieces[i]);
+        }
+        i += 1;
+    }
+    return out;
+}
+
+// ============================================================================
+// §D1c — CLASSIFY
+//
+// **Two families, and the parameter type says which.** A `string_is_*` takes a BYTE, like
+// `string_is_space` above it, which is the precedent this file already set. `all_*` and
+// `is_ascii` take the whole String. So `string_is_digit(byte_at(s, 0))` asks about one byte and
+// `all_digits(s)` asks about every byte, and no call site is ambiguous about which it meant.
+//
+// **D1c's `all_alpha` is not written**, because `is_alpha` earlier in this file already is it — a
+// whole-String "is every byte a letter". That name is out of step with `all_digits` beside it and
+// renaming it would be right in isolation; it is left alone because it is a shipped, documented,
+// fixture-pinned name and a library-only change is the wrong place to break one. Recorded so that
+// "we decided" and "we missed it" do not look the same from outside.
+//
+// Every `all_*` is true of the empty String — the vacuous answer, and the one that composes. A
+// caller who means "a non-empty run of digits" checks the length too, which is clearer at the call
+// than hidden in here.
+// ============================================================================
+
+// `0`..`9`.
+pure function string_is_digit(byte: Int) -> Bool {
+    return byte >= 48 && byte <= 57;
+}
+
+// `A`..`Z` or `a`..`z`. ASCII only: no byte of a multi-byte character is a letter to this.
+pure function string_is_alpha(byte: Int) -> Bool {
+    return (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122);
+}
+
+// A letter or a digit, ASCII.
+pure function string_is_alnum(byte: Int) -> Bool {
+    return string_is_alpha(byte) || string_is_digit(byte);
+}
+
+// `A`..`Z`.
+pure function string_is_upper(byte: Int) -> Bool {
+    return byte >= 65 && byte <= 90;
+}
+
+// `a`..`z`.
+pure function string_is_lower(byte: Int) -> Bool {
+    return byte >= 97 && byte <= 122;
+}
+
+// `0`..`9`, `a`..`f` or `A`..`F`.
+pure function string_is_hex_digit(byte: Int) -> Bool {
+    return string_is_digit(byte)
+        || (byte >= 97 && byte <= 102)
+        || (byte >= 65 && byte <= 70);
+}
+
+// The value of a digit byte in base 36: `0`..`9` is 0..9, `a`/`A` is 10, `z`/`Z` is 35, and
+// **anything else is -1**.
+//
+// -1 rather than an `Option`, and this is the one place in the file where that is the right call: it
+// is the inner loop of every parse below, an `Option` per byte would allocate nothing but would
+// cost a `match` per digit, and the caller's very next line is a range check against the base
+// anyway — `digit < 0 || digit >= base` catches "not a digit" and "not a digit IN THIS BASE" in one
+// comparison. The sentinel is safe here because -1 is outside every base's digit range, so a caller
+// who forgets the check gets a refusal from the range test rather than a wrong number.
+pure function string_digit_value(byte: Int) -> Int {
+    if byte >= 48 && byte <= 57 {
+        return byte - 48;
+    }
+    if byte >= 97 && byte <= 122 {
+        return byte - 87;
+    }
+    if byte >= 65 && byte <= 90 {
+        return byte - 55;
+    }
+    return 0 - 1;
+}
+
+// Empty, or nothing but whitespace. The check a program reads a config file with, and the reason
+// it is not `string_trim(line) == ""`: that builds a String to answer a Bool, and on a large file
+// it does it once per line.
+pure function string_is_blank(text: String) -> Bool {
+    let stop: Int = len(text);
+    let mutable i: Int = 0;
+    while i < stop {
+        if !string_is_space(byte_at(text, i)) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+// Is every byte an ASCII letter or digit? Named for `all_digits`, not for `string_is_alnum`.
+pure function all_alnum(text: String) -> Bool {
+    let stop: Int = len(text);
+    let mutable i: Int = 0;
+    while i < stop {
+        if !string_is_alnum(byte_at(text, i)) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+// Is every byte `0`..`9`, `a`..`f` or `A`..`F`? Named for `all_digits` for the same reason.
+pure function all_hex_digits(text: String) -> Bool {
+    let stop: Int = len(text);
+    let mutable i: Int = 0;
+    while i < stop {
+        if !string_is_hex_digit(byte_at(text, i)) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+// ============================================================================
+// §D1d — PARSE AND FORMAT
+//
+// ---- the bug this section was written on top of, and it was in THIS file ----
+//
+// `string_parse_int("99999999999999999999")` **killed the process.** Not a wrong answer — a
+// `burxt runtime error: arithmetic overflow` and exit code 70, measured, in an `Option`-returning
+// parser whose entire purpose is to answer None for input it cannot read. Burxt's `*` traps, and
+// the accumulator was `value = value * 10 + (b - 48)` with nothing in front of it, so any number of
+// more than nineteen digits aborted the program.
+//
+// That is worse than the silent 0 this function was fixed for in v0.0.152, because the caller
+// cannot even catch it: a config file, a CSV field or a query parameter with twenty digits in it
+// takes the whole program down, and the function's own comment says it exists so that a program
+// "has to say what it does about bad input". It could say nothing, because it was never asked.
+//
+// **The fix is `string_parse_int_base` below, and `string_parse_int` is now one line on top of it.**
+// One parser rather than two, so the overflow rule cannot be right in one and missing in the other.
+//
+// ---- how the overflow guard works, and why the accumulator is NEGATIVE ----
+//
+// Every step must be checked BEFORE it happens, because a trap cannot be recovered from — this is
+// the same ordering `lib/math.bx`'s `checked_*` family is built on and for the same reason.
+//
+// The accumulator runs DOWN from 0 rather than up, which is not a stylistic choice: `INT_MIN`'s
+// magnitude is 2^63 and **that is not an Int**, so a positive accumulator physically cannot hold
+// the value while parsing `"-9223372036854775808"`. Counting negative, every intermediate value is
+// representable, and the single unrepresentable case — a positive `+9223372036854775808` — is the
+// one refusal at the very end.
+// ============================================================================
+
+// A number in any base from 2 to 36, or None. Digits are `0`..`9` then `a`..`z`, case-insensitive.
+//
+// An optional leading `-` or `+`. **Accepting `+` is a change from what `string_parse_int` used to
+// do**, and it is deliberate: C, Rust and Python all accept it, and the alternative was one parser
+// in this file that took `"+5"` and another that did not.
+//
+// Refuses, rather than traps or truncates: an empty String, a sign with no digits after it, a byte
+// that is not a digit in this base, and anything whose value does not fit an Int. There is no
+// whitespace tolerance — `string_trim` is one call and doing it silently would make `" 1 2"` a
+// question this function has to have an opinion about.
+pure function string_parse_int_base(text: String, base: Int) -> Option<Int>
+    requires base >= 2
+    requires base <= 36
+{
+    let stop: Int = len(text);
+    if stop == 0 {
+        return Option.None;
+    }
+    let mutable i: Int = 0;
+    let mutable negative: Bool = false;
+    let lead: Int = byte_at(text, 0);
+    if lead == 45 {
+        negative = true;
+        i = 1;
+    } else if lead == 43 {
+        i = 1;
+    }
+    // A sign alone is not a number, which the pre-v0.0.152 version read as 0.
+    if i >= stop {
+        return Option.None;
+    }
+    // `ceil(INT_MIN / base)`: the most negative accumulator that can still be multiplied by `base`
+    // without trapping. `divide_floor(a + base - 1, base)` is the ceiling for a positive divisor,
+    // and `INT_MIN + base - 1` cannot overflow because `base` is at least 2.
+    let smallest: Int = 0 - 9223372036854775807 - 1;
+    let multipliable: Int = divide_floor(smallest + base - 1, base);
+    let mutable value: Int = 0;
+    while i < stop {
+        let digit: Int = string_digit_value(byte_at(text, i));
+        if digit < 0 || digit >= base {
+            return Option.None;
+        }
+        // Guard, then multiply. The other order is a trap, not a check.
+        if value < multipliable {
+            return Option.None;
+        }
+        let scaled: Int = value * base;
+        // Same again for the subtraction. `smallest + digit` is safe because `digit` is >= 0.
+        if scaled < smallest + digit {
+            return Option.None;
+        }
+        value = scaled - digit;
+        i += 1;
+    }
+    if negative {
+        return Option.Some(value);
+    }
+    // The one asymmetry in two's complement: `-INT_MIN` has no Int. `"-9223372036854775808"` is a
+    // number and `"9223372036854775808"` is not.
+    if value == smallest {
+        return Option.None;
+    }
+    return Option.Some(0 - value);
+}
+
+// Hexadecimal, with an optional `0x` or `0X` prefix. `string_parse_hex("0xff")` and
+// `string_parse_hex("FF")` are both 255.
+//
+// **The prefix is the only reason this exists** rather than being `string_parse_int_base(s, 16)`
+// under a second name — which the project's one-spelling-per-concept rule would refuse. A sign goes
+// before the prefix: `"-0x10"` is -16, and `"0x-10"` is not a number.
+pure function string_parse_hex(text: String) -> Option<Int> {
+    let stop: Int = len(text);
+    let mutable at: Int = 0;
+    let mutable sign: String = "";
+    if stop > 0 && byte_at(text, 0) == 45 {
+        sign = "-";
+        at = 1;
+    } else if stop > 0 && byte_at(text, 0) == 43 {
+        at = 1;
+    }
+    if stop >= at + 2 && byte_at(text, at) == 48
+        && (byte_at(text, at + 1) == 120 || byte_at(text, at + 1) == 88) {
+        let from: Int = at + 2;
+        let body: String = substring(text, from, stop - from);
+        // **The digits after the prefix must be digits and nothing else.** Handing the body
+        // straight to `string_parse_int_base` would accept `"0x-10"` as -16, because that parser
+        // reads a sign of its own — measured, and the fixture pins it. A sign belongs before the
+        // prefix. The length test is separate because `all_hex_digits("")` is vacuously true, so
+        // `"0x"` alone would otherwise pass this guard on its way to being refused later.
+        if len(body) == 0 || !all_hex_digits(body) {
+            return Option.None;
+        }
+        return string_parse_int_base(sign + body, 16);
+    }
+    return string_parse_int_base(text, 16);
+}
+
+// An Int written in any base from 2 to 36, lower case, with no prefix. `string_int_to_base(255, 16)`
+// is `"ff"`.
+//
+// ---- INT_MIN, which is where a naive version is wrong ----
+//
+// Digits come off the NEGATIVE side — `remainder` of a negative is negative here, so `0 - remainder`
+// is the digit — and the reason is the same one the parser has: `0 - INT_MIN` traps, so a version
+// that took the absolute value first would abort on exactly one input out of 2^64. The fixture
+// checks `string_int_to_base(INT_MIN, 10)` for that reason.
+//
+// ---- the prepend, and why it is not a chunk list ----
+//
+// `out = digit + out` is the quadratic shape §D0 exists to refuse, and it is correct here for a
+// reason that has to be stated or it will be "fixed" into a chunk list by someone reading the rule
+// and not the bound: **the digit count is at most 64**, at base 2, for any Int. So the total copied
+// is at most 64*65/2 = 2,080 bytes, whatever the value. It is a constant, not a growth rate.
+pure function string_int_to_base(value: Int, base: Int) -> String
+    requires base >= 2
+    requires base <= 36
+{
+    if value == 0 {
+        return "0";
+    }
+    let digits: String = "0123456789abcdefghijklmnopqrstuvwxyz";
+    let mutable n: Int = value;
+    if value > 0 {
+        n = 0 - value;
+    }
+    let mutable out: String = "";
+    while n != 0 {
+        out = substring(digits, 0 - remainder(n, base), 1) + out;
+        n = divide_toward_zero(n, base);
+    }
+    if value < 0 {
+        return "-" + out;
+    }
+    return out;
+}
+
+// Base 16, lower case, no `0x`. `string_int_to_hex(255)` is `"ff"`.
+//
+// A named base rather than a second spelling of `string_int_to_base`: the base is the argument a
+// reader cannot check by eye, and `string_int_to_hex(x)` cannot be miswritten as base 61. The same
+// argument Rust's `{:x}` makes against `{:radix$}`. Upper case is `string_to_upper_ascii` of this.
+pure function string_int_to_hex(value: Int) -> String {
+    return string_int_to_base(value, 16);
+}
+
+// Base 2, no `0b`. `string_int_to_binary(5)` is `"101"`.
+pure function string_int_to_binary(value: Int) -> String {
+    return string_int_to_base(value, 2);
+}
+
+// An Int zero-padded to at least `width` characters. `string_int_padded(7, 3)` is `"007"`.
+//
+// **The sign goes before the zeros and counts toward the width**, so `string_int_padded(-7, 4)` is
+// `"-007"` and not `"0-07"` or `"-0007"`. That is printf's `%04d` and every other language's
+// answer; the alternatives are respectively unreadable and off by one.
+//
+// A number already that wide is unchanged — never truncated. Padding that silently dropped a digit
+// would be a wrong number in a column that looks right, which is the failure this language exists
+// to refuse.
+pure function string_int_padded(value: Int, width: Int) -> String {
+    let body: String = to_string(value);
+    let have: Int = len(body);
+    if have >= width {
+        return body;
+    }
+    if value < 0 {
+        return "-" + string_repeat("0", width - have) + substring(body, 1, have - 1);
+    }
+    return string_repeat("0", width - have) + body;
+}

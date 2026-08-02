@@ -1,0 +1,59 @@
+format(WARN, 2026-07-29T08:14:56Z) = [2026-07-29T08:14:56Z WARN  disk almost full]
+format(DEBUG, epoch) = [1970-01-01T00:00:00Z DEBUG at the beginning]
+format(INFO, leap day 2000) = [2000-02-29T00:00:00Z INFO  2000 was a leap year]
+format(ERROR, epoch) = [1970-01-01T00:00:00Z ERROR gone]
+format(15, epoch) = [1970-01-01T00:00:00Z LEVEL15 between two levels]
+format(OFF, epoch) = [1970-01-01T00:00:00Z OFF   nobody calls this]
+format(INFO, empty message) = [1970-01-01T00:00:00Z INFO  ]
+one_line(plain) = [nothing to escape]
+one_line(a\nb) = [a\nb]
+one_line(a\r\nb) = [a\r\nb]
+one_line(trailing newline) = [done\n]
+one_line(empty) = []
+one_line(only newlines) = [\n\n]
+one_line(literal backslash-n) = [a\nb]
+format(WARN, two lines) = [1970-01-01T00:00:00Z WARN  first\nsecond]
+one_line(long) has no newline = true
+one_line(long) length = 310
+level(WARN) = [WARN]
+level(warn) = [WARN]
+level(  warn  ) = [WARN]
+level(WaRn) = [WARN]
+level(warning) = [WARN]
+level(debug) = [DEBUG]
+level(DEBUG) = [DEBUG]
+level(info) = [INFO]
+level(error) = [ERROR]
+level(off) = [OFF]
+level(none) = [OFF]
+level(silent) = [OFF]
+level(empty) = [WARN]
+level(   ) = [WARN]
+level(banana) = [DEBUG]
+level(DEBUGG) = [DEBUG]
+level(err) = [DEBUG]
+level(0) = [DEBUG]
+level(offf) = [DEBUG]
+default = [WARN]
+debug passes debug = true
+debug passes warn = false
+info passes warn = false
+warn passes warn = true
+error passes warn = true
+error passes off = false
+debug passes off = false
+error passes error = true
+warn passes error = false
+stdout is still ours
+BURXT_LOG=debug logs all four to stderr, none to stdout = true
+unset logs warn and error only = true
+BURXT_LOG=off logs nothing at all = true
+BURXT_LOG=banana does not silence the log = true
+BURXT_LOG=WARN is BURXT_LOG=warn = true
+BURXT_LOG= (empty) is the default = true
+BURXT_LOG=error drops warnings = true
+banana produces a complaint naming the value = true
+a good value produces no complaint = true
+unset produces no complaint = true
+empty produces no complaint = true
+done

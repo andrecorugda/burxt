@@ -1,0 +1,201 @@
+// lib/log.bx — four levels, a threshold from `BURXT_LOG`, and stderr.
+//
+// Three things are being tested here and only the first is ordinary.
+//
+// **1. The line, exactly.** `log_format` takes its timestamp as a parameter rather than reading the
+// clock, which is the only reason an exact expectation is possible: every line below is a byte-for-
+// byte String, not a shape. The timestamps were computed with `datetime.fromtimestamp(t, utc)`
+// before the fixture was written, so `lib/time.bx` is being cross-checked here too — 951782400 is
+// 2000-02-29, the leap day that catches a wrong century rule.
+//
+// **2. Nothing reaches stdout.** The program logs at all four levels in the middle of this file,
+// and this fixture's `.stdout` — which the runner compares exactly — contains no log line at all.
+// A log line on stdout corrupts the output of every program that is piped, and that is a property
+// a comment cannot assert. `tests/runner.bx` discards a pass fixture's stderr for exactly this
+// reason (`run_capturing_stdout`, added when `print_error` arrived), so the two halves of the test
+// are: the lines are not here, and they went somewhere.
+//
+// **3. `BURXT_LOG` actually works**, which cannot be tested from inside a single process: a Burxt
+// program has no way to set an environment variable yet (§D1q, `os_set_env`). So this program
+// **re-runs itself** — `os_arg(0)` with an `emit` argument — under a shell that sets the variable,
+// and checks what came out of which stream. Five settings, and the one that matters most is
+// `banana`: a typo must not be able to switch the log off.
+//
+// The child's temporary files are named by `mktemp`, not by this fixture, because a fixed path in
+// /tmp is a collision the day two copies of the suite run at once — and today they do.
+use "../../lib/log.bx";
+
+function show(label: String, value: String) -> Bool {
+    print(label + " = [" + value + "]");
+    return true;
+}
+
+function show_bool(label: String, value: Bool) -> Bool {
+    if value {
+        print(label + " = true");
+    } else {
+        print(label + " = false");
+    }
+    return true;
+}
+
+// Run this same program again in `emit` mode with `setting` in front of it, and answer whether
+// `expectation` — a shell test over `"$F"`, the child's stderr, and `"$G"`, its stdout — holds.
+//
+// The verdict travels back as the shell's EXIT CODE rather than through a file this program would
+// have to name and read, which is what keeps the whole thing collision-free.
+function child_says(exe: String, setting: String, expectation: String) -> Bool touches commands {
+    let command: String =
+        "F=$(mktemp /tmp/burxt-log-fixture.XXXXXX); G=$(mktemp /tmp/burxt-log-fixture.XXXXXX); "
+        + setting + " '" + exe + "' emit >\"$G\" 2>\"$F\"; R=1; "
+        + "if " + expectation + "; then R=0; fi; rm -f \"$F\" \"$G\"; exit $R";
+    return os_run(command) == 0;
+}
+
+region main {
+    // The child half. Four lines, one per level, and nothing on stdout — what the parent greps for.
+    // Plus the complaint, if `BURXT_LOG` holds something this library does not recognise: printing
+    // it is the CALLER's decision, which is the shape `log_env_problem` exists to have, so a
+    // program that wants it does exactly this.
+    if os_arg_count() > 1 {
+        match log_env_problem() {
+            None => { }
+            Some(why) => { print_error(why); }
+        }
+        log_debug("debug-line");
+        log_info("info-line");
+        log_warn("warn-line");
+        log_error("error-line");
+        exit(0);
+    }
+
+    // ---- the line, exactly ----
+    show("format(WARN, 2026-07-29T08:14:56Z)",
+        log_format(LOG_WARN, "disk almost full", 1785312896));
+    show("format(DEBUG, epoch)", log_format(LOG_DEBUG, "at the beginning", 0));
+    show("format(INFO, leap day 2000)", log_format(LOG_INFO, "2000 was a leap year", 951782400));
+    show("format(ERROR, epoch)", log_format(LOG_ERROR, "gone", 0));
+    // The level is padded to five so the messages line up; an unnamed level overflows the column
+    // rather than being rounded to a neighbour that would be a small lie.
+    show("format(15, epoch)", log_format(15, "between two levels", 0));
+    show("format(OFF, epoch)", log_format(LOG_OFF, "nobody calls this", 0));
+    // An empty message still gets a timestamp and a level — the trailing space is real and this is
+    // why the answers are bracketed.
+    show("format(INFO, empty message)", log_format(LOG_INFO, "", 0));
+
+    // ---- one record per line: newlines are escaped rather than allowed to break the format ----
+    // A second line with no timestamp and no level is a line every log reader attributes to the
+    // wrong record. The escaping is visible in the output instead of silent.
+    show("one_line(plain)", log_one_line("nothing to escape"));
+    show("one_line(a\\nb)", log_one_line("a\nb"));
+    show("one_line(a\\r\\nb)", log_one_line("a\r\nb"));
+    show("one_line(trailing newline)", log_one_line("done\n"));
+    show("one_line(empty)", log_one_line(""));
+    show("one_line(only newlines)", log_one_line("\n\n"));
+    // Not a reversible encoding, and `lib/log.bx` says so: a literal backslash-n renders the same
+    // as a newline. Pinned here so the ambiguity is a decision rather than a discovery.
+    show("one_line(literal backslash-n)", log_one_line("a\\nb"));
+    show("format(WARN, two lines)", log_format(LOG_WARN, "first\nsecond", 0));
+    // Longer than the 128-byte flush point, so the chunk list actually merges more than once.
+    let mutable long: String = "";
+    for i in 0..40 {
+        long = long + "line" + to_string(i) + "\n";
+    }
+    show_bool("one_line(long) has no newline", !log_has_break(log_one_line(long)));
+    print("one_line(long) length = " + to_string(len(log_one_line(long))));
+
+    // ---- reading a level name: case-insensitive, space-trimmed, and total ----
+    show("level(WARN)", log_level_name(log_level_from_name("WARN")));
+    show("level(warn)", log_level_name(log_level_from_name("warn")));
+    show("level(  warn  )", log_level_name(log_level_from_name("  warn  ")));
+    show("level(WaRn)", log_level_name(log_level_from_name("WaRn")));
+    show("level(warning)", log_level_name(log_level_from_name("warning")));
+    show("level(debug)", log_level_name(log_level_from_name("debug")));
+    show("level(DEBUG)", log_level_name(log_level_from_name("DEBUG")));
+    show("level(info)", log_level_name(log_level_from_name("info")));
+    show("level(error)", log_level_name(log_level_from_name("error")));
+    show("level(off)", log_level_name(log_level_from_name("off")));
+    show("level(none)", log_level_name(log_level_from_name("none")));
+    show("level(silent)", log_level_name(log_level_from_name("silent")));
+    // Set to nothing is not a level: it means the same as unset, which is the convention every
+    // other tool uses for "leave it alone".
+    show("level(empty)", log_level_name(log_level_from_name("")));
+    show("level(   )", log_level_name(log_level_from_name("   ")));
+    // A typo shows too much, never too little. Too much is visible the instant you look; too little
+    // is an hour that ends in someone finding they typed DEBUGG.
+    show("level(banana)", log_level_name(log_level_from_name("banana")));
+    show("level(DEBUGG)", log_level_name(log_level_from_name("DEBUGG")));
+    show("level(err)", log_level_name(log_level_from_name("err")));
+    show("level(0)", log_level_name(log_level_from_name("0")));
+    show("level(offf)", log_level_name(log_level_from_name("offf")));
+    // The default with nothing set at all, stated without reading the environment — so this line
+    // says the same thing on a machine where a developer has BURXT_LOG exported.
+    show("default", log_level_name(LOG_DEFAULT));
+
+    // ---- which levels pass which threshold ----
+    show_bool("debug passes debug", log_level_passes(LOG_DEBUG, LOG_DEBUG));
+    show_bool("debug passes warn", log_level_passes(LOG_DEBUG, LOG_WARN));
+    show_bool("info passes warn", log_level_passes(LOG_INFO, LOG_WARN));
+    show_bool("warn passes warn", log_level_passes(LOG_WARN, LOG_WARN));
+    show_bool("error passes warn", log_level_passes(LOG_ERROR, LOG_WARN));
+    show_bool("error passes off", log_level_passes(LOG_ERROR, LOG_OFF));
+    show_bool("debug passes off", log_level_passes(LOG_DEBUG, LOG_OFF));
+    show_bool("error passes error", log_level_passes(LOG_ERROR, LOG_ERROR));
+    show_bool("warn passes error", log_level_passes(LOG_WARN, LOG_ERROR));
+
+    // ---- logging for real: every one of these goes to stderr, so NONE of it is below ----
+    // If any of the four ever reached stdout, this fixture's `.stdout` would gain four lines with
+    // timestamps in them — which would also make it fail on the next second, loudly.
+    log_debug("this must not be on stdout");
+    log_info("nor this");
+    log_warn("nor this");
+    log_error("nor this either");
+    print("stdout is still ours");
+
+    // ---- the environment, end to end, by re-running this program ----
+    let exe: String = os_arg(0);
+    // Everything, and stdout stays empty. The exact padded forms are checked, so the column
+    // alignment is part of the assertion.
+    show_bool("BURXT_LOG=debug logs all four to stderr, none to stdout",
+        child_says(exe, "BURXT_LOG=debug",
+            "grep -q 'DEBUG debug-line' \"$F\" && grep -q 'INFO  info-line' \"$F\" "
+            + "&& grep -q 'WARN  warn-line' \"$F\" && grep -q 'ERROR error-line' \"$F\" "
+            + "&& [ ! -s \"$G\" ]"));
+    // Unset: the default. Warnings and errors, and nothing else — the whole argument for WARN
+    // being the default rather than silent or info.
+    show_bool("unset logs warn and error only",
+        child_says(exe, "unset BURXT_LOG;",
+            "grep -q 'WARN  warn-line' \"$F\" && grep -q 'ERROR error-line' \"$F\" "
+            + "&& ! grep -q 'debug-line' \"$F\" && ! grep -q 'info-line' \"$F\""));
+    // A library that cannot be quiet is not one you can put in a pipeline.
+    show_bool("BURXT_LOG=off logs nothing at all",
+        child_says(exe, "BURXT_LOG=off", "[ ! -s \"$F\" ] && [ ! -s \"$G\" ]"));
+    // The case this whole rule exists for.
+    show_bool("BURXT_LOG=banana does not silence the log",
+        child_says(exe, "BURXT_LOG=banana",
+            "grep -q 'DEBUG debug-line' \"$F\" && grep -q 'ERROR error-line' \"$F\""));
+    // Case-insensitive through a real environment, not just through the parser.
+    show_bool("BURXT_LOG=WARN is BURXT_LOG=warn",
+        child_says(exe, "BURXT_LOG=WARN",
+            "grep -q 'WARN  warn-line' \"$F\" && ! grep -q 'info-line' \"$F\""));
+    show_bool("BURXT_LOG= (empty) is the default",
+        child_says(exe, "BURXT_LOG=",
+            "grep -q 'WARN  warn-line' \"$F\" && ! grep -q 'info-line' \"$F\""));
+    show_bool("BURXT_LOG=error drops warnings",
+        child_says(exe, "BURXT_LOG=error",
+            "grep -q 'ERROR error-line' \"$F\" && ! grep -q 'warn-line' \"$F\""));
+
+    // ---- the complaint, for a program that wants to tell its operator about a typo ----
+    // Through a child, because `log_env_problem` reads the environment and THIS process has
+    // whatever the developer running the suite happens to export.
+    show_bool("banana produces a complaint naming the value",
+        child_says(exe, "BURXT_LOG=banana",
+            "grep -q 'BURXT_LOG=banana is not a level I know' \"$F\""));
+    show_bool("a good value produces no complaint",
+        child_says(exe, "BURXT_LOG=info", "! grep -q 'is not a level I know' \"$F\""));
+    show_bool("unset produces no complaint",
+        child_says(exe, "unset BURXT_LOG;", "! grep -q 'is not a level I know' \"$F\""));
+    show_bool("empty produces no complaint",
+        child_says(exe, "BURXT_LOG=", "! grep -q 'is not a level I know' \"$F\""));
+    print("done");
+}

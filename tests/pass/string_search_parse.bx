@@ -1,0 +1,289 @@
+// §D1b, §D1c and §D1d — search, split, classify, parse and format.
+//
+// Two things here are worth more than the rest of the file put together.
+//
+// **The overflow cases.** `string_parse_int("99999999999999999999")` used to END THE PROCESS —
+// `burxt runtime error: arithmetic overflow`, exit code 70 — because the accumulator multiplied
+// before checking and Burxt's `*` traps. An `Option`-returning parser that aborts instead of
+// answering None is worse than one that answers a silent 0, which is what this function was fixed
+// for in v0.0.152: the caller cannot even see it happen. Every boundary around `INT_MIN` and
+// `INT_MAX` is pinned below, in both directions, because the fix is arithmetic and arithmetic
+// fixes are exactly the kind that are right for nineteen digits and wrong for twenty.
+//
+// **The round trip.** `parse(format(v)) == v` is checked over `INT_MIN`, `INT_MAX`, 0, -1 and 1 in
+// four bases. That single property catches more than the individual cases do, because it holds only
+// if the negative-side digit extraction and the negative-side accumulator agree — and `INT_MIN` is
+// the one value where a version that takes an absolute value anywhere traps instead of answering.
+//
+// Lists are rendered with `string_join` so the `.stdout` shows the pieces and their COUNT: `"a|b"`
+// and `"a|b|"` are different answers and a fixture that printed only a length would call them the
+// same.
+use "../../lib/string.bx";
+
+// A list backwards. Local to this fixture on purpose: it exists to show what `string_rsplit` is
+// NOT, so borrowing a library function to define the comparison would beg the question.
+function reversed_pieces(pieces: [String]) -> [String] {
+    let mutable out: [String] = [];
+    let mutable i: Int = len(pieces);
+    while i > 0 {
+        i -= 1;
+        push(out, pieces[i]);
+    }
+    return out;
+}
+
+region r {
+    // ---- find_from: the reason it exists is that the alternative is quadratic ----
+    print(string_find_from("abcabc", "b", 0));
+    print(string_find_from("abcabc", "b", 2));
+    print(string_find_from("abcabc", "b", 5));
+    print(string_find_from("abcabc", "b", 0 - 5));
+    print(string_find_from("abc", "abc", 0));
+    print(string_find_from("abc", "abc", 1));
+    // An empty needle is at the position you started from, clamped into the text.
+    print(string_find_from("abc", "", 1));
+    print(string_find_from("abc", "", 99));
+    print(string_find_from("", "a", 0));
+
+    // ---- rfind: the LAST occurrence, and the empty needle is at the END ----
+    print(string_rfind("abcabc", "b"));
+    print(string_rfind("abc", "z"));
+    print(string_rfind("abc", ""));
+    print(string_rfind("", ""));
+    print(string_rfind("aaa", "aa"));
+    print(string_rfind("abc", "abc"));
+    print(string_rfind("ab", "abc"));
+    // The three search functions agree with each other on an empty needle: 0, from, len.
+    print(string_find("abc", "") == 0);
+    print(string_rfind("abc", "") == len("abc"));
+
+    // ---- count: NON-overlapping, so it agrees with what replace will do ----
+    print(string_count("aaaa", "aa"));
+    print(string_count("banana", "ana"));
+    print(string_count("abc", "abc"));
+    print(string_count("abc", "z"));
+    print(string_count("", "a"));
+    // Zero for an empty needle, agreeing with replace and split rather than with Python.
+    print(string_count("abc", ""));
+    // count and replace have to agree: two matches replaced, two matches counted.
+    print(string_count("aaaa", "aa") == 2);
+    print(string_replace("aaaa", "aa", "-"));
+
+    // ---- split_space: runs, and no empty pieces at the ends ----
+    print("[" + string_join(string_split_space("  a  b "), "|") + "]");
+    print("[" + string_join(string_split_space(""), "|") + "]");
+    print("[" + string_join(string_split_space("   "), "|") + "]");
+    print("[" + string_join(string_split_space("a"), "|") + "]");
+    print("[" + string_join(string_split_space("a\tb\nc\rd"), "|") + "]");
+    print(len(string_split_space("  a  b ")));
+    print(len(string_split_space("")));
+    // The difference from splitting on a single space, which is the reason this exists.
+    print(len(string_split("  a  b ", " ")));
+
+    // ---- split_once: an Option, because there is no honest pair when the separator is absent ----
+    match string_split_once("key=value", "=") {
+        None => { print("none"); }
+        Some(p) => { print("[" + p.0 + "][" + p.1 + "]"); }
+    }
+    match string_split_once("a=b=c", "=") {
+        None => { print("none"); }
+        Some(p) => { print("[" + p.0 + "][" + p.1 + "]"); }
+    }
+    match string_split_once("key=", "=") {
+        None => { print("none"); }
+        Some(p) => { print("[" + p.0 + "][" + p.1 + "]"); }
+    }
+    match string_split_once("=value", "=") {
+        None => { print("none"); }
+        Some(p) => { print("[" + p.0 + "][" + p.1 + "]"); }
+    }
+    match string_split_once("novalue", "=") {
+        None => { print("none"); }
+        Some(p) => { print("[" + p.0 + "][" + p.1 + "]"); }
+    }
+    match string_split_once("abc", "") {
+        None => { print("none"); }
+        Some(p) => { print("[" + p.0 + "][" + p.1 + "]"); }
+    }
+    match string_split_once("", "=") {
+        None => { print("none"); }
+        Some(p) => { print("[" + p.0 + "][" + p.1 + "]"); }
+    }
+
+    // ---- rsplit: scanned from the right, pieces last-first ----
+    print("[" + string_join(string_rsplit("a.b.c", "."), "|") + "]");
+    print("[" + string_join(string_rsplit("abc", "z"), "|") + "]");
+    print("[" + string_join(string_rsplit("", "."), "|") + "]");
+    print("[" + string_join(string_rsplit("a.b.", "."), "|") + "]");
+    print("[" + string_join(string_rsplit(".a.b", "."), "|") + "]");
+    // The last field of a dotted name, which is what this is for.
+    print(string_rsplit("archive.tar.gz", ".")[0]);
+    // A SELF-OVERLAPPING separator, where scanning from the right picks different occurrences than
+    // scanning from the left. All three lists are printed — split, split REVERSED, and rsplit — so
+    // that "rsplit is not split backwards" is on the record as an observation rather than a claim.
+    print("[" + string_join(string_split("aaa", "aa"), "|") + "]");
+    print("[" + string_join(reversed_pieces(string_split("aaa", "aa")), "|") + "]");
+    print("[" + string_join(string_rsplit("aaa", "aa"), "|") + "]");
+    print(string_join(reversed_pieces(string_split("aaa", "aa")), "|")
+          == string_join(string_rsplit("aaa", "aa"), "|"));
+    print("[" + string_join(string_split("aaaaa", "aa"), "|") + "]");
+    print("[" + string_join(string_rsplit("aaaaa", "aa"), "|") + "]");
+    // And on a separator that cannot overlap, where the two ARE each other reversed.
+    print("[" + string_join(reversed_pieces(string_split("a.b.c", ".")), "|") + "]");
+    print("[" + string_join(string_rsplit("a.b.c", "."), "|") + "]");
+
+    // ---- split_no_empty ----
+    print("[" + string_join(string_split_no_empty("a,,b,", ","), "|") + "]");
+    print("[" + string_join(string_split_no_empty(",,,", ","), "|") + "]");
+    print("[" + string_join(string_split_no_empty("a", ","), "|") + "]");
+    print("[" + string_join(string_split_no_empty("", ","), "|") + "]");
+    // Against plain split on the same input: four fields against two.
+    print(len(string_split("a,,b,", ",")));
+    print(len(string_split_no_empty("a,,b,", ",")));
+
+    // ---- classify: byte predicates take a BYTE, all_* take the String ----
+    print(string_is_digit(byte_at("5", 0)));
+    print(string_is_digit(byte_at("a", 0)));
+    print(string_is_alpha(byte_at("Z", 0)));
+    print(string_is_alpha(byte_at("0", 0)));
+    print(string_is_alnum(byte_at("9", 0)));
+    print(string_is_alnum(byte_at("_", 0)));
+    print(string_is_upper(byte_at("A", 0)));
+    print(string_is_upper(byte_at("a", 0)));
+    print(string_is_lower(byte_at("a", 0)));
+    print(string_is_hex_digit(byte_at("f", 0)));
+    print(string_is_hex_digit(byte_at("F", 0)));
+    print(string_is_hex_digit(byte_at("g", 0)));
+    // No byte of a multi-byte character is a letter to these, which is the ASCII limit as a test.
+    print(string_is_alpha(byte_at("é", 0)));
+    print(string_is_alnum(byte_at("é", 1)));
+
+    print(string_is_blank(""));
+    print(string_is_blank("  \t\n\r "));
+    print(string_is_blank(" a "));
+    print(string_is_blank("\t\tx"));
+    print(all_alnum("abc123"));
+    print(all_alnum(""));
+    print(all_alnum("a b"));
+    print(all_alnum("café"));
+    print(all_hex_digits("dEaDbEeF"));
+    print(all_hex_digits("0123456789abcdefABCDEF"));
+    print(all_hex_digits(""));
+    print(all_hex_digits("xyz"));
+    print(all_hex_digits("0x1f"));
+
+    print(string_digit_value(byte_at("0", 0)));
+    print(string_digit_value(byte_at("9", 0)));
+    print(string_digit_value(byte_at("a", 0)));
+    print(string_digit_value(byte_at("A", 0)));
+    print(string_digit_value(byte_at("z", 0)));
+    print(string_digit_value(byte_at("Z", 0)));
+    print(string_digit_value(byte_at("!", 0)));
+
+    // ---- parse_int_base ----
+    print(string_to_int("ff", 0 - 1) == 0 - 1);
+    match string_parse_int_base("ff", 16) { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_int_base("FF", 16) { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_int_base("z", 36) { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_int_base("101", 2) { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_int_base("-101", 2) { None => { print("none"); } Some(n) => { print(n); } }
+    // A digit that exists but not IN THIS BASE.
+    match string_parse_int_base("102", 2) { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_int_base("g", 16) { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_int_base("", 10) { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_int_base("-", 10) { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_int_base("+", 10) { None => { print("none"); } Some(n) => { print(n); } }
+    // A leading `+` is accepted, which C, Rust and Python all do and this used not to.
+    match string_parse_int_base("+5", 10) { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_int_base("-5", 10) { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_int_base("007", 10) { None => { print("none"); } Some(n) => { print(n); } }
+    // No whitespace tolerance, deliberately.
+    match string_parse_int_base(" 5", 10) { None => { print("none"); } Some(n) => { print(n); } }
+
+    // ---- THE OVERFLOW CASES, which used to kill the process ----
+    match string_parse_int("99999999999999999999") { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_int("9223372036854775807") { None => { print("none"); } Some(n) => { print(n); } }
+    // One past INT_MAX: refused, not wrapped and not fatal.
+    match string_parse_int("9223372036854775808") { None => { print("none"); } Some(n) => { print(n); } }
+    // INT_MIN itself, which a positive accumulator physically cannot hold.
+    match string_parse_int("-9223372036854775808") { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_int("-9223372036854775809") { None => { print("none"); } Some(n) => { print(n); } }
+    // The same boundary in base 16 and base 2, where the guard arithmetic differs.
+    match string_parse_int_base("7fffffffffffffff", 16) { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_int_base("8000000000000000", 16) { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_int_base("-8000000000000000", 16) { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_int_base("-8000000000000001", 16) { None => { print("none"); } Some(n) => { print(n); } }
+    // Absurdly long input: still an answer, still alive.
+    match string_parse_int(string_repeat("9", 400)) { None => { print("none"); } Some(n) => { print(n); } }
+
+    // ---- parse_hex, whose ONLY difference from parse_int_base(s, 16) is the prefix ----
+    match string_parse_hex("0xff") { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_hex("0XFF") { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_hex("ff") { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_hex("-0x10") { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_hex("0x") { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_hex("0x-10") { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_hex("") { None => { print("none"); } Some(n) => { print(n); } }
+    match string_parse_hex("0") { None => { print("none"); } Some(n) => { print(n); } }
+
+    // ---- formatting ----
+    print(string_int_to_base(255, 16));
+    print(string_int_to_base(0, 16));
+    print(string_int_to_base(0 - 255, 16));
+    print(string_int_to_base(35, 36));
+    print(string_int_to_base(5, 2));
+    print(string_int_to_hex(255));
+    print(string_int_to_binary(5));
+    print(string_int_to_binary(0));
+    // INT_MIN, the one value a version that negates first traps on.
+    print(string_int_to_base(0 - 9223372036854775807 - 1, 10));
+    print(string_int_to_base(0 - 9223372036854775807 - 1, 16));
+    print(string_int_to_base(9223372036854775807, 10));
+    print(len(string_int_to_binary(0 - 9223372036854775807 - 1)));
+
+    print(string_int_padded(7, 3));
+    print(string_int_padded(0 - 7, 4));
+    print(string_int_padded(12345, 3));
+    print(string_int_padded(0, 2));
+    print(string_int_padded(0 - 1, 1));
+    print(string_int_padded(0 - 1, 2));
+    print(string_int_padded(0, 0));
+
+    // ---- the round trip, which is worth more than every case above ----
+    // parse(format(v)) == v, for the values that break a careless implementation, in four bases.
+    let mutable values: [Int] = [];
+    push(values, 0);
+    push(values, 1);
+    push(values, 0 - 1);
+    push(values, 9223372036854775807);
+    push(values, 0 - 9223372036854775807 - 1);
+    push(values, 255);
+    push(values, 0 - 255);
+    let mutable bases: [Int] = [];
+    push(bases, 2);
+    push(bases, 8);
+    push(bases, 10);
+    push(bases, 36);
+    let mutable trips: Int = 0;
+    let mutable v: Int = 0;
+    while v < len(values) {
+        let mutable b: Int = 0;
+        while b < len(bases) {
+            let written: String = string_int_to_base(values[v], bases[b]);
+            match string_parse_int_base(written, bases[b]) {
+                None => { print("ROUND TRIP LOST: " + written); }
+                Some(back) => {
+                    if back == values[v] {
+                        trips += 1;
+                    } else {
+                        print("ROUND TRIP WRONG: " + written);
+                    }
+                }
+            }
+            b += 1;
+        }
+        v += 1;
+    }
+    print(trips);
+    print(trips == len(values) * len(bases));
+}

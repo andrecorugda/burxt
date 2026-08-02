@@ -1,0 +1,153 @@
+// §D1a — case, replace, pad, trim, strip, and the two builders D0 rewrote.
+//
+// **Every check here is an EDGE**, because the happy path is not where these break. The shapes this
+// fixture exists to catch, each of which was a real defect in some version of some standard library:
+//
+//   * the empty String, and a one-character String, in every function that indexes
+//   * a needle that is the WHOLE text, and one that is not there at all
+//   * multi-byte UTF-8, which is why `capitalise` and `title_case` are checked on `"élan"` —
+//     a byte-wise word-boundary rule capitalises the byte AFTER an accented letter
+//   * **a `replace` whose replacement contains the pattern**, which is the case that hangs or
+//     explodes rather than answering wrong
+//   * `pad` on text whose byte length and character count differ, which is the case that makes a
+//     column visibly crooked
+//
+// Values are printed rather than a pass/fail tally, so the `.stdout` pins the actual answer and a
+// regression shows up in the diff as the wrong text rather than as a number going down.
+use "../../lib/string.bx";
+
+region r {
+    // ---- D0: the pairwise join itself, including the ODD count that exercises the carry ----
+    print(string_join_chunks([]) == "");
+    print(string_join_chunks(["a"]));
+    print(string_join_chunks(["a", "b"]));
+    print(string_join_chunks(["a", "b", "c"]));
+    print(string_join_chunks(["a", "b", "c", "d", "e"]));
+
+    // ---- string_join and string_repeat, both rewritten by D0 ----
+    print(string_join(["a", "b", "c"], "-"));
+    print(string_join([], "-") == "");
+    print(string_join(["x"], "-"));
+    print(string_join(["", ""], ","));
+    print(string_repeat("ab", 3));
+    print(string_repeat("ab", 1));
+    print(string_repeat("ab", 0) == "");
+    // A negative count is zero copies, not a refusal — see the note on the function.
+    print(string_repeat("ab", 0 - 4) == "");
+    print(string_repeat("", 5) == "");
+    // The doubling has to be right for odd counts too, which is where a binary decomposition slips.
+    print(len(string_repeat("xyz", 1000)));
+    print(len(string_repeat("x", 1023)));
+
+    // ---- capitalise: the tail is LOWERED, and that is the recorded decision ----
+    print(string_capitalise("") == "");
+    print(string_capitalise("a"));
+    print(string_capitalise("A"));
+    print(string_capitalise("jOHN"));
+    print(string_capitalise("123abc"));
+    print(string_capitalise("-x"));
+    // Multi-byte first character: unchanged, and the two invalid halves it is briefly split into
+    // concatenate back to exactly what they were.
+    print(string_capitalise("élan"));
+    print(string_capitalise("Élan"));
+    print(string_capitalise("中文Text"));
+
+    // ---- title_case: the word-boundary rule is the whole function ----
+    print(string_title_case("") == "");
+    print(string_title_case("jOHN sMITH"));
+    print(string_title_case("o'brien"));
+    print(string_title_case("3rd place"));
+    print(string_title_case("hello-world"));
+    print(string_title_case("  spaced  out  "));
+    // A byte >= 128 is word-ish. Without that clause this answers "éLan Vital".
+    print(string_title_case("élan vital"));
+    print(string_title_case("中文 text"));
+
+    // ---- the comparisons, none of which allocate ----
+    print(string_equals_ignore_case("HELLO", "hello"));
+    print(string_equals_ignore_case("", ""));
+    print(string_equals_ignore_case("a", "ab"));
+    print(string_equals_ignore_case("Straße", "STRASSE"));
+    // Non-ASCII compares BYTE-EXACTLY, so the two É agree and the ASCII tail folds: true.
+    print(string_equals_ignore_case("École", "ÉCOLE"));
+    // **The `_ascii` limit, stated as a test rather than only in prose.** These two are the same
+    // word and this answers false, because `é` and `É` are different bytes and nothing here maps
+    // them. A caller who tests only with ASCII never sees it — which is the whole reason the limit
+    // is in the function's NAME.
+    print(string_equals_ignore_case("école", "ÉCOLE"));
+    print(string_compare_ignore_case("école", "ÉCOLE") == 0);
+    print(string_compare("abc", "abd"));
+    print(string_compare("abc", "abc"));
+    print(string_compare("ab", "abc"));
+    print(string_compare("b", "abc"));
+    print(string_compare("", ""));
+    print(string_compare("", "a"));
+    print(string_compare_ignore_case("ABC", "abc"));
+    print(string_compare_ignore_case("ABC", "abd"));
+    print(string_find_ignore_case("Hello World", "WORLD"));
+    print(string_find_ignore_case("Hello", "hello"));
+    print(string_find_ignore_case("abc", "z"));
+    print(string_find_ignore_case("abc", ""));
+    print(string_find_ignore_case("", "a"));
+
+    // ---- replace: the pattern-in-replacement cases first, because they are the dangerous ones ----
+    print(string_replace("aaa", "a", "aa"));
+    print(string_replace("x", "x", "xx"));
+    print(string_replace("ab", "a", "aba"));
+    // Non-overlapping, left to right.
+    print(string_replace("banana", "ana", "X"));
+    print(string_replace("aaaa", "aa", "-"));
+    // The ordinary edges.
+    print(string_replace("", "a", "b") == "");
+    print(string_replace("abc", "abc", "Z"));
+    print(string_replace("abc", "z", "Z"));
+    print(string_replace("aaa", "a", "") == "");
+    print(string_replace("hello", "", "Z"));
+    print(string_replace("a,b,c", ",", " -> "));
+    // A multi-byte needle and a multi-byte replacement.
+    print(string_replace("aéa", "é", "E"));
+    print(string_replace("cafe", "e", "é"));
+    print(string_replace_first("aaa", "a", "X"));
+    print(string_replace_first("abc", "z", "Z"));
+    print(string_replace_first("abc", "abc", "Z"));
+    print(string_replace_first("abc", "", "Z"));
+    print(string_replace_first("", "a", "b") == "");
+
+    // ---- pad: the width is in CODEPOINTS, which is the point ----
+    print(string_pad_start("7", 3, "0"));
+    print(string_pad_end("7", 3, "0"));
+    print(string_pad_start("", 3, "-"));
+    print(string_pad_end("", 3, "-"));
+    print(string_pad_start("hello", 3, " "));
+    print(string_pad_start("hello", 5, " "));
+    // "café" is 5 bytes and 4 characters. A byte-width version pads one short and the column bends.
+    print(len("café"));
+    print(char_count("café"));
+    print(string_pad_start("café", 6, "."));
+    print(string_pad_end("café", 6, "."));
+    // A multi-byte FILL, which must count as one column too.
+    print(string_pad_start("x", 4, "→"));
+
+    // ---- trim, at both ends and separately ----
+    print("[" + string_trim_start("  a  ") + "]");
+    print("[" + string_trim_end("  a  ") + "]");
+    print(string_trim_start("") == "");
+    print(string_trim_end("") == "");
+    print(string_trim_start("   ") == "");
+    print(string_trim_end("   ") == "");
+    print("[" + string_trim_start("a") + "]");
+    print("[" + string_trim_start("\t\n\r x") + "]");
+    print("[" + string_trim_end("x \r\n\t") + "]");
+
+    // ---- strip: absent means unchanged, not empty ----
+    print(string_strip_prefix("foobar", "foo"));
+    print(string_strip_prefix("foobar", "bar"));
+    print(string_strip_prefix("abc", "abc") == "");
+    print(string_strip_prefix("abc", ""));
+    print(string_strip_prefix("ab", "abc"));
+    print(string_strip_suffix("foobar", "bar"));
+    print(string_strip_suffix("foobar", "foo"));
+    print(string_strip_suffix("abc", "abc") == "");
+    print(string_strip_suffix("abc", ""));
+    print(string_strip_suffix("ab", "abc"));
+}

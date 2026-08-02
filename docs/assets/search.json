@@ -337,45 +337,52 @@
  },
  {
   "kind": "function",
+  "name": "string_join_chunks",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-join-chunks",
+  "where": "pure function string_join_chunks(chunks: [String]) -> String"
+ },
+ {
+  "kind": "function",
   "name": "string_find",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-find",
-  "where": "function string_find(text: String, needle: String) -> Int"
+  "where": "pure function string_find(text: String, needle: String) -> Int"
  },
  {
   "kind": "function",
   "name": "string_contains",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-contains",
-  "where": "function string_contains(text: String, needle: String) -> Bool"
+  "where": "pure function string_contains(text: String, needle: String) -> Bool"
  },
  {
   "kind": "function",
   "name": "string_starts_with",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-starts-with",
-  "where": "function string_starts_with(text: String, prefix: String) -> Bool"
+  "where": "pure function string_starts_with(text: String, prefix: String) -> Bool"
  },
  {
   "kind": "function",
   "name": "string_ends_with",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-ends-with",
-  "where": "function string_ends_with(text: String, suffix: String) -> Bool"
+  "where": "pure function string_ends_with(text: String, suffix: String) -> Bool"
  },
  {
   "kind": "function",
   "name": "string_trim",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-trim",
-  "where": "function string_trim(text: String) -> String"
+  "where": "pure function string_trim(text: String) -> String"
  },
  {
   "kind": "function",
   "name": "string_is_space",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-is-space",
-  "where": "function string_is_space(byte: Int) -> Bool"
+  "where": "pure function string_is_space(byte: Int) -> Bool"
  },
  {
   "kind": "function",
@@ -389,7 +396,7 @@
   "name": "string_matches_at",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-matches-at",
-  "where": "function string_matches_at(text: String, needle: String, at: Int) -> Bool"
+  "where": "pure function string_matches_at(text: String, needle: String, at: Int) -> Bool"
  },
  {
   "kind": "function",
@@ -410,7 +417,7 @@
   "name": "string_parse_int",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-parse-int",
-  "where": "function string_parse_int(text: String) -> Option<Int>"
+  "where": "pure function string_parse_int(text: String) -> Option<Int>"
  },
  {
   "kind": "function",
@@ -424,7 +431,7 @@
   "name": "string_repeat",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-repeat",
-  "where": "function string_repeat(text: String, times: Int) -> String"
+  "where": "pure function string_repeat(text: String, times: Int) -> String"
  },
  {
   "kind": "function",
@@ -487,21 +494,21 @@
   "name": "string_reverse",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-reverse",
-  "where": "pure function string_reverse(text: String) -> String allocates"
+  "where": "pure function string_reverse(text: String) -> String"
  },
  {
   "kind": "function",
   "name": "string_to_upper_ascii",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-to-upper-ascii",
-  "where": "pure function string_to_upper_ascii(text: String) -> String allocates"
+  "where": "pure function string_to_upper_ascii(text: String) -> String"
  },
  {
   "kind": "function",
   "name": "string_to_lower_ascii",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-to-lower-ascii",
-  "where": "pure function string_to_lower_ascii(text: String) -> String allocates"
+  "where": "pure function string_to_lower_ascii(text: String) -> String"
  },
  {
   "kind": "function",
@@ -543,7 +550,273 @@
   "name": "from_bytes",
   "text": "lib/string.bx",
   "url": "/reference/string.html#from-bytes",
-  "where": "pure function from_bytes(xs: [Int]) -> String allocates"
+  "where": "pure function from_bytes(xs: [Int]) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "string_fold_ascii",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-fold-ascii",
+  "where": "pure function string_fold_ascii(byte: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "string_equals_ignore_case",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-equals-ignore-case",
+  "where": "pure function string_equals_ignore_case(a: String, b: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "string_compare",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-compare",
+  "where": "pure function string_compare(a: String, b: String) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "string_compare_ignore_case",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-compare-ignore-case",
+  "where": "pure function string_compare_ignore_case(a: String, b: String) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "string_find_ignore_case",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-find-ignore-case",
+  "where": "pure function string_find_ignore_case(text: String, needle: String) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "string_capitalise",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-capitalise",
+  "where": "pure function string_capitalise(text: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "string_title_case",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-title-case",
+  "where": "pure function string_title_case(text: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "string_replace",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-replace",
+  "where": "pure function string_replace(text: String, from: String, to: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "string_replace_first",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-replace-first",
+  "where": "pure function string_replace_first(text: String, from: String, to: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "string_pad_start",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-pad-start",
+  "where": "pure function string_pad_start(text: String, width: Int, fill: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "string_pad_end",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-pad-end",
+  "where": "pure function string_pad_end(text: String, width: Int, fill: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "string_trim_start",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-trim-start",
+  "where": "pure function string_trim_start(text: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "string_trim_end",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-trim-end",
+  "where": "pure function string_trim_end(text: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "string_strip_prefix",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-strip-prefix",
+  "where": "pure function string_strip_prefix(text: String, prefix: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "string_strip_suffix",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-strip-suffix",
+  "where": "pure function string_strip_suffix(text: String, suffix: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "string_find_from",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-find-from",
+  "where": "pure function string_find_from(text: String, needle: String, from: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "string_rfind",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-rfind",
+  "where": "pure function string_rfind(text: String, needle: String) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "string_count",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-count",
+  "where": "pure function string_count(text: String, needle: String) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "string_split_space",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-split-space",
+  "where": "function string_split_space(text: String) -> [String]"
+ },
+ {
+  "kind": "function",
+  "name": "string_split_once",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-split-once",
+  "where": "function string_split_once(text: String, separator: String) -> Option<(String, String)>"
+ },
+ {
+  "kind": "function",
+  "name": "string_rsplit",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-rsplit",
+  "where": "function string_rsplit(text: String, separator: String) -> [String]"
+ },
+ {
+  "kind": "function",
+  "name": "string_split_no_empty",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-split-no-empty",
+  "where": "function string_split_no_empty(text: String, separator: String) -> [String]"
+ },
+ {
+  "kind": "function",
+  "name": "string_is_digit",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-is-digit",
+  "where": "pure function string_is_digit(byte: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "string_is_alpha",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-is-alpha",
+  "where": "pure function string_is_alpha(byte: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "string_is_alnum",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-is-alnum",
+  "where": "pure function string_is_alnum(byte: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "string_is_upper",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-is-upper",
+  "where": "pure function string_is_upper(byte: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "string_is_lower",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-is-lower",
+  "where": "pure function string_is_lower(byte: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "string_is_hex_digit",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-is-hex-digit",
+  "where": "pure function string_is_hex_digit(byte: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "string_digit_value",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-digit-value",
+  "where": "pure function string_digit_value(byte: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "string_is_blank",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-is-blank",
+  "where": "pure function string_is_blank(text: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "all_alnum",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#all-alnum",
+  "where": "pure function all_alnum(text: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "all_hex_digits",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#all-hex-digits",
+  "where": "pure function all_hex_digits(text: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "string_parse_int_base",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-parse-int-base",
+  "where": "pure function string_parse_int_base(text: String, base: Int) -> Option<Int>"
+ },
+ {
+  "kind": "function",
+  "name": "string_parse_hex",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-parse-hex",
+  "where": "pure function string_parse_hex(text: String) -> Option<Int>"
+ },
+ {
+  "kind": "function",
+  "name": "string_int_to_base",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-int-to-base",
+  "where": "pure function string_int_to_base(value: Int, base: Int) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "string_int_to_hex",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-int-to-hex",
+  "where": "pure function string_int_to_hex(value: Int) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "string_int_to_binary",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-int-to-binary",
+  "where": "pure function string_int_to_binary(value: Int) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "string_int_padded",
+  "text": "lib/string.bx",
+  "url": "/reference/string.html#string-int-padded",
+  "where": "pure function string_int_padded(value: Int, width: Int) -> String"
  },
  {
   "kind": "class",
@@ -624,6 +897,13 @@
  },
  {
   "kind": "method",
+  "name": "is_empty",
+  "text": "lib/map.bx",
+  "url": "/reference/map.html#is-empty",
+  "where": "function (self: Map<K, V>) is_empty() -> Bool"
+ },
+ {
+  "kind": "method",
   "name": "keys",
   "text": "lib/map.bx",
   "url": "/reference/map.html#keys",
@@ -631,10 +911,38 @@
  },
  {
   "kind": "method",
+  "name": "values",
+  "text": "lib/map.bx",
+  "url": "/reference/map.html#values",
+  "where": "function (self: Map<K, V>) values() -> [V]"
+ },
+ {
+  "kind": "method",
+  "name": "entries",
+  "text": "lib/map.bx",
+  "url": "/reference/map.html#entries",
+  "where": "function (self: Map<K, V>) entries() -> [(K, V)]"
+ },
+ {
+  "kind": "method",
+  "name": "merge",
+  "text": "lib/map.bx",
+  "url": "/reference/map.html#merge",
+  "where": "function (mutable self: Map<K, V>) merge(from: Map<K, V>) -> Int"
+ },
+ {
+  "kind": "method",
   "name": "remove",
   "text": "lib/map.bx",
   "url": "/reference/map.html#remove",
   "where": "function (mutable self: Map<K, V>) remove(key: K) -> Bool"
+ },
+ {
+  "kind": "method",
+  "name": "clear",
+  "text": "lib/map.bx",
+  "url": "/reference/map.html#clear",
+  "where": "function (mutable self: Map<K, V>) clear() -> Int"
  },
  {
   "kind": "enum",

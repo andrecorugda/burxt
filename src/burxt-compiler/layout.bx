@@ -447,15 +447,38 @@ function (self: Unit) layout_type_name(src: String, given: Type) -> String {
 //
 // Asked AFTER `resolve_shallow`, so an argument that is a parameter with a binding in scope
 // counts as concrete: inside `Nested<Point>`, `Pair<T>`'s argument resolves to Point.
+//
+// ---- it must see THROUGH a slice, and for six versions it did not ----------------------
+//
+// **`[T]` is not a concrete type, and a check that only reads the outermost kind calls it one.**
+// A type parameter is kind 50; a slice of one is kind 47 holding a 50, and the test below used to
+// stop at the 47. So `([T], [T])` — `array_partition<T>`'s return in `lib/array.bx` — passed as
+// concrete and was reported as a laid-out type named `([T], [T])`, which is a row stage-0 never
+// emits for a type no value has. It cost nothing in codegen (the sizes were right and both
+// compilers ran identically) and it broke `the_two_compilers_report_the_same_layout` for **every**
+// fixture that used `lib/array.bx`, including two that predate tuples entirely.
+//
+// The shape of the bug is worth more than the fix: the scalar case was already correct, because
+// `(T, T)` puts the 50 where the test was looking. **A9 and A8 each worked; the defect lived only
+// where a slice sat between them**, which is why nothing caught it until a library function
+// returned a tuple of arrays. The `while` loop below is the same slice-unwinding idiom the
+// dependency walk in `layout_report` already uses — this function was simply missing it.
+//
+// A tuple recurses for the same reason a generic application does, and it is the same `scale`/
+// `contract` pair: kind 53 IS an argument list with no name on the front.
 function (self: Unit) layout_is_concrete(src: String, applied: Type) -> Bool {
     let mutable i: Int = 0;
     while i < applied.contract {
-        let argument: Type = self.resolve_shallow(src,
+        let mutable argument: Type = self.resolve_shallow(src,
                                  self.declared_type(src, self.nested_children[applied.scale + i]));
+        // `[[T]]` needs the loop rather than one unwrap, and an array is 48 for the same reason.
+        while argument.kind == 47 || argument.kind == 48 {
+            argument = self.resolve_shallow(src, self.declared_type(src, argument.scale));
+        }
         if argument.kind == 50 {
             return false;
         }
-        if argument.kind == 46 && argument.contract > 0 {
+        if (argument.kind == 46 || argument.kind == 53) && argument.contract > 0 {
             if !self.layout_is_concrete(src, argument) {
                 return false;
             }
@@ -716,19 +739,14 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
         // tuple after every instantiation, which is only right when a program has one kind.
         if n.kind == 53 {
             let applied: Type = self.declared_type(src, node);
-            let mutable concrete: Bool = true;
-            let mutable a: Int = 0;
-            while a < applied.contract {
-                let element: Type = self.resolve_shallow(src,
-                                        self.declared_type(src, self.nested_children[applied.scale + a]));
-                if element.kind == 50 {
-                    concrete = false;                // `(T, Int)` inside a generic: not a type yet
-                }
-                a += 1;
-            }
+            // `layout_is_concrete` rather than an inlined `element.kind == 50`, which is what this
+            // was and what let `([T], [T])` through: the shallow test sees the slice, not the
+            // parameter inside it. One function answers "is this a type yet" for applications and
+            // tuples alike, so the two cannot drift apart again.
+            let concrete: Bool = self.layout_is_concrete(src, applied);
             if concrete {
                 let from: Int = len(held);
-                a = 0;
+                let mutable a: Int = 0;
                 while a < applied.contract {
                     push(held, self.resolve_shallow(src,
                              self.declared_type(src, self.nested_children[applied.scale + a])));
@@ -770,19 +788,10 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
             // never monomorphises, so an instantiation that exists only inside a generic
             // function's specialised copy has no node here to be found from. Reporting the
             // wrong row was A8's to fix; reporting the missing one is that gap's.
-            let mutable concrete: Bool = literal.kind == 53;
-            let mutable a: Int = 0;
-            while a < literal.contract {
-                let element: Type = self.resolve_shallow(src,
-                                        self.declared_type(src, self.nested_children[literal.scale + a]));
-                if element.kind == 50 {
-                    concrete = false;
-                }
-                a += 1;
-            }
+            let concrete: Bool = literal.kind == 53 && self.layout_is_concrete(src, literal);
             if concrete {
                 let from: Int = len(held);
-                a = 0;
+                let mutable a: Int = 0;
                 while a < literal.contract {
                     push(held, self.resolve_shallow(src,
                              self.declared_type(src, self.nested_children[literal.scale + a])));
@@ -796,6 +805,161 @@ function (mutable self: Unit) layout_print(src: String) -> Int {
             }
         }
         node += 1;
+    }
+
+    // ---- tuples reached only through a generic class's METHOD, and why they are a third pass --
+    //
+    // `function (self: Map<K, V>) entries() -> [(K, V)]` puts no concrete tuple node anywhere:
+    // the only spelling in the file is `(K, V)`, and `Map<String, Int>` is written somewhere else
+    // entirely. Stage-0 specialises every method of every instantiation, so it builds `(String,
+    // Int)` and files it; stage-1 does not monomorphise, so before this pass it reported nothing
+    // and `map_library.bx` and `set_library.bx` differed by three rows each.
+    //
+    // **The method does not have to be CALLED.** Measured on a seven-line probe: a `Bag<K, V>`
+    // with an uncalled `both() -> (K, V)` and one `Bag<String, Int>` gives stage-0 a `(String,
+    // Int)` row. So the trigger is the instantiation existing, not any call — which is why this
+    // scans applications rather than call sites.
+    //
+    // **Third, and after both of the above, because that is where stage-0 puts them.** Measured on
+    // `map_library.bx`: all six class instantiations first — `MapEntry$String$Int`,
+    // `Map$String$Int`, then the `Int$Int` pair, then the `String$Point` pair — and only then
+    // `(String, Int)`, `(Int, Int)`, `(String, Point)`, in the order of the instantiations that
+    // produced them. Not interleaved with the classes, which is what a fourth guess would have
+    // been. A tuple already seeded by an annotation keeps its earlier place: the `done_name` check
+    // in the emit loop dedupes, and the first seeding wins.
+    // **A WORKLIST, not a scan of the source, because the instantiation may never be written.**
+    // `class Set<T> { inner: Map<T, Bool> }` puts no `Map<Int, Bool>` anywhere in
+    // `set_library.bx` — it exists because `Set<Int>` has a field of that type — and it is that
+    // Map's `entries()` that gives stage-0 `(Int, Bool)`. So this seeds from the applications the
+    // source does write, then follows their members the way the emit loop follows dependencies,
+    // and asks the method question at every instantiation it reaches. Deduped by mangled name, so
+    // a class reached twice is walked once and cannot loop.
+    let mutable work_start: [Int] = [];
+    let mutable work_length: [Int] = [];
+    let mutable work_from: [Int] = [];
+    let mutable work_count: [Int] = [];
+    let mutable work_seen: [String] = [];
+    node = 0;
+    while node < len(self.nodes) {
+        let n: Node = self.nodes[node];
+        if n.kind == 46 && n.b > 0 {
+            let applied: Type = self.declared_type(src, node);
+            if applied.kind == 46
+               && self.generic_named(src, applied.name_start, applied.name_length) >= 0 {
+                let declared: Int = self.find_type(src, applied.name_start, applied.name_length);
+                if declared >= 0 && self.types[declared].kind == 82
+                   && self.layout_is_concrete(src, applied) {
+                    // The arguments have to be in `held` before they can be bound, because
+                    // `layout_bind_args` reads them from there.
+                    let args: Int = len(held);
+                    let mutable a: Int = 0;
+                    while a < applied.contract {
+                        push(held, self.resolve_shallow(src,
+                                 self.declared_type(src, self.nested_children[applied.scale + a])));
+                        a += 1;
+                    }
+                    push(work_start, applied.name_start);
+                    push(work_length, applied.name_length);
+                    push(work_from, args);
+                    push(work_count, applied.contract);
+                }
+            }
+        }
+        node += 1;
+    }
+
+    let mutable w: Int = 0;
+    while w < len(work_start) {
+        let here_start: Int = work_start[w];
+        let here_length: Int = work_length[w];
+        let here_from: Int = work_from[w];
+        let here_count: Int = work_count[w];
+        let here_name: String = self.layout_name_with(src, here_start, here_length,
+                                                     held, here_from, here_count);
+        let mutable already: Bool = false;
+        let mutable s: Int = 0;
+        while s < len(work_seen) {
+            if work_seen[s] == here_name {
+                already = true;
+            }
+            s += 1;
+        }
+        if already {
+            w += 1;
+            continue;
+        }
+        push(work_seen, here_name);
+
+        let restore: Int = self.layout_bind_args(src, here_start, here_length,
+                                                held, here_from, here_count);
+        // The same holder the emit loop builds for an instantiation: a bare kind-46 naming the
+        // class, with the arguments supplied by the bindings rather than by the Type.
+        let whole: Type = Type { kind: 46, scale: 0, contract: 0,
+                                name_start: here_start, name_length: here_length };
+
+        let mutable m: Int = 0;
+        while m < len(self.methods) {
+            let declared_method: Method = self.methods[m];
+            if spans_equal(src, declared_method.receiver_start, declared_method.receiver_length,
+                           here_start, here_length) {
+                // `[(K, V)]` is the shape that actually occurs, so see through the slice — the
+                // same unwinding `layout_is_concrete` now does.
+                let mutable answered: Type = self.resolve_shallow(src,
+                                                 declared_method.return_type);
+                while answered.kind == 47 || answered.kind == 48 {
+                    answered = self.resolve_shallow(src, self.declared_type(src, answered.scale));
+                }
+                if answered.kind == 53 && self.layout_is_concrete(src, answered) {
+                    let from: Int = len(held);
+                    let mutable e: Int = 0;
+                    while e < answered.contract {
+                        // Resolved HERE, while the bindings are still in scope: they are truncated
+                        // below, and a `K` copied unresolved would spell itself `K` when the emit
+                        // loop finally reached it.
+                        push(held, self.resolve_shallow(src, self.declared_type(src,
+                                     self.nested_children[answered.scale + e])));
+                        e += 1;
+                    }
+                    push(stack_start, 0 - 1);
+                    push(stack_length, 0);
+                    push(stack_from, from);
+                    push(stack_count, answered.contract);
+                    push(opened, 0);
+                }
+            }
+            m += 1;
+        }
+
+        // Then its members, so a nested instantiation gets the same question asked of it.
+        let members: Int = self.member_count(src, whole);
+        let mutable f: Int = 0;
+        while f < members {
+            let mutable inner: Type = self.resolve_shallow(src, self.member_type(src, whole, f));
+            while inner.kind == 47 || inner.kind == 48 {
+                inner = self.resolve_shallow(src, self.declared_type(src, inner.scale));
+            }
+            if inner.kind == 46 && inner.contract > 0
+               && self.generic_named(src, inner.name_start, inner.name_length) >= 0
+               && self.layout_is_concrete(src, inner) {
+                let sub: Int = self.find_type(src, inner.name_start, inner.name_length);
+                if sub >= 0 && self.types[sub].kind == 82 {
+                    let at: Int = len(held);
+                    let mutable a: Int = 0;
+                    while a < inner.contract {
+                        push(held, self.resolve_shallow(src, self.declared_type(src,
+                                     self.nested_children[inner.scale + a])));
+                        a += 1;
+                    }
+                    push(work_start, inner.name_start);
+                    push(work_length, inner.name_length);
+                    push(work_from, at);
+                    push(work_count, inner.contract);
+                }
+            }
+            f += 1;
+        }
+        let dropped: Int = truncate(self.type_bindings, restore);
+        w += 1;
     }
 
     // The stack is currently the seeds in source order, and a stack pops from the END — so it is

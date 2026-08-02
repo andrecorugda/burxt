@@ -1,0 +1,224 @@
+// lib/path.bx — POSIX paths taken apart lexically, and the edge cases are the test.
+//
+// Every line here is a case that decides the shape of a path library rather than a happy path.
+// `path_join("a", "b")` being `"a/b"` is not interesting and nothing was ever wrong about it; what
+// decides the file is `dirname("/")`, `basename("/a/b/")`, `extension(".hidden")`,
+// `join("a/", "/b")` and above all `normalise("../..")`.
+//
+// **The expected output was written from an independent implementation, not from this one.** A
+// Python oracle written from `lib/path.bx`'s documented rules produced these 118 lines, and the two
+// were compared before the `.stdout` was created — so a mistake shared between the library and its
+// fixture had to be made twice, in two languages, to survive. Where the rules match POSIX the lines
+// were also checked against `basename(1)`, `dirname(1)` and `posixpath.normpath`, which agree on
+// everything except `normalise("//a")`; that one difference is deliberate and `lib/path.bx`'s header
+// says why.
+//
+// Answers are printed inside `[...]` because **an empty answer is a real answer here** — several of
+// these cases answer the empty String, and a bare `print("")` in a `.stdout` is indistinguishable
+// from a blank line someone left behind.
+use "../../lib/path.bx";
+
+function show(label: String, value: String) -> Bool {
+    print(label + " = [" + value + "]");
+    return true;
+}
+
+function show_bool(label: String, value: Bool) -> Bool {
+    if value {
+        print(label + " = true");
+    } else {
+        print(label + " = false");
+    }
+    return true;
+}
+
+// `path_stem` and `path_extension` always partition the basename — the invariant `lib/path.bx`'s
+// header states, and the reason `.hidden`, `..`, `a.` and `archive.tar.gz` are one rule rather than
+// four special cases. Checked over every path this fixture mentions rather than asserted in a
+// comment.
+function partitions(path: String) -> Bool {
+    let name: String = path_basename(path);
+    let stem: String = path_stem(path);
+    let extension: String = path_extension(path);
+    if len(extension) == 0 {
+        return stem == name;
+    }
+    return stem + "." + extension == name;
+}
+
+region main {
+    // ---- is_absolute: one byte, and the empty path is not absolute ----
+    show_bool("is_absolute()", path_is_absolute(""));
+    show_bool("is_absolute(/)", path_is_absolute("/"));
+    show_bool("is_absolute(a)", path_is_absolute("a"));
+    show_bool("is_absolute(/a)", path_is_absolute("/a"));
+    show_bool("is_absolute(//a)", path_is_absolute("//a"));
+    show_bool("is_absolute(./a)", path_is_absolute("./a"));
+    show_bool("is_absolute(..)", path_is_absolute(".."));
+
+    // ---- basename and dirname, against the two coreutils tools ----
+    // `dirname("")` is "." and not "": an empty String is not a path anything can open, so
+    // answering it turns a harmless input into a syscall failure three frames away.
+    show("basename(/)", path_basename("/"));
+    show("dirname(/)", path_dirname("/"));
+    show("basename(a)", path_basename("a"));
+    show("dirname(a)", path_dirname("a"));
+    show("basename()", path_basename(""));
+    show("dirname()", path_dirname(""));
+    // The trailing separator belongs to the framing, not to the name.
+    show("basename(/a/b/)", path_basename("/a/b/"));
+    show("dirname(/a/b/)", path_dirname("/a/b/"));
+    show("basename(/a)", path_basename("/a"));
+    show("dirname(/a)", path_dirname("/a"));
+    show("basename(a/b)", path_basename("a/b"));
+    show("dirname(a/b)", path_dirname("a/b"));
+    show("basename(a/b/c)", path_basename("a/b/c"));
+    show("dirname(a/b/c)", path_dirname("a/b/c"));
+    // All separators: the path names the root, and the root's parent is the root.
+    show("basename(//)", path_basename("//"));
+    show("dirname(//)", path_dirname("//"));
+    show("basename(///)", path_basename("///"));
+    show("dirname(///)", path_dirname("///"));
+    // Interior separators are left exactly as they were — `dirname` is a lexical prefix and
+    // normalising is a different function's job. `dirname //a//b//` answers `//a` too.
+    show("basename(//a//b//)", path_basename("//a//b//"));
+    show("dirname(//a//b//)", path_dirname("//a//b//"));
+    show("basename(//a)", path_basename("//a"));
+    show("dirname(//a)", path_dirname("//a"));
+    show("basename(a//)", path_basename("a//"));
+    show("dirname(a//)", path_dirname("a//"));
+    show("basename(a//b//c)", path_basename("a//b//c"));
+    show("dirname(a//b//c)", path_dirname("a//b//c"));
+    show("basename(.)", path_basename("."));
+    show("dirname(.)", path_dirname("."));
+    show("basename(..)", path_basename(".."));
+    show("dirname(..)", path_dirname(".."));
+    show("basename(/..)", path_basename("/.."));
+    show("dirname(/..)", path_dirname("/.."));
+
+    // ---- extension and stem ----
+    // One extension, the last one, without the dot. `tar.gz` is not derivable — see the argument in
+    // `lib/path.bx` — and a caller who wants the compound asks twice.
+    show("extension(archive.tar.gz)", path_extension("archive.tar.gz"));
+    show("stem(archive.tar.gz)", path_stem("archive.tar.gz"));
+    show("extension(stem(archive.tar.gz))", path_extension(path_stem("archive.tar.gz")));
+    // A leading dot hides a file; it does not extend it. Answering "hidden" here is how a caller
+    // building a sibling name from the stem creates a file called ".txt".
+    show("extension(.hidden)", path_extension(".hidden"));
+    show("stem(.hidden)", path_stem(".hidden"));
+    show("extension(.hidden.txt)", path_extension(".hidden.txt"));
+    show("stem(.hidden.txt)", path_stem(".hidden.txt"));
+    // The dot is in a DIRECTORY name, so `d` has no extension. Working from the basename rather
+    // than from the whole path is the only reason this comes out right.
+    show("extension(a/b.c/d)", path_extension("a/b.c/d"));
+    show("stem(a/b.c/d)", path_stem("a/b.c/d"));
+    // `..` is the parent directory. Reading its extension as empty-after-the-second-dot would leave
+    // the stem as ".", which names a different directory.
+    show("extension(..)", path_extension(".."));
+    show("stem(..)", path_stem(".."));
+    show("extension(.)", path_extension("."));
+    show("stem(.)", path_stem("."));
+    show("extension(...)", path_extension("..."));
+    show("stem(...)", path_stem("..."));
+    // A dot at the very end: nothing follows it, so nothing is the extension.
+    show("extension(a.)", path_extension("a."));
+    show("stem(a.)", path_stem("a."));
+    show("extension(a.b.)", path_extension("a.b."));
+    show("stem(a.b.)", path_stem("a.b."));
+    show("extension(a..b)", path_extension("a..b"));
+    show("stem(a..b)", path_stem("a..b"));
+    show("extension(noext)", path_extension("noext"));
+    show("stem(noext)", path_stem("noext"));
+    show("extension(/a/b.txt/)", path_extension("/a/b.txt/"));
+    show("stem(/a/b.txt/)", path_stem("/a/b.txt/"));
+    show("extension()", path_extension(""));
+    show("stem()", path_stem(""));
+    show("extension(/)", path_extension("/"));
+    show("stem(/)", path_stem("/"));
+    show("extension(.a.)", path_extension(".a."));
+    show("stem(.a.)", path_stem(".a."));
+
+    // ---- join: exactly one separator, however many each side brought ----
+    show("join(a/, /b)", path_join("a/", "/b"));
+    show("join(a, )", path_join("a", ""));
+    show("join(, b)", path_join("", "b"));
+    show("join(, )", path_join("", ""));
+    show("join(a, b)", path_join("a", "b"));
+    // The root survives being stripped: answering "a" here loses the leading slash and turns an
+    // absolute path into a relative one.
+    show("join(/, a)", path_join("/", "a"));
+    show("join(/, /)", path_join("/", "/"));
+    // A piece that held no name contributes no trailing separator — inventing one changes what
+    // `basename` and `dirname` then answer.
+    show("join(a, /)", path_join("a", "/"));
+    show("join(a, //)", path_join("a", "//"));
+    show("join(a//, //b)", path_join("a//", "//b"));
+    // The deliberate disagreement with Python and Rust: an absolute right-hand side does NOT
+    // discard the left. Under their rule `join(uploads, "/etc/passwd")` answers "/etc/passwd",
+    // having silently thrown away the directory it was given.
+    show("join(a, /b)", path_join("a", "/b"));
+    show("join(uploads, /etc/passwd)", path_join("uploads", "/etc/passwd"));
+    // And the limit of that: join is not a containment check. `..` is normalise's business.
+    show("join(uploads, ../../etc/passwd)", path_join("uploads", "../../etc/passwd"));
+    show("normalise(join(uploads, ../../etc/passwd))",
+        path_normalise(path_join("uploads", "../../etc/passwd")));
+    // Interior separators untouched: only the joint is.
+    show("join(a//b, c)", path_join("a//b", "c"));
+    show("join(/base, sub/file.txt)", path_join("/base", "sub/file.txt"));
+
+    // ---- normalise, which is where a path library is dangerous rather than wrong ----
+    show("normalise(a/./b/../c)", path_normalise("a/./b/../c"));
+    // A RELATIVE path keeps its leading `..`. Dropping it answers a path naming a DIFFERENT file,
+    // silently, in a way that looks like a simplification.
+    show("normalise(../..)", path_normalise("../.."));
+    show("normalise(../secret)", path_normalise("../secret"));
+    show("normalise(../../../a)", path_normalise("../../../a"));
+    // An ABSOLUTE path drops it at the root, because `/..` and `/` are the same directory on POSIX
+    // — that is the kernel's behaviour, not a convention.
+    show("normalise(/..)", path_normalise("/.."));
+    show("normalise(/../..)", path_normalise("/../.."));
+    show("normalise(/../a)", path_normalise("/../a"));
+    show("normalise()", path_normalise(""));
+    show("normalise(.)", path_normalise("."));
+    show("normalise(..)", path_normalise(".."));
+    // "." and not "": "a/.." really does name the directory the program is in.
+    show("normalise(a/..)", path_normalise("a/.."));
+    show("normalise(/)", path_normalise("/"));
+    show("normalise(a/b/)", path_normalise("a/b/"));
+    show("normalise(a//b)", path_normalise("a//b"));
+    show("normalise(./a)", path_normalise("./a"));
+    show("normalise(..a)", path_normalise("..a"));
+    show("normalise(a/...)", path_normalise("a/..."));
+    show("normalise(a/b/../../..)", path_normalise("a/b/../../.."));
+    show("normalise(a/../../b)", path_normalise("a/../../b"));
+    show("normalise(/a/../../b)", path_normalise("/a/../../b"));
+    show("normalise(/a/b/../c/./d/)", path_normalise("/a/b/../c/./d/"));
+    show("normalise(a/b/c/../../..)", path_normalise("a/b/c/../../.."));
+    show("normalise(../a/..)", path_normalise("../a/.."));
+    show("normalise(/a/../..)", path_normalise("/a/../.."));
+    // `//` is not a special root here, and this is the one line that disagrees with POSIX and with
+    // `posixpath.normpath`, which both answer "//a". Linux does not implement the distinct root.
+    show("normalise(//a)", path_normalise("//a"));
+    show("normalise(///a)", path_normalise("///a"));
+    show("normalise(////)", path_normalise("////"));
+    show("normalise(a/./././b)", path_normalise("a/./././b"));
+    show("normalise(...)", path_normalise("..."));
+    // Lexical, and it says so: if `b` is a symlink this answer is wrong about the filesystem. That
+    // is why the name is not `canonicalise`.
+    show("normalise(a/b/..)", path_normalise("a/b/.."));
+
+    // ---- the partition invariant, over every path above ----
+    let all_paths: [String] = ["", "/", "//", "///", "a", "/a", "a/b", "/a/b/", "a//", "//a",
+        "//a//b//", "a//b//c", ".", "..", "...", "/..", "archive.tar.gz", ".hidden", ".hidden.txt",
+        "a/b.c/d", "a.", "a.b.", "a..b", ".a.", "noext", "/a/b.txt/", "a/b/c",
+        "uploads/../../etc/passwd", "..a", "a/...", "/a/b.txt"];
+    let mutable broken: Int = 0;
+    for i in 0..len(all_paths) {
+        if !partitions(all_paths[i]) {
+            broken += 1;
+            print("PARTITION BROKEN: [" + all_paths[i] + "]");
+        }
+    }
+    print("paths checked = " + to_string(len(all_paths)));
+    print("partition failures = " + to_string(broken));
+}

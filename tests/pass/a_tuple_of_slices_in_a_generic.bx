@@ -1,0 +1,82 @@
+// A8 × A9 — a tuple whose ELEMENTS are slices of a type parameter, which is the one shape that got
+// past `burxt layout`'s concreteness test.
+//
+// **This fixture exists because the bug was invisible to every test that already existed.** The
+// layout computation was never wrong: `([T], [T])` was sized 48/24/24, both compilers ran the
+// program identically, and every `.stdout` matched. What differed was the NAME in the report —
+// stage-0 said `([Int], [Int])` and stage-1 said `([T], [T])` — and that only broke
+// `the_two_compilers_report_the_same_layout`, which is one test out of the whole suite.
+//
+// ---- why nothing caught it for six versions ---------------------------------------------
+//
+// `layout_is_concrete` refused a type parameter by asking `argument.kind == 50`. A bare `T` IS kind
+// 50, so `(T, T)` was correctly refused and the scalar case worked from the day A8 landed. A slice
+// of a parameter is kind 47 holding a 50, and the test stopped at the 47 — so `([T], [T])` was
+// called concrete and reported as a type no value has.
+//
+// **A8 worked and A9 worked; the defect lived only where a slice sat between them.** Nothing found
+// it until `array_partition<T>(xs, p) -> ([T], [T])` was written in `lib/array.bx`, at which point
+// it broke the layout agreement for every fixture that used that module — including two written
+// long before tuples existed.
+//
+// ---- and the second half, which is a different gap --------------------------------------
+//
+// `Bag` below has a method returning `(K, V)` that **nothing calls**. Stage-0 specialises every
+// method of every instantiation, so it files a `(String, Int)` class; stage-1 does not
+// monomorphise, so it has to find that tuple by walking the instantiation's methods itself. That
+// is a separate pass in `layout.bx` and it is what `lib/map.bx`'s `entries() -> [(K, V)]` needs —
+// without it, `map_library.bx` and `set_library.bx` each differed by three rows.
+//
+// `Set` here is the nested case in miniature: the instantiation whose method matters
+// (`Bag<Int, Bool>`) is never written down — it exists only because `Holder<Int>` has a field of
+// that type. A pass that scanned the source would miss it, which is why that one is a worklist.
+//
+// The program's OUTPUT is almost beside the point; `burxt layout` is what this pins. It is a
+// `tests/pass` fixture rather than a layout-only one because the harness compares the two
+// compilers' layout reports over every pass fixture, so landing it here is what makes it checked.
+
+class Bag<K, V> { k: K, v: V }
+
+// Never called. Stage-0 still builds `(String, Int)` and `(Int, Bool)` for the instantiations below.
+function (self: Bag<K, V>) both() -> (K, V) {
+    return (self.k, self.v);
+}
+
+// The nested case: `Bag<Int, Bool>` is never spelled out anywhere.
+class Holder<T> { inner: Bag<T, Bool> }
+
+// The shape that started it: a tuple of two SLICES of a type parameter, returned from a free
+// generic function. Annotated at the call site below, because stage-1 cannot report a tuple that
+// only exists inside a specialisation it never made.
+function halve<T>(xs: [T]) -> ([T], [T]) {
+    let mutable front: [T] = [];
+    let mutable back: [T] = [];
+    let half: Int = divide_floor(len(xs), 2);
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        if i < half {
+            push(front, xs[i]);
+        } else {
+            push(back, xs[i]);
+        }
+        i += 1;
+    }
+    return (front, back);
+}
+
+region main {
+    let numbers: [Int] = [1, 2, 3, 4, 5];
+    let split: ([Int], [Int]) = halve(numbers);
+    let front: [Int] = split.0;
+    let back: [Int] = split.1;
+    print(len(front));
+    print(len(back));
+    print(front[0]);
+    print(back[0]);
+
+    let labelled: Bag<String, Int> = Bag { k: "a", v: 1 };
+    print(labelled.k);
+
+    let held: Holder<Int> = Holder { inner: Bag { k: 7, v: true } };
+    print(held.inner.k);
+}

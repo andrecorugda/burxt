@@ -30,8 +30,20 @@
 // down. Byte order needs no decision and is identical on every machine, which is what a reproducible
 // sort is built on.
 //
-// **No `map` or `filter`.** Those need function values, which the language does not have. Write the
-// loop; it is three lines and a reader can see what it does.
+// ~~**No `map` or `filter`.** Those need function values, which the language does not have.**~~
+// **Both exist as of v0.0.279**, along with `fold`, `any`, `all`, `position`, `retain`, `partition`
+// and `sort_by` — roadmap D2d, and see the `// ---- higher order ----` section below.
+//
+// The claim was true when written and the diagnosis was right: they DO need function values. What
+// changed is that the language got them without getting closures. `dynamic Trait` had been a function
+// value since v0.0.14; A9 made it generic, which is the whole of what was missing, and A10 (closures)
+// was then closed without being built. The vocabulary lives in `lib/fn.bx` and the reasoning for its
+// shape lives there too.
+//
+// The old advice — *"write the loop; it is three lines and a reader can see what it does"* — is still
+// right for a one-off, and nothing here deprecates a `for` loop. What a named function buys is the
+// case where the loop is NOT three lines: `array_sort_by` is a stable merge sort, and nobody should
+// write that inline.
 //
 // ~~**`array_index_of` is not `pure`, and it should be.**~~ **Fixed in v0.0.248, and this comment had
 // the diagnosis exactly right.** It said `Option.Some(i)` "reads as a method call on the enum" and
@@ -58,6 +70,7 @@
 // ============================================================================
 
 use "option.bx";
+use "fn.bx";
 
 // ---- asking ----------------------------------------------------------------------------
 
@@ -278,4 +291,483 @@ function array_remove_at<T>(mutable xs: [T], at: Int) -> Int
     }
     let shorter: Int = truncate(xs, len(xs) - 1);
     return len(xs);
+}
+
+// ---- copying and reshaping (roadmap D1e) -----------------------------------------------
+
+// A NEW array with the same elements.
+//
+// **Read this one before you assume you do not need it.** Assigning an array does NOT copy it:
+//
+//     let mutable b: [Int] = a;
+//     b[0] = 99;                    // a[0] is now 99
+//
+// That is measured, in both compilers, not inferred from the memory model. An array value carries a
+// pointer to its buffer, and assignment copies the value, so both names see one buffer. Every
+// function in this file that answers a new array therefore builds it with `push` rather than starting
+// from an assignment — and a caller who wants an independent array has to say so, which is what this
+// is for.
+//
+// It is not a deep copy. If `T` is a class, the elements are still shared; there is no way to write a
+// deep copy generically, because there is no interface saying how to clone a `T`.
+function array_copy<T>(xs: [T]) -> [T] {
+    let mutable out: [T] = [];
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        push(out, xs[i]);
+        i += 1;
+    }
+    return out;
+}
+
+// The elements from `from` up to but NOT including `to`, as a new array.
+//
+// End-EXCLUSIVE, matching `string_slice` and the reason it chose the same: `to - from` is the length,
+// `array_slice(xs, 0, len(xs))` is the whole thing, and two adjacent slices meet without an
+// off-by-one at the seam. Inclusive ends read more naturally in one call and wrongly in every
+// composition of two.
+//
+// An empty slice is legal — `from == to` answers `[]` — because a loop that narrows a range down to
+// nothing should not have to special-case its last step. `from > to` is not legal, because that is a
+// reversed range rather than an empty one, and answering `[]` would hide the caller's arithmetic bug.
+function array_slice<T>(xs: [T], from: Int, to: Int) -> [T]
+    requires from >= 0
+    requires to >= from
+    requires to <= len(xs)
+{
+    let mutable out: [T] = [];
+    let mutable i: Int = from;
+    while i < to {
+        push(out, xs[i]);
+        i += 1;
+    }
+    return out;
+}
+
+// Both arrays' elements, in order, as a NEW one. Neither argument changes — which is the difference
+// between this and `array_extend`, and the reason both exist.
+function array_concat<T>(first: [T], second: [T]) -> [T] {
+    let mutable out: [T] = [];
+    let mutable i: Int = 0;
+    while i < len(first) {
+        push(out, first[i]);
+        i += 1;
+    }
+    let mutable j: Int = 0;
+    while j < len(second) {
+        push(out, second[j]);
+        j += 1;
+    }
+    return out;
+}
+
+// Put `value` at `at`, shifting everything from there along. `at == len(xs)` appends, which is why the
+// precondition is `<=` and not `<` — inserting at the end is the ordinary case of a loop that inserts
+// in order, not an edge to be refused.
+function array_insert_at<T>(mutable xs: [T], at: Int, value: T) -> Int
+    requires at >= 0
+    requires at <= len(xs)
+{
+    push(xs, value);                 // grow by one; if `at` is the end this is already the answer
+    let mutable i: Int = len(xs) - 1;
+    while i > at {
+        xs[i] = xs[i - 1];
+        i -= 1;
+    }
+    xs[at] = value;
+    return len(xs);
+}
+
+// How many times a value appears. `array_contains` asks whether it appears at all; this is the count,
+// and having both means neither caller writes the loop.
+pure function array_count_of<T: Equatable>(xs: [T], of: T) -> Int {
+    let mutable seen: Int = 0;
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        if xs[i] == of {
+            seen += 1;
+        }
+        i += 1;
+    }
+    return seen;
+}
+
+// Same length and equal elements in the same order.
+//
+// Explicit rather than `a == b`, because `==` on two arrays is not defined and this says what the
+// comparison IS: order-sensitive, so `[1, 2]` and `[2, 1]` differ. A set comparison is `lib/set.bx`.
+pure function array_equals<T: Equatable>(first: [T], second: [T]) -> Bool {
+    if len(first) != len(second) {
+        return false;
+    }
+    let mutable i: Int = 0;
+    while i < len(first) {
+        if !(first[i] == second[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+// The index of `of`, found in O(log n) — or None.
+//
+// **The array must be sorted ascending, and that is a requirement on the CALLER rather than a
+// `requires` clause.** The reason is cost and it is worth being explicit about, because omitting a
+// precondition is normally the wrong call in this language: `requires array_is_sorted(xs)` is O(n),
+// which would make an O(log n) function linear and leave a caller no faster than `array_index_of`.
+// A contract that costs more than the function it guards is a contract nobody can afford to keep.
+//
+// On an unsorted array this answers *something* — possibly None for a value that is present. That is
+// the honest cost of the above. `array_index_of` is the one to reach for when sortedness is not
+// already known, and `array_is_sorted` exists if you want to check once outside a loop.
+//
+// **On duplicates it answers the FIRST match**, not an arbitrary one. A plain binary search may stop
+// on any of them, which makes the result depend on the length of the array rather than its contents —
+// reproducible in the sense that it is deterministic, useless in the sense that inserting an unrelated
+// element changes it. So this is a lower-bound search followed by one equality test: same O(log n),
+// one answer.
+pure function array_binary_search<T: Ordered>(xs: [T], of: T) -> Option<Int> {
+    let mutable low: Int = 0;
+    let mutable high: Int = len(xs);                 // exclusive
+    // Lower bound: on exit `low` is the first index whose element is not before `of`.
+    // `low + divide_floor(high - low, 2)` rather than `divide_floor(low + high, 2)`, which can
+    // overflow — and `+` TRAPS here, so that would be a crash rather than a wrong answer. Still
+    // worth writing correctly: a trap on a 4-billion-element array is not a good failure either.
+    while low < high {
+        let mid: Int = low + divide_floor(high - low, 2);
+        if xs[mid] < of {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    // `low` has `!(xs[low] < of)`. If also `!(of < xs[low])` then neither is before the other, which
+    // for an Ordered type is equality — expressed with `<` alone, because `Ordered` promises `<` and
+    // a second `T: Equatable` bound would narrow who may call this for no gain.
+    if low < len(xs) && !(of < xs[low]) {
+        return Option.Some(low);
+    }
+    return Option.None;
+}
+
+// Drop ADJACENT duplicates, in place, answering the new length.
+//
+// **Adjacent, which means this only removes ALL duplicates from a SORTED array.** On `[1, 2, 1]`
+// nothing is removed, and that is not a bug — it is `uniq`, and it is the version that runs in O(n)
+// with no allocation and no `Ordered` bound. It is also exactly the shape of function this project
+// keeps getting wrong: right about the sorted case somebody wrote, silent about the unsorted case
+// nobody did. So it is said here, and `tests/pass/array_higher_order.bx` pins `[1, 2, 1]`
+// specifically so the behaviour cannot drift into the other one unnoticed.
+//
+// For all-distinct regardless of order: `array_sort` then this, or `lib/set.bx`, which keeps
+// insertion order and costs a hash per element.
+function array_dedup<T: Equatable>(mutable xs: [T]) -> Int {
+    if len(xs) < 2 {
+        return len(xs);
+    }
+    let mutable kept: Int = 1;                       // xs[0] always survives
+    let mutable i: Int = 1;
+    let count: Int = len(xs);                        // hoisted: the array shrinks under us at the end
+    while i < count {
+        if !(xs[i] == xs[kept - 1]) {
+            xs[kept] = xs[i];
+            kept += 1;
+        }
+        i += 1;
+    }
+    let shorter: Int = truncate(xs, kept);
+    return kept;
+}
+
+// ---- higher order (roadmap D2d) --------------------------------------------------------
+//
+// `map`, `filter`, `fold` and the rest, over the interfaces in `lib/fn.bx`. Read that file's header
+// once: it says how a caller writes an implementation, why it takes two `let`s rather than one, and
+// what state-as-a-field looks like next to a closure.
+//
+// **Nothing in this section is `pure`, and every one of them looks like it should be.** `array_any`
+// reads an array and answers a Bool; so does `array_contains`, which IS pure. The difference is that
+// this one's answer is only as pure as the predicate it was handed, and the compiler currently lets a
+// `pure` function call through a `dynamic` to arbitrary code — measured in both compilers, written up
+// in `lib/fn.bx`. Marking these `pure` would compile and would be a claim the language cannot check.
+//
+// **On cost, measured rather than assumed — and the answer was not the expected one.** One vtable
+// indirection per element sounds like it should show up, so it was measured against the identical loop
+// with the operation written inline and no interface at all:
+//
+//     array_map, 100,000 Ints          dynamic  5,104 KB   inline  5,104 KB    (identical)
+//     array_map, 5,000,000 Ints        dynamic    210 MB   inline    210 MB    0.07 s both
+//     array_fold, 5,000,000 Ints       dynamic  0.04 s     inline  0.04 s      (no allocation
+//                                                                               in the loop, so the
+//                                                                               call is the largest
+//                                                                               remaining term)
+//
+// **Zero memory cost, and no measurable time cost.** The memory result is not luck and is the part
+// that generalises: an interface object is two words, `{data, vtable}`, and the data half IS the
+// storage of the variable it was coerced from — `DynCoerce` copies nothing. So there is no per-element
+// allocation and no closure to heap, which is the cost a closure-based `map` would have had.
+//
+// The time result is the weaker claim of the two and worth stating narrowly: it says the indirection
+// is not the bottleneck in a loop that also touches memory per element, not that an indirect call is
+// free in the abstract. A tight arithmetic loop over data already in cache could still show it.
+
+// Every element through `f`, as a new array. `[T]` in, `[U]` out — so this is the type-changing form,
+// and `Mapper<T, T>` covers the case where it does not change.
+function array_map<T, U>(xs: [T], f: dynamic Mapper<T, U>) -> [U] {
+    let mutable out: [U] = [];
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        push(out, f.apply(xs[i]));
+        i += 1;
+    }
+    return out;
+}
+
+// The elements that pass, as a new array, in their original order.
+function array_filter<T>(xs: [T], keep: dynamic Predicate<T>) -> [T] {
+    let mutable out: [T] = [];
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        if keep.test(xs[i]) {
+            push(out, xs[i]);
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    return out;
+}
+
+// Left fold: `start`, then one `step` per element, in order.
+//
+// **`start` is a parameter and there is no version without one**, which is not an omission. A
+// `fold` that used "the zero of T" would need a `Default` interface, and this language deliberately
+// has none — `array_sum_int` and `array_sum_money` are two functions rather than one generic for
+// exactly that reason (`0` and `$0.00` are different values and nothing can name both). Passing the
+// start also makes the empty case total: the fold of nothing is `start`, no precondition needed.
+//
+// Left rather than right, and only left. A right fold over an array is a left fold over its reverse,
+// and `array_reverse` is right there; shipping both would mean a reader checking which one they have.
+function array_fold<T, A>(xs: [T], start: A, f: dynamic Folder<T, A>) -> A {
+    let mutable held: A = start;
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        held = f.step(held, xs[i]);
+        i += 1;
+    }
+    return held;
+}
+
+// Does any element pass? False for an empty array, and it stops at the first one that does.
+function array_any<T>(xs: [T], holds: dynamic Predicate<T>) -> Bool {
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        if holds.test(xs[i]) {
+            return true;
+        }
+        i += 1;
+    }
+    return false;
+}
+
+// Do all of them pass? **True for an empty array** — vacuously, because there is no element that
+// fails. That answer surprises people often enough to be worth a line: it is what makes
+// `array_all(a, p) && array_all(b, p)` equal `array_all(concat(a, b), p)` for every a and b, and any
+// other choice breaks that. Pinned in the fixture.
+function array_all<T>(xs: [T], holds: dynamic Predicate<T>) -> Bool {
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        if !holds.test(xs[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+// The index of the first element that passes, or None. The predicate counterpart of
+// `array_index_of`, and `Option<Int>` for the same reason that one gives: -1 is a usable index and
+// None is not.
+function array_position<T>(xs: [T], holds: dynamic Predicate<T>) -> Option<Int> {
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        if holds.test(xs[i]) {
+            return Option.Some(i);
+        }
+        i += 1;
+    }
+    return Option.None;
+}
+
+// Keep the elements that pass, IN PLACE, answering the new length.
+//
+// `array_filter`'s mutating twin, and the signature is the whole difference: `mutable xs` says the
+// call changes your array, where `array_filter` cannot touch it. Having both is the point — a filter
+// into a new array is what you want inside an expression, and a retain is what you want when the
+// array is large and the copy is the expensive part.
+//
+// Compacting rather than repeated removal: one pass, each survivor moved down to the next open slot,
+// then one truncate. Removing in place with `array_remove_at` would be O(n²) — it shifts the whole
+// tail per removal — which for a predicate that rejects most elements is the difference between a
+// scan and a stall.
+function array_retain<T>(mutable xs: [T], keep: dynamic Predicate<T>) -> Int {
+    let mutable kept: Int = 0;
+    let mutable i: Int = 0;
+    // Hoisted, because `truncate` at the end changes what `len(xs)` answers — and because the
+    // predicate is arbitrary code, so re-reading the length every step would be re-reading it after
+    // something that had no business changing it.
+    let count: Int = len(xs);
+    while i < count {
+        if keep.test(xs[i]) {
+            xs[kept] = xs[i];
+            kept += 1;
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    let shorter: Int = truncate(xs, kept);
+    return kept;
+}
+
+// Split into those that pass and those that do not: `(passing, failing)`, both new arrays, each in
+// original order.
+//
+// A TUPLE return, which A8 landed the same day as A9 — before that this needed a two-field class
+// declared somewhere a caller could reach, which is precisely the record nobody wants to invent.
+// `.0` is the passing half; the order is the same as `filter` first, which is the reading order of
+// the name.
+//
+// One pass rather than two calls to `array_filter` with opposite predicates: a caller cannot write
+// the negation of an arbitrary `Predicate` without declaring another class, and calling the predicate
+// twice per element would double the vtable cost for an answer already in hand.
+function array_partition<T>(xs: [T], keep: dynamic Predicate<T>) -> ([T], [T])
+{
+    let mutable passing: [T] = [];
+    let mutable failing: [T] = [];
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        if keep.test(xs[i]) {
+            push(passing, xs[i]);
+            i += 1;
+        } else {
+            push(failing, xs[i]);
+            i += 1;
+        }
+    }
+    return (passing, failing);
+}
+
+// Sort in place by a caller's order. **STABLE**: elements the comparer calls neither-before-the-other
+// keep the order they were in.
+//
+// ---- which algorithm, and why it is not the one above ----------------------------------
+//
+// **Bottom-up merge sort**, where `array_sort` is insertion sort. Two different answers to two
+// different questions, and the deciding factor is one this file did not have before today:
+//
+// **Every comparison here is a vtable call**, where `array_sort` compares with `<` on an `Ordered`
+// type and the compiler emits it inline. So the COUNT of comparisons stopped being a secondary
+// concern. **Measured**, reversed input, this merge sort against insertion sort with the same
+// comparer — the version this function would be if it had simply copied `array_sort`'s algorithm:
+//
+//     n           this (merge)      insertion sort with a comparer
+//     20,000      0.00 s              0.28 s
+//     40,000      0.00 s              1.15 s
+//     80,000      0.00 s              4.99 s
+//     2,000,000   0.14 s              not attempted
+//
+// Insertion sort quadruples for every doubling, which is the O(n²) showing up exactly where it
+// should. The last row is the one that settles it: this sorts **25 times as many elements in a
+// thirtieth of the time** that insertion sort needs for 80,000. This is the *"a faster stable sort"*
+// roadmap D1e asked for, arriving with the feature that made a comparison expensive enough to need it.
+//
+// **`array_sort` stays and is still the right call** for an `Ordered` type: its `<` is inline, so none
+// of the above applies to it, and it allocates nothing — so it can be called where a scratch array
+// cannot be had. Two functions, and the choice is visible in which one you typed.
+//
+// **Why merge and not quicksort**, given quicksort also gets O(n log n) with no allocation: quicksort
+// is not stable, and stability is the promise in this function's first line. It also needs a pivot
+// rule, and every simple pivot rule has an input shape that makes it quadratic — which for a language
+// arguing about reproducibility is a worse failure than the scratch array.
+//
+// **The cost, stated:** one scratch array of `n` elements, and `n` writes back per pass — so
+// `n log n` copies on top of `n log n` comparisons. Ping-ponging between the two buffers would halve
+// the copying, but the result has to END in `xs`, so it would depend on the number of passes being
+// even and need a final conditional copy. Not worth the reasoning for a constant factor on the cheap
+// half of the loop; the expensive half is the comparisons, and those are already minimal.
+function array_sort_by<T>(mutable xs: [T], order: dynamic Comparer<T>) -> Int {
+    let count: Int = len(xs);
+    if count < 2 {
+        return count;
+    }
+
+    // Element by element. `let mutable scratch: [T] = xs;` would ALIAS — both names would be one
+    // buffer, and the merge would overwrite the input it was reading. See `array_copy`, where that is
+    // measured rather than argued.
+    let mutable scratch: [T] = [];
+    let mutable c: Int = 0;
+    while c < count {
+        push(scratch, xs[c]);
+        c += 1;
+    }
+
+    // Runs of 1 are sorted by definition, so the first pass merges pairs, then pairs of pairs.
+    let mutable width: Int = 1;
+    while width < count {
+        let mutable low: Int = 0;
+        while low < count {
+            let mutable mid: Int = low + width;
+            if mid > count {
+                mid = count;
+            }
+            let mutable high: Int = low + width + width;
+            if high > count {
+                high = count;
+            }
+
+            // Merge xs[low..mid) and xs[mid..high) into scratch[low..high).
+            let mutable left: Int = low;
+            let mutable right: Int = mid;
+            let mutable at: Int = low;
+            while at < high {
+                if left < mid && right < high {
+                    // **This branch is the stability**, and it is the only place it lives. Take from
+                    // the right run ONLY when its element is STRICTLY before the left one; on
+                    // neither-before-the-other, take the left. The left run holds the elements that
+                    // came first, so equals come out in the order they went in. `order.before(left,
+                    // right)` with the branches swapped would look equivalent and would reverse
+                    // every group of equals — which is the defect the fixture's `by_length`
+                    // comparer over same-length words exists to catch.
+                    if order.before(xs[right], xs[left]) {
+                        scratch[at] = xs[right];
+                        right += 1;
+                    } else {
+                        scratch[at] = xs[left];
+                        left += 1;
+                    }
+                } else {
+                    if left < mid {
+                        scratch[at] = xs[left];
+                        left += 1;
+                    } else {
+                        scratch[at] = xs[right];
+                        right += 1;
+                    }
+                }
+                at += 1;
+            }
+
+            low = low + width + width;
+        }
+
+        let mutable back: Int = 0;
+        while back < count {
+            xs[back] = scratch[back];
+            back += 1;
+        }
+        width = width + width;
+    }
+    return count;
 }

@@ -1,0 +1,355 @@
+// Roadmap D2d — `map`, `filter`, `fold`, `any`, `all`, `position`, `retain`, `partition`, `sort_by`.
+//
+// **Every one of these was unwritable yesterday**, and the reason is worth stating precisely because
+// it is not the reason a reader would guess: it was never about generics or about arrays. They need a
+// FUNCTION VALUE, Burxt has no closures, and A10 — build closures — was closed WITHOUT being built,
+// because `dynamic Trait` had been a function value since v0.0.14 and A9 made it generic. So this
+// fixture is the acceptance test for that decision: if these read badly, A9 did not replace closures.
+//
+// `lib/fn.bx` holds the four interfaces and the reasoning for their shape.
+//
+// ---- what this fixture is built to CATCH ------------------------------------------------
+//
+// The edges, not the happy path, because the happy path is the case that already works:
+//
+//   * the EMPTY array through every function, including `array_all` answering **true** on it
+//   * a single element, where a merge sort's runs never merge
+//   * a predicate that accepts EVERYTHING and one that accepts NOTHING
+//   * **a comparer that calls distinct elements equal** — `AllEqual` and `ByLength`. This is the one
+//     that catches an unstable sort, and nothing else does: every ascending-order test passes with the
+//     merge's two branches swapped, and that swap reverses every group of equals.
+//   * an ODD element count, 9, so `array_sort_by`'s last run is a partial one at every width
+//
+// ---- why the output is joined by hand ---------------------------------------------------
+//
+// `join_pairwise` below, rather than `string_join` from `lib/string.bx` — which is a perfectly good
+// chunked join and would work here. The reason is about what a FAILURE means, not about that function:
+//
+// **This fixture tests `lib/array.bx`. It should not be able to fail because `lib/string.bx`
+// changed.** A fixture that reaches into a second library to render its output has two ways to go red
+// and only says one of them out loud, and the half hour spent finding out which is exactly the cost a
+// test exists to avoid. Joining by hand keeps every failure here attributable to the thing under test.
+//
+// Writing the pairwise merge out also puts the D0 idiom in front of a reader of a D2d fixture, which
+// is where someone about to write their own fold will be looking. `string_join_chunks` in
+// `lib/string.bx` is the library version of the same merge, and is what a real program should call.
+use "../../lib/array.bx";
+
+// Pairwise: halve the list of chunks each pass, so a piece is copied log n times rather than n.
+// `join_chunks` in `src/burxt-compiler/emit.bx` is the reference implementation.
+function join_pairwise(pieces: [String], separator: String) -> String {
+    if len(pieces) == 0 {
+        return "(empty)";
+    }
+    let mutable level: [String] = [];
+    let mutable i: Int = 0;
+    while i < len(pieces) {
+        push(level, pieces[i]);
+        i += 1;
+    }
+    while len(level) > 1 {
+        let mutable next: [String] = [];
+        let mutable j: Int = 0;
+        while j + 1 < len(level) {
+            push(next, level[j] + separator + level[j + 1]);
+            j += 2;
+        }
+        // An odd leftover is carried up as its own chunk; it picks up its separator next pass.
+        if j < len(level) {
+            push(next, level[j]);
+        }
+        level = next;
+    }
+    return level[0];
+}
+
+function show_ints(xs: [Int]) -> String {
+    let mutable pieces: [String] = [];
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        push(pieces, to_string(xs[i]));
+        i += 1;
+    }
+    return join_pairwise(pieces, " ");
+}
+
+// ---- the implementations a USER would write ---------------------------------------------
+//
+// Three lines each. That is the bar A9 had to clear, and it is the whole of what a caller writes.
+
+class Doubler { }
+implement Mapper<Int, Int> for Doubler {
+    function (self) apply(x: Int) -> Int { return x * 2; }
+}
+
+class Label { }
+implement Mapper<Int, String> for Label {
+    function (self) apply(x: Int) -> String { return "n{x}"; }
+}
+
+class Even { }
+implement Predicate<Int> for Even {
+    function (self) test(x: Int) -> Bool { return remainder(x, 2) == 0; }
+}
+
+class Always { }
+implement Predicate<Int> for Always {
+    function (self) test(x: Int) -> Bool { return true; }
+}
+
+class Never { }
+implement Predicate<Int> for Never {
+    function (self) test(x: Int) -> Bool { return false; }
+}
+
+// **State as a FIELD, which is the honest version of a closure's capture.** A closure over `limit`
+// and this are the same program; here the captured value has a name and a type, and a reviewer can
+// see what was captured without reading the body.
+class Above { limit: Int }
+implement Predicate<Int> for Above {
+    function (self) test(x: Int) -> Bool { return x > self.limit; }
+}
+
+class SumFold { }
+implement Folder<Int, Int> for SumFold {
+    function (self) step(acc: Int, x: Int) -> Int { return acc + x; }
+}
+
+// A fold that CHANGES type: `[String]` down to an `Int`. This is what the separate `A` parameter on
+// `Folder` is for, and a fold restricted to `A = T` could not express it.
+class LenFold { }
+implement Folder<String, Int> for LenFold {
+    function (self) step(acc: Int, x: String) -> Int { return acc + len(x); }
+}
+
+class Asc { }
+implement Comparer<Int> for Asc {
+    function (self) before(a: Int, b: Int) -> Bool { return a < b; }
+}
+
+class Desc { }
+implement Comparer<Int> for Desc {
+    function (self) before(a: Int, b: Int) -> Bool { return b < a; }
+}
+
+// **The stability probes.** `AllEqual` says nothing is before anything, so a STABLE sort must leave
+// the array exactly as it found it — and an unstable one will not. `ByLength` is the realistic
+// version: distinct strings that compare equal, which is what sorting records by one field is.
+class AllEqual { }
+implement Comparer<Int> for AllEqual {
+    function (self) before(a: Int, b: Int) -> Bool { return false; }
+}
+
+class ByLength { }
+implement Comparer<String> for ByLength {
+    function (self) before(a: String, b: String) -> Bool { return len(a) < len(b); }
+}
+
+// One class wearing three hats at once, which is why `lib/fn.bx`'s four interfaces have four
+// DIFFERENT method names. A single `call` on all of them would make this a name clash and force a
+// class per operation.
+class Rules { }
+implement Predicate<Int> for Rules {
+    function (self) test(x: Int) -> Bool { return x > 0; }
+}
+implement Mapper<Int, Int> for Rules {
+    function (self) apply(x: Int) -> Int { return x + 100; }
+}
+implement Comparer<Int> for Rules {
+    function (self) before(a: Int, b: Int) -> Bool { return a < b; }
+}
+
+region main {
+    // The interface objects. **Two `let`s per function value, not one** — an interface object borrows
+    // the storage of the value it refers to, so `let f: dynamic Mapper<Int, Int> = Doubler { };` is
+    // refused: an expression has no storage to borrow. That is the one place this is measurably more
+    // ceremonious than a closure, and it is the rule that makes passing a `dynamic` free.
+    let doubler: Doubler = Doubler { };
+    let double: dynamic Mapper<Int, Int> = doubler;
+    let labeller: Label = Label { };
+    let label: dynamic Mapper<Int, String> = labeller;
+    let evener: Even = Even { };
+    let even: dynamic Predicate<Int> = evener;
+    let alwayser: Always = Always { };
+    let always: dynamic Predicate<Int> = alwayser;
+    let neverer: Never = Never { };
+    let never: dynamic Predicate<Int> = neverer;
+    let summer: SumFold = SumFold { };
+    let add: dynamic Folder<Int, Int> = summer;
+    let lengther: LenFold = LenFold { };
+    let add_len: dynamic Folder<String, Int> = lengther;
+    let ascer: Asc = Asc { };
+    let ascending: dynamic Comparer<Int> = ascer;
+    let descer: Desc = Desc { };
+    let descending: dynamic Comparer<Int> = descer;
+    let equaller: AllEqual = AllEqual { };
+    let all_equal: dynamic Comparer<Int> = equaller;
+    let lengther2: ByLength = ByLength { };
+    let by_length: dynamic Comparer<String> = lengther2;
+
+    let numbers: [Int] = [1, 2, 3, 4, 5];
+    let empty: [Int] = [];
+    let single: [Int] = [7];
+
+    // ---- map ----
+    print("map");
+    print(show_ints(array_map(numbers, double)));           // 2 4 6 8 10
+    print(show_ints(array_map(empty, double)));             // (empty)
+    print(show_ints(array_map(single, double)));            // 14
+    // Type-changing, [Int] -> [String]: one `array_map`, a second instantiation.
+    let labels: [String] = array_map(single, label);
+    print(join_pairwise(labels, ","));                      // n7
+
+    // ---- filter ----
+    print("filter");
+    print(show_ints(array_filter(numbers, even)));          // 2 4
+    print(show_ints(array_filter(numbers, always)));        // all of them
+    print(show_ints(array_filter(numbers, never)));         // (empty)
+    print(show_ints(array_filter(empty, even)));            // (empty)
+    print(show_ints(array_filter(single, never)));          // (empty) — one element, rejected
+    print(show_ints(array_filter(single, always)));         // 7 — one element, kept
+
+    // A captured value, as a field.
+    let above: Above = Above { limit: 3 };
+    let over_three: dynamic Predicate<Int> = above;
+    print(show_ints(array_filter(numbers, over_three)));    // 4 5
+
+    // ---- fold ----
+    print("fold");
+    print(array_fold(numbers, 0, add));                     // 15
+    print(array_fold(empty, 100, add));                     // 100 — the fold of nothing is `start`
+    print(array_fold(single, 0, add));                      // 7
+    let words: [String] = ["a", "bbb", "cc"];
+    print(array_fold(words, 0, add_len));                   // 6 — [String] folded into an Int
+
+    // ---- any / all ----
+    print("any");
+    print(array_any(numbers, even));                        // true
+    print(array_any(numbers, never));                       // false
+    print(array_any(empty, always));                        // false — nothing to satisfy it
+    print(array_any(single, even));                         // false — 7 is odd
+    print("all");
+    print(array_all(numbers, always));                      // true
+    print(array_all(numbers, even));                        // false
+    // **True, vacuously.** No element fails, because there is no element. This is the answer that
+    // makes `all(a) && all(b) == all(a ++ b)` hold for every pair, and any other choice breaks it.
+    print(array_all(empty, never));                         // true
+    print(array_all(single, never));                        // false
+
+    // ---- position ----
+    print("position");
+    print(option_or(array_position(numbers, even), 0 - 1));       // 1
+    print(option_or(array_position(numbers, never), 0 - 1));      // -1
+    print(option_or(array_position(empty, always), 0 - 1));       // -1
+    print(option_is_some(array_position(single, always)));        // true
+
+    // ---- retain, which changes the array it is given ----
+    print("retain");
+    let mutable keep_even: [Int] = [1, 2, 3, 4, 5, 6];
+    print(array_retain(keep_even, even));                   // 3
+    print(show_ints(keep_even));                            // 2 4 6
+    let mutable keep_none: [Int] = [1, 2, 3];
+    print(array_retain(keep_none, never));                  // 0
+    print(show_ints(keep_none));                            // (empty)
+    let mutable keep_all: [Int] = [1, 2, 3];
+    print(array_retain(keep_all, always));                  // 3
+    print(show_ints(keep_all));                             // 1 2 3
+    let mutable keep_empty: [Int] = [];
+    print(array_retain(keep_empty, always));                // 0
+    let mutable keep_one: [Int] = [8];
+    print(array_retain(keep_one, even));                    // 1
+    print(show_ints(keep_one));                             // 8
+
+    // ---- partition ----
+    print("partition");
+    // **The `([Int], [Int])` annotations below are load-bearing for `burxt layout`, not decoration.**
+    // Stage-0 monomorphises and reports the tuple it built for the call; stage-1 never
+    // monomorphises, so it can only report a tuple some type NODE spells out. Without an
+    // annotation the two reports differ by a whole row — a PRE-EXISTING gap, nothing to do with
+    // tuples: `class Box<T>` reached only through `function make<T>(x: T) -> Box<T>` gives stage-0
+    // a `Box$String` row and stage-1 nothing, and a plain `(T, T)` behaves the same. Writing the
+    // type is also the better fixture: a reader sees what `array_partition` answers.
+    let split: ([Int], [Int]) = array_partition(numbers, even);
+    let passing: [Int] = split.0;
+    let failing: [Int] = split.1;
+    print(show_ints(passing));                              // 2 4
+    print(show_ints(failing));                              // 1 3 5
+    let split_all: ([Int], [Int]) = array_partition(numbers, always);
+    let all_pass: [Int] = split_all.0;
+    let none_fail: [Int] = split_all.1;
+    print(show_ints(all_pass));                             // 1 2 3 4 5
+    print(show_ints(none_fail));                            // (empty)
+    let split_none: ([Int], [Int]) = array_partition(numbers, never);
+    let none_pass: [Int] = split_none.0;
+    let all_fail: [Int] = split_none.1;
+    print(show_ints(none_pass));                            // (empty)
+    print(show_ints(all_fail));                             // 1 2 3 4 5
+    let split_empty: ([Int], [Int]) = array_partition(empty, even);
+    let ep: [Int] = split_empty.0;
+    let ef: [Int] = split_empty.1;
+    print(show_ints(ep));                                   // (empty)
+    print(show_ints(ef));                                   // (empty)
+
+    // ---- sort_by: a STABLE merge sort ----
+    print("sort_by");
+    let mutable up: [Int] = [5, 3, 9, 1];
+    print(array_sort_by(up, ascending));                    // 4
+    print(show_ints(up));                                   // 1 3 5 9
+    let mutable down: [Int] = [5, 3, 9, 1];
+    print(array_sort_by(down, descending));                 // 4
+    print(show_ints(down));                                 // 9 5 3 1
+
+    let mutable none_to_sort: [Int] = [];
+    print(array_sort_by(none_to_sort, ascending));          // 0
+    let mutable one_to_sort: [Int] = [7];
+    print(array_sort_by(one_to_sort, ascending));           // 1
+    print(show_ints(one_to_sort));                          // 7
+    let mutable two_to_sort: [Int] = [2, 1];
+    print(array_sort_by(two_to_sort, ascending));           // 2
+    print(show_ints(two_to_sort));                          // 1 2
+
+    // ODD length, 9, so the final run at every width is a partial one — the boundary a bottom-up
+    // merge gets wrong if `mid` or `high` is not clamped.
+    let mutable nine: [Int] = [9, 1, 8, 2, 7, 3, 6, 4, 5];
+    print(array_sort_by(nine, ascending));                  // 9
+    print(show_ints(nine));                                 // 1 2 3 4 5 6 7 8 9
+
+    // Already sorted, and reversed — both must come out ascending.
+    let mutable sorted_already: [Int] = [1, 2, 3, 4, 5];
+    print(array_sort_by(sorted_already, ascending));        // 5
+    print(show_ints(sorted_already));                       // 1 2 3 4 5
+    let mutable reversed: [Int] = [5, 4, 3, 2, 1];
+    print(array_sort_by(reversed, ascending));              // 5
+    print(show_ints(reversed));                             // 1 2 3 4 5
+
+    // ---- STABILITY, which is the reason this is a merge sort and not a quicksort ----
+    print("stable");
+    // Every element "equal", so a stable sort changes NOTHING. An unstable one reorders, and this is
+    // the only test in the file that can tell.
+    let mutable unchanged: [Int] = [3, 1, 2, 5, 4];
+    print(array_sort_by(unchanged, all_equal));             // 5
+    print(show_ints(unchanged));                            // 3 1 2 5 4 — exactly as written
+
+    // Distinct values that compare equal: same length, so their relative order must survive.
+    let mutable same_length: [String] = ["bb", "aa", "cc"];
+    print(array_sort_by(same_length, by_length));           // 3
+    print(join_pairwise(same_length, " "));                 // bb aa cc — NOT sorted alphabetically
+
+    // The realistic case: groups of equals that also have to move.
+    let mutable by_size: [String] = ["dddd", "bb", "a", "cc", "eee", "ff"];
+    print(array_sort_by(by_size, by_length));               // 6
+    print(join_pairwise(by_size, " "));                     // a bb cc ff eee dddd
+
+    // ---- one class, three interfaces ----
+    print("three hats");
+    let rules: Rules = Rules { };
+    let rule_p: dynamic Predicate<Int> = rules;
+    let rule_m: dynamic Mapper<Int, Int> = rules;
+    let rule_c: dynamic Comparer<Int> = rules;
+    let mixed: [Int] = [0 - 1, 2, 0 - 3, 4];
+    print(show_ints(array_filter(mixed, rule_p)));          // 2 4
+    print(show_ints(array_map(single, rule_m)));            // 107
+    let mutable to_sort: [Int] = [3, 1, 2];
+    print(array_sort_by(to_sort, rule_c));                  // 3
+    print(show_ints(to_sort));                              // 1 2 3
+}

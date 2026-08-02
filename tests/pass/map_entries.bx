@@ -1,0 +1,241 @@
+// Roadmap D1f — `values()`, `entries()`, `clear()`, `merge()`, `is_empty()` on `Map<K, V>`.
+//
+// **`entries()` is the one that needed a language feature**, and it needed A8 (tuples), which landed
+// the same day as A9. Without a tuple type the return had to be a named two-field class — declared in
+// `lib/map.bx`, exported into every program that iterates a map, and generic in `K` and `V`. The
+// workaround was `keys()` and then a `get` per key, which costs a full hash-and-probe per entry to
+// re-find data the loop already had in hand.
+//
+// ---- what this fixture is built to catch -------------------------------------------------
+//
+// **Insertion order across a removal, for all three views.** That is `lib/map.bx`'s whole thesis and
+// the reason it is a compact table rather than plain buckets: iteration order is insertion order,
+// always, never "unspecified". `keys()` has been pinned on that since v0.0.118; `values()` and
+// `entries()` are new and could each have got it wrong independently, since each walks the entry array
+// and has to skip tombstones itself.
+//
+// And the parts of that thesis that only show up in combination:
+//
+//   * a TOMBSTONE in the middle — every survivor keeps its original position, so the removed entry
+//     leaves a gap in nothing
+//   * an OVERWRITE, which must not move a key to the end
+//   * a key removed and then RE-ADDED, which goes to the end because it is a new insertion
+//   * `merge` where keys overlap, so the count of new keys is not the count of entries merged
+//   * `clear` followed by reuse, which is where a map that dropped its slot table but kept a stale
+//     `live` count would answer wrongly
+//   * **a view held ACROSS a `clear`**, which is why `clear` builds fresh arrays rather than
+//     truncating the ones it has
+use "../../lib/map.bx";
+
+function show_strings(pieces: [String]) -> String {
+    if len(pieces) == 0 {
+        return "(empty)";
+    }
+    // Pairwise, per D0.
+    let mutable level: [String] = [];
+    let mutable i: Int = 0;
+    while i < len(pieces) {
+        push(level, pieces[i]);
+        i += 1;
+    }
+    while len(level) > 1 {
+        let mutable next: [String] = [];
+        let mutable j: Int = 0;
+        while j + 1 < len(level) {
+            push(next, level[j] + " " + level[j + 1]);
+            j += 2;
+        }
+        if j < len(level) {
+            push(next, level[j]);
+        }
+        level = next;
+    }
+    return level[0];
+}
+
+function show_ints(xs: [Int]) -> String {
+    let mutable pieces: [String] = [];
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        push(pieces, to_string(xs[i]));
+        i += 1;
+    }
+    return show_strings(pieces);
+}
+
+// `(K, V)` pairs rendered as `key=value`. `.0` and `.1` rather than names, because A8 shipped
+// positional access and not destructuring — which reads worse than `for (k, v) in ...` and is the
+// honest state of the feature.
+function show_entries(pairs: [(String, Int)]) -> String {
+    let mutable pieces: [String] = [];
+    let mutable i: Int = 0;
+    while i < len(pairs) {
+        let pair: (String, Int) = pairs[i];
+        push(pieces, pair.0 + "=" + to_string(pair.1));
+        i += 1;
+    }
+    return show_strings(pieces);
+}
+
+region main {
+    // ---- an empty map answers all three views without crashing ----
+    print("empty");
+    let mutable blank: Map<String, Int> = map_new();
+    print(blank.is_empty());                             // true
+    print(blank.count());                                // 0
+    print(show_ints(blank.values()));                    // (empty)
+    print(show_entries(blank.entries()));                // (empty)
+    print(show_strings(blank.keys()));                   // (empty)
+    // `clear` on an already-empty map: 0 dropped, still usable. A map_new() has no slot table at all
+    // yet, so this is the case where clearing touches arrays that were never built.
+    print(blank.clear());                                // 0
+    print(blank.is_empty());                             // true
+    let after_clear: Int = blank.set("a", 1);
+    print(blank.count());                                // 1 — usable after being cleared
+
+    // ---- one entry ----
+    print("one");
+    let mutable single: Map<String, Int> = map_new();
+    let s1: Int = single.set("only", 5);
+    print(single.is_empty());                            // false
+    print(show_ints(single.values()));                   // 5
+    print(show_entries(single.entries()));                // only=5
+
+    // ---- insertion order, and what does not disturb it ----
+    print("order");
+    let mutable scores: Map<String, Int> = map_new();
+    let a: Int = scores.set("alpha", 1);
+    let b: Int = scores.set("beta", 2);
+    let c: Int = scores.set("gamma", 3);
+    let d: Int = scores.set("delta", 4);
+    print(show_strings(scores.keys()));                  // alpha beta gamma delta
+    print(show_ints(scores.values()));                   // 1 2 3 4
+    print(show_entries(scores.entries()));               // alpha=1 beta=2 gamma=3 delta=4
+
+    // An OVERWRITE does not move the key. `set` answers 0 for a replacement.
+    let over: Int = scores.set("beta", 99);
+    print(over);                                         // 0
+    print(show_entries(scores.entries()));               // beta is still SECOND, now 99
+
+    // A TOMBSTONE in the middle: every survivor keeps its position.
+    print(scores.remove("gamma"));                       // true
+    print(scores.count());                               // 3
+    print(show_strings(scores.keys()));                  // alpha beta delta
+    print(show_ints(scores.values()));                   // 1 99 4
+    print(show_entries(scores.entries()));               // alpha=1 beta=99 delta=4
+
+    // Removing the FIRST key inserted — the case a hash-ordered map gets wrong.
+    print(scores.remove("alpha"));                       // true
+    print(show_entries(scores.entries()));               // beta=99 delta=4
+
+    // Re-adding a removed key puts it at the END, because it is a new insertion rather than a repair.
+    let again: Int = scores.set("alpha", 7);
+    print(again);                                        // 1 — a NEW key, so 1
+    print(show_entries(scores.entries()));               // beta=99 delta=4 alpha=7
+
+    // ---- values are NOT deduplicated ----
+    print("duplicate values");
+    let mutable repeats: Map<String, Int> = map_new();
+    let r1: Int = repeats.set("x", 1);
+    let r2: Int = repeats.set("y", 1);
+    let r3: Int = repeats.set("z", 1);
+    print(show_ints(repeats.values()));                  // 1 1 1
+    print(len(repeats.values()) == repeats.count());      // true — one element per live entry
+
+    // ---- merge ----
+    print("merge");
+    let mutable into: Map<String, Int> = map_new();
+    let i1: Int = into.set("keep", 1);
+    let i2: Int = into.set("shared", 2);
+    let mutable from: Map<String, Int> = map_new();
+    let f1: Int = from.set("shared", 20);                 // overlaps — overwrites, does not add
+    let f2: Int = from.set("fresh", 30);                  // new
+    // Answers how many keys were NEW, which is 1 of the 2 merged.
+    print(into.merge(from));                             // 1
+    print(into.count());                                 // 3
+    // `keep` and `shared` hold their original positions; `fresh` is appended.
+    print(show_entries(into.entries()));                 // keep=1 shared=20 fresh=30
+    // The source is unchanged — no `mutable` on the parameter.
+    print(from.count());                                 // 2
+    print(show_entries(from.entries()));                 // shared=20 fresh=30
+
+    // Merging an EMPTY map adds nothing and disturbs nothing.
+    let mutable nothing_to_merge: Map<String, Int> = map_new();
+    print(into.merge(nothing_to_merge));                 // 0
+    print(show_entries(into.entries()));                 // keep=1 shared=20 fresh=30
+
+    // Merging a map with a TOMBSTONE: the removed key must not travel.
+    let mutable with_hole: Map<String, Int> = map_new();
+    let h1: Int = with_hole.set("live", 1);
+    let h2: Int = with_hole.set("dead", 2);
+    print(with_hole.remove("dead"));                     // true
+    let mutable target: Map<String, Int> = map_new();
+    print(target.merge(with_hole));                      // 1 — only the live one
+    print(target.has("dead"));                           // false
+    print(show_entries(target.entries()));               // live=1
+
+    // ---- clear, and a view held across it ----
+    print("clear");
+    let mutable to_clear: Map<String, Int> = map_new();
+    let c1: Int = to_clear.set("one", 1);
+    let c2: Int = to_clear.set("two", 2);
+    let c3: Int = to_clear.set("three", 3);
+    print(to_clear.remove("two"));                       // true — a tombstone, so live is 2 of 3
+    // **The view is taken BEFORE the clear and read after it.** `clear` builds fresh arrays rather
+    // than truncating the ones it has, so this stays valid — an array is a handle, and truncating in
+    // place would empty this list out from under the caller.
+    let held: [(String, Int)] = to_clear.entries();
+    print(to_clear.clear());                             // 2 — LIVE entries dropped, not 3
+    print(show_entries(held));                           // one=1 three=3 — still there
+    print(to_clear.is_empty());                          // true
+    print(to_clear.count());                             // 0
+    print(show_entries(to_clear.entries()));             // (empty)
+    print(to_clear.has("one"));                          // false
+    // Refilled after clearing: order starts over, and the old keys are ordinary new ones.
+    let n1: Int = to_clear.set("three", 30);
+    let n2: Int = to_clear.set("one", 10);
+    print(to_clear.count());                             // 2
+    print(show_entries(to_clear.entries()));             // three=30 one=10 — the NEW order
+
+    // ---- enough entries to force a rehash, which is where order is most at risk ----
+    print("rehash");
+    let mutable many: Map<Int, Int> = map_new();
+    let mutable k: Int = 0;
+    while k < 40 {
+        let added: Int = many.set(k, k * 10);
+        k += 1;
+    }
+    print(many.count());                                 // 40
+    let keys_in_order: [Int] = many.keys();
+    let values_in_order: [Int] = many.values();
+    // Every position must still hold the key that was inserted there, through several doublings of
+    // the slot table — and the values must line up with the keys index for index.
+    let mutable ordered: Bool = true;
+    let mutable j: Int = 0;
+    while j < len(keys_in_order) {
+        if keys_in_order[j] != j {
+            ordered = false;
+        }
+        if values_in_order[j] != j * 10 {
+            ordered = false;
+        }
+        j += 1;
+    }
+    print(ordered);                                      // true
+    print(len(many.entries()) == 40);                     // true
+    // The tuple view agrees with the two separate views, entry for entry.
+    let pairs: [(Int, Int)] = many.entries();
+    let mutable agreeing: Bool = true;
+    let mutable p: Int = 0;
+    while p < len(pairs) {
+        let pair: (Int, Int) = pairs[p];
+        if pair.0 != keys_in_order[p] {
+            agreeing = false;
+        }
+        if pair.1 != values_in_order[p] {
+            agreeing = false;
+        }
+        p += 1;
+    }
+    print(agreeing);                                     // true
+}
