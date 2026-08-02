@@ -1,0 +1,22 @@
+// A PHANTOM type parameter, and this fixture exists because v0.0.272 shipped without it.
+//
+// `Tagged<T>` never uses `T` in a field, so `Tagged<String>` is one Int in the layout and cannot
+// dangle — reading it out of a region-built parent is a copy. The first version of B36's gate asked
+// the type ARGUMENTS before asking the declaration, so `String` as an argument condemned a type that
+// stores no String, and stage-1 refused a program stage-0 accepts.
+//
+// The loop was redundant as well as wrong: substitution binds the arguments and the fields are read
+// THROUGH them, so an argument that reaches storage already shows up as a field. An argument that
+// reaches no field is exactly the phantom case, and asking about it is a false refusal.
+//
+// Stage-0 arrives at the same answer by a different road — it never sees a generic application at
+// this site, because the type is already monomorphised to `Tagged$String` and its `Named` path runs.
+// Two roads, one answer, and the fixture pins the answer rather than either road.
+class Tagged<T> { n: Int }
+class Outer { inner: Tagged<String>, s: String }
+let mutable kept: Tagged<String> = Tagged { n: 0 };
+region r {
+    let o: Outer = Outer { inner: Tagged { n: 42 }, s: "a" + "b" };
+    kept = o.inner;
+}
+print(kept.n);

@@ -1345,11 +1345,6 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
     // has to be both. A field of type String is a pointer into the record and stays refused; a field
     // of type Int is a copy and is now accepted.
     //
-    // One place the two do NOT yet agree, and it is deliberate: on a generic APPLICATION this gate
-    // is stricter than stage-0's helper, because that helper has a measured hole there. The proof
-    // and the reasoning are on `may_be_region_storage` in `check.bx`; the short version is that a
-    // false refusal is a program someone rewrites and a false acceptance is a use-after-free.
-    //
     // The gate is a fact about the representation, not a guess — measured before it was written: a
     // class value is copied INLINE, nested class fields included, so a field whose leaves are all
     // scalars is a copy too.
@@ -1358,9 +1353,27 @@ function (mutable self: Unit) expr_allocates(src: String, node: Int) -> Bool {
     //     let mutable a: Outer = Outer { inner: Inner { n: 1 }, s: "x" };
     //     let mutable b: Outer = a;  b.inner.n = 99;  print("{a.inner.n}");   // prints 1
     //
-    // Stage-1 asks only `n.a` where stage-0's Index arm also asks its INDEX. Left as it was, because
-    // narrowing and mirroring are two changes and this row is the first one; noted so the next
-    // reader does not take the difference for a decision.
+    // Landed in both compilers together, and neither gate is a port of the other — stage-0 had no
+    // gate at this arm either, so this is the same NEW question asked in two places. They were then
+    // measured against each other on 22 shapes and on every program in `tests/`, `lib/`, `examples/`
+    // and the audit corpus: 0 verdict divergences. Getting there took three corrections in an hour,
+    // all of them from someone checking a premise instead of agreeing with it.
+    //
+    // ---- one thing NOT mirrored, and it is stage-0 that is wrong -------------------------------
+    //
+    // Stage-1 asks only `n.a`. Stage-0's Index arm asks `expr_allocates(base) || expr_allocates(index)`,
+    // and that disjunct is a false refusal — an index is an Int, and what the read hands back comes
+    // from the BASE however the index was computed. Reachable whenever the element type is region
+    // storage and only the index allocates:
+    //
+    //     let mutable xs: [String] = [];  push(xs, "lit");     // built OUTSIDE the region
+    //     region r { kept = xs[idx()]; }                       // idx() joins two Strings
+    //
+    // stage-0 REFUSES, stage-1 ACCEPTS, and stage-1 is right: the String comes from `xs`, which
+    // outlives the region. **It predates B36** — the pre-fix stage-1 accepts it too — so it is not
+    // this row's to fix, and adding the disjunct here to match would be importing a false refusal.
+    // Reported to whoever owns `typeck.rs`; recorded here so the difference is not read as an
+    // oversight by the next person who diffs the two arms.
     //
     // The inference does not move: `holds_region` is only ever set while a region is open, so
     // `return b.name` in an ordinary function still answers exactly what it answered before.

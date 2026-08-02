@@ -5716,16 +5716,18 @@ function (mutable self: Unit) region_allocated(src: String, t: Type) -> Bool {
 // signature stops compiling. This one asks whether it COULD be, and must answer YES for the same
 // String, or `kept = b.name` reads bytes the region released. Two questions, two answers, one type.
 //
-// Stage-0's `may_be_region_storage`, mirrored — its own comment says what the shape is for: *"only
-// to keep the taint OFF names that cannot dangle... false positives are as much a failure as false
-// negatives here."* A type parameter and a `dynamic` answer YES because neither says what the
+// The same shape as stage-0's `may_be_region_storage`, and **not a port of a call site** — stage-0
+// had no gate at the field/index arm either, so B36 is one NEW question asked in two places rather
+// than one compiler catching up with the other. Stage-0's own comment says what the shape is for:
+// *"only to keep the taint OFF names that cannot dangle... false positives are as much a failure as
+// false negatives here."* A type parameter and a `dynamic` answer YES because neither says what the
 // storage is, which is M14 §10: a wrong guess must cost memory rather than correctness.
 //
 // ---- the generic application, and why it asks the DECLARATION with the arguments put in --------
 //
 // The arguments alone are not enough. A field that is a String whatever T is never appears among
-// them, and the first version of this predicate — arguments only, which is what stage-0's
-// `Type::Generic` arm did — accepted a use-after-free. Measured, built and run:
+// them, and the first version of this predicate — arguments only — accepted a use-after-free.
+// Measured, built and run:
 //
 //     class Wrapper<T> { t: T, note: String }      class Outer { inner: Wrapper<Int> }
 //     region r { let o: Outer = Outer { inner: Wrapper { t: 1, note: "hello-" + "world" } };
@@ -5739,9 +5741,13 @@ function (mutable self: Unit) region_allocated(src: String, t: Type) -> Bool {
 // why `bind_from_application` is here: the arguments are bound, the fields are read THROUGH those
 // bindings by `resolve_shallow` at the top of this function, and `one: T` becomes `one: Int`.
 //
-// Both halves are stage-0's as well — `b32-stage0` fixed the same predicate from the other side in
-// the same hour, through `fields_of` and `generic_body_holds_storage`, and `a12-stage0` had already
-// written the reason down beside `could_hold_storage`: a generic INSTANTIATION resolves through a
+// Both halves are stage-0's as well, reached by a different road, and the difference is worth
+// knowing: **stage-0 never sees a generic application here at all.** By the time its
+// `expr_allocates` runs, `Wrapper<Int>` has been monomorphised to `Named("Wrapper$Int")`, so it
+// takes the `Named` path and its `Type::Generic` arm is dead at this site — which is why the same
+// bug is a `fields_of` lookup there and a substitution here. `b32-stage0` established that by
+// measurement after I had misattributed it to their `Generic` arm; `a12-stage0` had already written
+// the underlying reason beside `could_hold_storage`, that an INSTANTIATION resolves through a
 // different table, so the naive lookup answers "holds nothing" and `lib/json.bx` printed a
 // truncated document until that stopped being believed. Three finds, one predicate.
 //
@@ -5773,19 +5779,25 @@ function (mutable self: Unit) may_be_region_storage(src: String, written: Type) 
     }                                                // a sized width — one i64 cell, copied
     // Taken BEFORE anything is pushed, and every exit below truncates back to it.
     let bindings_base: Int = len(self.type_bindings);
-    if t.contract > 0 {                              // a generic application: its ARGUMENTS first
-        let mutable a: Int = 0;
-        while a < t.contract {
-            let argument: Type = self.declared_type(src, self.nested_children[t.scale + a]);
-            if self.may_be_region_storage(src, argument) {
-                return true;                         // nothing pushed yet, so nothing to undo
-            }
-            a += 1;
-        }
-        // Then the declaration, with the arguments bound. No floor move: `bind_from_application`
-        // resolves each argument under the bindings ALREADY in scope before pushing it, which is
-        // what makes `Nested<Point>` holding a `Pair<T>` come out as `Pair<Point>` rather than
-        // rebinding `T` to itself. The match-arm caller binds it exactly this way.
+    if t.contract > 0 {
+        // A generic application asks the DECLARATION with the arguments bound, and asks the
+        // arguments themselves NOT AT ALL. That is not an omission — an argument that reaches the
+        // storage reaches it through a field, and the binding puts it there; an argument that
+        // reaches no field is a PHANTOM parameter, absent from the layout, and asking about it is a
+        // false refusal. Measured, and it is the last thing the two compilers disagreed on:
+        //
+        //     class Tagged<T> { n: Int }    class Outer { inner: Tagged<String>, s: String }
+        //     region r { ... kept = o.inner; }        // `Tagged<String>` is one Int, copied
+        //
+        // stage-0 ACCEPTS that and an arguments-first version of this refused it. Stage-0 reaches
+        // the same answer by a different road: by the time its `expr_allocates` sees the read, the
+        // type has been monomorphised to `Tagged$String`, so it takes the `Named` path through
+        // `fields_of` and its `Type::Generic` arm — which does ask the arguments — never runs.
+        //
+        // No floor move: `bind_from_application` resolves each argument under the bindings ALREADY
+        // in scope before pushing it, which is what makes `Nested<Point>` holding a `Pair<T>` come
+        // out as `Pair<Point>` rather than rebinding `T` to itself. The match-arm caller binds it
+        // exactly this way.
         let bound: Int = self.bind_from_application(src, t);
     }
     let found: Int = self.find_type(src, t.name_start, t.name_length);

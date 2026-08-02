@@ -136,7 +136,7 @@ error: this `match` on `Method` does not handle `Transfer`. Every variant must b
  --> examples/refused/05-forgotten-variant.bx:7:19
   |
 7 |         Card => { return $0.30; }
-  |                   ^^^^^^^^^^^^^
+  |                   ^^^^^^
 ```
 
 ## A precondition passed a value it forbids
@@ -186,7 +186,7 @@ error: cannot return this String: it was built inside a `region` block, which re
  --> examples/refused/07-escaping-region.bx:6:9
   |
 6 |         return text;
-  |         ^^^^^^^^^^^^
+  |         ^^^^^^
 ```
 
 ## Text treated as money
