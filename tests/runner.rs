@@ -2011,6 +2011,56 @@ fn the_repository_root_holds_only_what_belongs_there() {
     );
 }
 
+/// A fixture directory holds programs, expectations, and the handful of files a program READS.
+/// Nothing a program WRITES.
+///
+/// `the_repository_root_holds_only_what_belongs_there` has caught seven strays and has no
+/// counterpart one directory down, which is how `tests/pass/` came to hold three of its own
+/// outputs — `bytes_out.txt` and `string_length_probe.txt` both COMMITTED, since v0.0.121 in one
+/// case, and `emitted.ll` sitting there untracked because `*.ll` is gitignored and the ignore hid
+/// it. `docs/log/08` records removing exactly that file once before.
+///
+/// Untidy is the small half. `install_fixtures` copies every non-program file in the directory into
+/// the run as an INPUT, so a leaked output is indistinguishable from a real fixture like
+/// `source_fixture.txt`. Nothing reads one today because all three fixtures write before they read.
+/// The day one does not, it passes on the strength of a committed artifact — the same shape as a
+/// pass fixture that cannot tell "supported" from "not examined", which is the rule this suite was
+/// built around.
+///
+/// The cause was a harness, not a habit: `tests/runner.bx` ran pass fixtures with `cd tests/pass`
+/// and panic fixtures in whatever directory it was standing in, which was the repository root. Both
+/// now run in the work directory. This test is what stops the next one.
+///
+/// An allowlist, like the root's, because "should this be here?" has a short knowable answer and
+/// anything new should have to be added on purpose.
+#[test]
+fn a_fixture_directory_holds_only_programs_expectations_and_inputs() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    // Files a fixture READS. Each one has to be justified by a program that reads it and does not
+    // write it first — a file the fixture writes belongs in the work directory, not here.
+    const INPUTS: [&str; 1] = ["source_fixture.txt"];
+    let mut strays = Vec::new();
+    for kind in ["pass", "fail", "panic"] {
+        for entry in fs::read_dir(root.join("tests").join(kind)).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let ext = Path::new(&name).extension().and_then(|e| e.to_str()).unwrap_or("");
+            if matches!(ext, "bx" | "stdout" | "stderr") || INPUTS.contains(&name.as_str()) {
+                continue;
+            }
+            strays.push(format!("tests/{}/{}", kind, name));
+        }
+    }
+    strays.sort();
+    assert!(
+        strays.is_empty(),
+        "a fixture directory holds a file that is not a program, an expectation, or a declared \
+         input: {:?}\nIf a fixture WRITES it, that is a leak — fixtures run in the work directory, \
+         so nothing should land here. If a fixture READS it, add it to INPUTS above with a reason.",
+        strays
+    );
+}
+
 /// The milestone log is split across files, so the index and the files must agree. Two
 /// ways to drift, both silent: a log file nobody links to, and a link to a file that was
 /// renamed. Checked because the log's whole value is that an entry can be found later.

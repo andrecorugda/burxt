@@ -1,0 +1,32 @@
+// A String is UTF-8, and that is CHECKED where text enters. Roadmap B5.
+//
+// `spec/A4.4` says "a String is UTF-8. Decide this now and hold it", and `docs/limitations.md`
+// told a reader the invariant "is checked at every entry point". It was not: a file holding
+// `0xff 0xfe` came back as a 22-byte String and the program exited 0. The guarantee was published
+// and not enforced, which is worse than never claiming it — the point of a claim like that is that
+// a reader stops checking.
+//
+// The check is at the door rather than at the first thing that reads the value, because an invalid
+// byte that gets in is a wrong answer somewhere else entirely, and by then the message can only
+// name the symptom. `read_file`, `argument` and `c_string_at` all check now; `os_env` is a library
+// function built on `c_string_at`, so it is covered by that one rather than by a rule of its own.
+//
+// The bytes are written by this program rather than committed next to it, deliberately: a binary
+// fixture file is an artifact the harness copies into every run as though it were an input, and
+// `tests/pass/` already has three of those that arrived by accident.
+//
+// The stated cost, which the roadmap row named in advance: a program reading BINARY through
+// `read_file` breaks. `file_read_bytes` is the door for that, and `tests/runner.bx` is where the
+// cost landed — the mascot check reads a GIF and now reads it as `[Int]`.
+let mutable payload: [Int] = [];
+let h: Int = push(payload, 104);        // 'h'
+let i: Int = push(payload, 105);        // 'i'
+let bad: Int = push(payload, 255);      // 0xff — a byte no valid UTF-8 sequence contains
+let nl: Int = push(payload, 10);
+
+let wrote: Int = write_bytes("not_text.bin", payload);
+print(wrote);
+
+// This must not return. If it ever prints, the invariant is unenforced again.
+let text: String = read_file("not_text.bin");
+print(len(text));

@@ -79,7 +79,7 @@ Burxt is early and built in small, verified increments. It is **not yet ready fo
 
 **The Burxt compiler compiles all 144 pass programs — 0 refused — and every one prints the same bytes as the Rust compiler's build of it** — Decimals, `match`, `return tail`, `external function`, interpolation, generics and maps included.
 
-**And it keeps every runtime guarantee.** "Compiles every program" would read like more than it is on its own, because that measure only covers programs that *succeed*. So a second test runs the 34 programs in `tests/panic/` — a broken contract, an overflow, an index out of range, a byte outside 0..255, a value too wide for the C parameter it crosses into, a `decreases` measure that does not decrease — through stage-1's backend and requires each one to fail. **It keeps 52 of 52**, and that is an equality rather than a floor, so losing one is a failing test.
+**And it keeps every runtime guarantee.** "Compiles every program" would read like more than it is on its own, because that measure only covers programs that *succeed*. So a second test runs the 34 programs in `tests/panic/` — a broken contract, an overflow, an index out of range, a byte outside 0..255, a value too wide for the C parameter it crosses into, a `decreases` measure that does not decrease — through stage-1's backend and requires each one to fail. **It keeps 53 of 53**, and that is an equality rather than a floor, so losing one is a failing test.
 Since v0.0.262 it also requires exit 70 and the fixture's own message, not merely a non-zero exit —
 because a bare `sdiv` on x86-64 *faults*, so for 120 versions the hardware was standing in for a
 check stage-1 never emitted, and the same program on arm64 printed a wrong number instead. That

@@ -150,8 +150,17 @@ unchanged. Full Unicode case mapping needs ~1,400 generated entries plus locale 
 and `ß` becoming `SS`, one codepoint becoming two.
 
 Codepoint iteration, `char_count`, `from_codepoint` and `is_valid_utf8` are all present. **A String is
-UTF-8 and that is checked at every entry point**, so invalid bytes are a named error where they enter
-rather than a corrupted value discovered later.
+UTF-8 and that is checked at every entry point** — `read_file`, `argument` and `c_string_at`, which is
+also how `os_env` is covered — so invalid bytes are a named error naming the door they came through,
+rather than a corrupted value discovered later somewhere that can only report the symptom. Overlong
+forms, surrogates, anything above U+10FFFF and a sequence the buffer cut short are all refused.
+
+This sentence was here before the check was, which is worth admitting rather than quietly correcting:
+the guarantee was published and unenforced until v0.0.284, and a published guarantee is exactly the
+kind a reader stops verifying.
+
+**The cost, stated plainly: you cannot read binary through `read_file` any more.** `file_read_bytes`
+answers `Option<[Int]>` and is the door for data that is not text.
 
 ### Nothing runs on a phone or in a browser yet
 

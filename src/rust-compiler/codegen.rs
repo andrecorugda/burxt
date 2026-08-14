@@ -88,6 +88,8 @@ pub struct CodeGen<'ctx> {
     alloc_fn: Option<FunctionValue<'ctx>>,
     byte_index_check_fn: Option<FunctionValue<'ctx>>,
     str_eq_fn: Option<FunctionValue<'ctx>>,
+    /// lazily created UTF-8 validator, B5 — emitted only into programs that let text IN
+    utf8_check_fn: Option<FunctionValue<'ctx>>,
     /// user fn name -> (param types, return type), for aggregate call lowering
     fn_sigs: HashMap<String, (Vec<Type>, Type)>,
     /// Which of each function's parameters were declared `mutable`, by name.
@@ -233,6 +235,7 @@ impl<'ctx> CodeGen<'ctx> {
             alloc_fn: None,
             byte_index_check_fn: None,
             str_eq_fn: None,
+            utf8_check_fn: None,
             fn_sigs: HashMap::new(),
             fn_writable: HashMap::new(),
             print_to_stderr: false,
@@ -3642,6 +3645,12 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_call(fclose, &[fh.into()], "close").map_err(err)?;
         let end = unsafe { self.builder.build_gep(i8t, buf, &[size], "end") }.map_err(err)?;
         self.builder.build_store(end, i8t.const_zero()).map_err(err)?;
+        // B5. The file's bytes are now a String, and a Burxt String is UTF-8. Checked HERE, at the
+        // boundary, rather than left for whatever reads it later: an invalid byte that gets in is
+        // a wrong answer somewhere else entirely, and the point of a boundary check is that the
+        // error names the door it came through. `file_read_bytes` is the way in for data that is
+        // not text.
+        self.build_require_utf8(buf, "read_file")?;
         Ok(buf)
     }
 
@@ -3882,6 +3891,11 @@ impl<'ctx> CodeGen<'ctx> {
             .map_err(err)?;
         let end = unsafe { self.builder.build_gep(i8t, buf, &[len], "c_end") }.map_err(err)?;
         self.builder.build_store(end, i8t.const_zero()).map_err(err)?;
+        // B5, and this is the widest door of the four: every `char*` a C library hands back becomes
+        // a Burxt String here. It also covers `os_env`, which is not a builtin at all — `lib/os.bx`
+        // reaches `getenv` and copies through this, so checking here checks that too. One place,
+        // not two rules that could drift.
+        self.build_require_utf8(buf, "c_string_at")?;
         Ok(buf)
     }
 
@@ -4129,6 +4143,195 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     /// Get (or lazily define) `i64 @burxt.checked.index(i64 %i, i64 %n)`.
+    /// `@burxt.require.utf8(bytes, len, where)` — B5. Ends the program with a named error if the
+    /// bytes are not valid UTF-8, naming WHERE they came in and WHICH byte is wrong.
+    ///
+    /// `spec/A4.4` says "a String is UTF-8. Decide this now and hold it", and `docs/limitations.md`
+    /// tells a reader the invariant "is checked at every entry point". It was not. `read_file` of
+    /// a file holding `0xff 0xfe` answered a 22-byte String and exit 0 — so the guarantee was
+    /// published and not enforced, which is worse than not claiming it, because the whole point of
+    /// the claim is that a reader stops checking.
+    ///
+    /// **One loop with a state machine, not one branch per length.** The obvious shape — decode the
+    /// leading byte, then check two or three continuations — needs a block per width and repeats
+    /// the continuation test three times, which is three places to get the surrogate and overlong
+    /// edges wrong. Instead the leading byte sets how many continuations are still expected and the
+    /// EXACT range the next one may take, and one test covers every case:
+    ///
+    ///   * `0xE0` demands `A0..BF` next, which is what rejects an overlong three-byte form.
+    ///   * `0xED` demands `80..9F`, which is what rejects a surrogate — the encoding a UTF-16
+    ///     escape pair produces if a decoder handles its halves separately (see `lib/json.bx`).
+    ///   * `0xF0` demands `90..BF` and `0xF4` demands `80..8F`, which reject the overlong
+    ///     four-byte form and everything above U+10FFFF.
+    ///   * `0xC0`/`0xC1` never appear, so an overlong two-byte form cannot start.
+    ///
+    /// The leftover count is checked after the loop, which is what catches a sequence truncated by
+    /// the end of the buffer — the case a per-width shape usually forgets, because it tests
+    /// `i + width <= n` and then never looks again.
+    fn utf8_fn(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        if let Some(f) = self.utf8_check_fn {
+            return Ok(f);
+        }
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let saved_block = self.builder.get_insert_block();
+
+        let i64t = self.ctx.i64_type();
+        let i8t = self.ctx.i8_type();
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+        let fprintf = self.fprintf_fn();
+        let (stderr_g, _, exit) = self.panic_deps();
+
+        let fn_ty = self.ctx.void_type().fn_type(&[ptr.into(), i64t.into(), ptr.into()], false);
+        let f = self.module.add_function("burxt.require.utf8", fn_ty, None);
+        let entry = self.ctx.append_basic_block(f, "entry");
+        let head = self.ctx.append_basic_block(f, "loop");
+        let body = self.ctx.append_basic_block(f, "byte");
+        let lead = self.ctx.append_basic_block(f, "lead");
+        let cont = self.ctx.append_basic_block(f, "continuation");
+        let step = self.ctx.append_basic_block(f, "step");
+        let done = self.ctx.append_basic_block(f, "done");
+        let bad = self.ctx.append_basic_block(f, "not_utf8");
+        let ok = self.ctx.append_basic_block(f, "ok");
+
+        self.builder.position_at_end(entry);
+        let bytes = f.get_nth_param(0).unwrap().into_pointer_value();
+        let n = f.get_nth_param(1).unwrap().into_int_value();
+        let source = f.get_nth_param(2).unwrap().into_pointer_value();
+        // Allocas rather than phis: three carried values across five blocks is where a
+        // hand-written phi web stops being readable, and mem2reg turns these back into registers.
+        let i_slot = self.builder.build_alloca(i64t, "i").map_err(err)?;
+        let need_slot = self.builder.build_alloca(i64t, "need").map_err(err)?;
+        let lo_slot = self.builder.build_alloca(i64t, "lo").map_err(err)?;
+        let hi_slot = self.builder.build_alloca(i64t, "hi").map_err(err)?;
+        self.builder.build_store(i_slot, i64t.const_zero()).map_err(err)?;
+        self.builder.build_store(need_slot, i64t.const_zero()).map_err(err)?;
+        self.builder.build_store(lo_slot, i64t.const_int(0x80, false)).map_err(err)?;
+        self.builder.build_store(hi_slot, i64t.const_int(0xBF, false)).map_err(err)?;
+        self.builder.build_unconditional_branch(head).map_err(err)?;
+
+        use inkwell::IntPredicate::*;
+        self.builder.position_at_end(head);
+        let i = self.builder.build_load(i64t, i_slot, "i.now").map_err(err)?.into_int_value();
+        let more = self.builder.build_int_compare(SLT, i, n, "more").map_err(err)?;
+        self.builder.build_conditional_branch(more, body, done).map_err(err)?;
+
+        self.builder.position_at_end(body);
+        let i = self.builder.build_load(i64t, i_slot, "i.b").map_err(err)?.into_int_value();
+        let at = unsafe { self.builder.build_gep(i8t, bytes, &[i], "at") }.map_err(err)?;
+        let raw = self.builder.build_load(i8t, at, "raw").map_err(err)?.into_int_value();
+        let b = self.builder.build_int_z_extend(raw, i64t, "b").map_err(err)?;
+        let need = self.builder.build_load(i64t, need_slot, "need.now").map_err(err)?.into_int_value();
+        let mid_sequence =
+            self.builder.build_int_compare(SGT, need, i64t.const_zero(), "mid").map_err(err)?;
+        self.builder.build_conditional_branch(mid_sequence, cont, lead).map_err(err)?;
+
+        // ---- a leading byte ----
+        self.builder.position_at_end(lead);
+        let c = |v: u64| i64t.const_int(v, false);
+        let ascii = self.builder.build_int_compare(ULT, b, c(0x80), "ascii").map_err(err)?;
+        // 0x80..0xC1 can never lead: 0x80..0xBF is a continuation with nothing to continue, and
+        // 0xC0/0xC1 are the overlong two-byte forms.
+        let stray = self.builder.build_int_compare(ULT, b, c(0xC2), "stray").map_err(err)?;
+        let bad_lead = self.builder.build_and(
+            self.builder.build_not(ascii, "not.ascii").map_err(err)?,
+            stray,
+            "bad.lead",
+        ).map_err(err)?;
+        let too_high = self.builder.build_int_compare(UGT, b, c(0xF4), "too.high").map_err(err)?;
+        let reject = self.builder.build_or(bad_lead, too_high, "reject").map_err(err)?;
+        let two = self.builder.build_int_compare(ULT, b, c(0xE0), "two").map_err(err)?;
+        let three = self.builder.build_int_compare(ULT, b, c(0xF0), "three").map_err(err)?;
+        // 0 for ASCII, else 1, 2 or 3 continuations.
+        let n_three = self.builder.build_select(three, c(2), c(3), "n3").map_err(err)?.into_int_value();
+        let n_multi = self.builder.build_select(two, c(1), n_three, "nm").map_err(err)?.into_int_value();
+        let new_need =
+            self.builder.build_select(ascii, i64t.const_zero(), n_multi, "need.next").map_err(err)?;
+        // The range the NEXT byte may take. Only four leading bytes narrow it, and each one is
+        // exactly one of UTF-8's four traps.
+        let is_e0 = self.builder.build_int_compare(EQ, b, c(0xE0), "is.e0").map_err(err)?;
+        let is_ed = self.builder.build_int_compare(EQ, b, c(0xED), "is.ed").map_err(err)?;
+        let is_f0 = self.builder.build_int_compare(EQ, b, c(0xF0), "is.f0").map_err(err)?;
+        let is_f4 = self.builder.build_int_compare(EQ, b, c(0xF4), "is.f4").map_err(err)?;
+        let lo1 = self.builder.build_select(is_e0, c(0xA0), c(0x80), "lo1").map_err(err)?.into_int_value();
+        let lo2 = self.builder.build_select(is_f0, c(0x90), lo1, "lo2").map_err(err)?;
+        let hi1 = self.builder.build_select(is_ed, c(0x9F), c(0xBF), "hi1").map_err(err)?.into_int_value();
+        let hi2 = self.builder.build_select(is_f4, c(0x8F), hi1, "hi2").map_err(err)?;
+        self.builder.build_store(need_slot, new_need).map_err(err)?;
+        self.builder.build_store(lo_slot, lo2).map_err(err)?;
+        self.builder.build_store(hi_slot, hi2).map_err(err)?;
+        self.builder.build_conditional_branch(reject, bad, step).map_err(err)?;
+
+        // ---- a continuation byte ----
+        self.builder.position_at_end(cont);
+        let lo = self.builder.build_load(i64t, lo_slot, "lo.now").map_err(err)?.into_int_value();
+        let hi = self.builder.build_load(i64t, hi_slot, "hi.now").map_err(err)?.into_int_value();
+        let under = self.builder.build_int_compare(ULT, b, lo, "under").map_err(err)?;
+        let over = self.builder.build_int_compare(UGT, b, hi, "over").map_err(err)?;
+        let out_of_range = self.builder.build_or(under, over, "out").map_err(err)?;
+        let need_now =
+            self.builder.build_load(i64t, need_slot, "need.c").map_err(err)?.into_int_value();
+        let left = self.builder.build_int_sub(need_now, c(1), "left").map_err(err)?;
+        self.builder.build_store(need_slot, left).map_err(err)?;
+        // Every continuation after the first is an ordinary one; only the byte right after the
+        // leading one carries a narrowed range.
+        self.builder.build_store(lo_slot, c(0x80)).map_err(err)?;
+        self.builder.build_store(hi_slot, c(0xBF)).map_err(err)?;
+        self.builder.build_conditional_branch(out_of_range, bad, step).map_err(err)?;
+
+        self.builder.position_at_end(step);
+        let i = self.builder.build_load(i64t, i_slot, "i.s").map_err(err)?.into_int_value();
+        let next = self.builder.build_int_add(i, c(1), "i.next").map_err(err)?;
+        self.builder.build_store(i_slot, next).map_err(err)?;
+        self.builder.build_unconditional_branch(head).map_err(err)?;
+
+        // Ran out of bytes mid-sequence. This is the case a per-width implementation forgets.
+        self.builder.position_at_end(done);
+        let leftover =
+            self.builder.build_load(i64t, need_slot, "need.end").map_err(err)?.into_int_value();
+        let truncated =
+            self.builder.build_int_compare(SGT, leftover, i64t.const_zero(), "truncated").map_err(err)?;
+        self.builder.build_conditional_branch(truncated, bad, ok).map_err(err)?;
+
+        self.builder.position_at_end(bad);
+        let fmt = self.global_str(
+            "burxt runtime error: %s handed back bytes that are not valid UTF-8, at byte %lld — \
+             a Burxt String is UTF-8, so this is refused where it enters rather than becoming a \
+             wrong answer later. For data that is not text, read it as bytes.\n",
+            "utf8_msg",
+        );
+        let stream = self.load_stderr(stderr_g)?;
+        let where_at = self.builder.build_load(i64t, i_slot, "i.bad").map_err(err)?;
+        self.builder
+            .build_call(
+                fprintf,
+                &[stream.into(), fmt.into(), source.into(), where_at.into()],
+                "fprintf",
+            )
+            .map_err(err)?;
+        self.build_exit70(exit)?;
+
+        self.builder.position_at_end(ok);
+        self.builder.build_return(None).map_err(err)?;
+
+        if let Some(b) = saved_block {
+            self.builder.position_at_end(b);
+        }
+        self.utf8_check_fn = Some(f);
+        Ok(f)
+    }
+
+    /// Check a String that has just come in from outside. B5.
+    fn build_require_utf8(&mut self, s: PointerValue<'ctx>, source: &str) -> Result<(), String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let f = self.utf8_fn()?;
+        let len = self.build_str_len(s)?;
+        let name = self.global_str(source, "utf8_where");
+        self.builder
+            .build_call(f, &[s.into(), len.into(), name.into()], "require_utf8")
+            .map_err(err)?;
+        Ok(())
+    }
+
     fn index_fn(&mut self) -> Result<FunctionValue<'ctx>, String> {
         if let Some(f) = self.index_check_fn {
             return Ok(f);
@@ -4473,6 +4676,8 @@ impl<'ctx> CodeGen<'ctx> {
         };
         let owned = self.build_alloc_string(n)?;
         self.builder.build_memcpy(owned, 1, borrowed, 1, n).map_err(err)?;
+        // B5. A command line is bytes the shell handed over, and nothing checked they were text.
+        self.build_require_utf8(owned, "argument")?;
         Ok(owned)
     }
 

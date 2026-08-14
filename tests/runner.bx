@@ -37,6 +37,42 @@ external function system(command: String) -> CInt;
 external function fopen(path: String, mode: String) -> CPointer touches files;
 external function fclose(stream: CPointer) -> CInt touches files;
 
+// B5. `read_file` answers a String, and from v0.0.284 a String is CHECKED to be UTF-8 where it
+// enters. The mascot is a GIF, so it can no longer come in that way — which is the stated cost of
+// enforcing the invariant, arriving here first because this file is the only thing in the tree that
+// reads a binary format.
+//
+// So the bytes get their own door. `fread` into a buffer and `c_bytes_at` to copy it out is exactly
+// what `lib/files.bx`'s `file_read_bytes` does; it is spelled again here rather than imported
+// because this runner reaches the machine through its own externals on purpose — it is the second
+// implementation of the harness, and a second implementation that borrows the first's library is
+// not independent of it.
+external function malloc(size: Int) -> CPointer;
+external function fread(into: CPointer, size: Int, count: Int, stream: CPointer) -> Int touches files;
+
+function read_bytes(path: String) -> [Int] touches files {
+    let empty: [Int] = [];
+    let f: CPointer = fopen(path, "rb");
+    if c_is_null(f) {
+        return empty;
+    }
+    // One generous buffer rather than seek-and-tell: the two files this reads are ~108 KB and
+    // fixed, and `fread` reports what it DELIVERED, so the count is measured rather than promised.
+    // That is the same lesson `string_length.bx` pins — `ftell` promises, `fread` delivers.
+    let room: Int = 1048576;
+    let buffer: CPointer = malloc(room);
+    if c_is_null(buffer) {
+        let shut: Int = fclose(f);
+        return empty;
+    }
+    let got: Int = fread(buffer, 1, room, f);
+    let closed: Int = fclose(f);
+    if got <= 0 {
+        return empty;
+    }
+    return c_bytes_at(buffer, got);
+}
+
 function readable(path: String) -> Bool touches files {
     let f: CPointer = fopen(path, "r");
     if c_is_null(f) {
@@ -258,8 +294,10 @@ function (mutable self: Outcome) check_pass(compiler: String, name: String, work
         let noted: Int = self.note(false, "pass", name, "did not compile: " + trimmed(read_file(log)));
         return 0;
     }
-    // In the fixture directory, because a program may read a file next to it.
-    let ran: Int = run_capturing_stdout("cd tests/pass && " + binary, log);
+    // In the WORK directory, not `tests/pass`: a fixture may read a file next to it,
+    // and a fixture may also WRITE one — running in the source tree is how
+    // `tests/pass/` came to hold three of its own outputs, two of them committed.
+    let ran: Int = run_capturing_stdout("cd " + work + " && " + binary, log);
     let printed: String = trimmed(read_file(log));
     if ran != 0 {
         let noted: Int = self.note(false, "pass", name, "exited " + to_string(ran));
@@ -323,7 +361,11 @@ function (mutable self: Outcome) check_panic(compiler: String, name: String, wor
         let noted: Int = self.note(false, "panic", name, "did not compile, and should have");
         return 0;
     }
-    let ran: Int = run_capturing(binary, log);
+    // Also in the work directory. This one ran wherever the runner happened to be
+    // standing, which is the repository ROOT, so a panic fixture that writes a file
+    // left it there — caught by `the_repository_root_holds_only_what_belongs_there`
+    // the moment B5 needed a fixture that writes one.
+    let ran: Int = run_capturing("cd " + work + " && " + binary, log);
     let said: String = read_file(log);
     if ran == 0 {
         let noted: Int = self.note(false, "panic", name, "ran to completion, and should have died");
@@ -697,15 +739,79 @@ function index_of(haystack: String, needle: String) -> Int {
 // The hero's mark must play ONCE and rest.
 //
 // **This one reads a BINARY file, and that capability was probed before a line of it was written.**
-// `read_file` preserves every byte including NULs: on `assets/burxt-ember.gif` it answers 108599
-// bytes, `71 73 70 56 57 97` for `GIF89a`, and finds `NETSCAPE2.0` at offset 784 with a loop count
-// of 1 — byte for byte what Python reports for the same file. So Burxt can inspect a binary
-// format, and this invariant is not a text check pretending.
+// Burxt can inspect a binary format, and this invariant is not a text check pretending: on
+// `assets/burxt-ember.gif` it reads 108599 bytes, `71 73 70 56 57 97` for `GIF89a`, and finds
+// `NETSCAPE2.0` at offset 784 with a loop count of 1 — byte for byte what Python reports for the
+// same file.
+//
+// It used to read that through `read_file`, whose String preserved every byte including NULs.
+// **B5 (v0.0.284) ended that**: a String is UTF-8 and is now checked to be, at the door, so a GIF
+// cannot arrive as one. This invariant is where that cost landed first, and it is the cost the
+// roadmap row named in advance rather than a surprise. Reading it as `[Int]` is the honest
+// replacement and arguably what it should always have been — the old version relied on a String
+// tolerating bytes that are not text, which is precisely the property the language now denies.
 //
 // The loop count lives in the NETSCAPE application extension: the eleven bytes `NETSCAPE2.0`, then
 // `0x03 0x01`, then two little-endian bytes. 0 means forever. The animation ends with the ember
 // hidden, so exactly one play leaves a still logo — which is the whole design, and why the number
 // is 1 rather than "small".
+// The three byte-array helpers the mascot check needs now that it reads bytes rather than text.
+// `needle` stays a String because every caller writes a literal, and a String IS its bytes —
+// `byte_at` reads them without a conversion step that could disagree.
+function starts_with_bytes(data: [Int], needle: String) -> Bool {
+    if len(data) < len(needle) {
+        return false;
+    }
+    let mutable i: Int = 0;
+    while i < len(needle) {
+        if data[i] != byte_at(needle, i) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
+// The offset of `needle` in `data`, or -1. Plain search rather than anything clever: it runs twice,
+// over 108 KB, once per suite.
+function find_bytes(data: [Int], needle: String) -> Int {
+    let n: Int = len(data);
+    let m: Int = len(needle);
+    if m == 0 || n < m {
+        return -1;
+    }
+    let mutable i: Int = 0;
+    while i <= n - m {
+        let mutable k: Int = 0;
+        let mutable matched: Bool = true;
+        while matched && k < m {
+            if data[i + k] != byte_at(needle, k) {
+                matched = false;
+            }
+            k += 1;
+        }
+        if matched {
+            return i;
+        }
+        i += 1;
+    }
+    return -1;
+}
+
+function same_bytes(a: [Int], b: [Int]) -> Bool {
+    if len(a) != len(b) {
+        return false;
+    }
+    let mutable i: Int = 0;
+    while i < len(a) {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
 function mascot_plays_once() -> String touches files {
     let mutable wrong: String = "";
     let marker: String = "NETSCAPE2.0";
@@ -716,27 +822,27 @@ function mascot_plays_once() -> String touches files {
     if !readable(here) || !readable(served) {
         return "the mascot is missing from assets/ or docs/assets/";
     }
-    let a: String = read_file(here);
-    let b: String = read_file(served);
+    let a: [Int] = read_bytes(here);
+    let b: [Int] = read_bytes(served);
     let mutable which: Int = 0;
     while which < 2 {
-        let mutable copy: String = a;
+        let mutable copy: [Int] = a;
         let mutable named: String = here;
         if which == 1 {
             copy = b;
             named = served;
         }
-        if len(copy) < 6 || substring(copy, 0, 6) != "GIF89a" {
+        if !starts_with_bytes(copy, "GIF89a") {
             if len(wrong) > 0 { wrong += "; "; }
             wrong += named + " is not an animated GIF";
         } else {
-            let at: Int = index_of(copy, marker);
+            let at: Int = find_bytes(copy, marker);
             if at < 0 {
                 if len(wrong) > 0 { wrong += "; "; }
                 wrong += named + " has no NETSCAPE extension, so it has no loop count";
             } else {
-                let low: Int = byte_at(copy, at + len(marker) + 2);
-                let high: Int = byte_at(copy, at + len(marker) + 3);
+                let low: Int = copy[at + len(marker) + 2];
+                let high: Int = copy[at + len(marker) + 3];
                 let loops: Int = low + high * 256;
                 if loops != 1 {
                     if len(wrong) > 0 { wrong += "; "; }
@@ -748,7 +854,7 @@ function mascot_plays_once() -> String touches files {
         }
         which += 1;
     }
-    if len(a) != len(b) || a != b {
+    if !same_bytes(a, b) {
         if len(wrong) > 0 { wrong += "; "; }
         wrong += "assets/ and docs/assets/ hold different copies of the mascot";
     }
@@ -1700,6 +1806,28 @@ region suite {
         work = argument(2);
     }
     let made: Int = system("mkdir -p " + work);
+
+    // Fixture programs run in `work`, and anything they need to READ is copied in first — the same
+    // thing `install_fixtures` does in `tests/runner.rs`. Anything that is not a program or an
+    // expectation is an input.
+    //
+    // This runner used to run pass fixtures with `cd tests/pass` and panic fixtures wherever it
+    // happened to be standing, which was the repository root. Both leak: a fixture that WRITES a
+    // file wrote it into the source tree. That is not hypothetical — `tests/pass/` holds
+    // `bytes_out.txt` and `string_length_probe.txt`, both COMMITTED, both merely the output of the
+    // fixture beside them, and `emitted.ll` sitting there untracked because `*.ll` is ignored.
+    //
+    // The nastier half is what that does to evidence. `install_fixtures` copies every non-program
+    // file in the directory into the run as an INPUT, so a leaked output is indistinguishable from
+    // a real fixture like `source_fixture.txt`. Nothing depends on one today, and the day something
+    // does, it passes because of an artifact rather than because it works — which is the same shape
+    // as a pass fixture that cannot tell "supported" from "not examined".
+    // Copy everything, then remove the programs and expectations — rather than `find -exec`, whose
+    // `{}` and `\;` both need escaping twice over (once for Burxt's interpolation, once for the
+    // shell) and are unreadable by the time they survive both.
+    let staged: Int = system("cp tests/pass/* tests/fail/* tests/panic/* " + work
+                             + "/ 2>/dev/null; rm -f " + work + "/*.bx " + work + "/*.stdout "
+                             + work + "/*.stderr; true");
 
     print("running the suite with " + compiler);
 
