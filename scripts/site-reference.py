@@ -134,13 +134,13 @@ def commands():
     """The command line, from the usage block in src/rust-compiler/main.rs."""
     text = read("src", "rust-compiler", "main.rs")
     lines = []
-    for m in re.finditer(r'eprintln!\("(  burxt [^"]*)"\)', text):
+    # `[^"\n]*` rather than `[^"]*`: one row per `eprintln!`, and a call that spans a raw
+    # newline is a mistake rather than a shape to accommodate. It used to be accommodated —
+    # `review` and `mcp-schema` shared one call — and the workaround silently produced a row
+    # whose description was the whole of the NEXT row. Refusing to cross a newline turns that
+    # from a wrong published table into a missing command, which the guard below then catches.
+    for m in re.finditer(r'eprintln!\("(  burxt [^"\n]*)"\)', text):
         lines.append(m.group(1))
-    # `review` and `mcp-schema` share one eprintln! with an embedded newline, so the tail of that
-    # string arrives as its own physical line rather than in a call of its own.
-    for m in re.finditer(r'\n(  burxt [a-z-]+ +<[^"\n]*)', text):
-        if m.group(1) not in lines:
-            lines.append(m.group(1))
     found = []
     for line in lines:
         m = re.match(r"  burxt (\S+)\s+(.*?)\s\s+(.*)$", line)
@@ -159,6 +159,45 @@ def commands():
                 "most distinctive features in the language." % must
             )
     return found
+
+
+def flags():
+    """The flags, from the same usage block.
+
+    These were never published. `cli.md` listed nine commands and not one flag, so `-o` survived
+    only in a hand-written sentence at the foot of the page and `--target` — the switch behind the
+    identical-IR-on-every-target claim — appeared nowhere at all. C1 added `-g` and `-O0`, and
+    rather than write two more rows by hand they are scraped, for the reason the commands are:
+    a table maintained by hand drifts from the compiler and nobody notices until a reader does.
+
+    A flag's explanation runs over several `eprintln!`s, continued by indentation. They are joined
+    back into one paragraph here, so the page can say WHY a flag exists rather than only that it
+    does — `-g` being off by default is a design decision, not a default worth guessing at.
+    """
+    text = read("src", "rust-compiler", "main.rs")
+    rows, current = [], None
+    for m in re.finditer(r'eprintln!\("(  (?:-|\s)[^"\n]*)"\)', text):
+        line = m.group(1).replace("\\'", "'")
+        head = re.match(r"  (-{1,2}[A-Za-z0-9-]+(?: <[^>]+>)?)\s\s+(.*)$", line)
+        if head:
+            if current:
+                rows.append(current)
+            current = [head.group(1), head.group(2).strip()]
+        elif current and line.startswith("    "):
+            # A continuation line: same flag, more sentence.
+            current[1] = (current[1] + " " + line.strip()).strip()
+    if current:
+        rows.append(current)
+    # The same anti-vacuity guard the commands have. A scrape that silently finds nothing would
+    # publish an empty table, and an empty table reads as "this compiler takes no flags".
+    names = {r[0].split()[0] for r in rows}
+    for must in ("-o", "-g", "-O0", "--target"):
+        if must not in names:
+            sys.exit(
+                "the usage block in src/rust-compiler/main.rs no longer documents `%s`, or this "
+                "scrape stopped reading it. Fix the scrape rather than dropping the flag." % must
+            )
+    return rows
 
 
 # ---------------------------------------------------------------------------------------------
@@ -952,7 +991,7 @@ def render_builtins(effects):
     return "\n".join(out) + "\n"
 
 
-def render_cli(cmds):
+def render_cli(cmds, flgs):
     out = [FRONT % ("The command line", "Every burxt command, including review and mcp-schema.")]
     out.append("# The command line\n")
     out.append(
@@ -966,9 +1005,19 @@ def render_cli(cmds):
     for name, takes, what in cmds:
         rows.append("| `burxt %s` | %s | %s |" % (name, "`%s`" % takes if takes else "—", what))
     out.append("\n".join(rows) + "\n")
+    out.append("## Flags\n")
     out.append(
-        "Arguments after the source file go to the linker unchanged, so `burxt run pay.bx cside.o "
-        "-lm` links the C you call. `-o <path>` says where the executable goes.\n"
+        "Scraped from the same usage block. Flags may be written before or after the file, so "
+        "`burxt build -O0 -g pay.bx -o pay` and `burxt build pay.bx -O0 -g -o pay` are the same "
+        "command.\n"
+    )
+    frows = ["| Flag | What it does |", "|---|---|"]
+    for name, what in flgs:
+        frows.append("| `%s` | %s |" % (name, what))
+    out.append("\n".join(frows) + "\n")
+    out.append(
+        "Arguments after the source file that are not flags go to the linker unchanged, so "
+        "`burxt run pay.bx cside.o -lm` links the C you call.\n"
     )
     return "\n".join(out) + "\n"
 
@@ -1044,7 +1093,7 @@ def build():
     pages = {
         "index.md": None,           # rendered last: its list needs MODULE_TITLES
         "builtins.md": render_builtins(effects),
-        "cli.md": render_cli(cmds),
+        "cli.md": render_cli(cmds, flags()),
     }
     for m in mods:
         pages["%s.md" % m["name"]] = render_module(m)

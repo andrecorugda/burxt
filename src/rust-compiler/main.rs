@@ -72,10 +72,26 @@ fn compile_main() {
         eprintln!("  burxt emit-ir <file.bx> [--target ...]   print LLVM IR");
         eprintln!("  burxt layout  <file.bx>                  print class layouts");
         eprintln!("  burxt explain memory <file.bx>           what each function builds");
-        eprintln!("  burxt review  <old.bx> <new.bx>          what changed about what it PROMISES
-  burxt mcp-schema <file.bx>               the MCP tool manifest, from the preconditions");
+        // One `eprintln!` per row. These two were a single call holding a raw newline, which
+        // read the same on a terminal and broke the scrape: `scripts/site-reference.py` matches
+        // `eprintln!("(  burxt [^"]*)")`, so `[^"]*` ran through the newline and produced one
+        // reference row whose "what it does" column was the whole `mcp-schema` line. The
+        // published page said so for months. A generated document is only as honest as the
+        // shape it is generated from.
+        eprintln!("  burxt review  <old.bx> <new.bx>          what changed about what it PROMISES");
+        eprintln!("  burxt mcp-schema <file.bx>               the MCP tool manifest, from the preconditions");
         eprintln!();
         eprintln!("  -o <path>     where to write the executable (default ./<name>)");
+        eprintln!("  -g            emit DWARF debug info: a line table, and every parameter");
+        eprintln!("                and `let` with its name, type and stack slot. A debugger");
+        eprintln!("                can then stop on a line and read a local — which is the");
+        eprintln!("                alternative to inserting a `print`, and a `print` MOVES THE");
+        eprintln!("                STACK and can change the answer. Off by default: debug info");
+        eprintln!("                carries absolute paths and a producer string, so it would");
+        eprintln!("                make the emitted IR differ between machines.");
+        eprintln!("  -O0           do not optimise. Independent of -g on purpose: -O2 -g is");
+        eprintln!("                for a crash report from the field, -O0 -g is for stepping.");
+        eprintln!("                Use both to follow a program statement by statement.");
         eprintln!("  --target <triple>  build for another machine, e.g. aarch64-apple-darwin.");
         eprintln!("                Emits an OBJECT and stops: linking needs that target\'s libc");
         eprintln!("                and linker, so it is left to that target\'s toolchain. The");
@@ -103,6 +119,33 @@ fn compile_main() {
         }
         arguments.remove(2);
     }
+
+    // Flags may come BEFORE the source file: `burxt build -O0 -g prog.bx -o prog` is how
+    // anyone who has used a C compiler will write it, and until C1 it produced
+    // "cannot read -O0", which blames the user for the compiler's parser. The file is
+    // moved to slot 2 and the flags left in their order after it, so everything below —
+    // which has always assumed `arguments[2]` is the path — is unchanged.
+    //
+    // `-o` and `--target` take an operand, so their next argument is skipped rather than
+    // mistaken for the file. A bare `-` is the stdin spelling, not a flag.
+    {
+        let mut i = 2;
+        while i < arguments.len() {
+            let a = arguments[i].clone();
+            if a == "-o" || a == "--target" {
+                i += 2;
+            } else if a.starts_with('-') && a != "-" {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        if i > 2 && i < arguments.len() {
+            let file = arguments.remove(i);
+            arguments.insert(2, file);
+        }
+    }
+
     let cmd = &arguments[1];
     let path = &arguments[2];
     // `review` is the odd one out: two paths, no output file, no linking. It answers what changed
@@ -152,11 +195,33 @@ fn compile_main() {
     // cross build emits a `.o` and says so, and the caller links it with the toolchain that already
     // knows about its platform.
     let mut target: Option<String> = None;
+    // C1. Two flags, kept INDEPENDENT, and the spelling is `-g` and `-O0` because those
+    // are the two every C toolchain has spelled the same way for forty years — a person
+    // debugging is already typing them from muscle memory.
+    //
+    // Why they are not one flag. `-g` says "describe this program to a debugger" and
+    // `-O0` says "do not rearrange it". They are genuinely different requests: `-O2 -g`
+    // is what you want for a profiler or a crash report from the field, and `-O0` alone
+    // is what you want when a miscompilation is suspected. Folding either into the other
+    // would be the compiler guessing which was meant, which is the shape of thing this
+    // language refuses (see `explain memory` above, refused rather than defaulted).
+    //
+    // What IS done is to say so once: `-g` without `-O0` warns, because a line table over
+    // optimised code is honest about instructions and misleading about statements, and a
+    // reader who did not know that would blame the debugger. A warning is neither
+    // guessing nor silence.
+    let mut debug_info = false;
+    let mut optimise = true;
     let mut link_args: Vec<String> = Vec::new();
     let mut i = 0;
     while i < rest.len() {
         match rest[i].as_str() {
             "--json" => {}
+            "-g" => debug_info = true,
+            "-O0" => optimise = false,
+            // Named explicitly so `-O2` is a way to say "the default, and I mean it"
+            // next to a `-g`, rather than an unknown flag handed to the linker.
+            "-O2" => optimise = true,
             "--target" => {
                 if i + 1 >= rest.len() {
                     eprintln!("error: --target needs a triple after it, e.g. aarch64-unknown-linux-gnu");
@@ -178,7 +243,24 @@ fn compile_main() {
         i += 1;
     }
 
-    if let Err(e) = run(cmd, path, &link_args, json, out.as_deref(), target.as_deref()) {
+    if debug_info && optimise && cmd != "check" {
+        eprintln!(
+            "warning: -g without -O0. The line table will be correct about instructions and \
+             misleading about statements, because optimisation moves, merges and deletes them. \
+             Add -O0 for a build a debugger can follow."
+        );
+    }
+
+    if let Err(e) = run(
+        cmd,
+        path,
+        &link_args,
+        json,
+        out.as_deref(),
+        target.as_deref(),
+        debug_info,
+        optimise,
+    ) {
         match e {
             // Diagnostics know where they are, so they can be shown properly —
             // all of them, in the order a reader meets them.
@@ -377,6 +459,8 @@ fn run(
     json: bool,
     out: Option<&str>,
     target: Option<&str>,
+    debug_info: bool,
+    optimise: bool,
 ) -> Result<(), Failure> {
     // `-` means "the program is on stdin": what an editor has in its buffer is
     // not what is on disk, and checking the file would report yesterday's errors.
@@ -468,6 +552,26 @@ fn run(
         .and_then(|s| s.to_str())
         .unwrap_or("module");
     let mut cg = codegen::CodeGen::new(&ctx, stem);
+    if debug_info {
+        // Where each function was DECLARED, taken from the UNTYPED tree — the only one
+        // that still knows. `TypedFn` carries a body and no position of its own, and the
+        // typed tree is not structurally 1:1 with this one anyway (the checker's
+        // `place_releases` inserts blocks), so this is a lookup by NAME rather than a
+        // parallel walk. A name is unique; a traversal order under a rewriting pass is
+        // not, and a line table built on the second kind would be wrong silently.
+        //
+        // A monomorphised generic has a mangled name that appears here under none of its
+        // spellings; codegen falls back to the first statement of its body.
+        let mut decls: std::collections::HashMap<String, diag::Span> =
+            std::collections::HashMap::new();
+        for f in &program.fns {
+            decls.insert(f.name.clone(), f.span);
+        }
+        for m in &program.methods {
+            decls.insert(format!("{}.{}", m.receiver, m.name), m.span);
+        }
+        cg.enable_debug_info(&files, &src, decls, optimise);
+    }
     cg.compile(&typed)?;
 
     match cmd {
@@ -523,7 +627,7 @@ fn run(
                     Some(p) => p.to_string(),
                     None => format!("./{}.o", stem),
                 };
-                cg.write_object_for(&obj, Some(triple))?;
+                cg.write_object_for(&obj, Some(triple), optimise)?;
                 eprintln!("compiled {} -> {} ({})", path, obj, triple);
                 eprintln!(
                     "not linked: link it with that target's toolchain, e.g. \
@@ -540,7 +644,7 @@ fn run(
                 .join(format!("burxt-{}-{}.o", std::process::id(), stem))
                 .to_string_lossy()
                 .into_owned();
-            cg.write_object(&obj)?;
+            cg.write_object(&obj, optimise)?;
 
             // link with the system C compiler (for printf + crt startup), plus
             // whatever the caller needs for the C it declared.

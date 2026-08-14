@@ -159,7 +159,7 @@ pub enum TypedExprKind {
 }
 
 #[derive(Debug, Clone)]
-pub enum TypedStmt {
+pub enum TypedStmtKind {
     Let { name: String, ty: Type, value: TypedExpr },
     Assign { name: String, value: TypedExpr },
     /// Field assignment, path resolved to positional indices.
@@ -223,6 +223,32 @@ pub enum TypedStmt {
     },
 }
 
+/// A checked statement, and **where it was written**.
+///
+/// The span is here rather than on each variant because the typed tree is built and
+/// then REBUILT: `place_releases` walks a finished body and wraps runs of statements in
+/// `Release`, so the typed tree is not structurally 1:1 with the `ast::Stmt` tree it came
+/// from. That rules out every cheaper way of recovering a position later — a side table
+/// keyed by traversal order, or a parallel walk of the two trees from `main.rs`, both
+/// drift the moment a `Release` is inserted, and they drift SILENTLY. The symptom of a
+/// drifted line table is a debugger stopping on the wrong line, which is worse than
+/// having no debug info at all, so the position travels inside the node.
+///
+/// Added for C1 (DWARF). Nothing but codegen reads `span`, and codegen reads it only
+/// when `-g` was asked for — but it is not optional in the type, because a statement
+/// that cannot say where it came from is what this whole change exists to prevent.
+#[derive(Debug, Clone)]
+pub struct TypedStmt {
+    pub kind: TypedStmtKind,
+    pub span: Span,
+}
+
+impl TypedStmt {
+    pub fn new(kind: TypedStmtKind, span: Span) -> Self {
+        TypedStmt { kind, span }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TypedArm {
     pub tag: u32,
@@ -280,6 +306,14 @@ pub struct TypedFn {
 pub struct TypedContract {
     pub cond: TypedExpr,
     pub text: String,
+    /// Where the clause was written. C1: a contract's code runs in the function's
+    /// PROLOGUE, before any statement has set a position, so without this the
+    /// instructions that check it would carry no location at all — and a call to a
+    /// `pure` function from a clause then fails LLVM's verifier outright
+    /// ("inlinable function call in a function with debug info must have a !dbg
+    /// location"). Found by probing a contract that calls a pure function, which
+    /// nothing in the suite did.
+    pub span: Span,
 }
 
 /// A method, ready for codegen: `self` is always the first bound name, typed
@@ -961,7 +995,7 @@ impl TypeChecker {
                     clause.text, cond.ty
                 ));
             }
-            out.push(TypedContract { cond, text: clause.text.clone() });
+            out.push(TypedContract { cond, text: clause.text.clone(), span: clause.span });
         }
         self.in_ensures = false;
         Ok(out)
@@ -3141,7 +3175,7 @@ impl TypeChecker {
                 break;
             }
             match self.check_stmt(s) {
-                Ok(t) => stmts.push(t),
+                Ok(kind) => stmts.push(TypedStmt::new(kind, s.span)),
                 Err(message) => {
                     self.record(message);
                     self.recover_from(s);
@@ -3938,19 +3972,19 @@ impl TypeChecker {
             if let Some(found) = self.first_allocation_in_stmt(stmt) {
                 into.push(found);
             }
-            match stmt {
-                TypedStmt::If { then_block, else_block, .. } => {
+            match &stmt.kind {
+                TypedStmtKind::If { then_block, else_block, .. } => {
                     self.collect_allocations(then_block, into);
                     if let Some(other) = else_block {
                         self.collect_allocations(other, into);
                     }
                 }
-                TypedStmt::While { body, .. }
-                | TypedStmt::Region { body, .. }
-                | TypedStmt::Release { body }
-                | TypedStmt::For { body, .. }
-                | TypedStmt::ForRange { body, .. } => self.collect_allocations(body, into),
-                TypedStmt::Match { arms, .. } => {
+                TypedStmtKind::While { body, .. }
+                | TypedStmtKind::Region { body, .. }
+                | TypedStmtKind::Release { body }
+                | TypedStmtKind::For { body, .. }
+                | TypedStmtKind::ForRange { body, .. } => self.collect_allocations(body, into),
+                TypedStmtKind::Match { arms, .. } => {
                     for arm in arms {
                         self.collect_allocations(&arm.body, into);
                     }
@@ -3962,24 +3996,24 @@ impl TypeChecker {
 
     fn first_allocation_in_stmt(&self, stmt: &TypedStmt) -> Option<String> {
         let describe = |e: &TypedExpr| -> Option<String> { self.describe_allocation(e) };
-        match stmt {
-            TypedStmt::Let { value, .. }
-            | TypedStmt::Assign { value, .. }
-            | TypedStmt::AssignField { value, .. }
-            | TypedStmt::ExprStmt(value)
-            | TypedStmt::Return(value)
-            | TypedStmt::Print { value, .. } => describe(value),
-            TypedStmt::If { cond, then_block, else_block } => describe(cond)
+        match &stmt.kind {
+            TypedStmtKind::Let { value, .. }
+            | TypedStmtKind::Assign { value, .. }
+            | TypedStmtKind::AssignField { value, .. }
+            | TypedStmtKind::ExprStmt(value)
+            | TypedStmtKind::Return(value)
+            | TypedStmtKind::Print { value, .. } => describe(value),
+            TypedStmtKind::If { cond, then_block, else_block } => describe(cond)
                 .or_else(|| self.first_allocation(then_block))
                 .or_else(|| else_block.as_ref().and_then(|b| self.first_allocation(b))),
-            TypedStmt::While { body, .. } => self.first_allocation(body),
-            TypedStmt::Region { body, .. } | TypedStmt::Release { body } => {
+            TypedStmtKind::While { body, .. } => self.first_allocation(body),
+            TypedStmtKind::Region { body, .. } | TypedStmtKind::Release { body } => {
                 self.first_allocation(body)
             }
-            TypedStmt::For { body, .. } => self.first_allocation(body),
+            TypedStmtKind::For { body, .. } => self.first_allocation(body),
             // The BOUNDS cannot allocate — both are Ints — so only the body is walked.
-            TypedStmt::ForRange { body, .. } => self.first_allocation(body),
-            TypedStmt::Match { arms, .. } => {
+            TypedStmtKind::ForRange { body, .. } => self.first_allocation(body),
+            TypedStmtKind::Match { arms, .. } => {
                 arms.iter().find_map(|arm| self.first_allocation(&arm.body))
             }
             _ => None,
@@ -4944,7 +4978,7 @@ impl TypeChecker {
                         clause.text, measure.ty
                     ));
                 }
-                Some(TypedContract { cond: measure, text: clause.text.clone() })
+                Some(TypedContract { cond: measure, text: clause.text.clone(), span: clause.span })
             }
         };
         self.in_pure = saved_pure;
@@ -5167,7 +5201,7 @@ impl TypeChecker {
     /// legal when the caller's and callee's prototypes MATCH, so that condition
     /// is checked here, in words, rather than surfacing as an LLVM verifier
     /// message no one can act on.
-    fn check_tail_return(&mut self, e: &Expr) -> Result<TypedStmt, String> {
+    fn check_tail_return(&mut self, e: &Expr) -> Result<TypedStmtKind, String> {
         let ret = self.current_ret.clone().ok_or_else(|| {
             "`return` only makes sense inside a function".to_string()
         })?;
@@ -5268,7 +5302,7 @@ impl TypeChecker {
             }
             typed_args.push(t);
         }
-        Ok(TypedStmt::TailReturn { name, arguments: typed_args })
+        Ok(TypedStmtKind::TailReturn { name, arguments: typed_args })
     }
 
 
@@ -5291,7 +5325,7 @@ impl TypeChecker {
         scrutinee: TypedExpr,
         arms: &[MatchArm],
         at: Span,
-    ) -> Result<TypedStmt, String> {
+    ) -> Result<TypedStmtKind, String> {
         self.current_span.set(at);
         let ty = scrutinee.ty.clone();
         let shown = format!("{}", ty);
@@ -5388,12 +5422,19 @@ impl TypeChecker {
                 Some(&Type::Bool),
             )?;
             let then_block = self.check_block(&arm.body)?;
-            chain = vec![TypedStmt::If { cond, then_block, else_block: Some(chain) }];
+            // The whole chain is one `match`, so every `if` in it is blamed on the `match`
+            // — `at`. The arms' own statements keep their own spans, so a debugger steps
+            // from the `match` line into the arm the value took, which is what the reader
+            // wrote even though it is not what the tree now says.
+            chain = vec![TypedStmt::new(
+                TypedStmtKind::If { cond, then_block, else_block: Some(chain) },
+                at,
+            )];
         }
         // A chain of one is the wildcard alone, which is a block and not an `if`.
         Ok(match chain.len() {
-            1 => chain.into_iter().next().unwrap(),
-            _ => TypedStmt::If {
+            1 => chain.into_iter().next().unwrap().kind,
+            _ => TypedStmtKind::If {
                 cond: self.check_expr(
                     &Expr { kind: ExprKind::BoolLit(true), span: at },
                     Some(&Type::Bool),
@@ -5411,7 +5452,7 @@ impl TypeChecker {
         arms: &[MatchArm],
         at: Span,
         shown: String,
-    ) -> Result<TypedStmt, String> {
+    ) -> Result<TypedStmtKind, String> {
             // B27. A pattern binding is the SIXTH place a name enters scope, and it was the
             // first one that never asked this: if the value being matched on is region storage,
             // so is everything the pattern pulls out of it. `region r { let w = W.Some("a" +
@@ -5533,7 +5574,7 @@ impl TypeChecker {
             }
 
             typed_arms.sort_by_key(|a| a.tag);
-            Ok(TypedStmt::Match { value: scrutinee, arms: typed_arms })
+            Ok(TypedStmtKind::Match { value: scrutinee, arms: typed_arms })
     }
     /// Render a parameter list for an error message.
     fn type_list(types: &[Type]) -> String {
@@ -5556,8 +5597,8 @@ impl TypeChecker {
             if out.last().is_some_and(stmt_diverges) {
                 self.current_span.set(s.span);
                 let after = match out.last().map(|p| &*p) {
-                    Some(TypedStmt::Break) => "`break`",
-                    Some(TypedStmt::Continue) => "`continue`",
+                    Some(TypedStmt { kind: TypedStmtKind::Break, .. }) => "`break`",
+                    Some(TypedStmt { kind: TypedStmtKind::Continue, .. }) => "`continue`",
                     _ => "`return`",
                 };
                 self.record(format!(
@@ -5569,7 +5610,10 @@ impl TypeChecker {
                 break;
             }
             match self.check_stmt(s) {
-                Ok(t) => out.push(t),
+                // The ONE place a checked statement is paired with where it was written.
+                // `check_stmt` answers what the statement IS; the span it came from is
+                // right here in `s`, so nothing below has to thread a position through.
+                Ok(kind) => out.push(TypedStmt::new(kind, s.span)),
                 Err(message) => {
                     // Record and CARRY ON. A compiler that stops at the first
                     // problem makes the reader fix one thing, recompile, and
@@ -5607,7 +5651,9 @@ impl TypeChecker {
         self.current_span.set(Span::new(start, start + name.len()));
     }
 
-    fn check_stmt(&mut self, s: &Stmt) -> Result<TypedStmt, String> {
+    /// Answers what the statement IS. The position it was written at is attached by the
+    /// caller — see `check_block`, which is the only one — so no arm here has to carry it.
+    fn check_stmt(&mut self, s: &Stmt) -> Result<TypedStmtKind, String> {
         // Remember where we are. Errors below are returned as plain messages and
         // the position is attached once, at the boundary — so a nested statement
         // naturally reports the innermost (most precise) position, and no error
@@ -5772,7 +5818,7 @@ impl TypeChecker {
                     }
                 }
                 self.env.insert(name.clone(), (bound.clone(), *mutable));
-                Ok(TypedStmt::Let { name: name.clone(), ty: bound, value: typed })
+                Ok(TypedStmtKind::Let { name: name.clone(), ty: bound, value: typed })
             }
             StmtKind::Assign { name, value } => {
                 self.blame_target(s, name);
@@ -5912,7 +5958,7 @@ impl TypeChecker {
                         }
                     }
                 }
-                Ok(TypedStmt::Assign { name: name.clone(), value: typed })
+                Ok(TypedStmtKind::Assign { name: name.clone(), value: typed })
             }
             StmtKind::AssignField { name, path, value } => {
                 self.blame_target(s, name);
@@ -5965,7 +6011,7 @@ impl TypeChecker {
                         self.region_locals.insert(name.clone());
                     }
                 }
-                Ok(TypedStmt::AssignField { name: name.clone(), indices, value: typed })
+                Ok(TypedStmtKind::AssignField { name: name.clone(), indices, value: typed })
             }
             StmtKind::AssignFieldIndex { name, path, index, value } => {
                 self.blame_target(s, name);
@@ -6023,7 +6069,7 @@ impl TypeChecker {
                         self.region_locals.insert(name.clone());
                     }
                 }
-                Ok(TypedStmt::AssignFieldIndex {
+                Ok(TypedStmtKind::AssignFieldIndex {
                     name: name.clone(),
                     indices,
                     len,
@@ -6078,7 +6124,7 @@ impl TypeChecker {
                         self.region_locals.insert(name.clone());
                     }
                 }
-                Ok(TypedStmt::AssignIndex { name: name.clone(), len, index, value: typed })
+                Ok(TypedStmtKind::AssignIndex { name: name.clone(), len, index, value: typed })
             }
             StmtKind::ExprStmt(e) => {
                 // `exit(code)` — a STATEMENT, handled here rather than as a builtin call, because a
@@ -6117,11 +6163,11 @@ impl TypeChecker {
                                 ));
                             }
                         }
-                        return Ok(TypedStmt::Exit(code));
+                        return Ok(TypedStmtKind::Exit(code));
                     }
                 }
                 let typed = self.check_expr(e, None)?;
-                Ok(TypedStmt::ExprStmt(typed))
+                Ok(TypedStmtKind::ExprStmt(typed))
             }
             StmtKind::Region { name, body } => {
                 // One level only in this slice — nesting is deferred with a
@@ -6146,7 +6192,7 @@ impl TypeChecker {
                 let checked = self.check_block(body);
                 self.region_scope = outer_scope;
                 self.current_region = None;
-                Ok(TypedStmt::Region { name: name.clone(), body: checked? })
+                Ok(TypedStmtKind::Region { name: name.clone(), body: checked? })
             }
             StmtKind::Match { value, arms } => {
                 let scrutinee = self.check_expr(value, None)?;
@@ -6211,7 +6257,7 @@ impl TypeChecker {
                         word
                     ));
                 }
-                Ok(if word == "break" { TypedStmt::Break } else { TypedStmt::Continue })
+                Ok(if word == "break" { TypedStmtKind::Break } else { TypedStmtKind::Continue })
             }
             StmtKind::For { name, iterable, body } => {
                 // A `for` binding is a binding, so it may not take a const's name either. The
@@ -6272,7 +6318,7 @@ impl TypeChecker {
                 if tainted {
                     self.region_locals.remove(name);
                 }
-                Ok(TypedStmt::For {
+                Ok(TypedStmtKind::For {
                     name: name.clone(),
                     elem,
                     iterable,
@@ -6357,7 +6403,7 @@ impl TypeChecker {
                 self.loop_depth -= 1;
                 self.loop_counters.pop();
                 self.env = saved;
-                Ok(TypedStmt::ForRange {
+                Ok(TypedStmtKind::ForRange {
                     name: name.clone(),
                     start,
                     end,
@@ -6376,7 +6422,7 @@ impl TypeChecker {
                 self.loop_depth += 1;
                 let body = self.check_block(body);
                 self.loop_depth -= 1;
-                Ok(TypedStmt::While { cond, body: body? })
+                Ok(TypedStmtKind::While { cond, body: body? })
             }
             StmtKind::Print { value: e, to_stderr } => {
                 if let Some(why) = self.impure("print") {
@@ -6428,7 +6474,7 @@ impl TypeChecker {
                             }
                         }
                     }
-                    return Ok(TypedStmt::PrintInterp { parts: typed_parts, to_stderr: *to_stderr });
+                    return Ok(TypedStmtKind::PrintInterp { parts: typed_parts, to_stderr: *to_stderr });
                 }
                 let typed = self.check_expr(e, None)?;
                 match &typed.ty {
@@ -6476,7 +6522,7 @@ impl TypeChecker {
                     }
                     _ => {}
                 }
-                Ok(TypedStmt::Print { value: typed, to_stderr: *to_stderr })
+                Ok(TypedStmtKind::Print { value: typed, to_stderr: *to_stderr })
             }
             StmtKind::Return(e) => {
                 // The keyword, for the same reason and to the same length stage-1 uses.
@@ -6537,7 +6583,7 @@ impl TypeChecker {
                     // is the same condition this rule is testing.
                     if self.probing {
                         let _ = self.has_region();
-                        return Ok(TypedStmt::Return(typed));
+                        return Ok(TypedStmtKind::Return(typed));
                     }
                     return Err(format!(
                         "cannot return this {}: it was built inside a `region` block, which \
@@ -6547,7 +6593,7 @@ impl TypeChecker {
                         typed.ty
                     ));
                 }
-                Ok(TypedStmt::Return(typed))
+                Ok(TypedStmtKind::Return(typed))
             }
             StmtKind::TailReturn(e) => self.check_tail_return(e),
             StmtKind::If { cond, then_block, else_block } => {
@@ -6564,7 +6610,7 @@ impl TypeChecker {
                     Some(b) => Some(self.check_block(b)?),
                     None => None,
                 };
-                Ok(TypedStmt::If { cond, then_block, else_block })
+                Ok(TypedStmtKind::If { cond, then_block, else_block })
             }
         }
     }
@@ -9523,19 +9569,19 @@ fn mentions(e: &Expr, name: &str) -> bool {
 /// does not satisfy a function's obligation to return a value, and conflating the two
 /// would let a function end in `break` and be accepted.
 fn stmt_diverges(s: &TypedStmt) -> bool {
-    match s {
-        TypedStmt::Break | TypedStmt::Continue => true,
-        TypedStmt::If { then_block, else_block: Some(e), .. } => {
+    match &s.kind {
+        TypedStmtKind::Break | TypedStmtKind::Continue => true,
+        TypedStmtKind::If { then_block, else_block: Some(e), .. } => {
             block_diverges(then_block) && block_diverges(e)
         }
-        TypedStmt::Match { arms, .. } => {
+        TypedStmtKind::Match { arms, .. } => {
             !arms.is_empty() && arms.iter().all(|a| block_diverges(&a.body))
         }
-        TypedStmt::Region { body, .. } | TypedStmt::Release { body } => block_diverges(body),
+        TypedStmtKind::Region { body, .. } | TypedStmtKind::Release { body } => block_diverges(body),
         // A `for` over an empty array — or an empty range, `0..0` — runs zero times, so
         // neither form can be what makes control leave a block.
-        TypedStmt::For { .. } | TypedStmt::ForRange { .. } => false,
-        other => stmt_returns(other),
+        TypedStmtKind::For { .. } | TypedStmtKind::ForRange { .. } => false,
+        _ => stmt_returns(s),
     }
 }
 
@@ -9545,16 +9591,16 @@ fn block_diverges(stmts: &[TypedStmt]) -> bool {
 
 /// Does this statement return on every path through it?
 fn stmt_returns(s: &TypedStmt) -> bool {
-    match s {
-        TypedStmt::Return(_) | TypedStmt::TailReturn { .. } => true,
-        TypedStmt::If { then_block, else_block: Some(e), .. } => {
+    match &s.kind {
+        TypedStmtKind::Return(_) | TypedStmtKind::TailReturn { .. } => true,
+        TypedStmtKind::If { then_block, else_block: Some(e), .. } => {
             block_returns(then_block) && block_returns(e)
         }
         // An exhaustive match is a return when every arm is. Exhaustiveness is
         // already proven, so the arms ARE all the paths — the same reasoning as
         // an if/else where both branches return. A `while` never counts, since
         // its condition may be false at entry.
-        TypedStmt::Match { arms, .. } => {
+        TypedStmtKind::Match { arms, .. } => {
             !arms.is_empty() && arms.iter().all(|a| block_returns(&a.body))
         }
         // A region is a lexical scope, not a branch: if its body returns on
@@ -9562,7 +9608,7 @@ fn stmt_returns(s: &TypedStmt) -> bool {
         // second `return` after the block and then called it unreachable —
         // there was no way to write a function that returns from inside a
         // region.
-        TypedStmt::Region { body, .. } | TypedStmt::Release { body } => block_returns(body),
+        TypedStmtKind::Region { body, .. } | TypedStmtKind::Release { body } => block_returns(body),
         // **`For` used to answer `block_returns(body)` here, and that was a CRASH.** A `for` whose
         // body returns was treated as returning on every path — but a `for` over an EMPTY array runs
         // zero times, so the path that skips the loop falls out of the function with no `return`.
@@ -10016,7 +10062,7 @@ fn specialise_method(m: &MethodDef, map: &HashMap<String, Type>, receiver: &str)
 //
 //     does anything allocated inside this block reach a binding declared outside it?
 //
-// If the answer is no, the block gets a `TypedStmt::Release` wrapper and codegen
+// If the answer is no, the block gets a `TypedStmtKind::Release` wrapper and codegen
 // puts the bump cursor back at its closing brace. If the answer is yes — or if this
 // pass does not RECOGNISE the construct well enough to answer — the block is left
 // exactly as it was, which is the behaviour before A12 existed. That asymmetry is
@@ -10555,23 +10601,38 @@ impl<'a> ReleasePass<'a> {
         // `allocates` needs no propagating: `mark_allocates` sets every open frame at
         // once, so an ancestor already knows about anything its children built.
         if may_release && frame.allocates && !frame.leaks {
-            vec![TypedStmt::Release { body }]
+            // A `Release` is the one statement in the typed tree the programmer did not
+            // write, so it is also the one with no span of its own. It takes the span of
+            // the FIRST statement it wraps, because that is where its code goes: the node
+            // lowers to save-cursor, the body, restore-cursor, and the save sits at the
+            // top. The restore inherits the last statement's location naturally, which is
+            // where it belongs. An empty body is not reachable — a frame that allocates
+            // has at least one statement — but the fallback is honest rather than zero.
+            let span = body.first().map(|s| s.span).unwrap_or_else(|| Span::new(0, 0));
+            vec![TypedStmt::new(TypedStmtKind::Release { body }, span)]
         } else {
             body
         }
     }
 
+    /// Rebuilds the statement, keeping the position it was written at.
+    ///
+    /// This function is the reason `TypedStmt` carries its span as a field: the tree that
+    /// reaches codegen is the one this pass returns, not the one the checker built, so a
+    /// position recovered by walking the ORIGINAL `ast::Stmt` tree in parallel would be
+    /// wrong wherever a `Release` was inserted — and wrong silently.
     fn stmt(&mut self, s: TypedStmt) -> TypedStmt {
         let here = self.depth();
-        match s {
-            TypedStmt::Let { name, ty, value } => {
+        let span = s.span;
+        let kind = match s.kind {
+            TypedStmtKind::Let { name, ty, value } => {
                 self.scan(&value);
                 let owner = self.place_owner(&value);
                 let allocated = self.allocates(&value);
                 self.declare(&name, owner, allocated);
-                TypedStmt::Let { name, ty, value }
+                TypedStmtKind::Let { name, ty, value }
             }
-            TypedStmt::Assign { name, value } => {
+            TypedStmtKind::Assign { name, value } => {
                 self.scan(&value);
                 // The name may now alias something older than it is.
                 let owner = Self::shorter(self.owner_of(&name), self.place_owner(&value));
@@ -10579,90 +10640,90 @@ impl<'a> ReleasePass<'a> {
                     slot.owner = owner;
                 }
                 self.store(&name, &value);
-                TypedStmt::Assign { name, value }
+                TypedStmtKind::Assign { name, value }
             }
-            TypedStmt::AssignField { name, indices, value } => {
+            TypedStmtKind::AssignField { name, indices, value } => {
                 self.scan(&value);
                 self.store(&name, &value);
-                TypedStmt::AssignField { name, indices, value }
+                TypedStmtKind::AssignField { name, indices, value }
             }
-            TypedStmt::AssignFieldIndex { name, indices, len, index, value } => {
+            TypedStmtKind::AssignFieldIndex { name, indices, len, index, value } => {
                 self.scan(&index);
                 self.scan(&value);
                 self.store(&name, &value);
-                TypedStmt::AssignFieldIndex { name, indices, len, index, value }
+                TypedStmtKind::AssignFieldIndex { name, indices, len, index, value }
             }
-            TypedStmt::AssignIndex { name, len, index, value } => {
+            TypedStmtKind::AssignIndex { name, len, index, value } => {
                 self.scan(&index);
                 self.scan(&value);
                 self.store(&name, &value);
-                TypedStmt::AssignIndex { name, len, index, value }
+                TypedStmtKind::AssignIndex { name, len, index, value }
             }
-            TypedStmt::ExprStmt(e) => {
+            TypedStmtKind::ExprStmt(e) => {
                 self.scan(&e);
-                TypedStmt::ExprStmt(e)
+                TypedStmtKind::ExprStmt(e)
             }
-            TypedStmt::Exit(e) => {
+            TypedStmtKind::Exit(e) => {
                 self.scan(&e);
-                TypedStmt::Exit(e)
+                TypedStmtKind::Exit(e)
             }
-            TypedStmt::Print { value, to_stderr } => {
+            TypedStmtKind::Print { value, to_stderr } => {
                 self.scan(&value);
-                TypedStmt::Print { value, to_stderr }
+                TypedStmtKind::Print { value, to_stderr }
             }
-            TypedStmt::PrintInterp { parts, to_stderr } => {
+            TypedStmtKind::PrintInterp { parts, to_stderr } => {
                 for p in &parts {
                     if let TypedInterpPart::Expr(e) = p {
                         self.scan(e);
                     }
                 }
-                TypedStmt::PrintInterp { parts, to_stderr }
+                TypedStmtKind::PrintInterp { parts, to_stderr }
             }
             // Whatever is handed back outlives every block in this function.
-            TypedStmt::Return(e) => {
+            TypedStmtKind::Return(e) => {
                 self.scan(&e);
                 if self.allocates(&e) {
                     self.taint(None);
                 }
-                TypedStmt::Return(e)
+                TypedStmtKind::Return(e)
             }
             // `musttail` requires the call to sit immediately before the `ret`, with
             // nothing in between — and a release is something in between. So no block
             // containing one may release.
-            TypedStmt::TailReturn { name, arguments } => {
+            TypedStmtKind::TailReturn { name, arguments } => {
                 for a in &arguments {
                     self.scan(a);
                 }
                 self.taint(None);
-                TypedStmt::TailReturn { name, arguments }
+                TypedStmtKind::TailReturn { name, arguments }
             }
-            TypedStmt::Break => TypedStmt::Break,
-            TypedStmt::Continue => TypedStmt::Continue,
-            TypedStmt::While { cond, body } => {
+            TypedStmtKind::Break => TypedStmtKind::Break,
+            TypedStmtKind::Continue => TypedStmtKind::Continue,
+            TypedStmtKind::While { cond, body } => {
                 self.scan(&cond);
                 let body = self.block(body, true, &[]);
-                TypedStmt::While { cond, body }
+                TypedStmtKind::While { cond, body }
             }
-            TypedStmt::If { cond, then_block, else_block } => {
+            TypedStmtKind::If { cond, then_block, else_block } => {
                 self.scan(&cond);
                 let then_block = self.block(then_block, true, &[]);
                 let else_block = else_block.map(|b| self.block(b, true, &[]));
-                TypedStmt::If { cond, then_block, else_block }
+                TypedStmtKind::If { cond, then_block, else_block }
             }
-            TypedStmt::For { name, elem, iterable, body } => {
+            TypedStmtKind::For { name, elem, iterable, body } => {
                 self.scan(&iterable);
                 let owner = self.place_owner(&iterable);
                 let allocated = self.allocates(&iterable);
                 let body = self.block(body, true, &[(name.clone(), owner, allocated)]);
-                TypedStmt::For { name, elem, iterable, body }
+                TypedStmtKind::For { name, elem, iterable, body }
             }
-            TypedStmt::ForRange { name, start, end, body } => {
+            TypedStmtKind::ForRange { name, start, end, body } => {
                 self.scan(&start);
                 self.scan(&end);
                 let body = self.block(body, true, &[(name.clone(), Some(here), false)]);
-                TypedStmt::ForRange { name, start, end, body }
+                TypedStmtKind::ForRange { name, start, end, body }
             }
-            TypedStmt::Match { value, arms } => {
+            TypedStmtKind::Match { value, arms } => {
                 self.scan(&value);
                 let owner = self.place_owner(&value);
                 let allocated = self.allocates(&value);
@@ -10681,18 +10742,19 @@ impl<'a> ReleasePass<'a> {
                         }
                     })
                     .collect();
-                TypedStmt::Match { value, arms }
+                TypedStmtKind::Match { value, arms }
             }
             // A `region` the programmer wrote already releases at this exact point, so
             // there is nothing for a second wrapper to do — but its body is still a
             // block, and names declared in it still belong to it.
-            TypedStmt::Region { name, body } => {
+            TypedStmtKind::Region { name, body } => {
                 let body = self.block(body, false, &[]);
-                TypedStmt::Region { name, body }
+                TypedStmtKind::Region { name, body }
             }
             // This pass runs once per body.
-            TypedStmt::Release { body } => TypedStmt::Release { body },
-        }
+            TypedStmtKind::Release { body } => TypedStmtKind::Release { body },
+        };
+        TypedStmt { kind, span }
     }
 }
 

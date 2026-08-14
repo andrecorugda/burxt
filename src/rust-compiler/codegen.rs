@@ -43,7 +43,9 @@
 //!     same way, so you get a named error rather than a raw SIGFPE.
 
 use crate::ast::{BinOp, CmpOp, LogicalOp, Rounding, Type};
-use crate::typeck::{TypedExpr, TypedExprKind, TypedFn, TypedMethod, TypedProgram, TypedStmt};
+use crate::typeck::{
+    TypedExpr, TypedExprKind, TypedFn, TypedMethod, TypedProgram, TypedStmt, TypedStmtKind,
+};
 use inkwell::types::StructType;
 
 use inkwell::builder::Builder;
@@ -51,6 +53,7 @@ use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::{AnyType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FloatValue, FunctionValue, IntValue, PointerValue};
+use inkwell::debug_info::AsDIScope;
 use inkwell::AddressSpace;
 use std::collections::HashMap;
 
@@ -162,6 +165,51 @@ pub struct CodeGen<'ctx> {
         FunctionValue<'ctx>,
         FunctionValue<'ctx>,
     )>,
+    /// DWARF, present only when `-g` was asked for. C1.
+    ///
+    /// `Option` rather than a flag, so there is no way to emit half a line table: every
+    /// call site is `if let Some(d) = &self.debug`, and a build without `-g` produces
+    /// exactly the module it produced before this existed. That is what keeps the
+    /// self-hosting fixpoint and `the_ir_is_the_same_for_every_target` untouched.
+    debug: Option<DebugInfo<'ctx>>,
+}
+
+/// Everything DWARF needs, built once per module when `-g` is given.
+struct DebugInfo<'ctx> {
+    builder: inkwell::debug_info::DebugInfoBuilder<'ctx>,
+    unit: inkwell::debug_info::DICompileUnit<'ctx>,
+    /// One `DIFile` per source file, in the order `main.rs` loaded them — so a
+    /// breakpoint in a `use`d module names THAT module rather than an offset into a
+    /// concatenated buffer nobody wrote.
+    files: Vec<inkwell::debug_info::DIFile<'ctx>>,
+    /// Per file, parallel to `files`: where it starts in the buffer, where it ends, and
+    /// the buffer offset of each of its lines. Binary-searched, because a compile of
+    /// `lib/json.bx` asks this question once per statement.
+    extents: Vec<(usize, usize, Vec<usize>)>,
+    /// Printed Burxt type -> its `DIType`. A program with four hundred `Int` locals
+    /// should describe `Int` once.
+    ///
+    /// A `RefCell` because building a type needs `&self` for `layout_of` and
+    /// `struct_fields` at the same time as it needs the cache.
+    types: std::cell::RefCell<HashMap<String, inkwell::debug_info::DIType<'ctx>>>,
+    /// Where each function was DECLARED, by name — `Recv.name` for a method. Built by
+    /// `main.rs` from the untyped AST, which is the only tree that still knows: the
+    /// typed `TypedFn` carries a body and no position of its own.
+    decls: HashMap<String, crate::diag::Span>,
+    /// The function being generated: its subprogram, and which file it is written in.
+    current: Option<(inkwell::debug_info::DISubprogram<'ctx>, usize)>,
+    /// The lexical scopes open here, outermost first — the subprogram, then one per
+    /// nested block. Locations and variables hang off the innermost.
+    ///
+    /// Without this every local in a function belongs to the function, and `info locals`
+    /// inside the second of two sibling blocks shows BOTH of their `x`es, one of them
+    /// holding whatever the stack had. Burxt forbids shadowing, so this cannot happen
+    /// between a block and its parent — only between siblings, which is exactly the case
+    /// nobody writes a fixture for.
+    scopes: Vec<inkwell::debug_info::DIScope<'ctx>>,
+    /// Was the IR pipeline going to run? DWARF records it, and a debugger tells the user
+    /// when the code it is stepping through has been optimised.
+    optimised: bool,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -204,6 +252,7 @@ impl<'ctx> CodeGen<'ctx> {
             enum_types: HashMap::new(),
             printf: None,
             panic_deps: None,
+            debug: None,
         }
     }
 
@@ -368,8 +417,15 @@ impl<'ctx> CodeGen<'ctx> {
         let ptr_ty = self.ctx.ptr_type(AddressSpace::default());
         let main_ty = i32t.fn_type(&[i32t.into(), ptr_ty.into()], false);
         let main_fn = self.module.add_function("main", main_ty, None);
+        // The top level has no declaration to point at — it IS the file — so `main`'s
+        // subprogram starts at the first statement the programmer wrote. That is also
+        // where `break main` should land, and it is a real line rather than line 1 of a
+        // file whose first lines are `use` declarations.
+        let main_at = prog.stmts.first().map(|s| s.span).unwrap_or_else(|| crate::diag::Span::new(0, 0));
+        self.begin_subprogram(main_fn, "main", main_at, &[], &Type::Int);
         let entry = self.ctx.append_basic_block(main_fn, "entry");
         self.builder.position_at_end(entry);
+        self.set_debug_location(main_at);
         self.vars.clear();
         // A body starts with no mark of its own: a region is released inside the frame
         // that opened it, never across a call.
@@ -396,6 +452,12 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder
             .build_return(Some(&i32t.const_int(0, false)))
             .map_err(|e| e.to_string())?;
+        self.end_subprogram();
+
+        // BEFORE the verifier, not after: `finalize` resolves the temporary metadata
+        // nodes the builder left behind, and the verifier rejects a module that still
+        // holds one. Getting this order wrong fails loudly, which is the good case.
+        self.finalize_debug_info();
 
         // verify the module — catches malformed IR early
         self.module
@@ -407,8 +469,17 @@ impl<'ctx> CodeGen<'ctx> {
 
     fn gen_fn(&mut self, f: &TypedFn) -> Result<(), String> {
         let llf = self.user_fns[&f.name];
+        let at = self.decl_span(&f.name, &f.body);
+        self.begin_subprogram(llf, &f.name, at, &f.parameters, &f.ret);
         let entry = self.ctx.append_basic_block(llf, "entry");
         self.builder.position_at_end(entry);
+        // The prologue — parameter spills, `old(...)` captures, contract checks — is
+        // attributed to the declaration until a clause or a statement says otherwise.
+        // Not cosmetic: LLVM's verifier REFUSES a call to a function with debug info
+        // from a function with debug info when the call carries no location, so an
+        // unlocated prologue is a build failure waiting for the first `pure` call in a
+        // contract. It was found that way.
+        self.set_debug_location(at);
         self.vars.clear();
         // A body starts with no mark of its own: a region is released inside the frame
         // that opened it, never across a call.
@@ -436,9 +507,16 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder.build_store(slot, argument).map_err(|e| e.to_string())?;
                 self.vars.insert(name.clone(), (slot, ty.clone()));
             }
+            // An aggregate parameter's slot IS the caller's storage (byval or `mutable`),
+            // and a scalar's is the spill above — either way the name now has an address,
+            // which is the only thing `dbg.declare` needs. `i + 1`: DWARF numbers
+            // arguments from one, and the hidden sret pointer is not one of the
+            // programmer's.
+            let (slot, _) = self.vars[name];
+            self.declare_variable(name, ty, slot, at, Some((i + 1) as u32));
         }
 
-        self.gen_contract_prologue(&f.requires, &f.ensures, &f.olds, &f.name)?;
+        self.gen_contract_prologue(&f.requires, &f.ensures, &f.olds, &f.name, at)?;
         self.gen_measure_prologue(f)?;
 
         for stmt in &f.body {
@@ -448,13 +526,23 @@ impl<'ctx> CodeGen<'ctx> {
         self.current_ensures.clear();
         self.old_slots.clear();
         self.current_measure = None;
+        self.end_subprogram();
         // The typechecker proved every path ends in `return`, so the current
         // block is already terminated — no fallthrough ret is needed.
         Ok(())
     }
 
     fn gen_stmt(&mut self, stmt: &TypedStmt) -> Result<(), String> {
-        match stmt {
+        // Every instruction from here down is attributed to this statement, until the next
+        // one moves it. That is the whole line table: LLVM stamps whatever location the
+        // builder is carrying onto each instruction it creates. Off unless `-g` was asked
+        // for, in which case it is a no-op.
+        self.set_debug_location(stmt.span);
+        // The `for` lowerings below build statements the programmer never wrote. Each is
+        // blamed on the `for` it came from rather than given a position of its own, so a
+        // hidden counter update reports the loop's line instead of somewhere it isn't.
+        let syn = |kind| TypedStmt::new(kind, stmt.span);
+        match &stmt.kind {
             // `exit(code)` — the status a shell reads, and the reason this is not an
             // `external function exit`: the runtime owns that symbol (it is what a contract failure
             // calls), so declaring it was refused and a CLI had no way to report failure at all.
@@ -463,7 +551,7 @@ impl<'ctx> CodeGen<'ctx> {
             // BITS, so `exit(256)` arrives as 0 — a program reporting SUCCESS while trying to report
             // failure, which is the worst possible direction for this particular mistake. A literal
             // is refused by the checker; anything computed dies here, naming the range.
-            TypedStmt::Exit(code) => {
+            TypedStmtKind::Exit(code) => {
                 let value = self.gen_expr(code)?.into_int_value();
                 let i64t = self.ctx.i64_type();
                 let i32t = self.ctx.i32_type();
@@ -508,21 +596,26 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder.position_at_end(after);
                 Ok(())
             }
-            TypedStmt::Let { name, ty, value } => {
+            TypedStmtKind::Let { name, ty, value } => {
                 // An array is built in place: alloca once, store per element.
                 if let TypedExprKind::ArrayLit(elems) = &value.kind {
                     let slot = self.create_entry_alloca(name, ty)?;
                     self.store_array_elements(slot, ty, elems)?;
                     self.vars.insert(name.clone(), (slot, ty.clone()));
+                    self.declare_variable(name, ty, slot, stmt.span, None);
                     return Ok(());
                 }
                 let val = self.gen_expr(value)?;
                 let slot = self.create_entry_alloca(name, ty)?;
                 self.builder.build_store(slot, val).map_err(|e| e.to_string())?;
                 self.vars.insert(name.clone(), (slot, ty.clone()));
+                // AFTER the store, so the declaration marks the point the name means
+                // something. Declaring it at the alloca would let a debugger stopped on
+                // this line print whatever the stack happened to hold.
+                self.declare_variable(name, ty, slot, stmt.span, None);
                 Ok(())
             }
-            TypedStmt::Assign { name, value } => {
+            TypedStmtKind::Assign { name, value } => {
                 let val = self.gen_expr(value)?;
                 let (slot, _) = *self
                     .vars
@@ -531,7 +624,7 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder.build_store(slot, val).map_err(|e| e.to_string())?;
                 Ok(())
             }
-            TypedStmt::AssignField { name, indices, value } => {
+            TypedStmtKind::AssignField { name, indices, value } => {
                 let val = self.gen_expr(value)?;
                 let (slot, ty) = self
                     .vars
@@ -562,7 +655,7 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder.build_store(cur_ptr, val).map_err(|e| e.to_string())?;
                 Ok(())
             }
-            TypedStmt::AssignFieldIndex { name, indices, len, index, value } => {
+            TypedStmtKind::AssignFieldIndex { name, indices, len, index, value } => {
                 let val = self.gen_expr(value)?;
                 let (slot, ty) = self
                     .vars
@@ -633,17 +726,17 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder.build_store(elem_ptr, val).map_err(|e| e.to_string())?;
                 Ok(())
             }
-            TypedStmt::AssignIndex { name, len, index, value } => {
+            TypedStmtKind::AssignIndex { name, len, index, value } => {
                 let val = self.gen_expr(value)?;
                 let ptr = self.gen_element_ptr(name, *len, index)?;
                 self.builder.build_store(ptr, val).map_err(|e| e.to_string())?;
                 Ok(())
             }
-            TypedStmt::ExprStmt(e) => {
+            TypedStmtKind::ExprStmt(e) => {
                 self.gen_expr(e)?;
                 Ok(())
             }
-            TypedStmt::For { name, elem, iterable, body } => {
+            TypedStmtKind::For { name, elem, iterable, body } => {
                 // Lowered HERE rather than in the parser, so the checker could give `for`
                 // its own errors instead of complaining about a `len` call the author
                 // never wrote. The index is named `for$N`; `$` is not a byte an
@@ -672,29 +765,29 @@ impl<'ctx> CodeGen<'ctx> {
                 };
 
                 let saved = self.vars.clone();
-                self.gen_stmt(&TypedStmt::Let {
+                self.gen_stmt(&syn(TypedStmtKind::Let {
                     name: index.clone(),
                     ty: Type::Int,
                     value: int(TypedExprKind::IntLit(0)),
-                })?;
+                }))?;
                 let mut inner = Vec::with_capacity(body.len() + 2);
-                inner.push(TypedStmt::Let {
+                inner.push(syn(TypedStmtKind::Let {
                     name: name.clone(),
                     ty: elem.clone(),
                     value: TypedExpr { ty: elem.clone(), kind: read },
-                });
+                }));
                 // The advance comes BEFORE the body. `continue` jumps to the condition,
                 // so an increment at the bottom is skipped and the loop never ends — one
                 // hung test taught me that, and it is why a lowering has to be read
                 // against every control-flow statement the language has.
-                inner.push(TypedStmt::Assign {
+                inner.push(syn(TypedStmtKind::Assign {
                     name: index.clone(),
                     value: int(TypedExprKind::Binary {
                         op: BinOp::Add,
                         lhs: Box::new(idx()),
                         rhs: Box::new(int(TypedExprKind::IntLit(1))),
                     }),
-                });
+                }));
                 inner.extend(body.iter().cloned());
                 let cond = TypedExpr {
                     ty: Type::Bool,
@@ -708,7 +801,7 @@ impl<'ctx> CodeGen<'ctx> {
                 self.vars = saved;
                 r
             }
-            TypedStmt::ForRange { name, start, end, body } => {
+            TypedStmtKind::ForRange { name, start, end, body } => {
                 // Lowered to EXACTLY the hand-written idiom it replaces:
                 //
                 //     let for$N_end = <end>;              // once, before the loop
@@ -740,34 +833,34 @@ impl<'ctx> CodeGen<'ctx> {
                 let idx = || int(TypedExprKind::Var(index.clone()));
 
                 let saved = self.vars.clone();
-                self.gen_stmt(&TypedStmt::Let {
+                self.gen_stmt(&syn(TypedStmtKind::Let {
                     name: limit.clone(),
                     ty: Type::Int,
                     value: end.clone(),
-                })?;
-                self.gen_stmt(&TypedStmt::Let {
+                }))?;
+                self.gen_stmt(&syn(TypedStmtKind::Let {
                     name: index.clone(),
                     ty: Type::Int,
                     value: start.clone(),
-                })?;
+                }))?;
                 let mut inner = Vec::with_capacity(body.len() + 2);
-                inner.push(TypedStmt::Let {
+                inner.push(syn(TypedStmtKind::Let {
                     name: name.clone(),
                     ty: Type::Int,
                     value: idx(),
-                });
+                }));
                 // The advance comes BEFORE the body, for the reason the array `for` above
                 // records: `continue` jumps to the CONDITION, so an increment at the bottom
                 // is skipped and the loop never ends. The counter is read into `name` first,
                 // so the body still sees the pass it is on.
-                inner.push(TypedStmt::Assign {
+                inner.push(syn(TypedStmtKind::Assign {
                     name: index.clone(),
                     value: int(TypedExprKind::Binary {
                         op: BinOp::Add,
                         lhs: Box::new(idx()),
                         rhs: Box::new(int(TypedExprKind::IntLit(1))),
                     }),
-                });
+                }));
                 inner.extend(body.iter().cloned());
                 let cond = TypedExpr {
                     ty: Type::Bool,
@@ -794,12 +887,12 @@ impl<'ctx> CodeGen<'ctx> {
             // nothing (A12). Neither knows anything the other does not, which is the
             // point: per-block release adds no runtime machinery, it only puts the
             // existing mark-and-restore somewhere else.
-            TypedStmt::Region { name, body } => {
+            TypedStmtKind::Region { name, body } => {
                 let _ = name;
                 self.gen_released_block(body)
             }
-            TypedStmt::Release { body } => self.gen_released_block(body),
-            TypedStmt::Match { value, arms } => {
+            TypedStmtKind::Release { body } => self.gen_released_block(body),
+            TypedStmtKind::Match { value, arms } => {
                 let err = |e: inkwell::builder::BuilderError| e.to_string();
                 let i64t = self.ctx.i64_type();
                 let enum_name = match &value.ty {
@@ -907,30 +1000,30 @@ impl<'ctx> CodeGen<'ctx> {
             //
             // Releasing the body's own block here is what makes `continue` in a loop
             // that builds and discards constant-memory rather than merely usually so.
-            TypedStmt::Break | TypedStmt::Continue => {
+            TypedStmtKind::Break | TypedStmtKind::Continue => {
                 let (cond_bb, end_bb, depth_at_entry) = *self
                     .loop_stack
                     .last()
                     .ok_or("codegen bug: `break` outside a loop")?;
                 self.close_regions_below(depth_at_entry)?;
-                let target = if matches!(stmt, TypedStmt::Break) { end_bb } else { cond_bb };
+                let target = if matches!(stmt.kind, TypedStmtKind::Break) { end_bb } else { cond_bb };
                 self.builder
                     .build_unconditional_branch(target)
                     .map_err(|e| e.to_string())?;
                 Ok(())
             }
-            TypedStmt::While { cond, body } => self.gen_while(cond, body),
+            TypedStmtKind::While { cond, body } => self.gen_while(cond, body),
             // One statement, two destinations. `to_stderr` is set for the whole statement and read
             // by `emit_print_call`, so every arm of the per-type formatter below serves both — which
             // is the point of not having a second statement: the first time one formatter learned
             // about a new type, the other would print something different for the same value.
-            TypedStmt::Print { value, to_stderr } => {
+            TypedStmtKind::Print { value, to_stderr } => {
                 let outer = std::mem::replace(&mut self.print_to_stderr, *to_stderr);
                 let r = self.gen_print(value);
                 self.print_to_stderr = outer;
                 r
             }
-            TypedStmt::PrintInterp { parts, to_stderr } => {
+            TypedStmtKind::PrintInterp { parts, to_stderr } => {
                 // Emit each piece in order — no intermediate String is built,
                 // so this needs no allocation.
                 let outer = std::mem::replace(&mut self.print_to_stderr, *to_stderr);
@@ -952,7 +1045,7 @@ impl<'ctx> CodeGen<'ctx> {
                 self.print_to_stderr = outer;
                 r
             }
-            TypedStmt::Return(e) => {
+            TypedStmtKind::Return(e) => {
                 if let Some(sret) = self.current_sret {
                     // Build the result directly in the caller's space, then
                     // return nothing: no aliasing question, no copy-elision
@@ -1001,7 +1094,7 @@ impl<'ctx> CodeGen<'ctx> {
             // The call must sit IMMEDIATELY before the `ret`, with nothing in
             // between. That is why a tail call inside a region is refused
             // earlier: the region release would land in that gap.
-            TypedStmt::TailReturn { name, arguments } => {
+            TypedStmtKind::TailReturn { name, arguments } => {
                 let f = *self
                     .user_fns
                     .get(name.as_str())
@@ -1030,7 +1123,7 @@ impl<'ctx> CodeGen<'ctx> {
                 }
                 Ok(())
             }
-            TypedStmt::If { cond, then_block, else_block } => {
+            TypedStmtKind::If { cond, then_block, else_block } => {
                 self.gen_if(cond, then_block, else_block.as_deref())
             }
         }
@@ -1284,8 +1377,13 @@ impl<'ctx> CodeGen<'ctx> {
     /// mutation.
     fn gen_method(&mut self, m: &TypedMethod) -> Result<(), String> {
         let llf = self.methods[&(m.receiver.clone(), m.name.clone())];
+        let label = format!("{}.{}", m.receiver, m.name);
+        let at = self.decl_span(&label, &m.body);
+        self.begin_subprogram(llf, &label, at, &m.parameters, &m.ret);
         let entry = self.ctx.append_basic_block(llf, "entry");
         self.builder.position_at_end(entry);
+        // See gen_fn: an unlocated prologue is a verifier failure, not a cosmetic gap.
+        self.set_debug_location(at);
         self.vars.clear();
         // A body starts with no mark of its own: a region is released inside the frame
         // that opened it, never across a call.
@@ -1299,10 +1397,11 @@ impl<'ctx> CodeGen<'ctx> {
         };
         let self_idx = if ret_is_agg { 1 } else { 0 };
         let self_arg = llf.get_nth_param(self_idx as u32).unwrap();
-        self.vars.insert(
-            "self".to_string(),
-            (self_arg.into_pointer_value(), Type::Named(m.receiver.clone())),
-        );
+        let self_ty = Type::Named(m.receiver.clone());
+        self.vars.insert("self".to_string(), (self_arg.into_pointer_value(), self_ty.clone()));
+        // `self` is argument one, so a debugger's `bt` shows the receiver a method was
+        // called on rather than starting at its second parameter.
+        self.declare_variable("self", &self_ty, self_arg.into_pointer_value(), at, Some(1));
 
         let param_offset = self_idx + 1;
         for (i, (name, ty)) in m.parameters.iter().enumerate() {
@@ -1314,10 +1413,11 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder.build_store(slot, argument).map_err(|e| e.to_string())?;
                 self.vars.insert(name.clone(), (slot, ty.clone()));
             }
+            let (slot, _) = self.vars[name];
+            self.declare_variable(name, ty, slot, at, Some((i + 2) as u32));
         }
 
-        let label = format!("{}.{}", m.receiver, m.name);
-        self.gen_contract_prologue(&m.requires, &m.ensures, &m.olds, &label)?;
+        self.gen_contract_prologue(&m.requires, &m.ensures, &m.olds, &label, at)?;
 
         for stmt in &m.body {
             self.gen_stmt(stmt)?;
@@ -1325,6 +1425,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.current_sret = None;
         self.current_ensures.clear();
         self.old_slots.clear();
+        self.end_subprogram();
         Ok(())
     }
 
@@ -1555,13 +1656,483 @@ impl<'ctx> CodeGen<'ctx> {
         tmp.build_alloca(self.llvm_type(ty), name).map_err(|e| e.to_string())
     }
 
+    // ------------------------------------------------------------ DWARF (C1)
+    //
+    // The whole of this section is inert unless `-g` was given. That is deliberate and
+    // load-bearing rather than tidy: the self-hosting fixpoint compares stage-1's IR
+    // against itself byte for byte, and `the_ir_is_the_same_for_every_target` compares
+    // one machine's IR against another's. Debug info would break both — a `DIFile`
+    // carries the directory the compiler ran in, and a compile unit carries a producer
+    // string with a version in it. So debug info is opt-in, and a default build emits
+    // the same module it emitted before this code existed.
+    //
+    // What a debugger gets: a line table at STATEMENT granularity, a subprogram per
+    // function, and a `DILocalVariable` with a `llvm.dbg.declare` for every parameter
+    // and every `let`. What it does not get: stage-1. See `main.rs`, which refuses
+    // `-g` there rather than emitting something a debugger would read wrongly.
+
+    /// Turn on DWARF for this module.
+    ///
+    /// `files` and `src` are `main.rs`'s program buffer and its map back to the files
+    /// it was built from — a span is an offset into the buffer, so this is what turns
+    /// one back into a place. `decls` maps a function's name (or `Recv.name` for a
+    /// method) to where it was declared; anything missing from it — a monomorphised
+    /// generic, whose mangled name no source line spells — falls back to the first
+    /// statement of its body, which is a real position rather than an invented one.
+    pub fn enable_debug_info(
+        &mut self,
+        files: &[crate::SourceFile],
+        src: &str,
+        decls: HashMap<String, crate::diag::Span>,
+        optimised: bool,
+    ) {
+        use inkwell::debug_info::{DWARFEmissionKind, DWARFSourceLanguage};
+
+        // Without this flag LLVM STRIPS every piece of debug info on its way out, and
+        // says nothing. inkwell does not add it — its own documentation shows the caller
+        // doing it. A build that silently emits no DWARF while reporting success is
+        // exactly the failure this row exists to prevent, so
+        // `a_debug_build_declares_its_debug_info_version` in tests/runner.rs asserts the
+        // flag is present in the emitted IR.
+        self.module.add_basic_value_flag(
+            "Debug Info Version",
+            inkwell::module::FlagBehavior::Warning,
+            self.ctx.i32_type().const_int(inkwell::debug_info::debug_metadata_version() as u64, false),
+        );
+        // DWARF 4 rather than 5: it is what every debugger in the field reads without
+        // argument, and Burxt uses nothing DWARF 5 added.
+        self.module.add_basic_value_flag(
+            "Dwarf Version",
+            inkwell::module::FlagBehavior::Warning,
+            self.ctx.i32_type().const_int(4, false),
+        );
+
+        // The compile unit is named for the ROOT file — the one the user typed — and the
+        // `use`d modules become additional DIFiles below.
+        let root = files.last().expect("a program has at least one file");
+        let (root_name, root_dir) = split_path(&root.path);
+        let (builder, unit) = self.module.create_debug_info_builder(
+            true,
+            // There is no DW_LANG for Burxt, and inventing one would make every tool
+            // report "unknown". C is the closest honest lie: scalars in registers,
+            // structs by offset, no runtime type model — which is what a debugger will
+            // in fact find.
+            DWARFSourceLanguage::C,
+            &root_name,
+            &root_dir,
+            &format!("burxt {}", env!("CARGO_PKG_VERSION")),
+            optimised,
+            "",
+            0,
+            "",
+            DWARFEmissionKind::Full,
+            0,
+            false,
+            false,
+            "",
+            "",
+        );
+
+        let mut difiles = Vec::with_capacity(files.len());
+        let mut extents = Vec::with_capacity(files.len());
+        for f in files {
+            let (name, dir) = split_path(&f.path);
+            difiles.push(builder.create_file(&name, &dir));
+            // Line starts in BUFFER coordinates, so a lookup is one binary search with
+            // no subtraction to get wrong.
+            let end = f.start + f.len;
+            let mut starts = vec![f.start];
+            starts.extend(
+                src[f.start..end]
+                    .bytes()
+                    .enumerate()
+                    .filter(|(_, b)| *b == b'\n')
+                    .map(|(i, _)| f.start + i + 1),
+            );
+            extents.push((f.start, end, starts));
+        }
+
+        self.debug = Some(DebugInfo {
+            builder,
+            unit,
+            files: difiles,
+            extents,
+            types: std::cell::RefCell::new(HashMap::new()),
+            decls,
+            current: None,
+            scopes: Vec::new(),
+            optimised,
+        });
+    }
+
+    /// A buffer offset back to (which file, 1-based line, 1-based column).
+    ///
+    /// `None` when the offset belongs to no file, which happens for the one-byte
+    /// separator `load_program` puts between files. Callers treat that as "no position"
+    /// rather than guessing at a nearby one.
+    fn locate(&self, offset: usize) -> Option<(usize, u32, u32)> {
+        let d = self.debug.as_ref()?;
+        let (ix, (start, _, starts)) = d
+            .extents
+            .iter()
+            .enumerate()
+            .find(|(_, (s, e, _))| offset >= *s && offset <= *e)?;
+        let line_ix = match starts.binary_search(&offset) {
+            Ok(i) => i,
+            Err(i) => i.saturating_sub(1),
+        };
+        let _ = start;
+        Some((ix, (line_ix + 1) as u32, (offset - starts[line_ix] + 1) as u32))
+    }
+
+    /// Point the builder at `span`, so every instruction it makes from here on is
+    /// attributed there. Does nothing unless `-g` asked for debug info.
+    fn set_debug_location(&self, span: crate::diag::Span) {
+        let Some(d) = self.debug.as_ref() else { return };
+        let Some(scope) = d.scopes.last().copied() else { return };
+        let Some((_, line, col)) = self.locate(span.start as usize) else { return };
+        let loc = d.builder.create_debug_location(self.ctx, line, col, scope, None);
+        self.builder.set_current_debug_location(loc);
+    }
+
+    /// The `DIType` for a Burxt type, made once per program and cached.
+    ///
+    /// The mapping is deliberately literal about what is actually in the machine, not
+    /// about what the language pretends. A `Decimal<2>` is described as a 64-bit signed
+    /// integer NAMED `Decimal<2>`, because that is what a debugger will find in the slot
+    /// — it holds 1999 for 19.99, and a reader who sees `Decimal<2> = 1999` has been told
+    /// the truth, where a reader shown `19.99` would have been told a number no register
+    /// contains. Same argument as the compiler's: never a float, anywhere.
+    fn di_type(&self, ty: &Type) -> Option<inkwell::debug_info::DIType<'ctx>> {
+        use inkwell::debug_info::{DIFlags, DIFlagsConstants};
+        let d = self.debug.as_ref()?;
+        let key = format!("{}", ty);
+        if let Some(t) = d.types.borrow().get(&key) {
+            return Some(*t);
+        }
+
+        // DWARF attribute encodings (DW_ATE_*), by number because inkwell takes the raw
+        // value: 0x02 boolean, 0x05 signed, 0x06 signed char, 0x07 unsigned, 0x04 float.
+        let made: inkwell::debug_info::DIType<'ctx> = match ty {
+            Type::Int => d.builder.create_basic_type("Int", 64, 0x05, DIFlags::PUBLIC).ok()?.as_type(),
+            // A Burxt Bool is an i64 holding 0 or 1 — see this file's header. Describing
+            // it as one byte would make a debugger read the wrong seven.
+            Type::Bool => d.builder.create_basic_type("Bool", 64, 0x02, DIFlags::PUBLIC).ok()?.as_type(),
+            Type::CInt => d.builder.create_basic_type("CInt", 32, 0x05, DIFlags::PUBLIC).ok()?.as_type(),
+            Type::CDouble => d.builder.create_basic_type("CDouble", 64, 0x04, DIFlags::PUBLIC).ok()?.as_type(),
+            Type::Width { bits, signed } => d
+                .builder
+                .create_basic_type(
+                    &format!("{}{}", if *signed { "i" } else { "u" }, bits),
+                    *bits as u64,
+                    if *signed { 0x05 } else { 0x07 },
+                    DIFlags::PUBLIC,
+                )
+                .ok()?
+                .as_type(),
+            Type::Decimal { .. } => d
+                .builder
+                .create_basic_type(&key, 64, 0x05, DIFlags::PUBLIC)
+                .ok()?
+                .as_type(),
+            // A String is a pointer to NUL-terminated bytes, and describing it as
+            // `char*` is what makes a debugger PRINT it rather than show an address.
+            // That is most of the value of `info locals` in a language whose errors are
+            // sentences.
+            Type::String => {
+                let byte = d.builder.create_basic_type("char", 8, 0x06, DIFlags::PUBLIC).ok()?;
+                d.builder
+                    .create_pointer_type("String", byte.as_type(), 64, 64, AddressSpace::default())
+                    .as_type()
+            }
+            // Opaque by design — the language allows exactly two operations on one and
+            // looking inside is neither. `void*` is the honest description.
+            Type::CPointer => {
+                let byte = d.builder.create_basic_type("void", 8, 0x06, DIFlags::PUBLIC).ok()?;
+                d.builder
+                    .create_pointer_type("CPointer", byte.as_type(), 64, 64, AddressSpace::default())
+                    .as_type()
+            }
+            Type::Array { elem, len } => {
+                let inner = self.di_type(elem)?;
+                let l = self.layout_of(ty);
+                d.builder
+                    .create_array_type(inner, l.size * 8, l.align as u32 * 8, &[0..(*len as i64)])
+                    .as_type()
+            }
+            Type::Named(name) if self.struct_fields.contains_key(name) && !self.enum_types.contains_key(name) => {
+                self.di_struct(name)?
+            }
+            // An enum is `{ i64 tag, [N x i64] payload }`. Described as a struct with
+            // those two members rather than as a DWARF variant part: a debugger then
+            // shows the tag, which is the thing a reader actually wants, and the payload
+            // as the cells it really is. Claiming a discriminated union here would mean
+            // claiming a member layout per variant, and the payload area is an overlay —
+            // that would be a description the machine does not match.
+            other => {
+                let l = self.layout_of(other);
+                let i64ty = d.builder.create_basic_type("Int", 64, 0x05, DIFlags::PUBLIC).ok()?;
+                let root = d.files.last().copied()?;
+                let members: Vec<inkwell::debug_info::DIType<'ctx>> = (0..l.size / 8)
+                    .map(|i| {
+                        d.builder
+                            .create_member_type(
+                                d.unit.as_debug_info_scope(),
+                                &format!("cell{}", i),
+                                root,
+                                0,
+                                64,
+                                64,
+                                i * 64,
+                                DIFlags::PUBLIC,
+                                i64ty.as_type(),
+                            )
+                            .as_type()
+                    })
+                    .collect();
+                d.builder
+                    .create_struct_type(
+                        d.unit.as_debug_info_scope(),
+                        &key,
+                        root,
+                        0,
+                        l.size * 8,
+                        l.align as u32 * 8,
+                        DIFlags::PUBLIC,
+                        None,
+                        &members,
+                        0,
+                        None,
+                        &key,
+                    )
+                    .as_type()
+            }
+        };
+        d.types.borrow_mut().insert(key, made);
+        Some(made)
+    }
+
+    /// A class, described field by field with the offsets `layout_of` already computes —
+    /// so `print p` in a debugger shows the same field boundaries the compiler used.
+    fn di_struct(&self, name: &str) -> Option<inkwell::debug_info::DIType<'ctx>> {
+        use inkwell::debug_info::{DIFlags, DIFlagsConstants};
+        let d = self.debug.as_ref()?;
+        let fields = self.struct_fields.get(name)?.clone();
+        let l = self.layout_of(&Type::Named(name.to_string()));
+        let root = d.files.last().copied()?;
+        // Placed in the cache BEFORE the members are built. A class may hold a pointer to
+        // its own kind, and without this the walk would not terminate.
+        let shell = d
+            .builder
+            .create_struct_type(
+                d.unit.as_debug_info_scope(),
+                name,
+                root,
+                0,
+                l.size * 8,
+                l.align as u32 * 8,
+                DIFlags::PUBLIC,
+                None,
+                &[],
+                0,
+                None,
+                name,
+            )
+            .as_type();
+        d.types.borrow_mut().insert(format!("{}", Type::Named(name.to_string())), shell);
+
+        let mut members = Vec::with_capacity(fields.len());
+        for (i, f) in fields.iter().enumerate() {
+            let fty = self.di_type(f)?;
+            let fl = self.layout_of(f);
+            members.push(
+                d.builder
+                    .create_member_type(
+                        d.unit.as_debug_info_scope(),
+                        &format!("f{}", i),
+                        root,
+                        0,
+                        fl.size * 8,
+                        fl.align as u32 * 8,
+                        l.field_offsets.get(i).copied().unwrap_or(0) * 8,
+                        DIFlags::PUBLIC,
+                        fty,
+                    )
+                    .as_type(),
+            );
+        }
+        let full = d
+            .builder
+            .create_struct_type(
+                d.unit.as_debug_info_scope(),
+                name,
+                root,
+                0,
+                l.size * 8,
+                l.align as u32 * 8,
+                DIFlags::PUBLIC,
+                None,
+                &members,
+                0,
+                None,
+                name,
+            )
+            .as_type();
+        d.types.borrow_mut().insert(format!("{}", Type::Named(name.to_string())), full);
+        Some(full)
+    }
+
+    /// Where a function was declared. A monomorphised generic has a mangled name no
+    /// source line spells, so it falls back to the first statement of its body — a real
+    /// position inside the right function, rather than line 1 of the wrong file.
+    fn decl_span(&self, name: &str, body: &[TypedStmt]) -> crate::diag::Span {
+        self.debug
+            .as_ref()
+            .and_then(|d| d.decls.get(name).copied())
+            .or_else(|| body.first().map(|s| s.span))
+            .unwrap_or_else(|| crate::diag::Span::new(0, 0))
+    }
+
+    /// Open a subprogram for the function about to be generated, and make it the scope
+    /// every location below hangs off. `at` is where the function was declared.
+    fn begin_subprogram(
+        &mut self,
+        llf: FunctionValue<'ctx>,
+        name: &str,
+        at: crate::diag::Span,
+        parameters: &[(String, Type)],
+        ret: &Type,
+    ) {
+        use inkwell::debug_info::{DIFlags, DIFlagsConstants};
+        if self.debug.is_none() {
+            return;
+        }
+        let (file_ix, line, _) = self.locate(at.start as usize).unwrap_or((0, 1, 1));
+        // Burxt has no void type — a function that returns nothing still has a `ret` in
+        // the typed tree — so the return type is always described rather than elided.
+        let ret_di = self.di_type(ret);
+        let param_di: Vec<_> = parameters.iter().filter_map(|(_, t)| self.di_type(t)).collect();
+        let d = self.debug.as_ref().expect("checked above");
+        let file = d.files.get(file_ix).copied().unwrap_or_else(|| d.files[0]);
+        let sub_ty = d.builder.create_subroutine_type(file, ret_di, &param_di, DIFlags::PUBLIC);
+        let sp = d.builder.create_function(
+            file.as_debug_info_scope(),
+            name,
+            Some(llf.get_name().to_str().unwrap_or(name)),
+            file,
+            line,
+            sub_ty,
+            false,
+            true,
+            line,
+            DIFlags::PUBLIC,
+            d.optimised,
+        );
+        llf.set_subprogram(sp);
+        {
+            let d = self.debug.as_mut().expect("checked above");
+            d.current = Some((sp, file_ix));
+            // Cleared and re-seeded rather than pushed onto: a body that returned early
+            // out of a nested block would otherwise leave its scope open for the next
+            // function, and every location after it would name the wrong one.
+            d.scopes.clear();
+            d.scopes.push(sp.as_debug_info_scope());
+        }
+        // Cleared, not left over: an instruction built between two functions with a
+        // stale location attached is an LLVM verifier error, and a confusing one.
+        self.builder.unset_current_debug_location();
+    }
+
+    /// Close the current subprogram. Every function must do this, or the next one's
+    /// instructions hang off the previous one's scope.
+    fn end_subprogram(&mut self) {
+        if let Some(d) = self.debug.as_mut() {
+            d.current = None;
+            d.scopes.clear();
+        }
+        self.builder.unset_current_debug_location();
+    }
+
+    /// Record a binding so a debugger can name it and read it.
+    ///
+    /// `arg_no` is `Some(n)` (1-based) for a parameter and `None` for a `let`: DWARF
+    /// keeps the two apart, and it is why `bt` can print the arguments a frame was
+    /// called with rather than only the locals it went on to make.
+    fn declare_variable(
+        &self,
+        name: &str,
+        ty: &Type,
+        slot: PointerValue<'ctx>,
+        at: crate::diag::Span,
+        arg_no: Option<u32>,
+    ) {
+        use inkwell::debug_info::{DIFlags, DIFlagsConstants};
+        let Some(dty) = self.di_type(ty) else { return };
+        let Some(d) = self.debug.as_ref() else { return };
+        let Some((_, file_ix)) = d.current else { return };
+        let Some(scope) = d.scopes.last().copied() else { return };
+        let Some(block) = self.builder.get_insert_block() else { return };
+        let (loc_file, line, col) = self.locate(at.start as usize).unwrap_or((file_ix, 1, 1));
+        let file = d.files.get(loc_file).copied().unwrap_or_else(|| d.files[0]);
+        let var = match arg_no {
+            Some(n) => d.builder.create_parameter_variable(scope, name, n, file, line, dty, true, DIFlags::PUBLIC),
+            None => d.builder.create_auto_variable(scope, name, file, line, dty, true, DIFlags::PUBLIC, 0),
+        };
+        let loc = d.builder.create_debug_location(self.ctx, line, col, scope, None);
+        d.builder.insert_declare_at_end(slot, Some(var), None, loc, block);
+    }
+
+    /// Resolve the metadata graph. Nothing below this is optional: LLVM's verifier
+    /// rejects a module with unresolved temporary debug nodes, so a missing `finalize`
+    /// is a hard failure rather than a quiet one.
+    fn finalize_debug_info(&self) {
+        if let Some(d) = &self.debug {
+            d.builder.finalize();
+        }
+    }
+
     /// Generate a block's statements in a child scope, mirroring the
     /// typechecker: bindings made inside vanish at the closing brace.
     fn gen_block(&mut self, stmts: &[TypedStmt]) -> Result<(), String> {
         let saved = self.vars.clone();
+        // A DWARF lexical block, mirroring exactly what `vars` is doing on the line
+        // above: bindings made inside vanish at the closing brace, for the debugger as
+        // well as for the compiler. Pushed only when there is a statement to take a
+        // position from.
+        let opened = self.push_lexical_block(stmts.first().map(|s| s.span));
         let result = stmts.iter().try_for_each(|s| self.gen_stmt(s));
+        if opened {
+            self.pop_lexical_block();
+        }
         self.vars = saved;
         result
+    }
+
+    /// Open a debug scope for a block. Answers whether one was actually pushed, so the
+    /// pop is never unbalanced — an extra pop would silently reparent the rest of the
+    /// function onto the wrong scope.
+    fn push_lexical_block(&mut self, at: Option<crate::diag::Span>) -> bool {
+        let Some(at) = at else { return false };
+        let Some((file_ix, line, col)) = self.locate(at.start as usize) else { return false };
+        let Some(d) = self.debug.as_mut() else { return false };
+        let Some(parent) = d.scopes.last().copied() else { return false };
+        let file = match d.files.get(file_ix).copied() {
+            Some(f) => f,
+            None => return false,
+        };
+        let block = d.builder.create_lexical_block(parent, file, line, col);
+        d.scopes.push(block.as_debug_info_scope());
+        true
+    }
+
+    fn pop_lexical_block(&mut self) {
+        if let Some(d) = self.debug.as_mut() {
+            // Never below the subprogram itself, which is the scope every location in
+            // the function ultimately hangs off.
+            if d.scopes.len() > 1 {
+                d.scopes.pop();
+            }
+        }
     }
 
     /// Is the builder's current block still missing a terminator?
@@ -4408,8 +4979,14 @@ impl<'ctx> CodeGen<'ctx> {
         ensures: &[crate::typeck::TypedContract],
         olds: &[crate::typeck::TypedExpr],
         name: &str,
+        at: crate::diag::Span,
     ) -> Result<(), String> {
         self.old_slots.clear();
+        // Every `old(...)` is hoisted out of an `ensures`, so the clause it came from is
+        // the honest position for the work of capturing it. The first `ensures` is close
+        // enough and is a real line; `at` covers a body with none.
+        let olds_at = ensures.first().map(|c| c.span).unwrap_or(at);
+        self.set_debug_location(olds_at);
         for (i, expr) in olds.iter().enumerate() {
             let value = self.gen_expr(expr)?;
             let slot = self.create_entry_alloca(&format!("old{}", i), &expr.ty)?;
@@ -4417,6 +4994,11 @@ impl<'ctx> CodeGen<'ctx> {
             self.old_slots.push((slot, expr.ty.clone()));
         }
         for clause in requires {
+            // The CLAUSE's own line, not the function's. A `requires` that fails should
+            // report the sentence the reader has to satisfy, and a debugger stopped in
+            // the check should show it — see the `pure`-function probe that made this a
+            // hard verifier failure rather than a cosmetic one.
+            self.set_debug_location(clause.span);
             self.gen_contract_check(clause, name, "requires")?;
         }
 
@@ -4432,6 +5014,7 @@ impl<'ctx> CodeGen<'ctx> {
     fn gen_measure_prologue(&mut self, f: &crate::typeck::TypedFn) -> Result<(), String> {
         self.current_measure = None;
         let Some(clause) = &f.decreases else { return Ok(()) };
+        self.set_debug_location(clause.span);
         let value = self.gen_expr(&clause.cond)?.into_int_value();
         let slot = self.create_entry_alloca("measure", &Type::Int)?;
         self.builder.build_store(slot, value).map_err(|e| e.to_string())?;
@@ -5752,8 +6335,8 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     /// Emit a native object file using the host target machine.
-    pub fn write_object(&self, path: &str) -> Result<(), String> {
-        self.write_object_for(path, None)
+    pub fn write_object(&self, path: &str, optimise: bool) -> Result<(), String> {
+        self.write_object_for(path, None, optimise)
     }
 
     /// Emit an object file for `triple`, or for the host when it is None.
@@ -5768,7 +6351,11 @@ impl<'ctx> CodeGen<'ctx> {
     /// A generic CPU and no features for a cross target, deliberately: `get_host_cpu_name` would
     /// name THIS machine's CPU, which for a foreign triple is either meaningless or wrong, and
     /// "wrong but it compiled" is the failure mode this whole language is arranged against.
-    pub fn write_object_for(&self, path: &str, triple: Option<&str>) -> Result<(), String> {
+    /// `optimise` is false for `-O0`. Both halves of it matter and they are different
+    /// mechanisms: the TargetMachine's level governs instruction selection and
+    /// scheduling, and `run_passes` is the mid-level IR pipeline. Turning off only one
+    /// leaves a build a debugger still cannot follow, which is why `-O0` sets both.
+    pub fn write_object_for(&self, path: &str, triple: Option<&str>, optimise: bool) -> Result<(), String> {
         use inkwell::passes::PassBuilderOptions;
         use inkwell::targets::{
             CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
@@ -5811,7 +6398,7 @@ impl<'ctx> CodeGen<'ctx> {
                 &triple,
                 &cpu,
                 &features,
-                OptimizationLevel::Default,
+                if optimise { OptimizationLevel::Default } else { OptimizationLevel::None },
                 RelocMode::PIC,
                 CodeModel::Default,
             )
@@ -5834,13 +6421,40 @@ impl<'ctx> CodeGen<'ctx> {
         //
         // Correctness first: the check stays, and every program still refuses to read a
         // byte it does not own. It is simply hoisted rather than repeated.
-        self.module
-            .run_passes("default<O2>", &tm, PassBuilderOptions::create())
-            .map_err(|e| e.to_string())?;
+        //
+        // `-O0` skips it entirely rather than running `default<O0>`: that pipeline still
+        // runs `mem2reg` in some configurations, and a promoted alloca is a local a
+        // debugger can no longer read — the one thing an `-O0` build exists to preserve.
+        // The cost is the `strlen` above staying in the loop, which is the trade a
+        // person asking for `-O0` has already accepted.
+        if optimise {
+            self.module
+                .run_passes("default<O2>", &tm, PassBuilderOptions::create())
+                .map_err(|e| e.to_string())?;
+        }
 
         tm.write_to_file(&self.module, FileType::Object, std::path::Path::new(path))
             .map_err(|e| e.to_string())
     }
+}
+
+/// A path split into the (filename, directory) pair DWARF wants.
+///
+/// The directory is made ABSOLUTE, because a debugger resolves a relative one against
+/// its own working directory rather than the compiler's, and `burxt build sub/p.bx` from
+/// a parent then finds no source at all. This is also the reason debug info is opt-in:
+/// an absolute path is the compiler's own machine baked into the object, which is the
+/// one thing this project's reproducibility claim does not tolerate in a default build.
+fn split_path(path: &str) -> (String, String) {
+    let p = std::path::Path::new(path);
+    let name = p.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
+    let dir = p
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .map(|d| d.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+    (name, dir.to_string_lossy().into_owned())
 }
 
 /// Is this type an aggregate (multi-field or multi-element)?

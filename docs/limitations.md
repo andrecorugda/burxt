@@ -97,13 +97,6 @@ suite missed.
 
 ## Not yet — real gaps
 
-### No debugger support
-
-There is no DWARF output and no `-O0`. You cannot step through a Burxt program.
-
-**This is the gap we consider most serious**, and the reason is specific: without a debugger the
-fallback is inserting `print`, which moves the stack and can change the answer you are chasing.
-
 ### No dependency management
 
 There is no manifest, no lockfile, no registry. `use "path.bx"` resolves textually, relative to the
@@ -171,8 +164,14 @@ packaging work rather than compiler work.
 
 No formatter (`burxt fmt`) · no regex · no stack trace on failure, only the named error and its
 location · no default parameter values or named arguments · no `if` as an expression · no attributes ·
-no warnings — every diagnostic is a refusal to compile, so there is no way to flag something without
-stopping the build · parse errors arrive one at a time, with no token-stream recovery.
+**no warnings about your program** — every diagnostic the compiler can produce about Burxt code is a
+refusal to compile, so there is no way to flag something without stopping the build · parse errors
+arrive one at a time, with no token-stream recovery.
+
+The one thing that prints the word *warning* is the driver, not the compiler: `-g` without `-O0`
+says so, because a line table over optimised code is honest about instructions and misleading about
+statements. That is a remark about how you invoked the tool, not a judgement about your program, and
+the distinction is the whole of why the rule above still holds.
 
 ---
 
@@ -180,7 +179,11 @@ stopping the build · parse errors arrive one at a time, with no token-stream re
 
 The list is long because it is honest, not because the language is thin. Every entry above is either
 a decision with a reason or a gap with a plan, and the ones we consider most limiting for real work
-today are **the debugger, dependency management, and the network** — in that order.
+today are **dependency management and the network** — in that order.
+
+The debugger used to head that list, and it is gone: `burxt build -O0 -g` emits DWARF, so a debugger
+stops on the line you wrote, names the function, prints your locals as values rather than addresses,
+and can break on a `requires` clause and show you the arguments that violated it.
 
 What you get in exchange is narrow and unusual: **exact decimal arithmetic with no floating point
 anywhere, contracts that are always checked, no runtime, no garbage collector, memory that is released

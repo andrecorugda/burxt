@@ -10169,3 +10169,266 @@ print(rounds);
         CEILING_KB
     );
 }
+
+/// C1. **The line table maps each statement to the line it was written on** — checked by
+/// its content, not by whether `-g` parsed.
+///
+/// A flag test would have passed on every broken version of this feature. The failure
+/// mode that matters is a line table that EXISTS and is WRONG by a line or two, because
+/// a debugger then stops confidently in the wrong place and the reader believes it.
+/// That is worse than no debug info at all, which is why the roadmap row says a refusal
+/// is honest where a half-mapped table is misleading.
+///
+/// So this asserts the actual mapping: a program whose statements sit on known lines
+/// must produce debug locations on exactly those lines, and its locals must be declared
+/// on the lines they were written on.
+///
+/// **Checked in the IR rather than in the object**, deliberately. Reading the emitted
+/// DWARF needs `llvm-dwarfdump` or `objdump`, which are spelled differently on the
+/// Darwin runners and absent on some; eleven tests in this file were silently skipping
+/// on macOS for exactly that reason, and the fix was to stop depending on where a tool
+/// lives. `!DILocation` in the IR is what LLVM turns into the line table, so checking it
+/// checks the same fact, everywhere, with nothing to install. The end-to-end half — that
+/// the object links, runs, and gives the same answer — is asserted below without a
+/// debugger.
+#[test]
+fn a_debug_build_maps_every_statement_to_its_own_line() {
+    let scratch = scratch_dir("dwarf-lines");
+    fs::create_dir_all(&scratch).unwrap();
+    let source = scratch.join("lines.bx");
+
+    // Every line is numbered in the comment beside it, and the numbers below are read
+    // off THIS text. A statement moved without moving its expectation fails the test.
+    //
+    //  1 function widen(n: Int) -> Int {
+    //  2     let doubled: Int = n * 2;
+    //  3     let label: String = "widened";
+    //  4     print(label);
+    //  5     return doubled;
+    //  6 }
+    //  7
+    //  8 let answer: Int = widen(21);
+    //  9 print(answer);
+    let program = "function widen(n: Int) -> Int {\n\
+                   \x20   let doubled: Int = n * 2;\n\
+                   \x20   let label: String = \"widened\";\n\
+                   \x20   print(label);\n\
+                   \x20   return doubled;\n\
+                   }\n\
+                   \n\
+                   let answer: Int = widen(21);\n\
+                   print(answer);\n";
+    fs::write(&source, program).unwrap();
+
+    let ir_with = |args: &[&str]| -> String {
+        let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("emit-ir")
+            .args(args)
+            .arg(&source)
+            .output()
+            .expect("burxt emit-ir");
+        assert!(
+            out.status.success(),
+            "emit-ir {:?} failed:\n{}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    // ---- 1. Without -g there is NO debug info at all. ----
+    //
+    // This assertion is the one protecting the self-hosting fixpoint and
+    // `the_ir_is_the_same_for_every_target`: both compare IR, and debug info carries an
+    // absolute directory and a producer string. Debug info leaking into a default build
+    // would break them — so the guarantee is that it cannot, and it is checked here
+    // rather than inferred from those tests failing later for a reason nobody traces.
+    let plain = ir_with(&[]);
+    for marker in ["!DILocation", "!DISubprogram", "!DIFile", "llvm.dbg", "Debug Info Version"] {
+        assert!(
+            !plain.contains(marker),
+            "a build WITHOUT -g emitted `{}`. Debug info in a default build makes the IR \
+             machine-dependent — it carries the compiler's working directory — and the \
+             byte-identical self-hosting fixpoint cannot survive that.\n{}",
+            marker,
+            plain.lines().filter(|l| l.contains(marker)).take(3).collect::<Vec<_>>().join("\n")
+        );
+    }
+
+    // ---- 2. With -g, the module declares its debug info version. ----
+    //
+    // Without this module flag LLVM STRIPS every piece of debug info on the way out and
+    // says nothing — a build that reports success and emits an object with no DWARF in
+    // it. inkwell does not add the flag; the compiler has to. A test for "some DWARF was
+    // emitted" would not have caught its absence, because the stripping happens later.
+    let debug = ir_with(&["-g", "-O0"]);
+    assert!(
+        debug.contains("Debug Info Version"),
+        "-g emitted no `Debug Info Version` module flag, so LLVM will strip the debug \
+         info and the object will contain none of it"
+    );
+    assert!(debug.contains("!llvm.dbg.cu"), "-g emitted no compile unit");
+
+    // ---- 3. The statements map to the lines they are written on. ----
+    let lines: std::collections::BTreeSet<u32> = debug
+        .lines()
+        .filter(|l| l.contains("!DILocation("))
+        .filter_map(|l| {
+            let at = l.find("line: ")? + 6;
+            let rest = &l[at..];
+            let end = rest.find(|c: char| !c.is_ascii_digit())?;
+            rest[..end].parse().ok()
+        })
+        .collect();
+
+    // Lines 2, 3, 4 and 5 are the four statements of `widen`; 8 and 9 are the two at the
+    // top level. Line 1 is the declaration, which the prologue is attributed to.
+    for expected in [2u32, 3, 4, 5, 8, 9] {
+        assert!(
+            lines.contains(&expected),
+            "no instruction was attributed to line {}, but a statement is written there. \
+             Lines actually present: {:?}",
+            expected,
+            lines
+        );
+    }
+    // Nothing may be attributed to a line that has no code on it. Line 6 is `}`, line 7
+    // is blank — an off-by-one in the span-to-line walk shows up here and nowhere else.
+    for forbidden in [6u32, 7] {
+        assert!(
+            !lines.contains(&forbidden),
+            "an instruction was attributed to line {}, which holds no statement — the \
+             span-to-line mapping is off. Lines present: {:?}",
+            forbidden,
+            lines
+        );
+    }
+
+    // ---- 4. Locals are named, typed, and declared on their own line. ----
+    for (name, line, ty) in [("doubled", 2, "Int"), ("label", 3, "String")] {
+        let found = debug.lines().find(|l| {
+            l.contains("!DILocalVariable(")
+                && l.contains(&format!("name: \"{}\"", name))
+                && l.contains(&format!("line: {}", line))
+        });
+        assert!(
+            found.is_some(),
+            "`{}` has no !DILocalVariable on line {}. Without one a debugger cannot print \
+             it, and the only way left to see its value is to insert a `print` — which \
+             moves the stack and can change the answer. Variables found:\n{}",
+            name,
+            line,
+            debug
+                .lines()
+                .filter(|l| l.contains("!DILocalVariable("))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let _ = ty;
+    }
+    // The parameter is a parameter, not a local: DWARF keeps them apart, and it is what
+    // lets a backtrace show the arguments a frame was CALLED with.
+    assert!(
+        debug
+            .lines()
+            .any(|l| l.contains("!DILocalVariable(") && l.contains("name: \"n\"") && l.contains("arg: 1")),
+        "the parameter `n` was not recorded as argument 1"
+    );
+
+    // A String must be described as a pointer to characters, or a debugger shows an
+    // address where the program's own error messages show text.
+    assert!(
+        debug.contains("DW_ATE_signed_char") || debug.contains("name: \"String\""),
+        "`String` has no pointer-to-char debug type, so a debugger will print an address \
+         rather than the string"
+    );
+
+    // ---- 5. The subprogram exists and starts where the function was declared. ----
+    assert!(
+        debug
+            .lines()
+            .any(|l| l.contains("!DISubprogram(") && l.contains("name: \"widen\"") && l.contains("line: 1")),
+        "`widen` has no subprogram declared on line 1, so a backtrace cannot name it"
+    );
+
+    // ---- 6. Debug info does not change what the program computes. ----
+    //
+    // The whole point of being able to debug without inserting a `print` is that
+    // observing must not perturb. A line table that changed an answer would be the
+    // v0.0.141 trap wearing a different hat.
+    let run = |args: &[&str]| -> (String, Option<i32>) {
+        let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("run")
+            .args(args)
+            .arg(&source)
+            .output()
+            .expect("burxt run");
+        (String::from_utf8_lossy(&out.stdout).into_owned(), out.status.code())
+    };
+    let (plain_out, plain_code) = run(&[]);
+    let (debug_out, debug_code) = run(&["-O0", "-g"]);
+    assert_eq!(plain_out, "widened\n42\n", "the program itself is wrong, so nothing else here means anything");
+    assert_eq!(debug_out, plain_out, "-O0 -g changed what the program printed");
+    assert_eq!(debug_code, plain_code, "-O0 -g changed the program's exit status");
+
+    // ---- 7. A contract clause carries its OWN line. ----
+    //
+    // Probed rather than assumed, and it found a real defect: a contract runs in the
+    // function PROLOGUE, before any statement has set a position, so its instructions
+    // carried no location at all. A clause calling a `pure` function then failed LLVM's
+    // verifier outright — "inlinable function call in a function with debug info must
+    // have a !dbg location" — and no fixture in this suite wrote that program.
+    //
+    //  1 pure function floor_of(n: Int) -> Int {
+    //  2     return n - 1;
+    //  3 }
+    //  4
+    //  5 function narrow(n: Int) -> Int
+    //  6     requires floor_of(n) > 100
+    //  7 {
+    //  8     return n;
+    //  9 }
+    // 10 print(narrow(200));
+    let contract = scratch.join("contract.bx");
+    fs::write(
+        &contract,
+        "pure function floor_of(n: Int) -> Int {\n\
+         \x20   return n - 1;\n\
+         }\n\
+         \n\
+         function narrow(n: Int) -> Int\n\
+         \x20   requires floor_of(n) > 100\n\
+         {\n\
+         \x20   return n;\n\
+         }\n\
+         print(narrow(200));\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .args(["run", "-O0", "-g"])
+        .arg(&contract)
+        .output()
+        .expect("burxt run");
+    assert!(
+        out.status.success(),
+        "a -g build of a contract that calls a `pure` function failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "200\n");
+
+    let contract_ir = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .args(["emit-ir", "-O0", "-g"])
+        .arg(&contract)
+        .output()
+        .expect("burxt emit-ir");
+    let contract_ir = String::from_utf8_lossy(&contract_ir.stdout);
+    // The `requires` is on line 6. A failure must report the clause the reader has to
+    // satisfy, not the `function` line above it.
+    assert!(
+        contract_ir.lines().any(|l| l.contains("!DILocation(line: 6")),
+        "the `requires` clause on line 6 produced no debug location, so a contract \
+         failure reports the wrong line"
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}

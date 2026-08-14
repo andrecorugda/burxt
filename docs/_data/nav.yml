@@ -349,6 +349,9 @@
           id: main
     - name: "The command line"
       url: /reference/cli.html
+      steps:
+        - name: "Flags"
+          id: flags
     - name: "lib/option.bx"
       url: /reference/option.html
       steps:

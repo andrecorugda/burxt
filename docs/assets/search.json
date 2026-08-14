@@ -275,9 +275,9 @@
  {
   "kind": "command",
   "name": "burxt review",
-  "text": "<old.bx> <new.bx>          what changed about what it PROMISES",
+  "text": "<old.bx> <new.bx>",
   "url": "/reference/cli.html",
-  "where": "burxt mcp-schema <file.bx>               the MCP tool manifest, from the preconditions"
+  "where": "what changed about what it PROMISES"
  },
  {
   "kind": "command",
