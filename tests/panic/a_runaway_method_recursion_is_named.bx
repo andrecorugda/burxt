@@ -1,0 +1,26 @@
+// A runaway recursion through a METHOD is named too. Roadmap B7.
+//
+// This fixture exists because the first version of B7's guard did not cover methods, and the suite
+// went green anyway: `a_runaway_recursion_is_named.bx` recurses through a free function, and nothing
+// in 617 fixtures recursed through a method. A guard over `function f()` and not `function (self) f()`
+// is exactly the shape this codebase keeps paying for — a rule right about the case someone wrote
+// and silent about the case nobody did.
+//
+// It surfaced from outside the suite, which is the only place it could have: stage-1's parser is
+// recursive descent written as methods, so a 30,000-deep expression segfaulted stage-1 while
+// stage-0 parsed the same file without complaint. One `bt` in gdb showed
+// `parse_primary -> parse_expr -> parse_primary` with no guard between the frames.
+//
+// So the fixture is the free-function one with the recursion moved onto a receiver, and nothing
+// else changed. Two places a user-written body begins; both must guard.
+class Counter { seen: Int }
+
+function (self: Counter) down(n: Int) -> Int {
+    if n <= 0 {
+        return 0;
+    }
+    return 1 + self.down(n - 1);
+}
+
+let c: Counter = Counter { seen: 0 };
+print(c.down(100000000));

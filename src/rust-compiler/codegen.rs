@@ -1392,6 +1392,20 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.position_at_end(entry);
         // See gen_fn: an unlocated prologue is a verifier failure, not a cosmetic gap.
         self.set_debug_location(at);
+        // B7, and this line is the whole of the bug the first attempt had. The guard went into
+        // `gen_fn` and methods are emitted HERE, by a separate function — so `function f()` was
+        // guarded and `function (self) f()` was not. The suite went green: its recursion fixture is
+        // a free function, and no fixture recurses through a method.
+        //
+        // It surfaced because stage-1's parser is recursive descent written as METHODS, so a
+        // 30,000-deep expression segfaulted stage-1 while stage-0 parsed it fine. Found in one gdb
+        // command — `bt` showed parse_primary -> parse_expr -> parse_primary with no guard between
+        // them — which is a use for C1 the day after landing it, on a bug C1's own commit created.
+        //
+        // The general lesson is the one this codebase keeps paying for: a rule right about the case
+        // someone wrote and silent about the case nobody did. The fix is not "remember methods", it
+        // is that there are exactly two places a user-written body begins, and both are here.
+        self.build_stack_guard()?;
         self.vars.clear();
         // A body starts with no mark of its own: a region is released inside the frame
         // that opened it, never across a call.
