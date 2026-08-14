@@ -57,6 +57,8 @@ And going out, **money crosses as a quoted string**: `json_money($19.99)` render
 | [`parse_value`](#parse-value) | method on `Reader` | Parse one value at the cursor. Recursive through `parse_list` and `parse_object`. |
 | [`word`](#word) | method on `Reader` | Consume `word` if it is at the cursor. Answers whether it was. |
 | [`parse_number`](#parse-number) | method on `Reader` | A number, kept as the digits it was written with. Only the SHAPE is checked here — that it is a number at all — because  |
+| [`parse_unicode_escape`](#parse-unicode-escape) | method on `Reader` | One `\uXXXX`, with `self.at` sitting on the `u`. Answers the character and leaves `self.at` just past the escape. B9. |
+| [`read_four_hex`](#read-four-hex) | method on `Reader` | The four hex digits of a `\uXXXX`, with `self.at` on the `u`. Leaves `self.at` past the digits. |
 | [`parse_text`](#parse-text) | method on `Reader` | A quoted string, with the escapes undone. |
 | [`parse_list`](#parse-list) | method on `Reader` | — |
 | [`parse_object`](#parse-object) | method on `Reader` | — |
@@ -284,7 +286,7 @@ function json_parse(text: String) -> Result<Json, String>
 
 One JSON document. Trailing whitespace is allowed; trailing anything else is not, because a second document where one was expected means the caller framed its input wrong and saying so beats parsing half of it.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L511)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L600)
 
 ## Methods
 {: #methods}
@@ -348,6 +350,36 @@ Takes `mutable self`, so it changes the value it is called on.
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L350)
 
+### `parse_unicode_escape`
+{: #parse-unicode-escape}
+
+```burxt
+function (mutable self: Reader) parse_unicode_escape() -> Result<String, String>
+```
+
+One `\uXXXX`, with `self.at` sitting on the `u`. Answers the character and leaves `self.at` just past the escape. B9.
+
+**Surrogate pairs are the reason this is a function rather than four lines inline.** JSON is specified in terms of UTF-16, so every codepoint above U+FFFF is written as TWO escapes — an emoji is `😀`, never one escape. A decoder that treats each `\uXXXX` independently produces two half-characters, and `from_codepoint` refuses those outright (they are surrogates, and encoding one is CESU-8, which this library's own `is_valid_utf8` rejects). So the choice was never "handle pairs or ignore them" — it was "handle pairs or refuse every emoji in real-world JSON".
+
+A lone surrogate, high or low, is an error rather than U+FFFD. Substituting a replacement character is the same silent repair as the `"?"` that `os_byte_as_string` used to make: the caller asked for text and would get text, subtly not the text that was sent.
+
+Takes `mutable self`, so it changes the value it is called on.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L407)
+
+### `read_four_hex`
+{: #read-four-hex}
+
+```burxt
+function (mutable self: Reader) read_four_hex() -> Result<Int, String>
+```
+
+The four hex digits of a `\uXXXX`, with `self.at` on the `u`. Leaves `self.at` past the digits.
+
+Takes `mutable self`, so it changes the value it is called on.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L445)
+
 ### `parse_text`
 {: #parse-text}
 
@@ -359,7 +391,7 @@ A quoted string, with the escapes undone.
 
 Takes `mutable self`, so it changes the value it is called on.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L394)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L468)
 
 ### `parse_list`
 {: #parse-list}
@@ -370,7 +402,7 @@ function (mutable self: Reader) parse_list() -> Result<Json, String>
 
 Takes `mutable self`, so it changes the value it is called on.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L431)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L520)
 
 ### `parse_object`
 {: #parse-object}
@@ -381,5 +413,5 @@ function (mutable self: Reader) parse_object() -> Result<Json, String>
 
 Takes `mutable self`, so it changes the value it is called on.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L462)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L551)
 

@@ -1,0 +1,29 @@
+// An interface signature does not take a trailing `;`. Roadmap B15.
+//
+// This is the fixture that did not exist, and its absence is the whole story: for seventy
+// versions stage-0 ACCEPTED the `;` form and stage-1 refused it, so the same program compiled
+// with one compiler and failed to parse with the other. The differential runs both compilers
+// over the suite and reports every disagreement — but it can only disagree about a program
+// somebody wrote, and nobody had written this one.
+//
+// A divergence in what is ACCEPTED is the direction that matters. A program refused by both is
+// merely unwritten; a program one compiler takes and the other rejects means the language has
+// two definitions.
+//
+// Fixed by refusing it in stage-0 rather than by allowing it in stage-1, and the rest of the
+// language is what decides that: a class body refuses a stray `;`, and so does an enum. The
+// interface was the only declaration body that took one. An optional separator is a second
+// spelling of one thing, and this language does not keep those.
+interface Predicate {
+    function test(self, x: Int) -> Bool;
+}
+
+class Positive { tag: Int }
+
+implement Predicate for Positive {
+    function (self) test(x: Int) -> Bool { return x > 0; }
+}
+
+let p: Positive = Positive { tag: 1 };
+let d: dynamic Predicate = p;
+print(d.test(3));

@@ -1,0 +1,12 @@
+{"a":"xAy"}
+{"a":"é"}
+{"a":"中"}
+{"a":"😀"}
+{"a":"p\bq"}
+{"a":"r\fs"}
+REFUSED: a high surrogate with no low half at byte 12
+REFUSED: a stray low surrogate at byte 12
+REFUSED: this is not a JSON escape at byte 8
+REFUSED: a \u escape whose four characters are not hex at byte 7
+REFUSED: a \u escape whose four characters are not hex at byte 7
+{"a":"q\nr\ts\\t\"u"}

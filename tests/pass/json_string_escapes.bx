@@ -1,0 +1,57 @@
+// lib/json.bx decodes every escape JSON defines, including `\uXXXX` and surrogate pairs. B9.
+//
+// Before this, `\b`, `\f` and `\uXXXX` were REFUSED — honestly, with a message saying so, but a
+// refusal that meant Burxt could not read real-world JSON, because `\uXXXX` is how every encoder
+// in the world writes a non-ASCII character it is not confident about.
+//
+// The interesting half is surrogate pairs. JSON is specified over UTF-16, so a codepoint above
+// U+FFFF is written as TWO escapes — an emoji is never one `\u`. A decoder handling each escape
+// independently produces two half-characters, and this library's own `from_codepoint` refuses
+// those (a lone surrogate encodes as CESU-8, which `is_valid_utf8` rejects). So pairs were never
+// optional: without them every emoji in every real document is unreadable.
+//
+// The round trip is the assertion, for the reason `json_round_trip.bx` gives: parsing and then
+// re-rendering proves nothing was quietly reinterpreted in the middle. `\u0041` must come back
+// as a bare `A` and the emoji as its four UTF-8 bytes — if either came back as an escape, or as
+// the replacement character, the render would differ and this fixture would say so.
+//
+// A literal `{` is written `\{` because an unescaped one opens an interpolation.
+use "../../lib/json.bx";
+
+function decoded(document: String) -> String {
+    match json_parse(document) {
+        Error(why) => { return "REFUSED: " + why; }
+        Ok(value) => { return json_render(value); }
+    }
+}
+
+// One escape, one character, in each of UTF-8's four widths.
+print(decoded("\{\"a\":\"x\\u0041y\"\}"));       // 1 byte  — A
+print(decoded("\{\"a\":\"\\u00e9\"\}"));         // 2 bytes — é
+print(decoded("\{\"a\":\"\\u4e2d\"\}"));         // 3 bytes — 中
+print(decoded("\{\"a\":\"\\ud83d\\ude00\"\}"));  // 4 bytes — an emoji, from a SURROGATE PAIR
+
+// The two that were refused for being one codepoint each.
+print(decoded("\{\"a\":\"p\\bq\"\}"));
+print(decoded("\{\"a\":\"r\\fs\"\}"));
+
+// A lone surrogate is an error, not U+FFFD. Substituting a replacement character would be the
+// same silent repair as the `"?"` that `os_byte_as_string` used to make: the caller asks for text
+// and gets text, subtly not the text that was sent.
+print(decoded("\{\"a\":\"\\ud83d\"\}"));
+print(decoded("\{\"a\":\"\\ude00\"\}"));
+
+// And the defect found while fixing the ones that were refused honestly: an escape that is not a
+// JSON escape used to be SILENTLY DROPPED. None of the decoder's arms matched, so the backslash
+// and the character after it were both skipped and nothing was appended — `"p\qr"` parsed as
+// `"pr"`, no error, one character quietly gone. That is the wrong answer this language exists to
+// refuse, sitting inside the library that reads other people's data.
+print(decoded("\{\"a\":\"p\\qr\"\}"));
+
+// A `\u` must have four hex digits. JSON has no short form, and accepting one would make this
+// decoder read documents no other decoder does.
+print(decoded("\{\"a\":\"\\u12\"\}"));
+print(decoded("\{\"a\":\"\\uZZZZ\"\}"));
+
+// The escapes that always worked, so a regression in the rewritten arm is visible here too.
+print(decoded("\{\"a\":\"q\\nr\\ts\\\\t\\\"u\"\}"));

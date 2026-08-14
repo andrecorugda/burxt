@@ -1170,6 +1170,20 @@
  },
  {
   "kind": "method",
+  "name": "parse_unicode_escape",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#parse-unicode-escape",
+  "where": "function (mutable self: Reader) parse_unicode_escape() -> Result<String, String>"
+ },
+ {
+  "kind": "method",
+  "name": "read_four_hex",
+  "text": "lib/json.bx",
+  "url": "/reference/json.html#read-four-hex",
+  "where": "function (mutable self: Reader) read_four_hex() -> Result<Int, String>"
+ },
+ {
+  "kind": "method",
   "name": "parse_text",
   "text": "lib/json.bx",
   "url": "/reference/json.html#parse-text",

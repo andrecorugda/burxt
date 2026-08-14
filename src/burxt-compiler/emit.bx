@@ -3599,7 +3599,47 @@ function replace_whole_word(text: String, word: String, with_text: String) -> St
     let n: Int = len(text);
     let w: Int = len(word);
     let mutable i: Int = 0;
+    // B8. Inside a string literal `it` is TEXT, not the subject. Written `[it != "make it so"]`,
+    // the message used to read `requires tag != "make tag so"` — quoting a string the program does
+    // not contain. The one artefact a failure hands a reader was misquoting the source it came
+    // from, which is the opposite of what this language is for.
+    //
+    // An interpolation inside the literal is code again, so `it` inside `{...}` is still replaced.
+    // A backslash escapes the next byte, so `\"` neither closes the string nor is matched against.
+    //
+    // Skipping advances `i` WITHOUT moving `copied`, so a skipped run is still copied whole by the
+    // next match. Copying byte-by-byte here is the shape that made the lexer quadratic.
+    let mutable in_string: Bool = false;
+    let mutable interpolation: Int = 0;
     while i < n {
+        let b: Int = byte_at(text, i);
+        if in_string && interpolation == 0 {
+            if b == 92 && i + 1 < n {                // a backslash: it and the byte after are text
+                i += 2;
+                continue;
+            }
+            if b == 34 {                             // the closing quote
+                in_string = false;
+                i += 1;
+                continue;
+            }
+            if b == 123 {                            // `{` opens an interpolation
+                interpolation = 1;
+                i += 1;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+        if !in_string && b == 34 {
+            in_string = true;
+            i += 1;
+            continue;
+        }
+        if in_string && interpolation > 0 {
+            if b == 123 { interpolation += 1; }
+            if b == 125 { interpolation -= 1; }
+        }
         let mutable matched: Bool = i + w <= n;
         let mutable k: Int = 0;
         while matched && k < w {

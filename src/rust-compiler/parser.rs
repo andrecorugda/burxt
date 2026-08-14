@@ -470,10 +470,23 @@ impl Parser {
                 return Err(format!("unclosed interface `{}`: expected `}}`", name));
             }
             methods.push(self.parse_interface_sig(&name)?);
-            // a separating semicolon is allowed but not required
-            if self.at(&Token::Semicolon) {
-                self.bump();
-            }
+            // B15. This used to skip a `;` here, with the comment "a separating semicolon is
+            // allowed but not required" — and that one line was a divergence between the two
+            // compilers in the direction that matters: what is ACCEPTED. Stage-1 refuses the
+            // `;` form outright, so a program using it compiled with stage-0 and failed to
+            // parse with stage-1.
+            //
+            // Fixed by refusing it here rather than by teaching stage-1 to allow it, because
+            // the rest of the language already answers the question: a class body refuses a
+            // stray `;` ("expected a field name or a `function`"), and so does an enum. An
+            // interface was the ONLY declaration body that took one, which makes it an
+            // accident rather than a design — and an optional separator is a second spelling
+            // of one thing, which costs every reader the question of which one they are
+            // looking at. The same reason closures were declined.
+            //
+            // Nothing in the suite used the `;` form, which is why the differential could not
+            // see this for seventy versions. `tests/fail/interface_signature_semicolon.bx`
+            // now writes it down.
         }
         self.expect(&Token::RBrace)?;
         self.type_parameters.clear();
@@ -489,6 +502,18 @@ impl Parser {
     /// `fn m(mut self, extra: U) -> V`. The receiver has no type — it is
     /// whichever type implements the interface.
     fn parse_interface_sig(&mut self, interface_name: &str) -> Result<InterfaceSig, String> {
+        // Stage-1's wording, adopted here rather than left to differ. B15 removed the trailing
+        // `;` stage-0 used to accept, which made this the message a reader now meets — and the
+        // two compilers said it differently: stage-0's bare `expected `function`, found `;`` and
+        // stage-1's `expected `function` — an interface holds signatures, found `;``. The second
+        // says WHY, so it is the one that survives. Two compilers agreeing on a refusal is the
+        // point of having two, and B19 already cost a version by fixing that in the other order.
+        if !self.at(&Token::Fn) {
+            return Err(format!(
+                "expected `function` — an interface holds signatures, found {}",
+                self.peek().describe()
+            ));
+        }
         self.expect(&Token::Fn)?;
         let name = match self.bump() {
             Token::Ident(s) => s,
@@ -2320,7 +2345,66 @@ fn replace_whole_word(text: &str, word: &str, with: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
+    // B8. Inside a string literal, `it` is TEXT and not the subject. Without this, a clause
+    // written `[it != "make it so"]` reported `requires tag != "make tag so"` — a message quoting
+    // a string the program does not contain. Cosmetic in the sense that nothing computes wrongly,
+    // and not cosmetic at all in a language whose case is that a reviewer can read what it did:
+    // the one artefact a failure hands you was misquoting the source.
+    //
+    // An INTERPOLATION inside the literal is code again, so `it` inside `{...}` is still replaced,
+    // and `\{` is an escaped brace that stays text — the same rule the lexer applies, kept in step
+    // with it deliberately, because the two disagreeing is how this class of bug starts.
+    //
+    // That branch is currently unreachable and is written anyway, which is worth saying rather
+    // than leaving for someone to discover: a bare `it` inside a string INTERPOLATION does not
+    // resolve today — `[it != "v{it}"]` is refused with *unknown variable: it*, because the
+    // subject is installed for the clause and not re-installed when the lexer re-enters expression
+    // parsing inside a literal. That is a separate gap and not this one. Handling it here costs
+    // four lines and means the message stays right on the day the resolver catches up, instead of
+    // becoming wrong in a way nobody would think to re-test.
+    let mut in_string = false;
+    let mut interpolation = 0usize;
     while i < text.len() {
+        let c = bytes[i] as char;
+        if in_string && interpolation == 0 {
+            // `\"` and `\{` do not end the string or open code; copy both bytes and move on.
+            if c == '\\' && i + 1 < text.len() {
+                out.push(c);
+                out.push(bytes[i + 1] as char);
+                i += 2;
+                continue;
+            }
+            if c == '"' {
+                in_string = false;
+                out.push(c);
+                i += 1;
+                continue;
+            }
+            if c == '{' {
+                interpolation = 1;
+                out.push(c);
+                i += 1;
+                continue;
+            }
+            // Ordinary text inside the literal: copied through untouched, which is the fix.
+            let ch = text[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+            continue;
+        }
+        if !in_string && c == '"' {
+            in_string = true;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if in_string && interpolation > 0 {
+            if c == '{' {
+                interpolation += 1;
+            } else if c == '}' {
+                interpolation -= 1;
+            }
+        }
         if text[i..].starts_with(word) {
             let before_ok = i == 0 || !ident(bytes[i - 1] as char);
             let after = i + word.len();

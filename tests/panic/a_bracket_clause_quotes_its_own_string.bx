@@ -1,0 +1,21 @@
+// A contract failure quotes the clause AS WRITTEN, string literals included. Roadmap B8.
+//
+// `it` in a bracket clause is the subject, and the failure message renders the clause by replacing
+// every whole-word `it` with the parameter's name — a whole-word replace rather than a
+// pretty-printer, so that every other clause in the language is quoted in the spelling its author
+// chose. `spec/M13` names the one case that instrument gets wrong, and this is it: a bare `it`
+// inside a STRING LITERAL was replaced too.
+//
+// Written `[it != "make it so"]`, the message used to read `requires tag != "make tag so"` — a
+// diagnostic quoting a string the program does not contain. Nothing computes wrongly, so it is
+// cosmetic in the narrow sense and not cosmetic at all in a language whose case is that a reviewer
+// can see what happened: the one artefact a failure hands you was misquoting the source it came
+// from. A reader checking the message against the file would have found a string that is not there.
+//
+// This is a `tests/panic` fixture and not a `tests/pass` one because the message only exists when
+// the contract FAILS, and the pass harness compares stdout and requires success.
+function pick(tag: String [it != "make it so"]) -> String {
+    return tag;
+}
+
+print(pick("make it so"));

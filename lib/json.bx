@@ -390,6 +390,80 @@ function is_json_digit(b: Int) -> Bool {
     return b >= 48 && b <= 57;
 }
 
+// One `\uXXXX`, with `self.at` sitting on the `u`. Answers the character and leaves `self.at`
+// just past the escape. B9.
+//
+// **Surrogate pairs are the reason this is a function rather than four lines inline.** JSON is
+// specified in terms of UTF-16, so every codepoint above U+FFFF is written as TWO escapes — an
+// emoji is `😀`, never one escape. A decoder that treats each `\uXXXX` independently
+// produces two half-characters, and `from_codepoint` refuses those outright (they are surrogates,
+// and encoding one is CESU-8, which this library's own `is_valid_utf8` rejects). So the choice
+// was never "handle pairs or ignore them" — it was "handle pairs or refuse every emoji in
+// real-world JSON".
+//
+// A lone surrogate, high or low, is an error rather than U+FFFD. Substituting a replacement
+// character is the same silent repair as the `"?"` that `os_byte_as_string` used to make: the
+// caller asked for text and would get text, subtly not the text that was sent.
+function (mutable self: Reader) parse_unicode_escape() -> Result<String, String> {
+    match self.read_four_hex() {
+        Error(why) => { return Result.Error(why); }
+        Ok(first) => {
+            // Not a surrogate: one escape, one character, done.
+            if first < 55296 || first > 57343 {
+                return Result.Ok(from_codepoint(first));
+            }
+            // A LOW surrogate arriving first has no high half to join.
+            if first > 56319 {
+                return Result.Error("a stray low surrogate at byte " + to_string(self.at));
+            }
+            // A high surrogate must be followed by `\u` and its low half.
+            if self.at + 1 >= len(self.text)
+                || byte_at(self.text, self.at) != 92
+                || byte_at(self.text, self.at + 1) != 117 {
+                return Result.Error("a high surrogate with no low half at byte "
+                            + to_string(self.at));
+            }
+            self.at += 1;                                // the backslash
+            match self.read_four_hex() {
+                Error(why) => { return Result.Error(why); }
+                Ok(second) => {
+                    if second < 56320 || second > 57343 {
+                        return Result.Error("a high surrogate followed by something that is not "
+                                    + "a low surrogate at byte " + to_string(self.at));
+                    }
+                    // The UTF-16 pairing rule, spelled out rather than folded into constants.
+                    let high: Int = first - 55296;
+                    let low: Int = second - 56320;
+                    return Result.Ok(from_codepoint(65536 + high * 1024 + low));
+                }
+            }
+        }
+    }
+}
+
+// The four hex digits of a `\uXXXX`, with `self.at` on the `u`. Leaves `self.at` past the digits.
+function (mutable self: Reader) read_four_hex() -> Result<Int, String> {
+    // Four, exactly. `string_parse_hex` would happily read `\u12` from `"\u12"` followed by a
+    // quote, and JSON does not have a short form — accepting one would make this decoder read a
+    // document no other decoder does.
+    if self.at + 4 >= len(self.text) {
+        return Result.Error("a \\u escape that runs off the end at byte " + to_string(self.at));
+    }
+    let digits: String = substring(self.text, self.at + 1, 4);
+    if !all_hex_digits(digits) {
+        return Result.Error("a \\u escape whose four characters are not hex at byte "
+                    + to_string(self.at));
+    }
+    match string_parse_hex(digits) {
+        None => { return Result.Error("a \\u escape that is not hex at byte "
+                    + to_string(self.at)); }
+        Some(value) => {
+            self.at += 5;                                // the `u` and its four digits
+            return Result.Ok(value);
+        }
+    }
+}
+
 // A quoted string, with the escapes undone.
 function (mutable self: Reader) parse_text() -> Result<String, String> {
     self.at += 1;                                    // the opening quote
@@ -412,12 +486,27 @@ function (mutable self: Reader) parse_text() -> Result<String, String> {
             if e == 114 { out = out + "\r"; }
             if e == 116 { out = out + "\t"; }
             if e == 47 { out = out + "/"; }
-            if e == 98 || e == 102 || e == 117 {
-                // \b, \f and \uXXXX are valid JSON that this slice does not decode. Refused rather
-                // than dropped: a string quietly missing a character is a wrong answer, and a
-                // wrong answer is worse than a refusal.
-                return Result.Error("this JSON escape is not supported yet at byte "
-                            + to_string(self.at));
+            // B9. `\b` and `\f` are one codepoint each and were refused only because this slice
+            // predated `from_codepoint` (A5). `from_codepoint` rather than a literal because it
+            // is the function that promises a whole sequence or none.
+            if e == 8 || e == 98 { out = out + from_codepoint(8); }
+            if e == 102 { out = out + from_codepoint(12); }
+            if e == 117 {                                // \uXXXX
+                match self.parse_unicode_escape() {
+                    Error(why) => { return Result.Error(why); }
+                    Ok(decoded) => { out = out + decoded; }
+                }
+                copied = self.at;
+                continue;
+            }
+            // Anything else is not a JSON escape, and it used to be SILENTLY DROPPED: none of
+            // the arms above matched, so the backslash and the character after it were skipped
+            // and nothing was appended. `"a\qb"` parsed as `"ab"`, with no error — a string
+            // quietly missing a character, which is the exact wrong answer this language exists
+            // to refuse, found while fixing the escapes that were refused honestly.
+            if e != 34 && e != 92 && e != 110 && e != 114 && e != 116 && e != 47
+                && e != 8 && e != 98 && e != 102 {
+                return Result.Error("this is not a JSON escape at byte " + to_string(self.at));
             }
             self.at += 1;
             copied = self.at;
