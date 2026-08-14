@@ -3798,6 +3798,12 @@ function (mutable self: Unit) emit_function(src: String, index: Int, suffix: Str
     }
     let opened: Int = self.open_function("define i64 @" + symbol + "(" + signature
                                    + ") \{\nentry:\n");
+    // B7, first thing in the function. An `alloca` in the entry block IS a stack address, so the
+    // frame measures itself without an intrinsic. Register names are function-scoped in LLVM, so
+    // the same two names are safe in every function and no counter is needed.
+    let guarded: Int = self.write_body("  %sgprobe = alloca i8\n"
+                                       + "  %sgat = ptrtoint ptr %sgprobe to i64\n"
+                                       + "  call void @burxt.stack_guard(i64 %sgat)\n");
     if is_method {
         let receiver: Token = self.tokens[signature_node.value];
         // The word `self`, found by scanning back from the method's name rather than by
@@ -4012,6 +4018,10 @@ function (mutable self: Unit) emit_module(src: String) -> Int {
     // than a parameter threaded through every function that might want it.
     let clear_marks: Int = truncate(self.region_marks, 0);
     let clear_depths: Int = truncate(self.loop_region_depths, 0);
+    // B7. Before anything else runs, so every function that checks has something to check.
+    let floored: Int = self.write_body("  %sgbase_p = alloca i8\n"
+                                       + "  %sgbase = ptrtoint ptr %sgbase_p to i64\n"
+                                       + "  call void @burxt.set_stack_floor(i64 %sgbase)\n");
     let widened: Int = self.write_body("  %argc64 = sext i32 %argc to i64\n");
     let kept: Int = self.write_body("  store i64 %argc64, ptr @burxt.argc\n");
     let kept_argv: Int = self.write_body("  store ptr %argv, ptr @burxt.argv\n");
@@ -4140,6 +4150,8 @@ function runtime_ir() -> String {
         + "declare ptr @memcpy(ptr, ptr, i64)\n"
         + "declare i32 @snprintf(ptr, i64, ptr, ...)\n"
         + "declare i32 @fprintf(ptr, ptr, ...)\n"
+        // B7. How much stack this process was given.
+        + "declare i32 @getrlimit(i32, ptr)\n"
         + "@stderr = external global ptr\n\n"
         // FOUR gigabytes, the same reservation stage-0 makes, and the SAME refusal when it runs
         // out. A bump allocator that does not check its limit does not fail — it writes past the
@@ -4568,7 +4580,53 @@ function runtime_ir() -> String {
         + "becoming a wrong answer later. For data that is not text, read it as bytes.\\0A\\00\"\n"
         + "@burxt.utf8_read_file = private unnamed_addr constant [10 x i8] c\"read_file\\00\"\n"
         + "@burxt.utf8_argument = private unnamed_addr constant [9 x i8] c\"argument\\00\"\n"
-        + "@burxt.utf8_c_string_at = private unnamed_addr constant [12 x i8] c\"c_string_at\\00\"\n\n"
+        + "@burxt.utf8_c_string_at = private unnamed_addr constant [12 x i8] c\"c_string_at\\00\"\n"
+        // B7. Byte for byte stage-0's wording again.
+        + "@burxt.deep_msg = private unnamed_addr constant [230 x i8] "
+        + "c\"burxt runtime error: this call went too deep and the stack is full \\E2\\80\\94 a "
+        + "recursion with no base case, or one deeper than this machine's stack allows. "
+        + "`return f(...)` in tail position reuses the frame and does not grow the stack.\\0A\\00\"\n"
+        // Where the stack runs out, set once by `main`. Zero means "not set", and the guard treats
+        // zero as no limit — the only code that could see zero ran before `main`, which in a Burxt
+        // program is nothing.
+        + "@burxt.stack_floor = global i64 0\n\n"
+        // The guard, as a FUNCTION taking the caller's frame address rather than inline. Stage-0
+        // inlines it, which is faster; here a call is three lines per function instead of two new
+        // basic blocks and a register-name scheme, and the observable behaviour is the same to
+        // within one frame — far inside the 128 KB margin. What has to match between the two
+        // compilers is when a program dies and what it says, not the instructions that get there.
+        + "define void @burxt.stack_guard(i64 %sp) \{\n"
+        + "entry:\n"
+        + "  %sgfloor = load i64, ptr @burxt.stack_floor\n"
+        + "  %sgset = icmp ne i64 %sgfloor, 0\n"
+        + "  %sglow = icmp ult i64 %sp, %sgfloor\n"
+        + "  %sggone = and i1 %sgset, %sglow\n"
+        + "  br i1 %sggone, label %sgfull, label %sgroom\n"
+        + "sgfull:\n"
+        + "  %sgerr = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %sgerr, ptr @burxt.deep_msg)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n"
+        + "sgroom:\n"
+        + "  ret void\n\}\n\n"
+        // How much stack this process was given. `getrlimit(RLIMIT_STACK)` — 3 on Linux and macOS
+        // — rather than a constant, because the answer is 8 MB by default, unlimited under one
+        // `ulimit`, and small inside a container, and a guess would be wrong in both directions.
+        // struct rlimit is two 64-bit values on every platform this targets.
+        + "define void @burxt.set_stack_floor(i64 %base) \{\n"
+        + "entry:\n"
+        + "  %rl = alloca [2 x i64]\n"
+        + "  store [2 x i64] zeroinitializer, ptr %rl\n"
+        + "  %got = call i32 @getrlimit(i32 3, ptr %rl)\n"
+        + "  %cur = load i64, ptr %rl\n"
+        + "  %sane = icmp ult i64 %cur, 1099511627776\n"
+        + "  %room = select i1 %sane, i64 %cur, i64 8388608\n"
+        // A margin, so the guard and `fprintf` have room after it fires. Reporting a full stack by
+        // overflowing the stack would be a poor joke.
+        + "  %usable = sub i64 %room, 131072\n"
+        + "  %floor = sub i64 %base, %usable\n"
+        + "  store i64 %floor, ptr @burxt.stack_floor\n"
+        + "  ret void\n\}\n\n"
         + "define i64 @burxt.argument_count() \{\n"
         + "entry:\n  %n = load i64, ptr @burxt.argc\n  ret i64 %n\n\}\n\n"
         + "define i64 @burxt.argument(i64 %i) \{\n"

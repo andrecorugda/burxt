@@ -1,0 +1,34 @@
+// A stack overflow is a NAMED failure, like every other one. Roadmap B7.
+//
+// `DESIGN.md`: nothing in the language should fail anonymously. This was the one exception — a
+// recursion with no base case died of a raw SIGSEGV, exit 139, with nothing on stderr. Every other
+// way a Burxt program can fail says what happened and exits 70.
+//
+// Worth knowing how it was verified, because the obvious check is wrong: at `-O2` LLVM turns some
+// recursions into loops, so `1 + deep(n - 1)` on a big `n` simply runs and the fault never happens.
+// A test written only against a default build would have passed on a compiler that had no guard at
+// all. It was measured at `-O0` as well, where the recursion stays a recursion — which is a use for
+// C1's flag that has nothing to do with debugging.
+//
+// The guard is a floor: `main` asks `getrlimit` how much stack this process was given and records
+// the address where it runs out, less a margin so the message itself has room to print. Every
+// function compares its own frame against that floor. `getrlimit` rather than a constant because
+// the stack is whatever the OS gave — 8 MB by default, unlimited under one `ulimit`, small inside
+// a container — and a hardcoded guess would be wrong in both directions.
+//
+// The check is in EVERY function rather than only in ones a call graph shows to be recursive. That
+// is deliberate: a static call graph cannot see recursion through a `dynamic` call, and a guard
+// with a hole in it is worse than none, because the hole is where someone writes the interesting
+// recursion. Measured cost: about 7% of object size.
+//
+// `return down(n - 1)` in tail position would NOT do this — a tail call reuses the frame and the
+// stack does not grow. The `1 +` is what forces a frame to stay alive, and it is why the message
+// says so.
+function down(n: Int) -> Int {
+    if n <= 0 {
+        return 0;
+    }
+    return 1 + down(n - 1);
+}
+
+print(down(100000000));

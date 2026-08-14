@@ -429,6 +429,8 @@ impl<'ctx> CodeGen<'ctx> {
         let entry = self.ctx.append_basic_block(main_fn, "entry");
         self.builder.position_at_end(entry);
         self.set_debug_location(main_at);
+        // B7. Before anything else runs, so every function that checks has something to check.
+        self.build_stack_floor()?;
         self.vars.clear();
         // A body starts with no mark of its own: a region is released inside the frame
         // that opened it, never across a call.
@@ -483,6 +485,9 @@ impl<'ctx> CodeGen<'ctx> {
         // unlocated prologue is a build failure waiting for the first `pure` call in a
         // contract. It was found that way.
         self.set_debug_location(at);
+        // B7. First thing in the function, before the parameter spills, so a frame that is about
+        // to run out of stack says so instead of faulting inside its own prologue.
+        self.build_stack_guard()?;
         self.vars.clear();
         // A body starts with no mark of its own: a region is released inside the frame
         // that opened it, never across a call.
@@ -4143,6 +4148,128 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     /// Get (or lazily define) `i64 @burxt.checked.index(i64 %i, i64 %n)`.
+    /// The one address every stack check compares against: how far down the stack a call may go
+    /// before the program is out of room. Set once, in `main`. B7.
+    fn stack_floor_global(&mut self) -> inkwell::values::GlobalValue<'ctx> {
+        if let Some(g) = self.module.get_global("burxt.stack_floor") {
+            return g;
+        }
+        let i64t = self.ctx.i64_type();
+        let g = self.module.add_global(i64t, None, "burxt.stack_floor");
+        // Zero means "not set yet", and the guard treats zero as no limit. `main` sets it before
+        // anything else runs, so the only code that can see zero is code that ran before `main`,
+        // which in a Burxt program is nothing.
+        g.set_initializer(&i64t.const_zero());
+        g
+    }
+
+    /// Work out where the stack runs out, and record it. Emitted at the top of `main`. B7.
+    ///
+    /// `DESIGN.md` says nothing in the language should fail anonymously, and a stack overflow was
+    /// the ONE failure that did: a recursion with no base case died of a raw SIGSEGV, exit 139, no
+    /// message. Verified still true at v0.0.284, at `-O2` and at `-O0` both — worth checking both,
+    /// because at `-O2` LLVM turns some recursions into loops and the fault disappears, which makes
+    /// this exactly the kind of bug that looks fixed depending on how you built it.
+    ///
+    /// **A probe alloca rather than `llvm.frameaddress`.** An `alloca` in the entry block IS a
+    /// stack address, it needs no intrinsic, and it is one instruction that the register allocator
+    /// folds away. It also spells identically in stage-1, which emits IR as text — and a guarantee
+    /// the two compilers implement differently is a guarantee that will diverge.
+    ///
+    /// **`getrlimit` rather than a constant.** The stack is whatever the OS gave this process, and
+    /// a hardcoded 8 MB would be wrong on a machine with `ulimit -s unlimited` and wrong the other
+    /// way inside a container. `RLIMIT_STACK` is 3 on both Linux and macOS.
+    fn build_stack_floor(&mut self) -> Result<(), String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+        let i32t = self.ctx.i32_type();
+        let i8t = self.ctx.i8_type();
+        let ptr = self.ctx.ptr_type(AddressSpace::default());
+
+        let probe = self.builder.build_alloca(i8t, "stack_top").map_err(err)?;
+        let base = self.builder.build_ptr_to_int(probe, i64t, "stack_base").map_err(err)?;
+
+        // struct rlimit { rlim_t rlim_cur; rlim_t rlim_max; } — two 64-bit values on every
+        // platform this targets, so a two-element array is the whole of the layout.
+        let rlimit_ty = i64t.array_type(2);
+        let rlim = self.builder.build_alloca(rlimit_ty, "rlimit").map_err(err)?;
+        self.builder.build_store(rlim, rlimit_ty.const_zero()).map_err(err)?;
+        let getrlimit = self.libc("getrlimit", i32t.fn_type(&[i32t.into(), ptr.into()], false));
+        self.builder
+            .build_call(getrlimit, &[i32t.const_int(3, false).into(), rlim.into()], "rl")
+            .map_err(err)?;
+        let cur = self.builder.build_load(i64t, rlim, "stack_size").map_err(err)?.into_int_value();
+
+        // RLIM_INFINITY, or anything absurd, falls back to 8 MB — the common default, and the
+        // point is to have SOME floor rather than the exactly right one. A guard that gives up
+        // when the limit is unusual is a guard that is absent precisely where recursion is deepest.
+        let eight_mb = i64t.const_int(8 * 1024 * 1024, false);
+        let sane = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::ULT, cur, i64t.const_int(1 << 40, false), "sane")
+            .map_err(err)?;
+        let size = self.builder.build_select(sane, cur, eight_mb, "stack_room").map_err(err)?.into_int_value();
+
+        // Leave a margin so the guard itself, and `fprintf`, have room to run after it fires.
+        // Reporting a full stack by overflowing the stack would be a poor joke.
+        let margin = i64t.const_int(128 * 1024, false);
+        let usable = self.builder.build_int_sub(size, margin, "usable").map_err(err)?;
+        let floor = self.builder.build_int_sub(base, usable, "floor").map_err(err)?;
+        let g = self.stack_floor_global();
+        self.builder.build_store(g.as_pointer_value(), floor).map_err(err)?;
+        Ok(())
+    }
+
+    /// One stack check, at the top of a function. B7.
+    ///
+    /// Cheap on purpose: an `alloca`, a load of a global that is hot in cache, a compare and a
+    /// branch that predicts perfectly. It is emitted in EVERY function rather than only in ones the
+    /// call graph shows to be recursive, and that is a deliberate trade — a static call graph
+    /// cannot see recursion through a `dynamic` call, and a guard with a hole in it is worse than
+    /// none, because the hole is exactly where someone writes the interesting recursion.
+    fn build_stack_guard(&mut self) -> Result<(), String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+        let i8t = self.ctx.i8_type();
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_parent())
+            .ok_or("codegen bug: stack guard outside a function")?;
+
+        let probe = self.builder.build_alloca(i8t, "here").map_err(err)?;
+        let here = self.builder.build_ptr_to_int(probe, i64t, "sp").map_err(err)?;
+        let g = self.stack_floor_global();
+        let floor = self
+            .builder
+            .build_load(i64t, g.as_pointer_value(), "floor")
+            .map_err(err)?
+            .into_int_value();
+        // Unsigned, and `floor != 0` guards the moment before `main` has set it.
+        let set = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::NE, floor, i64t.const_zero(), "floor_set")
+            .map_err(err)?;
+        let low = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::ULT, here, floor, "too_deep")
+            .map_err(err)?;
+        let overflowed = self.builder.build_and(set, low, "stack_gone").map_err(err)?;
+        let full_bb = self.ctx.append_basic_block(function, "stack_full");
+        let room_bb = self.ctx.append_basic_block(function, "has_room");
+        self.builder.build_conditional_branch(overflowed, full_bb, room_bb).map_err(err)?;
+
+        self.builder.position_at_end(full_bb);
+        self.build_panic(
+            "burxt runtime error: this call went too deep and the stack is full — a recursion with \
+             no base case, or one deeper than this machine's stack allows. `return f(...)` in tail \
+             position reuses the frame and does not grow the stack.\n",
+        )?;
+
+        self.builder.position_at_end(room_bb);
+        Ok(())
+    }
+
     /// `@burxt.require.utf8(bytes, len, where)` — B5. Ends the program with a named error if the
     /// bytes are not valid UTF-8, naming WHERE they came in and WHICH byte is wrong.
     ///

@@ -125,11 +125,16 @@ path works; the callback path does not.
 
 ### Cryptography: some built, most deliberately not
 
-Hashing, HMAC, PBKDF2, hex and base64 are **being built**, because they have published test vectors
-and no secret-dependent branching — so "it compiles" and "it is correct" are the same statement,
-checkable against the values the standards publish. Until they land, this repository has **no
-cryptographic primitives at all**, and that is worth stating plainly rather than implying otherwise:
-today you cannot compute a digest or sign a request without shelling out.
+Hashing, HMAC, PBKDF2, hex and base64 are **built** — `lib/hash.bx`, `lib/encoding.bx` and
+`lib/secure.bx` — because they have published test vectors and no secret-dependent branching, so
+"it compiles" and "it is correct" are the same statement, checkable against the values the standards
+publish. SHA-256, SHA-512, HMAC, PBKDF2, CRC-32, FNV-1a, hex, base64 and base64url, every RFC 4648
+vector pinned in a fixture. Entropy comes from `getentropy`, with `secure_uuid_v4` and
+`secure_token_hex` over it, and `string_equals_constant_time` for comparing any of it.
+
+*(This paragraph said "being built" for two versions after they landed. A gap document that is wrong
+about a gap is worse than none — including when it is wrong in the direction of modesty, because the
+reader who needed a digest went and shelled out for one.)*
 
 **AES, ChaCha20, RSA, Ed25519, X25519, TLS, Argon2 and bcrypt are deliberately absent and will be
 bound rather than written.** Two reasons: Burxt gives no control over instruction timing or cache
@@ -172,7 +177,8 @@ packaging work rather than compiler work.
 ### Other absences
 
 No formatter (`burxt fmt`) · no regex · no stack trace on failure, only the named error and its
-location · no default parameter values or named arguments · no `if` as an expression · no attributes ·
+location — though as of v0.0.285 there is no longer any failure WITHOUT one: a runaway recursion
+names itself and exits 70 like everything else, where it used to die of a bare SIGSEGV · no default parameter values or named arguments · no `if` as an expression · no attributes ·
 **no warnings about your program** — every diagnostic the compiler can produce about Burxt code is a
 refusal to compile, so there is no way to flag something without stopping the build · parse errors
 arrive one at a time, with no token-stream recovery.
