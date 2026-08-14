@@ -2234,6 +2234,8 @@ impl TypeChecker {
             // on v0.0.276, because no vtable was emitted for an interface nothing had
             // registered. Measured on the pristine baseline before this line was added.
             for p in &concrete.parameters {
+                // B17: the caret goes on the type that is wrong.
+                self.current_span.set(p.ty_span);
                 self.validate_type(&p.ty)?;
             }
             self.validate_type(&concrete.ret)?;
@@ -2744,6 +2746,10 @@ impl TypeChecker {
             self.current_span.set(t.span);
             for signature in &t.methods {
                 for p in &signature.parameters {
+                    // B17: the caret belongs on the type that is wrong, not on the declaration
+                    // that contains it.
+                    self.current_span.set(p.ty_span);
+                    self.current_span.set(p.ty_span);
                     self.validate_type(&p.ty)?;
                 }
                 self.validate_type(&signature.ret)?;
@@ -2821,7 +2827,8 @@ impl TypeChecker {
         for s in &prog.structs {
             self.current_span.set(s.span);
             for f in &s.fields {
-
+                // B17: same rule for a field's type.
+                self.current_span.set(f.ty_span);
                 self.validate_type(&f.ty)?;
             }
             self.check_struct_finite(&s.name, &mut Vec::new())?;
@@ -2890,6 +2897,8 @@ impl TypeChecker {
                 ));
             }
             for p in &f.parameters {
+                // B17: the caret goes on the type that is wrong.
+                self.current_span.set(p.ty_span);
                 self.validate_type(&p.ty)?;
             }
             self.validate_type(&f.ret)?;
@@ -3050,6 +3059,8 @@ impl TypeChecker {
                 ));
             }
             for p in &m.parameters {
+                // B17: the caret goes on the type that is wrong.
+                self.current_span.set(p.ty_span);
                 self.validate_type(&p.ty)?;
             }
             self.validate_type(&m.ret)?;
@@ -3235,6 +3246,8 @@ impl TypeChecker {
                 // function's signature registers no vtable without it. See the note in
                 // `instantiate_record_methods`.
                 for p in &concrete.parameters {
+                    // B17: the caret goes on the type that is wrong.
+                    self.current_span.set(p.ty_span);
                     self.validate_type(&p.ty)?;
                 }
                 self.validate_type(&concrete.ret)?;

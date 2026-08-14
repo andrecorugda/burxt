@@ -512,6 +512,16 @@ pub enum StmtKind {
 pub struct Param {
     pub name: String,
     pub ty: Type,
+    /// Where the TYPE was written, not where the declaration starts. B17.
+    ///
+    /// `function scaled(n: CInt)` is refused, and stage-0 used to draw the caret at column 1 — the
+    /// `function` keyword — because `validate_type` reports a string and the caller attached the
+    /// nearest span it had, which was the whole declaration. Stage-1 named the offending token
+    /// instead, so the two compilers refused the same program and pointed at different places.
+    ///
+    /// The span is not cosmetic: it is where the editor draws the squiggle and what the language
+    /// server returns. A caret on `function` tells a reader to look at the wrong thing.
+    pub ty_span: Span,
     /// `mutable xs: [Int]` — the callee may modify the CALLER's value, and the signature says so.
     ///
     /// The mechanism is the one `mutable self` has always used: an aggregate parameter is normally

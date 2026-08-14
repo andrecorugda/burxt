@@ -344,14 +344,16 @@ impl Parser {
                 }
             };
             self.expect(&Token::Colon)?;
+            let ty_start = self.span().start;
             let ty = self.parse_type()?;
+            let ty_span = Span { start: ty_start, end: self.prev_end().max(ty_start + 1) };
             // Accepted here only so the typechecker can explain WHY a field
             // cannot have one; "expected `}`" would not teach anything.
             let marshal = self.parse_marshal()?;
             if is_private {
                 private_fields.push(fname.clone());
             }
-            fields.push(Param { name: fname, ty, marshal, writable: false });
+            fields.push(Param { name: fname, ty, marshal, writable: false, ty_span });
             if self.at(&Token::Comma) {
                 self.bump(); // trailing comma allowed, and required before a method follows
             }
@@ -558,8 +560,10 @@ impl Parser {
                 }
             };
             self.expect(&Token::Colon)?;
+            let ty_start = self.span().start;
             let ty = self.parse_type()?;
-            parameters.push(Param { name: pname, ty, marshal: None, writable });
+            let ty_span = Span { start: ty_start, end: self.prev_end().max(ty_start + 1) };
+            parameters.push(Param { name: pname, ty, marshal: None, writable, ty_span });
         }
         self.expect(&Token::RParen)?;
         if !self.at(&Token::Arrow) {
@@ -1123,12 +1127,14 @@ impl Parser {
                     other => return Err(format!("expected a parameter name, found {}", other.describe())),
                 };
                 self.expect(&Token::Colon)?;
+                let ty_start = self.span().start;
                 let ty = self.parse_type()?;
+                let ty_span = Span { start: ty_start, end: self.prev_end().max(ty_start + 1) };
                 let marshal = self.parse_marshal()?;
                 // Brackets AFTER the marshaller, so `as scaled` still reads as part of the type
                 // and the contract reads as a statement about the value.
                 bracket_requires.extend(self.parse_value_contracts(&pname)?);
-                parameters.push(Param { name: pname, ty, marshal, writable });
+                parameters.push(Param { name: pname, ty, marshal, writable, ty_span });
                 if !self.more_in_list(&Token::RParen) {
                     break;
                 }

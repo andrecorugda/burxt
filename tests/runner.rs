@@ -2011,6 +2011,106 @@ fn the_repository_root_holds_only_what_belongs_there() {
     );
 }
 
+/// A refusal points at the thing that is wrong, and both compilers point at the same thing. B17.
+///
+/// The two compilers agreed on the boundary refusal's TEXT and disagreed on where it happened:
+/// stage-0 drew its caret at column 1, the `function` keyword, and stage-1 named the offending
+/// token. Byte-identical sentence, different place, for twenty-five versions.
+///
+/// It hid because nothing looked. A `.stderr` fixture records one compiler's message and
+/// `the_two_compilers_render_a_problem_identically` compares the rendered text — neither of them
+/// asks WHERE. And the span is not decoration: it is the range the language server returns and
+/// where an editor draws the squiggle, so a caret on `function` sends a reader to the wrong line of
+/// their own file.
+///
+/// The cause was that the position did not exist where the error was raised. `validate_type`
+/// answers a string and the caller attached the nearest span it had, which was the whole
+/// declaration — the same shape as C1, where the typed AST had no spans and the fix was to record
+/// one rather than to guess better.
+///
+/// The two are compared in each compiler's own form on purpose: stage-0 renders a caret under the
+/// source, stage-1 names the token. Asserting they produce identical BYTES here would be asserting
+/// they render diagnostics the same way, which they do not and need not. What has to match is which
+/// token they blame.
+#[test]
+fn both_compilers_blame_the_same_token_for_a_boundary_type() {
+    let scratch = scratch_dir("b17-span");
+    fs::create_dir_all(&scratch).unwrap();
+    let source = scratch.join("boundary.bx");
+    // `CInt` starts at column 20 of line 1, and the point of writing it out is that the expectation
+    // is read off THIS text rather than off whatever the compiler happens to say.
+    fs::write(&source, "function scaled(n: CInt) -> Int { return 1; }\nprint(scaled(1));\n").unwrap();
+
+    let rust = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("check")
+        .arg(&source)
+        .output()
+        .expect("burxt check");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&rust.stdout),
+        String::from_utf8_lossy(&rust.stderr)
+    );
+    assert!(
+        said.contains("CInt only exists at the C boundary"),
+        "stage-0 stopped refusing `CInt` in a Burxt signature:\n{}",
+        said
+    );
+    assert!(
+        said.contains("boundary.bx:1:20"),
+        "stage-0's caret is not on `CInt`, which starts at 1:20. A refusal that points at the \
+         `function` keyword sends a reader to the wrong part of their own line, and it is the range \
+         the language server hands an editor.\n{}",
+        said
+    );
+    // The caret row underlines the type itself, not one column of it.
+    assert!(
+        said.lines().any(|l| l.contains("^^^^") && !l.contains("^^^^^")),
+        "stage-0 underlined something other than the four characters of `CInt`:\n{}",
+        said
+    );
+
+    // And stage-1, in its own spelling.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let stage1 = scratch.join("stage1");
+    let build = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("src/burxt-compiler/main.bx"))
+        .arg("-o")
+        .arg(&stage1)
+        .current_dir(&scratch)
+        .output()
+        .expect("failed to spawn burxt");
+    assert!(
+        build.status.success(),
+        "stage-1 did not build:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let out = Command::new(&stage1)
+        .arg(&source)
+        .arg(scratch.join("boundary.ll"))
+        .current_dir(&scratch)
+        .output()
+        .expect("stage-1");
+    let s1 = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        s1.contains("CInt only exists at the C boundary"),
+        "stage-1 stopped refusing `CInt` in a Burxt signature:\n{}",
+        s1
+    );
+    assert!(
+        s1.contains("(at `CInt`)"),
+        "stage-1 blamed a token other than `CInt`. The two compilers refusing the same program in \
+         different places is the defect this test exists for.\n{}",
+        s1
+    );
+    let _ = fs::remove_dir_all(&scratch);
+}
+
 /// A fixture directory holds programs, expectations, and the handful of files a program READS.
 /// Nothing a program WRITES.
 ///
