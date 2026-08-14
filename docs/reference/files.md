@@ -63,7 +63,7 @@ which blames memory for what is a directory handed to a file reader. That messag
 
 **`file_read_maybe` is §B1's fix**, and it is a bigger fix than the row asked for: `None` for missing, `None` for unreadable, `None` for a directory, `Some("")` for a file that is genuinely empty, and in none of those cases does the program stop. `file_read` stays for the caller who already knows the file is there.
 
-The same shape governs everything added since: `file_size`, `file_read_bytes` and `file_walk` answer `Option`, because "no such file" and "zero bytes" and "empty directory" are different facts. `file_list_directory` does NOT, and that is named as a gap at the foot of this file rather than quietly left.
+The same shape governs everything since: `file_size`, `file_read_bytes`, `file_walk` and — as of §B51, v0.0.288 — `file_list_directory` all answer `Option`, because "no such file" and "zero bytes" and "empty directory" are different facts. That last one held out longest, defended as published API, and it was the only function in this module that could still answer a caller's question wrongly without saying so.
 
 ## What is in it
 {: #what-is-in-it}
@@ -84,7 +84,7 @@ The same shape governs everything added since: `file_size`, `file_read_bytes` an
 | [`file_copy`](#file-copy) | function | Copies a file's contents and mode. **Not a directory** — `cp` without `-R` refuses one, and the refusal arrives here as  |
 | [`file_make_directory`](#file-make-directory) | function | 0755: readable and executable by everyone, writable by its owner. |
 | [`file_remove_directory`](#file-remove-directory) | function | Removes an **empty** directory. |
-| [`file_list_directory`](#file-list-directory) | function | Every name in a directory. The shell does the reading because `readdir` answers a struct whose field offsets Burxt canno |
+| [`file_list_directory`](#file-list-directory) | function | Every name in a directory, or `None` if there is no such directory. §B51. |
 | [`file_walk`](#file-walk) | function | Every path under a directory, recursively, sorted — or `None` if there is no such directory. |
 | [`file_temp_directory`](#file-temp-directory) | function | A private directory, made atomically, or a stated failure. |
 | [`file_temp_path`](#file-temp-path) | function | A path for a temporary file, inside a fresh private directory. Roadmap §D1m's `temp_file`. |
@@ -112,7 +112,7 @@ Everything a path holds, as one String.
 
 Use this one only when the file is known to be there — a fixture, a path just written, a file whose absence really should stop everything. Otherwise use `file_read_maybe`.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L120)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L121)
 
 ### `file_read_maybe`
 {: #file-read-maybe}
@@ -127,7 +127,7 @@ Everything a path holds, or a stated absence. **This is roadmap §B1's fix.**
 
 The existence question is answered by `fopen` rather than by `test -e`, so it is the same open that would do the reading: a path that exists but cannot be opened is not a readable file, and `test -e` would have said it was. There are two opens here, not one — `fopen` to ask, `read_file` to read — so a file deleted between them takes the program down the way `file_read` always does. Closing that window means reading through the handle already open, which is `file_read_bytes`, at the cost of building the answer a byte at a time.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L137)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L138)
 
 ### `file_read_bytes`
 {: #file-read-bytes}
@@ -142,7 +142,7 @@ Every byte of a file, as numbers 0..255, or a stated absence.
 
 The chain is §A1's: `fread` fills a buffer this function owns, `c_bytes_at` copies the filled part into Burxt, and the pointer is freed here. The buffer is reused across chunks, so a large file costs one 64 KB allocation, not one per read.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L161)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L162)
 
 ### `file_size`
 {: #file-size}
@@ -157,7 +157,7 @@ How many bytes a file holds, or a stated absence.
 
 For anything that is not a regular file the number is whatever the stream reports, and for an unseekable stream that is nothing useful — `file_read_bytes` is the way to ask how big a device is, by reading it.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L199)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L200)
 
 ### `file_write`
 {: #file-write}
@@ -168,7 +168,7 @@ function file_write(path: String, text: String) -> Int touches files
 
 Replaces the file. Answers the number of bytes written.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L220)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L221)
 
 ### `file_append`
 {: #file-append}
@@ -179,7 +179,7 @@ function file_append(path: String, text: String) -> Int touches files
 
 Adds to the end, leaving what was there. Read-modify-write, because the builtin replaces rather than appends — fine for a log line, wrong for a gigabyte, and that is worth knowing before you use it.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L227)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L228)
 
 ### `file_exists`
 {: #file-exists}
@@ -188,7 +188,7 @@ Adds to the end, leaving what was there. Read-modify-write, because the builtin 
 function file_exists(path: String) -> Bool touches commands
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L232)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L233)
 
 ### `file_is_directory`
 {: #file-is-directory}
@@ -203,7 +203,7 @@ Whether the path is a directory.
 
 Symlinks are FOLLOWED, because `opendir` follows them: a link to a directory answers true. That is the right answer for a caller about to read it and the wrong one for a caller avoiding a loop, which is why `file_walk` does not recurse in Burxt at all.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L248)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L249)
 
 ### `file_is_file`
 {: #file-is-file}
@@ -216,7 +216,7 @@ Whether the path exists and is not a directory.
 
 **Deliberately not `test -f`, which asks about a REGULAR file.** A device, a socket and a FIFO all answer true here and false to `test -f`, and the question a caller is really asking before `file_read_bytes` is "is there something here that is not a directory". Stated rather than implied, because the two readings differ and only one of them is in the name.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L263)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L264)
 
 ### `file_delete`
 {: #file-delete}
@@ -225,7 +225,7 @@ Whether the path exists and is not a directory.
 function file_delete(path: String) -> Bool touches files
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L267)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L268)
 
 ### `file_move`
 {: #file-move}
@@ -234,7 +234,7 @@ function file_delete(path: String) -> Bool touches files
 function file_move(from: String, to: String) -> Bool touches files
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L271)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L272)
 
 ### `file_copy`
 {: #file-copy}
@@ -249,7 +249,7 @@ Copies a file's contents and mode. **Not a directory** — `cp` without `-R` ref
 
 `--` before the paths, because quoting does not stop option parsing: a file honestly named `-r` is a file, not a flag.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L283)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L284)
 
 ### `file_make_directory`
 {: #file-make-directory}
@@ -260,7 +260,7 @@ function file_make_directory(path: String) -> Bool touches commands
 
 0755: readable and executable by everyone, writable by its owner.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L288)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L289)
 
 ### `file_remove_directory`
 {: #file-remove-directory}
@@ -273,20 +273,26 @@ Removes an **empty** directory.
 
 There is no recursive delete in this file, and that is a decision rather than an omission. `rm -rf` on a path a program computed is the single most expensive mistake a standard library can hand somebody: one empty variable and it is `rm -rf /`. What replaces it is three lines the caller writes in the open, where a reviewer sees the tree being named before it is removed — `file_walk`, then `file_delete` over the answer in reverse, then this. `tests/pass/files_library.bx` ends by doing exactly that, and is the worked example.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L300)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L301)
 
 ### `file_list_directory`
 {: #file-list-directory}
 
 ```burxt
-function file_list_directory(directory: String) -> [String] touches commands, files, input
+function file_list_directory(directory: String) -> Option<[String]> touches commands, files, input
 ```
 
-Every name in a directory. The shell does the reading because `readdir` answers a struct whose field offsets Burxt cannot know — see the header.
+Every name in a directory, or `None` if there is no such directory. §B51.
 
-**Answers `[]` for a directory that is not there**, which is the §B1 shape all over again, and it is left that way on purpose: this is existing published API, and a caller can ask `file_is_directory` first. `file_walk` below is the same question answered honestly, and is the one to reach for in new code.
+The shell does the reading because `readdir` answers a struct whose field offsets Burxt cannot know — see the header.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L311)
+**This used to answer `[]` for a directory that is not there**, and the comment that stood here defended it: *"existing published API, and a caller can ask `file_is_directory` first."* That defence was wrong twice over. Empty and absent are different answers and the caller could not tell them apart — §B1's exact shape, which the roadmap calls the silent wrong answer this language exists to refuse, sitting in the standard library where a new reader meets it first. And asking `file_is_directory` first is a race: the directory can go between the two calls.
+
+**The signature changed rather than a second spelling being added**, and the timing is the whole argument: this is the last version before 1.0 states a compatibility promise. Keeping a function that is known to answer wrongly, and adding an honest twin beside it, means carrying the wrong one forever and making every reader ask which of the two they are looking at. There is one caller in this repository. `file_walk` already answers `Option<[String]>`, so this makes the module consistent rather than adding to it.
+
+The status of `ls` is what is CHECKED — not the emptiness of its output, which is the mistake that was here. A missing directory and an empty one produce the same empty text and different exit codes, and only one of those two facts can tell them apart.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L327)
 
 ### `file_walk`
 {: #file-walk}
@@ -324,7 +330,7 @@ The root itself is not in the answer; an empty directory answers `Some([])`, whi
 
 **A newline inside a filename breaks this**, because the answer travels as lines. So does `file_list_directory`, and so does every `find | while read` in every shell script ever written. Said out loud rather than discovered.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L351)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L370)
 
 ### `file_temp_directory`
 {: #file-temp-directory}
@@ -339,7 +345,7 @@ The pid is in the name so that two processes do not spend the loop below collidi
 
 `prefix` must be a plain name: a `/` in it would put the directory somewhere the caller did not mean, so it is refused rather than sanitised.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L394)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L413)
 
 ### `file_temp_path`
 {: #file-temp-path}
@@ -354,7 +360,7 @@ A path for a temporary file, inside a fresh private directory. Roadmap §D1m's `
 
 Two calls never answer the same path, in the same process or in two. `file_temp_release` is how it goes away, and it takes the directory with it.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L422)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L441)
 
 ### `file_temp_release`
 {: #file-temp-release}
@@ -367,7 +373,7 @@ Deletes a path from `file_temp_path` **and the private directory holding it**.
 
 Answers whether the directory went away; the file itself may already be gone, which is not a failure. A path this did not hand out is not released — the parent has to look like one of ours, or a caller who passed `/etc/hosts` would have `/etc` attempted.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L432)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L451)
 
 ### `file_temp_base`
 {: #file-temp-base}
@@ -380,7 +386,7 @@ function file_temp_base() -> String touches input
 
 A relative `TMPDIR` is ignored rather than honoured: it would put scratch files in whatever directory the program happened to be in, which is the one place a caller has other files.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L450)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L469)
 
 ### `file_quote`
 {: #file-quote}
@@ -395,7 +401,7 @@ Quoting does not stop OPTION parsing: `file_quote("-r")` is a correctly quoted `
 
 **The refusal goes to `print_error` and not `print`, and it used to go to `print`.** A library writing a diagnostic to stdout corrupts the output of every program that is piped: a caller doing `file_read` of what a Burxt program printed would find this sentence in the middle of their data. `lib/log.bx` makes the same argument at length and calls it *"not a preference"* — this was the one place in the library still disagreeing with it.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L478)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L497)
 
 ### `file_split_lines`
 {: #file-split-lines}
@@ -406,7 +412,7 @@ function file_split_lines(text: String) -> [String]
 
 Split on newlines, dropping the empty piece a trailing newline leaves. Local rather than borrowed from lib/string.bx, so `use "lib/files.bx"` pulls in files and nothing else.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L496)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L515)
 
 ### `file_last_slash`
 {: #file-last-slash}
@@ -417,7 +423,7 @@ function file_last_slash(path: String) -> Int
 
 The last `/`, or -1. Local for the same reason `file_split_lines` is: `lib/path.bx` has `path_dirname`, and this file does not depend on it.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L515)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L534)
 
 ### `file_starts_with`
 {: #file-starts-with}
@@ -426,7 +432,7 @@ The last `/`, or -1. Local for the same reason `file_split_lines` is: `lib/path.
 function file_starts_with(text: String, prefix: String) -> Bool
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L528)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L547)
 
 ### `file_is_plain_name`
 {: #file-is-plain-name}
@@ -437,5 +443,5 @@ function file_is_plain_name(name: String) -> Bool
 
 A name with no `/` and no NUL, and not `.` or `..` — what a single directory entry may be called.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L537)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L556)
 

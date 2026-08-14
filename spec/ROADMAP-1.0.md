@@ -36,6 +36,36 @@ D1p D1q D1r D1t D2b D2d** were built and unticked · **H5** (the limitations doc
 OBSOLETE rather than open, because A6 shipped and `range(n)` would now be a second way to do one
 thing. Earlier in the same sweep: **B2, B6, B14** described defects that no longer existed.
 
+## The release plan — Andre's, 2026-08-15
+
+**1.0.0 ships after C2, and the order to it changed on the same call.** The audit had left the
+critical path as C2 → H2 → H6 → H3; two things were promoted in front of C2 because they are small
+and because one of them should not appear in a 1.0 at all.
+
+| # | before 1.0.0 | why it is not deferrable |
+|---|---|---|
+| 1 | **B51** — `file_list_directory` answered `[]` for a directory that is not there | §B1's exact shape: **the silent wrong answer this language exists to refuse**, in the standard library, where a new reader meets it first. And the signature had to change, which is the one thing a compatibility promise makes impossible afterwards |
+| 2 | **B40 · B43 · B44 · B47 · B48** — stage-0 and stage-1 disagreeing about what COMPILES | `README.md` and `DESIGN.md` claim two independent implementations that must agree. Eight known disagreements about what a valid program is undercuts a headline claim — the same class as B5, a published guarantee that was not enforced. B15 was this shape and cost an afternoon |
+| 3 | **C2** — dependency management | the goal sentence says *depend on other people's code*. It is the only remaining row that is a **permanent commitment**: a manifest format and a resolution rule cannot be changed after people use them |
+| 4 | **H2 · H6**, then **H3** at the tag | H6 is what makes the number mean anything |
+
+**After 1.0.0, and this is the part that decides where everything else lands:**
+
+- **1.0.x** — fixes only. No new function, no new syntax. That is what a patch is.
+- **1.1.x / 1.2.0** — the additive leftovers: **D2c** tuple helpers, **D2e** monotonic clock,
+  **D2f** chunks/windows, and all of **§Q**. These add functions and commands, which is a MINOR
+  bump and not a patch. Calling them `1.0.1` would break the very rule `burxt review` exists to
+  enforce mechanically, on the first release that promises it.
+- **2.0** — everything in [ROADMAP-1.1](ROADMAP-1.1.md): hosts, and the whole web half — a real
+  listening server, `html.bx`, `cgi.bx`. **That file is another session's and is not renamed here;
+  the relabel needs relaying rather than editing.**
+
+**And the rule that reconciles `burxt review` with a milestone number, which H6 should state
+outright:** `burxt review` sets the **minimum** bump — it can prove a change weakened a promise and
+therefore needs a major, and it can prove nothing was weakened. It cannot know that a release is a
+milestone. So a human may always go HIGHER than the tool says, never lower. 2.0 for the web work is
+exactly that: additive by the tool's reckoning, a major by intent.
+
 ## The goal
 
 > **Burxt 1.0.0 — a language someone outside this repository can ship on.**
@@ -806,7 +836,7 @@ lands with stage-1's half, in one version, as §A0 requires of every row.
 | **B48** | **`unknown function: nofunc` against `unknown function`** — stage-0 names the function and stage-1 does not, so this divergence moves the OTHER way: stage-1 adopts stage-0's. Worth noting because every other text row this week ran stage-0 → stage-1 | XS |
 | **B49** | **`read_file` of a DIRECTORY reports `region memory exhausted`.** Verified: `fopen` succeeds on a directory, `fseek` to the end answers **9223372036854775807**, and the reader tries to allocate it. So a directory handed to a file reader **blames memory**, naming the one thing that is not wrong. A user who hits this goes looking for a leak. Runtime source, and the fix is to reject the size before allocating rather than to enlarge the arena | S |
 | **B50** | **Redeclaring a libc function the compiler also emits produces an LLVM VERIFIER error, not a Burxt diagnostic.** `external function fseek(f: CPointer, off: Int, whence: Int)` in a program that also uses `read_file` — for which the compiler emits its own `fseek` with an `i32` whence — gives *"LLVM module verification failed: Call parameter type does not match function signature! i32 2"*. **The message names nothing the user wrote**, and this is the one place a Burxt program can produce a diagnostic from a layer the language claims to hide. Found because §A7's widths were load-bearing for the first time: `whence` must be declared `i32`, and an `Int` silently redeclares `@fseek` so **every `read_file` in the program stops verifying**. Fix: refuse the conflicting redeclaration by name, or reconcile the signature | M |
-| **B51** | **`file_list_directory` answers `[]` for a directory that does not exist** — B1's exact shape, surviving in the one function that predates `Option` and has published callers. Empty and absent are different answers and the caller cannot tell them apart. Named in the module and the README rather than left silent; the fix is an `Option` return and a deprecation of the old spelling | S |
+| **B51** | **FIXED v0.0.288 — and the signature changed, which is the whole point of doing it now.** `file_list_directory` answers `Option<[String]>`: `None` for a directory that is not there, `Some([])` for one that is genuinely empty. The comment that stood in `lib/files.bx` DEFENDED the old behaviour — *"existing published API, and a caller can ask `file_is_directory` first"* — and it was wrong twice: empty and absent were the same answer, and asking first is a race, because the directory can go between the two calls. **What is checked is the exit status of `ls`, not the emptiness of its output** — a missing directory and an empty one produce the same empty text and different exit codes, and only one of those two facts can tell them apart. **Adding an honest twin beside the wrong one was rejected**: it means carrying the wrong one forever and making every reader ask which of the two they are looking at. There were two callers in the whole repository. This is the last version before a compatibility promise, so it is the last moment the signature could move at all. **`file_list_directory` answers `[]` for a directory that does not exist** — B1's exact shape, surviving in the one function that predates `Option` and has published callers. Empty and absent are different answers and the caller cannot tell them apart. Named in the module and the README rather than left silent; the fix is an `Option` return and a deprecation of the old spelling | S |
 | **B52** | **FIXED v0.0.280**, with `tests/pass/a_one_field_class_in_an_array.bx` — the fixture that did not exist, which is why the suite read N of N over this for its whole life. ~~**stage-1 MISCOMPILES a one-field class held in an array — it reads back the address instead of the field.** Four lines, and about the most ordinary declaration anyone would write: `class R { n: Int }` then `let mutable rows: [R] = [R { n: 7 }]; print(rows[0].n);` — **stage-0 prints `7`, stage-1 prints a pointer.** `burxt check` says no errors on both, and stage-1's IR assembles and links. Silent wrong answer. The boundary is exactly one field: `{ s: String }` also fails (pointer, then garbage bytes), `{ fields: [String] }` **segfaults** when bound to a local, and **any second field makes both compilers agree** — as does the same class outside an array. **Pre-existing**, verified by rebuilding stage-1 from `git show HEAD:src/burxt-compiler/*.bx` in a clean directory. **Nothing in `tests/pass` puts a one-field class in an array**, which is why `the_burxt_backend_compiles_a_growing_share_of_the_suite` has read N of N over a real hole for its whole life — the same shape as B18, B35 and B42 before it: the suite cannot see what nobody wrote. Found by an agent writing `lib/csv.bx`, from a `CsvRow` that happened to have one field~~ | M |
 | B14 | **ALREADY FIXED — row was stale, all four claims checked v0.0.283.** `lib/README.md` documents `Option` and `Result` at length; its module table lists **22 of 22** modules with none missing and none gone; `docs/reference/builtins.md` carries all nine bitwise and C builtins; and `map.bx`'s *"Burxt has no bitwise operators"* is simply TRUE — they are seven named builtins, which is the recorded decision, not rot. **Doc rot** — `lib/README.md` claims `Option`/`Result` do not exist · `map.bx` claims no bit ops · the module table omits 3 modules · `docs/reference/builtins.md` omits 9 builtins while claiming to be generated from that list | XS |
 

@@ -184,11 +184,23 @@ region main {
     let walked_nested: Bool = say_walk("nested", root, file_walk(nested));
 
     print("-- list_directory of the same nested directory, one level only");
-    let names: [String] = file_list_directory(nested + "/one");
-    let mutable n: Int = 0;
-    while n < len(names) {
-        print("  " + names[n]);
-        n += 1;
+    match file_list_directory(nested + "/one") {
+        None => { print("  no such directory"); }
+        Some(names) => {
+            let mutable n: Int = 0;
+            while n < len(names) {
+                print("  " + names[n]);
+                n += 1;
+            }
+        }
+    }
+
+    // §B51: a directory that is not there is `None`, not an empty list. Empty and absent were the
+    // same answer here until v0.0.288, which is the one shape this language exists to refuse.
+    print("-- list_directory of a directory that does not exist");
+    match file_list_directory(nested + "/no-such-directory") {
+        None => { print("  None, and not an empty list"); }
+        Some(found) => { print("  WRONG: answered a list of " + to_string(len(found))); }
     }
 
     // ---- temp files, twice, not colliding ----------------------------------------------------

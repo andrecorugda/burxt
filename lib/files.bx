@@ -58,10 +58,11 @@
 // empty, and in none of those cases does the program stop. `file_read` stays for the caller who
 // already knows the file is there.
 //
-// The same shape governs everything added since: `file_size`, `file_read_bytes` and `file_walk`
-// answer `Option`, because "no such file" and "zero bytes" and "empty directory" are different
-// facts. `file_list_directory` does NOT, and that is named as a gap at the foot of this file
-// rather than quietly left.
+// The same shape governs everything since: `file_size`, `file_read_bytes`, `file_walk` and — as of
+// §B51, v0.0.288 — `file_list_directory` all answer `Option`, because "no such file" and "zero
+// bytes" and "empty directory" are different facts. That last one held out longest, defended as
+// published API, and it was the only function in this module that could still answer a caller's
+// question wrongly without saying so.
 // ============================================================================
 
 use "option.bx";
@@ -301,17 +302,32 @@ function file_remove_directory(path: String) -> Bool touches files {
     return rmdir(path) == 0;
 }
 
-// Every name in a directory. The shell does the reading because `readdir` answers a struct whose
-// field offsets Burxt cannot know — see the header.
+// Every name in a directory, or `None` if there is no such directory. §B51.
 //
-// **Answers `[]` for a directory that is not there**, which is the §B1 shape all over again, and
-// it is left that way on purpose: this is existing published API, and a caller can ask
-// `file_is_directory` first. `file_walk` below is the same question answered honestly, and is the
-// one to reach for in new code.
-function file_list_directory(directory: String) -> [String] touches commands, files, input {
+// The shell does the reading because `readdir` answers a struct whose field offsets Burxt cannot
+// know — see the header.
+//
+// **This used to answer `[]` for a directory that is not there**, and the comment that stood here
+// defended it: *"existing published API, and a caller can ask `file_is_directory` first."* That
+// defence was wrong twice over. Empty and absent are different answers and the caller could not
+// tell them apart — §B1's exact shape, which the roadmap calls the silent wrong answer this
+// language exists to refuse, sitting in the standard library where a new reader meets it first.
+// And asking `file_is_directory` first is a race: the directory can go between the two calls.
+//
+// **The signature changed rather than a second spelling being added**, and the timing is the whole
+// argument: this is the last version before 1.0 states a compatibility promise. Keeping a function
+// that is known to answer wrongly, and adding an honest twin beside it, means carrying the wrong
+// one forever and making every reader ask which of the two they are looking at. There is one
+// caller in this repository. `file_walk` already answers `Option<[String]>`, so this makes the
+// module consistent rather than adding to it.
+//
+// The status of `ls` is what is CHECKED — not the emptiness of its output, which is the mistake
+// that was here. A missing directory and an empty one produce the same empty text and different
+// exit codes, and only one of those two facts can tell them apart.
+function file_list_directory(directory: String) -> Option<[String]> touches commands, files, input {
     match file_temp_path("ls") {
         None => {
-            return [];
+            return Option.None;
         }
         Some(scratch) => {
             // §B3: this used to be the fixed path `/tmp/burxt-fs-list`. Two processes clobbered
@@ -320,7 +336,10 @@ function file_list_directory(directory: String) -> [String] touches commands, fi
             let status: Int = system("ls -1 " + file_quote(directory) + " > " + file_quote(scratch) + " 2>/dev/null");
             let text: String = read_file(scratch);
             let dropped: Bool = file_temp_release(scratch);
-            return file_split_lines(text);
+            if status != 0 {
+                return Option.None;
+            }
+            return Option.Some(file_split_lines(text));
         }
     }
 }
@@ -551,10 +570,6 @@ function file_is_plain_name(name: String) -> Bool {
 }
 
 // ---- what this file still does not hide -----------------------------------------------------
-//
-// **`file_list_directory` answers `[]` for a directory that is not there.** That is §B1's shape,
-// surviving in the one function that predates `Option` and has published callers. `file_walk`
-// answers the same question with `Option`, and is what new code should use.
 //
 // **`file_append` reads the whole file and writes it back**, because the builtin replaces rather
 // than appends. Fine for a log line, wrong for a gigabyte.

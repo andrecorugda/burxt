@@ -1313,7 +1313,7 @@
   "name": "file_list_directory",
   "text": "lib/files.bx",
   "url": "/reference/files.html#file-list-directory",
-  "where": "function file_list_directory(directory: String) -> [String] touches commands, files, input"
+  "where": "function file_list_directory(directory: String) -> Option<[String]> touches commands, files, input"
  },
  {
   "kind": "function",

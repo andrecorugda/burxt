@@ -58,6 +58,8 @@ nested: 4 entries
 -- list_directory of the same nested directory, one level only
   beside
   two
+-- list_directory of a directory that does not exist
+  None, and not an empty list
 -- temp
 true
 true
