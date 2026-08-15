@@ -1,3 +1,11 @@
+---
+layout: doc
+title: Burxt — the milestone log
+section: log
+permalink: /log/
+description: Every version, in order, with what it decided and what it cost. The log is a record,
+---
+
 # Burxt — the milestone log
 
 Every version, in order, with what it decided and what it cost. The log is a **record**,

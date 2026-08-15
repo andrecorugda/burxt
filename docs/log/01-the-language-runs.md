@@ -1,3 +1,10 @@
+---
+layout: doc
+title: The language runs
+section: log
+description: *Milestone log, v0.0.1 – v0.0.10. The design these versions serve is in DESIGN.md; the whole log is indexed here.*
+---
+
 # The language runs
 
 *Milestone log, v0.0.1 – v0.0.10. The design these versions serve is in [DESIGN.md](../../DESIGN.md); the whole log is indexed [here](README.md).*

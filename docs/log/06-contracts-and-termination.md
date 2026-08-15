@@ -1,3 +1,10 @@
+---
+layout: doc
+title: Contracts, conservation laws, and termination
+section: log
+description: *Milestone log, v0.0.43 – v0.0.50. The design these versions serve is in DESIGN.md; the whole log is indexed here.*
+---
+
 # Contracts, conservation laws, and termination
 
 *Milestone log, v0.0.43 – v0.0.50. The design these versions serve is in [DESIGN.md](../../DESIGN.md); the whole log is indexed [here](README.md).*

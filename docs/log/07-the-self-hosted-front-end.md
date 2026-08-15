@@ -1,3 +1,10 @@
+---
+layout: doc
+title: The front end, in Burxt
+section: log
+description: *Milestone log, v0.0.51 – v0.0.58. The design these versions serve is in DESIGN.md; the whole log is indexed here.*
+---
+
 # The front end, in Burxt
 
 *Milestone log, v0.0.51 – v0.0.58. The design these versions serve is in [DESIGN.md](../../DESIGN.md); the whole log is indexed [here](README.md).*

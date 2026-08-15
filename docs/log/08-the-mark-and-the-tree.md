@@ -1,3 +1,10 @@
+---
+layout: doc
+title: The mark, and the shape of the repository
+section: log
+description: *Milestone log, v0.0.69 – v0.0.71. The design these versions serve is in DESIGN.md; the whole log is indexed here.*
+---
+
 # The mark, and the shape of the repository
 
 *Milestone log, v0.0.69 – v0.0.71. The design these versions serve is in [DESIGN.md](../../DESIGN.md); the whole log is indexed [here](README.md).*

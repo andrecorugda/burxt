@@ -1,3 +1,10 @@
+---
+layout: doc
+title: Memory, regions, and the first self-hosted pieces
+section: log
+description: *Milestone log, v0.0.21 – v0.0.30. The design these versions serve is in DESIGN.md; the whole log is indexed here.*
+---
+
 # Memory, regions, and the first self-hosted pieces
 
 *Milestone log, v0.0.21 – v0.0.30. The design these versions serve is in [DESIGN.md](../../DESIGN.md); the whole log is indexed [here](README.md).*

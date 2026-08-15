@@ -1,3 +1,10 @@
+---
+layout: doc
+title: `allocates`, `pure`, and the mark
+section: log
+description: *Milestone log, v0.0.38 – v0.0.42. The design these versions serve is in DESIGN.md; the whole log is indexed here.*
+---
+
 # `allocates`, `pure`, and the mark
 
 *Milestone log, v0.0.38 – v0.0.42. The design these versions serve is in [DESIGN.md](../../DESIGN.md); the whole log is indexed [here](README.md).*

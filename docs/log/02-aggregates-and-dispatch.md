@@ -1,3 +1,10 @@
+---
+layout: doc
+title: Aggregates, dispatch, and the literals money needs
+section: log
+description: *Milestone log, v0.0.11 – v0.0.20. The design these versions serve is in DESIGN.md; the whole log is indexed here.*
+---
+
 # Aggregates, dispatch, and the literals money needs
 
 *Milestone log, v0.0.11 – v0.0.20. The design these versions serve is in [DESIGN.md](../../DESIGN.md); the whole log is indexed [here](README.md).*

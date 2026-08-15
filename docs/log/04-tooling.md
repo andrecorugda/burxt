@@ -1,3 +1,10 @@
+---
+layout: doc
+title: The half of a language that lives outside the compiler
+section: log
+description: *Milestone log, v0.0.31 – v0.0.37. The design these versions serve is in DESIGN.md; the whole log is indexed here.*
+---
+
 # The half of a language that lives outside the compiler
 
 *Milestone log, v0.0.31 – v0.0.37. The design these versions serve is in [DESIGN.md](../../DESIGN.md); the whole log is indexed [here](README.md).*
