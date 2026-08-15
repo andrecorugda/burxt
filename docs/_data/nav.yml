@@ -258,6 +258,27 @@
           id: examples
         - name: "Next"
           id: next
+    - name: "13. Practices"
+      url: /guide/13-practices.html
+      steps:
+        - name: "What this is for"
+          id: what-this-is-for
+        - name: "Think of a load-bearing wall"
+          id: think-of-a-load-bearing-wall
+        - name: "A step closer"
+          id: a-step-closer
+        - name: "In code"
+          id: in-code
+        - name: "Why it is built this way"
+          id: why-it-is-built-this-way
+        - name: "What it costs"
+          id: what-it-costs
+        - name: "When you reach for it"
+          id: when-you-reach-for-it
+        - name: "Examples"
+          id: examples
+        - name: "Next"
+          id: next
 - title: Reference
   url: /reference/
   items:

@@ -25,6 +25,7 @@ What the language refuses is usually the interesting part.
 <li><a href="10-absence-and-failure.html"><span class="n">10</span> <span>Absence and failure</span> <span class="what"><code>Option</code>, <code>Result</code>, <code>?</code>, and no null</span></a></li>
 <li><a href="11-maps.html"><span class="n">11</span> <span>Maps and strings</span> <span class="what">Insertion order, <code>Equatable</code> keys, bytes</span></a></li>
 <li><a href="12-tools-and-agents.html"><span class="n">12</span> <span>Tools and agents</span> <span class="what"><code>mcp-schema</code>, <code>review</code> — the contract <em>is</em> the schema</span></a></li>
+<li><a href="13-practices.html"><span class="n">13</span> <span>Practices</span> <span class="what">where a contract belongs and where it does not, and the traps already paid for</span></a></li>
 </ul>
 
 Looking for one thing rather than reading? The [reference]({{ site.baseurl }}/reference/) has every
