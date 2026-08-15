@@ -240,3 +240,181 @@ pub fn cache_key(url: &str, tag: &str) -> String {
 fn is_plain_name(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_')
 }
+
+// ---------------------------------------------------------------------------------------------
+// The lockfile — `burxt.lock`. C2.
+// ---------------------------------------------------------------------------------------------
+
+/// One dependency, pinned to the commit that was actually built.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Locked {
+    pub name: String,
+    pub url: String,
+    pub tag: String,
+    pub commit: String,
+}
+
+pub const LOCK_NAME: &str = "burxt.lock";
+
+/// Read `burxt.lock`, or an empty list when there is none.
+///
+/// Same grammar as the manifest for the same reason — one statement per line, first word is the
+/// key — because a lockfile is read by people far more often than it is written, usually while
+/// answering "what changed" during a review.
+pub fn read_lock(root: &Path) -> Result<Vec<Locked>, String> {
+    let path = root.join(LOCK_NAME);
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
+    let mut out = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let words: Vec<&str> = trimmed.split_whitespace().collect();
+        match words.as_slice() {
+            ["package", name, url, tag, commit] => out.push(Locked {
+                name: name.to_string(),
+                url: url.to_string(),
+                tag: tag.to_string(),
+                commit: commit.to_string(),
+            }),
+            _ => {
+                return Err(format!(
+                    "{}:{}: a lockfile line is `package <name> <url> <tag> <commit>`. This file is \
+                     written by `burxt fetch` — if it has been edited by hand, delete it and fetch \
+                     again.",
+                    path.display(),
+                    n + 1
+                ))
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Write `burxt.lock`. Sorted by name so two fetches of the same manifest produce the same bytes,
+/// which is what makes the file reviewable in a diff.
+pub fn write_lock(root: &Path, mut locked: Vec<Locked>) -> Result<(), String> {
+    locked.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut text = String::from(
+        "# Written by `burxt fetch`. Every dependency, pinned to the exact commit that was\n\
+         # resolved — so the next person to fetch gets these bytes even if the tag has moved.\n\
+         # Commit this file. Do not edit it by hand.\n",
+    );
+    for entry in &locked {
+        text.push_str(&format!(
+            "package  {}  {}  {}  {}\n",
+            entry.name, entry.url, entry.tag, entry.commit
+        ));
+    }
+    std::fs::write(root.join(LOCK_NAME), text)
+        .map_err(|e| format!("cannot write {}: {}", root.join(LOCK_NAME).display(), e))
+}
+
+/// `burxt fetch` — populate `.burxt/packages/` and write the lockfile. C2.
+///
+/// **The only place this compiler touches the network, and only when asked.** A build that fetched
+/// silently would mean the same command did different things on different days depending on what a
+/// remote had done, which is the opposite of every other guarantee here. `build` reads what is on
+/// disk and refuses, by name, when something is missing.
+///
+/// **With a lockfile present, the LOCKED COMMIT is what gets checked out — not the tag.** That is
+/// the whole point of the file: a tag is a name somebody else can move, and the second person to
+/// fetch a project should get the bytes the first person built. Without a lock, the tag is resolved
+/// once and the commit it pointed at is written down.
+pub fn fetch(package: &Manifest) -> Result<String, String> {
+    use std::process::Command;
+    let cache = package.root.join(".burxt").join("packages");
+    std::fs::create_dir_all(&cache)
+        .map_err(|e| format!("cannot create {}: {}", cache.display(), e))?;
+    let existing = read_lock(&package.root)?;
+    let mut locked: Vec<Locked> = Vec::new();
+    let mut report = String::new();
+
+    for (name, dependency) in &package.dependencies {
+        let Source::Git { url, tag } = &dependency.source else {
+            // A path dependency is a directory somebody already has. Nothing to fetch and nothing
+            // to pin: it has no version, which is the trade a path dependency makes.
+            continue;
+        };
+        let into = cache.join(cache_key(url, tag));
+        let pinned = existing
+            .iter()
+            .find(|l| l.name == *name && l.url == *url && l.tag == *tag)
+            .map(|l| l.commit.clone());
+
+        if !into.join(".git").is_dir() {
+            let _ = std::fs::remove_dir_all(&into);
+            let out = Command::new("git")
+                .args(["clone", "--quiet", url])
+                .arg(&into)
+                .output()
+                .map_err(|e| format!("cannot run git: {}", e))?;
+            if !out.status.success() {
+                return Err(format!(
+                    "could not clone `{}` from {}:\n{}",
+                    name,
+                    url,
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+        }
+
+        // What to check out: the locked commit if there is one, otherwise the tag.
+        let wanted = pinned.clone().unwrap_or_else(|| tag.clone());
+        let out = Command::new("git")
+            .args(["-C"])
+            .arg(&into)
+            .args(["checkout", "--quiet", &wanted])
+            .output()
+            .map_err(|e| format!("cannot run git: {}", e))?;
+        if !out.status.success() {
+            // A locked commit that is gone is a different failure from a tag that never existed,
+            // and the two need different advice.
+            return Err(if pinned.is_some() {
+                format!(
+                    "`{}` is locked to commit {}, and that commit is not in {}. The history was \
+                     rewritten or the repository moved. Delete `{}` and fetch again to record what \
+                     is there now — and know that you are changing what this project builds.",
+                    name, wanted, url, LOCK_NAME
+                )
+            } else {
+                format!(
+                    "`{}` has no tag `{}` at {}:\n{}",
+                    name,
+                    tag,
+                    url,
+                    String::from_utf8_lossy(&out.stderr).trim()
+                )
+            });
+        }
+
+        let head = Command::new("git")
+            .args(["-C"])
+            .arg(&into)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .map_err(|e| format!("cannot run git: {}", e))?;
+        let commit = String::from_utf8_lossy(&head.stdout).trim().to_string();
+        report.push_str(&format!(
+            "{}  {}  {}  {}\n",
+            if pinned.is_some() { "locked " } else { "fetched" },
+            name,
+            tag,
+            &commit[..commit.len().min(12)]
+        ));
+        locked.push(Locked {
+            name: name.clone(),
+            url: url.clone(),
+            tag: tag.clone(),
+            commit,
+        });
+    }
+
+    write_lock(&package.root, locked)?;
+    Ok(report)
+}

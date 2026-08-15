@@ -52,6 +52,41 @@ fn compile_main() {
 
     // `lsp` takes no file: the editor sends the buffers. Handled before the
     // usage check for that reason.
+    // C2. `burxt fetch` — the ONLY place this compiler touches the network, and only when asked.
+    // Handled here, beside `lsp`, because it takes no source file: it works on the package the
+    // current directory is in.
+    if arguments.len() == 2 && arguments[1] == "fetch" {
+        match manifest::Manifest::discover(Path::new(".")) {
+            Err(e) => {
+                eprintln!("burxt fetch: {}", e);
+                std::process::exit(1);
+            }
+            Ok(None) => {
+                eprintln!(
+                    "burxt fetch: no `{}` here or in any directory above. A package declares what \
+                     it depends on; without one there is nothing to fetch.",
+                    manifest::MANIFEST_NAME
+                );
+                std::process::exit(1);
+            }
+            Ok(Some(package)) => match manifest::fetch(&package) {
+                Err(e) => {
+                    eprintln!("burxt fetch: {}", e);
+                    std::process::exit(1);
+                }
+                Ok(report) => {
+                    if report.is_empty() {
+                        println!("nothing to fetch — every dependency is a local directory");
+                    } else {
+                        print!("{}", report);
+                        println!("wrote {}", manifest::LOCK_NAME);
+                    }
+                    return;
+                }
+            },
+        }
+    }
+
     if arguments.len() == 2 && arguments[1] == "lsp" {
         if let Err(e) = lsp::serve() {
             eprintln!("burxt lsp: {}", e);
@@ -67,6 +102,7 @@ fn compile_main() {
         eprintln!("                <file.bx> --json         ... as JSON, for editors and CI");
         eprintln!("                -                        ... reading the program from stdin");
         eprintln!("  burxt lsp                                language server over stdio");
+        eprintln!("  burxt fetch                              get the dependencies, write burxt.lock");
         eprintln!("  burxt build   <file.bx> [link args...]   compile to a native executable");
         eprintln!("                <file.bx> --target <triple> ... an object for another machine");
         eprintln!("  burxt run     <file.bx> [link args...]   compile then run");
@@ -426,6 +462,19 @@ fn load_into(
                     manifest::MANIFEST_NAME,
                     relative.display()
                 ))
+            }
+            // A git dependency that has not been fetched. "cannot read
+            // .burxt/packages/…/tax.bx" is true and sends the reader looking for a file they were
+            // never meant to create; this names the command instead. Deliberately NOT fetched
+            // automatically — a build that reaches the network does different things on different
+            // days, which is the opposite of every other guarantee here.
+            Some(via) if !via.exists() => {
+                let first = import.split('/').next().unwrap_or(import);
+                return Err(format!(
+                    "`use \"{}\"` needs the dependency `{}`, and it has not been fetched. \
+                     Run `burxt fetch`.",
+                    import, first
+                ));
             }
             Some(via) => via.to_string_lossy().into_owned(),
             None => relative.to_string_lossy().into_owned(),

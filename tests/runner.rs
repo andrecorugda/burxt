@@ -2248,6 +2248,117 @@ fn a_package_dependency_resolves_and_an_ambiguous_import_is_refused() {
     let _ = fs::remove_dir_all(&scratch);
 }
 
+/// The lockfile pins a commit, so a tag that moves upstream does not change what you build. C2.
+///
+/// This is the guarantee the whole file exists for, and it is asserted by MOVING A TAG rather than
+/// by reading the lock back: a lockfile that is written and never consulted looks identical to one
+/// that works, and "the file has the right commit in it" proves only that the writer ran.
+///
+/// So: publish v1.0.0 that answers 42, fetch and lock it, then rewrite the upstream so the same tag
+/// points at code answering 1041, and fetch again. A build that still says 42 read the lock. A build
+/// that says 1041 followed the tag, which is what every dependency system that lacks a lockfile
+/// does, and is how a project stops reproducing without anybody changing a line of it.
+///
+/// Uses a local repository over `file://` — no network, and the failure mode being tested has
+/// nothing to do with where the bytes come from.
+#[test]
+fn a_lockfile_pins_a_commit_even_when_the_tag_moves() {
+    if Command::new("git").arg("--version").output().is_err() {
+        return; // no git on this machine; the compiler is not what is being tested here
+    }
+    let scratch = scratch_dir("c2-lockfile");
+    let _ = fs::remove_dir_all(&scratch);
+    let upstream = scratch.join("upstream");
+    let app = scratch.join("app");
+    fs::create_dir_all(&upstream).unwrap();
+    fs::create_dir_all(&app).unwrap();
+
+    let git = |args: &[&str], dir: &Path| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("git");
+        assert!(
+            out.status.success(),
+            "git {:?} failed:\n{}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+
+    // v1.0.0 answers 42.
+    fs::write(
+        upstream.join("greet.bx"),
+        "public function greet(n: Int) -> Int { return n + 1; }\n",
+    )
+    .unwrap();
+    git(&["init", "-q", "."], &upstream);
+    git(&["add", "-A"], &upstream);
+    git(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "v1"], &upstream);
+    git(&["tag", "v1.0.0"], &upstream);
+
+    fs::write(
+        app.join("burxt.package"),
+        format!("name app\nversion 0.1.0\ndependency greeter file://{} v1.0.0\n", upstream.display()),
+    )
+    .unwrap();
+    fs::write(app.join("main.bx"), "use \"greeter/greet.bx\";\nprint(greet(41));\n").unwrap();
+
+    let burxt = |args: &[&str]| -> (bool, String) {
+        let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .args(args)
+            .current_dir(&app)
+            .output()
+            .expect("burxt");
+        (
+            out.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+
+    // Before fetching, the build names the command rather than a file the reader never made.
+    let (ok, said) = burxt(&["check", "main.bx"]);
+    assert!(!ok && said.contains("burxt fetch"), "an unfetched dependency did not say so:\n{}", said);
+
+    let (ok, said) = burxt(&["fetch"]);
+    assert!(ok && said.contains("fetched"), "fetch failed:\n{}", said);
+    let (ok, said) = burxt(&["run", "main.bx"]);
+    assert!(ok && said.contains("42"), "the fetched dependency did not build:\n{}", said);
+
+    // The upstream rewrites history under the SAME tag. This is the case a lockfile is for, and it
+    // is not hypothetical — a moved tag is how a supply chain changes underneath you.
+    fs::write(
+        upstream.join("greet.bx"),
+        "public function greet(n: Int) -> Int { return n + 1000; }\n",
+    )
+    .unwrap();
+    git(&["add", "-A"], &upstream);
+    git(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "v2"], &upstream);
+    git(&["tag", "-f", "v1.0.0"], &upstream);
+
+    let (ok, said) = burxt(&["fetch"]);
+    assert!(ok, "the second fetch failed:\n{}", said);
+    assert!(
+        said.contains("locked"),
+        "the second fetch did not report using the lock:\n{}",
+        said
+    );
+    let (ok, said) = burxt(&["run", "main.bx"]);
+    assert!(
+        ok && said.contains("42") && !said.contains("1041"),
+        "THE TAG MOVED AND THE BUILD FOLLOWED IT. The lockfile is not being read, which means this \
+         project stops reproducing the moment somebody else's tag changes:\n{}",
+        said
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
 /// A fixture directory holds programs, expectations, and the handful of files a program READS.
 /// Nothing a program WRITES.
 ///
@@ -7894,7 +8005,12 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
              refused` runs both and compares the answer and the refusals. The one difference is \
              the existence probe: stage-0 uses `Path::is_file`, stage-1 calls `access` — and NOT \
              `fopen`, which `lsp.bx` already declares, because `use` concatenates every source \
-             into one buffer and calling it would have worked by accident.",
+             into one buffer and calling it would have worked by accident. **The LOCKFILE and \
+             `burxt fetch` are stage-0 only, on purpose**: they move files and touch the network, \
+             and neither changes what any program MEANS. Stage-1 resolves a fetched package by the \
+             same derived cache path without needing to know a lock exists, so there is no \
+             divergence to have — which is the test the counterpart map is really asking, rather \
+             than whether two files exist.",
         ),
         (
             "review.rs",

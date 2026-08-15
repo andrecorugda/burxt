@@ -239,6 +239,13 @@
  },
  {
   "kind": "command",
+  "name": "burxt fetch",
+  "text": "",
+  "url": "/reference/cli.html",
+  "where": "get the dependencies, write burxt.lock"
+ },
+ {
+  "kind": "command",
   "name": "burxt build",
   "text": "<file.bx> [link args...]",
   "url": "/reference/cli.html",
