@@ -1618,6 +1618,13 @@
  },
  {
   "kind": "keyword",
+  "name": "public",
+  "text": "",
+  "url": "/reference/#keywords",
+  "where": "keyword"
+ },
+ {
+  "kind": "keyword",
   "name": "break",
   "text": "",
   "url": "/reference/#keywords",

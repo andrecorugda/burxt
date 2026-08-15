@@ -1803,6 +1803,64 @@ function (mutable self: Unit) find_function(src: String, start: Int, length: Int
     return -1;
 }
 
+// Which dependency owns the byte at `at`, or "" for the root package. C2.
+function (self: Unit) package_at(at: Int) -> String {
+    let mutable i: Int = 0;
+    while i < len(self.package_names) {
+        if at >= self.package_starts[i] && at <= self.package_ends[i] {
+            return self.package_names[i];
+        }
+        i += 1;
+    }
+    return "";
+}
+
+// If `name` is a dependency's private declaration and we are not inside that dependency, the
+// sentence to refuse with — otherwise "". C2, and the wording is stage-0's, word for word.
+//
+// **Asked before the lookup, never instead of it.** A package's private helper is real and
+// perfectly usable inside that package, so it cannot be removed from the tables. Stage-0's first
+// attempt did exactly that and broke the dependency's own code, which is the useful way to learn
+// that privacy is a RELATION between the use and the declaration rather than a property of one.
+function (self: Unit) package_private_refusal(src: String, name: String, at: Int) -> String {
+    let mutable i: Int = 0;
+    while i < len(self.private_names) {
+        if self.private_names[i] == name {
+            let owner: String = self.private_owners[i];
+            if self.package_at(at) == owner {
+                return "";
+            }
+            return "`" + name + "` is declared in the package `" + owner
+                   + "` but not `public`, so this package cannot reach it. A package exposes what "
+                   + "it means to support — if `" + name + "` is meant to be part of that, the fix "
+                   + "belongs in `" + owner + "`, by writing `public` in front of its declaration.";
+        }
+        i += 1;
+    }
+    return "";
+}
+
+// C2. A dependency's private CLASS or ENUM, refused where it is named. Mirrors stage-0's check at
+// the top of `validate_type`: every type a program writes down — parameter, `let`, field, return —
+// comes through `declared_type`, so one place answers for all of them.
+function (mutable self: Unit) refuse_private_type(src: String, node: Int) -> Int {
+    if node < 0 || node >= len(self.nodes) {
+        return 0;
+    }
+    let held: Node = self.nodes[node];
+    if held.kind != 46 {
+        return 0;
+    }
+    let named: Token = self.tokens[held.token];
+    let refusal: String = self.package_private_refusal(src,
+                              substring(src, named.start, named.length), named.start);
+    if len(refusal) > 0 {
+        let complained: Int = self.complain_at(src, held.token, refusal);
+        return 1;
+    }
+    return 0;
+}
+
 function (self: Unit) find_type(src: String, start: Int, length: Int) -> Int {
     let mutable i: Int = 0;
     while i < len(self.types) {
@@ -2536,6 +2594,31 @@ function (mutable self: Unit) collect_declarations(src: String) -> Int {
             }
         }
         i += 1;
+    }
+    // C2. Which declarations a DEPENDENCY kept to itself. Recorded in the same second pass as
+    // B40's cycle check, because both need the declaration table complete and neither needs
+    // anything else.
+    let mutable pc: Int = 0;
+    while pc < len(self.types) {
+        let holder: Node = self.nodes[self.types[pc].node];
+        let named: Token = self.tokens[holder.token];
+        let owner: String = self.package_at(named.start);
+        if len(owner) > 0 && flag_public(holder.value) == 0 {
+            let noted: Int = push(self.private_names, substring(src, named.start, named.length));
+            let owned: Int = push(self.private_owners, owner);
+        }
+        pc += 1;
+    }
+    let mutable pf: Int = 0;
+    while pf < len(self.functions) {
+        let declared: DeclaredFunction = self.functions[pf];
+        let owner: String = self.package_at(declared.start);
+        if len(owner) > 0 && flag_public(declared.flags) == 0 {
+            let noted: Int = push(self.private_names,
+                                  substring(src, declared.start, declared.length));
+            let owned: Int = push(self.private_owners, owner);
+        }
+        pf += 1;
     }
     // B40, and it has to be a SECOND pass: `self.types` is filled by the loop above, so asking
     // `find_type` during it answers -1 for every class and the check silently does nothing. The
@@ -3509,6 +3592,19 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
 
     if n.kind == 13 {                                // a call
         let t: Token = self.tokens[n.token];
+        // C2. At the TOP of the call branch, before any of the paths below can answer. Placing it
+        // beside `find_function` was wrong: several branches above return first — `result` inside
+        // an `ensures`, a one-argument builtin — so the check ran for some calls and not others,
+        // which is the shape of defect this whole section exists to remove.
+        //
+        // Asked before the lookup, never instead of it: a package's private helper is real and
+        // usable inside that package, so it cannot be removed from the tables.
+        let private_refusal: String = self.package_private_refusal(src,
+                                          substring(src, t.start, t.length), t.start);
+        if len(private_refusal) > 0 {
+            let complained: Int = self.complain_at(src, n.token, private_refusal);
+            return unknown_type();
+        }
         // The effect check, at the TOP of the arm and before the builtin dispatch.
         //
         // Placement is the whole of it, and stage-0 records getting this wrong: further down, past the
@@ -3849,6 +3945,10 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
         // typing, not checking. See spec/M10-ERGONOMICS.md §1.
         let mutable declared: Type = unknown_type();
         if n.a >= 0 {
+            // C2. A `let` naming a dependency's private class. `declared_type` cannot refuse — it
+            // takes an immutable `self` and has no way to report — so the question is asked here,
+            // where the annotation is read and the checker can still speak.
+            let private_named: Int = self.refuse_private_type(src, n.a);
             declared = self.declared_type(src, n.a);
             let actual: Type = self.type_of(src, n.b, declared);
             // An interface object BORROWS the storage of the value it refers to, so there has to be
@@ -6017,6 +6117,11 @@ function (mutable self: Unit) bind_interface_arguments(src: String, item: Int,
 // describes nothing. A growable array inside a class is fine — stage-1's own Unit is
 // made of them — and what it costs is that the class must be built in a region.
 function (mutable self: Unit) check_type_shape(src: String, node: Int, at: Int) -> Int {
+    // C2. A dependency's private class or enum, refused where it is NAMED. Only four callers, which
+    // is fewer than stage-0's single `validate_type` funnel covers — recorded as the one place the
+    // two compilers differ in reach, and the C2 invariant runs both over the same program so a gap
+    // between them would show as a divergence rather than as silence.
+    let private_named: Int = self.refuse_private_type(src, node);
     if node < 0 {
         return 0;
     }

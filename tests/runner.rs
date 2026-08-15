@@ -2143,7 +2143,7 @@ fn a_package_dependency_resolves_and_an_ambiguous_import_is_refused() {
     .unwrap();
     fs::write(
         scratch.join("vendor/money/tax.bx"),
-        "function tax_of(amount: Decimal<2>, rate_cents: Int) -> Decimal<2> {\n    return amount + $0.01 * rate_cents;\n}\n",
+        "// A helper the package keeps to itself, and the one it exposes.\nfunction rounded(n: Int) -> Int {\n    return n;\n}\n\npublic function tax_of(amount: Decimal<2>, rate_cents: Int) -> Decimal<2> {\n    return amount + $0.01 * rounded(rate_cents);\n}\n",
     )
     .unwrap();
     fs::write(
@@ -2194,6 +2194,32 @@ fn a_package_dependency_resolves_and_an_ambiguous_import_is_refused() {
         out.status.success(),
         "a program with no manifest stopped compiling:\n{}",
         String::from_utf8_lossy(&out.stderr)
+    );
+
+    // 3b. `public` at the package boundary. The package reaches its OWN private helper — asserted
+    // by 1 above, which calls `tax_of`, which calls `rounded` — and we cannot.
+    //
+    // That pair is the whole design. An earlier attempt simply removed non-public declarations from
+    // the program, which hid `rounded` from `tax_of` too and broke the dependency's own code. It is
+    // the useful way to learn that privacy is a RELATION between the use and the declaration rather
+    // than a property of the declaration.
+    fs::write(
+        scratch.join("src/reach.bx"),
+        "use \"money/tax.bx\";\nprint(rounded(3));\n",
+    )
+    .unwrap();
+    let (ok, said) = run("src/reach.bx");
+    assert!(!ok, "a dependency's private declaration was reachable:\n{}", said);
+    assert!(
+        said.contains("not `public`") && said.contains("`money`"),
+        "reaching a private declaration was refused for the wrong reason:\n{}",
+        said
+    );
+    // and the caret is on OUR file, not on the dependency's
+    assert!(
+        said.contains("src/reach.bx"),
+        "the refusal pointed at the dependency rather than at the line that reached into it:\n{}",
+        said
     );
 
     // 4. the ambiguity, refused rather than resolved

@@ -77,6 +77,9 @@ function (mutable self: Unit) install_keywords() -> Int {
     n = self.add_word("as", 122);
     n = self.add_word("tail", 123);
     n = self.add_word("pure", 124);
+    // C2. `public`, spelled out — every other name in this language is. Code 125 sits beside
+    // `pure` because both are declaration markers rather than parts of a type or a statement.
+    n = self.add_word("public", 125);
     // `allocates`, `requires`, `ensures` and `decreases` are deliberately NOT here:
     // stage-0 made them contextual in v0.0.55, so they are ordinary identifiers and
     // the parser recognises them by position. A lexer that disagreed with stage-0

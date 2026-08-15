@@ -538,6 +538,19 @@ pub struct TypeChecker {
     /// bookkeeping for diagnostics, not part of the checking itself, and threading
     /// `&mut` through every checker method to carry it would say otherwise.
     current_span: Cell<Span>,
+    /// C2. A declaration a DEPENDENCY did not make `public`: name -> the package it is in.
+    ///
+    /// Consulted only when a name fails to resolve or is about to be used, so it costs nothing in
+    /// the ordinary case and turns "unknown function: `helper`" — true and useless when `helper` is
+    /// sitting in the dependency the reader is looking at — into a sentence that says what to do.
+    package_private: std::collections::BTreeMap<String, String>,
+    /// Which byte ranges belong to which dependency. Only FOREIGN ranges are listed: an offset
+    /// matching none of them is the root package, which is the common case.
+    ///
+    /// Both tables are needed because privacy is a RELATION and not a property. A helper a package
+    /// keeps to itself is perfectly visible to the rest of that package, so the question is never
+    /// "is this private" but "is this private FROM HERE".
+    package_ranges: Vec<(usize, usize, String)>,
     /// Set once an error has claimed a position, so the INNERMOST failing
     /// expression keeps it as the error propagates outward.
     error_located: Cell<bool>,
@@ -881,6 +894,8 @@ impl TypeChecker {
             impls: HashSet::new(),
             dyn_interfaces: HashSet::new(),
             current_span: Cell::new(Span::default()),
+            package_private: std::collections::BTreeMap::new(),
+            package_ranges: Vec::new(),
             error_located: Cell::new(false),
             expr_types: RefCell::new(Vec::new()),
             errors: Vec::new(),
@@ -916,6 +931,40 @@ impl TypeChecker {
     /// — so every one of the ~160 error sites inside stays a plain sentence, and
     /// a nested statement naturally yields the most precise position because it
     /// was the last thing entered.
+    /// Tell the checker which declarations belong to which package. C2.
+    pub fn with_packages(
+        &mut self,
+        private: std::collections::BTreeMap<String, String>,
+        ranges: Vec<(usize, usize, String)>,
+    ) {
+        self.package_private = private;
+        self.package_ranges = ranges;
+    }
+
+    /// Which package the code being checked right now is in — `None` for the root package.
+    fn package_here(&self) -> Option<&str> {
+        let at = self.current_span.get().start as usize;
+        self.package_ranges
+            .iter()
+            .find(|(from, to, _)| at >= *from && at <= *to)
+            .map(|(_, _, name)| name.as_str())
+    }
+
+    /// If `name` is a dependency's private declaration and we are not inside that dependency, the
+    /// sentence to refuse with. C2.
+    fn refuse_if_package_private(&self, name: &str) -> Option<String> {
+        let owner = self.package_private.get(name)?;
+        if self.package_here() == Some(owner.as_str()) {
+            return None;
+        }
+        Some(format!(
+            "`{}` is declared in the package `{}` but not `public`, so this package cannot reach \
+             it. A package exposes what it means to support — if `{}` is meant to be part of that, \
+             the fix belongs in `{}`, by writing `public` in front of its declaration.",
+            name, owner, name, owner
+        ))
+    }
+
     pub fn check(&mut self, prog: &Program) -> Result<TypedProgram, Vec<Diagnostic>> {
         // M14: work out which functions allocate before checking anything, so `allocates`
         // need not be written. See `probing` on the struct for why this needs a fixpoint
@@ -4538,6 +4587,22 @@ impl TypeChecker {
     /// C boundary. `dyn Trait` must name a declared trait — and using one
     /// classes that the interface needs vtables.
     fn validate_type(&mut self, ty: &Type) -> Result<(), String> {
+        // C2. Before anything else, and before the lookups below, because a dependency's private
+        // class RESOLVES perfectly well — it is in the table, it is real, and it is simply not
+        // ours to name. Every type a program writes down comes through here: parameters, `let`
+        // bindings, fields and returns. One place rather than four, which is what B47 and B7's
+        // method hole both cost a version for getting wrong.
+        let named = match ty {
+            Type::Named(name) => Some(name),
+            Type::Dyn(name) => Some(name),
+            Type::Generic { name, .. } => Some(name),
+            _ => None,
+        };
+        if let Some(name) = named {
+            if let Some(why) = self.refuse_if_package_private(name) {
+                return Err(why);
+            }
+        }
         if let Type::Dyn(name) = ty {
             if !self.interfaces.contains_key(name) {
                 return Err(format!(
@@ -4552,11 +4617,11 @@ impl TypeChecker {
             Type::Named(name)
                 if !self.is_record(name) && !self.is_enum(name) =>
             {
-                Err(format!(
+                Err(self.refuse_if_package_private(name).unwrap_or_else(|| format!(
                     "unknown type `{}` — declare it with `class {} {{ ... }}` or \
                      `enum {} {{ ... }}`",
                     name, name, name
-                ))
+                )))
             }
             Type::CInt => Err(
                 "CInt only exists at the C boundary (external function signatures) — \
@@ -7803,6 +7868,14 @@ impl TypeChecker {
                             other
                         )),
                     };
+                }
+                // C2. Asked BEFORE the lookup, because the declaration is still in the table —
+                // a package's private helper is real and perfectly usable inside that package, so
+                // it cannot be removed from the program. An earlier attempt did exactly that and
+                // broke the dependency's own code, which is the useful way to learn that privacy
+                // is a relation between the use and the declaration rather than a property of one.
+                if let Some(why) = self.refuse_if_package_private(name) {
+                    return Err(why);
                 }
                 let (mut param_tys, mut ret) = self
                     .fns

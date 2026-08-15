@@ -37,6 +37,13 @@ pub struct Parser {
     /// file reads exactly as it did before spans existed.
     spans: Vec<Span>,
     pos: usize,
+    /// C2. Whether the item now being parsed was written `public`.
+    ///
+    /// A field rather than a parameter threaded through `parse_struct`, `parse_enum`,
+    /// `parse_interface` and `parse_fn`: those four have different signatures and two of them
+    /// return tuples, so a parameter would be four edits and a fifth item kind added later would
+    /// silently default to private. Set once at the one place items are dispatched.
+    pending_public: bool,
     /// The whole source, for quoting contract clauses back verbatim.
     src: String,
     /// Struct literals are not allowed directly in an if/while condition —
@@ -81,6 +88,7 @@ impl Parser {
     pub fn with_source(tokens: Vec<(Token, Span)>, src: &str) -> Self {
         let (tokens, spans) = tokens.into_iter().unzip();
         Parser {
+            pending_public: false,
             tokens,
             spans,
             pos: 0,
@@ -156,6 +164,29 @@ impl Parser {
         let mut consts = Vec::new();
         let mut stmts = Vec::new();
         while !self.at(&Token::Eof) {
+            // C2. `public` before an item makes it reachable from a package that depends on this
+            // one. Consumed HERE, at the one place items are dispatched, rather than inside each
+            // `parse_*` — four copies of "is the next token `public`" is four places for the fifth
+            // item kind to be forgotten, which is the exact shape of B47 and B7's method hole.
+            let public = if self.at(&Token::Public) {
+                self.bump();
+                true
+            } else {
+                false
+            };
+            if public
+                && !(self.at(&Token::Class)
+                    || self.at(&Token::Enum)
+                    || self.at(&Token::Interface)
+                    || self.at(&Token::Fn)
+                    || self.at(&Token::Pure))
+            {
+                return Err(format!(
+                    "`public` describes a declaration a dependent package may reach — a                      `function`, `class`, `enum` or `interface`. It cannot go before {}.",
+                    self.peek().describe()
+                ));
+            }
+            self.pending_public = public;
             if self.at(&Token::Const) {
                 consts.push(self.parse_const()?);
             } else if self.at(&Token::Class) {
@@ -362,7 +393,7 @@ impl Parser {
         self.type_parameters.clear();
         let name_for_impls = name.clone();
         Ok((
-            StructDef { name, type_parameters, fields, private_fields, span: Span { start, end: self.prev_end().max(start + 1) } },
+            StructDef { name, type_parameters, fields, private_fields, span: Span { start, end: self.prev_end().max(start + 1) }, public: self.pending_public },
             methods,
             associated,
             implements
@@ -439,7 +470,7 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
         self.type_parameters.clear();
-        Ok(EnumDef { name, type_parameters, variants, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok(EnumDef { name, type_parameters, variants, span: Span { start, end: self.prev_end().max(start + 1) }, public: self.pending_public })
     }
 
     // ---- interfaces and impls ----
@@ -493,6 +524,7 @@ impl Parser {
         self.expect(&Token::RBrace)?;
         self.type_parameters.clear();
         Ok(InterfaceDef {
+            public: self.pending_public,
             name,
             type_parameters,
             methods,
@@ -872,7 +904,7 @@ impl Parser {
         let body = self.parse_block()?;
         // The parameters are only in scope for this signature and body.
         self.type_parameters.clear();
-        Ok(FnDef { name, type_parameters, parameters, ret, allocates, allocates_nothing, touches, is_pure, requires, ensures, decreases, body, span: Span { start, end: self.prev_end().max(start + 1) } })
+        Ok(FnDef { public: self.pending_public, name, type_parameters, parameters, ret, allocates, allocates_nothing, touches, is_pure, requires, ensures, decreases, body, span: Span { start, end: self.prev_end().max(start + 1) } })
     }
 
     /// `fn (self: Type) name(parameters) -> ret { body }`, or `fn (mut self: ...)`

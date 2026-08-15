@@ -575,6 +575,18 @@ pub struct TypeParam {
 /// typechecker proves it returns on every path.
 #[derive(Debug, Clone)]
 pub struct FnDef {
+    /// Declared `public`, so a package that DEPENDS on this one may reach it. C2.
+    ///
+    /// The boundary is the package and not the file, because `use` concatenates every source into
+    /// one buffer (M6 Decision 5) — there is no file boundary at runtime for anything to be private
+    /// across. Inside a package everything stays visible, which is why adding this changed no
+    /// existing program.
+    ///
+    /// Note the asymmetry with `private_fields`, which is deliberate rather than an oversight: a
+    /// field opts OUT of being seen by the class's users, and a declaration opts IN to being seen
+    /// by another package. Two boundaries, two defaults, and the default is the safe one at each —
+    /// a field is part of a class you are already holding, and a package's declaration is not.
+    pub public: bool,
     pub name: String,
     /// `fn largest<T: Ordered, U>(...)` — what this function is generic over, in order.
     /// Empty for the overwhelming majority of functions.
@@ -685,6 +697,18 @@ pub struct InterfaceSig {
 /// type can promise to satisfy. That is the whole concept.
 #[derive(Debug, Clone)]
 pub struct InterfaceDef {
+    /// Declared `public`, so a package that DEPENDS on this one may reach it. C2.
+    ///
+    /// The boundary is the package and not the file, because `use` concatenates every source into
+    /// one buffer (M6 Decision 5) — there is no file boundary at runtime for anything to be private
+    /// across. Inside a package everything stays visible, which is why adding this changed no
+    /// existing program.
+    ///
+    /// Note the asymmetry with `private_fields`, which is deliberate rather than an oversight: a
+    /// field opts OUT of being seen by the class's users, and a declaration opts IN to being seen
+    /// by another package. Two boundaries, two defaults, and the default is the safe one at each —
+    /// a field is part of a class you are already holding, and a package's declaration is not.
+    pub public: bool,
     pub name: String,
     /// `interface Mapper<T> { function apply(self, x: T) -> T }` — what this interface is
     /// generic over, in order. Empty for the overwhelming majority. Roadmap A9.
@@ -814,6 +838,18 @@ pub struct Variant {
 /// `enum Name { Unit, WithPayload(Int), ... }` — a sum type. Nominal, hoisted.
 #[derive(Debug, Clone)]
 pub struct EnumDef {
+    /// Declared `public`, so a package that DEPENDS on this one may reach it. C2.
+    ///
+    /// The boundary is the package and not the file, because `use` concatenates every source into
+    /// one buffer (M6 Decision 5) — there is no file boundary at runtime for anything to be private
+    /// across. Inside a package everything stays visible, which is why adding this changed no
+    /// existing program.
+    ///
+    /// Note the asymmetry with `private_fields`, which is deliberate rather than an oversight: a
+    /// field opts OUT of being seen by the class's users, and a declaration opts IN to being seen
+    /// by another package. Two boundaries, two defaults, and the default is the safe one at each —
+    /// a field is part of a class you are already holding, and a package's declaration is not.
+    pub public: bool,
     pub name: String,
     /// `enum Option<T> { ... }` — what this enum is generic over. Empty for the
     /// overwhelming majority. See spec/M7-GENERICS.md.
@@ -855,6 +891,18 @@ pub enum MatchLiteral {
 /// substrate for Burxt's OOP layers (methods, then interfaces).
 #[derive(Debug, Clone)]
 pub struct StructDef {
+    /// Declared `public`, so a package that DEPENDS on this one may reach it. C2.
+    ///
+    /// The boundary is the package and not the file, because `use` concatenates every source into
+    /// one buffer (M6 Decision 5) — there is no file boundary at runtime for anything to be private
+    /// across. Inside a package everything stays visible, which is why adding this changed no
+    /// existing program.
+    ///
+    /// Note the asymmetry with `private_fields`, which is deliberate rather than an oversight: a
+    /// field opts OUT of being seen by the class's users, and a declaration opts IN to being seen
+    /// by another package. Two boundaries, two defaults, and the default is the safe one at each —
+    /// a field is part of a class you are already holding, and a package's declaration is not.
+    pub public: bool,
     pub name: String,
     /// `record List<T> { items: [T] }` — what this record is generic over. Empty for the
     /// overwhelming majority. See spec/M7-GENERICS.md.

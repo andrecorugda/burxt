@@ -388,6 +388,11 @@
           "match": "\\bpure\\b"
         },
         {
+          "comment": "`public function`, `public class` — reachable from a package that DEPENDS on this one. C2. The boundary is the package and not the file, because `use` concatenates sources into one buffer.",
+          "name": "storage.modifier.public.burxt",
+          "match": "\\bpublic\\b"
+        },
+        {
           "comment": "`requires` / `ensures` / `decreases` — contract clauses on a signature, checked at runtime and quoted back when they fail.",
           "name": "keyword.other.contract.burxt",
           "match": "\\b(requires|ensures|decreases)\\b"

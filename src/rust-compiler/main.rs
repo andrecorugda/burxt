@@ -521,6 +521,118 @@ fn run(
         buffer
     };
 
+/// Hide what a dependency did not declare `public`. C2.
+///
+/// The boundary is the PACKAGE and not the file, which M6 Decision 5 forces rather than suggests:
+/// `use` concatenates every source into one buffer, so no file boundary survives to be private
+/// across. What does survive is which directory a file was read from, and a dependency's files all
+/// sit under its root.
+///
+/// **Removed from the program rather than marked and refused later.** A private declaration that is
+/// still in the tree is one every later pass has to remember to ignore — the checker, `review`, the
+/// language server, `mcp-schema` — and the first one that forgets makes the privacy a suggestion.
+/// Dropping it means a use of it fails as an unknown name, through the machinery that already
+/// exists, everywhere at once.
+///
+/// The names are kept so the message can be the right one. "unknown function: `helper`" is true and
+/// unhelpful when `helper` is sitting in the dependency the reader is looking at.
+fn hide_private_dependencies(
+    program: &ast::Program,
+    files: &[SourceFile],
+    package: Option<&manifest::Manifest>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut hidden = std::collections::BTreeMap::new();
+    let Some(package) = package else {
+        return hidden;
+    };
+    // Which package each file belongs to: the root package, or the dependency whose directory it
+    // sits under. Longest match wins, so a dependency vendored inside another one is attributed to
+    // the inner package rather than the outer.
+    let owner = |offset: usize| -> Option<String> {
+        let (file, _) = locate_file(files, offset)?;
+        let path = std::fs::canonicalize(&file.path).ok()?;
+        let mut best: Option<(usize, String)> = None;
+        for (name, dependency) in &package.dependencies {
+            let root = match &dependency.source {
+                manifest::Source::Path(dir) => package.root.join(dir),
+                manifest::Source::Git { url, tag } => package
+                    .root
+                    .join(".burxt")
+                    .join("packages")
+                    .join(manifest::cache_key(url, tag)),
+            };
+            let Ok(root) = std::fs::canonicalize(&root) else { continue };
+            if path.starts_with(&root) {
+                let depth = root.components().count();
+                if best.as_ref().map(|(d, _)| depth > *d).unwrap_or(true) {
+                    best = Some((depth, name.clone()));
+                }
+            }
+        }
+        best.map(|(_, name)| name)
+    };
+
+    let mut note = |name: &str, span: diag::Span, public: bool| {
+        if let Some(from) = owner(span.start as usize) {
+            if !public {
+                hidden.insert(name.to_string(), from);
+            }
+        }
+    };
+    for f in &program.fns {
+        note(&f.name, f.span, f.public);
+    }
+    for d in &program.structs {
+        note(&d.name, d.span, d.public);
+    }
+    for d in &program.enums {
+        note(&d.name, d.span, d.public);
+    }
+    for d in &program.interfaces {
+        note(&d.name, d.span, d.public);
+    }
+    hidden
+}
+
+/// Which package each byte range of the buffer belongs to. C2.
+///
+/// Only foreign ranges are listed: an offset that matches nothing is in the root package, which is
+/// the common case and the one worth making free.
+fn package_ranges(
+    files: &[SourceFile],
+    package: Option<&manifest::Manifest>,
+) -> Vec<(usize, usize, String)> {
+    let mut ranges = Vec::new();
+    let Some(package) = package else {
+        return ranges;
+    };
+    for file in files {
+        let Ok(path) = std::fs::canonicalize(&file.path) else { continue };
+        let mut best: Option<(usize, String)> = None;
+        for (name, dependency) in &package.dependencies {
+            let root = match &dependency.source {
+                manifest::Source::Path(dir) => package.root.join(dir),
+                manifest::Source::Git { url, tag } => package
+                    .root
+                    .join(".burxt")
+                    .join("packages")
+                    .join(manifest::cache_key(url, tag)),
+            };
+            let Ok(root) = std::fs::canonicalize(&root) else { continue };
+            if path.starts_with(&root) {
+                let depth = root.components().count();
+                if best.as_ref().map(|(d, _)| depth > *d).unwrap_or(true) {
+                    best = Some((depth, name.clone()));
+                }
+            }
+        }
+        if let Some((_, name)) = best {
+            ranges.push((file.start, file.start + file.len, name));
+        }
+    }
+    ranges
+}
+
     // ---- front end (backend-independent) ----
     // Every front-end failure carries a span, so it can be rendered with the
     // offending line and a caret under it.
@@ -530,6 +642,13 @@ fn run(
     let all = |ds: Vec<diag::Diagnostic>| Failure::At(ds, src.clone(), files.clone());
     let tokens = lexer::Lexer::new(&src).tokenize().map_err(one)?;
     let program = parser::Parser::with_source(tokens, &src).parse().map_err(one)?;
+    // C2. What a dependency did not declare `public`, and which bytes belong to which package.
+    // Both are needed because privacy is a RELATION between the use and the declaration: a helper
+    // a package keeps to itself is still perfectly visible to the rest of that package, and an
+    // earlier attempt that simply removed such declarations broke the dependency's own code.
+    let package = manifest::Manifest::discover(Path::new(path)).map_err(Failure::Plain)?;
+    let hidden = hide_private_dependencies(&program, &files, package.as_ref());
+    let owners = package_ranges(&files, package.as_ref());
 
     // A module holds DECLARATIONS, not statements: a file that runs when it is used is the
     // import side-effect problem, and every language that allows it grows a convention
@@ -561,6 +680,7 @@ fn run(
     // Kept alive past `check`, because `explain memory` asks it what it inferred — the same
     // question every allocation rule asks, rather than a second pass with its own answer.
     let mut checker = typeck::TypeChecker::new();
+    checker.with_packages(hidden, owners);
     let typed = checker.check(&program).map_err(all)?;
 
     // `check` is the front end and nothing more: no LLVM context, no object

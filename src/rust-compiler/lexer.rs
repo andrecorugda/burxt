@@ -45,6 +45,8 @@ pub enum Token {
     /// `pure fn` — the result depends only on the arguments, and the compiler
     /// checks it: no I/O, no FFI, no impure calls.
     Pure,
+    /// C2. `public function`, `public class` — reachable from a package that depends on this one.
+    Public,
     /// `break` — leave the enclosing loop.
     Break,
     /// `continue` — go straight to the enclosing loop's next test.
@@ -164,6 +166,7 @@ impl Token {
             Token::As => "`as`".to_string(),
             Token::Tail => "`tail`".to_string(),
             Token::Pure => "`pure`".to_string(),
+            Token::Public => "`public`".to_string(),
             Token::Break => "`break`".to_string(),
             Token::Continue => "`continue`".to_string(),
             Token::If => "`if`".to_string(),
@@ -832,6 +835,8 @@ impl<'a> Lexer<'a> {
             // adds is a declared word. `scaled` in `as scaled` was contextual from
             // the start; these follow it.
             "pure" => Token::Pure,
+            // C2. `public`, spelled out — every other name in this language is.
+            "public" => Token::Public,
             "break" => Token::Break,
             "continue" => Token::Continue,
             "if" => Token::If,

@@ -335,6 +335,23 @@ class Method {
 }
 
 class Unit {
+    // C2. Whether the item now being parsed was written `public` — 32 when it was, 0 when not,
+    // ready to be OR-ed into the item's flags word. A field rather than a parameter threaded
+    // through five `parse_*` functions with five different signatures.
+    pending_public: Int,
+    // C2. Which byte ranges of the buffer belong to which DEPENDENCY. Only foreign ranges are
+    // listed: an offset matching none of them is the root package, which is the common case.
+    //
+    // Three parallel arrays rather than one of a class, for the reason `manifest.bx` gives — and
+    // held on the Unit rather than returned from the loader because a `Loader` is region storage
+    // and cannot be handed back, which `modules.bx` already records as the cost of this design.
+    package_names: [String],
+    package_starts: [Int],
+    package_ends: [Int],
+    // Name -> the dependency that declared it without `public`. Filled while declarations are
+    // collected, which is the one pass that already sees every declaration and its token.
+    private_names: [String],
+    private_owners: [String],
     tokens: [Token],
     keywords: [Keyword],
     nodes: [Node],

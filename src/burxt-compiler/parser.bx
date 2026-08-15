@@ -2172,6 +2172,11 @@ function flag_external(flags: Int) -> Int {
 function flag_private(flags: Int) -> Int {
     return remainder(divide_floor(flags, 16), 2);
 }
+// `public`, C2 — bit 32, the one free bit between `private` at 16 and the effect mask at 64.
+// A declaration a package that DEPENDS on this one may reach.
+function flag_public(flags: Int) -> Int {
+    return remainder(divide_floor(flags, 32), 2);
+}
 // `mutable self` — bit 2, the receiver's own writability.
 //
 // **This helper is late, and its absence was a real bug rather than an untidiness.** Three places
@@ -3313,10 +3318,14 @@ function (mutable self: Unit) parse_function(src: String, is_pure: Int, owner: I
     // exactly the error. So the claim needs its own bit rather than being read off the absence of
     // the other, and this line is the whole of what B23 was missing.
     if claims_nothing == 1 { flags += 4096; }
+    // C2. Bit 32, set by `parse_item` before it dispatched here. A METHOD does not take it: a
+    // method is reached through its receiver, so the class's own visibility already answers the
+    // question and a second answer could disagree with the first.
+    flags += self.pending_public;
     if receiver_tok >= 0 {
         // A method: `c` is the clause node, which holds the receiver and the return
         // type both, so a method item has the same shape a function's does.
-        let m: Int = self.add(81, params, body, clauses, flags, name_tok);
+        let m: Int = self.add(81, params, body, clauses, flags - self.pending_public, name_tok);
         return m;
     }
     let f: Int = self.add(80, params, body, clauses, flags, name_tok);
@@ -3441,7 +3450,7 @@ function (mutable self: Unit) parse_record(src: String) -> Int {
     }
     if !self.eat(src, 32, "`\}` closing the class") { return -1; }
     let start: Int = self.commit(base);
-    return self.add(82, start, count, 0, 0, name_tok);
+    return self.add(82, start, count, 0, self.pending_public, name_tok);
 }
 
 // `enum Name { Variant, Variant(Type, Type), ... }`
@@ -3504,7 +3513,7 @@ function (mutable self: Unit) parse_enum(src: String) -> Int {
     }
     if !self.eat(src, 32, "`\}` closing the variants") { return -1; }
     let start: Int = self.commit(base);
-    return self.add(83, start, count, 0, 0, name_tok);
+    return self.add(83, start, count, 0, self.pending_public, name_tok);
 }
 
 // `trait Name { function sig(self) -> Type }` — signatures only, no bodies.
@@ -3573,7 +3582,7 @@ function (mutable self: Unit) parse_trait(src: String) -> Int {
     }
     if !self.eat(src, 32, "`\}` closing the interface") { return -1; }
     let start: Int = self.commit(base);
-    return self.add(84, start, count, 0, 0, name_tok);
+    return self.add(84, start, count, 0, self.pending_public, name_tok);
 }
 
 // The optional `<Int>` after an interface's name in an `implement` header. Roadmap A9.
@@ -3688,6 +3697,22 @@ function (mutable self: Unit) parse_item(src: String) -> Int {
     // inside the declaration parsers, of which there are dozens and each one a chance to
     // forget — the same argument `commit(base)` makes for child lists.
     let dropped: Int = truncate(self.params_in_scope, 0);
+    // C2. `public` before an item makes it reachable from a package that depends on this one.
+    // Consumed HERE, at the one place items are dispatched, rather than inside each `parse_*`:
+    // five copies of "is the next token `public`" is five places for the sixth item kind to be
+    // forgotten, which is exactly the shape of B47 and of B7's method hole.
+    self.pending_public = 0;
+    if self.kind_at(0) == 125 {
+        let marked: Int = self.advance();
+        self.pending_public = 32;
+        let after: Int = self.kind_at(0);
+        if after != 102 && after != 109 && after != 110 && after != 112 && after != 124 {
+            let complained: Int = self.complain(src,
+                "`public` describes a declaration a dependent package may reach — a `function`, "
+                + "`class`, `enum` or `interface`");
+            return 0 - 1;
+        }
+    }
     let k: Int = self.kind_at(0);
     if k == 124 {                                    // pure function
         let n: Int = self.advance();

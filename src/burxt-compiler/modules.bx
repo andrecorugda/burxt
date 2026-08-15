@@ -285,3 +285,51 @@ function offset_within_file(root: String, offset: Int) -> Int touches files {
     }
     return offset;
 }
+
+
+// Fill a Unit's package tables by loading the program a second time. C2.
+//
+// A second load rather than threading the Loader out, which is the cost `file_at_offset` above
+// already accepts and for the same reason: a `Loader` is region storage, so nothing can hand one
+// back. A handful of files read twice is cheaper than the machinery to avoid it, and this runs
+// once per compile.
+//
+// Only FOREIGN files are recorded. An offset matching nothing is the root package, which is both
+// the common case and the one worth making free.
+function (mutable self: Unit) note_package_ranges(root: String) -> Int touches files {
+    let package: Package = manifest_discover(root);
+    if !package.found {
+        return 0;
+    }
+    let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [],
+                                          package: package };
+    let done: Int = loader.load(root);
+    let mutable i: Int = 0;
+    let mutable noted: Int = 0;
+    while i < len(loader.paths) {
+        let path: String = loader.paths[i];
+        // Longest match wins, so a dependency vendored inside another is attributed to the inner
+        // one rather than the outer.
+        let mutable best: Int = 0 - 1;
+        let mutable best_length: Int = 0 - 1;
+        let mutable d: Int = 0;
+        while d < len(package.names) {
+            let dependency_root: String = package.roots[d];
+            if len(path) >= len(dependency_root)
+                && substring(path, 0, len(dependency_root)) == dependency_root
+                && len(dependency_root) > best_length {
+                best = d;
+                best_length = len(dependency_root);
+            }
+            d += 1;
+        }
+        if best >= 0 {
+            let named: Int = push(self.package_names, package.names[best]);
+            let began: Int = push(self.package_starts, loader.starts[i]);
+            let ended: Int = push(self.package_ends, loader.starts[i] + loader.lengths[i]);
+            noted += 1;
+        }
+        i += 1;
+    }
+    return noted;
+}
