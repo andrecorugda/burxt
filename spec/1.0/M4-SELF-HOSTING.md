@@ -385,7 +385,7 @@ Stated plainly, because the honest scope is the interesting part:
   pointer wall — and their binaries run and produce the same output as stage-0's.
 
   The claim was true when written and nothing updated it as each feature landed. Worse, it was
-  **believed and re-published**: `spec/ROADMAP-1.0.md` §A0 repeated it a version before this
+  **believed and re-published**: `spec/1.0/ROADMAP-1.0.md` §A0 repeated it a version before this
   correction, as the explanation for stage-0 being ~8,000 lines larger. That is this project's own
   warning — *"a status line saying DONE is not evidence"* — running the other way: **a status line
   saying NOT DONE is not evidence either.** The suite is. `the_burxt_backend_compiles_a_growing_share_of_the_suite`

@@ -65,7 +65,7 @@ function option_is_none<T>(o: Option<T>) -> Bool {
 // default is right, and `match` covers the case where it is not.
 //
 // There is no `map`. It needs a function as a value, and a closure needs an
-// owner for its captured state — see spec/M10-ERGONOMICS.md §3.
+// owner for its captured state — see spec/1.0/M10-ERGONOMICS.md §3.
 //
 // `option_ok_or(o, why)` — an absence turned into a stated reason — is in
 // **lib/result.bx**, not here, because it hands back a `Result` and a caller who

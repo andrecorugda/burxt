@@ -20,7 +20,7 @@ Nothing here needs a compiler feature. It is the `enum` + `class` mutual recursi
 
 **A JSON number is its DIGITS, not a float.**
 
-JSON's own grammar says a number is arbitrary-precision decimal text. Every language then parses it into a `double` on the way in, which is where an exact `19.99` stops being exact — and it is the same abandonment `as scaled` exists to prevent at the C boundary. See spec/N1-BOUNDARY-EXACTNESS.md: real financial defects live at boundaries, not in arithmetic.
+JSON's own grammar says a number is arbitrary-precision decimal text. Every language then parses it into a `double` on the way in, which is where an exact `19.99` stops being exact — and it is the same abandonment `as scaled` exists to prevent at the C boundary. See spec/1.0/N1-BOUNDARY-EXACTNESS.md: real financial defects live at boundaries, not in arithmetic.
 
 So `Json.Number` holds the digits exactly as they were written, and turning them into a typed value is a separate, checked step that can fail — `json_as_int`, `json_as_money`. Nothing is rounded on the way in, because nothing on the way in knows what rounding you wanted.
 

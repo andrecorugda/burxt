@@ -4,7 +4,7 @@
 //     use "lib/set.bx";
 //
 // A `Set<T>` answers one question — *is this in here?* — in constant time, and keeps what it was
-// given in the order it was given. `spec/ROADMAP-1.0.md` §D1g's argument for it is that every
+// given in the order it was given. `spec/1.0/ROADMAP-1.0.md` §D1g's argument for it is that every
 // comparison language ships one and Burxt had none, so every program that needed to deduplicate a
 // list or remember which ids it had already seen wrote a linear scan over an array.
 //
@@ -46,7 +46,7 @@
 //
 // ---- the order `items()` answers in ------------------------------------------------------
 //
-// **Insertion order, and a re-added element counts as newly inserted.** `spec/ROADMAP-1.0.md`'s
+// **Insertion order, and a re-added element counts as newly inserted.** `spec/1.0/ROADMAP-1.0.md`'s
 // decisions list says *"no undefined `Map` iteration order, ever"*, so a Set inherits `Map`'s
 // promise rather than inventing one: `Map` iterates in insertion order because Go randomises
 // iteration and Rust randomises its hash seed, and both are admissions that hash order leaked into

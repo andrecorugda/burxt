@@ -58,6 +58,7 @@ You can confirm all of that from the declarations, without reading a body.</p>
   <a class="btn ghost" href="{{ site.baseurl }}/guide/">Read the guide</a>
   <a class="btn ghost" href="{{ site.baseurl }}/install/">Install</a>
   <a class="btn ghost" href="{{ site.baseurl }}/limitations.html">What it does not do</a>
+  <a class="btn ghost" href="{{ site.baseurl }}/comparison.html">Compared</a>
   <a class="btn ghost" href="{{ site.baseurl }}/compatibility.html">What it promises</a>
 </div>
 
@@ -254,7 +255,10 @@ The work you stop doing is checking for the mistakes on this page.
 </div>
 
 <p style="font-size:14px; margin-top:2.5rem;">
-Burxt is early. It is not ready for production — it is ready to try, read and shape.
+<strong>Burxt 1.0.0 is released.</strong> You can write a program, test it, debug it, depend on
+other people's code and ship it. The ecosystem is new and there is no concurrency and no
+networking yet — <a href="{{ site.baseurl }}/limitations.html">every gap is named, with its
+reason</a>.
 </p>
 
 </div>

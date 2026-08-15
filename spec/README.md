@@ -1,63 +1,85 @@
-# Burxt milestone specs — index and status audit
+# Burxt design record — grouped by the version each decision shipped in
 
-The specs in this folder are the roadmap. Each one is written the same way:
-decisions with reasoning, an explicit **must NOT do** section, and a deferred
-ledger with the trigger that would earn each deferral a future milestone.
+**This is the record, not the plan.** Each file is written the same way: decisions with reasoning,
+an explicit **must NOT do** section, and a deferred ledger with the trigger that would earn each
+deferral a future milestone. They are kept because the REASONING is the valuable part — the boundary
+a package draws was decided by re-reading `M6-MODULES.md` §5 on the day it was needed, four hundred
+versions after it was written.
 
-**Two different disciplines live here, and they must not be confused.** The
-milestone specs govern **implementation** — what gets built next, and the
-scope rules that keep it sound. [`NOVELTY.md`](NOVELTY.md) holds **ambition** —
-what Burxt exists to solve that other languages do not. Scope discipline
-applies to the former only; applied to the latter it just produces incremental
-answers.
+## The layout
 
-**Read this file first.** The specs were written when Burxt was at roughly
-v0.0.1, so several describe work that is now done, and one describes work that
-was built in a different order than specified. This index records what is
-actually true as of **v0.0.58**, audited by running the compiler — not by
-reading the specs. Where a spec and the implementation disagree, the note says
-which is right.
+| where | what |
+|---|---|
+| **[`1.0/`](1.0/)** | the twenty-three specs that built **1.0.0**, and [`1.0/ROADMAP-1.0.md`](1.0/ROADMAP-1.0.md), the record of how it was built row by row |
+| **`spec/`** (here) | what is still LIVE: the standing rules, the ambition, and what is planned next |
+
+**Grouping by version rather than deleting.** A shipped spec is not waste — it is why a decision is
+the way it is, and this project has spent whole afternoons recovering reasoning that was written
+down and then not found. What the grouping fixes is the other failure: a reader landing on a folder
+of thirty "plans" cannot tell which describe a language that exists.
+
+## What is live
+
+| file | what it is |
+|---|---|
+| [`A7.0-NAMING.md`](A7.0-NAMING.md) | the naming rules, **in force** and tested — not version-scoped |
+| [`NOVELTY.md`](NOVELTY.md) | **ambition**: what Burxt exists to solve that other languages do not |
+| [`FAR-HORIZON-ROADMAP.md`](FAR-HORIZON-ROADMAP.md) | direction only, deliberately not a plan |
+| [`N9-VECTORS-EXACTLY.md`](N9-VECTORS-EXACTLY.md) | rows 1–5 shipped; 6–9 are open |
+| [`A8.0-RECORD-UPDATE.md`](A8.0-RECORD-UPDATE.md) | specified, **undecided** — Andre's call |
+| [`ROADMAP-1.1.md`](ROADMAP-1.1.md) · [`M15-WEB.md`](M15-WEB.md) | hosts and the web half. **Slated to become 2.0** |
+
+**Two disciplines live here and must not be confused.** The milestone specs govern
+**implementation** — what gets built, and the scope rules that keep it sound. `NOVELTY.md` holds
+**ambition**. Scope discipline applies to the former only; applied to the latter it just produces
+incremental answers.
+
+## The audit below
+
+Every row was checked by RUNNING the compiler rather than by reading the spec, and the status column
+is the authority — nine spec headers claimed "to implement" for shipped work until v0.0.295, and the
+index was right every time. Where a spec and the implementation disagree, the note says so.
 
 ## Status at a glance
 
 | Spec | State | What remains |
 |---|---|---|
-| [A4.4 Strings & Collections](A4.4-STRINGS-COLLECTIONS.md) | **DONE bar one view** | Arrays fixed (v0.0.10) and growable (v0.0.24). Strings: literals, printing, FFI, length, equality, `byte_at` (v0.0.21), **concatenation (v0.0.25)**, **`read_file` / `to_string` (v0.0.28)**. Remaining: `.chars()`. |
-| [A4.5 Aggregate ABI](A4.5-AGGREGATE-ABI.md) | **DONE** (v0.0.12) | — |
-| [A4.6 Interfaces & Dispatch](A4.6-INTERFACES-DISPATCH.md) | **DONE and CLOSED** (v0.0.14) | Interfaces, `implement`, static + `dynamic` dispatch. `class` / `open` inheritance was **dropped in v0.0.46** — nothing needed it across thirty versions, so composition-only is final. |
-| [A4.7 Signature Grammar](A4.7-SIGNATURE-GRAMMAR.md) | **Mostly done** (v0.0.17–v0.0.19, v0.0.28) | Brace hazard, interpolation (as a print, then as a value), money and percent literals, mixed-scale `*` all shipped. Remaining: unit literals (`5.km`), `requires`/`ensures`, pipelines. |
-| [A5.0 Control Flow](A5.0-CONTROL-FLOW.md) | **DONE** (v0.0.3–v0.0.4, v0.0.15) | — |
+| [A4.4 Strings & Collections](1.0/A4.4-STRINGS-COLLECTIONS.md) | **DONE bar one view** | Arrays fixed (v0.0.10) and growable (v0.0.24). Strings: literals, printing, FFI, length, equality, `byte_at` (v0.0.21), **concatenation (v0.0.25)**, **`read_file` / `to_string` (v0.0.28)**. Remaining: `.chars()`. |
+| [A4.5 Aggregate ABI](1.0/A4.5-AGGREGATE-ABI.md) | **DONE** (v0.0.12) | — |
+| [A4.6 Interfaces & Dispatch](1.0/A4.6-INTERFACES-DISPATCH.md) | **DONE and CLOSED** (v0.0.14) | Interfaces, `implement`, static + `dynamic` dispatch. `class` / `open` inheritance was **dropped in v0.0.46** — nothing needed it across thirty versions, so composition-only is final. |
+| [A4.7 Signature Grammar](1.0/A4.7-SIGNATURE-GRAMMAR.md) | **Mostly done** (v0.0.17–v0.0.19, v0.0.28) | Brace hazard, interpolation (as a print, then as a value), money and percent literals, mixed-scale `*` all shipped. Remaining: unit literals (`5.km`), `requires`/`ensures`, pipelines. |
+| [A5.0 Control Flow](1.0/A5.0-CONTROL-FLOW.md) | **DONE** (v0.0.3–v0.0.4, v0.0.15) | — |
 | [Far-horizon M1–M4](FAR-HORIZON-ROADMAP.md) | **Direction only** | Re-spec each on arrival. **M1's trigger is now MET** — see its amendment; two new criteria argue against the ARC lean. |
-| [A6.0 Sum Types](A6.0-SUM-TYPES.md) | **DONE** (v0.0.20) | Enums, exhaustive `match`. Deferred: wildcards, recursive/aggregate payloads (M1), guards, nested patterns, match-as-expression, generics. |
+| [A6.0 Sum Types](1.0/A6.0-SUM-TYPES.md) | **DONE** (v0.0.20) | Enums, exhaustive `match`. Deferred: wildcards, recursive/aggregate payloads (M1), guards, nested patterns, match-as-expression, generics. |
 | [A7.0 One word per concept](A7.0-NAMING.md) | **In force, and tested** (2026-07-29) | The naming rule: a concept gets **one word**, everywhere it appears — `find_<thing>` / `<thing>s` / `<Thing>`. Raised by Andre asking whether the lookup was `find_sym` or `find_bind`; the audit's finding was that **the convention already existed** and four of six lookup families followed it, but nobody had written it down, so the other two drifted and nothing noticed. `one_word_per_concept_in_the_burxt_compiler` in `tests/runner.rs` enforces the mechanically checkable part. **This row was missing until 2026-08-01** — the spec existed, unlinked, for three days, and it was the new `every_spec_is_linked_from_its_index` invariant that found it, on its first run |
 | [A8.0 Record update & class ergonomics](A8.0-RECORD-UPDATE.md) | **spec, to implement** | `self with { field: value }`. Raised by Andre asking why a method re-lists every field to change one. The argument is **correctness, not brevity**: a transposed copy of two same-typed fields compiles with no diagnostic and answers wrong — measured at v0.0.230 — and the hand-copy is the only place in the language where that is both possible and invisible. States its own cost: `with` makes "unchanged" implicit, and a class invariant is what pays for it. |
-| [M1a Caller-Region Functions](M1a-CALLER-REGION-FUNCTIONS.md) | **DONE** (v0.0.38) | `allocates` on a signature: build in the caller's region, return what you built. Deferred: `allocates` on methods. |
-| [M1 Memory Model](M1-MEMORY-MODEL.md) | **DONE** (v0.0.24–v0.0.27) | All four slices shipped: regions + bump allocator, growable arrays with escape checking, string concatenation, storable `dynamic`. Two of its predictions were corrected rather than forced — see §6a. |
-| [**Roadmap to 1.0.0**](ROADMAP-1.0.md) | **THE PLAN OF RECORD** (2026-07-31) | The goal — *a language someone outside this repository can ship on* — and the order of work: **A** compiler fixes by leverage, **B** urgent bugs, **C** the rest of the bar, **D** full Rust `str`+`Vec` parity in the library, **E** security build-vs-bind, then post-1.0 by gate. Built from all 26 specs plus three scans of the compiler and library against Rust/Python/PHP/Java/Go. Supersedes FAR-HORIZON's §4 ranking for near-term work; that document remains the audit |
+| [M1a Caller-Region Functions](1.0/M1a-CALLER-REGION-FUNCTIONS.md) | **DONE** (v0.0.38) | `allocates` on a signature: build in the caller's region, return what you built. Deferred: `allocates` on methods. |
+| [M1 Memory Model](1.0/M1-MEMORY-MODEL.md) | **DONE** (v0.0.24–v0.0.27) | All four slices shipped: regions + bump allocator, growable arrays with escape checking, string concatenation, storable `dynamic`. Two of its predictions were corrected rather than forced — see §6a. |
+| [**Roadmap to 1.0.0**](1.0/ROADMAP-1.0.md) | **THE PLAN OF RECORD** (2026-07-31) | The goal — *a language someone outside this repository can ship on* — and the order of work: **A** compiler fixes by leverage, **B** urgent bugs, **C** the rest of the bar, **D** full Rust `str`+`Vec` parity in the library, **E** security build-vs-bind, then post-1.0 by gate. Built from all 26 specs plus three scans of the compiler and library against Rust/Python/PHP/Java/Go. Supersedes FAR-HORIZON's §4 ranking for near-term work; that document remains the audit |
 | [**Roadmap 1.1 — the release after the core**](ROADMAP-1.1.md) | **THE PLAN OF RECORD for 1.1** (v0.0.260; Part II added 2026-08-01) | **Two unrelated halves, in one file so that a reader asking "what is in 1.1" finds all of it.** **Part I — hosts**, split from 1.0 by **verifiability**: the distribution work that *cannot be finished by writing it*, because finishing means proving it on hardware nobody here has. Android as a **host** (an experiment with the command written down — NDK r27 *is* LLVM 18, so the version objection is gone), the native Windows port with its bill itemised and refused, and the `use`-search-path question the container raised. Opens by separating **target** from **host**, because "supports Android" means one of two things and only one is hard — Burxt has emitted for Android since v0.0.197. **Part II — the web stack**, split from 1.0 by Andre's call that the core comes first; the detail is in [M15](M15-WEB.md) and the summary is there |
 | [Production-readiness gap](FAR-HORIZON-ROADMAP.md#the-production-readiness-gap-measured-against-languages-people-ship-in) | **Audited 2026-07-31** | What a user cannot do, against Rust / PHP / Python / Java, every row verified by running the compiler. Ranked by what fixing it unblocks — the **pointer wall** comes first, and it was predicted to before the count. Marks which absences are DECISIONS (no float, no bitwise, no inheritance) so nobody "fixes" the identity, and re-opens two of them with the reason the original call may not survive contact |
 | [N9 Vectors, exactly](N9-VECTORS-EXACTLY.md) | **Specified; the ARITHMETIC verified working** | The same query returns byte-identical scores on every CPU, and the compiler traps rather than silently losing a digit — because f32 addition is not associative and scaled-integer addition is. Cosine needs no square root if vectors are stored normalised, and inner product and squared-L2 need none at all. `Decimal<7>` is the sweet spot: exact at 1536 dimensions, and scale 8 **overflows**, measured. Rows 1–5 of its table need NO language change |
 | [Novelty register](NOVELTY.md) | **Ambition — §4, §1, §2, §3 and §5 (runtime forms) shipped** | What Burxt is *for*: exactness across boundaries, provable determinism, conservation-law contracts, effects-not-async. §4 guaranteed tail calls shipped in v0.0.29; §1's FFI half in v0.0.30. |
-| [M4 Self-Hosting](M4-SELF-HOSTING.md) | **Phases 1–4a DONE** (v0.0.51–57) — stage-1 parses and typechecks itself | The staging, with measured sizes: ~10–12.5k lines of Burxt for stage-1, a textual-LLVM-IR backend, six phases, and the public milestone at the end of phase 4. |
-| [N5 Termination](N5-TERMINATION.md) | **Slice 1 DONE** (v0.0.45) | `decreases`, checked at every recursive call site, so it works with `return tail`. Deferred: mutual recursion, methods, lexicographic measures, static proof. |
-| [A5 Contracts](A5-CONTRACTS.md) | **DONE** (v0.0.43–v0.0.44) | `requires` / `ensures` runtime-checked with the clause quoted on failure, clauses must be pure, contracts on methods, and `old(...)` — so NOVELTY §3's conservation laws are checkable. Deferred: static proof, `old` of an aggregate, derived mutual exclusion (needs threads). |
-| [N2 Pure Functions](N2-PURE-FUNCTIONS.md) | **Slice 1 DONE** (v0.0.39) | `pure function`: no I/O, no FFI, no impure calls. Deferred: pure methods, purity as a parameter requirement, purity-driven optimisation. |
-| [N1 Boundary Exactness](N1-BOUNDARY-EXACTNESS.md) | **Slice 1 DONE** (v0.0.30) | `CDouble`, `as scaled` marshallers, range-checked `Int` → `CDouble`, linker pass-through. Remaining: serialization and database boundaries, once an encoder exists to guard. |
+| [M4 Self-Hosting](1.0/M4-SELF-HOSTING.md) | **Phases 1–4a DONE** (v0.0.51–57) — stage-1 parses and typechecks itself | The staging, with measured sizes: ~10–12.5k lines of Burxt for stage-1, a textual-LLVM-IR backend, six phases, and the public milestone at the end of phase 4. |
+| [N5 Termination](1.0/N5-TERMINATION.md) | **Slice 1 DONE** (v0.0.45) | `decreases`, checked at every recursive call site, so it works with `return tail`. Deferred: mutual recursion, methods, lexicographic measures, static proof. |
+| [A5 Contracts](1.0/A5-CONTRACTS.md) | **DONE** (v0.0.43–v0.0.44) | `requires` / `ensures` runtime-checked with the clause quoted on failure, clauses must be pure, contracts on methods, and `old(...)` — so NOVELTY §3's conservation laws are checkable. Deferred: static proof, `old` of an aggregate, derived mutual exclusion (needs threads). |
+| [N2 Pure Functions](1.0/N2-PURE-FUNCTIONS.md) | **Slice 1 DONE** (v0.0.39) | `pure function`: no I/O, no FFI, no impure calls. Deferred: pure methods, purity as a parameter requirement, purity-driven optimisation. |
+| [N1 Boundary Exactness](1.0/N1-BOUNDARY-EXACTNESS.md) | **Slice 1 DONE** (v0.0.30) | `CDouble`, `as scaled` marshallers, range-checked `Int` → `CDouble`, linker pass-through. Remaining: serialization and database boundaries, once an encoder exists to guard. |
 
 ### Newer milestones
 
 | Spec | State | What it is |
 |---|---|---|
-| [M5 (in M4)](M4-SELF-HOSTING.md) | **DONE** (v0.0.79–v0.0.80) | The Burxt backend compiles all 88 pass programs, and the suite runs on Burxt |
-| [M6 Modules](M6-MODULES.md) | **DONE** (v0.0.81–v0.0.82) | `use "path"`, one buffer with a source map, and the compiler split into five files |
-| [M7 Generics](M7-GENERICS.md) | **Slices 1–3 DONE in stage-0** (v0.0.93–96) | Generic functions, enums and bounds (`Ordered`, `Equatable`, any trait — statically dispatched). Remaining: generic records, stage-1 |
-| [M8 Errors](M8-ERRORS.md) | **DONE** (v0.0.94, 97) | `Option<T>` and `Result<T, E>` in `lib/`, written in Burxt. `?` recognises the failure by VARIANT name, so neither type is known to the compiler — and it does not convert between error types |
-| [M9 Performance](M9-PERFORMANCE.md) | **DONE** (v0.0.87–v0.0.90) | The self-compile: 190 s → 1.17 s, ~1 GB → 196 MB. `byte_at` bounds-checked with a `strlen` per byte |
-| [M10 Ergonomics](M10-ERGONOMICS.md) | **Slices 1–2c DONE** (v0.0.91–92, 95, 98) | `let x = 0;`, `for x in xs`, trailing commas everywhere, `function (self)` inside an `implement` — both compilers. Plus the rounding rule corrected: a contract where a value narrows, and nowhere else |
-| [M11 Maps](M11-MAPS.md) | **DONE** (v0.0.119) | `Map<K, V>` in `lib/map.bx` — ordinary Burxt, one builtin (`hash`). Iteration order is INSERTION order, defined rather than unspecified, because a container whose order depends on a hash function is a determinism hazard in a language whose thesis is reproducibility. `find` answers `Option<V>` since v0.0.118 |
-| [M12 Strings](M12-STRINGS.md) | **DONE** (v0.0.121) | Both compilers, fixpoint intact. Known gaps tracked elsewhere: the `string_split` separator is a single BYTE, so `", "` cannot be split on, and there is no case conversion |
-| [M13 Contract syntax](M13-CONTRACT-SYNTAX.md) | **DONE, both compilers** (v0.0.135; `it` v0.0.167; stage-1 v0.0.169) | `function f(p: Type [> 0, <= q]) -> T [>= 0]` — the claim on the value it constrains. The comma is AND, `||` is OR. Desugars to `requires`/`ensures` with the SUBJECT synthesized into the message: `p > 0`, never `> 0`. Andre's call, v0.0.166. Stage-1's wall — the return bracket's `result` is written in no program — dissolved into a NODE KIND with no name: a thing that has no name needs no way to spell one |
-| [M14 Implicit regions](M14-IMPLICIT-REGIONS.md) | **Slices 1–2 DONE** (v0.0.142–146) | `allocates` inferred rather than written, and allocation outside a `region` is no longer an error — so a five-line program is five lines. Slice 3, per-block RELEASE, is open and is the memory half: without a region, memory grows in a straight line (5,280 KB against 1,408 KB per 100k Strings) |
+| [M5 (in M4)](1.0/M4-SELF-HOSTING.md) | **DONE** (v0.0.79–v0.0.80) | The Burxt backend compiles all 88 pass programs, and the suite runs on Burxt |
+| [M6 Modules](1.0/M6-MODULES.md) | **DONE** (v0.0.81–v0.0.82) | `use "path"`, one buffer with a source map, and the compiler split into five files |
+| [M7 Generics](1.0/M7-GENERICS.md) | **Slices 1–3 DONE in stage-0** (v0.0.93–96) | Generic functions, enums and bounds (`Ordered`, `Equatable`, any trait — statically dispatched). Remaining: generic records, stage-1 |
+| [M8 Errors](1.0/M8-ERRORS.md) | **DONE** (v0.0.94, 97) | `Option<T>` and `Result<T, E>` in `lib/`, written in Burxt. `?` recognises the failure by VARIANT name, so neither type is known to the compiler — and it does not convert between error types |
+| [M9 Performance](1.0/M9-PERFORMANCE.md) | **DONE** (v0.0.87–v0.0.90) | The self-compile: 190 s → 1.17 s, ~1 GB → 196 MB. `byte_at` bounds-checked with a `strlen` per byte |
+| [M10 Ergonomics](1.0/M10-ERGONOMICS.md) | **Slices 1–2c DONE** (v0.0.91–92, 95, 98) | `let x = 0;`, `for x in xs`, trailing commas everywhere, `function (self)` inside an `implement` — both compilers. Plus the rounding rule corrected: a contract where a value narrows, and nowhere else |
+| [M11 Maps](1.0/M11-MAPS.md) | **DONE** (v0.0.119) | `Map<K, V>` in `lib/map.bx` — ordinary Burxt, one builtin (`hash`). Iteration order is INSERTION order, defined rather than unspecified, because a container whose order depends on a hash function is a determinism hazard in a language whose thesis is reproducibility. `find` answers `Option<V>` since v0.0.118 |
+| [M12 Strings](1.0/M12-STRINGS.md) | **DONE** (v0.0.121) | Both compilers, fixpoint intact. Known gaps tracked elsewhere: the `string_split` separator is a single BYTE, so `", "` cannot be split on, and there is no case conversion |
+| [M13 Contract syntax](1.0/M13-CONTRACT-SYNTAX.md) | **DONE, both compilers** (v0.0.135; `it` v0.0.167; stage-1 v0.0.169) | `function f(p: Type [> 0, <= q]) -> T [>= 0]` — the claim on the value it constrains. The comma is AND, `||` is OR. Desugars to `requires`/`ensures` with the SUBJECT synthesized into the message: `p > 0`, never `> 0`. Andre's call, v0.0.166. Stage-1's wall — the return bracket's `result` is written in no program — dissolved into a NODE KIND with no name: a thing that has no name needs no way to spell one |
+| [M14 Implicit regions](1.0/M14-IMPLICIT-REGIONS.md) | **Slices 1–2 DONE** (v0.0.142–146) | `allocates` inferred rather than written, and allocation outside a `region` is no longer an error — so a five-line program is five lines. Slice 3, per-block RELEASE, is open and is the memory half: without a region, memory grows in a straight line (5,280 KB against 1,408 KB per 100k Strings) |
 | [M15 Web](M15-WEB.md) | **SPECIFIED, nothing built — scheduled for 1.1** (2026-08-01) | The web stack as **primitives, not a framework**: `html.bx`, `cgi.bx`, `net.bx`, `http.bx`. Andre's call — 1.0 is the real core and comes first, and the goal is that someone else builds the framework, because that is how a language acquires an ecosystem. **The finding that reorders it: W0 is gated on nothing.** The typed `Html` tree — `Text`/`Raw`/`Element`, escaped on render so an unescaped value is unrepresentable — was **measured compiling and running on today's compiler**, and `cgi.bx` needs only `os_env` and `os_read_all`, which exist. So a Burxt binary behind nginx serves dynamic pages with no socket and no concurrency. Only the listener waits: `sockaddr` needs C struct layouts (unblocked by A7 v0.0.261), and a server needs §G1, where a serial loop and `fork()` were both **refused** in favour of `NOVELTY.md` §6's effect handlers |
 
 ## The audit, in detail
@@ -200,7 +222,7 @@ In dependency order, cheapest and most-unblocking first:
     body could return at all.
 11. ~~NOVELTY §1, exactness that survives the boundary.~~ **Slice 1 done in
     v0.0.30** — the FFI half, which is the only boundary that exists today.
-    `spec/N1-BOUNDARY-EXACTNESS.md` records the decisions; the serialization half
+    `spec/1.0/N1-BOUNDARY-EXACTNESS.md` records the decisions; the serialization half
     waits for an encoder to guard. Linker pass-through shipped with it, because
     an `external function` is only half an FFI.
 12. ~~Editor support: highlighting, and a language GitHub can recognise.~~

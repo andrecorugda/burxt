@@ -2392,7 +2392,7 @@ impl<'ctx> CodeGen<'ctx> {
                 // Both are emitted as calls to one runtime helper rather than inline, so the two
                 // compilers can be checked against each other by comparing numbers.
                 //
-                // Deterministic and unseeded: see spec/M11-MAPS.md Decision 4 for the trade and
+                // Deterministic and unseeded: see spec/1.0/M11-MAPS.md Decision 4 for the trade and
                 // the trigger that would add a seeded constructor.
                 let value = self.gen_expr(inner)?;
                 let helper = self.hash_fn(matches!(inner.ty, Type::String))?;
@@ -2927,7 +2927,7 @@ impl<'ctx> CodeGen<'ctx> {
             // `e?` — read the tag; on the failure variant, rebuild that failure as the
             // enclosing function's return value and leave immediately; otherwise carry on
             // with the success payload. The checker proved the two failures have the same
-            // payload types (spec/M8-ERRORS.md §1a Decision A), so the copy is a copy and
+            // payload types (spec/1.0/M8-ERRORS.md §1a Decision A), so the copy is a copy and
             // never a conversion.
             TypedExprKind::Try { value, fail_tag, ok_tag, ret_enum, ret_fail_tag } => {
                 let err = |x: inkwell::builder::BuilderError| x.to_string();
@@ -4878,7 +4878,7 @@ impl<'ctx> CodeGen<'ctx> {
         // This is the one place a foreign string enters a Burxt program, and it is why `argument`
         // needs a region now when it did not before. The strlen does not disappear: it happens ONCE
         // here, at the boundary, instead of once per byte read afterwards. See
-        // spec/M12-STRINGS.md §3 — the accounting it describes for a future `char*` return is
+        // spec/1.0/M12-STRINGS.md §3 — the accounting it describes for a future `char*` return is
         // exactly this, arrived at early because `argument` was already that case.
         let strlen = self.libc(
             "strlen",
@@ -5137,7 +5137,7 @@ impl<'ctx> CodeGen<'ctx> {
     /// The layout is `[ i64 length ][ len bytes ][ NUL ]`, and the pointer answered points at the
     /// first BYTE, not at the header. So a Burxt String is still one pointer and still a valid
     /// `char*` for C — the header is additional information sitting behind it, which C never looks
-    /// at. See spec/M12-STRINGS.md §1.
+    /// at. See spec/1.0/M12-STRINGS.md §1.
     ///
     /// Every place that makes a String goes through here, which is the point: a length written in
     /// one place and read in another is exactly the kind of thing that works for the case you

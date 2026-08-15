@@ -228,8 +228,13 @@ what it produces needs nothing.
 **You write types at boundaries.** `let name: String`, and every parameter and return. Inside a body
 `let x = 0;` infers.
 
-**It is early.** Not ready for production — ready to try, read and shape. There is no package manager,
-no `wasm` target yet, and the standard library is seven files.
+**Burxt 1.0.0 is released**, and what that means here is narrow and checkable: you can write a
+program, test it, debug it with a real debugger, depend on other people's code with a lockfile that
+pins commits, and ship it to a machine with neither Rust nor LLVM installed. The standard library is
+**22 modules**.
+
+What is still missing is named rather than implied: no concurrency, no sockets, no `wasm` host yet.
+[Every gap, with its reason]({{ site.baseurl }}/limitations.html).
 
 **The editor extension has one trap**, and it cost a full afternoon: it runs whichever `burxt` binary
 it finds, and if you have both a `--release` and a `debug` build it prefers the newer. After

@@ -433,7 +433,7 @@ fn locate_file<'a>(files: &'a [SourceFile], offset: usize) -> Option<(&'a Source
 /// The imports are resolved as a pre-pass over the text rather than as a parser feature,
 /// and the `use` lines are BLANKED OUT — replaced by spaces of the same length — so every
 /// byte offset in what follows is unchanged and the lexer, parser and typechecker need to
-/// know nothing about modules at all. See spec/M6-MODULES.md §1.5.
+/// know nothing about modules at all. See spec/1.0/M6-MODULES.md §1.5.
 ///
 /// Imports come first in a file, before any other item. That is what makes the pre-pass
 /// safe: it stops at the first line that is not blank, a comment, or a `use`, so a `use`
@@ -740,7 +740,7 @@ fn package_ranges(
     // A module holds DECLARATIONS, not statements: a file that runs when it is used is the
     // import side-effect problem, and every language that allows it grows a convention
     // against it. The file being compiled is exempt — statements are what make it the
-    // program. See spec/M6-MODULES.md §1.3.
+    // program. See spec/1.0/M6-MODULES.md §1.3.
     if files.len() > 1 {
         let root = files.last().expect("the program is the last file loaded");
         for stmt in &program.stmts {

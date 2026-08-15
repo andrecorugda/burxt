@@ -214,7 +214,7 @@ thesis generalized: **dangerous defaults become compile errors.**
   The mechanism is decided: **region ownership** — a region has exactly one
   owner, so everything inside it is reachable by one thread and a race cannot
   be expressed. No per-object borrow checking, no collector, no refcounts.
-  See `spec/M1-MEMORY-MODEL.md`.
+  See `spec/1.0/M1-MEMORY-MODEL.md`.
 
 ### Aspiration — flagged without a timeline
 
@@ -494,7 +494,7 @@ to Cranelift or add an interpreter, only codegen.rs changes.
   true without an asterisk: measured at v0.0.215, the Burxt backend compiles
   **143 of 143** pass programs with **0 refused**, and each binary prints what
   stage 0's build of it prints. (This paragraph said *"the Burxt backend does not
-  emit every construct yet"* until v0.0.215, citing a `spec/M4-SELF-HOSTING.md`
+  emit every construct yet"* until v0.0.215, citing a `spec/1.0/M4-SELF-HOSTING.md`
   §3b that had gone stale under it. See §3b for what that cost.) Stage 0 stays,
   and its job is now only the second one: **trust anchor and differential test.**
 
@@ -517,7 +517,7 @@ how it got here, and finding an entry meant searching rather than navigating.
 | **v0.0.69–v0.0.99** | The mark, the fixpoint, the compiler's own speed, the ergonomics, generics with bounds, no null, `?`, every keyword spelled the word it means, and the tooling held to the same standard | [read](docs/log/08-the-mark-and-the-tree.md) |
 
 v0.0.59–v0.0.68 and v0.0.70 have no log entry: they were ten consecutive versions of one
-milestone, recorded in [`spec/M4-SELF-HOSTING.md`](spec/M4-SELF-HOSTING.md) next to the plan
+milestone, recorded in [`spec/1.0/M4-SELF-HOSTING.md`](spec/1.0/M4-SELF-HOSTING.md) next to the plan
 their measurements were checked against. The index says so plainly rather than leaving a
 reader to notice the numbers skip.
 
@@ -606,7 +606,7 @@ it travels.
   including its own.
 - M4 phase 1 (v0.0.51): `arg`, `arg_count`, `write_file`, and a 1 GB lazily-mapped
   region — the primitives a self-hosted compiler cannot start without. Plan of record:
-  `spec/M4-SELF-HOSTING.md`.
+  `spec/1.0/M4-SELF-HOSTING.md`.
 - A5.0b. `break` and `continue` (v0.0.50), with the region-release rule a jump out of
   a loop needs. Deferred since v0.0.11 until three self-hosted programs worked around
   their absence.

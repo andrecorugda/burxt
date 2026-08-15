@@ -1,6 +1,6 @@
 // `let x = e;` takes its type from `e`. The annotation is optional, not gone: it is
 // still legal everywhere and still required where a value cannot say its own type.
-// See spec/M10-ERGONOMICS.md §1.
+// See spec/1.0/M10-ERGONOMICS.md §1.
 class Point { x: Int, y: Int }
 enum Status { Paid, Void }
 

@@ -6,7 +6,7 @@
 // in every version. Neither survives an adversary for one second: given an FNV-1a answer, an input
 // producing it is a few lines of arithmetic away.
 //
-// **CRC-32 was promoted here out of `tests/pass/bits.bx`** — `spec/ROADMAP-1.0.md` §E4, and the
+// **CRC-32 was promoted here out of `tests/pass/bits.bx`** — `spec/1.0/ROADMAP-1.0.md` §E4, and the
 // cheapest item on that board because the code was already written and already checked against the
 // standard's value. That fixture keeps its own copy on purpose: it exists to show a reader that
 // `bit_*` alone is enough to build a real checksum, and importing the answer from a library would

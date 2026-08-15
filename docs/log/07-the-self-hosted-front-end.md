@@ -6,7 +6,7 @@ The driver primitives, then a lexer, a parser and a typechecker written in Burxt
 
 ### v0.0.51: the primitives that make a program a tool
 
-Phase 1 of `spec/M4-SELF-HOSTING.md`, which is now the plan of record with measured
+Phase 1 of `spec/1.0/M4-SELF-HOSTING.md`, which is now the plan of record with measured
 numbers in it rather than an intention.
 
 **`arg_count()` and `arg(n)`.** A compiler has to know which file it was asked to

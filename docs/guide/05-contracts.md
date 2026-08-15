@@ -436,7 +436,7 @@ on everything — not to make the checking optional.
 Static proof of arbitrary contracts is SMT-solver
 territory, and a prover that is right *sometimes* is worse than a check that is right *always*.
 Static proof is the eventual goal; this is what is reachable and true today.
-([The design record, including what a static pass would need.](https://github.com/andrecorugda/burxt/blob/main/spec/A5-CONTRACTS.md))
+([The design record, including what a static pass would need.](https://github.com/andrecorugda/burxt/blob/main/spec/1.0/A5-CONTRACTS.md))
 
 **An `ensures` cannot bind `result` to a class yet.** A class travels back through a hidden pointer
 into the caller's storage, and binding `result` to that needs care a scalar does not. Return a scalar, or

@@ -103,7 +103,7 @@ at all. Under that reading a green-thread scheduler can be a *library* that only
 programs using it pay for, which keeps the pillar intact without foreclosing
 concurrency.
 
-**DECIDED (2026-07-25) — see `spec/M1-MEMORY-MODEL.md`.** The answer was
+**DECIDED (2026-07-25) — see `spec/1.0/M1-MEMORY-MODEL.md`.** The answer was
 neither of the three options above: **regions, with the region as the unit of
 ownership.** A region has one owner, so everything inside it is reachable by
 one thread and data races are impossible by construction — WITHOUT per-object

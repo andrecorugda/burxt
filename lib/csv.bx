@@ -49,7 +49,7 @@
 //
 // ---- building the output: §D0, and it is not optional ----------------------------------------
 //
-// `csv_render` is exactly the loop `spec/ROADMAP-1.0.md` §D0 was written about — a String built
+// `csv_render` is exactly the loop `spec/1.0/ROADMAP-1.0.md` §D0 was written about — a String built
 // from tens of thousands of small pieces — so it uses the chunk list joined pairwise, through
 // `lib/string.bx`'s `string_join_chunks`. Every number below is `/usr/bin/time -f "%M"` on this
 // machine, rendering rows of five fields averaging 53 bytes a line.

@@ -61,7 +61,7 @@ foreign type's width honestly).
 **The claim it earns:** *exact end-to-end, not merely exact in memory.* No
 language can say this.
 
-**Slice 1 SHIPPED in v0.0.30** — see `spec/N1-BOUNDARY-EXACTNESS.md`. What landed
+**Slice 1 SHIPPED in v0.0.30** — see `spec/1.0/N1-BOUNDARY-EXACTNESS.md`. What landed
 is the FFI half, which is the only boundary that exists today: `CDouble` names
 C's `double` so a lossy crossing can be refused rather than merely absent;
 `Decimal<S>` → `CDouble` is a compile error naming the loss; `Int` → `CDouble` is
@@ -103,7 +103,7 @@ Composes directly with the existing byte-identical-across-targets property:
 same inputs, same result, on web and desktop and mobile, *and* nothing hidden
 feeding in.
 
-**Slice 1 SHIPPED in v0.0.39** — `spec/N2-PURE-FUNCTIONS.md`. The illustrative
+**Slice 1 SHIPPED in v0.0.39** — `spec/1.0/N2-PURE-FUNCTIONS.md`. The illustrative
 syntax above is the actual syntax. It needed **less** than an effect system: the
 first declared effect marker arrived in v0.0.38 (`allocates`), and `pure` is the
 same shape pointed the other way — one that forbids rather than permits. A `pure function`
@@ -147,7 +147,7 @@ available.
 much sooner and is worth shipping first; the A4.7 amendment already stages
 contracts that way.
 
-**The runtime staging SHIPPED in v0.0.43** — `spec/A5-CONTRACTS.md`. `requires` and
+**The runtime staging SHIPPED in v0.0.43** — `spec/1.0/A5-CONTRACTS.md`. `requires` and
 `ensures` are checked on entry and before every return, the failing clause is quoted
 verbatim with the function's name, and a clause must be `pure` (a check that can
 change the program is a second program). Contracts are always checked: there is no
@@ -225,7 +225,7 @@ recorded in DESIGN.md's interim ledger.
 
 **Novelty: high (in this combination). Buildability: low — needs the verifier.**
 
-**Slice 1 SHIPPED in v0.0.45** — `spec/N5-TERMINATION.md`. `decreases <Int>` is
+**Slice 1 SHIPPED in v0.0.45** — `spec/1.0/N5-TERMINATION.md`. `decreases <Int>` is
 checked at every recursive **call site**: the measure is evaluated with the new
 arguments and compared against the calling invocation's, which is why it works with
 `return tail` (a replaced frame has nowhere to restore per-invocation state from).

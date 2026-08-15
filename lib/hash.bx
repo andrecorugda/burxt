@@ -20,7 +20,7 @@
 // password hashes on their own: they are fast by design and a GPU tries billions per second, which
 // is what `pbkdf2_sha256` and its iteration count exist to answer.
 //
-// What is deliberately NOT here, per `spec/ROADMAP-1.0.md` §E5: AES, ChaCha20, RSA, Ed25519,
+// What is deliberately NOT here, per `spec/1.0/ROADMAP-1.0.md` §E5: AES, ChaCha20, RSA, Ed25519,
 // X25519, TLS, Argon2, scrypt, bcrypt. **Bind those, do not hand-roll them.** Two reasons and both
 // are structural rather than a matter of effort: this language gives no control over instruction
 // timing, and RSA and the curves need arbitrary-precision integers, which do not exist here —
@@ -139,7 +139,7 @@
 //
 //   * **A secret cannot be erased.** A String or an array lives until its region closes and there
 //     is no `zeroise`. A password handed to `pbkdf2_sha256` stays in memory until the region ends.
-//     This is `spec/ROADMAP-1.0.md` §E6 and it is a 1.0 limitation, not an oversight.
+//     This is `spec/1.0/ROADMAP-1.0.md` §E6 and it is a 1.0 limitation, not an oversight.
 //   * **There is no CSPRNG.** Nothing here generates a salt; `lib/random.bx` is seeded and
 //     reproducible on purpose, which is precisely wrong for a salt or a key. §E3.
 //   * **"Constant time" here means no secret-dependent branch or early exit** — see
@@ -328,7 +328,7 @@ pure function hash_equals_constant_time(a: [Int], b: [Int]) -> Bool {
 //
 // **Promoted out of `tests/pass/bits.bx`, where it was written in v0.0.199 as proof that the new
 // bit operations were enough to compute a real checksum.** It was correct there and is unchanged
-// here, which is why this is `spec/ROADMAP-1.0.md` §E4 and the cheapest item on that board: the
+// here, which is why this is `spec/1.0/ROADMAP-1.0.md` §E4 and the cheapest item on that board: the
 // work was done, in the wrong place. The fixture keeps its own copy, deliberately — it is a
 // demonstration that a reader can build a checksum from `bit_*` alone, and importing the answer
 // from a library would delete the thing it demonstrates.

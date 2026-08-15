@@ -132,7 +132,7 @@ pub enum Type {
     /// `fn largest<T>(xs: [T]) -> T`. It is not a type any value has: every one is
     /// replaced by a concrete type before codegen, one copy per instantiation.
     /// Two parameters are the same type only if they have the same name.
-    /// See spec/M7-GENERICS.md.
+    /// See spec/1.0/M7-GENERICS.md.
     Param(String),
     /// `dyn Trait` — an interface object: the ONLY thing that triggers dynamic
     /// dispatch. Represented as a fat pointer (data pointer, vtable pointer);
@@ -324,7 +324,7 @@ pub enum ExprKind {
         rhs: Box<Expr>,
     },
     /// `e?` — the value if the enum's success variant, or an immediate return of the
-    /// failure from the enclosing function. See spec/M8-ERRORS.md §1a.
+    /// failure from the enclosing function. See spec/1.0/M8-ERRORS.md §1a.
     Try(Box<Expr>),
     /// A comparison, e.g. `balance >= 0.00`. Produces a Bool.
     Compare {
@@ -389,7 +389,7 @@ pub enum StmtKind {
     /// `declared` is `None` when the annotation was left off and the type comes
     /// from the initializer instead (`let count = 0;`). Only the annotation is
     /// optional: a binding still has exactly one type, fixed where it is bound.
-    /// See spec/M10-ERGONOMICS.md §1.
+    /// See spec/1.0/M10-ERGONOMICS.md §1.
     Let {
         name: String,
         mutable: bool,
@@ -427,7 +427,7 @@ pub enum StmtKind {
     /// a synthesized index has no span. Rather than have the two compilers implement one
     /// construct two ways, both check it directly — which also means the errors talk about
     /// `for` instead of about a `len` call the author never wrote.
-    /// See spec/M10-ERGONOMICS.md §1b.
+    /// See spec/1.0/M10-ERGONOMICS.md §1b.
     For { name: String, iterable: Expr, body: Vec<Stmt> },
     /// `for name in start..end { body }` — count up, end EXCLUSIVE.
     ///
@@ -564,7 +564,7 @@ impl std::fmt::Display for Marshal {
 /// A parameter with **no bound** can only be stored, copied, passed and returned — the
 /// signature is the contract, so anything more has to be written in it. A bound may be one
 /// of the two the language ships (`Ordered`, `Equatable`) or any declared trait, in which
-/// case the parameter's methods are that trait's. See spec/M7-GENERICS.md Decision 2.
+/// case the parameter's methods are that trait's. See spec/1.0/M7-GENERICS.md Decision 2.
 #[derive(Debug, Clone)]
 pub struct TypeParam {
     pub name: String,
@@ -663,7 +663,7 @@ pub struct MethodDef {
     /// `function (mutable self: Stack<T>) push_one(...)` — the receiver's type arguments,
     /// which for a method are always the class's own parameter NAMES. A method may use the
     /// parameters of the type it is on and declare none of its own, per
-    /// spec/M7-GENERICS.md Decision 3 — so these are names, not types.
+    /// spec/1.0/M7-GENERICS.md Decision 3 — so these are names, not types.
     pub receiver_arguments: Vec<String>,
     pub receiver_mut: bool,
     pub name: String,
@@ -852,7 +852,7 @@ pub struct EnumDef {
     pub public: bool,
     pub name: String,
     /// `enum Option<T> { ... }` — what this enum is generic over. Empty for the
-    /// overwhelming majority. See spec/M7-GENERICS.md.
+    /// overwhelming majority. See spec/1.0/M7-GENERICS.md.
     pub type_parameters: Vec<TypeParam>,
     pub variants: Vec<Variant>,
     /// Where this item was written, for errors about the item itself.
@@ -905,7 +905,7 @@ pub struct StructDef {
     pub public: bool,
     pub name: String,
     /// `record List<T> { items: [T] }` — what this record is generic over. Empty for the
-    /// overwhelming majority. See spec/M7-GENERICS.md.
+    /// overwhelming majority. See spec/1.0/M7-GENERICS.md.
     pub type_parameters: Vec<TypeParam>,
     pub fields: Vec<Param>,
     /// Field names declared `private`: reachable only from this class's own methods.
@@ -939,7 +939,7 @@ pub struct StructDef {
 ///    nothing about `const` at all.
 /// 3. **A `let` cannot appear in a module AT ALL.** `main.rs` refuses a top-level statement
 ///    in any file reached by `use` — *"a module holds declarations, not statements: this
-///    would run when `helper.bx` was used, and a `use` is not a call"* (spec/M6-MODULES.md
+///    would run when `helper.bx` was used, and a `use` is not a call"* (spec/1.0/M6-MODULES.md
 ///    §1.3). So the answer to "why not just use a top-level `let`?" for `lib/math.bx` is
 ///    not that it would be awkward: it does not compile. A `const` is a declaration, so it
 ///    is allowed there, which is the entire reason A2 unblocks a standard-library module.

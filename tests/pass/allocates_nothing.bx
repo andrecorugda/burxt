@@ -1,4 +1,4 @@
-// `allocates nothing` — a CHECKED CLAIM. M14 slice 3, item A12 of spec/ROADMAP-1.0.md.
+// `allocates nothing` — a CHECKED CLAIM. M14 slice 3, item A12 of spec/1.0/ROADMAP-1.0.md.
 //
 // The mirror image of `allocates`, and the two say opposite things about who is trusted. `allocates`
 // is the programmer telling the compiler something it will work out anyway — since v0.0.142 it is

@@ -69,7 +69,7 @@ aggregate (the result travels by hidden pointer, so binding `result` needs care 
 scalar does not), and static proving, which is SMT territory — a checker that is
 right sometimes is worse than a check that is right always.
 
-Spec: `spec/A5-CONTRACTS.md`.
+Spec: `spec/1.0/A5-CONTRACTS.md`.
 
 ### v0.0.44: conservation laws, checked (NOVELTY §3's headline)
 
@@ -177,7 +177,7 @@ a method — one step behind contracts on methods, which shipped last version.
 `f` is not checked, because the two would need a shared measure and there is nothing
 to compare `g`'s state against.
 
-Spec: `spec/N5-TERMINATION.md`.
+Spec: `spec/1.0/N5-TERMINATION.md`.
 
 ### v0.0.46: integer division by name, and inheritance dropped
 

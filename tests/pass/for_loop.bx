@@ -1,5 +1,5 @@
 // `for x in xs` — the loop everyone writes, without the index. A real statement in both
-// compilers, not a parser desugar: see spec/M10-ERGONOMICS.md §1b for why.
+// compilers, not a parser desugar: see spec/1.0/M10-ERGONOMICS.md §1b for why.
 class Line { label: String, quantity: Int }
 class Doc { lines: [Line] }
 

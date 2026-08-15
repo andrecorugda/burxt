@@ -1,7 +1,7 @@
 // lib/set.bx — `Set<T: Equatable>` over `Map<T, Bool>`, and the shape of the file was decided by
 // three measurements rather than by taste.
 //
-// **1. A free generic function cannot call a method on `Map<T, Bool>`.** `spec/ROADMAP-1.0.md` §D1g
+// **1. A free generic function cannot call a method on `Map<T, Bool>`.** `spec/1.0/ROADMAP-1.0.md` §D1g
 // says "over `Map<T, Bool>`" without saying whether that means a wrapper class or a naming
 // convention with `set_*` free functions. The second one does not compile: a free generic body is
 // checked ABSTRACTLY, so `T` never becomes a type and `Map<T, Bool>` never becomes a class with

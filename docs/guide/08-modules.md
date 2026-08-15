@@ -273,7 +273,7 @@ the very same file. See [the sealed box](03-types.md#piece-two-private).
 
 Name collisions across modules are already an error, which is the half of the problem that bites
 today. The deferral, and the trigger for revisiting it, are in
-[`spec/M6-MODULES.md`](https://github.com/andrecorugda/burxt/blob/main/spec/M6-MODULES.md).
+[`spec/1.0/M6-MODULES.md`](https://github.com/andrecorugda/burxt/blob/main/spec/1.0/M6-MODULES.md).
 
 ## What it costs
 {: #what-it-costs}
@@ -291,7 +291,7 @@ compiler itself is, and it is not a module system that will scale to a thousand 
 first lines of the file and that is all they are.
 
 **And the deferral is recorded rather than hidden**, along with the trigger for revisiting it:
-[`spec/M6-MODULES.md`](https://github.com/andrecorugda/burxt/blob/main/spec/M6-MODULES.md).
+[`spec/1.0/M6-MODULES.md`](https://github.com/andrecorugda/burxt/blob/main/spec/1.0/M6-MODULES.md).
 
 ## When you reach for it
 {: #when-you-reach-for-it}

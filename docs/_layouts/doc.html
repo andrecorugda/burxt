@@ -16,6 +16,15 @@
 <meta property="og:type" content="article">
 </head>
 <body>
+<div class="version-pick" style="font-size:13px; opacity:.75; margin:.5rem 0 1rem;">
+version:
+{% if page.url contains '/1.0/' %}
+  <a href="{{ site.baseurl }}/">latest</a> · <strong>1.0.0</strong>
+{% else %}
+  <strong>latest</strong> · <a href="{{ site.baseurl }}/1.0/limitations.html">1.0.0</a>
+{% endif %}
+</div>
+
 
 <a class="skip" href="#top">Skip to content</a>
 

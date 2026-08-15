@@ -435,6 +435,6 @@ function os_is_space(b: Int) -> Bool {
 //
 // REMOVED rather than made correct, because correct would have been `return byte_as_string(byte);`
 // — a second name for a builtin, carrying an `os_` prefix for something that has nothing to do with
-// the operating system. `spec/ROADMAP-1.0.md` §D1p says "retires the lossy `os_byte_as_string`",
+// the operating system. `spec/1.0/ROADMAP-1.0.md` §D1p says "retires the lossy `os_byte_as_string`",
 // and retiring it is what that means. A program calling it gets an unknown-function error naming
 // the line, which is the outcome this language prefers to a silent redirection.

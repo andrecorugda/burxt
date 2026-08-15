@@ -1,4 +1,4 @@
-// A String carries its LENGTH in the eight bytes before its first byte. See spec/M12-STRINGS.md.
+// A String carries its LENGTH in the eight bytes before its first byte. See spec/1.0/M12-STRINGS.md.
 //
 // This fixture exists because a length written in one place and read in another is exactly the kind
 // of thing that works for the case you tested. So every WAY of making a String is made here and

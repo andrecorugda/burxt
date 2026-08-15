@@ -111,7 +111,7 @@ What the move preserved, and what it cost:
 - `DESIGN.md` is **557 lines**: the design, the roadmap, the testing shape, and an index of
   the log with a one-line description per file.
 - **The gap became visible.** v0.0.59–v0.0.68 and v0.0.70 have no entries, because they were
-  ten consecutive versions of one milestone and were recorded in `spec/M4-SELF-HOSTING.md`
+  ten consecutive versions of one milestone and were recorded in `spec/1.0/M4-SELF-HOSTING.md`
   next to the plan their measurements were checked against. In a 3,000-line file nobody
   notices numbers skipping; in an index it is the first thing you see. The index says so
   plainly rather than leaving a reader to work it out.
@@ -129,7 +129,7 @@ pass suite. A test runs the whole chain on every `cargo test`.
 
 Byte-identical output is the certificate, and it is a stronger claim than "the tests pass":
 a disagreement anywhere in 4,900 lines of lexer, parser, checker and backend would appear
-as a different byte. What it does not claim is in `spec/M4-SELF-HOSTING.md` §3b — stage-1's
+as a different byte. What it does not claim is in `spec/1.0/M4-SELF-HOSTING.md` §3b — stage-1's
 backend still does not emit Decimals, `match`, `tail` or contracts, none of which its own
 source uses, which is exactly why the certificate could arrive before them.
 
@@ -471,7 +471,7 @@ region r {
 }
 ```
 
-`spec/M6-MODULES.md` has the reasoning; the decisions worth repeating here:
+`spec/1.0/M6-MODULES.md` has the reasoning; the decisions worth repeating here:
 
 - **A path, not a name.** `use lexer;` needs a resolution rule — which directory, which
   extension, which precedence — and every language with one has a page of documentation
@@ -740,7 +740,7 @@ Three minutes, and v0.0.86 was already 2m57 — so nothing regressed; the compil
 been this slow and nobody had put a number on it. **The language cannot grow further until
 this changes**, because a program that exhausts its region stops rather than slows.
 
-`spec/M9-PERFORMANCE.md` records it as a milestone with an acceptance number: a self-compile
+`spec/1.0/M9-PERFORMANCE.md` records it as a milestone with an acceptance number: a self-compile
 under 20 seconds, region use under 200 MB, fixpoint intact.
 
 The honest part of the story is what the fix attempt taught. The obvious quadratic was the
@@ -1313,7 +1313,7 @@ values and named arguments (real friction, real feature, simply not built — no
 principle); and `to_string` of a struct (needs a display trait with a blessed name, which is a
 decision rather than a shorthand).
 
-The sweep is now a section in `spec/M10-ERGONOMICS.md`, including the "checked and already
+The sweep is now a section in `spec/1.0/M10-ERGONOMICS.md`, including the "checked and already
 fine" list, so the next one does not re-tread it.
 
 ### v0.0.96: bounds, and a promise the compiler could finally keep
@@ -1517,7 +1517,7 @@ reporting *"expected a parameter name, found `mut`"* about a program that said `
 Two agents ran the independent halves — the documentation sweep and the editor grammar — while I
 did the coupled core, which is the only part where the lexer and 237 source files have to change
 together or nothing compiles. The docs agent came back with nine ambiguous cases it refused to
-guess on, and it was right to: one was `spec/N1-BOUNDARY-EXACTNESS.md`, whose example C function
+guess on, and it was right to: one was `spec/1.0/N1-BOUNDARY-EXACTNESS.md`, whose example C function
 is literally *named* `record`, and another was a set of bare-noun uses where a strict swap turned
 "a trait implementation" into "a trait implement". Both fixed by hand.
 
@@ -1663,7 +1663,7 @@ I looked for a natural generic in the compiler's own source and did not find one
 `Outcome` are concrete and forcing a parameter into either would be contrived. So that proof
 waits on stage-1 rather than being faked.
 
-What I did instead of estimating: **designed it.** `spec/M7-GENERICS.md §5` now records why
+What I did instead of estimating: **designed it.** `spec/1.0/M7-GENERICS.md §5` now records why
 stage-1 cannot transcribe stage-0's approach — it names every type by its SPAN in the source, and
 `Option$Int` has no span, which is the same wall `for x in xs` hit — and the shape that fits:
 `Ty` gains `args_start`/`args_count` into a new `type_args` side array, the way `kids` and `subs`

@@ -1,5 +1,5 @@
 // `lib/map.bx` — a key-value table in INSERTION order, written in Burxt with no compiler support
-// beyond `hash`. See spec/M11-MAPS.md.
+// beyond `hash`. See spec/1.0/M11-MAPS.md.
 //
 // The last four lines are the point of the whole design. After removing the FIRST key inserted,
 // iteration still answers the survivors in the order they went in. A hash-ordered map gets this

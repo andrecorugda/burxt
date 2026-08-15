@@ -41,7 +41,7 @@
 //     language offers, and it is a real one — a secret read inside `region verify { ... }` is gone
 //     from the live heap when that block ends, even though the bytes are not scrubbed.
 //
-// This is recorded as a 1.0 limitation in `spec/ROADMAP-1.0.md` §E6. It is written here as well,
+// This is recorded as a 1.0 limitation in `spec/1.0/ROADMAP-1.0.md` §E6. It is written here as well,
 // and at this length, because §E6 is a single table row and this file is where somebody handling a
 // secret will actually be looking.
 //

@@ -272,7 +272,7 @@ burxt runtime error: `requires amount <= self.balance` failed in `Account.withdr
 ```
 
 There is no build mode that removes that check and no factory that skips it.
-([Why this shipped after `private` rather than with it](https://github.com/andrecorugda/burxt/blob/main/spec/A5-CONTRACTS.md).)
+([Why this shipped after `private` rather than with it](https://github.com/andrecorugda/burxt/blob/main/spec/1.0/A5-CONTRACTS.md).)
 
 ### Values, not references
 

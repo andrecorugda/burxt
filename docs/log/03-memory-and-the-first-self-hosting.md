@@ -83,7 +83,7 @@ region tx {
 }   // everything allocated here released in O(1)
 ```
 
-The first slice of the memory model decided in `spec/M1-MEMORY-MODEL.md`:
+The first slice of the memory model decided in `spec/1.0/M1-MEMORY-MODEL.md`:
 **regions as the unit of ownership.** Opening a region records where the bump
 cursor stands; closing it resets the cursor. That reset *is* the deallocation —
 no per-object free, no refcount, no collector, no scheduler. The
@@ -402,7 +402,7 @@ tested against hand-written C rather than described: a test asserts `$19.99`
 arrives as `1999`, that 2^53 crosses unchanged, and that 2^53+1 dies with a named
 error instead of quietly becoming its neighbour.
 
-Spec: `spec/N1-BOUNDARY-EXACTNESS.md`, with its own must-NOT list — no implicit
+Spec: `spec/1.0/N1-BOUNDARY-EXACTNESS.md`, with its own must-NOT list — no implicit
 Decimal↔double conversion ever, no float type in Burxt, no "close enough" mode on
 the range check, and no serialization layer yet (there is no encoder to guard;
 when one is built it inherits these rules).

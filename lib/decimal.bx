@@ -207,7 +207,7 @@ pure function decimal2_round_to(value: Decimal<2>, places: Int) -> Decimal<2>
 // answer for. Letting the language trap keeps one rule for overflow instead of two.
 //
 // A `Decimal<4>` for the rate because that is what a percent literal is: `8.25%` is `0.0825`
-// held at scale 4, per `spec/A4.7-SIGNATURE-GRAMMAR.md`.
+// held at scale 4, per `spec/1.0/A4.7-SIGNATURE-GRAMMAR.md`.
 pure function decimal2_percent_of(amount: Decimal<2>, rate: Decimal<4>) -> Decimal<2> {
     let exact: Decimal<6> = amount * rate;
     // Scale 6 is four places past the penny, so the divisor is 10^4.

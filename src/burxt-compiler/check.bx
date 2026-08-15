@@ -3948,7 +3948,7 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
     if n.kind == 60 {                                // let
         // Two paths, and only the first line differs: with an annotation the value is
         // checked AGAINST a type, without one the value IS the type. Inference removes
-        // typing, not checking. See spec/M10-ERGONOMICS.md §1.
+        // typing, not checking. See spec/1.0/M10-ERGONOMICS.md §1.
         let mutable declared: Type = unknown_type();
         if n.a >= 0 {
             // C2. A `let` naming a dependency's private class. `declared_type` cannot refuse — it
@@ -5783,7 +5783,7 @@ function find_text(src: String, needle: String) -> Int {
     // `len` on a String is strlen, so both bounds are hoisted. Leaving `len(src)` in the
     // condition walked the whole source on every iteration — O(source²) for one call, on a
     // two-hundred-kilobyte source. The first of four of this shape; the one that mattered
-    // was not in Burxt at all, and spec/M9-PERFORMANCE.md tells that story.
+    // was not in Burxt at all, and spec/1.0/M9-PERFORMANCE.md tells that story.
     let stop: Int = len(src) - n;
     let mutable i: Int = 0;
     while i <= stop {
@@ -6156,7 +6156,7 @@ function (mutable self: Unit) check_type_shape(src: String, node: Int, at: Int) 
 //
 // A clean refusal, not a crash. Before this guard the checker walked a type-parameter node,
 // looked its name up as a class, got -1, and indexed an array with it. Saying "not yet" is
-// the honest answer and the cheap one. See spec/M7-GENERICS.md §5 for the design that
+// the honest answer and the cheap one. See spec/1.0/M7-GENERICS.md §5 for the design that
 // replaces it.
 // The one thing left that needs a COPY rather than a resolution: a function whose body is sized
 // by a type parameter. `identity<T>` compiles to different code for `T = Int` (one cell) and
@@ -6694,7 +6694,7 @@ function (mutable self: Unit) check_return_storage(src: String) -> Int {
 // mark at the opening brace and puts the cursor back at the closing one. If the answer is yes — or
 // if this pass does not RECOGNISE the construct well enough to answer — the block is left exactly
 // as it was, which is the behaviour before A12 existed. That asymmetry is the whole safety
-// argument: a wrong guess costs memory, never correctness (spec/M14-IMPLICIT-REGIONS.md §10, "no
+// argument: a wrong guess costs memory, never correctness (spec/1.0/M14-IMPLICIT-REGIONS.md §10, "no
 // guessing inward"), and it is why every unhandled arm below taints rather than falling through.
 //
 // ALL-OR-NOTHING PER BLOCK, per §9b Decision 3. A bump allocator is LIFO, so there is no way to

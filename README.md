@@ -9,7 +9,7 @@
 and correctness is enforced by the compiler — not left to discipline.**
 
 [![CI](https://github.com/andrecorugda/burxt/actions/workflows/ci.yml/badge.svg)](https://github.com/andrecorugda/burxt/actions/workflows/ci.yml)
-[![Self-hosting](https://img.shields.io/badge/self--hosting-byte--identical%20fixpoint-111)](spec/M4-SELF-HOSTING.md)
+[![Self-hosting](https://img.shields.io/badge/self--hosting-byte--identical%20fixpoint-111)](spec/1.0/M4-SELF-HOSTING.md)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-111)](#licence)
 
 **[burxt-lang.org](https://burxt-lang.org)**
@@ -71,44 +71,34 @@ The same principle generalizes. Burxt's identity is: **the compiler refuses to l
 - **Composition-first OOP** — small interfaces, explicit `implement Trait for Type` conformance, static dispatch by default and runtime dispatch only where you write `dynamic`.
 - **Native, cross-platform by design** — one LLVM backend, many targets: desktop, mobile, and web (WebAssembly). The front end knows nothing about any platform, so reach is a configuration problem rather than a rewrite.
 
-## Status
+## Status — 1.0.0
 
-Burxt is early and built in small, verified increments. It is **not yet ready for production use** — it is ready to try, read and shape.
+**Released.** The bar was written down before the work started and it was not moved:
 
-**Burxt compiles Burxt, and the two compilers agree.** The compiler is written in Burxt — lexer, parser, typechecker and an LLVM-IR backend, **10,981 lines** of it — and it compiles its own source. The compiler *it* produces emits **byte-identical** output for that same source: the fixpoint that says the two implementations agree about the whole language, rather than about the programs someone thought to test.
+> A language someone outside this repository can ship on. They can write a real program, **test** it,
+> **debug** it, **depend** on other people's code, and hand it to a shell that understands what it
+> says — and everything deliberately absent is **named, with its reason**, in one place.
 
-**The Burxt compiler compiles all 144 pass programs — 0 refused — and every one prints the same bytes as the Rust compiler's build of it** — Decimals, `match`, `return tail`, `external function`, interpolation, generics and maps included.
+- **[What Burxt does not do](https://andrecorugda.github.io/burxt/limitations.html)** — every gap and
+  every deliberate absence, with the reason.
+- **[Compared to other languages](https://andrecorugda.github.io/burxt/comparison.html)** — row by
+  row, including the rows where other languages win.
+- **[What it promises between versions](https://andrecorugda.github.io/burxt/compatibility.html)** —
+  and the one command that enforces it.
 
-**And it keeps every runtime guarantee.** "Compiles every program" would read like more than it is on its own, because that measure only covers programs that *succeed*. So a second test runs the 34 programs in `tests/panic/` — a broken contract, an overflow, an index out of range, a byte outside 0..255, a value too wide for the C parameter it crosses into, a `decreases` measure that does not decrease — through stage-1's backend and requires each one to fail. **It keeps 55 of 55**, and that is an equality rather than a floor, so losing one is a failing test.
-Since v0.0.262 it also requires exit 70 and the fixture's own message, not merely a non-zero exit —
-because a bare `sdiv` on x86-64 *faults*, so for 120 versions the hardware was standing in for a
-check stage-1 never emitted, and the same program on arm64 printed a wrong number instead. That
-tightening immediately found four fixtures reporting the failure in different words from the Rust
-compiler — runtime text had been compared by no test at all. **All four are closed as of v0.0.263,
-and the list they were tracked in stays, empty**, so a new divergence fails by name rather than
-being absorbed into a count.
+**Burxt compiles Burxt, and the two compilers agree.** The compiler is written in Burxt — lexer,
+parser, typechecker and an LLVM-IR backend, **23,954 lines** of it — and it compiles its own source.
+The compiler *it* produces emits **byte-identical** output for that same source: the fixpoint that
+says the two implementations agree about the whole language, rather than about the programs someone
+thought to test.
 
-Worth knowing how that number got written down: when the test was first added it was **8 of 21**. Stage-1 had been compiling every program correctly and silently discarding contracts, bounds checks and the termination measure — because every contract fixture in `tests/pass/` has contracts that *succeed*, and a satisfied contract produces identical output whether or not it was ever checked. The gap was shaped exactly like a directory boundary.
+**The Burxt compiler compiles all 205 pass programs — 0 refused — and every one prints the same
+bytes as the Rust compiler's build of it.** Decimals, `match`, `return tail`, `external function`,
+interpolation, generics, maps, tuples and generic interfaces included.
 
-The Rust compiler stays as the trust anchor and as the other half of a differential test, so a change to the language has two implementations that must agree or a test fails. Details in [`spec/M4-SELF-HOSTING.md`](spec/M4-SELF-HOSTING.md).
-
-Every push runs **78 invariants**, including that fixpoint, the differential test, 157 pass and 309 fail fixtures, and performance ratios that fail if a known quadratic returns.
-
-**Working today:**
-
-- **Numbers.** Exact decimals with explicit rounding contracts (`RoundHalfEven` / `RoundHalfUp`), money and percent literals (`$19.99`, `8.25%`), overflow-trapping checked arithmetic, i128 intermediates so the overflow error means the *result* does not fit.
-- **The basics.** Integers, booleans, strings (length, byte access, equality, concatenation, interpolation both as a print and as a value), `let` / `let mutable`, functions, recursion, `if` / `else if` / `else`, `while`, `&&` / `||` / `!` with real short-circuiting.
-- **Types.** Nominal records with value semantics, fixed-size and growable arrays with always-on bounds checks, sum types with **exhaustive `match`** (no wildcard, so a new variant breaks every incomplete match), methods with value or mutating receivers, interfaces with static dispatch by default and `dynamic` fat-pointer dispatch only where written.
-- **Memory.** **Regions** as the unit of ownership: a bump allocator, release in O(1), no GC and no refcounts, and compile-time escape checking that refuses returning region storage. Single-owner regions are what make data-race freedom reachable without per-object borrow checking.
-- **Guaranteed tail calls.** `return tail f(...)` is a *checked* guarantee (LLVM `musttail`), not an invisible optimization: 50 million frames in constant stack, or a compile error explaining why the guarantee cannot be given.
-- **The C boundary.** `external function`, plus **exactness that survives it**: a `Decimal` crosses only through a declared marshaller (`amount: Decimal<2> as scaled`), a `Decimal` → C `double` crossing is a compile error, and an `Int` → `double` crossing is range-checked at 2^53.
-- **File input.** `read_file` and `to_string`, the two things a self-hosted compiler cannot do without.
-- **Contracts, checked.** `requires` / `ensures` / `decreases` on a signature, checked at runtime with no build mode that strips them, `old(...)` in an `ensures` so a conservation law is expressible (`ensures from + to == old(from + to)`), and `pure` as a compiler-checked claim that a function's answer depends on its arguments alone.
-- **Self-hosting.** The whole compiler, in Burxt: a lexer, a parser building an arena AST, a typechecker that agrees with this one on every program in the suite, and an LLVM-IR backend — compiling itself to a fixpoint.
-
-**Designed and committed, not yet built:** no null (absence as an explicit `Option<T>` the compiler forces you to handle); errors as values you must handle; *static proof* of the contracts that are checked at runtime today — the verification layer that is Burxt's eventual differentiator; algebraic effect handlers instead of coloured `async`; and the cross-compilation targets above. Single inheritance was **dropped**, not deferred: composition and interfaces do the work, and the reasoning is recorded rather than reversed quietly.
-
-`DESIGN.md` records the design north star and a ledger of superseded decisions and deliberately deferred features, each with the trigger that would earn it a milestone. Every version's entry — what it decided and what it cost — is in [`docs/log/`](docs/log/). The distinction between shipped and planned is kept honest in both, on purpose.
+The suite is **205 pass · 366 fail · 55 panic fixtures and 101 invariants**, and the standard library
+is 22 modules. A fail fixture exists for every refusal, with the reason in the fixture's comment,
+because a passing test cannot tell "supported" from "never examined".
 
 ## Running a Burxt program
 

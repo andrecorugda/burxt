@@ -12,7 +12,7 @@
 //
 // ---- why a compiler ships this at all --------------------------------------------------
 //
-// `spec/A4.5-AGGREGATE-ABI.md` §3 is a DECISION, in those words: *"layout IS exactly the
+// `spec/1.0/A4.5-AGGREGATE-ABI.md` §3 is a DECISION, in those words: *"layout IS exactly the
 // declared fields, no hidden header, ever — no type tag, no vtable pointer, no refcount, no
 // hidden header word."* That is a promise a reader has to be able to CHECK, and this is how
 // they check it. `codegen.rs` says the same thing about its own copy: *"this makes the
@@ -276,7 +276,7 @@ function (mutable self: Unit) layout_align(src: String, given: Type) -> Int {
     return 8;
 }
 
-// A type's size in bytes, per `spec/A4.5-AGGREGATE-ABI.md` §3: the declared fields, standard
+// A type's size in bytes, per `spec/1.0/A4.5-AGGREGATE-ABI.md` §3: the declared fields, standard
 // alignment, and no hidden header.
 //
 // A class is walked field by field — pad up to the field's own alignment, place it, advance —

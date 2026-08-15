@@ -1,4 +1,4 @@
-// `c_bytes_at(p, n)` — N bytes from C, copied into a Burxt `[Int]`. A1 of spec/ROADMAP-1.0.md.
+// `c_bytes_at(p, n)` — N bytes from C, copied into a Burxt `[Int]`. A1 of spec/1.0/ROADMAP-1.0.md.
 //
 // The counterpart to `c_string_at`, and the same wall: the bytes are COPIED, so the pointer never
 // becomes something the language must reason about the lifetime of.

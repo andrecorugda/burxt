@@ -167,7 +167,7 @@ is over a megabyte on the numbers above, and is not the compiler's own 200 KB.
 >
 > **DONE (v0.0.120), and the answer was not pointer-plus-length.** It is a length HEADER in the
 > eight bytes before the first byte, because a two-cell String would have broken stage-1's
-> one-value-per-i64 invariant to gain a register read over a cached load — see spec/M12-STRINGS.md
+> one-value-per-i64 invariant to gain a register read over a cached load — see spec/1.0/M12-STRINGS.md
 > §1. The expensive property was O(1), not zero-load.
 >
 > | Statements | 12800 | 25600 | 51200 | 102400 |

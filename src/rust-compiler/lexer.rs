@@ -130,7 +130,7 @@ pub enum Token {
     EqEq,
     NotEq,
     Bang,
-    /// `?` — the failure shortcut. See spec/M8-ERRORS.md §1a.
+    /// `?` — the failure shortcut. See spec/1.0/M8-ERRORS.md §1a.
     Question,
     AmpAmp,
     PipePipe,

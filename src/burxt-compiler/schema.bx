@@ -4,7 +4,7 @@
 //
 // `schema.rs`'s own header calls this "the one thing in this repository that no other
 // language can do", and until this file existed that sentence had a hole in it: the thing
-// no other language could do was done by a Rust program. `spec/ROADMAP-1.0.md` THE GATE
+// no other language could do was done by a Rust program. `spec/1.0/ROADMAP-1.0.md` THE GATE
 // states the rule it broke —
 //
 //   > **Rust may BUILD Burxt. Burxt may not USE Rust.** A bootstrap is a one-time debt.

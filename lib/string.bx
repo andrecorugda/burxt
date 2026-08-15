@@ -77,7 +77,7 @@ use "option.bx";
 //
 // ---- one thing D0 says that this file MEASURED as no longer true ---------------------------
 //
-// `spec/ROADMAP-1.0.md` §D0's third bullet says *"a String's `len` walks it, so never leave
+// `spec/1.0/ROADMAP-1.0.md` §D0's third bullet says *"a String's `len` walks it, so never leave
 // `len(s)` in a loop condition"*, and a comment in `src/burxt-compiler/emit.bx` says the same. **It
 // does not walk it.** `build_str_len` in `src/rust-compiler/codegen.rs` loads the length from the
 // eight bytes before the first byte — one load, no scan — and its own comment dates the change:
@@ -427,7 +427,7 @@ pure function string_repeat(text: String, times: Int) -> String {
 //
 // **No char type.** A single codepoint is a ONE-CODEPOINT STRING, not a new kind of value. So
 // `char_at` answers a String and there is nothing new to teach `print`, `==`, `+` or a `match`
-// about — which is the whole saving. `spec/ROADMAP-1.0.md`'s decisions list says *"no char type, no
+// about — which is the whole saving. `spec/1.0/ROADMAP-1.0.md`'s decisions list says *"no char type, no
 // bare `s[i]`"*, and the second half is why there is no `s[i]` here either.
 //
 // **Explicit views rather than bare indexing.** `spec/A4.4` wants `.bytes()` / `.chars()` because
@@ -454,7 +454,7 @@ pure function string_repeat(text: String, times: Int) -> String {
 //
 // ---- what these assume about validity -------------------------------------------------
 //
-// `spec/A4.4` declares a String is UTF-8 and `spec/ROADMAP-1.0.md` §B5 records that the invariant is
+// `spec/A4.4` declares a String is UTF-8 and `spec/1.0/ROADMAP-1.0.md` §B5 records that the invariant is
 // **declared and unenforced** at four entry points. That is not fixed here, so the honest statement
 // is which of these rely on it:
 //
@@ -554,7 +554,7 @@ pure function char_at(text: String, i: Int) -> String
 //   * **surrogates**: `ED A0`..`ED BF` is U+D800..U+DFFF, which UTF-8 does not encode.
 //   * **out of range**: past `F4 8F` is above U+10FFFF, which is not a codepoint.
 //
-// Assumes nothing. This is the function `spec/ROADMAP-1.0.md` §B5 would need if the declared-and-
+// Assumes nothing. This is the function `spec/1.0/ROADMAP-1.0.md` §B5 would need if the declared-and-
 // unenforced UTF-8 invariant were ever enforced at the four entry points — enforcing it is not done
 // here, and having something to enforce it WITH is the part A5 delivers.
 pure function is_valid_utf8(text: String) -> Bool {
@@ -823,7 +823,7 @@ pure function string_reverse(text: String) -> String {
 //     answer without knowing the language. A function with no locale argument cannot be right.
 //
 // That is a module with a generated table and a locale parameter, and it is a different decision
-// from this one. `spec/ROADMAP-1.0.md` §D1a is satisfied by naming the limit today.
+// from this one. `spec/1.0/ROADMAP-1.0.md` §D1a is satisfied by naming the limit today.
 //
 // ---- why a BYTE-wise loop is safe here, which is not obvious ----
 //

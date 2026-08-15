@@ -100,7 +100,7 @@ all of them, including above the ordering rule that used to be first.
 > exists in Rust, the one capability no other language has belongs to the Rust program. Every tool that
 > lives only on the Rust side is a claim Burxt cannot make on its own.
 
-That is why `spec/M4-SELF-HOSTING.md` §5's *"stage-0 is the trust anchor and the differential test"*
+That is why `spec/1.0/M4-SELF-HOSTING.md` §5's *"stage-0 is the trust anchor and the differential test"*
 survives the rule intact and is not in tension with it. **A differential test is not a dependency.** Two
 implementations that must agree is how a language change becomes a failing test instead of a bug report,
 and keeping the Rust one for that is deliberate. What the rule forbids is Burxt *needing* it to do a job.

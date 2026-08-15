@@ -687,7 +687,7 @@ mod tests {
 
     /// An inferred binding has no annotation to read, so hover is where its type
     /// lives now. This is the trade `let x = 0;` makes explicit: the type did not
-    /// disappear, it moved into the editor. See spec/M10-ERGONOMICS.md §4.6.
+    /// disappear, it moved into the editor. See spec/1.0/M10-ERGONOMICS.md §4.6.
     #[test]
     fn hover_reports_a_type_that_was_never_written() {
         let src = "region r {\n    let price = $19.99;\n    let rate = 8.25%;\n    \

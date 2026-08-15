@@ -251,5 +251,5 @@ function unreachable(why: String) -> Int {
 // It does NOT convert between error types. If the callee fails with a String and you
 // fail with something else, write the `match`: somebody has to decide what the
 // caller's failure means, and that decision does not belong to an operator. See
-// spec/M8-ERRORS.md §1a for the reasoning, and the trigger that would add a
+// spec/1.0/M8-ERRORS.md §1a for the reasoning, and the trigger that would add a
 // conversion trait.

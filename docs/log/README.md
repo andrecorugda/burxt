@@ -9,8 +9,8 @@ finding anything meant searching. The design it serves stayed there;
 [DESIGN.md](../../DESIGN.md) is still the place to start.
 
 > **This log covers v0.0.1–v0.0.89.** From v0.0.90 the record moved into the milestone specs in
-> [`spec/`](../../spec/), each carrying its own status block — `spec/M12-STRINGS.md` records M12's
-> numbers, `spec/M13-CONTRACT-SYNTAX.md` records what M13 shipped and what is still pending, and so
+> [`spec/`](../../spec/), each carrying its own status block — `spec/1.0/M12-STRINGS.md` records M12's
+> numbers, `spec/1.0/M13-CONTRACT-SYNTAX.md` records what M13 shipped and what is still pending, and so
 > on. That was a reasonable shift, since work became milestone-shaped rather than version-shaped,
 > but it happened without a note and this log appeared to simply stop. It did not; look in `spec/`.
 > Versions with no milestone of their own are recorded where they live — v0.0.141's wrong answer
@@ -141,7 +141,7 @@ backend — and they were recorded in that milestone's own specification while i
 built, where the running counts (false positives, rejections, lines emitted) belonged next
 to the plan they were measured against.
 
-- **v0.0.59–v0.0.68** — [`spec/M4-SELF-HOSTING.md`](../../spec/M4-SELF-HOSTING.md), phases
+- **v0.0.59–v0.0.68** — [`spec/1.0/M4-SELF-HOSTING.md`](../../spec/1.0/M4-SELF-HOSTING.md), phases
   4b through 5, and §3a for where the bootstrap stands.
 - **v0.0.70** — the VS Code extension reinstalled so it carried the new mark; recorded in
   the v0.0.69 entry, since it was the same change finished properly.

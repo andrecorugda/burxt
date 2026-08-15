@@ -344,7 +344,7 @@ The full rule, not the structural half. A checker that accepted overlong encodin
 
 * **surrogates**: `ED A0`..`ED BF` is U+D800..U+DFFF, which UTF-8 does not encode. * **out of range**: past `F4 8F` is above U+10FFFF, which is not a codepoint.
 
-Assumes nothing. This is the function `spec/ROADMAP-1.0.md` §B5 would need if the declared-and- unenforced UTF-8 invariant were ever enforced at the four entry points — enforcing it is not done here, and having something to enforce it WITH is the part A5 delivers.
+Assumes nothing. This is the function `spec/1.0/ROADMAP-1.0.md` §B5 would need if the declared-and- unenforced UTF-8 invariant were ever enforced at the four entry points — enforcing it is not done here, and having something to enforce it WITH is the part A5 delivers.
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L560)
 

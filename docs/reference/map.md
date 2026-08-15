@@ -16,7 +16,7 @@ use "lib/map.bx";
 
 A LIBRARY file, like lib/option.bx and lib/result.bx. The only compiler support it needs is `hash(x)`; everything else here is ordinary Burxt written with generics. If a map had needed a keyword, the generics would not be real.
 
-Iteration is INSERTION order, always — not "unspecified", not "arbitrary". Go randomises iteration deliberately and Rust randomises its hash seed per process, and both are admissions that hash order leaked into programs that then broke. A language whose thesis is reproducibility should not ship a container whose iteration order depends on a hash function's internals. See spec/M11-MAPS.md Decision 1.
+Iteration is INSERTION order, always — not "unspecified", not "arbitrary". Go randomises iteration deliberately and Rust randomises its hash seed per process, and both are admissions that hash order leaked into programs that then broke. A language whose thesis is reproducibility should not ship a container whose iteration order depends on a hash function's internals. See spec/1.0/M11-MAPS.md Decision 1.
 
 ## What is in it
 {: #what-is-in-it}
@@ -93,7 +93,7 @@ An empty map.
  let mutable counts: Map<String, Int> = map_new();
 ```
 
-The type arguments come from the ANNOTATION, not from an argument — there is nothing to pass. That works because a call whose type parameters the arguments cannot settle reads them from the expectation, which is strictly better than a turbofish: the type is already written where the value lands, and writing it twice would be the language asking a question it can already answer. Landed in v0.0.116; before that this had to be spelled `Map { entries: [], slots: [], live: 0 }` with all three fields exposed at every construction site. See spec/M11-MAPS.md Decision 7.
+The type arguments come from the ANNOTATION, not from an argument — there is nothing to pass. That works because a call whose type parameters the arguments cannot settle reads them from the expectation, which is strictly better than a turbofish: the type is already written where the value lands, and writing it twice would be the language asking a question it can already answer. Landed in v0.0.116; before that this had to be spelled `Map { entries: [], slots: [], live: 0 }` with all three fields exposed at every construction site. See spec/1.0/M11-MAPS.md Decision 7.
 
 Everything else is a METHOD, and not for tidiness: Burxt has no writable parameters, so a container that changes has to change through `mutable self`. The API is better for it — `counts.set("k", 1)` rather than `map_set(counts, "k", 1)` — which is the usual way a real constraint turns out to have been pointing at the nicer design.
 
@@ -180,7 +180,7 @@ function (self: Map<K, V>) get(key: K, fallback: V) -> V
 
 The value, or the fallback.
 
-A fallback rather than an `Option<V>`, and the reason is a current limitation rather than a preference: a generic enum payload must be a scalar, so `Option<Point>` is refused, so an `Option<V>` return would restrict values to scalars — a worse limitation than the one it removes. spec/M11-MAPS.md Decision 5 classes the trigger that would add `find`.
+A fallback rather than an `Option<V>`, and the reason is a current limitation rather than a preference: a generic enum payload must be a scalar, so `Option<Point>` is refused, so an `Option<V>` return would restrict values to scalars — a worse limitation than the one it removes. spec/1.0/M11-MAPS.md Decision 5 classes the trigger that would add `find`.
 
 Asking then reading is two lookups. That cost is documented rather than hidden, and it is the same shape lib/option.bx chose: `option_or` and `option_is_some`, and deliberately no `unwrap`.
 
@@ -195,7 +195,7 @@ function (self: Map<K, V>) find(key: K) -> Option<V>
 
 The value if it is there, as an `Option<V>`.
 
-This could not be written until v0.0.118, and the reason was recorded rather than guessed at: a variant payload had to be a scalar, so `Option<Point>` was refused, so an `Option<V>` return would have restricted map VALUES to scalars — a worse limitation than the one it removed. Lifting the payload rule was the trigger spec/M11-MAPS.md Decision 5 named, and this is what it unblocked.
+This could not be written until v0.0.118, and the reason was recorded rather than guessed at: a variant payload had to be a scalar, so `Option<Point>` was refused, so an `Option<V>` return would have restricted map VALUES to scalars — a worse limitation than the one it removed. Lifting the payload rule was the trigger spec/1.0/M11-MAPS.md Decision 5 named, and this is what it unblocked.
 
 `get` stays, and is still the right call when a default is genuinely right. `find` is for when it is not, and it answers with the one type in this language that cannot be read without saying what happens when there is nothing there.
 

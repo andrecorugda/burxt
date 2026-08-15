@@ -86,7 +86,7 @@ pub enum TypedExprKind {
     /// Unseeded on purpose. The same input hashes the same in every run on every machine, which
     /// is what lets a map iterate in a defined order and a program that contains one stay
     /// reproducible. The trade — no HashDoS protection — and the trigger that would change it are
-    /// in spec/M11-MAPS.md Decision 4.
+    /// in spec/1.0/M11-MAPS.md Decision 4.
     Hash(Box<TypedExpr>),
     /// `len(s)` on a String: a runtime byte scan (an array's length folds to a
     /// constant instead, so it never reaches codegen).
@@ -144,7 +144,7 @@ pub enum TypedExprKind {
     SliceIndex { base: Box<TypedExpr>, index: Box<TypedExpr> },
     /// `e?`: the success payload, or return the failure from the enclosing function.
     /// Everything the lowering needs is settled here — which variant fails, which
-    /// succeeds, and what the caller's failure variant is. See spec/M8-ERRORS.md §1a.
+    /// succeeds, and what the caller's failure variant is. See spec/1.0/M8-ERRORS.md §1a.
     Try {
         value: Box<TypedExpr>,
         fail_tag: u32,
@@ -406,7 +406,7 @@ pub struct TypeChecker {
     /// functions may be defined in any order and call each other.
     fns: HashMap<String, (Vec<Type>, Type)>,
     /// The type parameters of every generic function, by name. Empty for all the
-    /// others, so the common path is one `is_empty` away. See spec/M7-GENERICS.md.
+    /// others, so the common path is one `is_empty` away. See spec/1.0/M7-GENERICS.md.
     generics: HashMap<String, Vec<TypeParam>>,
     /// Generic ENUM declarations: their parameters and their variants, with the parameters
     /// still standing for nothing. Kept out of `enums` because a generic enum has no
@@ -1270,13 +1270,13 @@ impl TypeChecker {
     /// error in a cascade of "unknown name" noise.
     ///
     /// An **inferred** `let` whose initializer failed has nothing to recover with, and
-    /// nothing is guessed. That is the stated cost of spec/M10-ERGONOMICS.md §1 — half
+    /// nothing is guessed. That is the stated cost of spec/1.0/M10-ERGONOMICS.md §1 — half
     /// of an advantage Burxt used to have for free — and it is a real argument for
     /// annotating bindings in a long function.
     /// Record that this `(generic, type arguments)` pair is needed, and answer the symbol
     /// it will have. Recording is idempotent: a generic called in fifty places is emitted
     /// once, and a generic called nowhere is emitted never — which is what lets a library
-    /// declare generics at no cost. See spec/M7-GENERICS.md Decision 4.
+    /// declare generics at no cost. See spec/1.0/M7-GENERICS.md Decision 4.
     /// Is this name an enum? Either declared concretely, or made on demand as an
     /// instantiation of a generic one — a caller has no reason to care which.
     /// Replace every concrete generic application written anywhere in the program with the
@@ -1501,7 +1501,7 @@ impl TypeChecker {
     ///
     /// An application whose arguments still mention a type parameter is left alone: it is
     /// inside a generic being checked generically, and it becomes concrete when that
-    /// generic is instantiated. See spec/M7-GENERICS.md Decision 4.
+    /// generic is instantiated. See spec/1.0/M7-GENERICS.md Decision 4.
     /// Make one instantiation of a generic interface and hand back the `Dyn` that names it.
     ///
     /// Shared by the three spellings that reach it — `Mapper<Int>`, `dynamic Mapper<Int>` and
@@ -2081,7 +2081,7 @@ impl TypeChecker {
     /// Which instantiation a class literal means. For a non-generic record: itself. For a
     /// generic one: the arguments come from the context when it names them, and otherwise are
     /// inferred from the field values — the same two sources, in the same order, that a
-    /// generic enum's variant uses. See spec/M7-GENERICS.md.
+    /// generic enum's variant uses. See spec/1.0/M7-GENERICS.md.
     fn instantiate_record(
         &self,
         name: &str,
@@ -3070,7 +3070,7 @@ impl TypeChecker {
                          generic class is checked once per instantiation, so one `pure` promise \
                          would have to stand for every copy at once. `pure` on a method of a \
                          NON-generic class works today. This is a question about which copy owns \
-                         the promise rather than about purity — see spec/ROADMAP-1.0.md A4.",
+                         the promise rather than about purity — see spec/1.0/ROADMAP-1.0.md A4.",
                         m.receiver,
                         m.receiver_arguments.join(", "),
                         m.name
@@ -3270,7 +3270,7 @@ impl TypeChecker {
         // Pass 2b: one copy of each generic per `(generic, type arguments)` pair the
         // program actually reached. Checking an instantiation can discover more — a
         // generic calling a generic — so this drains to a fixpoint rather than iterating
-        // a fixed list. See spec/M7-GENERICS.md Decision 4.
+        // a fixed list. See spec/1.0/M7-GENERICS.md Decision 4.
         let by_name: HashMap<&str, &FnDef> =
             prog.fns.iter().map(|f| (f.name.as_str(), f)).collect();
         let mut guard = 0usize;
@@ -4011,7 +4011,7 @@ impl TypeChecker {
         }
         out.push_str(
             "\nwhether and what, from the same inference `allocates` is derived from. WHERE it \
-             lands\nis per-block release, which is not built — see spec/M14-IMPLICIT-REGIONS.md \
+             lands\nis per-block release, which is not built — see spec/1.0/M14-IMPLICIT-REGIONS.md \
              slice 3.\n",
         );
         out
@@ -5779,7 +5779,7 @@ impl TypeChecker {
                 // Two paths, and only the first line of each differs: with an annotation
                 // the value is checked AGAINST a type, without one the value IS the type.
                 // Every rule after that is the same, which is the point — inference removes
-                // typing, not checking. See spec/M10-ERGONOMICS.md §1 Decision 3.
+                // typing, not checking. See spec/1.0/M10-ERGONOMICS.md §1 Decision 3.
                 let (bound, typed) = match declared {
                     Some(declared) => {
                         self.validate_type(declared)?;
@@ -6772,7 +6772,7 @@ impl TypeChecker {
         }
         match &e.kind {
             // `e?` — the value, or an immediate return of the failure. Two decisions live
-            // here, both from spec/M8-ERRORS.md §1a: the failure variant is recognised by
+            // here, both from spec/1.0/M8-ERRORS.md §1a: the failure variant is recognised by
             // NAME (`Error` or `None`), never by the enum's type name, so a library type gets
             // it and a hardcoded one is not needed; and there is NO conversion, so the
             // enclosing function must fail the same way with the same payload.
@@ -8437,7 +8437,7 @@ impl TypeChecker {
                     // `alloc_methods` test further down, so `allocates` was enforced for a
                     // direct call and silently skipped through an interface object. It corrupted
                     // nothing in the reproduction only because a region happened to be open
-                    // further up the stack. spec/M14-IMPLICIT-REGIONS.md §5.
+                    // further up the stack. spec/1.0/M14-IMPLICIT-REGIONS.md §5.
                     //
                     // The design §5 first proposed — `allocates` on trait signatures — is not
                     // needed and would have been worse: one fact in two places, with the
@@ -8875,7 +8875,7 @@ impl TypeChecker {
                     // whether the array is FIXED or GROWABLE, and that is a decision with
                     // different storage, different rules and different costs behind it.
                     // So an array binding names its type, and says which.
-                    // See spec/M10-ERGONOMICS.md §1 Decision 2.
+                    // See spec/1.0/M10-ERGONOMICS.md §1 Decision 2.
                     _ => {
                         return Err(
                             "an array literal does not say whether the array is fixed or \
@@ -9302,7 +9302,7 @@ impl TypeChecker {
             // Two values of the same type PARAMETER. Whether this is allowed is entirely
             // what the bound says, which is the point of bounds: the body is checked
             // against the signature's promise, not against whatever the instantiations
-            // happen to permit. See spec/M7-GENERICS.md Decision 2.
+            // happen to permit. See spec/1.0/M7-GENERICS.md Decision 2.
             (Param(a), Param(b)) if a == b => {
                 let bound = self.param_bounds.get(a).cloned().flatten();
                 match (bound.as_deref(), op) {
@@ -9430,7 +9430,7 @@ impl TypeChecker {
                     // Otherwise the exact product, and the decision about narrowing it
                     // belongs wherever this value is finally stored. A caller expecting
                     // something else reports that mismatch itself rather than having this
-                    // rule guess at it. See spec/M10-ERGONOMICS.md §1 Decision 5.
+                    // rule guess at it. See spec/1.0/M10-ERGONOMICS.md §1 Decision 5.
                     _ if representable => Ok(exact_ty),
                     _ => Err(format!(
                         "this multiplication of {} by {} has an exact product with {} \
@@ -9806,7 +9806,7 @@ fn normalize_decimal(unscaled: i64, from_scale: u32, to_scale: u32) -> Result<i6
 
 // ---- generics: substitution, unification, and the name of an instantiation -----
 //
-// Monomorphisation, per spec/M7-GENERICS.md Decision 1: each `(generic, type arguments)`
+// Monomorphisation, per spec/1.0/M7-GENERICS.md Decision 1: each `(generic, type arguments)`
 // pair becomes its own function at compile time, so a `T` in memory is whatever the
 // caller's type is rather than a pointer to it. Erasure would put a pointer where the
 // value was and quietly undo everything else this language promises about what a value
@@ -10119,7 +10119,7 @@ fn substitute_in_block(stmts: &mut [Stmt], map: &HashMap<String, Type>) {
 
 /// What an unbounded type parameter cannot do, said the same way everywhere.
 ///
-/// Per spec/M7-GENERICS.md Decision 2: a parameter with no bound can be stored, copied,
+/// Per spec/1.0/M7-GENERICS.md Decision 2: a parameter with no bound can be stored, copied,
 /// passed and returned, and nothing else. Anything more needs the signature to say so,
 /// because a generic whose constraints are whatever its body happens to do is a generic
 /// whose signature is a lie — adding a `>` inside it would silently narrow every caller.
@@ -10177,7 +10177,7 @@ fn specialise_method(m: &MethodDef, map: &HashMap<String, Type>, receiver: &str)
 // pass does not RECOGNISE the construct well enough to answer — the block is left
 // exactly as it was, which is the behaviour before A12 existed. That asymmetry is
 // the whole safety argument: a wrong guess costs memory, never correctness
-// (spec/M14-IMPLICIT-REGIONS.md §10, "no guessing inward").
+// (spec/1.0/M14-IMPLICIT-REGIONS.md §10, "no guessing inward").
 //
 // ALL-OR-NOTHING PER BLOCK, per §9b Decision 3. A bump allocator is LIFO, so there is
 // no way to place one value below the current mark while the block keeps allocating

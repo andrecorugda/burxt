@@ -4,7 +4,7 @@
 // compilers would put the same key in two places, so this fixture is really a differential test
 // with the answers written down. FNV-1a for a String, two rounds of xor-shift-multiply for a
 // scalar, and the same result in every run on every machine — unseeded on purpose, because a
-// seeded hash cannot iterate in a defined order. See spec/M11-MAPS.md Decision 4.
+// seeded hash cannot iterate in a defined order. See spec/1.0/M11-MAPS.md Decision 4.
 
 region r {
     // Stable, and different keys differ.

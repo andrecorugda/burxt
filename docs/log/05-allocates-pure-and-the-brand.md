@@ -66,7 +66,7 @@ than printed piecemeal. The requirement is visible up the whole chain: `unexpect
   arm above had moved the recorded position. Found the honest way: by shadowing a
   name in `examples/lexer.bx` and being sent to the wrong line.
 
-Spec: `spec/M1a-CALLER-REGION-FUNCTIONS.md`, with its own must-NOT list — no
+Spec: `spec/1.0/M1a-CALLER-REGION-FUNCTIONS.md`, with its own must-NOT list — no
 inference, no region names in signatures, no implicit region at a call site, no
 `allocates` on `extern fn`, and no codegen change.
 
@@ -124,7 +124,7 @@ Methods cannot carry the marker yet, so a pure function cannot call one — refu
 with that reason stated, and `pure fn (self: T) ...` is refused at the parser with
 the same explanation rather than a confusing message about tokens.
 
-Spec: `spec/N2-PURE-FUNCTIONS.md`.
+Spec: `spec/1.0/N2-PURE-FUNCTIONS.md`.
 
 ### v0.0.40: the brand, in place
 

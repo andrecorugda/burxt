@@ -25,7 +25,7 @@ The first job is what pins it here. `Cargo.toml` points `[[bin]]` at `src/rust-c
 that is the entry point for anyone building from source.
 
 **So the honest fix was not to move it but to say what it is** — which is this file, because the
-directory listing could not say it on its own. `spec/ROADMAP-1.0.md` §THE GATE has the rule the two
+directory listing could not say it on its own. `spec/1.0/ROADMAP-1.0.md` §THE GATE has the rule the two
 follow: **Rust may BUILD Burxt; Burxt may not USE Rust.** A bootstrap is a one-time debt. A dependency
 is permanent.
 

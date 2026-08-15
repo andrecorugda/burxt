@@ -169,7 +169,7 @@ function skip_trivia(src: String, from: Int, stop: Int) -> Int {
         // Tested against `stop` first, then read directly rather than through `at_byte`,
         // which would re-derive a bound this function was handed. Worth 5% of the lexer
         // and no more: `byte_at`'s own check still measures the string, and see
-        // spec/M9-PERFORMANCE.md §3 for why only an O(1) length removes that.
+        // spec/1.0/M9-PERFORMANCE.md §3 for why only an O(1) length removes that.
         if i + 1 < stop && byte_at(src, i) == 47 && byte_at(src, i + 1) == 47 {
             while i < stop && byte_at(src, i) != 10 {
                 i += 1;

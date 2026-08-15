@@ -4032,7 +4032,7 @@ function (mutable self: Unit) emit_module(src: String) -> Int {
     // recurses, and a field's type is resolved deeply where it is read. LAYOUT is the part
     // that cannot be lazy — `Option<Int>` needs its own tag-and-payload sizing, one copy per
     // argument list — so the refusal lives here rather than in the checker, which no longer
-    // needs it. See spec/M7-GENERICS.md §5.
+    // needs it. See spec/1.0/M7-GENERICS.md §5.
     // A generic METHOD is the one thing left: `Stack<T>.push` wants a mangled receiver as well
     // as a mangled name, and a receiver that is itself an application. Named rather than emitted
     // wrongly, which is the rule every gap in this file follows.
@@ -4742,7 +4742,7 @@ function runtime_ir() -> String {
         // handing one back directly would make `len` of it read whatever the loader placed before
         // it — a silent wrong length, worse than a crash. This is the one place a foreign string
         // enters a Burxt program, and the strlen happens ONCE here rather than once per byte read
-        // afterwards. See spec/M12-STRINGS.md §3.
+        // afterwards. See spec/1.0/M12-STRINGS.md §3.
         + "  %borrowed = call i64 @strlen(ptr %s)\n"
         + "  %owned = call i64 @burxt.alloc_string(i64 %borrowed)\n"
         + "  %op = inttoptr i64 %owned to ptr\n"

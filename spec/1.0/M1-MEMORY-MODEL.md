@@ -211,7 +211,7 @@ not tell which region the value belonged to. It belongs to the CALLER's — a bu
 allocator hands out the caller's region to any callee that allocates while it is
 open.
 
-`spec/M1a-CALLER-REGION-FUNCTIONS.md` adds one declared bit, `allocates`, that says
+`spec/1.0/M1a-CALLER-REGION-FUNCTIONS.md` adds one declared bit, `allocates`, that says
 so. Nothing in §4's must-NOT list is weakened: no lifetimes in signatures (it has
 no name and no scope relation), no implicit region (a call that needs one and has
 none is an error), no cross-region references, and no codegen change.

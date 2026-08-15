@@ -2718,7 +2718,7 @@ function (mutable self: Unit) parse_stmt(src: String) -> Int {
         let m2: Int = self.advance();
         // The annotation is optional: without it the type comes from the value, and -1
         // is how a `let` node says "there was none" — the emitter already read it that
-        // way. See spec/M10-ERGONOMICS.md §1.
+        // way. See spec/1.0/M10-ERGONOMICS.md §1.
         let mutable type_node: Int = 0 - 1;
         if self.at(20) {
             let colon: Int = self.advance();
@@ -2792,7 +2792,7 @@ function (mutable self: Unit) parse_stmt(src: String) -> Int {
     // `for x in xs { body }` — a real statement, checked and emitted as one. The first
     // version desugared it in the parser, which worked in stage-0 and cannot work here:
     // every binding is named by its SPAN in the source, and a synthesized index has no
-    // span. See spec/M10-ERGONOMICS.md §1b.
+    // span. See spec/1.0/M10-ERGONOMICS.md §1b.
     if k == 114 {                                    // for
         let n: Int = self.advance();
         if !self.at(1) { return self.complain(src, "a name after `for`"); }

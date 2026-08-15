@@ -3,7 +3,7 @@
 // `src/rust-compiler/review.rs`.
 //
 // **Why this file has to exist at all**, and it is not "for symmetry".
-// `spec/ROADMAP-1.0.md` THE GATE states the rule this whole directory serves:
+// `spec/1.0/ROADMAP-1.0.md` THE GATE states the rule this whole directory serves:
 //
 //   > Rust may BUILD Burxt. Burxt may not USE Rust.
 //

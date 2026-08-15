@@ -694,7 +694,7 @@ impl Parser {
         }
         if !type_parameters.is_empty() {
             // C has no notion of a type parameter, and a monomorphised C symbol is a
-            // symbol that does not exist. See spec/M7-GENERICS.md §2.
+            // symbol that does not exist. See spec/1.0/M7-GENERICS.md §2.
             return Err(format!(
                 "`external function {}` cannot be generic: C has no type parameters, and there \
                  would be no symbol to link against.",
@@ -718,7 +718,7 @@ impl Parser {
     /// The subject is ELIDED: a clause beginning with a comparison operator gets `subject` inserted
     /// on its left, so `[> $0.00]` on a parameter named `amount` becomes `amount > $0.00`. Position
     /// decides what the clause is about, which is why there is no `self` here to be confused with a
-    /// method's receiver. See spec/M13-CONTRACT-SYNTAX.md Decision 1.
+    /// method's receiver. See spec/1.0/M13-CONTRACT-SYNTAX.md Decision 1.
     ///
     /// A clause that needs the subject anywhere else writes `it` (spec Decision 2), resolved at the
     /// one place a bare identifier becomes a `Var` — see `it_means`. Shipped in v0.0.167, after this
@@ -992,7 +992,7 @@ impl Parser {
         if !type_parameters.is_empty() {
             // A method may use its TYPE's parameters; its own are a later slice, and a
             // parameter list that silently did nothing would be worse than a refusal.
-            // See spec/M7-GENERICS.md §3.
+            // See spec/1.0/M7-GENERICS.md §3.
             return Err(format!(
                 "`{}` declares its own type parameters, and a method may not yet: it may \
                  use the parameters of the type it is on. Move it to a free function.",
@@ -1590,7 +1590,7 @@ impl Parser {
         Ok(StmtKind::Region { name, body })
     }
 
-    /// `for x in xs { body }` and `for i in 0..n { body }`. See spec/M10-ERGONOMICS.md §1b
+    /// `for x in xs { body }` and `for i in 0..n { body }`. See spec/1.0/M10-ERGONOMICS.md §1b
     /// for the array form and `ast::StmtKind::ForRange` for the range form's five decisions.
     fn parse_for(&mut self) -> Result<StmtKind, String> {
         self.expect(&Token::For)?;

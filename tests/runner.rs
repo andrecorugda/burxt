@@ -1539,7 +1539,7 @@ fn the_burxt_typechecker_agrees_with_the_rust_one() {
     // drift upward by luck. Measured at v0.0.224 it was 43 gaps; nobody had ever listed them,
     // because a number with no names attached cannot be worked on.
     //
-    // `spec/ROADMAP-1.0.md` §A0d named all of them. 29 were gaps and are now closed — the FFI
+    // `spec/1.0/ROADMAP-1.0.md` §A0d named all of them. 29 were gaps and are now closed — the FFI
     // boundary rules, the Decimal scale cap, `mutable` parameter misuse, string braces, interface
     // objects, arrays, record `==`/`<`, and the odds and ends. **3 were deliberate**, and they are
     // named below rather than counted, so the exclusion carries its reason with it.
@@ -2714,13 +2714,26 @@ fn every_spec_is_linked_from_its_index() {
     let dir = root.join("spec");
     let index = fs::read_to_string(dir.join("README.md")).expect("spec/README.md");
 
-    let mut files = Vec::new();
-    for entry in fs::read_dir(&dir).unwrap() {
-        let name = entry.unwrap().file_name().to_string_lossy().into_owned();
-        if name.ends_with(".md") && name != "README.md" {
-            files.push(name);
+    // RECURSES, since v1.0.0 grouped the record by the version each decision shipped in —
+    // `spec/1.0/` holds the twenty-three that built 1.0, and `spec/` itself holds what is still
+    // live plus the standing rules. A check that read only the top level would have called the
+    // whole archive missing the day it was filed, which is what it did.
+    fn walk(dir: &Path, out: &mut Vec<String>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".md") && name != "README.md" {
+                out.push(name);
+            }
         }
     }
+    let mut files = Vec::new();
+    walk(&dir, &mut files);
     files.sort();
     assert!(files.len() >= 30, "spec/ lost files: {} left, {:?}", files.len(), files);
 
@@ -3174,7 +3187,7 @@ fn the_suite_also_runs_on_burxt() {
     );
 }
 
-/// Modules: two files, one program, and the six rules from spec/M6-MODULES.md that a
+/// Modules: two files, one program, and the six rules from spec/1.0/M6-MODULES.md that a
 /// reader would want checked. The interesting one is the third — a diagnostic inside a
 /// used module must name THAT module and its own line number, not an offset into the
 /// buffer the compiler concatenated, which the programmer never saw.
@@ -3472,7 +3485,7 @@ fn the_release_tarball_works_without_rust_or_llvm() {
 /// it took **28 seconds**; it takes 1.3 now. The 8-second budget sits between them with room on
 /// both sides, so it flags the regression on a slow machine and flaps on none.
 ///
-/// The second number is `spec/M9-PERFORMANCE.md` §6.1 written down: a self-compile inside 20
+/// The second number is `spec/1.0/M9-PERFORMANCE.md` §6.1 written down: a self-compile inside 20
 /// seconds. It was 190 seconds before the fix and 1.2 after.
 ///
 /// What the fix was, since a threshold on its own teaches nobody: `byte_at` bounds-checks
@@ -3521,7 +3534,7 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
     assert!(
         on_comments < std::time::Duration::from_secs(8),
         "1.5 MB of comments took {:?}; the budget is 8 s (28 s before v0.0.90, 1.3 s after). \
-         Reading bytes has gone quadratic again — see spec/M9-PERFORMANCE.md",
+         Reading bytes has gone quadratic again — see spec/1.0/M9-PERFORMANCE.md",
         on_comments
     );
 
@@ -3767,7 +3780,7 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
         // **Why the raise anyway, when the note said not to:** a red tree is the failure this project
         // spent thirteen versions learning to avoid, and M14 slice 3 is escape analysis in two
         // compilers where a mistake is a use-after-free — it is not a hotfix. So the ceiling moves and
-        // **slice 3 stops being queued work**: it is item A12 in `spec/ROADMAP-1.0.md` and it is next.
+        // **slice 3 stops being queued work**: it is item A12 in `spec/1.0/ROADMAP-1.0.md` and it is next.
         // Saying "this is the last raise" a second time would be worth nothing; what is worth
         // something is that the next reader knows the promise was made, broken once, and why.
         //
@@ -6101,14 +6114,14 @@ fn the_burxt_backend_keeps_every_runtime_guarantee() {
 
 /// **A document may not claim a coverage number the suite refutes.**
 ///
-/// `spec/M4-SELF-HOSTING.md` §3b said, for a hundred versions: *"stage-1 cannot compile every
+/// `spec/1.0/M4-SELF-HOSTING.md` §3b said, for a hundred versions: *"stage-1 cannot compile every
 /// Burxt program. Its backend does not emit Decimals and their rounding, `match`, `tail` with
 /// `musttail`, contracts, or the FFI boundary."* Every clause of that was false by v0.0.215 —
 /// `the_burxt_backend_compiles_a_growing_share_of_the_suite` had been printing **142 of 142, 0
 /// refused** the whole time, four lines of `eprintln!` away from the sentence denying it.
 ///
 /// It was true when written. Nothing updated it as each feature landed, and then the worse thing
-/// happened: **it was believed and re-published.** `spec/ROADMAP-1.0.md` §A0 copied it forward as
+/// happened: **it was believed and re-published.** `spec/1.0/ROADMAP-1.0.md` §A0 copied it forward as
 /// the explanation for stage-0 being 8,000 lines larger, and the real explanation — tooling, and
 /// LLVM's C API against textual IR — went unwritten because a stale sentence had already answered
 /// the question.
@@ -6127,7 +6140,7 @@ fn the_burxt_backend_keeps_every_runtime_guarantee() {
 /// Deliberate limits, so the next reader knows what this does NOT check:
 ///
 /// - **The marker must be on the claim's own line**, not nearby. A rule a reader can apply by eye
-///   is worth more than one that scans a window, and `spec/M7-GENERICS.md` is why: its stale
+///   is worth more than one that scans a window, and `spec/1.0/M7-GENERICS.md` is why: its stale
 ///   number sat under a heading reading *"Where it stood (v0.0.110)"* and still said
 ///   *"stage-1 **now** compiles 100 of the 101"*. The dated heading did not save it. The word
 ///   "now" is how a record starts reading as a claim, and only a mark on the line itself stops it.
@@ -6506,7 +6519,7 @@ fn the_two_compilers_report_the_same_layout() {
 /// **Both compilers report the same change to what a program PROMISES.**
 ///
 /// `src/burxt-compiler/review.bx` is the Burxt counterpart of `src/rust-compiler/review.rs`, and it
-/// is the row that could not stay Rust-only for a reason beyond symmetry: `spec/ROADMAP-1.0.md` §C2
+/// is the row that could not stay Rust-only for a reason beyond symmetry: `spec/1.0/ROADMAP-1.0.md` §C2
 /// makes `burxt review` the **mechanical semver rule** for the 1.0 compatibility promise. While it
 /// existed only in Rust, Burxt could not enforce its own compatibility promise without Rust — which
 /// is exactly what the gate forbids.
@@ -6720,7 +6733,7 @@ fn hover_answers_on_a_file_that_imports_something() {
 /// **The two language servers answer the same session.**
 ///
 /// `src/burxt-compiler/lsp.bx` driven over a pipe beside `burxt lsp`, message for message. This is
-/// the row `spec/ROADMAP-1.0.md` §THE GATE counts as *verified* rather than merely *answered*.
+/// the row `spec/1.0/ROADMAP-1.0.md` §THE GATE counts as *verified* rather than merely *answered*.
 ///
 /// **What it holds is narrower than `diag.bx`'s byte-for-byte claim, for a reason that is not the
 /// language server's.** The two compilers do not word their diagnostics alike and do not point at
@@ -7673,7 +7686,7 @@ fn the_repository_layout_is_declared() {
         ("examples", "Burxt programs written to be READ. Not the compiler (v0.0.214)"),
         ("lib", "the standard library, written in Burxt"),
         ("scripts", "repository automation: site generation, release, checks"),
-        ("spec", "the design record — one file per milestone, plus the roadmap"),
+        ("spec", "the design record, grouped by the version each decision shipped in"),
         ("src", "the two compilers. `src/README.md` says which is the product and why the Rust \
          one is NOT under `tests/` despite being the cross-check: it is also the BOOTSTRAP, and \
          `cargo build` is the only way onto a machine with no Burxt binary"),
@@ -8520,7 +8533,7 @@ enum Strength {
     ///
     /// So it is mapped and **excluded from the `answered` count**. A module nobody has compared is
     /// not parity, and letting it raise the number would be the exact self-deception this map was
-    /// built to prevent — `spec/M4-SELF-HOSTING.md` §3b was believed for a hundred versions.
+    /// built to prevent — `spec/1.0/M4-SELF-HOSTING.md` §3b was believed for a hundred versions.
     /// Reported separately, so the gap between "written" and "agrees" stays visible.
     Delivered,
     /// Rust only.
@@ -9134,7 +9147,7 @@ fn the_guide_reads_in_order() {
 
 /// A bracket contract and the `requires` it desugars to produce **byte-identical** failure messages.
 ///
-/// spec/M13-CONTRACT-SYNTAX.md opens by claiming exactly this, and says the desugaring is
+/// spec/1.0/M13-CONTRACT-SYNTAX.md opens by claiming exactly this, and says the desugaring is
 /// "observable rather than asserted". It was neither: the bracket form shipped in v0.0.135 with no
 /// fixture anywhere in the suite, and `src/rust-compiler/parser.rs` carried a comment citing a
 /// `tests/pass/contract_brackets.bx` that had never existed. Fourteen versions of a syntax nobody

@@ -196,7 +196,7 @@ print(message);
 A program has a tray from the moment it starts. Until v0.0.146 you had to say so — building anything
 outside a `region` was a compile error, so every file opened with a wrapper it never mentioned again.
 That is gone.
-([Why, and what it cost to find out](https://github.com/andrecorugda/burxt/blob/main/spec/M14-IMPLICIT-REGIONS.md).)
+([Why, and what it cost to find out](https://github.com/andrecorugda/burxt/blob/main/spec/1.0/M14-IMPLICIT-REGIONS.md).)
 
 **Every block already gives the tray back.** When a block ends, anything built inside it that
 nothing outside can still reach is released — one assignment to a pointer, exactly as the picture

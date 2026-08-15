@@ -280,7 +280,7 @@ because `identity<T>` compiles to a load for `Int` and a memory copy for `Point`
 
 The rule the compiler follows: **a type parameter is a question, not a placeholder.** Answer it at
 every point that asks, and almost nothing has to be substituted.
-([The design record.](https://github.com/andrecorugda/burxt/blob/main/spec/M7-GENERICS.md))
+([The design record.](https://github.com/andrecorugda/burxt/blob/main/spec/1.0/M7-GENERICS.md))
 
 ## Why it is built this way
 {: #why-it-is-built-this-way}
@@ -291,7 +291,7 @@ read would be a chase — which would make the exact-money story slower than the
 
 **Because it is the test of whether the generics are real.** `Option<T>` is four lines of Burxt with no
 compiler support beyond generics. `Map<K, V>` is one file. If either had needed a keyword, the generics
-were decoration — that was the bar set in `spec/M7-GENERICS.md`, and it is why the standard library looks
+were decoration — that was the bar set in `spec/1.0/M7-GENERICS.md`, and it is why the standard library looks
 the way it does.
 
 **Because a bound is a promise a reviewer can read.** `T: Ordered` in a signature says exactly which

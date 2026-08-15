@@ -1,4 +1,4 @@
-// The acceptance program from spec/A6.0-SUM-TYPES.md §7 — the shape of a real
+// The acceptance program from spec/1.0/A6.0-SUM-TYPES.md §7 — the shape of a real
 // lexer's inner loop. Construction is qualified (`Token.Plus`); patterns are
 // not, because the matched value's type already says which enum it is.
 enum Token { Plus, Number(Int), End }

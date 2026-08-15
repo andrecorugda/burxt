@@ -13,7 +13,7 @@
 // It is also no longer TRUE in the way the name implied. A stage is a step toward a
 // destination you have not reached yet; Burxt compiles Burxt to a byte-identical
 // fixpoint, so this is not on the way to a compiler, it IS one. The name outlived what
-// it described — the same rot that `spec/M4-SELF-HOSTING.md` §3b was corrected for in
+// it described — the same rot that `spec/1.0/M4-SELF-HOSTING.md` §3b was corrected for in
 // this same version, and worth recording twice because it happened twice.
 //
 // (**"stage-0" and "stage-1" survive as PROSE**, in the specs, where the subject really
@@ -32,7 +32,7 @@
 //                 the tooling                    schema.rs · json.rs
 //
 // The last row is the honest asymmetry and the only one: the LANGUAGE is covered on both
-// sides, the TOOLING is not. See `spec/ROADMAP-1.0.md` §A0.
+// sides, the TOOLING is not. See `spec/1.0/ROADMAP-1.0.md` §A0.
 //
 // The program is this file; the compiler is the modules it uses. It was one file of
 // nearly six thousand lines until v0.0.82, because Burxt had no module system — and
@@ -243,7 +243,7 @@ return "; LLVM IR written by the Burxt compiler, in Burxt.\n"
 // parse, check, and emit if asked.
 //
 // `out_ll` empty means check only. `loud` is 1 for the legacy report — the token counts and
-// per-phase work that `spec/M9-PERFORMANCE.md` reads, and that three runner invariants parse
+// per-phase work that `spec/1.0/M9-PERFORMANCE.md` reads, and that three runner invariants parse
 // — and 0 for the subcommands, which must be quiet on success the way every other compiler
 // is. Both paths share this function so the two cannot drift, which is the whole reason it
 // is a function and not two copies.
@@ -251,7 +251,7 @@ return "; LLVM IR written by the Burxt compiler, in Burxt.\n"
 // Answers the number of problems found: 0 means it worked.
 // Given a PATH: the program and everything it uses, in one buffer. The same design stage-0
 // uses, for the same reason — a Span stays a byte range, and only a renderer needs to know
-// which file an offset fell in. See spec/M6-MODULES.md §1.5.
+// which file an offset fell in. See spec/1.0/M6-MODULES.md §1.5.
 function drive(path: String, out_ll: String, loud: Int) -> Int touches files {
     return drive_source(load_program(path), path, out_ll, loud);
 }
@@ -469,7 +469,7 @@ function usage() -> Int {
     print_error("");
     print_error("Not here yet, and named rather than silently missing:");
     print_error("  explain memory — the allocation inference is stage-0's alone until A12");
-    print_error("They exist in the Rust build. spec/ROADMAP-1.0.md THE GATE tracks the rest.");
+    print_error("They exist in the Rust build. spec/1.0/ROADMAP-1.0.md THE GATE tracks the rest.");
     return 0;
 }
 
@@ -503,7 +503,7 @@ if command == "lsp" {
     // **It must not be wrapped in a `region` block.** `lsp_serve` opens a region per turn, and an
     // inner region inside an outer one hands out the outer arena without ever resetting it — which
     // compiles, and then leaks a compiler's working set per keystroke. That is a real defect and it
-    // is written down rather than worked around: see the note in `spec/ROADMAP-1.0.md`.
+    // is written down rather than worked around: see the note in `spec/1.0/ROADMAP-1.0.md`.
     let served: Int = lsp_serve();
     exit(served);
 }
@@ -573,7 +573,7 @@ if command == "review" {
     // What changed about what the program PROMISES — signatures, contracts, effects, privacy —
     // rather than what changed textually.
     //
-    // `spec/ROADMAP-1.0.md` §C2 makes this the **mechanical semver rule** for the 1.0
+    // `spec/1.0/ROADMAP-1.0.md` §C2 makes this the **mechanical semver rule** for the 1.0
     // compatibility promise, which is why it could not stay Rust-only: Burxt would have been
     // unable to enforce its own compatibility promise without Rust, and that is precisely what
     // the gate forbids.
@@ -706,7 +706,7 @@ if command == "build" || command == "run" {
 //
 // Three runner invariants depend on every line of this, including the exact text
 // `  type errors: N`. It is not a debug mode left in by accident: it is what
-// `spec/M9-PERFORMANCE.md` reads to attribute a slowdown to a phase, and what the
+// `spec/1.0/M9-PERFORMANCE.md` reads to attribute a slowdown to a phase, and what the
 // differential tests parse to compare the two checkers.
 
 let mutable path: String = "examples/tour.bx";

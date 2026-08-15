@@ -31,7 +31,7 @@
 //
 // ---- where D0's chunk rule applies, and where it does not ------------------------------
 //
-// `spec/ROADMAP-1.0.md` §D0 requires a chunk list joined PAIRWISE for anything that builds a
+// `spec/1.0/ROADMAP-1.0.md` §D0 requires a chunk list joined PAIRWISE for anything that builds a
 // String, because `out = out + piece` in a loop cost this compiler 1,132 MB against 169 MB for the
 // identical output. **Exactly one function here builds a String in a loop** — `path_normalise`,
 // which reassembles the components it kept — and it uses the chunk list, in `path_merge` below.

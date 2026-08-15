@@ -1,4 +1,4 @@
-// `==` on records, which `spec/ROADMAP-1.0.md` §F listed as a papercut and which **already works**.
+// `==` on records, which `spec/1.0/ROADMAP-1.0.md` §F listed as a papercut and which **already works**.
 //
 // Measured at v0.0.247 rather than read: `P { x: 1, y: 2 } == P { x: 1, y: 2 }` is `true`, a differing
 // field gives `false`, and `!=` is its negation. Field-wise comparison, in declaration order.

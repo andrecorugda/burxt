@@ -7,7 +7,7 @@
 // sharper than "awkward": **a module cannot hold a statement.** `main.rs` refuses a top-level
 // statement in any file reached by `use` —
 // *"a module holds declarations, not statements: this would run when `math.bx` was used, and a `use`
-// is not a call"* (v0.0.81, spec/M6-MODULES.md §1.3). And a top-level `let` is not in scope inside a
+// is not a call"* (v0.0.81, spec/1.0/M6-MODULES.md §1.3). And a top-level `let` is not in scope inside a
 // function anyway, because top-level statements ARE main's body. So `INT_MAX` could not be NAMED in a
 // library under any arrangement: not as a `let` in the module (refused outright), not as a `let` above
 // the functions (invisible to them), and not inside each function (that is a magic number with a

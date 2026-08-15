@@ -27,7 +27,7 @@ round.
 
 **Guarding the arithmetic and then abandoning the boundary guards nothing.** Real financial defects
 overwhelmingly live at boundaries rather than in arithmetic
-([the design record](https://github.com/andrecorugda/burxt/blob/main/spec/N1-BOUNDARY-EXACTNESS.md)), and this page is the wall Burxt puts
+([the design record](https://github.com/andrecorugda/burxt/blob/main/spec/1.0/N1-BOUNDARY-EXACTNESS.md)), and this page is the wall Burxt puts
 there.
 
 Which is also why it exists at all: a language that cannot call C is a language you cannot deploy.
