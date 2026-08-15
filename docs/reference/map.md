@@ -2,7 +2,7 @@
 layout: doc
 title: lib/map.bx
 section: reference
-description: A key-value table, in insertion order.
+description: "A key-value table, in insertion order."
 ---
 
 

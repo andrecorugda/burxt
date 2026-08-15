@@ -2609,6 +2609,87 @@ fn every_rejection_points_somewhere_and_not_all_at_column_one() {
     );
 }
 
+/// Every YAML the site depends on parses. A colon in an unquoted value is the whole bug.
+///
+/// This exists because it happened: a tagline was changed to *"A contract-first imperative
+/// language: a signature says..."* and the colon in the middle turned the value into a nested
+/// mapping. `docs/_config.yml` stopped parsing, **the GitHub Pages build failed**, and the site
+/// silently kept serving the previous deploy — so nothing was broken except that nothing was
+/// updating, which is the failure mode that goes unnoticed longest.
+///
+/// Nothing here could have caught it. The suite compiles the guide's code, checks its links, checks
+/// its headings, and never once asks whether Jekyll can read the file that configures all of it.
+/// The build ran on a machine this project does not have — there is no Ruby here — so the answer
+/// arrived from a failed workflow rather than from a test.
+///
+/// A structural check rather than a real YAML parse, deliberately: adding a YAML dependency to the
+/// test suite to guard against one punctuation mistake is a worse trade than fifteen lines that
+/// catch the punctuation mistake. If a value needs a colon, quote it, which is what YAML asks for.
+#[test]
+fn every_front_matter_and_config_is_parseable_yaml() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut suspect = Vec::new();
+
+    let check = |text: &str, shown: &str, out: &mut Vec<String>| {
+        for (n, line) in text.lines().enumerate() {
+            let Some((key, value)) = line.split_once(": ") else { continue };
+            // A key is a bare word at the start of the line; anything indented is inside a
+            // structure this check does not try to understand.
+            if key.is_empty()
+                || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            {
+                continue;
+            }
+            let value = value.trim();
+            if value.starts_with('"') || value.starts_with('\'') || value.starts_with('|')
+                || value.starts_with('>') || value.starts_with('#')
+            {
+                continue;
+            }
+            // A second `: ` inside an unquoted scalar is what YAML reads as a nested mapping.
+            if value.contains(": ") {
+                out.push(format!(
+                    "{}:{}: `{}` — an unquoted value with a colon in it. YAML reads that as a \
+                     nested mapping and the whole file stops parsing. Quote it.",
+                    shown,
+                    n + 1,
+                    line.trim()
+                ));
+            }
+        }
+    };
+
+    let config = root.join("docs/_config.yml");
+    check(&fs::read_to_string(&config).expect("docs/_config.yml"), "docs/_config.yml", &mut suspect);
+
+    let mut pages = 0;
+    fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                found.push(path);
+            }
+        }
+    }
+    let mut markdown = Vec::new();
+    walk(&root.join("docs"), &mut markdown);
+    for path in &markdown {
+        let text = fs::read_to_string(path).unwrap();
+        if !text.starts_with("---") {
+            continue;
+        }
+        let Some(end) = text[3..].find("\n---") else { continue };
+        pages += 1;
+        check(&text[3..3 + end], &path.strip_prefix(root).unwrap().display().to_string(), &mut suspect);
+    }
+
+    assert!(pages > 30, "the front-matter sweep found only {} pages", pages);
+    assert!(suspect.is_empty(), "{}", suspect.join("\n"));
+}
+
 /// A fixture directory holds programs, expectations, and the handful of files a program READS.
 /// Nothing a program WRITES.
 ///

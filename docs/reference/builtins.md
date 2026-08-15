@@ -2,7 +2,7 @@
 layout: doc
 title: Builtins
 section: reference
-description: Every call the language owns: what it answers, whether it allocates, and what it refuses.
+description: "Every call the language owns: what it answers, whether it allocates, and what it refuses."
 ---
 
 

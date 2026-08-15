@@ -2,7 +2,7 @@
 layout: doc
 title: lib/result.bx
 section: reference
-description: Failure, made explicit.
+description: "Failure, made explicit."
 ---
 
 

@@ -2,7 +2,7 @@
 layout: doc
 title: Reference
 section: reference
-description: Every keyword, builtin, operator and standard-library function — read out of the compiler rather than from memory.
+description: "Every keyword, builtin, operator and standard-library function — read out of the compiler rather than from memory."
 ---
 
 

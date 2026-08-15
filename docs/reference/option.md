@@ -2,7 +2,7 @@
 layout: doc
 title: lib/option.bx
 section: reference
-description: Absence, made explicit.
+description: "Absence, made explicit."
 ---
 
 

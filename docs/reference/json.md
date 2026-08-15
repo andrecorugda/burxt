@@ -2,7 +2,7 @@
 layout: doc
 title: lib/json.bx
 section: reference
-description: JSON, parsed and rendered, in ordinary Burxt.
+description: "JSON, parsed and rendered, in ordinary Burxt."
 ---
 
 

@@ -2,7 +2,7 @@
 layout: doc
 title: lib/os.bx
 section: reference
-description: The machine the program is running on.
+description: "The machine the program is running on."
 ---
 
 

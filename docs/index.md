@@ -1,7 +1,7 @@
 ---
 layout: default
 title: null
-description: A contract-first imperative language: a signature says what a function promises, what it touches and what it will not do — and the compiler enforces every word. Compiled, native, exact decimals, no garbage collector.
+description: "A contract-first imperative language. A signature says what a function promises, what it touches and what it will not do — and the compiler enforces every word. Compiled, native, exact decimals, no garbage collector."
 width: wide
 no_roam: true
 ---

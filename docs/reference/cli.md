@@ -2,7 +2,7 @@
 layout: doc
 title: The command line
 section: reference
-description: Every burxt command, including review and mcp-schema.
+description: "Every burxt command, including review and mcp-schema."
 ---
 
 

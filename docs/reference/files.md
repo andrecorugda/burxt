@@ -2,7 +2,7 @@
 layout: doc
 title: lib/files.bx
 section: reference
-description: Files, without writing `external function fopen` yourself.
+description: "Files, without writing `external function fopen` yourself."
 ---
 
 

@@ -753,7 +753,14 @@ def verify(work):
 # Rendering
 # ---------------------------------------------------------------------------------------------
 
-FRONT = "---\nlayout: doc\ntitle: %s\nsection: reference\ndescription: %s\n---\n\n"
+# The description is QUOTED, and that is not tidiness. `description: Every call the language owns:
+# what it answers` has a colon in it, so YAML reads the first half as a key — and Jekyll silently
+# dropped the page's whole front matter, shipping the site-wide description as this page's meta tag
+# for as long as the page has existed. It renders fine, which is why nobody saw it.
+#
+# `_config.yml` is the same mistake and is FATAL there: it fails the Pages build outright, which is
+# how this was found. `every_front_matter_and_config_is_parseable_yaml` guards both now.
+FRONT = '---\nlayout: doc\ntitle: %s\nsection: reference\ndescription: "%s"\n---\n\n'
 
 # The tables that are a decision rather than a scrape. Operators, shorthands and runtime failures
 # came across from the hand-written page they replace; they describe grammar, which does not have a

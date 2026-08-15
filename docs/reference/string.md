@@ -2,7 +2,7 @@
 layout: doc
 title: lib/string.bx
 section: reference
-description: Strings, beyond the four builtins.
+description: "Strings, beyond the four builtins."
 ---
 
 
