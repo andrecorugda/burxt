@@ -817,20 +817,33 @@ function array_enumerate<T>(xs: [T]) -> [(Int, T)] {
     return out;
 }
 
-// **`array_split_at` is NOT here, and it was written, tested, and taken out again.** §B54.
+// Two arrays: everything before `at`, and everything from `at`. A negative `at` is 0 and one past
+// the end is the whole array, so the answer is always two valid arrays.
 //
-// It works in stage-0. Under stage-1 it SEGFAULTS when the element is a String — `[Int]` is fine —
-// and only from inside this file: the same function copied into a standalone program works, and so
-// does the `halve<T>(xs) -> ([T], [T])` shape that `tests/pass/a_tuple_of_slices_in_a_generic.bx`
-// already covers. So the trigger needs this file's other instantiations to be present, which is why
-// no existing fixture found it.
+// Clamped rather than refused, unlike indexing. `xs[i]` out of range is a mistake about ONE element
+// with no sensible answer; `split_at` past the end has an obvious one — everything, then nothing —
+// and refusing it would make every caller write the clamp this line already contains.
 //
-// That existing fixture is the whole lesson: it uses `[Int]`. A tuple of two slices from a generic
-// was covered, and covered for ONE element type, so the defect sat behind a green suite — the same
-// shape as B52, B18, B35 and B42.
-//
-// Shipping it with a note would have been worse than not shipping it: a library function that
-// crashes under one of two compilers is not a library function. It comes back when B54 closes.
+// **§B54 lived in this function**, and it was nothing to do with the function: `math_clamp` is
+// generic and calls its type parameter `T`, this one is generic and calls its type parameter `T`,
+// and stage-1's emitter let the caller's binding shadow the callee's — so a call whose arguments
+// are two Ints was emitted as the String copy and the program segfaulted. Fixed in `emit.bx`, not
+// here. The function was taken out for one version rather than shipped with a warning.
+function array_split_at<T>(xs: [T], at: Int) -> ([T], [T]) {
+    let cut: Int = math_clamp(at, 0, len(xs));
+    let mutable front: [T] = [];
+    let mutable back: [T] = [];
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        if i < cut {
+            let kept: Int = push(front, xs[i]);
+        } else {
+            let kept: Int = push(back, xs[i]);
+        }
+        i += 1;
+    }
+    return (front, back);
+}
 
 // **`array_chunks` and `array_windows` are absent, and D2f is not what its row assumed.**
 //

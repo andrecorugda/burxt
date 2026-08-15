@@ -1,0 +1,55 @@
+// Two DIFFERENT generics that both call their type parameter `T`. Roadmap B54.
+//
+// `T` is what everyone names it, so this is not an exotic program — it is the shape of almost any
+// library where one generic helper calls another. `lib/array.bx`'s `array_split_at<T>` calling
+// `lib/math.bx`'s `math_clamp<T>` is exactly it, and that is where the defect was found.
+//
+// What went wrong: stage-1's emitter binds type parameters BY NAME. While emitting `split_at$String`
+// the binding `T -> String` was in scope, so unifying the callee's own `T` against an Int argument
+// found `T` already bound, kept String, and emitted `smaller$String` for a call whose two arguments
+// are Ints. Stage-0 emits `smaller$Int`.
+//
+// The symptom was arbitrary and that is the dangerous half: `<` on String dereferenced two integers
+// and the program SEGFAULTED — exit 139, no message, empty stdout where stage-0 printed. A different
+// pair of types would have answered quietly and wrongly.
+//
+// **`[String]` is what makes it visible. `[Int]` passes either way** — which is why
+// `a_tuple_of_slices_in_a_generic.bx` covered this exact shape for a hundred versions and never
+// found it. The case was tested, tested for ONE element type, and the empty cell went unnoticed:
+// precisely what §Q3's construct coverage is for.
+//
+// The fix is one line in `emit.bx` — a binding floor around a call's unification, which `check.bx`
+// had already grown for the nested-call version of the same mistake and the emitter had not.
+
+pure function smaller<T: Ordered>(a: T, b: T) -> T {
+    if a < b {
+        return a;
+    }
+    return b;
+}
+
+// The outer generic's `T` is String here. The call below passes two Ints.
+function first_n<T>(xs: [T], n: Int) -> [T] {
+    let cut: Int = smaller(n, len(xs));
+    let mutable out: [T] = [];
+    let mutable i: Int = 0;
+    while i < cut {
+        let kept: Int = push(out, xs[i]);
+        i += 1;
+    }
+    return out;
+}
+
+let words: [String] = ["alpha", "beta", "gamma"];
+let two: [String] = first_n(words, 2);
+print(len(two));
+print(two[1]);
+
+// And past the end, so the Int-argument path is exercised in both directions.
+let all: [String] = first_n(words, 99);
+print(len(all));
+
+// The same generic at Int, which passed even while the String copy segfaulted.
+let numbers: [Int] = [10, 20, 30];
+let some: [Int] = first_n(numbers, 1);
+print(len(some));

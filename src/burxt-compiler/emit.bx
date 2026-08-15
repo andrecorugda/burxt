@@ -3217,16 +3217,75 @@ function (self: Unit) find_function_by_index(generic: Int) -> Int {
 // Answers -1 when a type argument is still abstract, which is not a failure: it means the
 // enclosing generic has not been instantiated yet, and this call will be reached again when it
 // is. That is exactly the case a work list exists to handle.
+// Is this type settled all the way down — no type parameter anywhere inside it? §B54.
+//
+// `Set<T>` is NOT concrete while `T` is abstract, and the top-level kind does not say so: the
+// application is kind 46 whatever it holds. `set_new<T>() -> Set<T>` has no parameters at all, so
+// its instantiation comes only from the call's type, and treating `Set<T>` as an answer pushed an
+// abstract binding that shadowed the caller's real one.
+function (self: Unit) type_is_concrete(src: String, t: Type) -> Bool {
+    if t.kind == 50 {
+        return false;                                // a bare type parameter
+    }
+    if t.kind == 47 || t.kind == 48 {                // a slice or a fixed array: check the element
+        return self.type_is_concrete(src, self.declared_type(src, t.scale));
+    }
+    if t.kind == 46 && t.contract > 0 {              // a generic application: check its arguments
+        let mutable i: Int = 0;
+        while i < t.contract {
+            let argument: Type = self.declared_type(src, self.nested_children[t.scale + i]);
+            if !self.type_is_concrete(src, argument) {
+                return false;
+            }
+            i += 1;
+        }
+    }
+    return true;
+}
+
 function (mutable self: Unit) instance_of_call(src: String, generic: Int, params: Int,
                                                args: Int, call: Int) -> Int {
     let base: Int = len(self.type_bindings);
+    // §B54. The callee's type parameters must NOT see the caller's bindings, and this floor is what
+    // stops them. `check.bx` grew the same line at v0.0.? for nested calls to ONE generic — its
+    // comment says *"the bindings were scoped correctly on the way OUT and not on the way IN"* —
+    // and the emitter kept the hole for the case that matters more, because it needs no nesting:
+    //
+    //     pure function smaller<T: Ordered>(a: T, b: T) -> T { ... }
+    //     function split_at<T>(xs: [T], at: Int) -> [T] { let cut: Int = smaller(at, len(xs)); ... }
+    //
+    // Two DIFFERENT generics, both of which call their type parameter `T` — which is what everyone
+    // calls it. Emitting `split_at$String` leaves `T -> String` bound, so `unify` on `smaller`'s
+    // own `T` found it already bound, kept String, and emitted `smaller$String` for a call whose
+    // arguments are two Ints. Stage-0 emits `smaller$Int`.
+    //
+    // The symptom was arbitrary, which is the dangerous part: here `<` on String dereferenced two
+    // integers and the program SEGFAULTED. Another pair of types would have answered quietly and
+    // wrongly. Nothing in the suite found it because a type parameter has to be named the same in
+    // both functions, and every fixture that nests generics happens to use different letters.
+    //
+    // **The floor goes up only around `unify`, never around `resolve_deep`.** The first attempt
+    // raised it for the whole function and broke `generics_functions` and `set_library`: an
+    // ARGUMENT's type is written in the CALLER's parameters — `xs: [T]` handed to a callee — so
+    // resolving it needs exactly the bindings the floor is there to hide. Two sides, two scopes:
+    // the actual is resolved with the caller's bindings visible, and the declared is unified
+    // without them.
+    let outer_floor: Int = self.type_binding_floor;
     // What the CALL's type turned out to be settles anything the arguments cannot — which for a
     // constructor is everything, since `-> Map<K, V>` mentions its parameters only in the return.
     // The checker already worked this out and cached it, so the emitter reads the answer rather
     // than deriving it a second time and risking a different one.
     let found: Int = self.find_function_by_index(generic);
     if found >= 0 {
-        let matched: Bool = self.unify(src, self.functions[found].return_type, self.type_at(call));
+        // Same condition as the arguments below: only a CONCRETE answer decides. An abstract one
+        // must not be pushed, because bindings are scanned newest-first and pushing `T -> T` here
+        // would shadow the caller's real answer and unsettle a call that was already decided.
+        let wanted_back: Type = self.type_at(call);
+        if self.type_is_concrete(src, wanted_back) {
+            self.type_binding_floor = base;
+        }
+        let matched: Bool = self.unify(src, self.functions[found].return_type, wanted_back);
+        self.type_binding_floor = outer_floor;
     }
     let wanted: Node = self.nodes[params];
     let given: Node = self.nodes[args];
@@ -3245,8 +3304,28 @@ function (mutable self: Unit) instance_of_call(src: String, generic: Int, params
         if declared.kind == 50 || declared.kind == 47 || declared.kind == 48
            || declared.kind == 46 {
             let recorded: Type = self.type_at(self.children[given.a + i]);
+            // Resolved with the caller's bindings VISIBLE: `[T]` in the caller means `[String]`,
+            // and that is the fact being handed over.
             let actual: Type = self.resolve_deep(src, recorded, self.children[given.a + i]);
+            // **The floor goes up only when the argument's type is CONCRETE**, and that one
+            // condition is the whole fix.
+            //
+            // A concrete argument DECIDES the callee's parameter: `smaller(at, len(xs))` passes two
+            // Ints, so `smaller`'s `T` is Int no matter what the caller's `T` happens to be. An
+            // abstract argument INHERITS: `echo<T>(x: T)` calling `identity(x)` passes the caller's
+            // own `T`, which is exactly the binding that must carry through, and
+            // `tests/pass/generics_functions.bx` says so in a comment — *"a generic calling a
+            // generic: `T` binds to the OUTER `T`"*.
+            //
+            // The first attempt raised the floor unconditionally and broke that second case, which
+            // is how the rule got stated properly rather than guessed: both compilers agree that a
+            // call's instantiation comes from its ARGUMENTS, and an abstract argument simply has no
+            // answer of its own to give yet.
+            if self.type_is_concrete(src, actual) {
+                self.type_binding_floor = base;
+            }
             let matched: Bool = self.unify(src, declared, actual);
+            self.type_binding_floor = outer_floor;
         }
         i += 1;
     }
@@ -3256,6 +3335,9 @@ function (mutable self: Unit) instance_of_call(src: String, generic: Int, params
     let mutable p: Int = 0;
     while p < declaration.type_param_count {
         let named: Token = self.tokens[self.type_parameters[declaration.type_param_start + p]];
+        // Read back UNfloored on purpose: bindings are scanned newest-first, so the concrete
+        // answer just pushed for this call wins, and a call that had nothing concrete to say
+        // inherits the caller's — which is the `echo` case above.
         let stands_for: Type = self.resolve_shallow(src,
             Type { kind: 50, scale: 0, contract: 0,
                    name_start: named.start, name_length: named.length });
@@ -3266,6 +3348,7 @@ function (mutable self: Unit) instance_of_call(src: String, generic: Int, params
         p += 1;
     }
     let dropped: Int = truncate(self.type_bindings, base);
+    self.type_binding_floor = outer_floor;
     if !settled {
         let unwound: Int = truncate(self.instance_arguments, args_start);
         return 0 - 1;

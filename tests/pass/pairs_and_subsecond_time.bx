@@ -28,9 +28,17 @@ print(paired[1].0 + "=" + to_string(paired[1].1));
 let numbered: [(Int, String)] = array_enumerate(names);
 print(to_string(numbered[2].0) + ":" + numbered[2].1);
 
-// `array_split_at` is absent, and §B54 records why: it segfaults under stage-1 when the element is
-// a String, from inside `lib/array.bx` and nowhere else. It works in stage-0 and it works for
-// `[Int]`, which is exactly why the existing tuple-of-slices fixture never found it.
+// Clamped rather than refused: past the end has an obvious answer — everything, then nothing.
+//
+// **This call is where §B54 lived.** `math_clamp` is generic over `T`, `array_split_at` is generic
+// over `T`, and stage-1 let the caller's binding shadow the callee's — so a call with two Int
+// arguments was emitted as the String copy and the program segfaulted. A `[String]` element is what
+// makes it visible; `[Int]` passes either way, which is exactly why the existing tuple-of-slices
+// fixture never found it.
+let split: ([String], [String]) = array_split_at(names, 1);
+print(to_string(len(split.0)) + "/" + to_string(len(split.1)));
+let all: ([String], [String]) = array_split_at(names, 99);
+print(to_string(len(all.0)) + "/" + to_string(len(all.1)));
 
 // The clock. Asserted as PROPERTIES rather than as values, because a timestamp is different on
 // every run and a fixture that printed one would be a fixture that never passes twice.
