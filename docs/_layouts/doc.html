@@ -16,15 +16,6 @@
 <meta property="og:type" content="article">
 </head>
 <body>
-<div class="version-pick" style="font-size:13px; opacity:.75; margin:.5rem 0 1rem;">
-version:
-{% if page.url contains '/1.0/' %}
-  <a href="{{ site.baseurl }}/">latest</a> · <strong>1.0.0</strong>
-{% else %}
-  <strong>latest</strong> · <a href="{{ site.baseurl }}/1.0/limitations.html">1.0.0</a>
-{% endif %}
-</div>
-
 
 <a class="skip" href="#top">Skip to content</a>
 
@@ -32,6 +23,33 @@ version:
   <a class="mark" href="{{ site.baseurl }}/">
     <img src="{{ site.baseurl }}/assets/burxt-lockup-light.png" alt="Burxt">
   </a>
+
+  {%- comment -%}
+    The version picker, beside the mark. It lands on the SAME page in the other version rather than
+    on a generic entry point: `rest` is the path with the version segment stripped, so
+    /1.0/guide/04-memory.html and /guide/04-memory.html map to each other.
+
+    Only the sections that were actually snapshotted are mapped. `log/` and the landing page are not
+    version-scoped and have no 1.0 copy, so for those the picker points at the frozen index instead
+    of building a link to a page that does not exist — a version switch that 404s is worse than one
+    that lands a click away.
+  {%- endcomment -%}
+  {%- assign rest = page.url | remove_first: site.baseurl -%}
+  {%- if page.url contains '/1.0/' -%}
+    {%- assign rest = rest | remove_first: '/1.0' -%}
+  {%- endif -%}
+  {%- assign versioned = 'guide,reference,refused,examples,install' | split: ',' -%}
+  {%- if versioned contains page.section or rest == '/limitations.html' or rest == '/comparison.html' or rest == '/compatibility.html' -%}
+    {%- assign latest_url = site.baseurl | append: rest -%}
+    {%- assign frozen_url = site.baseurl | append: '/1.0' | append: rest -%}
+  {%- else -%}
+    {%- assign latest_url = site.baseurl | append: '/' -%}
+    {%- assign frozen_url = site.baseurl | append: '/1.0/limitations.html' -%}
+  {%- endif -%}
+  <select class="ver" aria-label="Documentation version" onchange="location.href=this.value">
+    <option value="{{ latest_url }}"{% unless page.url contains '/1.0/' %} selected{% endunless %}>latest</option>
+    <option value="{{ frozen_url }}"{% if page.url contains '/1.0/' %} selected{% endif %}>1.0.0</option>
+  </select>
 
   <button class="find" type="button" data-find aria-label="Search the documentation">
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">

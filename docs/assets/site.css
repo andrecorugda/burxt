@@ -164,6 +164,39 @@ body {
   transition: color var(--quick);
 }
 .bar a:hover { color: var(--ink); text-decoration: none; }
+
+/* The version picker, beside the mark.
+   A real <select> rather than a styled menu, and that is the accessible choice as much as the
+   cheap one: it is keyboard-navigable, it works before any JavaScript runs, and on a phone it
+   opens the platform's own picker instead of a list somebody has to scroll inside a sticky bar.
+   The `gap` on `.bar` already spaces it; only the chrome needs removing so it reads as part of
+   the bar rather than as a form. */
+.bar .ver {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-2);
+  background: transparent;
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  padding: 2px 1.5rem 2px 0.6rem;
+  margin-left: -1.1rem;
+  cursor: pointer;
+  transition: color var(--quick), border-color var(--quick);
+  /* The chevron, drawn rather than fetched — the site ships no icon font and a background-image
+     would be a request for eleven pixels. */
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+                    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 0.72rem center, right 0.45rem center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+.bar .ver:hover { color: var(--ink); border-color: var(--ink-2); }
+.bar .ver:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+/* The native dropdown list is the platform's, so it needs real colours rather than inherited ones. */
+.bar .ver option { color: var(--ink); background: var(--paper); }
+
 .bar a.here { color: var(--ink); font-weight: 500; }
 
 /* The logo is a link, so it is a tap target: 44px tall whatever the mark's own height is. */
