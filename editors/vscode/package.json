@@ -1,7 +1,7 @@
 {
   "name": "burxt",
   "displayName": "Burxt",
-  "description": "Burxt language support: syntax highlighting, live diagnostics, and hover from the compiler itself.",
+  "description": "Burxt — a contract-first imperative language. Syntax highlighting, live diagnostics and hover, from the compiler itself.",
   "version": "0.1.4",
   "publisher": "burxt",
   "license": "MIT OR Apache-2.0",

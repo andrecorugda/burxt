@@ -4,7 +4,7 @@
 # which this repository has no local renderer for — and every pixel comes from _layouts/default.html
 # and assets/site.css instead of a theme's opinions.
 title: Burxt
-description: A typed, compiled, native language where exact decimals are the default.
+description: A contract-first imperative language: a signature says what a function promises, what it touches and what it will not do — and the compiler enforces every word.
 # The custom domain. `docs/CNAME` holds the bare hostname, and it is COMMITTED rather than left to
 # GitHub's settings page to write — GitHub does create it when a custom domain is set, but a branch
 # change or a rebuild can drop it, and the failure looks like DNS rather than a missing file.

@@ -2,7 +2,7 @@
 name = "burxt"
 version = "1.0.0"
 edition = "2021"
-description = "The Burxt programming language: typed, compiled, native, exact decimals by default."
+description = "Burxt: a contract-first imperative language. Contracts and effects in the signature, exact decimals, no GC, native."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/andrecorugda/burxt"
 readme = "README.md"

@@ -5,8 +5,13 @@
   <img src="assets/burxt-lockup-light.png" alt="Burxt" width="320">
 </picture>
 
-**A typed, compiled, native language where exact decimals are the default
-and correctness is enforced by the compiler — not left to discipline.**
+**A contract-first imperative language.**
+
+A signature says what a function promises, what it touches, and what it will not do —
+and the compiler enforces every word. Compiled, native, exact decimals, no garbage collector.
+
+*Strict enough that an agent cannot make a costly mistake.
+Plain enough that you can see that it didn't.*
 
 [![CI](https://github.com/andrecorugda/burxt/actions/workflows/ci.yml/badge.svg)](https://github.com/andrecorugda/burxt/actions/workflows/ci.yml)
 [![Self-hosting](https://img.shields.io/badge/self--hosting-byte--identical%20fixpoint-111)](spec/1.0/M4-SELF-HOSTING.md)

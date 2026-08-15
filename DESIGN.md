@@ -93,10 +93,25 @@ thesis, and those are not the same instruction.
 
 ## Identity (the anchor)
 
-> Burxt is **composition-only OOP**, where the compiler rigorously enforces
-> **objective** correctness (no null, no silent overflow, verified contracts,
-> exhaustiveness) and makes SOLID design the **ergonomic default** — giving
-> PHP's familiarity, Rust's safety, and a verification layer neither has.
+> Burxt is **a contract-first imperative language**. A signature says what a
+> function promises (`requires`, `ensures`), what it touches (`touches`), what
+> it will not do (`pure`, `allocates nothing`), that it terminates
+> (`decreases`), and who may call it (`public`) — and the compiler enforces
+> every word, in every build mode.
+>
+> Structurally it is **composition-only OOP** with PHP's familiarity and Rust's
+> safety. That is the furniture. The paradigm is the signature.
+
+*(Restated 2026-08-15. The identity had described the FURNITURE — composition, SOLID, no null — and
+never the organising idea, so a reader could finish the paragraph without learning what kind of
+language this is. Everything else falls out of the contract-first choice rather than sitting beside
+it: closures are declined because a function value hides its captured state from the signature;
+reflection, `unsafe` and conditional compilation are declined because each lets a program do
+something its signature does not say; exceptions are declined because they are a hidden second
+return path; regions replace a collector so memory behaviour is a visible property of a block.
+**Design by Contract is the lineage — Eiffel, Ada/SPARK, Dafny — and what is new here is an effect
+system in the same signature, contracts a tool can DIFF between versions, and its being an ordinary
+native language with a debugger and a package manager rather than a verification tool.**)*
 
 *(H2, corrected v0.0.295. This said **"opt-in safe inheritance"** for 249 versions after
 v0.0.46 dropped inheritance — and the same file says so two hundred lines below, under

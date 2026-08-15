@@ -1,7 +1,7 @@
 ---
 layout: default
 title: null
-description: A typed, compiled, native language for the way code gets written now — an agent writes it, you scan it, and a mistake costs money. Strict enough that the agent cannot make one, plain enough that you can see it didn't.
+description: A contract-first imperative language: a signature says what a function promises, what it touches and what it will not do — and the compiler enforces every word. Compiled, native, exact decimals, no garbage collector.
 width: wide
 no_roam: true
 ---
@@ -18,6 +18,12 @@ no_roam: true
 </picture>
 <img class="word" src="{{ site.baseurl }}/assets/burxt-wordmark.png" width="823" height="217" alt="burxt">
 </div>
+
+<p class="line" style="font-size:19px; letter-spacing:.01em;"><strong>A contract-first imperative language.</strong></p>
+
+<p class="line" style="font-size:17px;">A signature says what a function promises, what it touches,
+and what it will not do — and the compiler enforces every word. Compiled, native, exact decimals,
+no garbage collector.</p>
 
 <p class="line"><strong>Strict enough that an agent cannot make a costly mistake.<br>
 Plain enough that you can see that it didn't.</strong></p>
