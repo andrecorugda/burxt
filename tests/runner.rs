@@ -2464,6 +2464,151 @@ fn the_semver_rule_reads_the_interface_and_says_so() {
     let _ = fs::remove_dir_all(&scratch);
 }
 
+/// An `external function` that disagrees with the runtime about a C symbol is a NAMED refusal. B50.
+///
+/// It used to be an LLVM verifier error — "Call parameter type does not match function signature" —
+/// reaching a user from a compiler whose one non-negotiable guarantee is that every failure is
+/// named. A backend's diagnostic is the same defect as none: it describes a call the programmer did
+/// not write.
+///
+/// **The NAME is not the problem**, which is why this is not a reserved-word list and why such a
+/// list would have been wrong. `lib/files.bx` declares `fseek` ITSELF, and always has — as
+/// `whence: i32`, the real C type — and it works. The program below says `whence: Int`, which is
+/// i64 and is simply false about C. Only the disagreement is refused, so the check cannot fall
+/// behind a list: a symbol codegen starts emitting tomorrow is covered the day it is added.
+///
+/// An invariant rather than a `tests/fail` fixture, and the reason is worth stating: the conflict
+/// is only knowable at CODEGEN, where there is no span to point at and where stage-1 — which emits
+/// its own declaration as text and never reuses the user's — does not reach the same conclusion.
+/// A fail fixture has to be refused by both compilers with a position, and this is neither.
+#[test]
+fn an_extern_that_disagrees_with_the_runtime_is_named() {
+    let scratch = scratch_dir("b50-extern");
+    fs::create_dir_all(&scratch).unwrap();
+
+    // `whence: Int` is i64. C's `fseek` takes an int, and `read_file` below makes the compiler
+    // declare the real one — so the two meet.
+    let wrong = scratch.join("wrong.bx");
+    fs::write(
+        &wrong,
+        "external function fseek(f: CPointer, off: Int, whence: Int) -> CInt touches files;\n\
+         let text: String = read_file(\"wrong.bx\");\nprint(len(text) > 0);\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(&wrong)
+        .arg("-o")
+        .arg(scratch.join("wrong.exe"))
+        .current_dir(&scratch)
+        .output()
+        .expect("burxt build");
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "a false `external function` declaration was accepted");
+    assert!(
+        said.contains("declares a signature the compiler disagrees with"),
+        "the conflict was not named as a Burxt problem:\n{}",
+        said
+    );
+    assert!(
+        !said.contains("LLVM") && !said.contains("Call parameter type"),
+        "the LLVM verifier's message reached the user. That is the failure this test exists for — \
+         a compiler describing a call the programmer never wrote:\n{}",
+        said
+    );
+
+    // And the control that makes the rule the right one: `lib/files.bx` declares `fseek` correctly,
+    // as `whence: i32`, and must keep working.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let right = scratch.join("right.bx");
+    fs::write(
+        &right,
+        format!(
+            "use \"{}\";\nmatch file_read_maybe(\"right.bx\") {{ None => {{ print(0); }} Some(t) => {{ print(len(t) > 0); }} }}\n",
+            root.join("lib/files.bx").display()
+        ),
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("run")
+        .arg(&right)
+        .current_dir(&scratch)
+        .output()
+        .expect("burxt run");
+    assert!(
+        out.status.success(),
+        "the standard library's own `fseek` declaration stopped working, so the check is refusing \
+         agreement rather than disagreement:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+/// Every refusal points somewhere, and they do not all point at column 1. Roadmap B46.
+///
+/// **Not one of the 365 `tests/fail/*.stderr` goldens contains a caret.** They hold the message
+/// text, the harness matches by substring, and nothing anywhere asks WHERE the compiler pointed. So
+/// a change that collapsed every span to the start of the file would pass the entire suite — which
+/// is exactly what B17 turned out to be, in one place, for twenty-five versions.
+///
+/// The obvious fix — put a caret in all 365 goldens — is the wrong one. It pins a column per
+/// fixture, so every message reflow becomes 365 edits, and the suite would be re-recorded rather
+/// than read. This asks the two questions that actually matter and no more:
+///
+///   1. **Every refusal carries a position.** A diagnostic with no `-->` cannot be clicked, cannot
+///      be turned into an LSP range, and leaves the reader searching.
+///   2. **They are not all column 1.** This is the anti-vacuity half, and it is the half that
+///      catches the regression: a span that collapses to the declaration's start still produces a
+///      position, still renders, and is still wrong. If every fixture in the suite pointed at
+///      column 1, the first check would pass and the compiler would be useless.
+#[test]
+fn every_rejection_points_somewhere_and_not_all_at_column_one() {
+    let scratch = scratch_dir("b46-spans");
+    install_fixtures("fail", &scratch);
+
+    let mut positionless = Vec::new();
+    let mut columns: Vec<usize> = Vec::new();
+    let mut checked = 0;
+    for (program, _) in cases("fail", "stderr") {
+        let out = burxt("build", &program, &scratch);
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let name = program.file_name().unwrap().to_string_lossy().into_owned();
+        checked += 1;
+        // `--> path:line:column`
+        match said.split("--> ").nth(1).and_then(|rest| {
+            let head = rest.lines().next()?;
+            head.rsplit(':').next()?.trim().parse::<usize>().ok()
+        }) {
+            Some(column) => columns.push(column),
+            None => positionless.push(name),
+        }
+    }
+    let _ = fs::remove_dir_all(&scratch);
+
+    assert!(checked > 300, "the fail fixtures stopped being enumerated: only {} ran", checked);
+    assert!(
+        positionless.is_empty(),
+        "{} refusals carry no position at all. A diagnostic with no `-->` cannot be clicked, \
+         cannot become an LSP range, and leaves the reader searching:\n{:?}",
+        positionless.len(),
+        &positionless[..positionless.len().min(12)]
+    );
+    let past_one = columns.iter().filter(|c| **c > 1).count();
+    assert!(
+        past_one * 4 > columns.len(),
+        "only {} of {} refusals point past column 1. A span that collapses to the start of a \
+         declaration still renders and is still wrong — B17 was exactly that, and nothing in this \
+         suite could see it.",
+        past_one,
+        columns.len()
+    );
+}
+
 /// A fixture directory holds programs, expectations, and the handful of files a program READS.
 /// Nothing a program WRITES.
 ///
@@ -3804,9 +3949,12 @@ fn the_compiler_compiles_itself_without_going_quadratic() {
     let _ = fs::remove_dir_all(&scratch);
     assert!(said.contains("bytes of IR"), "stage-1 did not emit its own source:\n{}", said);
     assert!(
-        self_compile < std::time::Duration::from_secs(20),
-        "the compiler took {:?} on its own source; the budget is 20 s (190 s before v0.0.90, \
-         1.2 s after)",
+        self_compile < std::time::Duration::from_secs(5),
+        "the compiler took {:?} on its own source; the budget is 5 s. B13 asked for this \
+         tightening and it was pending for 177 versions: 190 s before v0.0.90, 1.2 s after, and \
+         measured at 0.15 s on three consecutive runs at v0.0.297. Twenty seconds had become a \
+         cushion rather than an instrument — it would not have noticed a hundredfold regression. \
+         Five keeps room for a slow shared CI runner and still catches one.",
         self_compile
     );
 

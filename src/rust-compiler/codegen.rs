@@ -90,6 +90,8 @@ pub struct CodeGen<'ctx> {
     str_eq_fn: Option<FunctionValue<'ctx>>,
     /// lazily created UTF-8 validator, B5 — emitted only into programs that let text IN
     utf8_check_fn: Option<FunctionValue<'ctx>>,
+    /// B50. C symbols a program declared with a signature the compiler disagrees with.
+    libc_conflicts: Vec<String>,
     /// user fn name -> (param types, return type), for aggregate call lowering
     fn_sigs: HashMap<String, (Vec<Type>, Type)>,
     /// Which of each function's parameters were declared `mutable`, by name.
@@ -236,6 +238,7 @@ impl<'ctx> CodeGen<'ctx> {
             byte_index_check_fn: None,
             str_eq_fn: None,
             utf8_check_fn: None,
+            libc_conflicts: Vec::new(),
             fn_sigs: HashMap::new(),
             fn_writable: HashMap::new(),
             print_to_stderr: false,
@@ -463,6 +466,24 @@ impl<'ctx> CodeGen<'ctx> {
         // nodes the builder left behind, and the verifier rejects a module that still
         // holds one. Getting this order wrong fails loudly, which is the good case.
         self.finalize_debug_info();
+
+        // B50. Reported BEFORE the verifier, because the verifier is exactly what would report it
+        // otherwise — in its own words, about a call the programmer did not write. A conflict here
+        // is a fact about their `external function` declaration, and it should read like one.
+        if !self.libc_conflicts.is_empty() {
+            self.libc_conflicts.sort();
+            self.libc_conflicts.dedup();
+            return Err(format!(
+                "`external function {}` declares a signature the compiler disagrees with. The \
+                 Burxt runtime calls `{}` itself, and one C symbol cannot have two signatures — so \
+                 either the declaration is wrong about what `{}` takes, or it wants a different \
+                 function and needs a differently-named C wrapper. Declaring it identically to the \
+                 runtime's own use is fine and is what `lib/os.bx` does with `malloc`.",
+                self.libc_conflicts.join("`, `external function "),
+                self.libc_conflicts[0],
+                self.libc_conflicts[0]
+            ));
+        }
 
         // verify the module — catches malformed IR early
         self.module
@@ -3579,9 +3600,28 @@ impl<'ctx> CodeGen<'ctx> {
 
     /// A libc function, declared exactly once. Declaring one twice makes LLVM
     /// rename the second, which surfaces as an undefined symbol at link time.
+    /// A libc function the compiler needs, declared once.
+    ///
+    /// **B50.** A name already in the module is reused — which is right when it is the compiler's
+    /// own earlier declaration, and wrong when it is a user's `external function` with a DIFFERENT
+    /// signature. That produced an LLVM verifier error, *"Call parameter type does not match
+    /// function signature"*, from a compiler whose one non-negotiable guarantee is that every
+    /// failure is named. A backend's diagnostic reaching a user is the same defect as no
+    /// diagnostic at all: it names something they did not write.
+    ///
+    /// The NAME is not the problem, which is why this is not a reserved-word list. `lib/os.bx`,
+    /// `lib/files.bx` and `lib/secure.bx` all declare `malloc` and always have; they agree with the
+    /// compiler about what `malloc` is, so nothing conflicts. Only a DISAGREEMENT is refused, and
+    /// the check therefore cannot fall behind a list — a symbol added to codegen tomorrow is
+    /// covered the day it is added.
     fn libc(&mut self, name: &str, ty: inkwell::types::FunctionType<'ctx>) -> FunctionValue<'ctx> {
         match self.module.get_function(name) {
-            Some(f) => f,
+            Some(f) => {
+                if f.get_type() != ty {
+                    self.libc_conflicts.push(name.to_string());
+                }
+                f
+            }
             None => self.module.add_function(name, ty, None),
         }
     }
@@ -3653,6 +3693,43 @@ impl<'ctx> CodeGen<'ctx> {
             )
             .map_err(err)?;
 
+        // B49. A DIRECTORY opens, and `fseek` to its end answers 9223372036854775807 — so the
+        // allocation below asked for eight exabytes and the program died saying "region memory
+        // exhausted", which names the arena and blames the wrong thing entirely. The reader had
+        // handed a directory to a file reader; nothing about their memory was the problem.
+        //
+        // The bound is the region's own size, which makes the message true either way: a size this
+        // build cannot hold is unreadable whether it came from a directory or from a genuinely
+        // enormous file, and both are named in one sentence rather than guessed between.
+        //
+        // Checked BEFORE the allocation, because after it the honest answer has already been
+        // replaced by the arena's.
+        let sane_bb = self.ctx.append_basic_block(function, "size_is_sane");
+        let unreadable_bb = self.ctx.append_basic_block(function, "not_a_readable_file");
+        let too_big = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::UGT,
+                size,
+                i64t.const_int(4 * 1024 * 1024 * 1024, false),
+                "size_absurd",
+            )
+            .map_err(err)?;
+        let negative = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, size, i64t.const_zero(), "size_neg")
+            .map_err(err)?;
+        let unreadable = self.builder.build_or(too_big, negative, "unreadable").map_err(err)?;
+        self.builder.build_conditional_branch(unreadable, unreadable_bb, sane_bb).map_err(err)?;
+
+        self.builder.position_at_end(unreadable_bb);
+        self.build_panic(
+            "burxt runtime error: cannot read this as a file — it is a directory, or it is larger \
+             than this build can hold. `file_is_directory` asks the first question; \
+             `file_read_bytes` reads what is not text.\n",
+        )?;
+
+        self.builder.position_at_end(sane_bb);
         let buf = self.build_alloc_string(size)?;
         self.builder
             .build_call(

@@ -2038,12 +2038,18 @@ function (mutable self: Unit) collect_method(src: String, index: Int) -> Int {
             + substring(src, name.start, name.length)
             + "` cannot return an array yet — the same limit as free functions.");
     }
-    // NOT the interface-object refusal that free functions get. Measured before adding it:
-    // stage-0 ACCEPTS a method returning `dynamic Greet` and refuses a free function that does,
-    // so copying the free-function arm here would have closed one divergence by opening another
-    // in the opposite direction. Whether stage-0 is RIGHT to accept it is a separate question,
-    // recorded as its own row rather than decided here by a compiler that was only being made to
-    // agree.
+    // B53. The interface-object refusal free functions already get. It was deliberately NOT added
+    // at v0.0.289, because stage-0 accepted the method spelling and copying the arm would have
+    // closed one divergence by opening another. The ruling came at v0.0.297 and went the
+    // conservative way — both refuse — so this arm is now the agreeing one.
+    if method_return.kind == 49 {
+        let complained: Int = self.complain_at(src, item.token,
+            "method `" + substring(src, receiver.start, receiver.length) + "."
+            + substring(src, name.start, name.length)
+            + "` cannot return an interface object — it borrows the value it "
+            + "refers to, which would not outlive the call. Return the concrete type, or a "
+            + "class holding it.");
+    }
     push(self.methods, Method {
         receiver_start: receiver.start, receiver_length: receiver.length,
         start: name.start, length: name.length,

@@ -4664,6 +4664,11 @@ function runtime_ir() -> String {
         + "@burxt.utf8_read_file = private unnamed_addr constant [10 x i8] c\"read_file\\00\"\n"
         + "@burxt.utf8_argument = private unnamed_addr constant [9 x i8] c\"argument\\00\"\n"
         + "@burxt.utf8_c_string_at = private unnamed_addr constant [12 x i8] c\"c_string_at\\00\"\n"
+        // B49. Byte for byte stage-0's wording.
+        + "@burxt.not_a_file_msg = private unnamed_addr constant [201 x i8] "
+        + "c\"burxt runtime error: cannot read this as a file \\E2\\80\\94 it is a directory, or "
+        + "it is larger than this build can hold. `file_is_directory` asks the first question; "
+        + "`file_read_bytes` reads what is not text.\\0A\\00\"\n"
         // B7. Byte for byte stage-0's wording again.
         + "@burxt.deep_msg = private unnamed_addr constant [230 x i8] "
         + "c\"burxt runtime error: this call went too deep and the stack is full \\E2\\80\\94 a "
@@ -4931,6 +4936,21 @@ function runtime_ir() -> String {
         + "  %sought = call i32 @fseek(ptr %f, i64 0, i32 2)\n"
         + "  %size = call i64 @ftell(ptr %f)\n"
         + "  %rewound = call i32 @fseek(ptr %f, i64 0, i32 0)\n"
+        // B49. A DIRECTORY opens, and `fseek` to its end answers 9223372036854775807 — so the
+        // allocation asked for eight exabytes and the program died saying "region memory
+        // exhausted", naming the arena and blaming the wrong thing. The reader had handed a
+        // directory to a file reader; nothing about their memory was the problem. Checked BEFORE
+        // the allocation, because afterwards the honest answer has been replaced by the arena's.
+        + "  %rf_big = icmp ugt i64 %size, 4294967296\n"
+        + "  %rf_neg = icmp slt i64 %size, 0\n"
+        + "  %rf_bad = or i1 %rf_big, %rf_neg\n"
+        + "  br i1 %rf_bad, label %notafile, label %sized\n"
+        + "notafile:\n"
+        + "  %rf_err = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %rf_err, ptr @burxt.not_a_file_msg)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n"
+        + "sized:\n"
         + "  %buffer = call i64 @burxt.alloc_string(i64 %size)\n"
         + "  %bp = inttoptr i64 %buffer to ptr\n"
         + "  %got = call i64 @fread(ptr %bp, i64 1, i64 %size, ptr %f)\n"

@@ -3120,6 +3120,30 @@ impl TypeChecker {
                     m.receiver, m.name
                 ));
             }
+            // B53. A free function returning an interface object is refused because the object
+            // BORROWS the value behind it, and a method was not — the same spelling, the same
+            // stated reason, two answers. Found while closing B47, by checking before copying the
+            // free-function arm into stage-1: copying it would have closed one divergence by
+            // opening another.
+            //
+            // **Ruled the conservative way, and the measurement is why it needed a ruling rather
+            // than a fix.** The method version RUNS correctly, including across a call that reuses
+            // the stack, because an aggregate parameter is `byval` — the copy lives in the CALLER's
+            // frame and outlives the call. So stage-0 may well be over-strict on free functions
+            // rather than unsound on methods, and one experiment is not a memory model.
+            //
+            // Between "relax a safety refusal on the strength of one run" and "refuse both", the
+            // region model states its own direction: the failure is memory, never a dangling
+            // pointer. Nothing in this repository returns a `dynamic` from anywhere, so making them
+            // agree costs nothing today and costs a compatibility promise tomorrow.
+            if matches!(m.ret, Type::Dyn(_)) {
+                return Err(format!(
+                    "method `{}.{}` cannot return an interface object — it borrows the value it \
+                     refers to, which would not outlive the call. Return the concrete type, or a \
+                     class holding it.",
+                    m.receiver, m.name
+                ));
+            }
             let param_tys = m.parameters.iter().map(|p| p.ty.clone()).collect();
             if m.allocates {
                 self.alloc_methods.insert(key.clone());
