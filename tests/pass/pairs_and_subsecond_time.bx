@@ -1,0 +1,54 @@
+// Tuple helpers and a finer clock. Roadmap D2c and D2e.
+//
+// D2c waited on tuples (A8): `zip` answers pairs, and before A8 a pair had nowhere to live that was
+// not a class somebody had to declare first.
+//
+// D2e is the sub-second clock, and the interesting part is which clock it is NOT. The monotonic
+// clock's constant is 1 on Linux and 6 on macOS, and Burxt has no conditional compilation — a
+// recorded decision rather than a gap — so no single program can name both. `CLOCK_REALTIME` is 0
+// on both, which is the only one reachable portably. It is a WALL clock and can step backwards when
+// the machine's time is corrected, and the name says so rather than leaving it to be discovered.
+//
+// D2f's `chunks` and `windows` are deliberately absent, and `lib/array.bx` records why: not the
+// slicing question the row assumed, but that `[[T]]` does not exist — "a growable array cannot hold
+// another array yet".
+use "../../lib/array.bx";
+use "../../lib/time.bx";
+
+let names: [String] = ["ada", "grace", "alan"];
+let scores: [Int] = [10, 20];
+
+// Stops at the shorter, rather than refusing unequal lengths: walking a list against its first N
+// labels is the common case, and a caller who wants them equal has a clearer error than this could
+// give.
+let paired: [(String, Int)] = array_zip(names, scores);
+print(len(paired));
+print(paired[1].0 + "=" + to_string(paired[1].1));
+
+let numbered: [(Int, String)] = array_enumerate(names);
+print(to_string(numbered[2].0) + ":" + numbered[2].1);
+
+// `array_split_at` is absent, and §B54 records why: it segfaults under stage-1 when the element is
+// a String, from inside `lib/array.bx` and nowhere else. It works in stage-0 and it works for
+// `[Int]`, which is exactly why the existing tuple-of-slices fixture never found it.
+
+// The clock. Asserted as PROPERTIES rather than as values, because a timestamp is different on
+// every run and a fixture that printed one would be a fixture that never passes twice.
+match time_wall_micros() {
+    None => { print("no clock"); }
+    Some(now) => {
+        // After 2023 and before 2100, in microseconds. A reading in the wrong unit — seconds or
+        // nanoseconds — fails this, which is the mistake worth catching.
+        print(now > 1700000000000000 && now < 4102444800000000);
+        let mutable spin: Int = 0;
+        let mutable i: Int = 0;
+        while i < 2000000 {
+            spin += i;
+            i += 1;
+        }
+        match time_since_micros(now) {
+            None => { print("no clock"); }
+            Some(took) => { print(took > 0); }
+        }
+    }
+}

@@ -71,6 +71,8 @@
 
 use "option.bx";
 use "fn.bx";
+// D2c/D2f use `math_min` and `math_clamp`.
+use "math.bx";
 
 // ---- asking ----------------------------------------------------------------------------
 
@@ -771,3 +773,81 @@ function array_sort_by<T>(mutable xs: [T], order: dynamic Comparer<T>) -> Int {
     }
     return count;
 }
+
+// ---- pairs and pieces (roadmap D2c and D2f) -------------------------------------------------
+//
+// These waited on tuples (A8), which is why they are here rather than beside `array_map`: `zip`
+// answers pairs, and before A8 there was nowhere for a pair to live that was not a class somebody
+// had to declare first.
+//
+// **Everything below COPIES, and that is the slicing decision D2f was waiting for, made and
+// written down rather than left open.** Burxt has no borrowed sub-slice: a value is either its own
+// storage or a whole array. So `array_chunks` builds real arrays, and the cost is one copy of every
+// element — the same total work as the walk that produced them, and O(n) rather than O(1) per piece.
+//
+// The alternative was a borrowed view, and it is refused for the reason the region model refuses
+// most references: a view outlives nothing safely without a lifetime to check it against, and the
+// language deliberately has none. A copy is honest, and a caller who cannot afford it should index
+// the original — which is what the loop they were about to write does anyway.
+
+// The two arrays walked together, stopping at the shorter. `zip([1,2,3], ["a","b"])` has two pairs.
+//
+// Stopping at the shorter rather than refusing unequal lengths: the caller who wants them equal has
+// `array_equals` on the lengths and a clearer error than this could give, and the caller who does
+// not want them equal is the common one — walking a list against its first N labels.
+function array_zip<A, B>(left: [A], right: [B]) -> [(A, B)] {
+    let mutable out: [(A, B)] = [];
+    let mutable i: Int = 0;
+    let stop: Int = math_min(len(left), len(right));
+    while i < stop {
+        let paired: Int = push(out, (left[i], right[i]));
+        i += 1;
+    }
+    return out;
+}
+
+// Every element with its index. `enumerate(["a","b"])` is `[(0,"a"), (1,"b")]`.
+function array_enumerate<T>(xs: [T]) -> [(Int, T)] {
+    let mutable out: [(Int, T)] = [];
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        let paired: Int = push(out, (i, xs[i]));
+        i += 1;
+    }
+    return out;
+}
+
+// **`array_split_at` is NOT here, and it was written, tested, and taken out again.** §B54.
+//
+// It works in stage-0. Under stage-1 it SEGFAULTS when the element is a String — `[Int]` is fine —
+// and only from inside this file: the same function copied into a standalone program works, and so
+// does the `halve<T>(xs) -> ([T], [T])` shape that `tests/pass/a_tuple_of_slices_in_a_generic.bx`
+// already covers. So the trigger needs this file's other instantiations to be present, which is why
+// no existing fixture found it.
+//
+// That existing fixture is the whole lesson: it uses `[Int]`. A tuple of two slices from a generic
+// was covered, and covered for ONE element type, so the defect sat behind a green suite — the same
+// shape as B52, B18, B35 and B42.
+//
+// Shipping it with a note would have been worse than not shipping it: a library function that
+// crashes under one of two compilers is not a library function. It comes back when B54 closes.
+
+// **`array_chunks` and `array_windows` are absent, and D2f is not what its row assumed.**
+//
+// The row files them under "needs a slicing decision — a borrowed sub-slice or a copy". That
+// decision was easy and it is COPY, for the reason the region model refuses most references: a view
+// outlives nothing safely without a lifetime to check it against, and this language deliberately
+// has none.
+//
+// That is not the blocker. Measured v0.0.294, writing the obvious version:
+//
+//     error: a growable array cannot hold another array yet — its element would need its own region
+//
+// **`[[T]]` does not exist.** Both functions answer a list of lists, so neither is writable at all
+// until a growable array can hold one — which is a language feature rather than a library choice,
+// and a bigger question than either function: an element that is itself a region needs somewhere to
+// live that outlasts the `push`.
+//
+// Written down here rather than left as an absence, because the next person to reach for `chunks`
+// would otherwise spend an afternoon rediscovering it. Index the original array — the loop that
+// does it is the loop `chunks` would have run for you.

@@ -532,3 +532,78 @@ function time_parse_unix(text: String) -> Option<Int> {
     let when: DateTime = time_parse_iso(text)?;
     return Option.Some(time_to_unix(when));
 }
+
+// ---- sub-second time (roadmap D2e) ----------------------------------------------------------
+//
+// `os_now()` answers whole seconds, which is enough for a date and useless for "how long did that
+// take". This is the finer clock.
+//
+// **`clock_gettime(CLOCK_REALTIME)` and not `CLOCK_MONOTONIC`, and the reason is a language
+// decision rather than an oversight.** The monotonic clock's constant is **1 on Linux and 6 on
+// macOS**, and Burxt has no conditional compilation — a recorded decision, not a gap — so there is
+// no way to write one program that names both. `CLOCK_REALTIME` is **0 on both**, which is why it
+// is the one that can be reached portably.
+//
+// The cost, stated rather than discovered: this is a WALL clock. It can jump backwards when the
+// machine's time is corrected, so a duration measured across an NTP step can be negative. For
+// timing a compile or a request that is fine and the numbers are honest. For a timeout that must
+// never go backwards it is not, and that needs monotonic — which needs either conditional
+// compilation or a per-platform constant the language can reach, and neither exists.
+//
+// **The name says which clock it is**, exactly as `string_to_upper_ascii` and `divide_floor` do.
+// A `time_now_micros` that silently meant "wall clock, may jump" would be the kind of quiet wrong
+// answer this language exists to refuse.
+external function clock_gettime(which: CInt, into: CPointer) -> CInt touches clock;
+// `malloc` is declared in `os.bx`, `files.bx` and `secure.bx` too. Four copies of one line is a
+// smell — one fact in four places — and it is left alone here rather than fixed in passing,
+// because an extern is the C symbol NAME and consolidating them is a change to every file that
+// reaches the boundary.
+external function malloc(size: Int) -> CPointer;
+
+// One little-endian i64 out of a byte array, starting at `from`.
+//
+// Eight bytes reassembled by hand because Burxt reads a C buffer as bytes and has no way to say
+// "the i64 at this offset" — the pointer wall hands over bytes and nothing else, which is what
+// makes it a wall.
+function time_i64_at(bytes: [Int], from: Int) -> Int
+    requires from >= 0
+{
+    let mutable value: Int = 0;
+    let mutable shift: Int = 0;
+    let mutable i: Int = 0;
+    while i < 8 && from + i < len(bytes) {
+        value += bytes[from + i] * math_pow(256, i);
+        i += 1;
+    }
+    return value;
+}
+
+// The wall clock in microseconds since the epoch, or `None` if the clock could not be read.
+//
+// `None` rather than 0: a clock that failed and a clock reading zero are different facts, and zero
+// is a real instant (1970) that a duration calculation would silently accept.
+function time_wall_micros() -> Option<Int> touches clock {
+    // `struct timespec` is two 64-bit values on every platform this targets: seconds, then
+    // nanoseconds. Sixteen bytes.
+    let buffer: CPointer = malloc(16);
+    if c_is_null(buffer) {
+        return Option.None;
+    }
+    let got: Int = clock_gettime(0, buffer);          // 0 is CLOCK_REALTIME on Linux and macOS
+    let bytes: [Int] = c_bytes_at(buffer, 16);
+    if len(bytes) < 16 {
+        return Option.None;
+    }
+    let seconds: Int = time_i64_at(bytes, 0);
+    let nanos: Int = time_i64_at(bytes, 8);
+    return Option.Some(seconds * 1000000 + divide_floor(nanos, 1000));
+}
+
+// Microseconds between two readings. Answers `None` when either reading failed, and the caller is
+// expected to notice — a duration is exactly the place a missing measurement must not become zero.
+function time_since_micros(started: Int) -> Option<Int> touches clock {
+    match time_wall_micros() {
+        None => { return Option.None; }
+        Some(now) => { return Option.Some(now - started); }
+    }
+}
