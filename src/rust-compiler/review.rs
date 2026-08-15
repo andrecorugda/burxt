@@ -64,6 +64,10 @@ struct Promise {
     ensures: Vec<String>,
     is_pure: bool,
     private: bool,
+    /// C2. Declared `public`, so a package that depends on this one can see it — which is exactly
+    /// the set of declarations a semver rule is about. A change to something no consumer can name
+    /// cannot break a consumer.
+    public: bool,
     /// What this reaches outside itself. GAINING one is the second half of what a reviewer needs
     /// — "this function now talks to the network" is a change in what the program can do, and
     /// since v0.0.159 it cannot happen without the signature changing.
@@ -280,6 +284,7 @@ fn collect(prog: &Program) -> BTreeMap<String, Promise> {
                 ensures: normalised(&f.ensures, &f.parameters),
                 is_pure: f.is_pure,
                 private: false,
+                public: f.public,
                 touches: f.touches.clone(),
             },
         );
@@ -299,6 +304,7 @@ fn collect(prog: &Program) -> BTreeMap<String, Promise> {
                 // misses a weakening is worse than no gate: someone is relying on it.
                 is_pure: m.is_pure,
                 private: m.private,
+                public: false,
                 touches: m.touches.clone(),
             },
         );
@@ -316,6 +322,7 @@ fn collect(prog: &Program) -> BTreeMap<String, Promise> {
                     // lose `pure` exactly as one written anywhere else can.
                     is_pure: m.is_pure,
                     private: m.private,
+                public: false,
                     touches: m.touches.clone(),
                 },
             );
@@ -331,6 +338,7 @@ fn collect(prog: &Program) -> BTreeMap<String, Promise> {
                 ensures: Vec::new(),
                 is_pure: false,
                 private: false,
+                public: s.public,
                 touches: Vec::new(),
             },
         );
@@ -344,6 +352,8 @@ fn collect(prog: &Program) -> BTreeMap<String, Promise> {
                     ensures: Vec::new(),
                     is_pure: false,
                     private: s.private_fields.contains(&f.name),
+                    // A field is reached through its class, so the class's visibility already answers.
+                    public: s.public,
                     touches: Vec::new(),
                 },
             );
@@ -359,6 +369,7 @@ fn collect(prog: &Program) -> BTreeMap<String, Promise> {
                 ensures: Vec::new(),
                 is_pure: false,
                 private: false,
+                public: t.public,
                 touches: Vec::new(),
             },
         );
@@ -391,6 +402,10 @@ fn collect(prog: &Program) -> BTreeMap<String, Promise> {
                 ensures: Vec::new(),
                 is_pure: false,
                 private: false,
+                // A `const` takes no `public` yet — the keyword goes before the four item kinds
+                // that can be reached across a package, and a const is not one of them. Recorded
+                // as false rather than defaulted silently, so adding it later is one line here.
+                public: false,
                 touches: Vec::new(),
             },
         );
@@ -522,4 +537,221 @@ fn render(e: &Expr, parameters: &[Param]) -> String {
 
 fn list(items: &[Expr], parameters: &[Param]) -> String {
     items.iter().map(|a| render(a, parameters)).collect::<Vec<_>>().join(", ")
+}
+
+// ---------------------------------------------------------------------------------------------
+// The semver rule. C2.
+// ---------------------------------------------------------------------------------------------
+
+/// `burxt review --semver old.bx new.bx` — the SMALLEST version bump this change is allowed to
+/// ship under.
+///
+/// # Why this is a different question from the one `review` already answers
+///
+/// The default output answers *"did this change promise LESS"*, which is what a reviewer of an
+/// agent's diff wants to know. Semver asks *"can a consumer upgrade without editing their code"*.
+/// They are not the same question and they disagree in two places, both counter-intuitive:
+///
+///   * **A stricter `requires` promises MORE and breaks callers.** `withdraw` gaining
+///     `amount <= balance` is the flagship catch run backwards: deleting that precondition is the
+///     agent mistake the default mode exists to find, and ADDING it is a major version, because
+///     every caller that passed a larger amount now fails a contract it used to satisfy.
+///   * **A weaker `ensures` breaks callers who relied on it**, even though nothing at the call site
+///     changed. Dropping `result >= $0.00` is major.
+///
+/// # The effect rule, which no other language has to think about
+///
+/// A public function that gains an effect is a MAJOR change, because effects propagate: every
+/// caller must now write `touches files` in its own signature or stop compiling. In a language
+/// where effects are not in the type, the same change is invisible and ships as a patch.
+///
+/// # The limit, and it belongs in the compatibility promise rather than in a footnote
+///
+/// This reads the INTERFACE. It cannot read behaviour. A function whose signature, contracts and
+/// effects are all unchanged, and which now returns different numbers, is a breaking change that
+/// nothing here detects.
+///
+/// So the answer is a FLOOR and never a ceiling. It can prove *"this is at least a major"*, and it
+/// can prove *"nothing in the interface broke"*. It can never prove *"safe to upgrade"*. A person
+/// may always go higher than it says — never lower.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Bump {
+    Patch,
+    Minor,
+    Major,
+}
+
+impl Bump {
+    pub fn word(self) -> &'static str {
+        match self {
+            Bump::Patch => "patch",
+            Bump::Minor => "minor",
+            Bump::Major => "major",
+        }
+    }
+
+    fn parse(text: &str) -> Option<Bump> {
+        match text {
+            "patch" => Some(Bump::Patch),
+            "minor" => Some(Bump::Minor),
+            "major" => Some(Bump::Major),
+            _ => None,
+        }
+    }
+}
+
+pub fn semver(old_path: &str, new_path: &str, required: Option<&str>) -> Result<i32, String> {
+    let claimed = match required {
+        Some(text) => match Bump::parse(text) {
+            Some(b) => Some(b),
+            None => {
+                return Err(format!(
+                    "`--require {}` is not a bump. It is `patch`, `minor` or `major`.",
+                    text
+                ))
+            }
+        },
+        None => None,
+    };
+
+    let before = promises_of(old_path)?;
+    let after = promises_of(new_path)?;
+    let mut worst = Bump::Patch;
+    let mut reasons: Vec<(Bump, String)> = Vec::new();
+    let mut note = |level: Bump, why: String, worst: &mut Bump| {
+        if level > *worst {
+            *worst = level;
+        }
+        reasons.push((level, why));
+    };
+
+    for (name, was) in &before {
+        // A declaration no consumer can name cannot break a consumer. This one line is what
+        // `public` bought: before it, every change to every helper was indistinguishable from a
+        // change to the interface, and the honest answer would have been "major, always".
+        if !was.public {
+            continue;
+        }
+        match after.get(name) {
+            None => note(
+                Bump::Major,
+                format!("`{}` is gone, and it was public", name),
+                &mut worst,
+            ),
+            Some(now) => {
+                if !now.public {
+                    note(
+                        Bump::Major,
+                        format!("`{}` is no longer public", name),
+                        &mut worst,
+                    );
+                }
+                if now.shape != was.shape {
+                    note(
+                        Bump::Major,
+                        format!("`{}` changed shape: {} -> {}", name, was.shape, now.shape),
+                        &mut worst,
+                    );
+                }
+                for clause in &now.requires {
+                    if !was.requires.contains(clause) {
+                        note(
+                            Bump::Major,
+                            format!(
+                                "`{}` gained `requires {}` — a caller that satisfied the old \
+                                 signature may not satisfy this one",
+                                name, shown(clause)
+                            ),
+                            &mut worst,
+                        );
+                    }
+                }
+                for clause in &was.ensures {
+                    if !now.ensures.contains(clause) {
+                        note(
+                            Bump::Major,
+                            format!(
+                                "`{}` lost `ensures {}` — a caller may have relied on it",
+                                name, shown(clause)
+                            ),
+                            &mut worst,
+                        );
+                    }
+                }
+                for effect in &now.touches {
+                    if !was.touches.contains(effect) {
+                        note(
+                            Bump::Major,
+                            format!(
+                                "`{}` now touches {} — effects propagate, so every caller must \
+                                 declare it too or stop compiling",
+                                name,
+                                // The language's own spelling, lowercase: `touches files` is what
+                                // a person writes, and a message that says `Files` is quoting the
+                                // compiler's internals back at them.
+                                format!("{:?}", effect).to_lowercase()
+                            ),
+                            &mut worst,
+                        );
+                    }
+                }
+                if was.is_pure && !now.is_pure {
+                    note(Bump::Major, format!("`{}` is no longer `pure`", name), &mut worst);
+                }
+                for clause in &was.requires {
+                    if !now.requires.contains(clause) {
+                        note(
+                            Bump::Minor,
+                            format!("`{}` dropped `requires {}` — it accepts more than it did", name, shown(clause)),
+                            &mut worst,
+                        );
+                    }
+                }
+                for clause in &now.ensures {
+                    if !was.ensures.contains(clause) {
+                        note(
+                            Bump::Minor,
+                            format!("`{}` gained `ensures {}` — it promises more", name, shown(clause)),
+                            &mut worst,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    for (name, now) in &after {
+        if now.public && !before.contains_key(name) {
+            note(Bump::Minor, format!("`{}` is new and public", name), &mut worst);
+        }
+    }
+
+    reasons.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    for (level, why) in &reasons {
+        println!("{:<7} {}", level.word(), why);
+    }
+    if !reasons.is_empty() {
+        println!();
+    }
+    println!("minimum bump: {}", worst.word());
+    println!();
+    println!(
+        "This reads the interface, not the behaviour. It can prove this is AT LEAST a {}; it \
+         cannot prove an upgrade is safe — a function whose signature, contracts and effects are \
+         unchanged can still answer differently. Go higher than this if you have reason to. Never \
+         lower.",
+        worst.word()
+    );
+
+    if let Some(claimed) = claimed {
+        if worst > claimed {
+            println!();
+            println!(
+                "REFUSED: you claimed `{}` and the interface demands `{}`.",
+                claimed.word(),
+                worst.word()
+            );
+            return Ok(1);
+        }
+    }
+    Ok(0)
 }

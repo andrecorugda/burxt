@@ -2359,6 +2359,111 @@ fn a_lockfile_pins_a_commit_even_when_the_tag_moves() {
     let _ = fs::remove_dir_all(&scratch);
 }
 
+/// `burxt review --semver` answers the smallest bump a change may ship under. C2.
+///
+/// The rule is not the same as the one the default mode applies, and the two counter-intuitive
+/// cases are the reason this test exists rather than a smoke check:
+///
+///   * **A stricter `requires` is a MAJOR.** It promises MORE, and the default mode correctly says
+///     nothing weakened — while every caller that satisfied the old signature may now fail. That is
+///     the flagship catch run backwards: deleting a precondition is the agent mistake `review`
+///     exists to find, and adding one is a breaking change.
+///   * **A public function that GAINS AN EFFECT is a major**, because effects propagate: every
+///     caller must write `touches files` in its own signature or stop compiling. In a language
+///     where effects are not in the type this change is invisible and ships as a patch.
+///
+/// And the boundary `public` bought: a change to a declaration no consumer can name is a PATCH.
+/// Before slice 2 every helper was indistinguishable from the interface and the only honest answer
+/// would have been "major, always", which is the same as no answer.
+#[test]
+fn the_semver_rule_reads_the_interface_and_says_so() {
+    let scratch = scratch_dir("c2-semver");
+    fs::create_dir_all(&scratch).unwrap();
+    let before = scratch.join("before.bx");
+    let after = scratch.join("after.bx");
+    fs::write(
+        &before,
+        "public function withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>\n\
+         \x20   requires amount > $0.00\n\
+         \x20   ensures result >= $0.00\n\
+         { return balance - amount; }\n\
+         public function read_config(path: String) -> Int { return len(path); }\n\
+         function helper(n: Int) -> Int { return n; }\n",
+    )
+    .unwrap();
+    fs::write(
+        &after,
+        "public function withdraw(balance: Decimal<2>, amount: Decimal<2>) -> Decimal<2>\n\
+         \x20   requires amount > $0.00\n\
+         \x20   requires amount <= balance\n\
+         { return balance - amount; }\n\
+         public function read_config(path: String) -> Int touches files { return len(read_file(path)); }\n\
+         function helper(n: Int) -> Int { return n + 1; }\n\
+         public function extra(n: Int) -> Int { return n; }\n",
+    )
+    .unwrap();
+
+    let run = |args: &[&str]| -> (Option<i32>, String) {
+        let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("review")
+            .arg("--semver")
+            .arg(&before)
+            .arg(&after)
+            .args(args)
+            .output()
+            .expect("burxt review --semver");
+        (
+            out.status.code(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+
+    let (_, said) = run(&[]);
+    assert!(said.contains("minimum bump: major"), "the bump was not major:\n{}", said);
+    assert!(
+        said.contains("gained `requires amount <= balance`"),
+        "a stricter precondition was not called out — it promises MORE and breaks callers, which \
+         is the case the default mode is silent about:\n{}",
+        said
+    );
+    assert!(
+        said.contains("now touches files") && said.contains("effects propagate"),
+        "a public function that gained an effect was not a major. Every caller must now declare \
+         it or stop compiling:\n{}",
+        said
+    );
+    assert!(
+        said.contains("lost `ensures result >= $0.00`"),
+        "a dropped postcondition was not called out:\n{}",
+        said
+    );
+    assert!(said.contains("`extra` is new and public"), "an added public function was missed:\n{}", said);
+    // `helper` is private and changed. It must not appear at all: that is what `public` bought.
+    assert!(
+        !said.contains("helper"),
+        "a change to a declaration no consumer can name was reported. Before `public`, every \
+         helper looked like the interface:\n{}",
+        said
+    );
+    // The limit is stated in the output, not in a footnote somewhere.
+    assert!(
+        said.contains("cannot prove an upgrade is safe"),
+        "the output did not state that it reads the interface rather than the behaviour. A rule \
+         that looks like a proof and is not is worse than no rule:\n{}",
+        said
+    );
+
+    assert_eq!(run(&["--require", "minor"]).0, Some(1), "claiming minor for a major was accepted");
+    assert_eq!(run(&["--require", "major"]).0, Some(0), "claiming major for a major was refused");
+    assert_eq!(run(&["--require", "nonsense"]).0, Some(2), "a bump word that is not one was taken");
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
 /// A fixture directory holds programs, expectations, and the handful of files a program READS.
 /// Nothing a program WRITES.
 ///

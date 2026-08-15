@@ -189,14 +189,52 @@ fn compile_main() {
     // about what the program PROMISES — signatures, contracts, privacy — rather than what changed
     // in the text. Handled here, before the flags every other command shares.
     if cmd == "review" {
-        if arguments.len() < 4 {
+        // C2. `--semver` answers a DIFFERENT question from the default, which is why it is a mode
+        // rather than a replacement: the default asks "did this promise less" (a reviewer of an
+        // agent's diff), `--semver` asks "can a consumer upgrade without editing their code".
+        // Those disagree — a stricter `requires` promises more and breaks callers.
+        let semver = arguments.iter().any(|a| a == "--semver");
+        let required = arguments
+            .iter()
+            .position(|a| a == "--require")
+            .and_then(|i| arguments.get(i + 1))
+            .cloned();
+        let files: Vec<String> = arguments[2..]
+            .iter()
+            .filter(|a| !a.starts_with("--"))
+            .cloned()
+            .collect();
+        // `--require` takes an operand, and that operand is not a file.
+        let files: Vec<String> = match &required {
+            Some(word) => files.into_iter().filter(|f| f != word).collect(),
+            None => files,
+        };
+        if files.len() < 2 {
             eprintln!("usage: burxt review <old.bx> <new.bx>");
+            eprintln!("       burxt review --semver <old.bx> <new.bx> [--require patch|minor|major]");
             eprintln!();
             eprintln!("Compares what two versions of a program GUARANTEE. Exits 1 if any promise");
             eprintln!("was weakened, so it works as a gate without parsing the output.");
+            eprintln!();
+            eprintln!("--semver  answers the smallest version bump this change may ship under.");
+            eprintln!("          A stricter `requires` is a MAJOR — it promises more and breaks");
+            eprintln!("          callers. A public function that gains an effect is a major too,");
+            eprintln!("          because effects propagate and every caller must declare it.");
+            eprintln!("          It reads the interface, not the behaviour: it can prove a change");
+            eprintln!("          is AT LEAST a major, never that an upgrade is safe.");
+            eprintln!("--require exits 1 when the bump you claim is smaller than the one demanded.");
             std::process::exit(2);
         }
-        match review::review(path, &arguments[3]) {
+        if semver {
+            match review::semver(&files[0], &files[1], required.as_deref()) {
+                Ok(code) => std::process::exit(code),
+                Err(message) => {
+                    eprintln!("error: {}", message);
+                    std::process::exit(2);
+                }
+            }
+        }
+        match review::review(&files[0], &files[1]) {
             Ok(code) => std::process::exit(code),
             Err(message) => {
                 eprintln!("error: {}", message);
