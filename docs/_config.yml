@@ -15,10 +15,23 @@ description: A typed, compiled, native language where exact decimals are the def
 url: https://burxt-lang.org
 baseurl: ""
 
-# The milestone log and the specs are for people reading the repository, not visitors to the site.
-# They stay in git and out of the build rather than being half-styled pages nobody links to.
+# **The milestone log was excluded, and that is REVERSED as of 1.0.0.** The reason it gave was that
+# the log and the specs "stay in git and out of the build rather than being half-styled pages nobody
+# links to", and both halves of that stopped being true:
+#
+#   * half-styled — every entry now carries `layout: doc`, a title from its own heading and a
+#     description from its first paragraph, so it renders exactly like the guide;
+#   * nobody links to it — `README.md` links it as `[The design log](docs/log/)`, which resolves on
+#     GitHub and 404'd on the site. That is the repository and the website telling different stories,
+#     with the repository quietly the only one that works.
+#
+# It is also the strongest thing here for a reader deciding whether to trust the project: 4,555 lines
+# of what each version decided and what it cost, including the mistakes.
+#
+# The SPECS stay out, and that part of the original reasoning still holds — they are a working record
+# for people reading the repository, and `spec/1.0/` in particular is an archive rather than
+# documentation. `docs/comparison.md` and `docs/limitations.md` are what a visitor should meet.
 exclude:
-  - log
   - README.md
 
 # Every page in guide/ gets the same layout without twelve copies of the same front matter.
