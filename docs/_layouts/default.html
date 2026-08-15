@@ -26,6 +26,23 @@
     <img src="{{ site.baseurl }}/assets/burxt-lockup-light.png" alt="Burxt">
   </a>
 
+  {%- comment -%}
+    The same picker `doc.html` carries, but shown ONLY where a version means something. This layout
+    also serves the landing page and the design log, and neither is version-scoped — a dropdown
+    offering "1.0.0" on a marketing page invites a click that answers a question nobody asked.
+    `install/` IS version-scoped, and it is the page a reader on 1.0 most needs to reach.
+  {%- endcomment -%}
+  {%- assign rest = page.url | remove_first: site.baseurl -%}
+  {%- if page.url contains '/1.0/' -%}
+    {%- assign rest = rest | remove_first: '/1.0' -%}
+  {%- endif -%}
+  {%- if page.section == 'install' or page.url contains '/1.0/' -%}
+  <select class="ver" aria-label="Documentation version" onchange="location.href=this.value">
+    <option value="{{ site.baseurl }}{{ rest }}"{% unless page.url contains '/1.0/' %} selected{% endunless %}>latest</option>
+    <option value="{{ site.baseurl }}/1.0{{ rest }}"{% if page.url contains '/1.0/' %} selected{% endif %}>1.0.0</option>
+  </select>
+  {%- endif -%}
+
   <!-- Search is present at every width: a labelled pill on a wide screen, the icon on a narrow one.
        The hamburger appears below 900px and opens the drawer below, which on this layout holds the
        site's links — the only copy of them once the row below is hidden. -->
