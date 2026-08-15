@@ -1,0 +1,13 @@
+// `==` on an enum is not available yet, in BOTH compilers. Roadmap B43.
+//
+// Stage-0 refused it and stage-1 compiled it, so the same program existed for one compiler and not
+// the other. No region anywhere, so this has nothing to do with the escape family — it was unmasked
+// by B36's narrowing, which had been over-refusing and hiding it.
+//
+// The reason is in the message rather than "not supported": two variants can carry different
+// payloads, so equality has to compare the TAG first and then only the payload that variant holds.
+// `match` already says exactly that, which is why this is a deferral and not a gap.
+enum Shade { Dark, Light }
+
+let a: Shade = Shade.Dark;
+print(a == Shade.Light);

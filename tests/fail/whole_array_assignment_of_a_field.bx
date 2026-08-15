@@ -1,0 +1,10 @@
+// Assigning a WHOLE fixed array is deferred, in both compilers. Roadmap B44.
+//
+// `kept = h.xs` — stage-0 refused, stage-1 compiled it. Region-free, like B43, and unmasked by the
+// same narrowing. Element assignment (`kept[0] = 9`) is fine and is what the message points at.
+class H { xs: [Int; 3] }
+
+let h: H = H { xs: [1, 2, 3] };
+let mutable kept: [Int; 3] = [0, 0, 0];
+kept = h.xs;
+print(kept[0]);

@@ -1,0 +1,19 @@
+// A class cannot contain itself THROUGH ANOTHER CLASS either. Roadmap B40.
+//
+// `class A { b: B }` with `class B { a: A }` has no finite size: sizeof(A) includes sizeof(B),
+// which includes sizeof(A). Stage-0 always refused it. Stage-1's check compared the field's type
+// NAME against the class's own name — so it caught `class A { a: A }` and nothing one step
+// further out, and it emitted 24,780 bytes of IR for a type whose size has no answer.
+//
+// This is the fixture that did not exist. The differential runs both compilers over the suite and
+// reports every disagreement, and it can only disagree about a program somebody wrote.
+//
+// The fix needed a SECOND pass, and that is the part worth remembering: the declaration table is
+// filled by the same loop that was doing the checking, so looking a class up during it answers
+// "no such class" for every one of them. The direct check never noticed because it compares source
+// text rather than looking anything up.
+class A { b: B }
+class B { a: A }
+
+let x: Int = 1;
+print(x);

@@ -9098,13 +9098,13 @@ impl TypeChecker {
                 // A slice is a pointer, a length and a capacity. Comparing it element-wise is a
                 // reasonable thing to want and a separate decision — two slices of equal contents but
                 // different capacity would have to be equal, and nothing says so yet.
-                Type::Slice(_) => Some("a growable array, and `==` on one is a separate question                                         — two arrays with equal contents and different capacity                                         would have to be equal, and nothing has decided that"
+                Type::Slice(_) => Some("a growable array, and `==` on one is a separate question — two arrays with equal contents and different capacity would have to be equal, and nothing has decided that"
                     .to_string()),
                 Type::Array { .. } => Some(
                     "a fixed array, and element-wise `==` on one is not available yet".to_string(),
                 ),
                 Type::Dyn(t) => Some(format!(
-                    "a `dynamic {}`, which is a pointer pair — comparing it would compare                      addresses, not values",
+                    "a `dynamic {}`, which is a pointer pair — comparing it would compare addresses, not values",
                     t
                 )),
                 other => Some(format!("{}, which cannot be compared", other)),
@@ -9144,20 +9144,20 @@ impl TypeChecker {
                 // that is a decision nobody wrote down.
                 if !matches!(op, CmpOp::Eq | CmpOp::Ne) {
                     return Err(format!(
-                        "`{}` on `{}` would have to decide which field comes first, and nothing                          says which. Compare the field you mean, or give `{}` a method that                          answers the question you are really asking.",
+                        "`{}` on `{}` would have to decide which field comes first, and nothing says which. Compare the field you mean, or give `{}` a method that answers the question you are really asking.",
                         op, a, a
                     ));
                 }
                 if self.is_enum(a) {
                     return Err(format!(
-                        "`==` on the enum `{}` is not available yet: two variants can carry                          different payloads, so equality has to compare the TAG first and then                          only the payload that variant holds. Use `match`.",
+                        "`==` on the enum `{}` is not available yet: two variants can carry different payloads, so equality has to compare the TAG first and then only the payload that variant holds. Use `match`.",
                         a
                     ));
                 }
                 self.class_is_comparable(a, &mut Vec::new())
             }
             (Named(a), Named(b)) => Err(format!(
-                "cannot compare `{}` with `{}`: one equality, no coercion. Both sides of `==`                  must be the same type.",
+                "cannot compare `{}` with `{}`: one equality, no coercion. Both sides of `==` must be the same type.",
                 a, b
             )),
             // Strings compare by BYTES, and only for equality. This is the

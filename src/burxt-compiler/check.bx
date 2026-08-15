@@ -1964,10 +1964,32 @@ function (mutable self: Unit) collect_method(src: String, index: Int) -> Int {
         }
         q += 1;
     }
+    // B47. The same two refusals a free function gets, in the method spelling. They were written
+    // once, for `function f() -> [Int; 3]`, and a method's declaration is checked HERE by different
+    // code — so `function (self: Box) same(...) -> [Int; 3]` was accepted by stage-1 and refused by
+    // stage-0, and the two compilers disagreed about whether the program exists.
+    //
+    // B37 fixed the free-function spelling and this one stayed open, which is the shape that keeps
+    // recurring: a rule applied where somebody wrote it and silent where nobody did. It is the same
+    // miss as B7's stack guard going into `gen_fn` and not `gen_method`, two days ago, in the other
+    // compiler.
+    let method_return: Type = self.declared_type(src, signature.c);
+    if method_return.kind == 48 {
+        let complained: Int = self.complain_at(src, item.token,
+            "method `" + substring(src, receiver.start, receiver.length) + "."
+            + substring(src, name.start, name.length)
+            + "` cannot return an array yet — the same limit as free functions.");
+    }
+    // NOT the interface-object refusal that free functions get. Measured before adding it:
+    // stage-0 ACCEPTS a method returning `dynamic Greet` and refuses a free function that does,
+    // so copying the free-function arm here would have closed one divergence by opening another
+    // in the opposite direction. Whether stage-0 is RIGHT to accept it is a separate question,
+    // recorded as its own row rather than decided here by a compiler that was only being made to
+    // agree.
     push(self.methods, Method {
         receiver_start: receiver.start, receiver_length: receiver.length,
         start: name.start, length: name.length,
-        return_type: self.declared_type(src, signature.c), parameters: item.a,
+        return_type: method_return, parameters: item.a,
         mutating: mutating, flags: item.value,
     });
     return 1;
@@ -2254,6 +2276,51 @@ function mul_is_safe(a: Int, b: Int) -> Bool {
     return b >= divide_toward_zero(INT_MIN, a);
 }
 
+// Can the class at `decl` reach `target` by VALUE, following only whole-class fields? B40.
+//
+// Stage-1's containment check caught only DIRECT self-containment — `class A { a: A }` — so
+// `class A { b: B }  class B { a: A }` was accepted and 24,780 bytes of IR were emitted for a type
+// whose size has no finite answer. Stage-0 refuses it. Measured.
+//
+// **A depth bound rather than stage-0's trail**, and the reason is a language limit worth naming: a
+// method may not take a `mutable` parameter, so a growing trail cannot be threaded through a
+// recursive method the way `check_struct_finite` threads a `Vec`. The bound is not a heuristic —
+// a simple path from a class back to itself visits at most as many classes as there are, so
+// searching deeper than that can find nothing new. Complete, and it needs no scratch storage.
+//
+// Only whole-class fields are followed, which is stage-0's rule too: recursion THROUGH a slice is a
+// pointer and terminates, and is how a tree or a JSON value is written. Infinite width comes from
+// containing a value, not from referring to one.
+function (self: Unit) reaches_class(src: String, decl: Int, target: Int, depth: Int) -> Bool {
+    if depth > len(self.types) {
+        return false;
+    }
+    if decl < 0 || decl >= len(self.types) {
+        return false;
+    }
+    if self.types[decl].kind != 82 {
+        return false;
+    }
+    let holder: Node = self.nodes[self.types[decl].node];
+    let mutable f: Int = 0;
+    while f < holder.b {
+        let field: Node = self.nodes[self.children[holder.a + f]];
+        let held: Node = self.nodes[field.a];
+        if held.kind == 46 {
+            let held_name: Token = self.tokens[held.token];
+            let inner: Int = self.find_type(src, held_name.start, held_name.length);
+            if inner == target {
+                return true;
+            }
+            if inner >= 0 && self.reaches_class(src, inner, target, depth + 1) {
+                return true;
+            }
+        }
+        f += 1;
+    }
+    return false;
+}
+
 function (mutable self: Unit) collect_declarations(src: String) -> Int {
     let mutable i: Int = 0;
     while i < len(self.items) {
@@ -2469,6 +2536,26 @@ function (mutable self: Unit) collect_declarations(src: String) -> Int {
             }
         }
         i += 1;
+    }
+    // B40, and it has to be a SECOND pass: `self.types` is filled by the loop above, so asking
+    // `find_type` during it answers -1 for every class and the check silently does nothing. The
+    // direct self-containment check higher up works only because it compares source TEXT rather
+    // than looking a declaration up — which is why it never noticed the difference.
+    //
+    // `class A { b: B }` with `class B { a: A }` has no finite size, stage-0 refuses it, and
+    // stage-1 emitted 24,780 bytes of IR for it. One step further out than the check that existed.
+    let mut_types: Int = len(self.types);
+    let mutable c: Int = 0;
+    while c < mut_types {
+        if self.types[c].kind == 82 && self.reaches_class(src, c, c, 0) {
+            let holder: Node = self.nodes[self.types[c].node];
+            let named: Token = self.tokens[holder.token];
+            let complained: Int = self.complain_at(src, holder.token,
+                "a `" + substring(src, named.start, named.length)
+                + "` cannot contain a `" + substring(src, named.start, named.length)
+                + "` — it would have no finite size");
+        }
+        c += 1;
     }
     return len(self.functions);
 }
@@ -2763,6 +2850,21 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
         // operator, which is the opposite of what this language is for.
         if left.kind == 46 && !is_unknown(left) {
             let decl: Int = self.find_type(src, left.name_start, left.name_length);
+            // B43. An ENUM has no `==` yet, and this arm asked only about classes — kind 82 — so
+            // `a == Shade.Light` fell straight through and stage-1 compiled a program stage-0
+            // refuses. No region anywhere, so it has nothing to do with the escape family: it was
+            // UNMASKED by B36's narrowing, which had been over-refusing and hiding it.
+            //
+            // The reason the feature is absent is worth keeping in the message rather than saying
+            // "not supported": two variants can carry different payloads, so equality has to
+            // compare the TAG first and then only the payload that variant holds. `match` already
+            // expresses exactly that, which is why this is a deferral and not a gap.
+            if decl >= 0 && self.types[decl].kind == 83 {
+                let complained: Int = self.complain_at(src, n.token,
+                    "`==` on the enum `" + self.show_type(src, left) + "` is not available yet: "
+                    + "two variants can carry different payloads, so equality has to compare the "
+                    + "TAG first and then only the payload that variant holds. Use `match`.");
+            }
             if decl >= 0 && self.types[decl].kind == 82 {
                 if ordering_only {
                     let complained: Int = self.complain_at(src, n.token,
@@ -3467,7 +3569,13 @@ function (mutable self: Unit) type_of_inner(src: String, node: Int, expected: Ty
             // so the checker knows them too rather than staying silent about calls.
             let builtin: Type = self.builtin_type(src, t, n.token, n.a);
             if is_unknown(builtin) {
-                let complained: Int = self.complain_at(src, n.token, "unknown function");
+                // B48. NAMES the function, because stage-0 does and the two must say the same
+                // thing. This divergence runs the other way from every other text row this week:
+                // stage-1 adopts stage-0's wording rather than the reverse, and it is the better
+                // message — `complain_at` appends "(at `nofunc`)", so the bare form said the name
+                // once, in a suffix, and left the sentence itself unable to stand alone in a log.
+                let complained: Int = self.complain_at(src, n.token,
+                    "unknown function: " + substring(src, t.start, t.length));
             }
             return builtin;
         }
@@ -4029,6 +4137,19 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
         if !is_unknown(got) && !is_unknown(want) && !self.fits(src, got, want) {
             let complained: Int = self.complain_at(src, n.token,
                 "cannot assign " + self.show_type(src, got) + " to " + self.show_type(src, want));
+        }
+        // B44. Assigning a WHOLE fixed array — `kept = h.xs` — is deferred in stage-0 and was
+        // accepted here, so the two compilers disagreed about whether the program exists. Region-
+        // free, like B43, and unmasked by the same B36 narrowing that had been over-refusing.
+        //
+        // Only a bare NAME on the left: `xs[0] = 9` is an element write and is fine, and it is the
+        // spelling the message points at. Kinds 11 and 12 are field and index access, so a target
+        // that is neither is the whole-name case.
+        if target.kind != 11 && target.kind != 12 && want.kind == 48 {
+            let named: Token = self.tokens[target.token];
+            let complained: Int = self.complain_at(src, n.token,
+                "whole-array assignment is deferred — assign elements individually: "
+                + substring(src, named.start, named.length) + "[0] = ...");
         }
         // A write THROUGH a name — `a[0] = 9`, `item.price = 2.00` — needs the same permission a
         // write TO it does. The binding is the thing that was declared immutable, whichever way the

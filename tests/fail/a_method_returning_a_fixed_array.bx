@@ -1,0 +1,16 @@
+// A METHOD cannot return a fixed array either. Roadmap B47.
+//
+// B37 closed this for `function f() -> [Int; 3]` and a method's declaration is checked by different
+// code, so the method spelling stayed accepted by stage-1 and refused by stage-0.
+//
+// The same miss as B7's stack guard going into `gen_fn` and not `gen_method`, in the other compiler,
+// two days earlier: a rule applied where somebody wrote it and silent where nobody did. There are
+// exactly two places a signature is declared, and both need every rule about signatures.
+class Box { tag: Int }
+
+function (self: Box) same(a: [Int; 3]) -> [Int; 3] {
+    return a;
+}
+
+let b: Box = Box { tag: 1 };
+print(b.same([1, 2, 3])[0]);
