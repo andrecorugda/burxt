@@ -102,7 +102,12 @@ suite missed.
 There is no manifest, no lockfile, no registry. `use "path.bx"` resolves textually, relative to the
 file. You can vendor code; you cannot depend on a version of it.
 
-There is also no `pub` — every declaration in a file a program `use`s is visible to it.
+There is also no visibility marker yet — every declaration in a file a program `use`s is visible to it.
+That changes with dependency management: the keyword is **`public`**, spelled out like everything else in
+this language, and the boundary is the **package** rather than the file. `use` concatenates sources into one
+buffer, so a file boundary does not exist at runtime for anything to be private across; a package boundary
+will. Everything stays visible inside a package, and only `public` declarations are importable by a package
+that depends on it.
 
 ### No concurrency
 

@@ -1,0 +1,246 @@
+// ============================================================================
+// The package manifest — `burxt.package`. Roadmap C2, stage-1's half.
+//
+// Stage-0's `manifest.rs` states the design; this states only what is different about doing it
+// here, because two copies of the same argument drift and one of them becomes wrong.
+//
+// **Why stage-1 needs it at all.** Dependency resolution decides which programs EXIST. A stage-1
+// that could not resolve a package import would refuse a program stage-0 compiles, which is an
+// acceptance divergence — the exact defect five of which were closed one version ago, and the thing
+// `README.md`'s claim of two implementations that must agree is about.
+//
+// **The format, in one sentence:** one statement per line, the first word is the key, the rest are
+// its words. No nesting, no quoting, no expressions.
+//
+//     name        ledger
+//     version     0.1.0
+//     dependency  money  ./vendor/money
+//     dependency  http   https://github.com/someone/http.bx  v1.2.0
+//
+// **Parallel arrays rather than a Map or an array of classes**, and it is worth saying which
+// constraint that is: a `Map<String, Dependency>` needs `Dependency` to be a value a Map can hold,
+// and the whole point of this file is to be readable by someone checking it against `manifest.rs`.
+// Two arrays and one index is the shape the rest of this compiler already uses.
+// ============================================================================
+
+// `access` rather than `fopen`/`fclose`, for two reasons worth stating. It is ONE call where the
+// pair is two, and — the one that decided it — `fopen` is already declared in `lsp.bx`, and since
+// `use` concatenates every source into one buffer, calling it from here would work by accident:
+// manifest.bx would compile only while lsp.bx happens to be imported too. A file that depends on
+// another file's extern declarations without saying so is a coupling nothing can see.
+external function access(path: String, mode: CInt) -> CInt touches files;
+
+// Everything a manifest says, flattened. `names[i]` is the dependency and `roots[i]` is the
+// directory its files are under, already joined to the manifest's own directory.
+class Package {
+    found: Bool,
+    root: String,
+    name: String,
+    version: String,
+    names: [String],
+    roots: [String],
+}
+
+// `access(path, F_OK)` — 0 when the path exists. F_OK is 0, written out rather than named because
+// there is nowhere to put a constant that both compilers would share.
+function manifest_readable(path: String) -> Bool touches files {
+    return access(path, 0) == 0;
+}
+
+// The words on a line, split on runs of spaces and tabs. Empty entries dropped, so the alignment a
+// person uses to make a manifest readable costs nothing.
+function manifest_words(line: String) -> [String] {
+    let mutable out: [String] = [];
+    let width: Int = len(line);
+    let mutable at: Int = 0;
+    while at < width {
+        while at < width && (byte_at(line, at) == 32 || byte_at(line, at) == 9) {
+            at += 1;
+        }
+        let began: Int = at;
+        while at < width && byte_at(line, at) != 32 && byte_at(line, at) != 9 {
+            at += 1;
+        }
+        if at > began {
+            let word: Int = push(out, substring(line, began, at - began));
+        }
+    }
+    return out;
+}
+
+// The parent directory of `path`, with its trailing slash, or "" when there is none.
+function manifest_parent(path: String) -> String {
+    let mutable cut: Int = len(path) - 1;
+    // Skip a trailing slash so `a/b/` answers `a/` rather than itself.
+    if cut >= 0 && byte_at(path, cut) == 47 {
+        cut -= 1;
+    }
+    while cut >= 0 {
+        if byte_at(path, cut) == 47 {
+            return substring(path, 0, cut + 1);
+        }
+        cut -= 1;
+    }
+    return "";
+}
+
+// Walk up from the directory holding `source`, looking for `burxt.package`.
+//
+// Answering "not found" is not a failure: a single-file program with no dependencies has nothing to
+// declare, and needing a manifest to compile one would make the language harder to try.
+function manifest_discover(source: String) -> Package touches files {
+    let empty: Package = Package { found: false, root: "", name: "", version: "",
+                                   names: [], roots: [] };
+    let mutable here: String = manifest_parent(source);
+    let mutable guard: Int = 0;
+    // Bounded rather than `while true`: a path has finitely many parents, and a loop that walks a
+    // filesystem is the wrong place to find out that an assumption about paths was wrong.
+    while guard < 64 {
+        let candidate: String = here + "burxt.package";
+        if manifest_readable(candidate) {
+            return manifest_parse(read_file(candidate), here, candidate);
+        }
+        if len(here) == 0 {
+            return empty;
+        }
+        here = manifest_parent(here);
+        guard += 1;
+    }
+    return empty;
+}
+
+// Parse a manifest. Every refusal names the line, because a manifest is edited by hand.
+//
+// Refusals print and exit rather than answering a Result: this runs before the lexer, so there is
+// no diagnostic machinery yet and nothing to attach a span to. Stage-0 does the same.
+function manifest_parse(text: String, root: String, shown_as: String) -> Package touches files {
+    let mutable names: [String] = [];
+    let mutable roots: [String] = [];
+    let mutable name: String = "";
+    let mutable version: String = "";
+
+    let width: Int = len(text);
+    let mutable at: Int = 0;
+    let mutable line_number: Int = 0;
+    while at < width {
+        let mutable stop: Int = at;
+        while stop < width && byte_at(text, stop) != 10 {
+            stop += 1;
+        }
+        line_number += 1;
+        let line: String = substring(text, at, stop - at);
+        let words: [String] = manifest_words(line);
+        let where_at: String = shown_as + ":" + to_string(line_number) + ": ";
+        if len(words) > 0 && byte_at(words[0], 0) != 35 {     // not a `#` comment
+            let key: String = words[0];
+            if key == "name" || key == "version" {
+                if len(words) != 2 {
+                    print_error("error: " + where_at + "`" + key
+                                + "` takes exactly one word, and this line has "
+                                + to_string(len(words) - 1));
+                    exit(2);
+                }
+                if key == "name" { name = words[1]; } else { version = words[1]; }
+            } else {
+                if key == "dependency" {
+                    if len(words) != 3 && len(words) != 4 {
+                        print_error("error: " + where_at
+                                    + "a dependency is `dependency <name> <directory>` or "
+                                    + "`dependency <name> <git-url> <tag>`");
+                        exit(2);
+                    }
+                    let dependency: String = words[1];
+                    let mutable where_from: String = "";
+                    if len(words) == 3 {
+                        where_from = root + words[2] + "/";
+                    } else {
+                        // A git dependency is built from the cache the fetch populated. The key is
+                        // DERIVED from the URL and tag rather than stored, so two manifests naming
+                        // the same tag share one copy and neither has to know the other exists.
+                        where_from = root + ".burxt/packages/"
+                                     + manifest_cache_key(words[2], words[3]) + "/";
+                    }
+                    let noted_name: Int = push(names, dependency);
+                    let noted_root: Int = push(roots, where_from);
+                } else {
+                    print_error("error: " + where_at + "unknown key `" + key
+                                + "`. A manifest has `name`, `version` and `dependency` — and "
+                                + "that is the whole grammar.");
+                    exit(2);
+                }
+            }
+        }
+        at = stop + 1;
+    }
+    if len(name) == 0 {
+        print_error("error: " + shown_as + ": no `name` line");
+        exit(2);
+    }
+    if len(version) == 0 {
+        print_error("error: " + shown_as + ": no `version` line");
+        exit(2);
+    }
+    return Package { found: true, root: root, name: name, version: version,
+                     names: names, roots: roots };
+}
+
+// A directory name for a git dependency, derived from what identifies it. Readable rather than
+// hashed: someone looking in `.burxt/packages` should be able to tell what they are looking at.
+function manifest_cache_key(url: String, tag: String) -> String {
+    return manifest_squash(url) + "-" + manifest_squash(tag);
+}
+
+function manifest_squash(text: String) -> String {
+    let mutable pieces: [String] = [];
+    let width: Int = len(text);
+    let mutable at: Int = 0;
+    while at < width {
+        let byte: Int = byte_at(text, at);
+        let letter: Bool = (byte >= 97 && byte <= 122) || (byte >= 65 && byte <= 90);
+        let digit: Bool = byte >= 48 && byte <= 57;
+        if letter || digit || byte == 95 {
+            let kept: Int = push(pieces, substring(text, at, 1));
+        } else {
+            let dashed: Int = push(pieces, "-");
+        }
+        at += 1;
+    }
+    // Joined once rather than appended in a loop — §D0. A trailing slash is dropped first so
+    // `https://host/repo` and `https://host/repo/` land in the same cache directory.
+    return string_join_pieces(pieces);
+}
+
+function string_join_pieces(pieces: [String]) -> String {
+    let mutable out: String = "";
+    let mutable at: Int = 0;
+    while at < len(pieces) {
+        out += pieces[at];
+        at += 1;
+    }
+    return out;
+}
+
+// Where a package import lands, or "" if the first segment names no dependency.
+function manifest_resolve(package: Package, named: String) -> String {
+    if !package.found {
+        return "";
+    }
+    let mutable cut: Int = 0;
+    let width: Int = len(named);
+    while cut < width && byte_at(named, cut) != 47 {
+        cut += 1;
+    }
+    if cut >= width {
+        return "";                               // no `/`, so no package segment
+    }
+    let first: String = substring(named, 0, cut);
+    let rest: String = substring(named, cut + 1, width - cut - 1);
+    let mutable i: Int = 0;
+    while i < len(package.names) {
+        if package.names[i] == first {
+            return package.roots[i] + rest;
+        }
+        i += 1;
+    }
+    return "";
+}

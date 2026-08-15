@@ -14,6 +14,7 @@
 //! delegates linking to system tools rather than owning it.
 
 mod ast;
+mod manifest;
 mod diag;
 mod json;
 mod lsp;
@@ -367,7 +368,12 @@ pub fn load_program(path: &str) -> Result<(String, Vec<SourceFile>), String> {
     let mut buffer = String::new();
     let mut files: Vec<SourceFile> = Vec::new();
     let mut seen: Vec<String> = Vec::new();
-    load_into(path, &mut buffer, &mut files, &mut seen, true)?;
+    // C2. The manifest is found ONCE, from the root source file, and every package import in the
+    // whole program is answered from it. Not once per file: a dependency of a dependency is
+    // resolved by ITS own manifest, and mixing the two would let a nested package quietly rebind a
+    // name its parent had already bound.
+    let found = manifest::Manifest::discover(std::path::Path::new(path))?;
+    load_into(path, &mut buffer, &mut files, &mut seen, true, found.as_ref())?;
     Ok((buffer, files))
 }
 
@@ -377,6 +383,7 @@ fn load_into(
     files: &mut Vec<SourceFile>,
     seen: &mut Vec<String>,
     is_root: bool,
+    package: Option<&manifest::Manifest>,
 ) -> Result<(), String> {
     let canonical = std::fs::canonicalize(path)
         .map(|p| p.to_string_lossy().into_owned())
@@ -397,11 +404,33 @@ fn load_into(
     // a buffer that reads in dependency order is a buffer a person can debug.
     let here = std::path::Path::new(path).parent().map(|p| p.to_path_buf());
     for import in &imports {
-        let resolved = match &here {
-            Some(dir) => dir.join(import).to_string_lossy().into_owned(),
-            None => import.clone(),
+        let relative = match &here {
+            Some(dir) => dir.join(import),
+            None => std::path::PathBuf::from(import),
         };
-        load_into(&resolved, buffer, files, seen, false).map_err(|e| {
+        // C2. An import whose first segment names a declared dependency is a PACKAGE import.
+        // Everything else is what it has always been: a path relative to the importing file.
+        let from_package = package.and_then(|m| m.resolve_package_import(import));
+        let resolved = match from_package {
+            // Both readings exist, and picking one silently would make resolution depend on the
+            // shape of a directory tree — so the failure would appear on somebody else's machine,
+            // with a program that compiled here. Refused where it is written instead.
+            Some(_via) if relative.exists() => {
+                return Err(format!(
+                    "`use \"{}\"` in {} could mean two things: the dependency `{}` declared in \
+                     {}, or the file at {}. Rename one of them — a dependency's name is the first \
+                     segment of every import that reaches it.",
+                    import,
+                    path,
+                    import.split('/').next().unwrap_or(import),
+                    manifest::MANIFEST_NAME,
+                    relative.display()
+                ))
+            }
+            Some(via) => via.to_string_lossy().into_owned(),
+            None => relative.to_string_lossy().into_owned(),
+        };
+        load_into(&resolved, buffer, files, seen, false, package).map_err(|e| {
             format!("{}\n  ...used by {}", e, path)
         })?;
     }

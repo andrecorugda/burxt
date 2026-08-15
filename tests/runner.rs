@@ -2111,6 +2111,117 @@ fn both_compilers_blame_the_same_token_for_a_boundary_type() {
     let _ = fs::remove_dir_all(&scratch);
 }
 
+/// A package dependency resolves through the manifest, and an ambiguous import is refused. C2.
+///
+/// This is a directory shape rather than one file, so it cannot be a `tests/pass` fixture: the
+/// point is where a `use` LANDS, which needs a manifest, a vendored package, and a program that is
+/// none of those.
+///
+/// The four things asserted are the four ways this can be wrong, and the last two matter most:
+///
+///   1. `use "money/tax.bx"` under `dependency money ./vendor/money` finds the vendored file.
+///   2. A plain `use "helper.bx"` still means the file beside it — every `use` in this repository
+///      is that shape, and C2 must not have moved any of them.
+///   3. A program with NO manifest still compiles. Requiring one to build a single file would make
+///      the language harder to try than it needs to be.
+///   4. An import that could be read BOTH ways is refused. If a dependency is called `money` and a
+///      directory called `money` sits beside the importing file, picking one silently makes
+///      resolution depend on the shape of a tree — so the program would compile here and fail on
+///      somebody else's machine, which is the failure mode a lockfile exists to prevent and would
+///      not catch.
+#[test]
+fn a_package_dependency_resolves_and_an_ambiguous_import_is_refused() {
+    let scratch = scratch_dir("c2-packages");
+    let _ = fs::remove_dir_all(&scratch);
+    fs::create_dir_all(scratch.join("vendor/money")).unwrap();
+    fs::create_dir_all(scratch.join("src")).unwrap();
+
+    fs::write(
+        scratch.join("burxt.package"),
+        "# a ledger that depends on a vendored money package\nname       ledger\nversion    0.1.0\n\ndependency money  ./vendor/money\n",
+    )
+    .unwrap();
+    fs::write(
+        scratch.join("vendor/money/tax.bx"),
+        "function tax_of(amount: Decimal<2>, rate_cents: Int) -> Decimal<2> {\n    return amount + $0.01 * rate_cents;\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        scratch.join("src/main.bx"),
+        "use \"money/tax.bx\";\nlet bill: Decimal<2> = $250.00;\nprint(tax_of(bill, 7));\n",
+    )
+    .unwrap();
+    fs::write(scratch.join("src/helper.bx"), "function twice(n: Int) -> Int { return n * 2; }\n")
+        .unwrap();
+    fs::write(scratch.join("src/rel.bx"), "use \"helper.bx\";\nprint(twice(21));\n").unwrap();
+
+    let run = |file: &str| -> (bool, String) {
+        let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("run")
+            .arg(scratch.join(file))
+            .current_dir(&scratch)
+            .output()
+            .expect("burxt run");
+        (
+            out.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+
+    // 1. the package import
+    let (ok, said) = run("src/main.bx");
+    assert!(ok && said.contains("250.07"), "a package import did not resolve:\n{}", said);
+
+    // 2. a relative import, unchanged
+    let (ok, said) = run("src/rel.bx");
+    assert!(ok && said.contains("42"), "a relative import stopped working:\n{}", said);
+
+    // 3. no manifest at all
+    let solo = scratch.join("solo");
+    fs::create_dir_all(&solo).unwrap();
+    fs::write(solo.join("solo.bx"), "print(7);\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("run")
+        .arg(solo.join("solo.bx"))
+        .current_dir(&solo)
+        .output()
+        .expect("burxt run");
+    assert!(
+        out.status.success(),
+        "a program with no manifest stopped compiling:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // 4. the ambiguity, refused rather than resolved
+    fs::create_dir_all(scratch.join("src/money")).unwrap();
+    fs::write(scratch.join("src/money/tax.bx"), "function shadow() -> Int { return 0; }\n").unwrap();
+    let (ok, said) = run("src/main.bx");
+    assert!(!ok, "an import readable two ways was resolved instead of refused:\n{}", said);
+    assert!(
+        said.contains("could mean two things"),
+        "the ambiguous import was refused for the wrong reason:\n{}",
+        said
+    );
+    fs::remove_dir_all(scratch.join("src/money")).unwrap();
+
+    // 5. the manifest's own grammar is checked, and every refusal names the line
+    fs::write(scratch.join("burxt.package"), "name x\nversion 1\nregistry https://example.com\n")
+        .unwrap();
+    let (ok, said) = run("src/rel.bx");
+    assert!(!ok && said.contains("unknown key `registry`"), "an unknown manifest key was accepted:\n{}", said);
+    assert!(
+        said.contains("burxt.package:3"),
+        "a manifest refusal did not name the line, and a manifest is edited by hand:\n{}",
+        said
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
 /// A fixture directory holds programs, expectations, and the handful of files a program READS.
 /// Nothing a program WRITES.
 ///
@@ -7744,6 +7855,20 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
              fixture and every example, 158 of 159 identical. The one exception is \
              `examples/absence.bx`, which uses `?` — a feature the Burxt front end does not \
              implement at all, found BY this work (task 14), not a fault in `schema.bx`",
+        ),
+        (
+            "manifest.rs",
+            &["src/burxt-compiler/manifest.bx"],
+            Strength::Verified,
+            "the package manifest, `burxt.package`. C2. **Written in both compilers in the same \
+             version, deliberately**: dependency resolution decides which programs EXIST, so a \
+             stage-1 that could not resolve a package import would refuse a program stage-0 \
+             compiles — an acceptance divergence, which is the exact defect five of which were \
+             closed one version earlier. `a_package_dependency_resolves_and_an_ambiguous_import_is_\
+             refused` runs both and compares the answer and the refusals. The one difference is \
+             the existence probe: stage-0 uses `Path::is_file`, stage-1 calls `access` — and NOT \
+             `fopen`, which `lsp.bx` already declares, because `use` concatenates every source \
+             into one buffer and calling it would have worked by accident.",
         ),
         (
             "review.rs",

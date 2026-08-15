@@ -159,7 +159,8 @@ function blank_imports(text: String) -> String {
 // stage-0 has had this since M6 (`SourceFile` and `locate_file` in `main.rs`) and this side simply
 // never grew it — because until `burxt check` learned to print a position at all, nothing on this
 // side ever asked which file an offset fell in.
-class Loader { seen: [String], buffer: String, paths: [String], starts: [Int], lengths: [Int] }
+class Loader { seen: [String], buffer: String, paths: [String], starts: [Int], lengths: [Int],
+               package: Package }
 
 function (mutable self: Loader) load(path: String) -> Int touches files {
     for seen in self.seen {
@@ -185,7 +186,27 @@ function (mutable self: Loader) load(path: String) -> Int touches files {
             if len(named) == 0 {
                 in_header = false;
             } else {
-                let done: Int = self.load(here + named);
+                // C2. An import whose first segment names a declared dependency is a PACKAGE
+                // import; everything else is what it has always been, a path relative to the file
+                // doing the importing.
+                let relative: String = here + named;
+                let via_package: String = manifest_resolve(self.package, named);
+                let mutable target: String = relative;
+                if len(via_package) > 0 {
+                    // Both readings exist. Picking one silently makes resolution depend on the
+                    // shape of a directory tree, so the program would compile here and fail on
+                    // somebody else's machine — refused where it is written instead.
+                    if manifest_readable(relative) {
+                        print_error("error: `use \"" + named + "\"` in " + path
+                                    + " could mean two things: the dependency declared in "
+                                    + "burxt.package, or the file at " + relative
+                                    + ". Rename one of them — a dependency's name is the first "
+                                    + "segment of every import that reaches it.");
+                        exit(2);
+                    }
+                    target = via_package;
+                }
+                let done: Int = self.load(target);
                 at = stop + 1;
             }
         }
@@ -211,7 +232,12 @@ function (mutable self: Loader) load(path: String) -> Int touches files {
 // `load_program`'s signature could not tell that compiling a program touches the disk. Stage-0's
 // effect check never looked at method calls, so nothing caught it for twenty-four versions.
 function load_program(path: String) -> String touches files {
-    let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [] };
+    // C2. Found ONCE, from the root source file, and every package import in the program is
+    // answered from it — a dependency of a dependency is resolved by its own manifest, and mixing
+    // the two would let a nested package rebind a name its parent had already bound.
+    let package: Package = manifest_discover(path);
+    let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [],
+                                          package: package };
     let done: Int = loader.load(path);
     return loader.buffer;
 }
@@ -232,7 +258,8 @@ function load_program(path: String) -> String touches files {
 // of files is cheaper than the machinery to avoid it. Stated rather than hidden, per the region
 // model's own terms.
 function file_at_offset(root: String, offset: Int) -> String touches files {
-    let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [] };
+    let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [],
+                                          package: manifest_discover(root) };
     let done: Int = loader.load(root);
     let mutable i: Int = 0;
     while i < len(loader.paths) {
@@ -246,7 +273,8 @@ function file_at_offset(root: String, offset: Int) -> String touches files {
 
 // The same offset, measured from the start of the file it fell in.
 function offset_within_file(root: String, offset: Int) -> Int touches files {
-    let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [] };
+    let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [],
+                                          package: manifest_discover(root) };
     let done: Int = loader.load(root);
     let mutable i: Int = 0;
     while i < len(loader.paths) {
