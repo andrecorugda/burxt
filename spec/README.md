@@ -27,6 +27,7 @@ of thirty "plans" cannot tell which describe a language that exists.
 | [`FAR-HORIZON-ROADMAP.md`](FAR-HORIZON-ROADMAP.md) | direction only, deliberately not a plan |
 | [`N9-VECTORS-EXACTLY.md`](N9-VECTORS-EXACTLY.md) | rows 1–5 shipped; 6–9 are open |
 | [`A8.0-RECORD-UPDATE.md`](A8.0-RECORD-UPDATE.md) | specified, **undecided** — Andre's call |
+| [`M16-NETWORK.md`](M16-NETWORK.md) | **sockets and processes, DONE** after 1.0.0 — and the wall that was one builtin |
 | [`ROADMAP-1.1.md`](ROADMAP-1.1.md) · [`M15-WEB.md`](M15-WEB.md) | hosts and the web half. **Slated to become 2.0** |
 
 **Two disciplines live here and must not be confused.** The milestone specs govern

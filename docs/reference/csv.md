@@ -1,0 +1,392 @@
+---
+layout: doc
+title: lib/csv.bx
+section: reference
+description: "Comma-separated values, read and written, RFC 4180 with the."
+---
+
+
+# `lib/csv.bx`
+
+Comma-separated values, read and written, RFC 4180 with the.
+
+```burxt
+use "lib/csv.bx";
+```
+
+deviations named.
+
+```burxt
+ match csv_parse(file_read("prices.csv")) {
+     Error(why) => { print(why); }
+     Ok(rows)   => { print(len(rows)); }
+ }
+```
+
+`lib/json.bx` covers the format a program talks to another program in. This is the format a program is HANDED — a bank statement, a payroll export, a price list, a ledger somebody opened in a spreadsheet — and for a language about money that is the more common arrival.
+
+---- what CSV actually is --------------------------------------------------------------------
+
+There is no CSV standard that everybody follows; RFC 4180 is a description of what most writers do, published four years after most of them were written. So a CSV library is a pile of decisions, and the only useful thing it can do is **write each one down**. Every deviation below is deliberate, and each is a line in `tests/pass/csv_library.bx`.
+
+* **A field is bytes.** No trimming, no number parsing, no date guessing, no empty-means-null.
+
+```burxt
+ ` 1.50 ` comes back as ` 1.50 `, spaces included, because a spreadsheet that wrote a space
+ meant one. `lib/string.bx` trims and `parse_decimal` parses, at the point the caller decides
+ what the column is. A CSV reader that guesses types is how a leading zero becomes an
+ integer and a part number becomes a date.
+```
+
+* **A quoted field ends at an unescaped `"`**; a doubled `""` inside one is a literal quote.
+
+```burxt
+ A quote in an *unquoted* field is an ordinary byte — `a"b` is three characters — because
+ nothing there gave `"` a meaning. Round-trip still holds: writing `a"b` quotes it.
+```
+
+* **`\r\n` and `\n` both end a record. A lone `\r` does not** — it is a data byte. Deciding
+
+```burxt
+ the other way would silently split a record whenever a text box picked up a stray carriage
+ return, while this way the byte survives a round-trip untouched. Lone-CR line endings are a
+ format last written by Mac OS 9.
+```
+
+* **Inside quotes every byte is kept exactly**, newlines included and un-normalised. A CRLF
+
+```burxt
+ inside a quoted field stays a CRLF. This is the rule that makes round-trip byte-exact.
+```
+
+* **A byte-empty line is skipped, not a record of one empty field.** Every file ends with a
+
+```burxt
+ newline, and the other reading would give every well-formed file a phantom trailing record.
+ A line holding `""` is a real record with one empty field — the escape hatch, and the reason
+ `csv_render` writes a one-empty-field row that way. See `csv_render_delimited`.
+```
+
+* **A leading UTF-8 BOM is stripped.** Excel writes one. Left in place it becomes part of the
+
+```burxt
+ first header's name, and `csv_column(header, "id")` then fails for a reason invisible in
+ every listing of the file. Stripped only at the very start, and only the three bytes.
+```
+
+* **Junk after a closing quote is REFUSED**, naming the byte. `"a"b` is not a field any writer
+
+```burxt
+ produces; it is a file that was concatenated or truncated wrongly, and the two readings
+ available (`a` and `ab`) are both guesses.
+```
+
+* **A short or long row is KEPT AS IT IS by `csv_parse`.** See `csv_parse_rectangular` for
+
+```burxt
+ the reason, which is the one decision here somebody will want to argue with.
+```
+
+---- building the output: §D0, and it is not optional ----------------------------------------
+
+`csv_render` is exactly the loop `spec/1.0/ROADMAP-1.0.md` §D0 was written about — a String built from tens of thousands of small pieces — so it uses the chunk list joined pairwise, through `lib/string.bx`'s `string_join_chunks`. Every number below is `/usr/bin/time -f "%M"` on this machine, rendering rows of five fields averaging 53 bytes a line.
+
+**The flat accumulator, which is the shape this is here to refuse:**
+
+```burxt
+ rows      out = out + piece            a chunk list, flushed at 32
+ 1,000              253 MB                            2.8 MB
+ 5,000     4 GB ARENA EXHAUSTED, dead                  9.3 MB
+ 20,000    (dead)                                     35.2 MB
+ 50,000    (dead)                                     89.1 MB
+ 200,000   (dead)                                    375.2 MB
+```
+
+Linear against quadratic, and the quadratic one does not reach 5,000 rows — a spreadsheet a bookkeeper would call small. That is the whole argument, measured rather than asserted.
+
+**The threshold is 32, and §D0 says to measure it rather than inherit it — so it was measured, and it landed on `lib/string.bx`'s number for a reason worth writing down.** At 50,000 rows:
+
+```burxt
+ flush at 8      89.1 MB          flush at 256     133 MB
+ flush at 16     89.1 MB          flush at 512     196 MB
+ flush at 32     89.1 MB          flush at 1024    317 MB
+ flush at 48     89.1 MB          flush at 4096  1,063 MB
+ flush at 64     98.4 MB
+ flush at 128   110.9 MB
+```
+
+Flat from 8 to 48, then quadratic. The draft of this file guessed 1024 on the reasoning that a field is a bigger piece than a byte, and **that guess was wrong by 3.6×** — because the loop appends a field AND a separator separately, so the average piece is under five bytes, not twelve. §D0's formula says the pending cost is `n * T / (2p)`, and `p` here is nearly `p` there. 32 is chosen from the middle of the plateau. The lesson is not that 32 is universal; it is that the piece size is a property of the LOOP and not of the data, and only a measurement knows it.
+
+## What is in it
+{: #what-is-in-it}
+
+| Name | Kind | What it answers |
+|---|---|---|
+| [`CsvRow`](#csvrow) | class | One record: where it began in the document, and its fields in order. |
+| [`CsvReader`](#csvreader) | class | Where the parse is. A class with `mutable self` methods for the same reason `lib/json.bx`'s `Reader` is one: Burxt has n |
+| [`csv_parse`](#csv-parse) | function | Every record in `text`, comma-separated. The call almost everybody wants. |
+| [`csv_parse_delimited`](#csv-parse-delimited) | function | Every record in `text`, separated by `delimiter`. |
+| [`csv_widths_agree`](#csv-widths-agree) | function | `None` when every record has the same number of fields; otherwise the complaint, naming the first record that disagrees  |
+| [`csv_parse_rectangular`](#csv-parse-rectangular) | function | Every record, **refusing the file if they are not all the same width**. |
+| [`csv_parse_rectangular_delimited`](#csv-parse-rectangular-delimited) | function | — |
+| [`csv_column`](#csv-column) | function | Which column `name` is, or `None`. The header row is a record like any other, so this takes one. |
+| [`csv_needs_quoting`](#csv-needs-quoting) | function | Does `field` contain anything that forces it to be quoted? |
+| [`csv_quote`](#csv-quote) | function | `field` as it must appear in the output: itself when nothing forces quotes, otherwise wrapped in quotes with every `"` d |
+| [`csv_render`](#csv-render) | function | `rows` as a CSV document: comma-separated, LF-terminated, every record ending with a newline. |
+| [`csv_render_delimited`](#csv-render-delimited) | function | `rows` as a CSV document, with the delimiter and the line ending chosen. |
+| [`count`](#count) | method on `CsvRow` | How many fields this record has. Not every record in a file has the same number — see `csv_parse_rectangular` — so this  |
+| [`at`](#at) | method on `CsvRow` | Field `index`, or `None` when the record is shorter than that. |
+| [`terminator`](#terminator) | method on `CsvReader` | Is there a record terminator at the cursor, and how many bytes long is it? 0 when there is not. `\r\n` is two, a bare `\ |
+| [`field`](#field) | method on `CsvReader` | One field at the cursor, leaving the cursor on the byte that ended it — the delimiter, the first byte of the terminator, |
+| [`quoted_field`](#quoted-field) | method on `CsvReader` | A field that began with `"`. Bytes are kept exactly — a delimiter, a newline and a CRLF inside the quotes are all data — |
+
+## Types
+{: #types}
+
+### `CsvRow`
+{: #csvrow}
+
+```burxt
+class CsvRow { fields: [String], offset: Int }
+```
+
+One record: where it began in the document, and its fields in order.
+
+A class and not `[[String]]`, because **a growable array cannot hold another array** — the compiler refuses it, and says the element would need its own region reasoning. That constraint turned out to be an improvement: a record is a thing with a name, and `row.at(2)` is a place to put the bounds question that `rows[i][2]` had nowhere to put.
+
+**`offset` is the byte position in the source text where this record starts**, and it is the field that lets an error message point at something. A caller validating a money column wants to say *which* record and *where*, not "somewhere in your file"; `csv_widths_agree` uses it for exactly that. Every serious CSV reader carries this — Python's `reader.line_num`, Go's `csv.ParseError.Line`, Rust's `csv::Position` — and it is a byte offset rather than a line number for the same reason those distinguish them: a quoted newline puts one record on several lines, so a line number is wrong in precisely the file where it matters. For a record built by a program rather than parsed, write 0; nothing here reads it back.
+
+**It also routes around a stage-1 defect, and that is written down so nobody deletes the field as redundant.** A class with exactly ONE field, held in an array, is miscompiled by the Burxt backend: `rows[0].n` reads the element's own address instead of its field, silently, with `burxt check` clean on both compilers. Four lines reproduce it —
+
+```burxt
+ class R { n: Int }
+ region main { let mutable rows: [R] = [R { n: 7 }]; print(rows[0].n); }
+ stage-0: 7      stage-1: 140734004848112
+```
+
+— it predates this file (verified against a stage-1 built from `HEAD`), and no fixture in `tests/pass` had a one-field class in an array, which is how it stayed invisible. A second field makes both compilers agree. `offset` earns its place on merit and this is a second reason, not the reason; but if the defect is fixed and someone then decides the offset is not worth keeping, they should remove it knowing that a one-field `CsvRow` is what the bug needs to bite.
+
+`fields` is a HANDLE, not a copy. `CsvRow { fields: xs, offset: 0 }` and `xs` are the same array, so pushing into `xs` afterwards lengthens the row — the same rule as everywhere else in this language, stated here because a record looks like a value. `array_copy` first if that matters.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/csv.bx#L152)
+
+### `CsvReader`
+{: #csvreader}
+
+```burxt
+class CsvReader { text: String, at: Int, delimiter: Int }
+```
+
+Where the parse is. A class with `mutable self` methods for the same reason `lib/json.bx`'s `Reader` is one: Burxt has no writable scalar parameters, so a cursor threaded through six returns is the alternative.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/csv.bx#L189)
+
+## Functions
+{: #functions}
+
+### `csv_parse`
+{: #csv-parse}
+
+```burxt
+function csv_parse(text: String) -> Result<[CsvRow], String>
+```
+
+Every record in `text`, comma-separated. The call almost everybody wants.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/csv.bx#L264)
+
+### `csv_parse_delimited`
+{: #csv-parse-delimited}
+
+```burxt
+function csv_parse_delimited(text: String, delimiter: Int) -> Result<[CsvRow], String>
+```
+
+Every record in `text`, separated by `delimiter`.
+
+The delimiter is a byte, so `CSV_SEMICOLON` and `CSV_TAB` are the same code path as the comma. It is refused rather than accepted if it is one of the four bytes the grammar has already spoken for — `"`, CR, LF, and anything outside ASCII, since a multi-byte UTF-8 separator would match its own continuation bytes. A contract rather than a `Result`, because this is the caller's own constant being wrong and not the file's.
+
+Ragged records are kept as they are: see `csv_parse_rectangular`.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/csv.bx#L277)
+
+### `csv_widths_agree`
+{: #csv-widths-agree}
+
+```burxt
+function csv_widths_agree(rows: [CsvRow]) -> Option<String>
+```
+
+`None` when every record has the same number of fields; otherwise the complaint, naming the first record that disagrees with the first one.
+
+An `Option<String>` rather than a `Bool`, and rather than printing: a library that prints unprompted is the wrong shape — `lib/log.bx`'s `log_env_problem` made the same call — and a bare `false` would leave the caller to re-derive the row number in order to say anything useful.
+
+Records are counted from 1, and they are RECORDS and not lines: a quoted newline puts a record on several lines, so a line number here would point at the wrong place in exactly the file where it mattered. The BYTE offset is in the message beside the count, from `CsvRow.offset`, because "record 812" sends a reader counting and a byte offset sends them to the place.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/csv.bx#L346)
+
+### `csv_parse_rectangular`
+{: #csv-parse-rectangular}
+
+```burxt
+function csv_parse_rectangular(text: String) -> Result<[CsvRow], String>
+```
+
+Every record, **refusing the file if they are not all the same width**.
+
+This is the decision the roadmap asked to be made and written down: a ragged row is REFUSED here, and never padded.
+
+Padding is what most libraries do, and it is wrong for this one. A row with three fields where the header has four means one of two things: the line was truncated, or a delimiter inside an unquoted field split a field in half. Both are the file being broken. Padding turns that into an empty String in some column — and in a money file the column that goes quietly empty is as likely to be `amount` as `note`. A total that is wrong because a row was short is precisely the failure this language exists to refuse, and it is undetectable after the fact.
+
+Refusing is also recoverable and padding is not: a caller who genuinely wants the ragged data calls `csv_parse` and gets it, with `CsvRow.at` for the short rows. There is no way back from a pad.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/csv.bx#L378)
+
+### `csv_parse_rectangular_delimited`
+{: #csv-parse-rectangular-delimited}
+
+```burxt
+function csv_parse_rectangular_delimited(text: String, delimiter: Int)
+```
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/csv.bx#L382)
+
+### `csv_column`
+{: #csv-column}
+
+```burxt
+function csv_column(header: CsvRow, name: String) -> Option<Int>
+```
+
+Which column `name` is, or `None`. The header row is a record like any other, so this takes one.
+
+Exact bytes, no trimming and no case folding. A header that reads ` Amount` is not `amount`, and pretending otherwise is the same guess this file refuses everywhere else — `string_trim` and `string_to_lower_ascii` are one call away if the caller decides their file needs it.
+
+The FIRST match, when a file has two columns with one name. Duplicated headers happen (two `Total` columns from a pivot), and answering the first is the only choice that does not depend on how far the reader looked.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/csv.bx#L410)
+
+### `csv_needs_quoting`
+{: #csv-needs-quoting}
+
+```burxt
+pure function csv_needs_quoting(field: String, delimiter: Int) -> Bool
+```
+
+Does `field` contain anything that forces it to be quoted?
+
+The minimal set, and minimal on purpose: the delimiter, a quote, CR, or LF. **Not** a leading or trailing space, even though quoting one would preserve it against a reader that trims. Quoting more than necessary makes the output differ from what every other writer produces for the same data, and this file does not trim on the way in, so there is nothing to protect.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/csv.bx#L429)
+
+### `csv_quote`
+{: #csv-quote}
+
+```burxt
+function csv_quote(field: String, delimiter: Int) -> String
+```
+
+`field` as it must appear in the output: itself when nothing forces quotes, otherwise wrapped in quotes with every `"` doubled.
+
+Public, because a caller streaming a very large file will write it a row at a time to avoid holding the whole thing — and without this they would write the escaping themselves, which is the one part of CSV everybody gets wrong.
+
+The unquoted case returns the field itself and allocates nothing, which is the overwhelmingly common one. The quoted case is a chunk list of the runs between quotes, so a field with no doubled quote is three pieces regardless of its length.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/csv.bx#L452)
+
+### `csv_render`
+{: #csv-render}
+
+```burxt
+function csv_render(rows: [CsvRow]) -> String
+```
+
+`rows` as a CSV document: comma-separated, LF-terminated, every record ending with a newline.
+
+**LF and not CRLF**, though RFC 4180 says CRLF. Every reader accepts LF, every other file this repository writes uses it, and a CR in a Unix pipeline shows up as `^M` in the middle of a `diff`. `csv_render_delimited(rows, CSV_COMMA, true)` writes CRLF for the tools that want it.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/csv.bx#L479)
+
+### `csv_render_delimited`
+{: #csv-render-delimited}
+
+```burxt
+function csv_render_delimited(rows: [CsvRow], delimiter: Int, crlf: Bool) -> String
+```
+
+`rows` as a CSV document, with the delimiter and the line ending chosen.
+
+Every record ends with a terminator, the last one included. A file whose final line has no newline is the thing that makes `cat a.csv b.csv` join two records into one.
+
+**A record with one empty field is written `""`, and so is a record with NO fields.** This is the one place where writing is not the plain inverse of reading, and it is forced: an empty field written bare would produce a byte-empty line, and reading skips those — so the record would vanish on the way back. `""` is a line that reads as exactly one empty field. A record with no fields at all cannot be expressed in CSV by anything (every line holds at least one field, possibly empty), so it becomes the nearest true statement, which is one empty field; the record count survives the round-trip even though the width does not. Both cases are in `tests/pass/csv_library.bx`, because neither is a case anyone thinks of first.
+
+§D0 throughout: a pending piece flushed into a `[String]` at `CSV_CHUNK`, joined pairwise. Never `out = out + row`.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/csv.bx#L499)
+
+## Methods
+{: #methods}
+
+### `count`
+{: #count}
+
+```burxt
+function (self: CsvRow) count() -> Int
+```
+
+How many fields this record has. Not every record in a file has the same number — see `csv_parse_rectangular` — so this is a question worth asking.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/csv.bx#L166)
+
+### `at`
+{: #at}
+
+```burxt
+function (self: CsvRow) at(index: Int) -> Option<String>
+```
+
+Field `index`, or `None` when the record is shorter than that.
+
+**This is not defensive, it is the other half of a decision.** `csv_parse` keeps a short row short rather than padding it, so `row.fields[3]` on a truncated line traps at run time. That is the correct failure and it is a bad one to hit in a loop over a file, so the safe read is here and named. A caller who knows the file is rectangular can check once with `csv_widths_agree` and then subscript directly.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/csv.bx#L177)
+
+### `terminator`
+{: #terminator}
+
+```burxt
+function (self: CsvReader) terminator() -> Int
+```
+
+Is there a record terminator at the cursor, and how many bytes long is it? 0 when there is not. `\r\n` is two, a bare `\n` is one, and a lone `\r` is none — the header says why.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/csv.bx#L193)
+
+### `field`
+{: #field}
+
+```burxt
+function (mutable self: CsvReader) field() -> Result<String, String>
+```
+
+One field at the cursor, leaving the cursor on the byte that ended it — the delimiter, the first byte of the terminator, or the end of the text. Never consumes what ended it: the record loop needs to see it to know whether the record is over.
+
+Takes `mutable self`, so it changes the value it is called on.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/csv.bx#L211)
+
+### `quoted_field`
+{: #quoted-field}
+
+```burxt
+function (mutable self: CsvReader) quoted_field() -> Result<String, String>
+```
+
+A field that began with `"`. Bytes are kept exactly — a delimiter, a newline and a CRLF inside the quotes are all data — and `""` collapses to one `"`.
+
+Built from a chunk list joined pairwise, per §D0, and the pieces are SEGMENTS BETWEEN QUOTES rather than bytes: the loop copies the run from the last quote to this one in a single `substring`, so a field with no doubled quote produces exactly one chunk and `string_join_chunks` hands it straight back without copying. A pending buffer would be pure overhead here for the same reason — there is no byte-at-a-time append to amortise.
+
+Takes `mutable self`, so it changes the value it is called on.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/csv.bx#L235)
+

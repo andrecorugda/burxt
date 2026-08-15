@@ -78,6 +78,13 @@
  },
  {
   "kind": "builtin",
+  "name": "c_bytes_to",
+  "text": "`Int` \u2014 how many it wrote",
+  "url": "/reference/builtins.html#c-bytes-to",
+  "where": "c_bytes_to(p: CPointer, bytes: [Int])"
+ },
+ {
+  "kind": "builtin",
   "name": "print",
   "text": "nothing",
   "url": "/reference/builtins.html#print",
@@ -390,6 +397,160 @@
   "text": "lib/result.bx",
   "url": "/reference/result.html#unreachable",
   "where": "function unreachable(why: String) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "decimal2_cents",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal2-cents",
+  "where": "pure function decimal2_cents(value: Decimal<2>) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "decimal2_from_cents",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal2-from-cents",
+  "where": "pure function decimal2_from_cents(cents: Int) -> Decimal<2>"
+ },
+ {
+  "kind": "function",
+  "name": "decimal2_is_zero",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal2-is-zero",
+  "where": "pure function decimal2_is_zero(value: Decimal<2>) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "decimal2_abs",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal2-abs",
+  "where": "pure function decimal2_abs(value: Decimal<2>) -> Decimal<2>"
+ },
+ {
+  "kind": "function",
+  "name": "decimal2_sign",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal2-sign",
+  "where": "pure function decimal2_sign(value: Decimal<2>) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "decimal2_round_to",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal2-round-to",
+  "where": "pure function decimal2_round_to(value: Decimal<2>, places: Int) -> Decimal<2>"
+ },
+ {
+  "kind": "function",
+  "name": "decimal2_percent_of",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal2-percent-of",
+  "where": "pure function decimal2_percent_of(amount: Decimal<2>, rate: Decimal<4>) -> Decimal<2>"
+ },
+ {
+  "kind": "function",
+  "name": "money_split",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#money-split",
+  "where": "function money_split(total: Decimal<2>, parts: Int) -> [Decimal<2>]"
+ },
+ {
+  "kind": "function",
+  "name": "decimal4_ticks",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal4-ticks",
+  "where": "pure function decimal4_ticks(value: Decimal<4>) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "decimal4_from_ticks",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal4-from-ticks",
+  "where": "pure function decimal4_from_ticks(ticks: Int) -> Decimal<4>"
+ },
+ {
+  "kind": "function",
+  "name": "decimal4_is_zero",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal4-is-zero",
+  "where": "pure function decimal4_is_zero(value: Decimal<4>) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "decimal4_abs",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal4-abs",
+  "where": "pure function decimal4_abs(value: Decimal<4>) -> Decimal<4>"
+ },
+ {
+  "kind": "function",
+  "name": "decimal4_sign",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal4-sign",
+  "where": "pure function decimal4_sign(value: Decimal<4>) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "decimal6_ticks",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal6-ticks",
+  "where": "pure function decimal6_ticks(value: Decimal<6>) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "decimal6_from_ticks",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal6-from-ticks",
+  "where": "pure function decimal6_from_ticks(ticks: Int) -> Decimal<6>"
+ },
+ {
+  "kind": "function",
+  "name": "decimal6_is_zero",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal6-is-zero",
+  "where": "pure function decimal6_is_zero(value: Decimal<6>) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "decimal7_ticks",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal7-ticks",
+  "where": "pure function decimal7_ticks(value: Decimal<7>) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "decimal7_from_ticks",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal7-from-ticks",
+  "where": "pure function decimal7_from_ticks(ticks: Int) -> Decimal<7>"
+ },
+ {
+  "kind": "function",
+  "name": "decimal7_is_zero",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal7-is-zero",
+  "where": "pure function decimal7_is_zero(value: Decimal<7>) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "decimal7_abs",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal7-abs",
+  "where": "pure function decimal7_abs(value: Decimal<7>) -> Decimal<7>"
+ },
+ {
+  "kind": "function",
+  "name": "decimal7_sign",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#decimal7-sign",
+  "where": "pure function decimal7_sign(value: Decimal<7>) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "divide_round_half_even",
+  "text": "lib/decimal.bx",
+  "url": "/reference/decimal.html#divide-round-half-even",
+  "where": "pure function divide_round_half_even(n: Int, step: Int) -> Int"
  },
  {
   "kind": "function",
@@ -875,6 +1036,349 @@
   "where": "pure function string_int_padded(value: Int, width: Int) -> String"
  },
  {
+  "kind": "function",
+  "name": "array_contains",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-contains",
+  "where": "pure function array_contains<T: Equatable>(xs: [T], of: T) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "array_index_of",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-index-of",
+  "where": "pure function array_index_of<T: Equatable>(xs: [T], of: T) -> Option<Int>"
+ },
+ {
+  "kind": "function",
+  "name": "array_is_sorted",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-is-sorted",
+  "where": "pure function array_is_sorted<T: Ordered>(xs: [T]) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "array_min",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-min",
+  "where": "function array_min<T: Ordered>(xs: [T]) -> T"
+ },
+ {
+  "kind": "function",
+  "name": "array_max",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-max",
+  "where": "function array_max<T: Ordered>(xs: [T]) -> T"
+ },
+ {
+  "kind": "function",
+  "name": "array_first",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-first",
+  "where": "function array_first<T>(xs: [T]) -> T"
+ },
+ {
+  "kind": "function",
+  "name": "array_last",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-last",
+  "where": "function array_last<T>(xs: [T]) -> T"
+ },
+ {
+  "kind": "function",
+  "name": "array_sum_int",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-sum-int",
+  "where": "pure function array_sum_int(xs: [Int]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "array_sum_money",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-sum-money",
+  "where": "pure function array_sum_money(xs: [Decimal<2>]) -> Decimal<2>"
+ },
+ {
+  "kind": "function",
+  "name": "array_swap",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-swap",
+  "where": "function array_swap<T>(mutable xs: [T], i: Int, j: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "array_reverse",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-reverse",
+  "where": "function array_reverse<T>(mutable xs: [T]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "array_sort",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-sort",
+  "where": "function array_sort<T: Ordered>(mutable xs: [T]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "array_fill",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-fill",
+  "where": "function array_fill<T>(mutable xs: [T], with: T) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "array_extend",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-extend",
+  "where": "function array_extend<T>(mutable xs: [T], from: [T]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "array_remove_at",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-remove-at",
+  "where": "function array_remove_at<T>(mutable xs: [T], at: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "array_copy",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-copy",
+  "where": "function array_copy<T>(xs: [T]) -> [T]"
+ },
+ {
+  "kind": "function",
+  "name": "array_slice",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-slice",
+  "where": "function array_slice<T>(xs: [T], from: Int, to: Int) -> [T]"
+ },
+ {
+  "kind": "function",
+  "name": "array_concat",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-concat",
+  "where": "function array_concat<T>(first: [T], second: [T]) -> [T]"
+ },
+ {
+  "kind": "function",
+  "name": "array_insert_at",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-insert-at",
+  "where": "function array_insert_at<T>(mutable xs: [T], at: Int, value: T) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "array_count_of",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-count-of",
+  "where": "pure function array_count_of<T: Equatable>(xs: [T], of: T) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "array_equals",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-equals",
+  "where": "pure function array_equals<T: Equatable>(first: [T], second: [T]) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "array_binary_search",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-binary-search",
+  "where": "pure function array_binary_search<T: Ordered>(xs: [T], of: T) -> Option<Int>"
+ },
+ {
+  "kind": "function",
+  "name": "array_dedup",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-dedup",
+  "where": "function array_dedup<T: Equatable>(mutable xs: [T]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "array_map",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-map",
+  "where": "function array_map<T, U>(xs: [T], f: dynamic Mapper<T, U>) -> [U]"
+ },
+ {
+  "kind": "function",
+  "name": "array_filter",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-filter",
+  "where": "function array_filter<T>(xs: [T], keep: dynamic Predicate<T>) -> [T]"
+ },
+ {
+  "kind": "function",
+  "name": "array_fold",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-fold",
+  "where": "function array_fold<T, A>(xs: [T], start: A, f: dynamic Folder<T, A>) -> A"
+ },
+ {
+  "kind": "function",
+  "name": "array_any",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-any",
+  "where": "function array_any<T>(xs: [T], holds: dynamic Predicate<T>) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "array_all",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-all",
+  "where": "function array_all<T>(xs: [T], holds: dynamic Predicate<T>) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "array_position",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-position",
+  "where": "function array_position<T>(xs: [T], holds: dynamic Predicate<T>) -> Option<Int>"
+ },
+ {
+  "kind": "function",
+  "name": "array_retain",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-retain",
+  "where": "function array_retain<T>(mutable xs: [T], keep: dynamic Predicate<T>) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "array_partition",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-partition",
+  "where": "function array_partition<T>(xs: [T], keep: dynamic Predicate<T>) -> ([T], [T])"
+ },
+ {
+  "kind": "function",
+  "name": "array_sort_by",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-sort-by",
+  "where": "function array_sort_by<T>(mutable xs: [T], order: dynamic Comparer<T>) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "array_zip",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-zip",
+  "where": "function array_zip<A, B>(left: [A], right: [B]) -> [(A, B)]"
+ },
+ {
+  "kind": "function",
+  "name": "array_enumerate",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-enumerate",
+  "where": "function array_enumerate<T>(xs: [T]) -> [(Int, T)]"
+ },
+ {
+  "kind": "function",
+  "name": "array_split_at",
+  "text": "lib/array.bx",
+  "url": "/reference/array.html#array-split-at",
+  "where": "function array_split_at<T>(xs: [T], at: Int) -> ([T], [T])"
+ },
+ {
+  "kind": "class",
+  "name": "Set",
+  "text": "lib/set.bx",
+  "url": "/reference/set.html#set",
+  "where": "class Set<T: Equatable> { held: Map<T, Bool> }"
+ },
+ {
+  "kind": "function",
+  "name": "set_new",
+  "text": "lib/set.bx",
+  "url": "/reference/set.html#set-new",
+  "where": "function set_new<T: Equatable>() -> Set<T>"
+ },
+ {
+  "kind": "method",
+  "name": "add",
+  "text": "lib/set.bx",
+  "url": "/reference/set.html#add",
+  "where": "function (mutable self: Set<T>) add(item: T) -> Bool"
+ },
+ {
+  "kind": "method",
+  "name": "add_all",
+  "text": "lib/set.bx",
+  "url": "/reference/set.html#add-all",
+  "where": "function (mutable self: Set<T>) add_all(xs: [T]) -> Int"
+ },
+ {
+  "kind": "method",
+  "name": "has",
+  "text": "lib/set.bx",
+  "url": "/reference/set.html#has",
+  "where": "function (self: Set<T>) has(item: T) -> Bool"
+ },
+ {
+  "kind": "method",
+  "name": "count",
+  "text": "lib/set.bx",
+  "url": "/reference/set.html#count",
+  "where": "function (self: Set<T>) count() -> Int"
+ },
+ {
+  "kind": "method",
+  "name": "items",
+  "text": "lib/set.bx",
+  "url": "/reference/set.html#items",
+  "where": "function (self: Set<T>) items() -> [T]"
+ },
+ {
+  "kind": "method",
+  "name": "is_subset_of",
+  "text": "lib/set.bx",
+  "url": "/reference/set.html#is-subset-of",
+  "where": "function (self: Set<T>) is_subset_of(other: Set<T>) -> Bool"
+ },
+ {
+  "kind": "method",
+  "name": "equals",
+  "text": "lib/set.bx",
+  "url": "/reference/set.html#equals",
+  "where": "function (self: Set<T>) equals(other: Set<T>) -> Bool"
+ },
+ {
+  "kind": "method",
+  "name": "remove",
+  "text": "lib/set.bx",
+  "url": "/reference/set.html#remove",
+  "where": "function (mutable self: Set<T>) remove(item: T) -> Bool"
+ },
+ {
+  "kind": "method",
+  "name": "take",
+  "text": "lib/set.bx",
+  "url": "/reference/set.html#take",
+  "where": "function (mutable self: Set<T>) take() -> Option<T>"
+ },
+ {
+  "kind": "method",
+  "name": "union",
+  "text": "lib/set.bx",
+  "url": "/reference/set.html#union",
+  "where": "function (self: Set<T>) union(other: Set<T>) -> Set<T>"
+ },
+ {
+  "kind": "method",
+  "name": "intersect",
+  "text": "lib/set.bx",
+  "url": "/reference/set.html#intersect",
+  "where": "function (self: Set<T>) intersect(other: Set<T>) -> Set<T>"
+ },
+ {
+  "kind": "method",
+  "name": "difference",
+  "text": "lib/set.bx",
+  "url": "/reference/set.html#difference",
+  "where": "function (self: Set<T>) difference(other: Set<T>) -> Set<T>"
+ },
+ {
   "kind": "class",
   "name": "MapEntry",
   "text": "lib/map.bx",
@@ -999,6 +1503,188 @@
   "text": "lib/map.bx",
   "url": "/reference/map.html#clear",
   "where": "function (mutable self: Map<K, V>) clear() -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "math_min",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-min",
+  "where": "pure function math_min<T: Ordered>(a: T, b: T) -> T"
+ },
+ {
+  "kind": "function",
+  "name": "math_max",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-max",
+  "where": "pure function math_max<T: Ordered>(a: T, b: T) -> T"
+ },
+ {
+  "kind": "function",
+  "name": "math_clamp",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-clamp",
+  "where": "pure function math_clamp<T: Ordered>(x: T, low: T, high: T) -> T"
+ },
+ {
+  "kind": "function",
+  "name": "math_abs",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-abs",
+  "where": "pure function math_abs(x: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "math_sign",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-sign",
+  "where": "pure function math_sign(x: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "math_add_overflows",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-add-overflows",
+  "where": "pure function math_add_overflows(a: Int, b: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "math_sub_overflows",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-sub-overflows",
+  "where": "pure function math_sub_overflows(a: Int, b: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "math_mul_overflows",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-mul-overflows",
+  "where": "pure function math_mul_overflows(a: Int, b: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "math_checked_add",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-checked-add",
+  "where": "pure function math_checked_add(a: Int, b: Int) -> Option<Int>"
+ },
+ {
+  "kind": "function",
+  "name": "math_checked_sub",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-checked-sub",
+  "where": "pure function math_checked_sub(a: Int, b: Int) -> Option<Int>"
+ },
+ {
+  "kind": "function",
+  "name": "math_checked_mul",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-checked-mul",
+  "where": "pure function math_checked_mul(a: Int, b: Int) -> Option<Int>"
+ },
+ {
+  "kind": "function",
+  "name": "math_saturating_add",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-saturating-add",
+  "where": "pure function math_saturating_add(a: Int, b: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "math_saturating_sub",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-saturating-sub",
+  "where": "pure function math_saturating_sub(a: Int, b: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "math_saturating_mul",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-saturating-mul",
+  "where": "pure function math_saturating_mul(a: Int, b: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "math_wrapping_add",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-wrapping-add",
+  "where": "pure function math_wrapping_add(a: Int, b: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "math_wrapping_neg",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-wrapping-neg",
+  "where": "pure function math_wrapping_neg(x: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "math_wrapping_sub",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-wrapping-sub",
+  "where": "pure function math_wrapping_sub(a: Int, b: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "math_wrapping_mul",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-wrapping-mul",
+  "where": "pure function math_wrapping_mul(a: Int, b: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "math_pow",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-pow",
+  "where": "pure function math_pow(base: Int, exponent: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "math_isqrt",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-isqrt",
+  "where": "pure function math_isqrt(n: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "math_gcd",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-gcd",
+  "where": "pure function math_gcd(a: Int, b: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "math_lcm",
+  "text": "lib/math.bx",
+  "url": "/reference/math.html#math-lcm",
+  "where": "pure function math_lcm(a: Int, b: Int) -> Int"
+ },
+ {
+  "kind": "interface",
+  "name": "Mapper",
+  "text": "lib/fn.bx",
+  "url": "/reference/fn.html#mapper",
+  "where": "interface Mapper<T, U> { function apply(self, x: T) -> U }"
+ },
+ {
+  "kind": "interface",
+  "name": "Predicate",
+  "text": "lib/fn.bx",
+  "url": "/reference/fn.html#predicate",
+  "where": "interface Predicate<T> { function test(self, x: T) -> Bool }"
+ },
+ {
+  "kind": "interface",
+  "name": "Folder",
+  "text": "lib/fn.bx",
+  "url": "/reference/fn.html#folder",
+  "where": "interface Folder<T, A> { function step(self, acc: A, x: T) -> A }"
+ },
+ {
+  "kind": "interface",
+  "name": "Comparer",
+  "text": "lib/fn.bx",
+  "url": "/reference/fn.html#comparer",
+  "where": "interface Comparer<T> { function before(self, a: T, b: T) -> Bool }"
  },
  {
   "kind": "enum",
@@ -1218,6 +1904,643 @@
   "where": "function json_parse(text: String) -> Result<Json, String>"
  },
  {
+  "kind": "class",
+  "name": "CsvRow",
+  "text": "lib/csv.bx",
+  "url": "/reference/csv.html#csvrow",
+  "where": "class CsvRow { fields: [String], offset: Int }"
+ },
+ {
+  "kind": "method",
+  "name": "count",
+  "text": "lib/csv.bx",
+  "url": "/reference/csv.html#count",
+  "where": "function (self: CsvRow) count() -> Int"
+ },
+ {
+  "kind": "method",
+  "name": "at",
+  "text": "lib/csv.bx",
+  "url": "/reference/csv.html#at",
+  "where": "function (self: CsvRow) at(index: Int) -> Option<String>"
+ },
+ {
+  "kind": "class",
+  "name": "CsvReader",
+  "text": "lib/csv.bx",
+  "url": "/reference/csv.html#csvreader",
+  "where": "class CsvReader { text: String, at: Int, delimiter: Int }"
+ },
+ {
+  "kind": "method",
+  "name": "terminator",
+  "text": "lib/csv.bx",
+  "url": "/reference/csv.html#terminator",
+  "where": "function (self: CsvReader) terminator() -> Int"
+ },
+ {
+  "kind": "method",
+  "name": "field",
+  "text": "lib/csv.bx",
+  "url": "/reference/csv.html#field",
+  "where": "function (mutable self: CsvReader) field() -> Result<String, String>"
+ },
+ {
+  "kind": "method",
+  "name": "quoted_field",
+  "text": "lib/csv.bx",
+  "url": "/reference/csv.html#quoted-field",
+  "where": "function (mutable self: CsvReader) quoted_field() -> Result<String, String>"
+ },
+ {
+  "kind": "function",
+  "name": "csv_parse",
+  "text": "lib/csv.bx",
+  "url": "/reference/csv.html#csv-parse",
+  "where": "function csv_parse(text: String) -> Result<[CsvRow], String>"
+ },
+ {
+  "kind": "function",
+  "name": "csv_parse_delimited",
+  "text": "lib/csv.bx",
+  "url": "/reference/csv.html#csv-parse-delimited",
+  "where": "function csv_parse_delimited(text: String, delimiter: Int) -> Result<[CsvRow], String>"
+ },
+ {
+  "kind": "function",
+  "name": "csv_widths_agree",
+  "text": "lib/csv.bx",
+  "url": "/reference/csv.html#csv-widths-agree",
+  "where": "function csv_widths_agree(rows: [CsvRow]) -> Option<String>"
+ },
+ {
+  "kind": "function",
+  "name": "csv_parse_rectangular",
+  "text": "lib/csv.bx",
+  "url": "/reference/csv.html#csv-parse-rectangular",
+  "where": "function csv_parse_rectangular(text: String) -> Result<[CsvRow], String>"
+ },
+ {
+  "kind": "function",
+  "name": "csv_parse_rectangular_delimited",
+  "text": "lib/csv.bx",
+  "url": "/reference/csv.html#csv-parse-rectangular-delimited",
+  "where": "function csv_parse_rectangular_delimited(text: String, delimiter: Int)"
+ },
+ {
+  "kind": "function",
+  "name": "csv_column",
+  "text": "lib/csv.bx",
+  "url": "/reference/csv.html#csv-column",
+  "where": "function csv_column(header: CsvRow, name: String) -> Option<Int>"
+ },
+ {
+  "kind": "function",
+  "name": "csv_needs_quoting",
+  "text": "lib/csv.bx",
+  "url": "/reference/csv.html#csv-needs-quoting",
+  "where": "pure function csv_needs_quoting(field: String, delimiter: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "csv_quote",
+  "text": "lib/csv.bx",
+  "url": "/reference/csv.html#csv-quote",
+  "where": "function csv_quote(field: String, delimiter: Int) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "csv_render",
+  "text": "lib/csv.bx",
+  "url": "/reference/csv.html#csv-render",
+  "where": "function csv_render(rows: [CsvRow]) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "csv_render_delimited",
+  "text": "lib/csv.bx",
+  "url": "/reference/csv.html#csv-render-delimited",
+  "where": "function csv_render_delimited(rows: [CsvRow], delimiter: Int, crlf: Bool) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "encoding_bytes_in_range",
+  "text": "lib/encoding.bx",
+  "url": "/reference/encoding.html#encoding-bytes-in-range",
+  "where": "pure function encoding_bytes_in_range(xs: [Int]) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "encoding_hex_value",
+  "text": "lib/encoding.bx",
+  "url": "/reference/encoding.html#encoding-hex-value",
+  "where": "pure function encoding_hex_value(byte: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "encoding_hex_encode",
+  "text": "lib/encoding.bx",
+  "url": "/reference/encoding.html#encoding-hex-encode",
+  "where": "function encoding_hex_encode(bytes: [Int]) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "encoding_hex_encode_text",
+  "text": "lib/encoding.bx",
+  "url": "/reference/encoding.html#encoding-hex-encode-text",
+  "where": "function encoding_hex_encode_text(text: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "encoding_hex_decode",
+  "text": "lib/encoding.bx",
+  "url": "/reference/encoding.html#encoding-hex-decode",
+  "where": "function encoding_hex_decode(text: String) -> Option<[Int]>"
+ },
+ {
+  "kind": "function",
+  "name": "encoding_hex_decode_text",
+  "text": "lib/encoding.bx",
+  "url": "/reference/encoding.html#encoding-hex-decode-text",
+  "where": "function encoding_hex_decode_text(text: String) -> Option<String>"
+ },
+ {
+  "kind": "function",
+  "name": "encoding_base64_value",
+  "text": "lib/encoding.bx",
+  "url": "/reference/encoding.html#encoding-base64-value",
+  "where": "pure function encoding_base64_value(byte: Int, sixty_two: Int, sixty_three: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "encoding_base64_encode_with",
+  "text": "lib/encoding.bx",
+  "url": "/reference/encoding.html#encoding-base64-encode-with",
+  "where": "function encoding_base64_encode_with(bytes: [Int], alphabet: String, pad: Bool) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "encoding_base64_decode_with",
+  "text": "lib/encoding.bx",
+  "url": "/reference/encoding.html#encoding-base64-decode-with",
+  "where": "function encoding_base64_decode_with(text: String,"
+ },
+ {
+  "kind": "function",
+  "name": "encoding_base64_encode",
+  "text": "lib/encoding.bx",
+  "url": "/reference/encoding.html#encoding-base64-encode",
+  "where": "function encoding_base64_encode(bytes: [Int]) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "encoding_base64_encode_text",
+  "text": "lib/encoding.bx",
+  "url": "/reference/encoding.html#encoding-base64-encode-text",
+  "where": "function encoding_base64_encode_text(text: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "encoding_base64_decode",
+  "text": "lib/encoding.bx",
+  "url": "/reference/encoding.html#encoding-base64-decode",
+  "where": "function encoding_base64_decode(text: String) -> Option<[Int]>"
+ },
+ {
+  "kind": "function",
+  "name": "encoding_base64_decode_text",
+  "text": "lib/encoding.bx",
+  "url": "/reference/encoding.html#encoding-base64-decode-text",
+  "where": "function encoding_base64_decode_text(text: String) -> Option<String>"
+ },
+ {
+  "kind": "function",
+  "name": "encoding_base64url_encode",
+  "text": "lib/encoding.bx",
+  "url": "/reference/encoding.html#encoding-base64url-encode",
+  "where": "function encoding_base64url_encode(bytes: [Int]) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "encoding_base64url_encode_text",
+  "text": "lib/encoding.bx",
+  "url": "/reference/encoding.html#encoding-base64url-encode-text",
+  "where": "function encoding_base64url_encode_text(text: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "encoding_base64url_decode",
+  "text": "lib/encoding.bx",
+  "url": "/reference/encoding.html#encoding-base64url-decode",
+  "where": "function encoding_base64url_decode(text: String) -> Option<[Int]>"
+ },
+ {
+  "kind": "function",
+  "name": "encoding_base64url_decode_text",
+  "text": "lib/encoding.bx",
+  "url": "/reference/encoding.html#encoding-base64url-decode-text",
+  "where": "function encoding_base64url_decode_text(text: String) -> Option<String>"
+ },
+ {
+  "kind": "function",
+  "name": "hash_mask_32",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#hash-mask-32",
+  "where": "pure function hash_mask_32(x: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "hash_rotate_right_32",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#hash-rotate-right-32",
+  "where": "pure function hash_rotate_right_32(x: Int, n: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "hash_rotate_right_64",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#hash-rotate-right-64",
+  "where": "pure function hash_rotate_right_64(x: Int, n: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "hash_add_wrapping_64",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#hash-add-wrapping-64",
+  "where": "pure function hash_add_wrapping_64(a: Int, b: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "hash_multiply_wrapping_64",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#hash-multiply-wrapping-64",
+  "where": "pure function hash_multiply_wrapping_64(a: Int, b: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "hash_hex_digit",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#hash-hex-digit",
+  "where": "pure function hash_hex_digit(value: Int) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "hash_hex",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#hash-hex",
+  "where": "pure function hash_hex(digest: [Int]) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "hash_hex_int",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#hash-hex-int",
+  "where": "pure function hash_hex_int(value: Int, width: Int) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "hash_equals_constant_time",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#hash-equals-constant-time",
+  "where": "pure function hash_equals_constant_time(a: [Int], b: [Int]) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "crc32_byte",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#crc32-byte",
+  "where": "pure function crc32_byte(crc: Int, byte: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "crc32",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#crc32",
+  "where": "pure function crc32(data: [Int]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "crc32_text",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#crc32-text",
+  "where": "pure function crc32_text(text: String) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "fnv1a_32",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#fnv1a-32",
+  "where": "pure function fnv1a_32(data: [Int]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "fnv1a_32_text",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#fnv1a-32-text",
+  "where": "pure function fnv1a_32_text(text: String) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "fnv1a_64",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#fnv1a-64",
+  "where": "pure function fnv1a_64(data: [Int]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "fnv1a_64_text",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#fnv1a-64-text",
+  "where": "pure function fnv1a_64_text(text: String) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "sha256_k",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#sha256-k",
+  "where": "function sha256_k(mutable into: [Int]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "sha256_block",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#sha256-block",
+  "where": "function sha256_block(mutable h: [Int], mutable w: [Int], message: [Int], at: Int, k: [Int]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "sha256",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#sha256",
+  "where": "function sha256(data: [Int]) -> [Int]"
+ },
+ {
+  "kind": "function",
+  "name": "sha256_text",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#sha256-text",
+  "where": "function sha256_text(text: String) -> [Int]"
+ },
+ {
+  "kind": "function",
+  "name": "sha512_k",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#sha512-k",
+  "where": "function sha512_k(mutable into: [Int]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "sha512_block",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#sha512-block",
+  "where": "function sha512_block(mutable h: [Int], mutable w: [Int], message: [Int], at: Int, k: [Int]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "sha512",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#sha512",
+  "where": "function sha512(data: [Int]) -> [Int]"
+ },
+ {
+  "kind": "function",
+  "name": "sha512_text",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#sha512-text",
+  "where": "function sha512_text(text: String) -> [Int]"
+ },
+ {
+  "kind": "function",
+  "name": "hmac_sha256",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#hmac-sha256",
+  "where": "function hmac_sha256(key: [Int], message: [Int]) -> [Int]"
+ },
+ {
+  "kind": "function",
+  "name": "hmac_sha256_text",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#hmac-sha256-text",
+  "where": "function hmac_sha256_text(key: String, message: String) -> [Int]"
+ },
+ {
+  "kind": "function",
+  "name": "hmac_sha512",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#hmac-sha512",
+  "where": "function hmac_sha512(key: [Int], message: [Int]) -> [Int]"
+ },
+ {
+  "kind": "function",
+  "name": "hmac_sha512_text",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#hmac-sha512-text",
+  "where": "function hmac_sha512_text(key: String, message: String) -> [Int]"
+ },
+ {
+  "kind": "function",
+  "name": "pbkdf2_sha256",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#pbkdf2-sha256",
+  "where": "function pbkdf2_sha256(password: [Int], salt: [Int], iterations: Int, length: Int) -> [Int]"
+ },
+ {
+  "kind": "function",
+  "name": "pbkdf2_sha256_text",
+  "text": "lib/hash.bx",
+  "url": "/reference/hash.html#pbkdf2-sha256-text",
+  "where": "function pbkdf2_sha256_text(password: String, salt: String, iterations: Int, length: Int) -> [Int]"
+ },
+ {
+  "kind": "function",
+  "name": "secure_entropy_block",
+  "text": "lib/secure.bx",
+  "url": "/reference/secure.html#secure-entropy-block",
+  "where": "function secure_entropy_block(count: Int) -> Option<[Int]> touches input"
+ },
+ {
+  "kind": "function",
+  "name": "secure_random_bytes",
+  "text": "lib/secure.bx",
+  "url": "/reference/secure.html#secure-random-bytes",
+  "where": "function secure_random_bytes(count: Int) -> Option<[Int]> touches input"
+ },
+ {
+  "kind": "function",
+  "name": "secure_random_int_below",
+  "text": "lib/secure.bx",
+  "url": "/reference/secure.html#secure-random-int-below",
+  "where": "function secure_random_int_below(bound: Int) -> Option<Int> touches input"
+ },
+ {
+  "kind": "function",
+  "name": "secure_uuid_v4",
+  "text": "lib/secure.bx",
+  "url": "/reference/secure.html#secure-uuid-v4",
+  "where": "function secure_uuid_v4() -> Option<String> touches input"
+ },
+ {
+  "kind": "function",
+  "name": "secure_token_hex",
+  "text": "lib/secure.bx",
+  "url": "/reference/secure.html#secure-token-hex",
+  "where": "function secure_token_hex(count: Int) -> Option<String> touches input"
+ },
+ {
+  "kind": "function",
+  "name": "secure_token_urlsafe",
+  "text": "lib/secure.bx",
+  "url": "/reference/secure.html#secure-token-urlsafe",
+  "where": "function secure_token_urlsafe(count: Int) -> Option<String> touches input"
+ },
+ {
+  "kind": "function",
+  "name": "string_equals_constant_time",
+  "text": "lib/secure.bx",
+  "url": "/reference/secure.html#string-equals-constant-time",
+  "where": "pure function string_equals_constant_time(a: String, b: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "bytes_equals_constant_time",
+  "text": "lib/secure.bx",
+  "url": "/reference/secure.html#bytes-equals-constant-time",
+  "where": "pure function bytes_equals_constant_time(a: [Int], b: [Int]) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "vector_dot",
+  "text": "lib/vector.bx",
+  "url": "/reference/vector.html#vector-dot",
+  "where": "pure function vector_dot(a: [Decimal<7>], b: [Decimal<7>]) -> Decimal<14>"
+ },
+ {
+  "kind": "function",
+  "name": "vector_squared_distance",
+  "text": "lib/vector.bx",
+  "url": "/reference/vector.html#vector-squared-distance",
+  "where": "pure function vector_squared_distance(a: [Decimal<7>], b: [Decimal<7>]) -> Decimal<14>"
+ },
+ {
+  "kind": "function",
+  "name": "vector_magnitude_squared",
+  "text": "lib/vector.bx",
+  "url": "/reference/vector.html#vector-magnitude-squared",
+  "where": "pure function vector_magnitude_squared(a: [Decimal<7>]) -> Decimal<14>"
+ },
+ {
+  "kind": "function",
+  "name": "vector_magnitude",
+  "text": "lib/vector.bx",
+  "url": "/reference/vector.html#vector-magnitude",
+  "where": "pure function vector_magnitude(a: [Decimal<7>]) -> Decimal<7>"
+ },
+ {
+  "kind": "function",
+  "name": "magnitude_of_squared",
+  "text": "lib/vector.bx",
+  "url": "/reference/vector.html#magnitude-of-squared",
+  "where": "pure function magnitude_of_squared(squared: Decimal<14>) -> Decimal<7>"
+ },
+ {
+  "kind": "function",
+  "name": "vector_is_unit",
+  "text": "lib/vector.bx",
+  "url": "/reference/vector.html#vector-is-unit",
+  "where": "pure function vector_is_unit(a: [Decimal<7>]) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "vector_normalise",
+  "text": "lib/vector.bx",
+  "url": "/reference/vector.html#vector-normalise",
+  "where": "pure function vector_normalise(a: [Decimal<7>]) -> [Decimal<7>]"
+ },
+ {
+  "kind": "class",
+  "name": "Scored",
+  "text": "lib/vector.bx",
+  "url": "/reference/vector.html#scored",
+  "where": "class Scored { at: Int, score: Decimal<14> }"
+ },
+ {
+  "kind": "function",
+  "name": "vector_top_dot",
+  "text": "lib/vector.bx",
+  "url": "/reference/vector.html#vector-top-dot",
+  "where": "function vector_top_dot(rows: [Row], query: [Decimal<7>], count: Int) -> [Scored]"
+ },
+ {
+  "kind": "class",
+  "name": "Row",
+  "text": "lib/vector.bx",
+  "url": "/reference/vector.html#row",
+  "where": "class Row { id: String, values: [Decimal<7>] }"
+ },
+ {
+  "kind": "function",
+  "name": "component_to_json",
+  "text": "lib/vector.bx",
+  "url": "/reference/vector.html#component-to-json",
+  "where": "function component_to_json(value: Decimal<7>) -> Json"
+ },
+ {
+  "kind": "function",
+  "name": "component_from_json",
+  "text": "lib/vector.bx",
+  "url": "/reference/vector.html#component-from-json",
+  "where": "function component_from_json(value: Json) -> Option<Decimal<7>>"
+ },
+ {
+  "kind": "function",
+  "name": "vector_to_json",
+  "text": "lib/vector.bx",
+  "url": "/reference/vector.html#vector-to-json",
+  "where": "function vector_to_json(row: Row) -> Json"
+ },
+ {
+  "kind": "function",
+  "name": "vector_from_json",
+  "text": "lib/vector.bx",
+  "url": "/reference/vector.html#vector-from-json",
+  "where": "function vector_from_json(value: Json) -> Result<Row, String>"
+ },
+ {
+  "kind": "function",
+  "name": "vector_store_render",
+  "text": "lib/vector.bx",
+  "url": "/reference/vector.html#vector-store-render",
+  "where": "function vector_store_render(rows: [Row]) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "vector_store_parse",
+  "text": "lib/vector.bx",
+  "url": "/reference/vector.html#vector-store-parse",
+  "where": "function vector_store_parse(text: String) -> Result<[Row], String>"
+ },
+ {
+  "kind": "function",
+  "name": "vector_store_write",
+  "text": "lib/vector.bx",
+  "url": "/reference/vector.html#vector-store-write",
+  "where": "function vector_store_write(path: String, rows: [Row]) -> Int touches files"
+ },
+ {
+  "kind": "function",
+  "name": "vector_store_read",
+  "text": "lib/vector.bx",
+  "url": "/reference/vector.html#vector-store-read",
+  "where": "function vector_store_read(path: String) -> Result<[Row], String> touches files"
+ },
+ {
+  "kind": "function",
+  "name": "vector_store_append",
+  "text": "lib/vector.bx",
+  "url": "/reference/vector.html#vector-store-append",
+  "where": "function vector_store_append(path: String, row: Row) -> Int touches files"
+ },
+ {
   "kind": "function",
   "name": "file_read",
   "text": "lib/files.bx",
@@ -1394,6 +2717,83 @@
  },
  {
   "kind": "function",
+  "name": "path_last_separator",
+  "text": "lib/path.bx",
+  "url": "/reference/path.html#path-last-separator",
+  "where": "pure function path_last_separator(text: String) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "path_without_trailing",
+  "text": "lib/path.bx",
+  "url": "/reference/path.html#path-without-trailing",
+  "where": "pure function path_without_trailing(text: String) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "path_is_absolute",
+  "text": "lib/path.bx",
+  "url": "/reference/path.html#path-is-absolute",
+  "where": "pure function path_is_absolute(path: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "path_basename",
+  "text": "lib/path.bx",
+  "url": "/reference/path.html#path-basename",
+  "where": "pure function path_basename(path: String) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "path_dirname",
+  "text": "lib/path.bx",
+  "url": "/reference/path.html#path-dirname",
+  "where": "pure function path_dirname(path: String) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "path_extension_dot",
+  "text": "lib/path.bx",
+  "url": "/reference/path.html#path-extension-dot",
+  "where": "pure function path_extension_dot(name: String) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "path_extension",
+  "text": "lib/path.bx",
+  "url": "/reference/path.html#path-extension",
+  "where": "pure function path_extension(path: String) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "path_stem",
+  "text": "lib/path.bx",
+  "url": "/reference/path.html#path-stem",
+  "where": "pure function path_stem(path: String) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "path_join",
+  "text": "lib/path.bx",
+  "url": "/reference/path.html#path-join",
+  "where": "pure function path_join(left: String, right: String) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "path_merge",
+  "text": "lib/path.bx",
+  "url": "/reference/path.html#path-merge",
+  "where": "pure function path_merge(chunks: [String]) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "path_normalise",
+  "text": "lib/path.bx",
+  "url": "/reference/path.html#path-normalise",
+  "where": "pure function path_normalise(path: String) -> String allocates"
+ },
+ {
+  "kind": "function",
   "name": "os_arg_count",
   "text": "lib/os.bx",
   "url": "/reference/os.html#os-arg-count",
@@ -1538,6 +2938,573 @@
   "text": "lib/os.bx",
   "url": "/reference/os.html#os-is-space",
   "where": "function os_is_space(b: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "os_fork",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-fork",
+  "where": "function os_fork() -> Int touches commands, input"
+ },
+ {
+  "kind": "function",
+  "name": "os_wait_for_child",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-wait-for-child",
+  "where": "function os_wait_for_child() -> Int touches commands, input"
+ },
+ {
+  "kind": "function",
+  "name": "os_flush",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-flush",
+  "where": "function os_flush() -> Bool touches input"
+ },
+ {
+  "kind": "function",
+  "name": "os_env_missing",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-env-missing",
+  "where": "function os_env_missing() -> CPointer touches input"
+ },
+ {
+  "kind": "function",
+  "name": "write_sockaddr_in",
+  "text": "lib/net.bx",
+  "url": "/reference/net.html#write-sockaddr-in",
+  "where": "function write_sockaddr_in(where: CPointer, port: Int, a: Int, b: Int, c: Int, d: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "net_listen",
+  "text": "lib/net.bx",
+  "url": "/reference/net.html#net-listen",
+  "where": "function net_listen(port: Int, backlog: Int) -> Option<Int> touches network, input"
+ },
+ {
+  "kind": "function",
+  "name": "net_accept",
+  "text": "lib/net.bx",
+  "url": "/reference/net.html#net-accept",
+  "where": "function net_accept(server: Int) -> Option<Int> touches network, input"
+ },
+ {
+  "kind": "function",
+  "name": "net_connect_ipv4",
+  "text": "lib/net.bx",
+  "url": "/reference/net.html#net-connect-ipv4",
+  "where": "function net_connect_ipv4(a: Int, b: Int, c: Int, d: Int, port: Int) -> Option<Int> touches network, input"
+ },
+ {
+  "kind": "function",
+  "name": "net_read",
+  "text": "lib/net.bx",
+  "url": "/reference/net.html#net-read",
+  "where": "function net_read(fd: Int, limit: Int) -> Option<String> touches network"
+ },
+ {
+  "kind": "function",
+  "name": "net_write",
+  "text": "lib/net.bx",
+  "url": "/reference/net.html#net-write",
+  "where": "function net_write(fd: Int, text: String) -> Option<Int> touches network"
+ },
+ {
+  "kind": "function",
+  "name": "net_close",
+  "text": "lib/net.bx",
+  "url": "/reference/net.html#net-close",
+  "where": "function net_close(fd: Int) -> Bool touches network"
+ },
+ {
+  "kind": "function",
+  "name": "net_listen_any_port",
+  "text": "lib/net.bx",
+  "url": "/reference/net.html#net-listen-any-port",
+  "where": "function net_listen_any_port(backlog: Int) -> Option<Int> touches network, input"
+ },
+ {
+  "kind": "function",
+  "name": "net_port_of",
+  "text": "lib/net.bx",
+  "url": "/reference/net.html#net-port-of",
+  "where": "function net_port_of(fd: Int) -> Option<Int> touches network"
+ },
+ {
+  "kind": "class",
+  "name": "DateTime",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#datetime",
+  "where": "class DateTime { year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int }"
+ },
+ {
+  "kind": "class",
+  "name": "Duration",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#duration",
+  "where": "class Duration { seconds: Int }"
+ },
+ {
+  "kind": "function",
+  "name": "duration_seconds",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#duration-seconds",
+  "where": "pure function duration_seconds(count: Int) -> Duration"
+ },
+ {
+  "kind": "function",
+  "name": "duration_minutes",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#duration-minutes",
+  "where": "pure function duration_minutes(count: Int) -> Duration"
+ },
+ {
+  "kind": "function",
+  "name": "duration_hours",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#duration-hours",
+  "where": "pure function duration_hours(count: Int) -> Duration"
+ },
+ {
+  "kind": "function",
+  "name": "duration_days",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#duration-days",
+  "where": "pure function duration_days(count: Int) -> Duration"
+ },
+ {
+  "kind": "function",
+  "name": "duration_total_seconds",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#duration-total-seconds",
+  "where": "pure function duration_total_seconds(span: Duration) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "duration_total_minutes",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#duration-total-minutes",
+  "where": "pure function duration_total_minutes(span: Duration) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "duration_total_hours",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#duration-total-hours",
+  "where": "pure function duration_total_hours(span: Duration) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "duration_total_days",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#duration-total-days",
+  "where": "pure function duration_total_days(span: Duration) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "time_add",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-add",
+  "where": "pure function time_add(unix_seconds: Int, span: Duration) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "time_between",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-between",
+  "where": "pure function time_between(from_unix: Int, to_unix: Int) -> Duration"
+ },
+ {
+  "kind": "function",
+  "name": "time_floor_mod",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-floor-mod",
+  "where": "pure function time_floor_mod(value: Int, by: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "time_is_leap_year",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-is-leap-year",
+  "where": "pure function time_is_leap_year(year: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "time_days_in_month",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-days-in-month",
+  "where": "pure function time_days_in_month(year: Int, month: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "time_days_from_civil",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-days-from-civil",
+  "where": "pure function time_days_from_civil(year: Int, month: Int, day: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "time_civil_from_days",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-civil-from-days",
+  "where": "pure function time_civil_from_days(days: Int) -> DateTime"
+ },
+ {
+  "kind": "function",
+  "name": "time_from_unix",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-from-unix",
+  "where": "pure function time_from_unix(unix_seconds: Int) -> DateTime"
+ },
+ {
+  "kind": "function",
+  "name": "time_is_valid",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-is-valid",
+  "where": "pure function time_is_valid(when: DateTime) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "time_to_unix",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-to-unix",
+  "where": "pure function time_to_unix(when: DateTime) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "time_weekday",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-weekday",
+  "where": "pure function time_weekday(when: DateTime) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "time_day_of_year",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-day-of-year",
+  "where": "pure function time_day_of_year(when: DateTime) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "time_pad",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-pad",
+  "where": "pure function time_pad(value: Int, width: Int) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "time_format_iso",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-format-iso",
+  "where": "pure function time_format_iso(when: DateTime) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "time_format_date",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-format-date",
+  "where": "pure function time_format_date(when: DateTime) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "time_parse_field",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-parse-field",
+  "where": "function time_parse_field(text: String, at: Int, width: Int) -> Option<Int>"
+ },
+ {
+  "kind": "function",
+  "name": "time_parse_iso",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-parse-iso",
+  "where": "function time_parse_iso(text: String) -> Option<DateTime>"
+ },
+ {
+  "kind": "function",
+  "name": "time_parse_unix",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-parse-unix",
+  "where": "function time_parse_unix(text: String) -> Option<Int>"
+ },
+ {
+  "kind": "function",
+  "name": "time_i64_at",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-i64-at",
+  "where": "function time_i64_at(bytes: [Int], from: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "time_wall_micros",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-wall-micros",
+  "where": "function time_wall_micros() -> Option<Int> touches clock"
+ },
+ {
+  "kind": "function",
+  "name": "time_since_micros",
+  "text": "lib/time.bx",
+  "url": "/reference/time.html#time-since-micros",
+  "where": "function time_since_micros(started: Int) -> Option<Int> touches clock"
+ },
+ {
+  "kind": "class",
+  "name": "Random",
+  "text": "lib/random.bx",
+  "url": "/reference/random.html#random",
+  "where": "class Random { state: Int }"
+ },
+ {
+  "kind": "function",
+  "name": "random_from",
+  "text": "lib/random.bx",
+  "url": "/reference/random.html#random-from",
+  "where": "function random_from(seed: Int) -> Random"
+ },
+ {
+  "kind": "method",
+  "name": "next",
+  "text": "lib/random.bx",
+  "url": "/reference/random.html#next",
+  "where": "function (mutable self: Random) next() -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "random_unsigned_at_most",
+  "text": "lib/random.bx",
+  "url": "/reference/random.html#random-unsigned-at-most",
+  "where": "pure function random_unsigned_at_most(a: Int, b: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "random_mask_for",
+  "text": "lib/random.bx",
+  "url": "/reference/random.html#random-mask-for",
+  "where": "pure function random_mask_for(value: Int) -> Int"
+ },
+ {
+  "kind": "method",
+  "name": "next_between",
+  "text": "lib/random.bx",
+  "url": "/reference/random.html#next-between",
+  "where": "function (mutable self: Random) next_between(low: Int, high: Int) -> Int"
+ },
+ {
+  "kind": "method",
+  "name": "next_below",
+  "text": "lib/random.bx",
+  "url": "/reference/random.html#next-below",
+  "where": "function (mutable self: Random) next_below(bound: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "random_shuffle",
+  "text": "lib/random.bx",
+  "url": "/reference/random.html#random-shuffle",
+  "where": "function random_shuffle<T>(mutable rng: Random, mutable xs: [T]) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "random_choice",
+  "text": "lib/random.bx",
+  "url": "/reference/random.html#random-choice",
+  "where": "function random_choice<T>(mutable rng: Random, xs: [T]) -> Option<T>"
+ },
+ {
+  "kind": "function",
+  "name": "log_level_from_name",
+  "text": "lib/log.bx",
+  "url": "/reference/log.html#log-level-from-name",
+  "where": "function log_level_from_name(text: String) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "log_level_name",
+  "text": "lib/log.bx",
+  "url": "/reference/log.html#log-level-name",
+  "where": "pure function log_level_name(level: Int) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "log_level_passes",
+  "text": "lib/log.bx",
+  "url": "/reference/log.html#log-level-passes",
+  "where": "pure function log_level_passes(level: Int, threshold: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "log_threshold",
+  "text": "lib/log.bx",
+  "url": "/reference/log.html#log-threshold",
+  "where": "function log_threshold() -> Int touches input"
+ },
+ {
+  "kind": "function",
+  "name": "log_enabled",
+  "text": "lib/log.bx",
+  "url": "/reference/log.html#log-enabled",
+  "where": "function log_enabled(level: Int) -> Bool touches input"
+ },
+ {
+  "kind": "function",
+  "name": "log_env_problem",
+  "text": "lib/log.bx",
+  "url": "/reference/log.html#log-env-problem",
+  "where": "function log_env_problem() -> Option<String> touches input"
+ },
+ {
+  "kind": "function",
+  "name": "log_pad_level",
+  "text": "lib/log.bx",
+  "url": "/reference/log.html#log-pad-level",
+  "where": "pure function log_pad_level(name: String) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "log_has_break",
+  "text": "lib/log.bx",
+  "url": "/reference/log.html#log-has-break",
+  "where": "pure function log_has_break(message: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "log_one_line",
+  "text": "lib/log.bx",
+  "url": "/reference/log.html#log-one-line",
+  "where": "pure function log_one_line(message: String) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "log_merge",
+  "text": "lib/log.bx",
+  "url": "/reference/log.html#log-merge",
+  "where": "pure function log_merge(chunks: [String]) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "log_format",
+  "text": "lib/log.bx",
+  "url": "/reference/log.html#log-format",
+  "where": "pure function log_format(level: Int, message: String, unix_seconds: Int) -> String allocates"
+ },
+ {
+  "kind": "function",
+  "name": "log_at",
+  "text": "lib/log.bx",
+  "url": "/reference/log.html#log-at",
+  "where": "function log_at(level: Int, message: String) -> Bool touches input, clock"
+ },
+ {
+  "kind": "function",
+  "name": "log_debug",
+  "text": "lib/log.bx",
+  "url": "/reference/log.html#log-debug",
+  "where": "function log_debug(message: String) -> Bool touches input, clock"
+ },
+ {
+  "kind": "function",
+  "name": "log_info",
+  "text": "lib/log.bx",
+  "url": "/reference/log.html#log-info",
+  "where": "function log_info(message: String) -> Bool touches input, clock"
+ },
+ {
+  "kind": "function",
+  "name": "log_warn",
+  "text": "lib/log.bx",
+  "url": "/reference/log.html#log-warn",
+  "where": "function log_warn(message: String) -> Bool touches input, clock"
+ },
+ {
+  "kind": "function",
+  "name": "log_error",
+  "text": "lib/log.bx",
+  "url": "/reference/log.html#log-error",
+  "where": "function log_error(message: String) -> Bool touches input, clock"
+ },
+ {
+  "kind": "class",
+  "name": "Tests",
+  "text": "lib/test.bx",
+  "url": "/reference/test.html#tests",
+  "where": "class Tests"
+ },
+ {
+  "kind": "function",
+  "name": "test_begin",
+  "text": "lib/test.bx",
+  "url": "/reference/test.html#test-begin",
+  "where": "function test_begin(suite: String) -> Tests"
+ },
+ {
+  "kind": "function",
+  "name": "test_passed",
+  "text": "lib/test.bx",
+  "url": "/reference/test.html#test-passed",
+  "where": "function test_passed(mutable t: Tests, what: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "fail_with",
+  "text": "lib/test.bx",
+  "url": "/reference/test.html#fail-with",
+  "where": "function fail_with(mutable t: Tests, what: String, why: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "check_that",
+  "text": "lib/test.bx",
+  "url": "/reference/test.html#check-that",
+  "where": "function check_that(mutable t: Tests, what: String, held: Bool) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "check_int",
+  "text": "lib/test.bx",
+  "url": "/reference/test.html#check-int",
+  "where": "function check_int(mutable t: Tests, what: String, got: Int, want: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "check_money",
+  "text": "lib/test.bx",
+  "url": "/reference/test.html#check-money",
+  "where": "function check_money(mutable t: Tests, what: String, got: Decimal<2>, want: Decimal<2>) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "check_money_half_even",
+  "text": "lib/test.bx",
+  "url": "/reference/test.html#check-money-half-even",
+  "where": "function check_money_half_even(mutable t: Tests, what: String, got: Decimal<2, RoundHalfEven>,"
+ },
+ {
+  "kind": "function",
+  "name": "check_decimal7",
+  "text": "lib/test.bx",
+  "url": "/reference/test.html#check-decimal7",
+  "where": "function check_decimal7(mutable t: Tests, what: String, got: Decimal<7>,"
+ },
+ {
+  "kind": "function",
+  "name": "check_string",
+  "text": "lib/test.bx",
+  "url": "/reference/test.html#check-string",
+  "where": "function check_string(mutable t: Tests, what: String, got: String, want: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "check_bool",
+  "text": "lib/test.bx",
+  "url": "/reference/test.html#check-bool",
+  "where": "function check_bool(mutable t: Tests, what: String, got: Bool, want: Bool) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "test_end",
+  "text": "lib/test.bx",
+  "url": "/reference/test.html#test-end",
+  "where": "function test_end(t: Tests) -> Int"
  },
  {
   "kind": "keyword",

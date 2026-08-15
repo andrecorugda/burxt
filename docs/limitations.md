@@ -109,18 +109,36 @@ buffer, so a file boundary does not exist at runtime for anything to be private 
 will. Everything stays visible inside a package, and only `public` declarations are importable by a package
 that depends on it.
 
-### No concurrency
+### No threads. Processes, yes
 
-No threads, no async, no channels. A Burxt program is single-threaded.
+No threads, no async, no channels. `os_fork` and `os_wait_for_child` in `lib/os.bx` are what a Burxt
+program has for doing more than one thing at once, and a pre-forked server is written with them
+today.
 
-This is deliberate sequencing rather than disinterest. The intended claim is that *two threads cannot
-corrupt a balance*, derived from a declared invariant rather than from a lock the programmer
-remembered — and shipping that half-done would be worse than not shipping it.
+Threads need `pthread_create`, which takes a **function pointer** — C calling back into Burxt, which
+is the door below that is genuinely still shut.
 
-### No sockets, no TLS, no HTTP
+The sequencing is deliberate rather than disinterested. The intended claim is that *two threads
+cannot corrupt a balance*, derived from a declared invariant rather than from a lock somebody
+remembered, and shipping that half-done would be worse than not shipping it. Separate processes get
+the same guarantee the coarse way: two workers share no memory, so there is nothing to corrupt.
 
-A program can read files, run commands and read standard input. It cannot open a network connection.
-Anything HTTP-shaped goes through `os_run` and a subprocess today.
+### TCP, yes. No TLS, no HTTP, no DNS
+
+`lib/net.bx` opens, binds, accepts, reads and writes TCP sockets, both as a server and as a client.
+A Burxt program answers HTTP requests. What is missing above it:
+
+- **No TLS**, and binding one rather than writing one is the recorded decision: this language gives
+  no control over instruction timing, and a hand-rolled handshake that *looks* fine is exactly the
+  failure it exists to refuse.
+- **No HTTP**, in the sense that a request is bytes and parsing it is your code.
+- **No DNS.** An address is four octets — `net_connect_ipv4(93, 184, 216, 34, 80)` — because
+  `getaddrinfo` hands back a pointer buried inside a chain of structs, and reading a pointer out of
+  C's memory is a door still shut.
+- **Blocking, with no timeouts.** `net_accept` waits.
+
+This section said *"It cannot open a network connection"* until it was measured. It could: every
+call but `bind` worked with no compiler change, and `bind` needed one builtin.
 
 ### C interoperation is limited on purpose
 

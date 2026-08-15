@@ -326,6 +326,8 @@
           id: c-string-at
         - name: "c_bytes_at"
           id: c-bytes-at
+        - name: "c_bytes_to"
+          id: c-bytes-to
         - name: "print"
           id: print
         - name: "len"

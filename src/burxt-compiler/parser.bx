@@ -507,6 +507,7 @@ function builtin_arity(name: String) -> Int {
     if name == "c_string_at" { return 1; }
     if name == "byte_as_string" { return 1; }
     if name == "c_bytes_at" { return 2; }
+    if name == "c_bytes_to" { return 2; }
     if name == "argument" { return 1; }
     if name == "hash" { return 1; }
     if name == "bit_not" { return 1; }
@@ -534,6 +535,9 @@ function builtin_result(name: String) -> Type {
     if name == "c_string_at" { return simple_type(42); }
     if name == "byte_as_string" { return simple_type(42); }
     if name == "c_is_null" { return simple_type(41); }
+    // Answers how many bytes it wrote, so `let n: Int = c_bytes_to(p, bytes);` reads like the
+    // `read` and `write` it exists to feed.
+    if name == "c_bytes_to" { return simple_type(40); }
     if name == "substring" { return simple_type(42); }
     if name == "argument" { return simple_type(42); }
     if name == "len" { return simple_type(40); }
@@ -637,7 +641,8 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
     // The two things that may be done with a CPointer, and the only two. An Int is not a pointer,
     // and letting one become one by writing it down would hand the language exactly the ability the
     // wall exists to withhold.
-    if called == "c_is_null" || called == "c_string_at" || called == "c_bytes_at" {
+    if called == "c_is_null" || called == "c_string_at" || called == "c_bytes_at"
+        || called == "c_bytes_to" {
         if !is_unknown(first) && first.kind != 51 {
             let complained: Int = self.complain_at(src, at,
                 "`" + called + "` takes a CPointer, the thing an `external function` handed back, "
@@ -648,6 +653,16 @@ function (mutable self: Unit) check_builtin_args(src: String, at: Int, called: S
     // check it — that is the pointer wall's one soft edge, named rather than hidden. What CAN be
     // checked is that it is an Int, and that a literal is not negative: a negative count read as an
     // unsigned size is not a smaller read, it is an enormous one.
+    // `c_bytes_to`'s second argument is the bytes themselves, so its LENGTH is not a claim —
+    // it is `len(bytes)`, and that is the half of the soft edge above this one closes. What stays
+    // the caller's claim is the DESTINATION's capacity, which belongs to C and cannot be checked.
+    if called == "c_bytes_to" {
+        if !is_unknown(second) && second.kind != 47 {
+            let objected: Int = self.complain_at(src, at,
+                "`c_bytes_to(p, bytes)` writes an array of bytes — the [Int] that `c_bytes_at` "
+                + "answers — but this is " + self.show_type(src, second));
+        }
+    }
     if called == "c_bytes_at" {
         if !is_unknown(second) && second.kind != 40 {
             let complained: Int = self.complain_at(src, at,

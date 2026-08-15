@@ -2501,6 +2501,11 @@ impl<'ctx> CodeGen<'ctx> {
                 let n = self.gen_expr(count)?.into_int_value();
                 self.build_c_bytes_at(&e.ty, ptr_val, n)
             }
+            TypedExprKind::CBytesTo { pointer, bytes } => {
+                let ptr_val = self.gen_expr(pointer)?.into_pointer_value();
+                let arr = self.gen_expr(bytes)?.into_struct_value();
+                self.build_c_bytes_to(ptr_val, arr).map(Into::into)
+            }
             TypedExprKind::CStringAt(p) => {
                 let ptr = self.gen_expr(p)?.into_pointer_value();
                 self.build_c_string_at(ptr).map(Into::into)
@@ -3944,6 +3949,106 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.position_at_end(done_bb);
         let _ = ptr;
         self.build_slice_value(slice_ty, data, n, cap)
+    }
+
+    /// Burxt's bytes into C's memory. The exact mirror of `build_c_bytes_at`, and the loop is the
+    /// same loop with the load and the store swapped.
+    ///
+    /// Three refusals, and the middle one is the only interesting decision:
+    ///
+    /// - **A null destination panics**, the same as reading one. Writing 16 bytes to address zero
+    ///   is a segfault a moment later and a mystery to whoever reads the core dump.
+    /// - **An element outside 0..=255 panics, naming the index.** Truncating would be cheaper by
+    ///   one branch and would write a byte the caller did not write down — `256` silently becoming
+    ///   `0` is a corrupt port number, a corrupt length prefix, a corrupt checksum. This is the
+    ///   language whose whole argument is that the quiet wrong answer is the expensive one.
+    /// - **Nothing checks that the destination is big enough**, because nothing can: the capacity
+    ///   belongs to C. `c_bytes_at` documents the same soft edge on the way in.
+    ///
+    /// Answers the count written, so `let n: Int = c_bytes_to(p, sockaddr);` reads like the `read`
+    /// and `write` it exists to feed.
+    fn build_c_bytes_to(
+        &mut self,
+        p: PointerValue<'ctx>,
+        arr: inkwell::values::StructValue<'ctx>,
+    ) -> Result<IntValue<'ctx>, String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+        let i8t = self.ctx.i8_type();
+
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_parent())
+            .ok_or("codegen bug: c_bytes_to outside a function")?;
+
+        let null_bb = self.ctx.append_basic_block(function, "c_to_null");
+        let checked_bb = self.ctx.append_basic_block(function, "c_to_checked");
+        let is_null = self.builder.build_is_null(p, "c_to_is_null").map_err(err)?;
+        self.builder.build_conditional_branch(is_null, null_bb, checked_bb).map_err(err)?;
+        self.builder.position_at_end(null_bb);
+        self.build_panic(
+            "burxt runtime error: c_bytes_to was given a null pointer; ask c_is_null(p) first\n",
+        )?;
+
+        self.builder.position_at_end(checked_bb);
+        let data = self
+            .builder
+            .build_extract_value(arr, 0, "c_to_data")
+            .map_err(err)?
+            .into_pointer_value();
+        let n = self.builder.build_extract_value(arr, 1, "c_to_len").map_err(err)?.into_int_value();
+
+        let loop_bb = self.ctx.append_basic_block(function, "c_to_loop");
+        let body_bb = self.ctx.append_basic_block(function, "c_to_body");
+        let range_bb = self.ctx.append_basic_block(function, "c_to_range");
+        let store_bb = self.ctx.append_basic_block(function, "c_to_store");
+        let done_bb = self.ctx.append_basic_block(function, "c_to_done");
+        let index = self.create_entry_alloca("c_to_i", &Type::Int)?;
+        self.builder.build_store(index, i64t.const_zero()).map_err(err)?;
+        self.builder.build_unconditional_branch(loop_bb).map_err(err)?;
+
+        self.builder.position_at_end(loop_bb);
+        let i = self.builder.build_load(i64t, index, "i").map_err(err)?.into_int_value();
+        let more =
+            self.builder.build_int_compare(inkwell::IntPredicate::SLT, i, n, "more").map_err(err)?;
+        self.builder.build_conditional_branch(more, body_bb, done_bb).map_err(err)?;
+
+        // A byte is 0..=255. Both ends, because -1 is as wrong as 256 and reads differently.
+        self.builder.position_at_end(body_bb);
+        let slot = unsafe { self.builder.build_gep(i64t, data, &[i], "c_to_slot") }.map_err(err)?;
+        let value = self.builder.build_load(i64t, slot, "c_to_value").map_err(err)?.into_int_value();
+        let low = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, value, i64t.const_zero(), "c_to_low")
+            .map_err(err)?;
+        let high = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::SGT,
+                value,
+                i64t.const_int(255, false),
+                "c_to_high",
+            )
+            .map_err(err)?;
+        let outside = self.builder.build_or(low, high, "c_to_outside").map_err(err)?;
+        self.builder.build_conditional_branch(outside, range_bb, store_bb).map_err(err)?;
+
+        self.builder.position_at_end(range_bb);
+        self.build_panic(
+            "burxt runtime error: c_bytes_to was given a number that is not a byte (0..=255)\n",
+        )?;
+
+        self.builder.position_at_end(store_bb);
+        let byte = self.builder.build_int_truncate(value, i8t, "c_to_byte").map_err(err)?;
+        let at = unsafe { self.builder.build_gep(i8t, p, &[i], "c_to_at") }.map_err(err)?;
+        self.builder.build_store(at, byte).map_err(err)?;
+        let next = self.builder.build_int_add(i, i64t.const_int(1, false), "next").map_err(err)?;
+        self.builder.build_store(index, next).map_err(err)?;
+        self.builder.build_unconditional_branch(loop_bb).map_err(err)?;
+
+        self.builder.position_at_end(done_bb);
+        Ok(n)
     }
 
     fn build_c_string_at(

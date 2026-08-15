@@ -261,10 +261,10 @@ The work you stop doing is checking for the mistakes on this page.
 </div>
 
 <p style="font-size:14px; margin-top:2.5rem;">
-<strong>Burxt 1.0.0 is released.</strong> You can write a program, test it, debug it, depend on
-other people's code and ship it. The ecosystem is new and there is no concurrency and no
-networking yet — <a href="{{ site.baseurl }}/limitations.html">every gap is named, with its
-reason</a>.
+<strong>Burxt 1.1.0 is released.</strong> You can write a program, test it, debug it, depend on
+other people's code, serve TCP and fork workers, and ship it. The ecosystem is new; there are no
+threads, no TLS and no DNS — <a href="{{ site.baseurl }}/limitations.html">every gap is named, with
+its reason</a>.
 </p>
 
 </div>

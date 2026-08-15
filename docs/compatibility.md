@@ -24,6 +24,23 @@ Ordinary semantic versioning, stated so nothing is assumed:
 A **patch adds nothing.** Not a function, not a keyword, not a flag. If it adds anything, it is a
 minor, and calling it a patch would break the only rule a version number carries.
 
+### The one way a minor can break a program
+
+**A new builtin reserves its name.** `is_reserved_name` is what the editor grammar and the generated
+reference are scraped from, so every builtin is in it, and a program that had already declared a
+function called `c_bytes_to` stops compiling when `c_bytes_to` becomes a builtin.
+
+Strictly read, that is a major. It is called a minor here, and the reasoning is written down rather
+than assumed: the alternative is a major version for every builtin ever added, which makes the
+number meaningless in the other direction. What is promised instead is narrower and keepable —
+
+> a new builtin is a **minor**, its name is listed in that release's notes, and the failure is a
+> compile error naming the line, never a silent change of meaning.
+
+The last clause is the one that matters. A program that used the name is *stopped*, not quietly
+rebound to something new, and renaming a function is a mechanical fix. This is the same trade as a
+new keyword in any language; the difference is that it is stated here instead of discovered.
+
 ---
 
 ## The command

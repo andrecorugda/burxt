@@ -1889,6 +1889,7 @@ function is_reserved_name(src: String, start: Int, length: Int) -> Bool {
         || span_equal(src, start, length, "c_is_null")
         || span_equal(src, start, length, "c_string_at")
         || span_equal(src, start, length, "c_bytes_at")
+        || span_equal(src, start, length, "c_bytes_to")
         || span_equal(src, start, length, "byte_as_string")
         || span_equal(src, start, length, "bit_and")
         || span_equal(src, start, length, "bit_or")
@@ -5406,6 +5407,7 @@ function (mutable self: Unit) describe_allocation(src: String, node: Int) -> Str
         if name == "read_file" { return "`read_file(...)` builds a String"; }
         if name == "c_string_at" { return "`c_string_at(...)` copies C's bytes into a String"; }
         if name == "c_bytes_at" { return "`c_bytes_at(...)` copies C's bytes into an array"; }
+        if name == "c_bytes_to" { return "`c_bytes_to(...)` writes bytes into C's memory"; }
         if builtin_arity(name) >= 0 { return ""; }
         return "`" + name + "(...)` builds its answer in the caller's region";
     }

@@ -1,0 +1,8 @@
+// The first argument is a CPointer, the thing an `external function` handed back. An Int is not
+// a pointer, and letting one become one by writing it down would hand the language exactly the
+// ability the pointer wall exists to withhold.
+function fill() -> Int {
+    let written: Int = c_bytes_to(4096, [1, 2, 3]);
+    return written;
+}
+let done: Int = fill();

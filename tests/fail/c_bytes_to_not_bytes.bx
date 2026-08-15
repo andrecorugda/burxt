@@ -1,0 +1,11 @@
+// The second argument is the bytes themselves — the `[Int]` that `c_bytes_at` answers. A String
+// is not it: it would have to decide whether "12" means one byte or two, and there is a named
+// function for each of those answers already.
+external function malloc(size: Int) -> CPointer;
+
+function fill() -> Int {
+    let buffer: CPointer = malloc(4);
+    let written: Int = c_bytes_to(buffer, "12");
+    return written;
+}
+let done: Int = fill();

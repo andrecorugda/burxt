@@ -74,6 +74,7 @@ pub enum TypedExprKind {
     CIsNull(Box<TypedExpr>),
     CStringAt(Box<TypedExpr>),
     CBytesAt { pointer: Box<TypedExpr>, count: Box<TypedExpr> },
+    CBytesTo { pointer: Box<TypedExpr>, bytes: Box<TypedExpr> },
     /// `to_string(v)`: the value's exact display form, region-allocated.
     ToString(Box<TypedExpr>),
     /// `byte_at(s, i)`: the i-th byte as an Int, bounds-checked at runtime.
@@ -816,7 +817,7 @@ fn is_reserved_name(name: &str) -> bool {
             // them too: one omission showing up twice, which is what a single source of truth is for.
             | "bit_and" | "bit_or" | "bit_xor" | "bit_not"
             | "shift_left" | "shift_right_zeros" | "shift_right_sign"
-            | "c_is_null" | "c_string_at" | "c_bytes_at"
+            | "c_is_null" | "c_string_at" | "c_bytes_at" | "c_bytes_to"
             // The exact inverse of `byte_at`, and the only builtin that turns a number into
             // bytes (roadmap A13). Reserved from the first version it existed, unlike the ten
             // above — being in this list is what the editor grammar and the generated reference
@@ -7749,6 +7750,59 @@ impl TypeChecker {
                         },
                     });
                 }
+                // `c_bytes_to(p, bytes)` — Burxt's bytes, written into C's memory. Answers how many.
+                //
+                // The mirror of `c_bytes_at`, and the reason it exists is narrower than it looks.
+                // `lib/os.bx` records the wall in prose: "Burxt can hold a pointer but cannot build a
+                // struct behind one: `c_bytes_at` reads C's memory and nothing writes it." That one
+                // sentence is why `nanosleep` was passed over for the obsolescent `usleep`, and why a
+                // socket could `listen` but never `bind` — every one of those calls wants a small
+                // struct filled in and handed over by pointer.
+                //
+                // Measured before it was built: a Burxt TCP server accepts a connection and answers
+                // an HTTP request TODAY, with no compiler change, because a String reaches C as a
+                // `char *` and `listen()` auto-binds. `bind()` to a CHOSEN port was the only thing
+                // missing, and it is 16 bytes of `sockaddr_in`. One builtin, not a milestone.
+                //
+                // **The length is not a claim here — it is `len(bytes)`.** That is the half of
+                // `c_bytes_at`'s soft edge this one closes: nothing can lie about how much is being
+                // read out of Burxt. What stays the caller's claim is the DESTINATION's capacity,
+                // and nothing in the type can check that, which is the same bargain `as scaled` and
+                // `external function` already make. Named, not hidden.
+                //
+                // **An element outside 0..=255 traps, and does not mask.** `bit_and(x, 0xFF)` would
+                // write a byte that is not the number the caller wrote down, which is exactly the
+                // quiet wrong answer this language exists to refuse. The trap names the index.
+                if name == "c_bytes_to" {
+                    if arguments.len() != 2 {
+                        return Err("c_bytes_to(p, bytes) takes a CPointer and an array of bytes"
+                            .to_string());
+                    }
+                    let pointer = self.check_expr(&arguments[0], Some(&Type::CPointer))?;
+                    if pointer.ty != Type::CPointer {
+                        return Err(format!(
+                            "c_bytes_to(...) writes into memory an `external function` handed \
+                             back, so its first argument is a CPointer, but this has type {}",
+                            pointer.ty
+                        ));
+                    }
+                    let wanted = Type::Slice(Box::new(Type::Int));
+                    let bytes = self.check_expr(&arguments[1], Some(&wanted))?;
+                    if bytes.ty != wanted {
+                        return Err(format!(
+                            "c_bytes_to(p, bytes) writes an array of bytes — the [Int] that \
+                             `c_bytes_at` answers and `to_bytes` builds — but this has type {}",
+                            bytes.ty
+                        ));
+                    }
+                    return Ok(TypedExpr {
+                        ty: Type::Int,
+                        kind: TypedExprKind::CBytesTo {
+                            pointer: Box::new(pointer),
+                            bytes: Box::new(bytes),
+                        },
+                    });
+                }
                 if name == "read_file" {
                     if let Some(why) = self.impure("read a file") {
                         return Err(why);
@@ -10317,6 +10371,7 @@ impl<'a> ReleasePass<'a> {
             | K::WriteFile { path: a, contents: b }
             | K::WriteBytes { path: a, buffer: b }
             | K::CBytesAt { pointer: a, count: b }
+            | K::CBytesTo { pointer: a, bytes: b }
             | K::ByteAt { s: a, index: b }
             | K::IntDiv { lhs: a, rhs: b, .. }
             | K::Logical { lhs: a, rhs: b, .. }
@@ -10401,6 +10456,9 @@ impl<'a> ReleasePass<'a> {
             {
                 true
             }
+            // Writes into memory C already owns and answers a count. Nothing is built here —
+            // the array it reads was built by whoever built it.
+            K::CBytesTo { .. } => false,
             K::Binary { lhs, rhs, .. } => self.allocates(lhs) || self.allocates(rhs),
             K::Call { name, arguments } => {
                 self.tc.alloc_fns.contains(name)
@@ -10641,6 +10699,7 @@ impl<'a> ReleasePass<'a> {
             | K::WriteFile { path: a, contents: b }
             | K::WriteBytes { path: a, buffer: b }
             | K::CBytesAt { pointer: a, count: b }
+            | K::CBytesTo { pointer: a, bytes: b }
             | K::ByteAt { s: a, index: b }
             | K::IntDiv { lhs: a, rhs: b, .. }
             | K::Logical { lhs: a, rhs: b, .. }

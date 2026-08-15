@@ -1,0 +1,378 @@
+---
+layout: doc
+title: lib/math.bx
+section: reference
+description: "Integer arithmetic that does not lie about its edges."
+---
+
+
+# `lib/math.bx`
+
+Integer arithmetic that does not lie about its edges.
+
+```burxt
+use "lib/math.bx";
+```
+
+This module was blocked from v0.0.81, when `use` arrived, until v0.0.243 — and the blocker was sharper than "awkward": **a module cannot hold a statement.** `main.rs` refuses a top-level statement in any file reached by `use` — *"a module holds declarations, not statements: this would run when `math.bx` was used, and a `use` is not a call"* (v0.0.81, spec/1.0/M6-MODULES.md §1.3). And a top-level `let` is not in scope inside a function anyway, because top-level statements ARE main's body. So `INT_MAX` could not be NAMED in a library under any arrangement: not as a `let` in the module (refused outright), not as a `let` above the functions (invisible to them), and not inside each function (that is a magic number with a comment, which is what this file exists to delete).
+
+`const` landed in v0.0.243 and it is an ITEM, so it is allowed where a statement is not, and it is visible to every body in the program. `INT_MIN` needed the FOLDING too, not just the keyword: `-9223372036854775808` lexes as a negation of `9223372036854775808`, which is `integer literal too large`, so the only spelling of the most negative Int is the subtraction below. A literal-only `const` would have shipped without the one constant this module was waiting for.
+
+`for i in 0..n` (v0.0.245) is why the loops here read as loops instead of as three lines of bookkeeping around one.
+
+---- the one rule that organises this whole file ---------------------------------------
+
+**Burxt's `+ - *` TRAP on overflow.** They do not wrap, they do not saturate, and they do not return a flag — the program stops. That is the right default and this module does not weaken it.
+
+The consequence runs through every function below: **you cannot compute a result and then ask whether it overflowed.** The trap has already happened. So every `checked_`, `saturating_` and `wrapping_` function here tests its OPERANDS first, against `INT_MAX`/`INT_MIN`, and only then operates. Getting that order backwards does not give a wrong answer, which is what makes it dangerous to write: it gives a dead process, and it gives one only on the inputs a test suite is least likely to contain.
+
+The tests themselves live in exactly one place each — `math_add_overflows`, `math_sub_overflows`, `math_mul_overflows` — and `checked_*` and `saturating_*` both call them rather than each carrying its own copy. Three predicates to review instead of nine, and they are `pure`, so a contract clause may use them.
+
+---- four families, and how to choose ---------------------------------------------------
+
+```burxt
+ a + b                        traps. The default, and right when overflow means a bug.
+ math_checked_add(a, b)       Option<Int> — None instead of a result. When input is untrusted.
+ math_saturating_add(a, b)    clamps to INT_MAX / INT_MIN. When a bound is a real answer.
+ math_wrapping_add(a, b)      discards the carry. For checksums, hashes and protocol fields.
+```
+
+**`wrapping_*` is not a second `+`, and tests/pass/bits.bx made that argument first**: the wrap is CONSTRUCTIBLE from the named bit operations, so the language should not grow an operator for it. That argument was about a BUILTIN and it still holds — nothing in the compiler knows these three functions exist. What a library adds is that the construction is written once instead of in every checksum, and bits.bx's objection to the name (*"a reader of `wrapping_add` has to know what the name promises"*) is answered by the body being nine lines of Burxt in a file the reader can open. So the half-adder is REUSED here rather than replaced by arithmetic on `INT_MIN`: `w_add` needs no reasoning about 2^64 at all, and the alternative — `(a + INT_MIN) + (b + INT_MIN)` — is correct but demands that a reviewer re-derive two's complement to see it.
+
+---- what is NOT here, and why ----------------------------------------------------------
+
+**`checked_*` and `pure` — the limit this section used to record is GONE, and the record outlived it.** The text here said no `checked_*` could be `pure`, because `Option.Some(x)` read as a method call on the enum and a method could not be declared `pure`. All three carry `pure` today, in the declarations below, and have for long enough that nobody remembers the version that fixed it. A stale limitation is worse than a stale claim of completeness: nobody re-tests what a comment says does not work, so it stays "impossible" until someone tries it by accident.
+
+**No floats, so no `sqrt`, `log`, `sin` or `exp`.** Burxt has `Int` and `Decimal<N>` and neither is a float, by design (spec/DESIGN.md). `math_isqrt` is the integer square root and it is EXACT; there is no approximate one to reach for by accident.
+
+**No `Decimal` versions of anything, and there is now a module that has them.** `math_min`/`math_max`/`math_clamp` are generic and already take `Decimal<N>` and `String` at every scale — so §D1i's `min` and `max` are these, and `lib/decimal.bx` deliberately does not repeat them. `abs`, `sign` and `is_zero` on a Decimal need the zero of that scale — `$0.00` and `0.0000` are different values — and a generic has no way to name it, so those are per-scale in **`lib/decimal.bx`**, along with `money_split` and the rounding.
+
+**No `divmod`.** It needs a two-value return, which is D2c behind A8.
+
+## What is in it
+{: #what-is-in-it}
+
+| Name | Kind | What it answers |
+|---|---|---|
+| [`math_min`](#math-min) | function | `T: Ordered` rather than `Int`, and this was CHECKED before it was promised — the two-argument generic compiles, runs in |
+| [`math_max`](#math-max) | function | — |
+| [`math_clamp`](#math-clamp) | function | Force a value into a range. `requires low <= high` is not defensive: an inverted range has no value inside it, so every  |
+| [`math_abs`](#math-abs) | function | The distance from zero. **`requires x > INT_MIN`**, because `abs(INT_MIN)` is 2^63 and there is no Int that holds it — t |
+| [`math_sign`](#math-sign) | function | -1, 0 or 1. No precondition and none needed: `math_sign(INT_MIN)` is -1, because nothing is negated. |
+| [`math_add_overflows`](#math-add-overflows) | function | `a + b` would leave the Int range. |
+| [`math_sub_overflows`](#math-sub-overflows) | function | `a - b` would leave the Int range. Note the asymmetry: `b < 0` is the case that overflows UPWARD, and it is the case tha |
+| [`math_mul_overflows`](#math-mul-overflows) | function | `a * b` would leave the Int range. |
+| [`math_checked_add`](#math-checked-add) | function | `Option<Int>`, not a sentinel. -1 and 0 are both valid sums, so a caller who forgets to check a sentinel gets a number r |
+| [`math_checked_sub`](#math-checked-sub) | function | — |
+| [`math_checked_mul`](#math-checked-mul) | function | — |
+| [`math_saturating_add`](#math-saturating-add) | function | Overflowing an addition means `b` pushed past a bound: positive `b` past INT_MAX, negative past INT_MIN. `b == 0` never  |
+| [`math_saturating_sub`](#math-saturating-sub) | function | Reversed from addition: subtracting a NEGATIVE is what runs up against INT_MAX. |
+| [`math_saturating_mul`](#math-saturating-mul) | function | The end is the SIGN OF THE PRODUCT, and that is available from the two operands without multiplying them: `math_sign(a)  |
+| [`math_wrapping_add`](#math-wrapping-add) | function | Addition that throws away the carry out of the top. The half-adder loop, taken from tests/pass/bits.bx unchanged: the su |
+| [`math_wrapping_neg`](#math-wrapping-neg) | function | Two's complement negation: flip every bit, add one. Wrapping, because `math_wrapping_neg(INT_MIN)` is `INT_MIN` — the as |
+| [`math_wrapping_sub`](#math-wrapping-sub) | function | Subtraction is addition of the negation, and both halves already wrap — so this needs no case for `b == INT_MIN`, which  |
+| [`math_wrapping_mul`](#math-wrapping-mul) | function | Shift-and-add, the schoolbook algorithm in base 2. For each set bit of `b`, add `a` shifted up by that bit's position; ` |
+| [`math_pow`](#math-pow) | function | `base` to the power `exponent`. **Traps on overflow**, because it is built from `*` and `*` traps — deliberately not wea |
+| [`math_isqrt`](#math-isqrt) | function | The integer square root: the largest `r` with `r * r <= n`. EXACT, and the only square root here — `math_isqrt(15)` is 3 |
+| [`math_gcd`](#math-gcd) | function | The greatest common divisor, always non-negative. Euclid's algorithm, which needs no explanation and no table. |
+| [`math_lcm`](#math-lcm) | function | The least common multiple, always non-negative. **Traps on overflow**, from the `*`. |
+
+## Functions
+{: #functions}
+
+### `math_min`
+{: #math-min}
+
+```burxt
+pure function math_min<T: Ordered>(a: T, b: T) -> T
+```
+
+`T: Ordered` rather than `Int`, and this was CHECKED before it was promised — the two-argument generic compiles, runs in both compilers, and stays `pure`. So `math_min($19.99, $4.50)` and `math_min("apple", "Zebra")` work, which for a language built around money is most of the value.
+
+`lib/array.bx` already has `array_min`/`array_max` over an array, with a `requires len(xs) > 0` because "the largest of nothing" is a question that should not have been asked. These two need no precondition: the smaller of two values always exists.
+
+String comparison is BYTE order, the same as `array_sort` — "Zebra" before "apple", because `Z` is 90 and `a` is 97. Not alphabetical in any language, and identical on every machine.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L106)
+
+### `math_max`
+{: #math-max}
+
+```burxt
+pure function math_max<T: Ordered>(a: T, b: T) -> T
+```
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L113)
+
+### `math_clamp`
+{: #math-clamp}
+
+```burxt
+pure function math_clamp<T: Ordered>(x: T, low: T, high: T) -> T
+```
+
+Force a value into a range. `requires low <= high` is not defensive: an inverted range has no value inside it, so every possible answer is wrong, and returning one anyway is how a clamp silently reports a bound the caller never meant. A contract on a generic function, which works.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L123)
+
+### `math_abs`
+{: #math-abs}
+
+```burxt
+pure function math_abs(x: Int) -> Int
+```
+
+The distance from zero. **`requires x > INT_MIN`**, because `abs(INT_MIN)` is 2^63 and there is no Int that holds it — the two's complement range is asymmetric, one more value below zero than above.
+
+A precondition rather than an `Option<Int>`, and the reason is the one `array_min` gives: this is not a question with a wrong answer, it is a question with no answer. Every other language answers it wrongly — C's `abs(INT_MIN)` is undefined behaviour and Rust's `i32::abs` panics in debug and wraps in release, both of which are `INT_MIN` coming back out of a function whose whole promise is a non-negative result. Here the caller states the promise or the program stops at the call.
+
+For untrusted input there is no separate `checked_abs`: `math_checked_sub(0, x)` is the checked negation and `math_saturating_sub(0, x)` the saturating one, both already here.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L148)
+
+### `math_sign`
+{: #math-sign}
+
+```burxt
+pure function math_sign(x: Int) -> Int
+```
+
+-1, 0 or 1. No precondition and none needed: `math_sign(INT_MIN)` is -1, because nothing is negated.
+
+`Int` rather than generic, deliberately. A generic `sign` needs the zero of `T` to compare against, and there is no `Default` in this language on purpose — `0`, `$0.00` and `0.0000` are three different values and a type parameter cannot name which one it means.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L162)
+
+### `math_add_overflows`
+{: #math-add-overflows}
+
+```burxt
+pure function math_add_overflows(a: Int, b: Int) -> Bool
+```
+
+`a + b` would leave the Int range.
+
+Split by the sign of `b` because the subtraction that expresses the test must not itself overflow: with `b > 0`, `INT_MAX - b` is safe; with `b < 0`, `INT_MIN - b` is safe. Writing it as one comparison against `INT_MAX - b` would trap on the very inputs it is asked about.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L185)
+
+### `math_sub_overflows`
+{: #math-sub-overflows}
+
+```burxt
+pure function math_sub_overflows(a: Int, b: Int) -> Bool
+```
+
+`a - b` would leave the Int range. Note the asymmetry: `b < 0` is the case that overflows UPWARD, and it is the case that includes `b == INT_MIN`, where `-b` does not exist — which is why this is written with `INT_MAX + b` rather than by negating `b` and reusing the addition test.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L198)
+
+### `math_mul_overflows`
+{: #math-mul-overflows}
+
+```burxt
+pure function math_mul_overflows(a: Int, b: Int) -> Bool
+```
+
+`a * b` would leave the Int range.
+
+By DIVISION, four ways, one per sign pair — because there is no multiplication that can be performed first to look at. `divide_toward_zero` and not `divide_floor`: the test is about magnitudes, and truncation is what keeps `a > INT_MAX / b` from being off by one on a negative operand.
+
+Neither division can trap here. `INT_MIN / -1` is the one division that overflows, and it cannot be reached: each `divide_toward_zero(INT_MIN, ...)` below sits in a branch where its divisor is strictly positive. The `a == 0 || b == 0` line is first because a product with a zero is always 0, and because dividing by `b` needs `b` to be non-zero.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L218)
+
+### `math_checked_add`
+{: #math-checked-add}
+
+```burxt
+pure function math_checked_add(a: Int, b: Int) -> Option<Int>
+```
+
+`Option<Int>`, not a sentinel. -1 and 0 are both valid sums, so a caller who forgets to check a sentinel gets a number rather than a mistake; `None` cannot be added to anything by accident.
+
+A concrete `Option<Int>` in the return position, which needed no generic machinery — `Option.None` resolving its type argument from the enclosing signature is v0.0.241's fix, and here the argument is spelled out anyway.
+
+**The test comes before the operation, and this is the whole point of the family.** If these were written as `let sum: Int = a + b; if overflowed { None }`, the `+` would trap and the `if` would never be reached — a dead process instead of a `None`, on exactly the inputs the function was called to protect against.
+
+**`pure` since v0.0.248, and this comment is why the line is worth reading twice.** It said: *"Not `pure`, and it should be: see the header. `Option.Some` is a method call to the `pure` checker."* That was TRUE when it was written and FALSE by the time this file landed — roadmap A4 shipped while this module was being written, and it fixed exactly that: a variant constructor was refused for being SHAPED like a method call. **Rot arriving in real time, inside one afternoon.**
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L255)
+
+### `math_checked_sub`
+{: #math-checked-sub}
+
+```burxt
+pure function math_checked_sub(a: Int, b: Int) -> Option<Int>
+```
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L262)
+
+### `math_checked_mul`
+{: #math-checked-mul}
+
+```burxt
+pure function math_checked_mul(a: Int, b: Int) -> Option<Int>
+```
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L269)
+
+### `math_saturating_add`
+{: #math-saturating-add}
+
+```burxt
+pure function math_saturating_add(a: Int, b: Int) -> Int
+```
+
+Overflowing an addition means `b` pushed past a bound: positive `b` past INT_MAX, negative past INT_MIN. `b == 0` never overflows, so the sign test is total here.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L287)
+
+### `math_saturating_sub`
+{: #math-saturating-sub}
+
+```burxt
+pure function math_saturating_sub(a: Int, b: Int) -> Int
+```
+
+Reversed from addition: subtracting a NEGATIVE is what runs up against INT_MAX.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L298)
+
+### `math_saturating_mul`
+{: #math-saturating-mul}
+
+```burxt
+pure function math_saturating_mul(a: Int, b: Int) -> Int
+```
+
+The end is the SIGN OF THE PRODUCT, and that is available from the two operands without multiplying them: `math_sign(a) * math_sign(b)`, a product of two values in -1..1 that cannot itself overflow. Neither operand is zero when the multiplication overflows, so the sign is never 0 in that branch.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L311)
+
+### `math_wrapping_add`
+{: #math-wrapping-add}
+
+```burxt
+pure function math_wrapping_add(a: Int, b: Int) -> Int
+```
+
+Addition that throws away the carry out of the top. The half-adder loop, taken from tests/pass/bits.bx unchanged: the sum without carry is `xor`, the carry is `and` shifted up, repeat until no carry is left. `shift_left` is the one operation in the language that discards bits past the top on purpose, and that discard IS the wrap — so nothing here needs to know what 2^64 is.
+
+Each pass moves the carry at least one bit left, so this ends in at most 64. **Measured over 20,000 random pairs: mean 6.3 passes, worst case 64** — and the worst case is not exotic, it is `math_wrapping_add(INT_MAX, 1)`, where the carry walks the whole register. An earlier version of this comment said "two or three in practice", which was a guess and was wrong by a factor of two.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L335)
+
+### `math_wrapping_neg`
+{: #math-wrapping-neg}
+
+```burxt
+pure function math_wrapping_neg(x: Int) -> Int
+```
+
+Two's complement negation: flip every bit, add one. Wrapping, because `math_wrapping_neg(INT_MIN)` is `INT_MIN` — the asymmetric range again, and here it is the correct answer rather than a precondition, since wrapping is what the caller asked for.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L350)
+
+### `math_wrapping_sub`
+{: #math-wrapping-sub}
+
+```burxt
+pure function math_wrapping_sub(a: Int, b: Int) -> Int
+```
+
+Subtraction is addition of the negation, and both halves already wrap — so this needs no case for `b == INT_MIN`, which is where a hand-written version goes wrong.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L356)
+
+### `math_wrapping_mul`
+{: #math-wrapping-mul}
+
+```burxt
+pure function math_wrapping_mul(a: Int, b: Int) -> Int
+```
+
+Shift-and-add, the schoolbook algorithm in base 2. For each set bit of `b`, add `a` shifted up by that bit's position; `shift_left` drops what leaves the top and `math_wrapping_add` drops the carry, so the whole thing is modular without a single subtraction of 2^64.
+
+`shift_right_zeros` and not `shift_right_sign` for walking `b`: the sign-copying shift would fill with ones on a negative `b` and never reach zero, so the loop would not end. Zeros make `b` reach 0 in at most 64 passes for any input, which is what terminates this.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L367)
+
+### `math_pow`
+{: #math-pow}
+
+```burxt
+pure function math_pow(base: Int, exponent: Int) -> Int
+```
+
+`base` to the power `exponent`. **Traps on overflow**, because it is built from `*` and `*` traps — deliberately not weakened. A power that silently wrapped would be the exact wrong answer this language exists to refuse, and `pow` is where a size calculation lives.
+
+`math_pow(x, 0)` is **1 for every x, including 0**. That is the empty product, it is what makes `pow(x, n) * pow(x, m) == pow(x, n + m)` hold at zero, and it is what every language answers. The alternative — refusing `0^0` as indeterminate — is a limit question about real numbers, and this function is not about real numbers.
+
+**A negative exponent is a `requires`, not an answer.** `pow(2, -1)` is 1/2, which is not an Int; the candidates were 0 (rounds a real answer away and hides the mistake) and a trap. A precondition is the third option and the right one: the caller who wrote a negative exponent meant a different function, and the contract says so at the call rather than in a returned zero.
+
+**The three degenerate bases are handled before the loop, and that is not tidying — without them this function does not terminate in useful time.** `math_pow(1, 1000000000)` has the answer 1 and cannot overflow, so nothing stops the loop early: it runs a billion multiplications by one. The first draft of this file had exactly that hole, under a comment claiming the loop was "bounded at 62 passes by the trap itself" — true for `|base| >= 2`, false for the three values where the trap never comes. Found by asking what bounded the loop instead of assuming the trap did.
+
+With those three out of the way the loop IS bounded at 62 passes, because `|base| >= 2` and the 63rd doubling leaves the range. So squaring is deliberately not done: it would turn 62 multiplications into 6, on a function whose entire range is 62, and the bit-walking costs a reader more than it saves.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L407)
+
+### `math_isqrt`
+{: #math-isqrt}
+
+```burxt
+pure function math_isqrt(n: Int) -> Int
+```
+
+The integer square root: the largest `r` with `r * r <= n`. EXACT, and the only square root here — `math_isqrt(15)` is 3 and `math_isqrt(16)` is 4, and there is no float in the language to round.
+
+Newton's method rather than binary search — and the first version of this comment justified that with "Newton converges in about log(log(n)) passes, six or so", which is the folk claim about Newton and is **wrong for this code.** Counted rather than argued, over 20,000 random values plus the endpoints:
+
+```burxt
+ this loop, guess = n           worst 36 divisions, mean 34.7
+ binary search over 1..3037000499   worst 32 divisions, mean 31.6
+ Newton seeded near the root    worst  6 divisions, mean  5.2
+```
+
+Quadratic convergence only starts once the guess is near the root; from `guess = n` the first thirty passes are just halving, so this is **slightly worse than the binary search it was chosen over**. Kept anyway, and the reason is what array_sort gives for insertion sort rather than a performance claim that does not hold: four lines, no magic upper bound to name and keep correct, and 36 divisions is not a cost anything here notices. **The upgrade path is measured and stated: seed the guess from the bit length and it is 6 passes.** If a caller ever needs that, it is a change with a number attached rather than a rewrite justified by a story about Newton.
+
+Both approaches must avoid ever forming `r * r`, which overflows for `r` above 3037000499, so both compare by DIVISION.
+
+`n < 4` is handled first and that is not tidying — Newton starting from `guess = n` does not descend for `n == 2` (the first step lands back on 2) and would answer 2. Measured, not reasoned: the version that returned `n` for `n < 2` passed every square and every large value and was wrong on exactly one input.
+
+No division here can overflow. The first step is `n/2 + 1`, and `guess` descends monotonically to the root from there, so `n/guess + guess` stays bounded — verified across the whole range including `math_isqrt(INT_MAX) == 3037000499` rather than argued.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L463)
+
+### `math_gcd`
+{: #math-gcd}
+
+```burxt
+pure function math_gcd(a: Int, b: Int) -> Int
+```
+
+The greatest common divisor, always non-negative. Euclid's algorithm, which needs no explanation and no table.
+
+`math_gcd(0, n)` is `n`, and that is the definition rather than a special case falling out: every integer divides 0, so the greatest divisor shared with 0 is `n` itself. `math_gcd(0, 0)` is 0 — there is no greatest common divisor of nothing and nothing, and 0 is the identity that makes `gcd` fold over a list correctly.
+
+`requires` on both arguments because this starts by taking magnitudes, and `math_abs(INT_MIN)` does not exist. Naming the precondition here rather than letting `math_abs`'s own contract fail one frame down: a failure should name the function the caller called.
+
+`remainder` and not `divide_floor`: Burxt's `remainder` takes the sign of the DIVIDEND (`remainder(-7, 3)` is -1), and Euclid does not care about the sign of the remainder because the magnitudes still descend. Both arguments are already non-negative by the time the loop runs anyway.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L500)
+
+### `math_lcm`
+{: #math-lcm}
+
+```burxt
+pure function math_lcm(a: Int, b: Int) -> Int
+```
+
+The least common multiple, always non-negative. **Traps on overflow**, from the `*`.
+
+Divided BEFORE multiplying — `(x / g) * y` and not `(x * y) / g` — and that is the only reason this is usable: `lcm(3037000499, 3037000498)` has a product that does not fit in an Int even though the answer does. `g` divides `x` exactly, so the division loses nothing.
+
+`math_lcm(0, n)` is 0. Guarded explicitly, because `g` is 0 exactly when both arguments are 0 and dividing by it would trap — but the guard is written on the ARGUMENTS rather than on `g`, because "the least common multiple of 0 and anything is 0" is the mathematical fact, and testing `g == 0` would express it as an accident of the implementation.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L524)
+

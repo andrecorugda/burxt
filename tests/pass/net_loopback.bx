@@ -1,0 +1,94 @@
+// A Burxt server and a Burxt client, in one program, over a real TCP socket.
+//
+// This is the fixture for `lib/net.bx`, and it is a `tests/pass` program rather than a runner
+// invariant because it needs nothing outside itself: `os_fork` makes the client, the parent binds
+// and accepts, and the two talk over the loopback interface. No `curl`, no port scanner, no
+// sleeping and hoping.
+//
+// **Only the parent prints, and that is what makes this fixture deterministic rather than
+// flaky.** The first version had the child print what it received; the harness compares stdout
+// byte for byte, and which of two processes reaches its `print` first is the scheduler's business.
+// It passed. It would have passed most of the time. So the child says nothing and instead sends
+// back what it saw, and the parent prints that — which tests the round trip more thoroughly than
+// the flaky version did, because now the data has to survive going both ways.
+//
+// **The kernel picks the port.** The first version bound a fixed 18099 and said in this comment
+// that a machine already using it would fail for reasons unrelated to the compiler — then judged
+// `getsockname` "a bigger fixture than the thing it is testing" and kept the fixed port anyway.
+// It failed within the hour: this suite runs its fixtures twice, once through each compiler, and
+// the two runs collided on 18099 with each other. The alternative was about twenty lines, and it
+// is `net_listen_any_port` / `net_port_of` in `lib/net.bx`. **A race a comment predicts is not
+// documented, it is scheduled.**
+use "../../lib/net.bx";
+use "../../lib/os.bx";
+
+function talk() -> Int touches network, commands, input, clock {
+    match net_listen_any_port(4) {
+        None => {
+            print("could not listen");
+            return 1;
+        }
+        Some(server) => {
+            // `match` is a statement here, not an expression — a recorded decision, alongside
+            // no `if` as an expression and no ternary.
+            let mutable port: Int = 0;
+            match net_port_of(server) {
+                None => { print("no port"); }
+                Some(p) => { port = p; }
+            }
+            if os_fork() == 0 {
+                // The child is the client, and it prints nothing at all.
+                //
+                // A short wait first: `accept` has to be running before `connect` arrives. The
+                // listen backlog covers that race on Linux — a connection to a bound, listening
+                // socket queues whether or not anyone has called `accept` — but the parent has
+                // work to do between `net_listen` and `net_accept`, and 50 ms costs nothing.
+                let waited: Bool = os_sleep(50);
+                match net_connect_ipv4(127, 0, 0, 1, port) {
+                    None => { return 0; }
+                    Some(link) => {
+                        match net_write(link, "ping") {
+                            None => { return 0; }
+                            Some(wrote) => {
+                                match net_read(link, 64) {
+                                    None => { return 0; }
+                                    Some(answer) => {
+                                        // Send back what arrived, so the PARENT can report it.
+                                        let told: Option<Int> = net_write(link, "saw:" + answer);
+                                    }
+                                }
+                            }
+                        }
+                        let shut: Bool = net_close(link);
+                        return 0;
+                    }
+                }
+            }
+
+            match net_accept(server) {
+                None => { print("accept failed"); }
+                Some(client) => {
+                    match net_read(client, 64) {
+                        None => { print("read failed"); }
+                        Some(request) => {
+                            print("server read: {request}");
+                            match net_write(client, "pong") {
+                                None => { print("write failed"); }
+                                Some(n) => { print("server wrote {n} bytes"); }
+                            }
+                            match net_read(client, 64) {
+                                None => { print("no reply"); }
+                                Some(reply) => { print("client reported: {reply}"); }
+                            }
+                        }
+                    }
+                    let shut: Bool = net_close(client);
+                }
+            }
+            let reaped: Int = os_wait_for_child();
+            let done: Bool = net_close(server);
+            return 0;
+        }
+    }
+}
+let r: Int = talk();

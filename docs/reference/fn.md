@@ -1,0 +1,143 @@
+---
+layout: doc
+title: lib/fn.bx
+section: reference
+description: "The four interfaces that stand in for a function value."
+---
+
+
+# `lib/fn.bx`
+
+The four interfaces that stand in for a function value.
+
+```burxt
+use "lib/fn.bx";
+```
+
+Burxt has no closures, and that is a DECISION rather than a gap: roadmap A10 was closed without being built, because `dynamic Trait` was already a function value in all but name and A9 (generic interfaces) made it a generic one. A closure needs an owner for its captured state, which is a memory question in a language whose whole memory model is regions; an interface object needs none, because the state it carries is a value you already named and can see.
+
+So `map` and `filter` are not "closures, worse". They are the same capability with the capture written out, and this file is the vocabulary they share.
+
+---- why one file, and why it is not negotiable -----------------------------------------
+
+**An interface may be declared exactly once in a program.** Two files that each declare `Predicate<T>` cannot both be used:
+
+```burxt
+ error: interface `Predicate` is defined twice
+```
+
+So if `lib/array.bx` declared its own `Predicate` and `lib/string.bx` declared another, a program that used both would not compile — and a `Predicate` written for one could not be handed to the other even if it did. A shared home is FORCED here, not chosen for tidiness, and that is worth stating because a reader would otherwise reasonably ask why these four lines are not simply at the top of `array.bx`. (`use` is idempotent, so reaching this file through both `array.bx` and `map.bx` is fine — measured, not assumed.)
+
+---- the four, and why four -------------------------------------------------------------
+
+They are split by ROLE, not by arity. `Folder` and `Comparer` both take two arguments and one could physically serve for the other, but a fold's two arguments are an accumulator and an element — different types, different meanings — while a comparison's two are peers. Collapsing them would save a declaration and cost every reader the question of which argument is which.
+
+**The method names are all different on purpose**, and this is the part that earns its keep: one class can implement several of these at once and be handed to `array_filter`, `array_map` and `array_sort_by` in turn. A single `call` on all four would make that a name clash and force a class per operation. Measured working: `Rules` implementing `Predicate<Int>`, `Mapper<Int, Int>` and `Comparer<Int>` simultaneously, all three reached through `dynamic`.
+
+---- how a caller writes one ------------------------------------------------------------
+
+Three lines, and then two at the call site:
+
+```burxt
+ class Doubler { }
+ implement Mapper<Int, Int> for Doubler {
+     function (self) apply(x: Int) -> Int { return x * 2; }
+ }
+```
+
+```burxt
+ let d: Doubler = Doubler { };                       // the value needs a name of its own
+ let f: dynamic Mapper<Int, Int> = d;                // then it is coerced
+ let doubled: [Int] = array_map(numbers, f);
+```
+
+**Those two `let`s are one line more than they look like they should be, and the reason is a rule rather than an oversight**: an interface object borrows the storage of the value it refers to, so `let f: dynamic Mapper<Int, Int> = Doubler { };` is refused — an expression has no storage to borrow. That refusal is what makes `dynamic` cost nothing to pass and is the same rule every `dynamic` has followed since v0.0.14. It is the one place this design is measurably more ceremonious than a closure, and it is written down here rather than discovered per call site.
+
+**State is a field, and that is the honest version of a capture.** A closure over a threshold and this are the same program, except that here the captured value has a name and a type:
+
+```burxt
+ class Above { limit: Int }
+ implement Predicate<Int> for Above {
+     function (self) test(x: Int) -> Bool { return x > self.limit; }
+ }
+```
+
+---- the instantiation is annotated, never inferred -------------------------------------
+
+`array_map(xs, Label { })` does not compile even setting the storage rule aside: the compiler will not search the implementations to discover that `Label` is a `Mapper<Int, String>`. That is deliberate — a class may implement one interface at several instantiations, and guessing which is meant is exactly the kind of question this language answers by making you write it down.
+
+---- what these are NOT, and this one is a live compiler defect --------------------------
+
+**Nothing in this file may be called from a `pure` function, and the compiler does not stop you.** Measured: a `pure` function that calls `f.apply(x)` through a `dynamic Mapper` passes `burxt check` in BOTH compilers, and the implementation it reaches can `print`, write a file or do anything else — verified by writing one that prints and watching it print from inside a `pure` caller.
+
+The `pure` checker refuses a direct method call, and a call through an interface object is not recognised as one. So `pure` is not sound across a `dynamic`: purity here would have to be a property of the IMPLEMENTOR, and no signature in this file can promise it.
+
+That is why **no higher-order function in `lib/array.bx` is marked `pure`**, even the ones that obviously do not touch anything themselves — `array_any` reads and answers a Bool and is as pure as `array_contains` is, but its answer is only as pure as the predicate it was handed. Marking it would be claiming something this language cannot currently check, which is the one thing it is not allowed to do. The honest fix is a rule that a `pure` function may only call a `dynamic` whose interface is itself declared pure, and that is a compiler change, not a library one.
+
+## What is in it
+{: #what-is-in-it}
+
+| Name | Kind | What it answers |
+|---|---|---|
+| [`Mapper`](#mapper) | interface | Turn a `T` into a `U`. `Mapper<T, T>` is the same-type case and needs no separate interface. |
+| [`Predicate`](#predicate) | interface | Ask a yes-or-no question about a `T`. |
+| [`Folder`](#folder) | interface | One step of a fold: the accumulator so far and the next element, answering the new accumulator. |
+| [`Comparer`](#comparer) | interface | Does `a` sort strictly before `b`? |
+
+## Types
+{: #types}
+
+### `Mapper`
+{: #mapper}
+
+```burxt
+interface Mapper<T, U> { function apply(self, x: T) -> U }
+```
+
+Turn a `T` into a `U`. `Mapper<T, T>` is the same-type case and needs no separate interface.
+
+Two type parameters rather than one, because `[Int] -> [String]` and `[String] -> [Int]` should be one `array_map` with two instantiations rather than two functions with different names.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/fn.bx#L100)
+
+### `Predicate`
+{: #predicate}
+
+```burxt
+interface Predicate<T> { function test(self, x: T) -> Bool }
+```
+
+Ask a yes-or-no question about a `T`.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/fn.bx#L103)
+
+### `Folder`
+{: #folder}
+
+```burxt
+interface Folder<T, A> { function step(self, acc: A, x: T) -> A }
+```
+
+One step of a fold: the accumulator so far and the next element, answering the new accumulator.
+
+The accumulator is a SEPARATE parameter `A`, which is what lets a fold change the type — summing `[String]` into an `Int`, or collecting `[Int]` into a `String`. A fold restricted to `A = T` would be `array_sum_int` with extra steps.
+
+Argument order is `(acc, x)`, matching every fold in every language that has one. It is not an arbitrary choice to get wrong: it is the choice that makes reading someone else's `step` free.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/fn.bx#L113)
+
+### `Comparer`
+{: #comparer}
+
+```burxt
+interface Comparer<T> { function before(self, a: T, b: T) -> Bool }
+```
+
+Does `a` sort strictly before `b`?
+
+**A Bool and not a three-way Int**, and the reason is which mistakes each shape allows. A 3-way comparator can be written with the sign inverted, or can return an inconsistent 0, and both produce a sort that is silently wrong rather than one that fails. `before` has one meaning and no sign to get backwards.
+
+It must be a STRICT order: `before(a, a)` is false, and for distinct elements that compare equal `before(a, b)` and `before(b, a)` are BOTH false. That is precisely the case `array_sort_by`'s stability is defined on, and `array_sort_by` guarantees the answer rather than leaving it to how the comparator was written. See the algorithm note there.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/fn.bx#L126)
+

@@ -1,0 +1,8 @@
+// A builtin is a name the language owns. `c_bytes_to` was in `is_reserved_name` from the version
+// it existed, unlike the ten builtins B6 found missing from it — being in that list is what the
+// editor grammar and the generated reference are scraped from, so a builtin that is not there is
+// a builtin no tool knows about.
+function c_bytes_to(p: Int, bytes: [Int]) -> Int {
+    return 0;
+}
+print("unreachable");

@@ -16,7 +16,9 @@ use "lib/os.bx";
 
 Arguments, the environment, the clock, the process itself, and running a command.
 
-This header used to end *"anything returning a pointer is absent, and the guide's chapter on the C boundary says why"*, and it had been false since v0.0.196: `getenv` returns a `CPointer` four lines below, and `getcwd` does too. **What is still absent is a struct behind a pointer** — `uname(2)` fills one, `nanosleep` takes one, `clock_gettime` fills one — because `c_bytes_at` reads C's memory and nothing in Burxt writes it. That is why `os_platform` shells out to `uname` and `os_sleep` calls `usleep`, and each of those says so where it is.
+**This header has now been wrong about the same thing twice, which is worth more than either correction.** It first ended *"anything returning a pointer is absent"*, false from v0.0.196 when `getenv` and `getcwd` began returning `CPointer`. It was rewritten to say *"what is still absent is a struct behind a pointer — `uname(2)` fills one, `nanosleep` takes one — because `c_bytes_at` reads C's memory and nothing in Burxt writes it."* **That is false too, since `c_bytes_to`.** Something in Burxt writes C's memory now, and `lib/net.bx` builds a `sockaddr_in` with it.
+
+So `os_platform` shelling out to `uname` and `os_sleep` calling `usleep` are no longer forced by the language. They are merely what is written, and each of those two is now a small job rather than a wall. A stale limitation is worse than a stale DONE, because nobody re-tests the thing that "doesn't work" — this file has proved that twice and gets one more sentence for it: **the reason a workaround exists stops being true before the workaround does.**
 
 ## What is in it
 {: #what-is-in-it}
@@ -44,6 +46,10 @@ This header used to end *"anything returning a pointer is absent, and the guide'
 | [`os_sleep`](#os-sleep) | function | Wait, and let the rest of the machine get on with it. Roadmap §D1r. |
 | [`os_trim_ascii`](#os-trim-ascii) | function | Spaces, tabs, carriage returns and newlines off both ends. Local rather than `lib/string.bx`'s `string_trim`, for the re |
 | [`os_is_space`](#os-is-space) | function | — |
+| [`os_fork`](#os-fork) | function | Splits this process in two. Answers **0 in the child** and the child's pid in the parent. |
+| [`os_wait_for_child`](#os-wait-for-child) | function | Waits for any child to finish and answers its pid, or -1 when there are none left. |
+| [`os_flush`](#os-flush) | function | Empties every output buffer. Answers whether it worked. |
+| [`os_env_missing`](#os-env-missing) | function | A null `CPointer`, for the C calls that want one. |
 
 ## Types
 {: #types}
@@ -59,7 +65,7 @@ Everything one command left behind: what it printed, what it complained about, a
 
 Three fields rather than three functions, because running the command three times to ask three questions would run it three times — and a command with an effect is not a question you may ask twice.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L111)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L127)
 
 ## Functions
 {: #functions}
@@ -73,7 +79,7 @@ function os_arg_count() -> Int touches input
 
 The arguments the program was started with. Index 0 is the program's own path, as it is everywhere else.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L54)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L70)
 
 ### `os_arg`
 {: #os-arg}
@@ -82,7 +88,7 @@ The arguments the program was started with. Index 0 is the program's own path, a
 function os_arg(index: Int) -> String touches input
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L58)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L74)
 
 ### `os_args`
 {: #os-args}
@@ -93,7 +99,7 @@ function os_args() -> [String] touches input
 
 Every argument after the program's own name.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L63)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L79)
 
 ### `os_now`
 {: #os-now}
@@ -104,7 +110,7 @@ function os_now() -> Int touches clock
 
 Seconds since 1970. Whole seconds, because that is what `time` answers — a finer clock needs `clock_gettime`, which fills a class through a pointer, and that is exactly what Burxt will not let C do yet.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L76)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L92)
 
 ### `os_run`
 {: #os-run}
@@ -115,7 +121,7 @@ function os_run(command: String) -> Int touches commands
 
 Run a command through the shell and answer its exit code.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L81)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L97)
 
 ### `os_exit_code`
 {: #os-exit-code}
@@ -130,7 +136,7 @@ A wait status turned into the number a shell would report.
 
 `-1` when the command did not run at all, which is what `system` answers when the fork failed. It is the one value no exited process can produce.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L95)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L111)
 
 ### `os_capture_status`
 {: #os-capture-status}
@@ -149,7 +155,7 @@ A command that could not be run at all — no private scratch directory — answ
 
 **The command is wrapped in `( ... )`, and `os_capture` had been silently wrong for want of it.** A redirection binds to ONE command, so `sh -c "echo a; echo b > f"` writes only `b` to the file and prints `a` to the terminal the program is running in. Every captured command containing a `;`, a `&&` or a `||` — which is most of the interesting ones — had all but its last piece escape the capture and land on the caller's own output. Found by giving this function a two-statement command in its first test, which is the case nobody had written.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L134)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L150)
 
 ### `os_capture`
 {: #os-capture}
@@ -166,7 +172,7 @@ Kept beside `os_capture_status` rather than replaced by it: interleaving is a re
 
 The `( ... )` is not decoration — see `os_capture_status` above for the capture this function was losing without it.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L171)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L187)
 
 ### `os_read_byte`
 {: #os-read-byte}
@@ -177,7 +183,7 @@ function os_read_byte() -> Int touches input
 
 One byte of standard input, or -1 at the end. The whole of the input, a byte at a time, is what a program can do today — `fgets` needs a buffer it does not own.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L187)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L203)
 
 ### `os_read_line`
 {: #os-read-line}
@@ -194,7 +200,7 @@ A bare `\r` before the newline is dropped, so a CRLF client and an LF client are
 
 `None` at end of input rather than an empty String, because an empty LINE is a real thing a client can send and the two must be distinguishable. That is the same reason `string_parse_int` exists beside `string_to_int`.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L204)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L220)
 
 ### `os_read_all`
 {: #os-read-all}
@@ -203,7 +209,7 @@ A bare `\r` before the newline is dropped, so a CRLF client and an LF client are
 function os_read_all() -> String touches input
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L234)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L250)
 
 ### `os_env`
 {: #os-env}
@@ -218,7 +224,7 @@ An environment variable, or a stated absence.
 
 `touches input` because the value came from outside the program. Whether reading the environment deserves an effect of its own is an open question — see spec/FAR-HORIZON-ROADMAP.md M2 — but `input` is honest today: it is a value the process was started with.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L262)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L278)
 
 ### `os_env_or`
 {: #os-env-or}
@@ -229,7 +235,7 @@ function os_env_or(name: String, fallback: String) -> String touches input
 
 The same question with a stated fallback, for the common case where a missing setting has a sensible default. Separate from `os_env` rather than a parameter with a default, because Burxt has no default arguments — and because the two really are different questions.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L274)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L290)
 
 ### `os_set_env`
 {: #os-set-env}
@@ -246,7 +252,7 @@ Set an environment variable for this process and every child it starts afterward
 
 `touches input` and not an effect of its own. The environment is process state that Burxt has no effect for, and `input` is the one that already names it — `os_env` reads through the same effect, and reading and writing the same place should not be filed apart. Whether process state deserves its own effect is spec/FAR-HORIZON-ROADMAP.md M2, the same open question `os_env` points at.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L294)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L310)
 
 ### `os_pid`
 {: #os-pid}
@@ -259,7 +265,7 @@ The process's own id.
 
 Small, and reused by the kernel once the process is gone, so it is a fine way to keep two concurrent programs from choosing the same scratch name and **not** a secret. `lib/files.bx` puts it in a temp directory's name for the first reason and relies on `mkdir` for the second — see §B3 there, which is the row this function closed.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L304)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L320)
 
 ### `os_cwd`
 {: #os-cwd}
@@ -274,7 +280,7 @@ The directory the process is running in, or a stated absence.
 
 The buffer is this function's: `getcwd` fills memory the caller owns, so nothing here has to free something C allocated, and `c_string_at` copies the bytes out before the `free`.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L316)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L332)
 
 ### `os_platform`
 {: #os-platform}
@@ -291,7 +297,7 @@ Two decisions worth stating. `darwin` comes back as `"macos"`, because that is t
 
 Empty when `uname` is not on the PATH, which is a stated failure rather than a guess.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L344)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L360)
 
 ### `os_sleep`
 {: #os-sleep}
@@ -310,7 +316,7 @@ Every retry loop, every poll of a file that another process is writing, and ever
 
 **A signal cuts the wait short and answers `false`**, having slept less than asked. It is not retried, because "sleep at least this long" and "return when something happened" are different intents and only the caller knows which one it had.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L378)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L394)
 
 ### `os_trim_ascii`
 {: #os-trim-ascii}
@@ -321,7 +327,7 @@ function os_trim_ascii(text: String) -> String
 
 Spaces, tabs, carriage returns and newlines off both ends. Local rather than `lib/string.bx`'s `string_trim`, for the reason the whole of this file is: `use "lib/os.bx"` should pull in the operating system and not two thousand lines of string handling.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L398)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L414)
 
 ### `os_is_space`
 {: #os-is-space}
@@ -330,5 +336,63 @@ Spaces, tabs, carriage returns and newlines off both ends. Local rather than `li
 function os_is_space(b: Int) -> Bool
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L411)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L427)
+
+### `os_fork`
+{: #os-fork}
+
+```burxt
+function os_fork() -> Int touches commands, input
+```
+
+Splits this process in two. Answers **0 in the child** and the child's pid in the parent.
+
+**It flushes first, and that is not tidiness — it is a correctness bug removed rather than documented.** `print` goes through C's stdio, which is fully buffered when stdout is a pipe or a file rather than a terminal. `fork` copies the process *including that buffer*, so anything printed and not yet flushed is printed again by every child. A pre-forked server that announced "listening on 18080" once printed it four times with three workers — on a terminal it looked perfect, because a terminal is line-buffered, and it only misbehaved when the output was redirected. That is the shape of defect this language exists to refuse, so `os_fork` empties the buffer before it splits and the caller never has to know.
+
+`fflush(NULL)` flushes every open stream, which is what a fork wants — stdout and stderr both. The null pointer comes from `os_env_missing`, because the language has no literal for one.
+
+**The child must not fall out of the bottom of the caller's loop.** A child that keeps looping forks again, and a program that forks in a loop it never leaves is a fork bomb. Every use of this looks like `if os_fork() == 0 { ...work...; return; }`.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L479)
+
+### `os_wait_for_child`
+{: #os-wait-for-child}
+
+```burxt
+function os_wait_for_child() -> Int touches commands, input
+```
+
+Waits for any child to finish and answers its pid, or -1 when there are none left.
+
+The exit STATUS is discarded, and that is a limit with a name rather than an oversight: `waitpid` reports it by filling an `int` the caller supplies, and reading it back means `c_bytes_at` on four bytes plus the `WIFEXITED`/`WEXITSTATUS` bit-twiddling that C hides in macros. Reachable now that `c_bytes_to` exists — every piece is here — and not yet written. `os_wait_for_child_status` is what it would be called.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L491)
+
+### `os_flush`
+{: #os-flush}
+
+```burxt
+function os_flush() -> Bool touches input
+```
+
+Empties every output buffer. Answers whether it worked.
+
+`print` is buffered, so output written just before a crash, a `fork` or an `exec` can be lost or duplicated. `os_fork` calls this for you; a program that hands its stdout to something else mid-run wants it directly.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L500)
+
+### `os_env_missing`
+{: #os-env-missing}
+
+```burxt
+function os_env_missing() -> CPointer touches input
+```
+
+A null `CPointer`, for the C calls that want one.
+
+`getenv` of a name nothing sets answers NULL — POSIX guarantees it, and `os_env` above already depends on exactly that to tell "unset" from "empty". It reads as a trick and it is the only spelling the language has: `CPointer` has no literal, deliberately, because a literal address is the one thing the pointer wall exists to refuse.
+
+**The header above is the reason this is worth a paragraph.** The absence of a null pointer was written down as a fact and used to justify choosing `usleep` over `nanosleep`. It was never a fact about the language, only about the syntax, and nobody tried the four-line workaround for long enough that it became load-bearing.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L515)
 

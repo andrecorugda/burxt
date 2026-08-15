@@ -65,7 +65,7 @@
     'len byte_at byte_as_string push read_file to_string old substring truncate write_file write_bytes ' +
     'argument argument_count divide_floor divide_toward_zero remainder hash exit ' +
     'bit_and bit_or bit_xor bit_not shift_left shift_right_zeros shift_right_sign ' +
-    'c_is_null c_string_at c_bytes_at'
+    'c_is_null c_string_at c_bytes_at c_bytes_to'
   );
 
   // Spellings that do not compile. The eight the language renamed, and `main` — Burxt has no entry

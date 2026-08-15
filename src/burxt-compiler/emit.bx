@@ -2134,6 +2134,12 @@ function (mutable self: Unit) emit_builtin(src: String, n: Node, called: String)
             + " = call i64 @burxt.c_bytes_at(i64 " + first + ", i64 " + second + ")\n");
         return answer;
     }
+    if called == "c_bytes_to" {
+        let written: String = self.fresh();
+        let saw: Int = self.write_body("  " + written
+            + " = call i64 @burxt.c_bytes_to(i64 " + first + ", i64 " + second + ")\n");
+        return written;
+    }
     if called == "read_file" {
         let visited: Int = self.write_body("  " + reg + " = call i64 @burxt.read_file(i64 " + first
                                   + ")\n");
@@ -4654,6 +4660,14 @@ function runtime_ir() -> String {
         + "@burxt.neg_bytes_msg = private unnamed_addr constant [74 x i8] "
         + "c\"burxt runtime error: c_bytes_at was asked for a negative "
         + "number of bytes\\0A\\00\"\n"
+        // Byte for byte stage-0's wording, the same rule the UTF-8 message below records: two
+        // compilers refusing the same program with different words is its own defect.
+        + "@burxt.null_to_msg = private unnamed_addr constant [82 x i8] "
+        + "c\"burxt runtime error: c_bytes_to was given a null pointer; "
+        + "ask c_is_null(p) first\\0A\\00\"\n"
+        + "@burxt.range_to_msg = private unnamed_addr constant [81 x i8] "
+        + "c\"burxt runtime error: c_bytes_to was given a number that is "
+        + "not a byte (0..=255)\\0A\\00\"\n"
         // B5. Byte for byte stage-0's wording, em dash included — the two compilers refusing the
         // same program with different words is its own defect, and B19 already cost a version by
         // fixing one of those in the wrong direction.
@@ -4831,6 +4845,67 @@ function runtime_ir() -> String {
         + "  br label %bloop\n"
         + "bdone:\n"
         + "  ret i64 %xs\n\}\n\n"
+        // `c_bytes_to(p, bytes)` — Burxt's bytes into C's memory. Answers how many it wrote.
+        //
+        // The mirror of the loop above with the load and the store swapped, and it exists because
+        // `lib/os.bx` recorded the wall in prose — "Burxt can hold a pointer but cannot build a
+        // struct behind one" — which is why `nanosleep` was passed over and why a socket could
+        // `listen` but never `bind`. Sixteen bytes of `sockaddr_in` was the whole of it.
+        //
+        // **A number outside 0..=255 exits 70 rather than truncating.** `256` quietly becoming `0`
+        // is a corrupt port, a corrupt length prefix, a corrupt checksum — the shape of wrong answer
+        // this language exists to refuse, and one branch is not a price worth taking for it.
+        //
+        // The count comes from the array, so nothing can lie about how much is read OUT of Burxt.
+        // The destination's capacity is still C's business and cannot be checked here.
+        + "define i64 @burxt.c_bytes_to(i64 %p, i64 %xs) \{\n"
+        + "entry:\n"
+        + "  %tonull = icmp eq i64 %p, 0\n"
+        + "  br i1 %tonull, label %tobad, label %toready\n"
+        + "tobad:\n"
+        + "  %toerr = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %toerr, ptr @burxt.null_to_msg)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n"
+        + "toready:\n"
+        + "  %ton = call i64 @burxt.array_len(i64 %xs)\n"
+        + "  %toip = alloca i64\n"
+        + "  store i64 0, ptr %toip\n"
+        + "  %todst = inttoptr i64 %p to ptr\n"
+        // An array header is [len, cap, data, element width], and the width is counted in i64
+        // cells — the layout `@burxt.slot` reads, mirrored here rather than assumed. Reading
+        // field 0 as the data pointer looked right and is the LENGTH; the fixture would have
+        // caught it, but only after writing the length into somebody's socket address.
+        + "  %tohdr = inttoptr i64 %xs to ptr\n"
+        + "  %todatap = getelementptr i64, ptr %tohdr, i64 2\n"
+        + "  %tobuf = load i64, ptr %todatap\n"
+        + "  %tosrc = inttoptr i64 %tobuf to ptr\n"
+        + "  br label %toloop\n"
+        + "toloop:\n"
+        + "  %toi = load i64, ptr %toip\n"
+        + "  %tomore = icmp slt i64 %toi, %ton\n"
+        + "  br i1 %tomore, label %tobody, label %todone\n"
+        + "tobody:\n"
+        + "  %toslot = getelementptr i64, ptr %tosrc, i64 %toi\n"
+        + "  %toval = load i64, ptr %toslot\n"
+        + "  %tolow = icmp slt i64 %toval, 0\n"
+        + "  %tohigh = icmp sgt i64 %toval, 255\n"
+        + "  %tooff = or i1 %tolow, %tohigh\n"
+        + "  br i1 %tooff, label %torange, label %tostore\n"
+        + "torange:\n"
+        + "  %torerr = load ptr, ptr @stderr\n"
+        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %torerr, ptr @burxt.range_to_msg)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n"
+        + "tostore:\n"
+        + "  %tobyte = trunc i64 %toval to i8\n"
+        + "  %toat = getelementptr i8, ptr %todst, i64 %toi\n"
+        + "  store i8 %tobyte, ptr %toat\n"
+        + "  %tonext = add i64 %toi, 1\n"
+        + "  store i64 %tonext, ptr %toip\n"
+        + "  br label %toloop\n"
+        + "todone:\n"
+        + "  ret i64 %ton\n\}\n\n"
         // B5. The same state machine stage-0 builds with inkwell, written out here. One loop:
         // the leading byte says how many continuations follow AND the exact range the next one may
         // take, and that one range is what rejects all four of UTF-8's traps — 0xE0 demanding

@@ -2609,6 +2609,49 @@ fn every_rejection_points_somewhere_and_not_all_at_column_one() {
     );
 }
 
+/// Every module in `lib/` has a page in the reference, derived from `lib/` rather than from a list.
+///
+/// This exists because the list won. `scripts/site-reference.py` named seven modules while `lib/`
+/// held twenty-two, so the reference shipped at **1.0.0** documenting under a third of the standard
+/// library: `array`, `math`, `time`, `hash`, `secure`, `encoding`, `csv`, `path`, `set`, `decimal`,
+/// `vector`, `random`, `fn`, `log` and `test` had no page at all. A reader looking for `array_map`
+/// on the website found nothing and would reasonably conclude it does not exist.
+///
+/// `the_reference_is_not_stale` ran green throughout, and was right to: it regenerates what the
+/// list names and compares that against what is committed. **A module missing from the list is a
+/// module the check has never heard of** — the same shape as the fail ratchet that could not see a
+/// fixture change hands, and the same shape as a pass fixture that cannot tell "supported" from
+/// "never examined". A check whose scope is a list can only ever be as complete as the list.
+///
+/// So this one takes its expected set from the filesystem. Adding `lib/whatever.bx` and forgetting
+/// the site is now a failing test rather than a page nobody writes.
+#[test]
+fn every_library_module_has_a_reference_page() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut missing = Vec::new();
+    let mut found = 0;
+    for entry in fs::read_dir(root.join("lib")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("bx") {
+            continue;
+        }
+        let name = path.file_stem().unwrap().to_str().unwrap().to_string();
+        found += 1;
+        if !root.join("docs/reference").join(format!("{}.md", name)).exists() {
+            missing.push(name);
+        }
+    }
+    assert!(found >= 20, "the sweep found only {} library modules", found);
+    missing.sort();
+    assert!(
+        missing.is_empty(),
+        "these library modules have no page in docs/reference/: {:?}\n\
+         Add them to MODULES in scripts/site-reference.py and regenerate. A module with no page is \
+         a module a reader concludes does not exist.",
+        missing
+    );
+}
+
 /// Every YAML the site depends on parses. A colon in an unquoted value is the whole bug.
 ///
 /// This exists because it happened: a tagline was changed to *"A contract-first imperative

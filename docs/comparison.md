@@ -81,8 +81,9 @@ Stated as plainly as the rest, because a comparison that only lists strengths is
 
 | | Burxt | the others |
 |---|---|---|
-| concurrency | **none** | all of them |
-| sockets, TLS, HTTP | **none** | all of them |
+| threads | **none** — processes via `os_fork` | all of them |
+| TCP sockets | **yes**, server and client | all of them |
+| TLS, HTTP, DNS | **none** | all of them |
 | closures | **declined** — `dynamic Trait` instead | all of them |
 | inheritance | **declined** — composition only | most |
 | generics | yes | yes |

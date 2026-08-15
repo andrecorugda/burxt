@@ -1,0 +1,17 @@
+// `c_bytes_to` writes BYTES. A number outside 0..=255 exits 70 rather than truncating.
+//
+// Truncating would be cheaper by one branch, and it is the wrong trade. `256` quietly becoming
+// `0` is a corrupt port number, a corrupt length prefix, a corrupt checksum — and every one of
+// those is discovered somewhere else entirely, long after the value was written. This is the
+// language whose whole argument is that the quiet wrong answer is the expensive one; masking
+// here would be that argument losing to one branch.
+external function malloc(size: Int) -> CPointer;
+
+function fill() -> Int {
+    let buffer: CPointer = malloc(4);
+    // 256 is one past the end of a byte, which is exactly the value a caller reaches by
+    // forgetting to split a port into two.
+    let bytes: [Int] = [2, 0, 256, 0];
+    return c_bytes_to(buffer, bytes);
+}
+let done: Int = fill();

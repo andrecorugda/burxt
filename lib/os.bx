@@ -5,12 +5,19 @@
 //
 // Arguments, the environment, the clock, the process itself, and running a command.
 //
-// This header used to end *"anything returning a pointer is absent, and the guide's chapter on the
-// C boundary says why"*, and it had been false since v0.0.196: `getenv` returns a `CPointer` four
-// lines below, and `getcwd` does too. **What is still absent is a struct behind a pointer** —
-// `uname(2)` fills one, `nanosleep` takes one, `clock_gettime` fills one — because `c_bytes_at`
-// reads C's memory and nothing in Burxt writes it. That is why `os_platform` shells out to `uname`
-// and `os_sleep` calls `usleep`, and each of those says so where it is.
+// **This header has now been wrong about the same thing twice, which is worth more than either
+// correction.** It first ended *"anything returning a pointer is absent"*, false from v0.0.196
+// when `getenv` and `getcwd` began returning `CPointer`. It was rewritten to say *"what is still
+// absent is a struct behind a pointer — `uname(2)` fills one, `nanosleep` takes one — because
+// `c_bytes_at` reads C's memory and nothing in Burxt writes it."* **That is false too, since
+// `c_bytes_to`.** Something in Burxt writes C's memory now, and `lib/net.bx` builds a
+// `sockaddr_in` with it.
+//
+// So `os_platform` shelling out to `uname` and `os_sleep` calling `usleep` are no longer forced by
+// the language. They are merely what is written, and each of those two is now a small job rather
+// than a wall. A stale limitation is worse than a stale DONE, because nobody re-tests the thing
+// that "doesn't work" — this file has proved that twice and gets one more sentence for it: **the
+// reason a workaround exists stops being true before the workaround does.**
 // ============================================================================
 
 use "option.bx";
@@ -39,6 +46,15 @@ external function getcwd(buffer: CPointer, size: Int) -> CPointer touches files;
 // being caught and being reinterpreted. Nothing here ever passes a negative anyway: `os_sleep`
 // refuses one in its contract, one level up, where the caller can read it.
 external function usleep(microseconds: u32) -> CInt touches clock;
+// Processes. `fork` is how a Burxt program does more than one thing at once today: threads want
+// `pthread_create`, which takes a FUNCTION POINTER, and C calling back into Burxt is a door that
+// is genuinely still shut. Separate address spaces are the coarser tool and the stronger promise —
+// two workers cannot corrupt a shared balance because they share no memory to corrupt, which is
+// the guarantee `spec/1.0/ROADMAP-1.0.md` §G1 sets out to build a type system for, arrived at here
+// by construction instead.
+external function fork() -> CInt touches commands;
+external function waitpid(pid: i32, status: CPointer, options: i32) -> CInt touches commands;
+external function fflush(stream: CPointer) -> CInt touches input;
 external function malloc(size: Int) -> CPointer;
 external function free(p: CPointer) -> Int;
 
@@ -438,3 +454,64 @@ function os_is_space(b: Int) -> Bool {
 // the operating system. `spec/1.0/ROADMAP-1.0.md` §D1p says "retires the lossy `os_byte_as_string`",
 // and retiring it is what that means. A program calling it gets an unknown-function error naming
 // the line, which is the outcome this language prefers to a silent redirection.
+
+// ============================================================================
+// Processes — doing more than one thing at once.
+// ============================================================================
+
+// Splits this process in two. Answers **0 in the child** and the child's pid in the parent.
+//
+// **It flushes first, and that is not tidiness — it is a correctness bug removed rather than
+// documented.** `print` goes through C's stdio, which is fully buffered when stdout is a pipe or a
+// file rather than a terminal. `fork` copies the process *including that buffer*, so anything
+// printed and not yet flushed is printed again by every child. A pre-forked server that announced
+// "listening on 18080" once printed it four times with three workers — on a terminal it looked
+// perfect, because a terminal is line-buffered, and it only misbehaved when the output was
+// redirected. That is the shape of defect this language exists to refuse, so `os_fork` empties the
+// buffer before it splits and the caller never has to know.
+//
+// `fflush(NULL)` flushes every open stream, which is what a fork wants — stdout and stderr both.
+// The null pointer comes from `os_env_missing`, because the language has no literal for one.
+//
+// **The child must not fall out of the bottom of the caller's loop.** A child that keeps looping
+// forks again, and a program that forks in a loop it never leaves is a fork bomb. Every use of
+// this looks like `if os_fork() == 0 { ...work...; return; }`.
+function os_fork() -> Int touches commands, input {
+    let flushed: Int = fflush(os_env_missing());
+    return fork();
+}
+
+// Waits for any child to finish and answers its pid, or -1 when there are none left.
+//
+// The exit STATUS is discarded, and that is a limit with a name rather than an oversight:
+// `waitpid` reports it by filling an `int` the caller supplies, and reading it back means
+// `c_bytes_at` on four bytes plus the `WIFEXITED`/`WEXITSTATUS` bit-twiddling that C hides in
+// macros. Reachable now that `c_bytes_to` exists — every piece is here — and not yet written.
+// `os_wait_for_child_status` is what it would be called.
+function os_wait_for_child() -> Int touches commands, input {
+    return waitpid(0 - 1, os_env_missing(), 0);
+}
+
+// Empties every output buffer. Answers whether it worked.
+//
+// `print` is buffered, so output written just before a crash, a `fork` or an `exec` can be lost or
+// duplicated. `os_fork` calls this for you; a program that hands its stdout to something else
+// mid-run wants it directly.
+function os_flush() -> Bool touches input {
+    return fflush(os_env_missing()) == 0;
+}
+
+// A null `CPointer`, for the C calls that want one.
+//
+// `getenv` of a name nothing sets answers NULL — POSIX guarantees it, and `os_env` above already
+// depends on exactly that to tell "unset" from "empty". It reads as a trick and it is the only
+// spelling the language has: `CPointer` has no literal, deliberately, because a literal address
+// is the one thing the pointer wall exists to refuse.
+//
+// **The header above is the reason this is worth a paragraph.** The absence of a null pointer was
+// written down as a fact and used to justify choosing `usleep` over `nanosleep`. It was never a
+// fact about the language, only about the syntax, and nobody tried the four-line workaround for
+// long enough that it became load-bearing.
+function os_env_missing() -> CPointer touches input {
+    return getenv("BURXT_OS_UNSET_ON_PURPOSE");
+}

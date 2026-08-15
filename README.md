@@ -76,9 +76,13 @@ The same principle generalizes. Burxt's identity is: **the compiler refuses to l
 - **Composition-first OOP** — small interfaces, explicit `implement Trait for Type` conformance, static dispatch by default and runtime dispatch only where you write `dynamic`.
 - **Native, cross-platform by design** — one LLVM backend, many targets: desktop, mobile, and web (WebAssembly). The front end knows nothing about any platform, so reach is a configuration problem rather than a rewrite.
 
-## Status — 1.0.0
+## Status — 1.1.0
 
-**Released.** The bar was written down before the work started and it was not moved:
+**Released.** 1.1 added TCP sockets (`lib/net.bx`), processes (`os_fork`), and the one builtin that
+turned out to be the whole of the network wall — `c_bytes_to`, the mirror of `c_bytes_at`. See
+[`spec/M16-NETWORK.md`](spec/M16-NETWORK.md) for what the wall actually was.
+
+The 1.0 bar was written down before the work started and it was not moved:
 
 > A language someone outside this repository can ship on. They can write a real program, **test** it,
 > **debug** it, **depend** on other people's code, and hand it to a shell that understands what it

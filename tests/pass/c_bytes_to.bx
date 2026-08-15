@@ -1,0 +1,38 @@
+// `c_bytes_to(p, bytes)` — Burxt's bytes written into C's memory, the mirror of `c_bytes_at`.
+//
+// The round trip is the test: write bytes in, read them back, and they are the same bytes. That
+// is what makes the two inverses rather than two functions that happen to touch the same buffer.
+//
+// It exists for one reason, and it is worth naming here because the fixture looks abstract:
+// `bind()`, `nanosleep()`, `setsockopt()` and most of the rest of POSIX take a small struct BY
+// POINTER. Burxt could hold a pointer and read what C put behind it, and had no way to put
+// anything there — so a socket could `listen` but never `bind` to a chosen port.
+external function malloc(size: Int) -> CPointer;
+external function free(p: CPointer) -> Int;
+
+function fill() -> Int {
+    let buffer: CPointer = malloc(8);
+
+    // A sockaddr_in's first four bytes, which is the case this was built for: AF_INET as a
+    // little-endian u16, then port 8080 as a BIG-endian one.
+    let addr: [Int] = [2, 0, 31, 144, 0, 255, 128, 1];
+    let wrote: Int = c_bytes_to(buffer, addr);
+    print(wrote);
+
+    let back: [Int] = c_bytes_at(buffer, 8);
+    print(len(back));
+    print(back[0]);
+    print(back[2]);
+    print(back[3]);
+    print(back[5]);      // 255 survives: zero-extended on the way back, not sign-extended
+    print(back[6]);
+    print(back[7]);
+
+    // An empty array writes nothing and says so, rather than being a special case.
+    let none: [Int] = [];
+    print(c_bytes_to(buffer, none));
+
+    let freed: Int = free(buffer);
+    return 0;
+}
+let done: Int = fill();

@@ -23,6 +23,7 @@ The names a program may not declare, because the language already means somethin
 | [`c_is_null`](#c-is-null) | `Bool` | no | — |
 | [`c_string_at`](#c-string-at) | `String` | **yes** | — |
 | [`c_bytes_at`](#c-bytes-at) | `[Int]` | **yes** | — |
+| [`c_bytes_to`](#c-bytes-to) | `Int` — how many it wrote | no | — |
 | [`print`](#print) | nothing | no | — |
 | [`len`](#len) | how many elements, or how many BYTES of a `String` | no | — |
 | [`byte_at`](#byte-at) | the byte at `i` | no | — |
@@ -167,6 +168,17 @@ c_bytes_at(p: CPointer, n: Int)
 Copies `n` bytes from C into a growable array, one byte per element, zero-extended so `0xFF` arrives as `255` rather than `-1`. The counterpart to `c_string_at`, and it is what makes OS entropy reachable: `/dev/urandom` is a character device, so `read_file` measures it and gets nothing. **Where the length comes from is the pointer wall's one soft edge** — `n` is your claim, and nothing in the type can check it. A null pointer and a negative count are refused.
 
 **Answers** `[Int]`. **Allocates:** yes.
+
+## `c_bytes_to`
+{: #c-bytes-to}
+
+```burxt
+c_bytes_to(p: CPointer, bytes: [Int])
+```
+
+Writes an array of bytes into memory C owns, the mirror of `c_bytes_at`. It is what lets a program hand C a **struct**: `bind` wants a `sockaddr_in`, `nanosleep` wants a `timespec`, `setsockopt` wants a flag — all of them small, all of them by pointer, and until this existed Burxt could read C's memory and never write it. **The length is not a claim here**, it is `len(bytes)`; what stays yours is whether the destination is big enough, which belongs to C. A null pointer is refused, and a number outside `0..=255` **exits 70 rather than truncating** — `256` quietly becoming `0` is a corrupt port or a corrupt length prefix.
+
+**Answers** `Int` — how many it wrote. **Allocates:** no.
 
 ## `print`
 {: #print}

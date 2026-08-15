@@ -71,9 +71,24 @@ OUT = os.path.join(ROOT, "docs", "reference")
 SEARCH = os.path.join(ROOT, "docs", "assets", "search.json")
 GH = "https://github.com/andrecorugda/burxt/blob/main"
 
-# The standard library, in reading order rather than alphabetical: absence before failure, and the
-# containers after the pieces they are built from.
-MODULES = ["option", "result", "string", "map", "json", "files", "os"]
+# The standard library, in reading order rather than alphabetical: absence before failure, the
+# containers after the pieces they are built from, and the modules that reach outside the process
+# last.
+#
+# **This list held seven names while `lib/` held twenty-two**, so the reference published at 1.0.0
+# documented under a third of the standard library — `array`, `math`, `time`, `hash`, `secure`,
+# `encoding`, `csv`, `path` and six more had no page at all. `the_reference_is_not_stale` did not
+# notice, and could not: it regenerates what this list names and compares that, so a module absent
+# from the list is a module the check has never heard of. A floor cannot see what it was not told
+# about, which is the same lesson the fail ratchet has already taught this project once.
+#
+# `every_library_module_has_a_reference_page` in `tests/runner.rs` now derives the expected set from
+# `lib/` itself, so adding a module to the library and forgetting the site is a failing test.
+MODULES = [
+    "option", "result", "decimal", "string", "array", "set", "map", "math", "fn",
+    "json", "csv", "encoding", "hash", "secure", "vector",
+    "files", "path", "os", "net", "time", "random", "log", "test",
+]
 
 
 def read(*parts):
@@ -449,6 +464,23 @@ BUILTINS = [
                "nothing in the type can check it. A null pointer and a negative count are refused.",
         "probe": 'external function strstr(a: String, b: String) -> CPointer;\nlet bytes: [Int] = c_bytes_at(strstr(\"hello\", \"llo\"), 3);\nprint(len(bytes));\n',
     },
+
+    {
+        "name": "c_bytes_to",
+        "signature": "c_bytes_to(p: CPointer, bytes: [Int])",
+        "answers": "`Int` \u2014 how many it wrote",
+        "region": False,
+        "doc": "Writes an array of bytes into memory C owns, the mirror of `c_bytes_at`. It is "
+               "what lets a program hand C a **struct**: `bind` wants a `sockaddr_in`, `nanosleep` "
+               "wants a `timespec`, `setsockopt` wants a flag \u2014 all of them small, all of them "
+               "by pointer, and until this existed Burxt could read C's memory and never write it. "
+               "**The length is not a claim here**, it is `len(bytes)`; what stays yours is whether "
+               "the destination is big enough, which belongs to C. A null pointer is refused, and a "
+               "number outside `0..=255` **exits 70 rather than truncating** \u2014 `256` quietly "
+               "becoming `0` is a corrupt port or a corrupt length prefix.",
+        "probe": 'external function malloc(size: Int) -> CPointer;\nlet p: CPointer = malloc(4);\nprint(c_bytes_to(p, [2, 0, 31, 144]));',
+    },
+
 
     {
         "name": "print",
