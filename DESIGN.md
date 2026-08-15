@@ -1,4 +1,4 @@
-# Burxt — Design Notes (v0.0.152)
+# Burxt — Design Notes (v0.0.295)
 
 **Burxt** is a typed, compiled programming language built for a working
 arrangement that did not exist when the languages we use were designed: **an AI
@@ -93,11 +93,16 @@ thesis, and those are not the same instruction.
 
 ## Identity (the anchor)
 
-> Burxt is **composition-first OOP with opt-in safe inheritance**, where the
-> compiler rigorously enforces **objective** correctness (no null, no silent
-> overflow, verified contracts, exhaustiveness) and makes SOLID design the
-> **ergonomic default** — giving PHP's familiarity, Rust's safety, and a
-> verification layer neither has.
+> Burxt is **composition-only OOP**, where the compiler rigorously enforces
+> **objective** correctness (no null, no silent overflow, verified contracts,
+> exhaustiveness) and makes SOLID design the **ergonomic default** — giving
+> PHP's familiarity, Rust's safety, and a verification layer neither has.
+
+*(H2, corrected v0.0.295. This said **"opt-in safe inheritance"** for 249 versions after
+v0.0.46 dropped inheritance — and the same file says so two hundred lines below, under
+"The OOP model — composition only (DECIDED, v0.0.46)". **The identity paragraph is the one
+line of this document most likely to be quoted**, and it was quoting a plan that had been
+abandoned. The superseded design is still kept below, as the record of what was considered.)*
 
 Distinct from PHP (enforces nothing; null + inheritance footguns) and from
 Rust (no inheritance, no built-in contracts). And honest: it does not claim to
@@ -268,14 +273,28 @@ Listed so they are not mistaken for finished work:
   values. Sound because a non-mutating `self` is read-only. Ordinary aggregate
   parameters are unaffected.
 
-### Open tradeoff — deliberately undecided, eyes open
+### ~~Open tradeoff — deliberately undecided, eyes open~~ — DECIDED
 
-- **Memory management.** GC (pauses — bad for "predictable"), ownership
-  (no pauses, steep learning curve), ARC (middle ground) — every option
-  costs something real. Burxt has deferred every allocation so far
-  precisely so this fork is chosen once, deliberately. The safety-vs-
-  ergonomics tension is permanent: the art is hiding strictness behind
-  inference so code stays simple while the compiler stays strict.
+**Memory management was decided by M1: REGIONS.** Every block is one, a block releases what it
+allocated when nothing outside can still reach it, and release is one pointer assignment. No GC, no
+reference counting, no runtime, no pauses, no finalizers. Per-block release landed as A12.
+
+The cost is stated rather than hidden, and it is the honest limit of the model: region granularity
+is coarser than a borrow checker's. A value the analysis cannot prove safe to release simply is not
+released — **the failure direction is memory, never a dangling pointer.**
+
+*(H2, corrected v0.0.295. This section described the fork as unchosen for 249 versions after M1
+chose it. A document that says a decision is still open invites it to be re-argued, which is the
+expensive half of documentation rot — the cheap half is only being out of date.)*
+
+The original text, kept because the reasoning is why regions won:
+
+> - **Memory management.** GC (pauses — bad for "predictable"), ownership
+>   (no pauses, steep learning curve), ARC (middle ground) — every option
+>   costs something real. Burxt has deferred every allocation so far
+>   precisely so this fork is chosen once, deliberately. The safety-vs-
+>   ergonomics tension is permanent: the art is hiding strictness behind
+>   inference so code stays simple while the compiler stays strict.
 
 ## The OOP model — composition only (DECIDED, v0.0.46)
 

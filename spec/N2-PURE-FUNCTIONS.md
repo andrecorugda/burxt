@@ -1,6 +1,10 @@
 # Burxt — Provably Reproducible Functions (NOVELTY §2, slice 1)
 
-> Status: **specified, to implement.** The first slice of `NOVELTY.md` §2
+> Status: **Slice 1 DONE** (v0.0.39) — H2, corrected v0.0.295. This header said *"spec, to implement"* while
+> `spec/README.md` recorded it as shipped, and the two had disagreed for over a hundred
+> versions. **The index was right.** A spec whose own header says it is unbuilt is read by
+> the next person as a plan rather than as a record, which is how a shipped decision gets
+> re-litigated.
 > ("provably deterministic money math via forbidden effects"), which the register
 > listed as *buildability: medium — needs an effect system first*. It needs less
 > than that: one declared effect marker already exists (`allocates`, v0.0.38), and

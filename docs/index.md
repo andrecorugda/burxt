@@ -58,6 +58,7 @@ You can confirm all of that from the declarations, without reading a body.</p>
   <a class="btn ghost" href="{{ site.baseurl }}/guide/">Read the guide</a>
   <a class="btn ghost" href="{{ site.baseurl }}/install/">Install</a>
   <a class="btn ghost" href="{{ site.baseurl }}/limitations.html">What it does not do</a>
+  <a class="btn ghost" href="{{ site.baseurl }}/compatibility.html">What it promises</a>
 </div>
 
 </div>

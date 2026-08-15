@@ -1,6 +1,10 @@
 # Burxt — Functions That Allocate In The Caller's Region (M1 amendment)
 
-> Status: **specified, to implement.** A small amendment to
+> Status: **DONE** (v0.0.38) — H2, corrected v0.0.295. This header said *"spec, to implement"* while
+> `spec/README.md` recorded it as shipped, and the two had disagreed for over a hundred
+> versions. **The index was right.** A spec whose own header says it is unbuilt is read by
+> the next person as a plan rather than as a record, which is how a shipped decision gets
+> re-litigated.
 > `M1-MEMORY-MODEL.md`, forced by the thing a Burxt-hosted compiler needs most and
 > cannot currently do.
 

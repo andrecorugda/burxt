@@ -1,6 +1,10 @@
 # Burxt — Termination As A Contract (NOVELTY §5, slice 1)
 
-> Status: **specified, to implement.** `NOVELTY.md` §5 asks for a `decreases`
+> Status: **Slice 1 DONE** (v0.0.45) — H2, corrected v0.0.295. This header said *"to implement"* while
+> `spec/README.md` recorded it as shipped, and the two had disagreed for over a hundred
+> versions. **The index was right.** A spec whose own header says it is unbuilt is read by
+> the next person as a plan rather than as a record, which is how a shipped decision gets
+> re-litigated.
 > measure, noting it is *"an extension of §3 rather than a separate idea"* and
 > pairing with it: **one says the answer is right, the other says an answer
 > arrives.** §3's runtime form shipped in v0.0.43–v0.0.44; this is the same staging
