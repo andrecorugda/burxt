@@ -65,39 +65,63 @@ external function free(p: CPointer) -> Int;
 // and already had the trick: `getenv` of a name nothing sets answers NULL, guaranteed by POSIX.
 // Spelling it twice would be a fact stored twice, and a fact stored twice disagrees with itself
 // eventually.
-// **Linux and the BSDs do not lay out `sockaddr_in` the same way, and this is measured rather
-// than assumed.**
+// **Linux and the BSDs do not lay out `sockaddr_in` the same way, and this asks the kernel which
+// one it is rather than inferring it.**
 //
 //     Linux:      sa_family_t sin_family;   // TWO bytes, little-endian  -> [2, 0, ...]
 //     macOS/BSD:  uint8_t     sin_len;      // ONE byte, the struct size -> [16, 2, ...]
 //                 sa_family_t sin_family;   // ONE byte
 //
-// There is no byte pair that satisfies both: Linux needs `[2, 0]` and macOS needs the `2` in the
-// second slot, and `[2, 2]` reads on Linux as family 514. So the layout has to be decided at
-// runtime, and Burxt has no conditional compilation — a recorded decision, and the right one.
+// No byte pair satisfies both — Linux needs `[2, 0]`, macOS needs the `2` second, and `[2, 2]`
+// reads on Linux as family 514 — so the layout is a runtime question. Burxt has no conditional
+// compilation, which is a recorded decision and the right one.
 //
-// **This cost a CI runner an hour.** `lib/net.bx` shipped writing the Linux layout unconditionally.
-// On macOS `bind` then saw family 0, `net_port_of` answered `None`, the fixture connected to port
-// 0, and the parent waited in `accept()` until GitHub cancelled the job at sixty minutes. The
-// library was announced as portable and was tested on one kernel.
+// **The first version of this asked "does `bind` reject the Linux layout?" and that is not a
+// question macOS answers.** It accepts it: the kernel takes the length from the `socklen_t`
+// argument and tolerates `sin_family` reading as `AF_UNSPEC`. So the probe said "not BSD" on a
+// Mac, everything wrote the Linux layout, and `bind` really did succeed — the failure surfaced two
+// calls later in `getsockname`, which writes back a **BSD** struct on a BSD kernel. `net_port_of`
+// checked byte 0 for `AF_INET`, found the length 16 sitting there, and answered `None`. The port
+// became 0, the client connected to nothing, and the server waited in `accept()` until CI killed
+// the job an hour later.
 //
-// The probe is a throwaway UDP socket bound to `127.0.0.1:0` — the kernel picks the port, nothing
-// listens, nothing conflicts, and it is three syscalls rather than the subprocess `os_platform`
-// would cost. `SOCK_DGRAM` is 2 and `AF_INET` is 2 on both families, which is why this can ask the
-// question in the first place.
+// That was reasoned about rather than measured, twice, on a machine with no Mac. The answer came
+// from a throwaway workflow that ran this same sequence on a real runner and printed what each
+// call returned:
+//
+//     uname says darwin; net_uses_bsd_sockaddr says false
+//     net_listen_any_port -> fd 3
+//     net_port_of -> None, errno 0
+//
+// So the question changed from "what does the kernel refuse" to **"what does the kernel write"**,
+// which is a fact it hands over rather than one inferred from a failure. Bind a throwaway UDP
+// socket — accepted by both, measured — and read the address back. A `16` in the first byte is
+// BSD saying so in its own words.
 function net_uses_bsd_sockaddr() -> Bool touches network {
     let fd: Int = socket(2, 2, 0);                  // AF_INET, SOCK_DGRAM
     if fd < 0 {
         return false;
     }
     let where: CPointer = malloc(16);
-    let linux_shape: [Int] = [2, 0, 0, 0, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
-    let wrote: Int = c_bytes_to(where, linux_shape);
+    let probe: [Int] = [2, 0, 0, 0, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+    let wrote: Int = c_bytes_to(where, probe);
     let bound: Int = bind(fd, where, 16);
+    let mutable bsd: Bool = false;
+    if bound == 0 {
+        let size: CPointer = malloc(4);
+        let sixteen: [Int] = [16, 0, 0, 0];
+        let said: Int = c_bytes_to(size, sixteen);
+        if getsockname(fd, where, size) == 0 {
+            let head: [Int] = c_bytes_at(where, 2);
+            // `sin_len` is the size of the struct, so 16 here is the kernel writing its own
+            // layout down. Linux puts the low byte of `AF_INET` there instead, which is 2.
+            bsd = head[0] == 16;
+        }
+        let freed: Int = free(size);
+    }
     let gone: Int = free(where);
     let shut: Int = close(fd);
-    // A kernel that refuses the Linux layout is telling us it wants the other one.
-    return bound != 0;
+    return bsd;
 }
 
 // `struct sockaddr_in`, the sixteen bytes every one of these calls is really about.
@@ -361,13 +385,14 @@ function net_port_of(fd: Int) -> Option<Int> touches network {
     let head: [Int] = c_bytes_at(where, 4);
     let a: Int = free(where);
     let b: Int = free(size);
-    // The family lives in byte 0 on Linux and byte 1 on the BSDs, and reading the wrong one is
-    // how this function answered `None` on macOS and sent a fixture to connect to port 0.
-    let mutable family: Int = head[0];
-    if net_uses_bsd_sockaddr() {
-        family = head[1];
-    }
-    if family != 2 {
+    // **Accept either layout here rather than asking which one this is.** The family lives in
+    // byte 0 on Linux and byte 1 on the BSDs, and this check reading byte 0 unconditionally is
+    // what answered `None` on macOS — it found `sin_len`'s 16 and refused a perfectly good
+    // address. Both spellings are recognised because both are correct, and the port sits at bytes
+    // 2 and 3 either way: two bytes of family, or one of length and one of family, then the port.
+    let linux_shape: Bool = head[0] == 2 && head[1] == 0;
+    let bsd_shape: Bool = head[0] == 16 && head[1] == 2;
+    if !linux_shape && !bsd_shape {
         return Option.None;            // not AF_INET, so bytes 2 and 3 are not a port
     }
     // Big-endian, the way it went in.

@@ -52,7 +52,7 @@ One thing was genuinely missing, and it was one builtin: **`bind()` wants sixtee
 function net_uses_bsd_sockaddr() -> Bool touches network
 ```
 
-The null pointer these calls want comes from `lib/os.bx`, which needed the same one for `fork` and already had the trick: `getenv` of a name nothing sets answers NULL, guaranteed by POSIX. Spelling it twice would be a fact stored twice, and a fact stored twice disagrees with itself eventually. **Linux and the BSDs do not lay out `sockaddr_in` the same way, and this is measured rather than assumed.**
+The null pointer these calls want comes from `lib/os.bx`, which needed the same one for `fork` and already had the trick: `getenv` of a name nothing sets answers NULL, guaranteed by POSIX. Spelling it twice would be a fact stored twice, and a fact stored twice disagrees with itself eventually. **Linux and the BSDs do not lay out `sockaddr_in` the same way, and this asks the kernel which one it is rather than inferring it.**
 
 ```burxt
  Linux:      sa_family_t sin_family;   // TWO bytes, little-endian  -> [2, 0, ...]
@@ -60,13 +60,21 @@ The null pointer these calls want comes from `lib/os.bx`, which needed the same 
              sa_family_t sin_family;   // ONE byte
 ```
 
-There is no byte pair that satisfies both: Linux needs `[2, 0]` and macOS needs the `2` in the second slot, and `[2, 2]` reads on Linux as family 514. So the layout has to be decided at runtime, and Burxt has no conditional compilation — a recorded decision, and the right one.
+No byte pair satisfies both — Linux needs `[2, 0]`, macOS needs the `2` second, and `[2, 2]` reads on Linux as family 514 — so the layout is a runtime question. Burxt has no conditional compilation, which is a recorded decision and the right one.
 
-**This cost a CI runner an hour.** `lib/net.bx` shipped writing the Linux layout unconditionally. On macOS `bind` then saw family 0, `net_port_of` answered `None`, the fixture connected to port 0, and the parent waited in `accept()` until GitHub cancelled the job at sixty minutes. The library was announced as portable and was tested on one kernel.
+**The first version of this asked "does `bind` reject the Linux layout?" and that is not a question macOS answers.** It accepts it: the kernel takes the length from the `socklen_t` argument and tolerates `sin_family` reading as `AF_UNSPEC`. So the probe said "not BSD" on a Mac, everything wrote the Linux layout, and `bind` really did succeed — the failure surfaced two calls later in `getsockname`, which writes back a **BSD** struct on a BSD kernel. `net_port_of` checked byte 0 for `AF_INET`, found the length 16 sitting there, and answered `None`. The port became 0, the client connected to nothing, and the server waited in `accept()` until CI killed the job an hour later.
 
-The probe is a throwaway UDP socket bound to `127.0.0.1:0` — the kernel picks the port, nothing listens, nothing conflicts, and it is three syscalls rather than the subprocess `os_platform` would cost. `SOCK_DGRAM` is 2 and `AF_INET` is 2 on both families, which is why this can ask the question in the first place.
+That was reasoned about rather than measured, twice, on a machine with no Mac. The answer came from a throwaway workflow that ran this same sequence on a real runner and printed what each call returned:
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L88)
+```burxt
+ uname says darwin; net_uses_bsd_sockaddr says false
+ net_listen_any_port -> fd 3
+ net_port_of -> None, errno 0
+```
+
+So the question changed from "what does the kernel refuse" to **"what does the kernel write"**, which is a fact it hands over rather than one inferred from a failure. Bind a throwaway UDP socket — accepted by both, measured — and read the address back. A `16` in the first byte is BSD saying so in its own words.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L100)
 
 ### `write_sockaddr_in`
 {: #write-sockaddr-in}
@@ -92,7 +100,7 @@ function write_sockaddr_in(where: CPointer, port: Int, a: Int, b: Int, c: Int, d
 
 **It writes the struct rather than answering it**, and that shape was chosen by the region model rather than by taste — the same way `sha256_k` fills an array instead of returning one. A function whose parameters are all `Int` carries no caller region, so it may not return `[Int]`: "its storage lives in a region and would not outlive it". Taking the destination pointer is the better API anyway. There is exactly one place that knows this layout, which is the point.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L129)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L153)
 
 ### `net_listen`
 {: #net-listen}
@@ -107,7 +115,7 @@ A socket bound to `port` on every interface, listening, ready for `net_accept`.
 
 Answers `None` when the socket cannot be made, bound or listened on. The commonest reason by a long way is that something else already has the port.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L162)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L186)
 
 ### `net_accept`
 {: #net-accept}
@@ -120,7 +128,7 @@ Waits for a connection and answers the socket that talks to it. **Blocks until o
 
 The peer's address is discarded — `accept` will fill a struct with it if given one, and there is nothing in this module that reads a `sockaddr` back into an address yet. `None` is a real failure (the listening socket was closed, or a signal interrupted the wait), not "nobody came".
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L199)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L223)
 
 ### `net_connect_ipv4`
 {: #net-connect-ipv4}
@@ -133,7 +141,7 @@ Connects to an IPv4 address given as four octets. **No hostname**, and the name 
 
 `net_connect_ipv4(93, 184, 216, 34, 80)` is `93.184.216.34:80`. Resolving a name needs `getaddrinfo`, which answers a chain of structs and hands back a pointer buried in one of them; reading a pointer out of C's memory is a door that is still shut, and a function called `net_connect` that only worked for addresses would be a promise this cannot keep.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L213)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L237)
 
 ### `net_read`
 {: #net-read}
@@ -148,7 +156,7 @@ Reads up to `limit` bytes. Answers `None` on error and `Some("")` when the peer 
 
 **One `recv` is not a message.** TCP is a stream: a 4 KB request can arrive as three reads, and a caller that treats one `net_read` as the whole request works perfectly on localhost and fails against a real client. Reading until a terminator is the caller's job, and it is a real job.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L250)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L274)
 
 ### `net_write`
 {: #net-write}
@@ -163,7 +171,7 @@ Writes every byte of `text`, or answers `None`.
 
 `MSG_NOSIGNAL` (0x4000) is passed for a reason worth naming: writing to a socket the peer has closed raises SIGPIPE, whose default action **kills the process**. A server that dies because a browser closed a tab is not a server, and Burxt has no signal handlers to install instead. With this flag the call answers EPIPE like any other error and the program stays alive.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L278)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L302)
 
 ### `net_close`
 {: #net-close}
@@ -174,7 +182,7 @@ function net_close(fd: Int) -> Bool touches network
 
 Closes a socket. Answers whether the close itself succeeded — worth checking on a socket, where a failing close can mean data the kernel never managed to send.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L297)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L321)
 
 ### `net_listen_any_port`
 {: #net-listen-any-port}
@@ -191,7 +199,7 @@ A socket on a port the KERNEL picks, and the port it picked.
 
 The fixture that made this necessary is the honest story: `tests/pass/net_loopback.bx` bound a fixed 18099, passed alone, and failed the moment two of the suite's tests ran it at once. The comment in that fixture predicted it and the fixed port was kept anyway, because the alternative looked bigger than the test. It was about twenty lines.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L316)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L340)
 
 ### `net_port_of`
 {: #net-port-of}
@@ -204,5 +212,5 @@ The port a socket is actually bound to. `None` if it is not bound, or is not an 
 
 The size argument is in-out: it must say how much room the struct has before the call, and the kernel writes back how much it used. Sixteen goes in as four little-endian bytes; a smaller number coming back would mean this is not the address family assumed here.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L350)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L374)
 
