@@ -2669,6 +2669,51 @@ fn every_rejection_points_somewhere_and_not_all_at_column_one() {
     );
 }
 
+/// The website and the compiler agree on which version is current.
+///
+/// `docs/_config.yml` carries `burxt_version`, and the install page builds four download URLs out
+/// of it — `burxt-<version>-linux-x86_64.tar.gz` and its three siblings. If that number falls
+/// behind `Cargo.toml`, every one of those links 404s, at the exact moment somebody has decided to
+/// try the language. A stale download link is worse than no download link: no link sends a reader
+/// to the releases page, a dead one sends them away.
+///
+/// The topbar's version picker labels itself from the same field, so this also keeps the site from
+/// announcing a version it does not document.
+#[test]
+fn the_site_and_the_compiler_agree_on_the_version() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let cargo = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    let declared = cargo
+        .lines()
+        .find_map(|l| l.strip_prefix("version = \""))
+        .and_then(|r| r.split('"').next())
+        .expect("version in Cargo.toml");
+
+    let config = fs::read_to_string(root.join("docs/_config.yml")).unwrap();
+    let site = config
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("burxt_version:"))
+        .map(|v| v.trim().trim_matches('"').to_string())
+        .expect("burxt_version in docs/_config.yml");
+
+    assert_eq!(
+        site, declared,
+        "docs/_config.yml says the released version is {} and Cargo.toml says {}. The install \
+         page builds its four download URLs from the first of those, so they would all 404.",
+        site, declared
+    );
+
+    // The series drives nothing today and will name the frozen tree when 1.2 arrives; keeping it
+    // consistent now costs one line and stops it being wrong on the day it starts mattering.
+    let series = config
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("burxt_series:"))
+        .map(|v| v.trim().trim_matches('"').to_string())
+        .expect("burxt_series in docs/_config.yml");
+    let want: String = declared.rsplit_once('.').map(|(head, _)| head.to_string()).unwrap();
+    assert_eq!(series, want, "burxt_series should be {} for version {}", want, declared);
+}
+
 /// Every module in `lib/` has a page in the reference, derived from `lib/` rather than from a list.
 ///
 /// This exists because the list won. `scripts/site-reference.py` named seven modules while `lib/`
@@ -10208,7 +10253,7 @@ fn the_ir_is_the_same_for_every_target() {
         //
         // Android is a TARGET here and nothing more. The compiler still does not RUN on a
         // phone, and conflating the two is the mistake this comment exists to prevent:
-        // hosting needs LLVM 18 rebuilt for bionic, which is spec/ROADMAP-1.1.md's problem.
+        // hosting needs LLVM 18 rebuilt for bionic, which is spec/ROADMAP-2.0.md's problem.
         "aarch64-linux-android",
         "armv7a-linux-androideabi",
         "x86_64-linux-android",

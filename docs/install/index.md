@@ -7,20 +7,18 @@ description: Burxt needs a C compiler and nothing else. Programs it compiles nee
 
 # Install
 
-Linux x86-64. That is the only platform built and tested, so it is the only one offered — a
-half-working download for another platform is worse than an honest absence.
+**Four platforms**, built and tested by the same workflow that publishes them: Linux and macOS, on
+Intel and on ARM. Windows runs through a container — there is no `burxt.exe`, deliberately, and the
+reason is below.
+
+## One line, on any of the four
+
+It works out which tarball you need from `uname`, which is exactly how the tarball was named:
 
 ```sh
-sh scripts/install.sh https://github.com/andrecorugda/burxt/releases/latest/download/burxt-linux-x86_64.tar.gz
-```
-
-Or take the tarball from [the releases page](https://github.com/andrecorugda/burxt/releases) and put
-the binary where you like:
-
-```sh
-tar xzf burxt-*-linux-x86_64.tar.gz
-cd burxt-*
-cp burxt ~/.local/bin/
+V={{ site.burxt_version }}
+sh scripts/install.sh \
+  https://github.com/andrecorugda/burxt/releases/download/v$V/burxt-$V-$(uname -s | tr 'A-Z' 'a-z')-$(uname -m).tar.gz
 ```
 
 Then:
@@ -28,6 +26,47 @@ Then:
 ```sh
 burxt run examples/tour.bx
 ```
+
+`PREFIX=~/.local sh scripts/install.sh ...` puts it somewhere other than `/usr/local`.
+
+## Or pick your own
+
+<div class="tablewrap" markdown="1">
+
+| Your machine | `uname -s`/`-m` | The asset |
+|---|---|---|
+| Linux, Intel or AMD | `Linux` / `x86_64` | `burxt-{{ site.burxt_version }}-linux-x86_64.tar.gz` |
+| Linux, ARM | `Linux` / `aarch64` | `burxt-{{ site.burxt_version }}-linux-aarch64.tar.gz` |
+| macOS, Apple silicon | `Darwin` / `arm64` | `burxt-{{ site.burxt_version }}-darwin-arm64.tar.gz` |
+| macOS, Intel | `Darwin` / `x86_64` | `burxt-{{ site.burxt_version }}-darwin-x86_64.tar.gz` |
+
+</div>
+
+Linux says `aarch64` where macOS says `arm64` for the same processor. The names here follow
+`uname` rather than tidying it, because the command above is `uname` and the two must agree.
+
+Every release also carries **`SHA256SUMS`** and the **VS Code extension** as a `.vsix`. All of it is
+on [the releases page](https://github.com/andrecorugda/burxt/releases).
+
+```sh
+tar xzf burxt-*-*.tar.gz
+cd burxt-*
+cp burxt ~/.local/bin/
+```
+
+## Windows
+
+There is no native build and that is a decision, not a gap: it would mean an MSVC toolchain in the
+matrix and a linker this project does not test. The container is the supported route and it is the
+same binary Linux gets.
+
+```sh
+wslc  run --rm -v "$PWD:/work" ghcr.io/andrecorugda/burxt run hello.bx   # Windows 11
+docker run --rm -v "$PWD:/work" ghcr.io/andrecorugda/burxt run hello.bx  # anywhere
+```
+
+`wslc` is Windows 11's built-in Linux container runtime — no Docker Desktop and no third-party
+runtime to install.
 
 ## What it needs from your machine
 

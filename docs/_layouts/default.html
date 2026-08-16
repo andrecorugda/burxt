@@ -38,7 +38,7 @@
   {%- endif -%}
   {%- if page.section == 'install' or page.url contains '/1.0/' -%}
   <select class="ver" aria-label="Documentation version" onchange="location.href=this.value">
-    <option value="{{ site.baseurl }}{{ rest }}"{% unless page.url contains '/1.0/' %} selected{% endunless %}>latest</option>
+    <option value="{{ site.baseurl }}{{ rest }}"{% unless page.url contains '/1.0/' %} selected{% endunless %}>{{ site.burxt_version }} (latest)</option>
     <option value="{{ site.baseurl }}/1.0{{ rest }}"{% if page.url contains '/1.0/' %} selected{% endif %}>1.0.0</option>
   </select>
   {%- endif -%}

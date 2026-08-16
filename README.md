@@ -80,7 +80,7 @@ The same principle generalizes. Burxt's identity is: **the compiler refuses to l
 
 **Released.** 1.1 added TCP sockets (`lib/net.bx`), processes (`os_fork`), and the one builtin that
 turned out to be the whole of the network wall — `c_bytes_to`, the mirror of `c_bytes_at`. See
-[`spec/M16-NETWORK.md`](spec/M16-NETWORK.md) for what the wall actually was.
+[`spec/1.1/M16-NETWORK.md`](spec/1.1/M16-NETWORK.md) for what the wall actually was.
 
 The 1.0 bar was written down before the work started and it was not moved:
 

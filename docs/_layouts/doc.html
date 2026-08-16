@@ -47,7 +47,7 @@
     {%- assign frozen_url = site.baseurl | append: '/1.0/limitations.html' -%}
   {%- endif -%}
   <select class="ver" aria-label="Documentation version" onchange="location.href=this.value">
-    <option value="{{ latest_url }}"{% unless page.url contains '/1.0/' %} selected{% endunless %}>latest</option>
+    <option value="{{ latest_url }}"{% unless page.url contains '/1.0/' %} selected{% endunless %}>{{ site.burxt_version }} (latest)</option>
     <option value="{{ frozen_url }}"{% if page.url contains '/1.0/' %} selected{% endif %}>1.0.0</option>
   </select>
 

@@ -17,7 +17,7 @@
 //
 // The separator is `/`, and only `/`. A backslash is an ordinary byte in a filename, `C:\x` is a
 // relative path whose single component is `C:\x`, and a drive letter means nothing. Windows paths
-// are `spec/ROADMAP-1.1.md`'s problem and the reason they are not attempted here is that a
+// are `spec/ROADMAP-2.0.md`'s problem and the reason they are not attempted here is that a
 // half-portable path library is worse than a POSIX one: it answers plausibly on Windows input
 // while getting UNC prefixes, drive-relative paths (`C:x` is not `C:\x`) and case folding wrong,
 // and a caller cannot tell which of those it just hit. This file's answers are wrong on Windows in

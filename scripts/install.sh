@@ -18,7 +18,7 @@
 #
 # `wslc` is Windows 11's built-in Linux container runtime — no Docker Desktop, no third-party
 # runtime. The reasoning for not shipping a native MSVC build, and the trigger that would
-# reverse it, are in spec/ROADMAP-1.1.md §W1–W2.
+# reverse it, are in spec/ROADMAP-2.0.md §W1–W2.
 set -e
 
 PREFIX="${PREFIX:-/usr/local}"

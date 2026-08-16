@@ -6823,7 +6823,7 @@ impl<'ctx> CodeGen<'ctx> {
         // **This is the documented exception to byte-identical IR.** The guarantee is about the
         // ARITHMETIC — every decimal operation, rounding helper and overflow check is identical
         // on every target, which is what makes the answers identical. A libc interface symbol is
-        // not arithmetic, and one platform simply spells this one differently. ROADMAP-1.1 §D2.
+        // not arithmetic, and one platform simply spells this one differently. ROADMAP-2.0 §D2.
         if triple.as_str().to_string_lossy().contains("apple") {
             if let Some(g) = self.module.get_global("stderr") {
                 g.set_name("__stderrp");

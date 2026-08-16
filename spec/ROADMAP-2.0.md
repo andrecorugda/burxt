@@ -1,7 +1,12 @@
-# Burxt 1.1 — the release after the core
+# Burxt 2.0 — hosts, and the web stack
 
-**Status: the plan of record for 1.1.** Created v0.0.260 as a hosts-only document; Part II
-added 2026-08-01, when 1.1 acquired a second half.
+**Status: the plan of record for 2.0.** Created v0.0.260 as a hosts-only document; Part II added
+2026-08-01, when it acquired a second half. **Renamed from `ROADMAP-1.1.md` on 2026-08-16**, because
+1.1.0 shipped without it: sockets and processes went out under [`1.1/M16-NETWORK.md`](1.1/M16-NETWORK.md)
+once the network wall turned out to be one builtin rather than a milestone, and this file plans
+something else. `spec/README.md` had already slated the rename; the release simply arrived first.
+
+**One row here is now DONE and it was Part II's foundation** — W2, `lib/net.bx`. See §Part II.
 
 [`ROADMAP-1.0.md`](ROADMAP-1.0.md) is the road to *a language someone outside this repository
 can ship on*. This file holds what comes after it, and it is **two unrelated things**:
@@ -12,7 +17,7 @@ can ship on*. This file holds what comes after it, and it is **two unrelated thi
 | **[Part II — The web stack](#part-ii--the-web-stack)** | HTML, CGI, sockets, a real server | Cannot be **started** until the core is done. Andre's call, 2026-08-01 |
 
 They share no machinery and neither blocks the other. They are in one file for one reason: a
-reader asking *"what is in 1.1"* has to find all of it in one place, and a `ROADMAP-1.1` that
+reader asking *"what is in 2.0"* has to find all of it in one place, and a `ROADMAP-2.0` that
 listed half the release would be the exact kind of index drift this project keeps tripping over.
 
 ---
@@ -255,7 +260,7 @@ split backwards.
 
 **And Part II is neither.** The web stack is not target-side and not host-side — it is library and
 language work that runs on a host already supported, for a target already emitting. It appears in
-this file because it ships in 1.1, not because it belongs to the target/host axis at all.
+this file because it ships in 2.0, not because it belongs to the target/host axis at all.
 
 ---
 
@@ -285,7 +290,7 @@ roadmap needs; the design, the measurements and the refusals are there.
 
 **Nothing here is built.** Andre's call, 2026-08-01: 1.0 is the real core and comes first.
 
-## Why it is in 1.1 at all
+## Why it is in 2.0 at all
 
 Burxt has no web story, and *"how does Rust handle front-end?"* is a question with no answer in
 this repository today. Rust's answer is instructive: it put **nothing** in the language and got
@@ -312,7 +317,7 @@ every framework author is competing with the compiler team instead of building o
 |---|---|---|---|
 | **W0** | `lib/html.bx` + `lib/cgi.bx` | **nothing** | none |
 | **W1** | C struct layouts — enough to describe `sockaddr_in` | A7 widths (**DONE** v0.0.261) | compiler |
-| **W2** | `lib/net.bx` — the socket calls | W1 | none |
+| **W2** | ~~`lib/net.bx` — the socket calls~~ **DONE in 1.1.0** — TCP server and client, `c_bytes_to` was the whole wall. [`1.1/M16-NETWORK.md`](1.1/M16-NETWORK.md) | W1 | none |
 | **W3** | Concurrency — this is **`ROADMAP-1.0.md` §G1**, not a new item | M1's re-decision | compiler, large |
 | **W4** | `lib/http.bx` — request, response, listener | W2, W3 | none |
 | **W5** | TLS / HTTPS | W4, §E build-vs-bind | undecided |
@@ -332,11 +337,25 @@ first draft of this section claimed:
 - **C structs — genuinely STALE.** The row said a C struct is out of reach because it *"needs
   widths"*. Widths landed in **v0.0.261**, and A7's own *unblocks* column names C structs. The
   blocker was gone and the row still described it. Corrected.
-- **Sockets — accurate, but vague.** The row said *"nothing wrapped. A fd is an int so it is
-  reachable, but no library"*, verdict Blocking. That was **right on both counts** and stays
-  Blocking, because you still cannot write a network program. What it did not say is *where* the
-  boundary falls: `socket`/`send`/`recv`/`listen`/`close` cross today, and only `bind`/`connect`/
-  `accept` need the struct. Sharpened, not corrected.
+- **Sockets — sharpened here, and then wrong by one function.** The row said *"nothing wrapped. A
+  fd is an int so it is reachable, but no library"*, verdict Blocking. This section sharpened it to
+  say where the boundary fell: *"`socket`/`send`/`recv`/`listen`/`close` cross today, and only
+  `bind`/`connect`/`accept` need the struct"* — and concluded it **stays Blocking, because you
+  still cannot write a network program.**
+  
+  **You could.** `accept(fd, NULL, NULL)` does not need the struct at all, and a null `CPointer` is
+  obtainable — `getenv` of a name nothing sets, which `os_env` already relied on. `listen()`
+  auto-binds an unbound TCP socket, so a server ran without `bind` ever being called. A Burxt
+  binary served HTTP to `curl` at v1.0.0 with **no compiler change**, and the one genuinely missing
+  piece was `bind` to a *chosen* port: sixteen bytes of `sockaddr_in`, one builtin, `c_bytes_to`.
+  Shipped in **1.1.0**; see [`1.1/M16-NETWORK.md`](1.1/M16-NETWORK.md).
+
+  Worth keeping because of where it sits. This is the paragraph directly above the sentence *"this
+  document is out of date is itself a claim worth checking before publishing"* — written by someone
+  doing exactly that check, on exactly this row, who narrowed the wall from five functions to three
+  and stopped one short of writing the program. **The correction was the right method applied
+  carefully and still short of the answer, because it reasoned about the boundary instead of
+  running it.**
 
 The first is Part I's own rule applied to a different file — *NOT DONE is not evidence*, and nobody
 re-tested the row once A7 shipped. The second is a reminder that "this document is out of date" is

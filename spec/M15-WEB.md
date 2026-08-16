@@ -1,6 +1,7 @@
 # Burxt — the web stack (M15)
 
-> Status: **SPECIFIED, NOTHING BUILT. Scheduled for 1.1, after 1.0 ships.** Andre's call,
+> Status: **SPECIFIED. Scheduled for 2.0.** Its socket foundation (W2) shipped early, in 1.1.0 —
+> see [`1.1/M16-NETWORK.md`](1.1/M16-NETWORK.md). Everything above the socket is still unbuilt.
 > 2026-08-01: 1.0 is the real core and comes first. No `.bx` file named in this document exists.
 >
 > Written now rather than later because exploring it sent someone back to
@@ -280,14 +281,14 @@ honest one.
 - **Databases.** An encoder to guard is §G5; a driver needs W2 first.
 - **A separate repository.** Considered and rejected: `use` names a path relative to the importing
   file with no way to name a **dependency** (`M6-MODULES.md` §1), so a second repo would need a git
-  submodule today. Revisit when packaging exists — and note `ROADMAP-1.1.md` §L1, where the
+  submodule today. Revisit when packaging exists — and note `ROADMAP-2.0.md` §L1, where the
   container raised the search-path question from the other side.
 
 ---
 
 ## 4. Verification — what would have to be true
 
-Per `ROADMAP-1.1.md`'s rule: every slice states what would have to be **executed**, not written.
+Per `ROADMAP-2.0.md`'s rule: every slice states what would have to be **executed**, not written.
 
 | Slice | The claim is earned when |
 |---|---|
