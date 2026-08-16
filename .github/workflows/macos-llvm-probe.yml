@@ -1,0 +1,57 @@
+# Temporary. Asks the two macOS runners whether a STATIC LLVM 18 link is possible at all.
+#
+# `release.sh` refuses the macOS binary because `otool -L` shows it linking libLLVM, which makes
+# the install page's "No Rust. No LLVM. No version to match." false on two of four platforms. The
+# Linux jobs get static archives from apt.llvm.org. The equivalent for macOS is not obvious:
+# **llvm.org publishes an arm64 macOS tarball for 18.1.8 and no x86_64 one for any 18.x**, so the
+# Intel runner has no upstream static build to fetch.
+#
+# Which leaves the question this answers: does Homebrew's `llvm@18` bottle ship static archives,
+# and does its `llvm-config` support `--link-static`? If yes, this is a build-flag fix rather than
+# a toolchain fix. Nobody has looked; the last three platform bugs today were all cases of
+# reasoning about a machine nobody ran.
+name: macOS LLVM probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: llvm-${{ matrix.name }}
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: darwin-arm64
+            runs-on: macos-14
+          - name: darwin-x86_64
+            runs-on: macos-15-intel
+    steps:
+      - name: Install LLVM 18 the way the release does
+        run: brew install --force-bottle llvm@18
+
+      - name: What does this bottle actually contain
+        run: |
+          P=$(brew --prefix llvm@18)
+          echo "prefix: $P"
+          echo
+          echo "--- static archives present? ---"
+          ls "$P"/lib/libLLVM*.a 2>/dev/null | head -5 || echo "NONE"
+          echo "count: $(ls "$P"/lib/libLLVM*.a 2>/dev/null | wc -l)"
+          echo
+          echo "--- shared libraries present? ---"
+          ls "$P"/lib/libLLVM*.dylib 2>/dev/null | head -5 || echo "NONE"
+          echo
+          echo "--- llvm-config says ---"
+          "$P"/bin/llvm-config --version
+          echo "shared-mode: $("$P"/bin/llvm-config --shared-mode 2>&1)"
+          echo
+          echo "--- can it link static? ---"
+          "$P"/bin/llvm-config --link-static --libs 2>&1 | head -c 300
+          echo
+          echo "(exit $?)"
+          echo
+          echo "--- and the system's own clang/llvm, for comparison ---"
+          xcrun --find clang 2>/dev/null || true
