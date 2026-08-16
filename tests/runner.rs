@@ -10999,18 +10999,35 @@ print(rounds);
     let source = scratch.join("early_exit.bx");
     fs::write(&source, program).unwrap();
 
+    // **GNU `time` and BSD `time` are different programs with the same path**, and this test was
+    // written against one of them. `/usr/bin/time -v` is GNU; macOS ships the BSD one, which
+    // answers `illegal option -- v` and a usage line, and the whole release then failed on a flag.
+    //
+    // The two disagree about more than the flag. GNU prints `Maximum resident set size (kbytes):
+    // 1408` — label first, **kilobytes**. BSD prints `1441792  maximum resident set size` — value
+    // first, **bytes**. Reading either one with the other's rule gives a number that is wrong by
+    // 1024×, which would have sailed straight past a ceiling assertion in one direction and
+    // tripped it in the other.
+    let gnu = !cfg!(target_os = "macos");
     let peak_kb = |exe: &Path| -> (u64, String) {
         let out = Command::new(timer)
-            .arg("-v")
+            .arg(if gnu { "-v" } else { "-l" })
             .arg(exe)
             .current_dir(&scratch)
             .output()
-            .expect("/usr/bin/time -v");
+            .expect("/usr/bin/time");
         let err = String::from_utf8_lossy(&out.stderr).to_string();
         let kb = err
             .lines()
-            .find(|l| l.contains("Maximum resident set size"))
-            .and_then(|l| l.rsplit(' ').next().and_then(|n| n.trim().parse::<u64>().ok()))
+            .find(|l| l.to_lowercase().contains("maximum resident set size"))
+            .and_then(|l| {
+                if gnu {
+                    l.rsplit(' ').next()?.trim().parse::<u64>().ok()
+                } else {
+                    // Bytes, and the number leads the line.
+                    l.split_whitespace().next()?.parse::<u64>().ok().map(|b| b / 1024)
+                }
+            })
             .unwrap_or_else(|| panic!("could not read peak RSS out of:\n{}", err));
         (kb, String::from_utf8_lossy(&out.stdout).trim().to_string())
     };
