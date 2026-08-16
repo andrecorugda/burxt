@@ -3666,6 +3666,58 @@ fn the_bmx_implementation_passes_the_formats_own_conformance_suite() {
     );
 }
 
+/// Every `lib/*.bx` imports its siblings by BARE FILENAME, never by a path.
+///
+/// The convention is real and was uniform — 49 imports, 49 bare — and it was written down
+/// nowhere. That is the shape `A7.0-NAMING.md` exists because of: a convention everybody follows
+/// until the first person who has no way to know it, and then nothing notices.
+///
+/// **The first person who has no way to know it is about to arrive.** `examples/` legitimately
+/// writes `use "../../lib/html.bx";` — six examples do — and a `lib/` module written by copying
+/// an example inherits that form. It is not merely inconsistent: `use` resolves relative to the
+/// including file, so from `lib/` that path lands *outside the repository* and the module cannot
+/// find its own dependency.
+///
+/// A compile failure would catch it only for the six modules named in
+/// `the_standard_library_compiles_and_works`. There are twenty-five.
+#[test]
+fn the_library_imports_itself_by_bare_filename() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut offenders = Vec::new();
+    let mut checked = 0;
+
+    for entry in fs::read_dir(root.join("lib")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("bx") {
+            continue;
+        }
+        let text = fs::read_to_string(&path).unwrap();
+        for (n, line) in text.lines().enumerate() {
+            let Some(rest) = line.strip_prefix("use \"") else { continue };
+            let Some(target) = rest.split('"').next() else { continue };
+            checked += 1;
+            if target.contains('/') {
+                offenders.push(format!(
+                    "lib/{}:{} imports `{}` — a sibling is named `{}`, with no path",
+                    path.file_name().unwrap().to_str().unwrap(),
+                    n + 1,
+                    target,
+                    target.rsplit('/').next().unwrap()
+                ));
+            }
+        }
+    }
+
+    // A sweep that found nothing to check would pass silently, which is the shape of every
+    // ratchet failure this project has already had.
+    assert!(checked >= 40, "the sweep found only {} imports in lib/ — it stopped working", checked);
+    assert!(
+        offenders.is_empty(),
+        "these library modules import by path rather than by bare filename:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 /// BMX level 2: a document becomes a view the COMPILER checks.
 ///
 /// This is the whole reason the format was worth defining, and it is the one thing a level-1
