@@ -1,0 +1,8 @@
+// `<br>Rice</br>` does not mean what it looks like: a browser reads the closing tag as a
+// SECOND `<br>`, and the text lands outside the element that was written. Rendering it would
+// be a silent wrong answer — worse than a crash, per DESIGN.md — so `html_element` refuses at
+// the point of construction instead, and the clause says which rule was broken.
+use "../../lib/html.bx";
+
+let broken: Html = html_element("br", [], [html_text("Rice")]);
+print(html_render(broken));

@@ -81,11 +81,24 @@ runtime to install.
 
 ## What it needs from your machine
 
-**A C compiler.** That is the whole list.
+**A C compiler**, for `burxt build` to link with — `build-essential` on Debian or Ubuntu,
+`xcode-select --install` on macOS. `burxt check` typechecks without linking and needs none of it.
 
-`burxt build` produces an object file and hands it to the system linker, so `cc` has to exist. On
-Debian or Ubuntu that is `build-essential`; on macOS, `xcode-select --install`. `burxt check`
-typechecks without linking anything and needs nothing at all.
+**And on Linux, five shared libraries.** This page said *"That is the whole list"* about the C
+compiler, and it was not:
+
+```
+libffi.so.8   libstdc++.so.6   libtinfo.so.6   libz.so.1   libzstd.so.1
+```
+
+A desktop distribution has all five already. A minimal container or a trimmed server image may not
+— which is exactly how this was found, when the official image moved to a base where `libffi8` was
+no longer pulled in by accident and the binary stopped starting. On Debian or Ubuntu:
+`apt-get install libffi8 libtinfo6 zlib1g libzstd1`.
+
+**macOS needs nothing beyond the system.** Those binaries link only what Apple ships.
+
+`burxt build` produces an object file and hands it to the system linker, so `cc` has to exist.
 
 **No Rust. No LLVM. No version to match.** LLVM is statically linked into the binary, which is why
 it is 48 MB. That is a deliberate trade: one download now, rather than a system dependency that has

@@ -1,0 +1,11 @@
+// The hole that escaping does not cover. `html_escape` guards VALUES; it can do nothing about
+// a tag or attribute NAME, which is written into the markup as syntax by definition. A computed
+// tag of `"div onclick=steal()"` would put an event handler on the page with every child of it
+// perfectly escaped, so the name itself is checked by contract.
+//
+// Its twin — the same refusal through `html_attr` — is the other half of the same rule, and one
+// fixture is enough to prove the predicate is wired to both because they call the same one.
+use "../../lib/html.bx";
+
+let injected: Html = html_element("div onclick=steal()", [], [html_text("Rice")]);
+print(html_render(injected));

@@ -1,0 +1,188 @@
+// ============================================================================
+// lib/html.bx — HTML as a typed tree, escaped at the one point it leaves.
+//
+//     use "lib/html.bx";
+//
+// This is M15's W0, and it needed no compiler feature: the `enum` + `class` mutual recursion
+// is the same shape `lib/json.bx` already proved, and the escape loop is `json_escape` with a
+// different table.
+//
+// ---- The one position this library takes ------------------------------------------------
+//
+// **An `Html` value cannot carry an unescaped String by mistake.**
+//
+// `Text` and `Raw` are different constructors and neither is the default, so embedding
+// unescaped bytes is a thing a reviewer sees on the line that does it. Escaping then happens
+// on RENDER, not at construction, because the alternative cannot be checked: if `html_text`
+// escaped eagerly, `Html.Text` would hold already-escaped text and nothing in the type would
+// say so — one function that forgets, or one value built by hand, and the page has a hole.
+// Escaping where a String leaves the tree means there is exactly one place to be right.
+//
+// ---- The two holes escaping does not cover, and both are refused here --------------------
+//
+// Escaping a VALUE does not save you from a bad NAME. `html_element(tag, ...)` with a tag of
+// `"div onclick=steal()"` writes that text into the markup as syntax, and no amount of
+// escaping the children helps — so a tag or attribute name that is not a name is refused by
+// contract rather than rendered. `html_is_name` is the whole rule and it is deliberately
+// narrow: a letter first, then letters, digits, `-` and `_`.
+//
+// A **void element cannot carry children**, also by contract. `<br>Rice</br>` does not mean
+// what it looks like — a browser reads `</br>` as a SECOND `<br>` and the text lands outside
+// the element you wrote. Rendering it would be a silent wrong answer, which `DESIGN.md` calls
+// worse than a crash, so it is a refusal at the point of construction instead.
+// ============================================================================
+
+// One attribute. A class rather than a two-payload variant, for the reason `Field` is one at
+// lib/json.bx:49 — a name and a value travelling together is a thing worth naming.
+class Attr { name: String, value: String }
+
+class Element { tag: String, attrs: [Attr], children: [Html] }
+
+// A node. `Element` holds `[Html]` and `Html` holds an `Element` — the two halves of one
+// recursive shape, and the slice is what keeps neither side infinitely wide.
+enum Html {
+    Text(String),   // escaped on render
+    Raw(String),    // trusted, and you had to type it
+    Node(Element),
+}
+
+// ---- names ---------------------------------------------------------------------
+// `pure`, because a contract clause must be, and this is used as one.
+
+// A tag or attribute name: a letter, then letters, digits, `-` and `_`. Narrow on purpose —
+// this is the predicate that stands between a computed name and markup injection, and the
+// safe answer to "should this byte be allowed" is no.
+pure function html_is_name(name: String) -> Bool {
+    let n: Int = len(name);
+    if n == 0 { return false; }
+    let first: Int = byte_at(name, 0);
+    let lower_first: Bool = first >= 97 && first <= 122;
+    let upper_first: Bool = first >= 65 && first <= 90;
+    if !lower_first && !upper_first { return false; }
+    let mutable i: Int = 1;
+    while i < n {
+        let b: Int = byte_at(name, i);
+        let lower: Bool = b >= 97 && b <= 122;
+        let upper: Bool = b >= 65 && b <= 90;
+        let digit: Bool = b >= 48 && b <= 57;
+        let dash: Bool = b == 45 || b == 95;
+        if !lower && !upper && !digit && !dash { return false; }
+        i += 1;
+    }
+    return true;
+}
+
+// The HTML void elements, in full. A closing tag for one of these is not merely redundant —
+// see the header. The list is the standard's and does not grow.
+pure function html_is_void(tag: String) -> Bool {
+    if tag == "area" { return true; }
+    if tag == "base" { return true; }
+    if tag == "br" { return true; }
+    if tag == "col" { return true; }
+    if tag == "embed" { return true; }
+    if tag == "hr" { return true; }
+    if tag == "img" { return true; }
+    if tag == "input" { return true; }
+    if tag == "link" { return true; }
+    if tag == "meta" { return true; }
+    if tag == "source" { return true; }
+    if tag == "track" { return true; }
+    if tag == "wbr" { return true; }
+    return false;
+}
+
+// ---- building ------------------------------------------------------------------
+// Free functions rather than one constructor: the name saying which kind you meant is what a
+// reviewer reads. None of these is `pure` — building an enum variant reads as a method call,
+// and a method may not be `pure` yet.
+
+function html_text(value: String) -> Html {
+    return Html.Text(value);
+}
+
+// The escape hatch, and it is spelled out. There is no convenience wrapper on this and there
+// will not be one: one way to say "unescaped", so a reviewer greps one word.
+function html_raw(trusted: String) -> Html {
+    return Html.Raw(trusted);
+}
+
+function html_attr(name: String, value: String) -> Attr
+    requires html_is_name(name)
+{
+    return Attr { name: name, value: value };
+}
+
+// Answers `Html` rather than `Element` so that nesting is one call deep: the tree is the
+// surface, and `Html.Node(html_element(...))` at every level would be ceremony carrying no
+// promise.
+function html_element(tag: String, attrs: [Attr], children: [Html]) -> Html
+    requires html_is_name(tag)
+    requires !html_is_void(tag) || len(children) == 0
+{
+    return Html.Node(Element { tag: tag, attrs: attrs, children: children });
+}
+
+// ---- rendering -----------------------------------------------------------------
+
+// The five entities, and only those. `'` goes out as `&#39;` rather than `&apos;`, which is
+// XML's spelling and not in HTML 4 — the numeric form is read correctly by everything.
+//
+// Built in RUNS rather than a byte at a time, copied from `json_escape` at lib/json.bx:98 for
+// the reason recorded there: `out = out + one_byte` copies the whole String on every byte, and
+// this project has paid for that shape three times.
+function html_escape(text: String) -> String {
+    let mutable out: String = "";
+    let mutable copied: Int = 0;
+    let mutable i: Int = 0;
+    let n: Int = len(text);
+    while i < n {
+        let b: Int = byte_at(text, i);
+        let mutable entity: String = "";
+        if b == 38 { entity = "&amp;"; }
+        if b == 60 { entity = "&lt;"; }
+        if b == 62 { entity = "&gt;"; }
+        if b == 34 { entity = "&quot;"; }
+        if b == 39 { entity = "&#39;"; }
+        if len(entity) > 0 {
+            out = out + substring(text, copied, i - copied) + entity;
+            copied = i + 1;
+        }
+        i += 1;
+    }
+    return out + substring(text, copied, n - copied);
+}
+
+// One node as text. Recursive, because the shape is.
+//
+// Attribute values are escaped and always double-quoted. An unquoted attribute is where a
+// value with a space becomes two attributes, so there is no option to omit them.
+function html_render(node: Html) -> String {
+    match node {
+        Text(s) => { return html_escape(s); }
+        Raw(s) => { return s; }
+        Node(e) => {
+            let mutable out: String = "<" + e.tag;
+            let mutable i: Int = 0;
+            while i < len(e.attrs) {
+                let a: Attr = e.attrs[i];
+                out = out + " " + a.name + "=\"" + html_escape(a.value) + "\"";
+                i += 1;
+            }
+            out = out + ">";
+            // A void element has no children — the contract on `html_element` guaranteed it —
+            // and no closing tag.
+            if html_is_void(e.tag) { return out; }
+            let mutable j: Int = 0;
+            while j < len(e.children) {
+                out = out + html_render(e.children[j]);
+                j += 1;
+            }
+            return out + "</" + e.tag + ">";
+        }
+    }
+}
+
+// A whole document, with the doctype every browser needs to stay out of quirks mode.
+function html_document(root: Html) -> String {
+    return "<!DOCTYPE html>" + html_render(root);
+}

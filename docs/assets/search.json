@@ -2023,6 +2023,90 @@
   "where": "function csv_render_delimited(rows: [CsvRow], delimiter: Int, crlf: Bool) -> String"
  },
  {
+  "kind": "class",
+  "name": "Attr",
+  "text": "lib/html.bx",
+  "url": "/reference/html.html#attr",
+  "where": "class Attr { name: String, value: String }"
+ },
+ {
+  "kind": "class",
+  "name": "Element",
+  "text": "lib/html.bx",
+  "url": "/reference/html.html#element",
+  "where": "class Element { tag: String, attrs: [Attr], children: [Html] }"
+ },
+ {
+  "kind": "enum",
+  "name": "Html",
+  "text": "lib/html.bx",
+  "url": "/reference/html.html#html",
+  "where": "enum Html"
+ },
+ {
+  "kind": "function",
+  "name": "html_is_name",
+  "text": "lib/html.bx",
+  "url": "/reference/html.html#html-is-name",
+  "where": "pure function html_is_name(name: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "html_is_void",
+  "text": "lib/html.bx",
+  "url": "/reference/html.html#html-is-void",
+  "where": "pure function html_is_void(tag: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "html_text",
+  "text": "lib/html.bx",
+  "url": "/reference/html.html#html-text",
+  "where": "function html_text(value: String) -> Html"
+ },
+ {
+  "kind": "function",
+  "name": "html_raw",
+  "text": "lib/html.bx",
+  "url": "/reference/html.html#html-raw",
+  "where": "function html_raw(trusted: String) -> Html"
+ },
+ {
+  "kind": "function",
+  "name": "html_attr",
+  "text": "lib/html.bx",
+  "url": "/reference/html.html#html-attr",
+  "where": "function html_attr(name: String, value: String) -> Attr"
+ },
+ {
+  "kind": "function",
+  "name": "html_element",
+  "text": "lib/html.bx",
+  "url": "/reference/html.html#html-element",
+  "where": "function html_element(tag: String, attrs: [Attr], children: [Html]) -> Html"
+ },
+ {
+  "kind": "function",
+  "name": "html_escape",
+  "text": "lib/html.bx",
+  "url": "/reference/html.html#html-escape",
+  "where": "function html_escape(text: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "html_render",
+  "text": "lib/html.bx",
+  "url": "/reference/html.html#html-render",
+  "where": "function html_render(node: Html) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "html_document",
+  "text": "lib/html.bx",
+  "url": "/reference/html.html#html-document",
+  "where": "function html_document(root: Html) -> String"
+ },
+ {
   "kind": "function",
   "name": "encoding_bytes_in_range",
   "text": "lib/encoding.bx",

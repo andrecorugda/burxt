@@ -24,6 +24,7 @@ Everything the language has. **Read out of the compiler**, not from memory: the 
 <li><a href="fn.html"><span><code>lib/fn.bx</code></span> <span class="what">the four interfaces that stand in for a function value</span></a></li>
 <li><a href="json.html"><span><code>lib/json.bx</code></span> <span class="what">JSON, parsed and rendered, in ordinary Burxt</span></a></li>
 <li><a href="csv.html"><span><code>lib/csv.bx</code></span> <span class="what">comma-separated values, read and written, RFC 4180 with the</span></a></li>
+<li><a href="html.html"><span><code>lib/html.bx</code></span> <span class="what">HTML as a typed tree, escaped at the one point it leaves</span></a></li>
 <li><a href="encoding.html"><span><code>lib/encoding.bx</code></span> <span class="what">hex, base64 and base64url, and every decoder REFUSES rather than guesses</span></a></li>
 <li><a href="hash.html"><span><code>lib/hash.bx</code></span> <span class="what">hashes and checksums</span></a></li>
 <li><a href="secure.html"><span><code>lib/secure.bx</code></span> <span class="what">bytes nobody can predict, and a comparison that does not leak</span></a></li>

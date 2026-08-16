@@ -1,0 +1,52 @@
+// lib/html.bx — the cases that decide an HTML library.
+//
+// A `<div>` rendering as `<div>` is not one of them; nothing was ever wrong about that. What
+// decides an HTML library is whether a value can stop being a value and start being SYNTAX —
+// through the text, through an attribute, through the tag name itself — and whether the one
+// element that has no closing tag gets one anyway.
+//
+// `spec/M15-WEB.md:302` says it plainly: compiling proves nothing about escaping, and this is
+// the test that matters. The two refusals live next door in tests/panic/, because a contract
+// failure is not a compile error.
+use "../../lib/html.bx";
+
+// 1. THE case. A script tag through `Text` reaches the page as characters, never as a tag.
+print(html_render(html_text("<script>alert('x')</script>")));
+
+// 2. All five entities in one string. `'` goes out as `&#39;` and not `&apos;` — see the header.
+print(html_render(html_text("Tom & Jerry \"quoted\"")));
+
+// 3. `Raw` passes through unchanged, and that is the point: it is a different constructor, so
+//    the one line that waives the rule is the one line a reviewer greps for.
+print(html_render(html_raw("<b>bold</b>")));
+
+// 4. The attribute breakout. A value that tries to close its own quote and start an event
+//    handler is escaped inside the quotes it cannot leave.
+print(html_render(html_element("span", [html_attr("title", "\" onmouseover=\"steal()")], [])));
+
+// 5. A void element renders with no closing tag. `<img src="a.png"></img>` would be a second
+//    image in a browser, which is a wrong answer nothing would report.
+print(html_render(html_element("img", [html_attr("src", "a.png")], [])));
+
+// 6. Nesting, and the shape M15 measured on the release binary at v0.0.264.
+print(html_render(html_element("div", [], [
+    html_element("p", [html_attr("class", "sku")], [html_text("Rice")]),
+])));
+
+// 7. A document carries the doctype, because without it a browser is in quirks mode.
+print(html_document(html_element("html", [], [
+    html_element("body", [], [html_text("hi")]),
+])));
+
+// 8. Empty text is an empty answer, not a missing one — and an element with no children is
+//    still an element with a closing tag.
+print(html_render(html_text("")));
+print(html_render(html_element("div", [], [])));
+
+// 9. Money keeps its scale on the way to the page. This is the thesis at the boundary the
+//    whole web stack loses it at: `to_string` of a Decimal<2> is two decimal places, and there
+//    is no float anywhere between the till and the tag.
+let price: Decimal<2> = 19.99;
+print(html_render(html_element("span", [html_attr("class", "price")], [
+    html_text(to_string(price * 3)),
+])));

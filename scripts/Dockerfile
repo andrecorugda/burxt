@@ -51,8 +51,14 @@ FROM debian:trixie-slim
 # than shipping no image.
 #
 # This layer comes before the COPY so that a new Burxt version does not re-fetch apt.
+# The four libraries after `libc6-dev` are what the binary actually links, and naming them is the
+# point. On bookworm they arrived as transitive dependencies of `gcc` and nobody noticed; on trixie
+# they do not, and the image failed its smoke test with `libffi.so.8: cannot open shared object
+# file`. A dependency that is satisfied by accident is a dependency you find out about on the day
+# the accident stops happening.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc libc6-dev \
+       libffi8 libtinfo6 zlib1g libzstd1 \
     && rm -rf /var/lib/apt/lists/*
 
 ARG TARGETARCH
