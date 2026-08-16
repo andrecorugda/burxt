@@ -119,9 +119,31 @@ if ! $SHARED_LIBS >/dev/null 2>&1; then
     echo "FAIL: could not inspect the binary's shared libraries with: $SHARED_LIBS" >&2
     exit 1
 fi
-if $SHARED_LIBS 2>/dev/null | grep -qi llvm; then
+# Two questions, not one, because the first version asked only the first and matched a PATH.
+#
+# **Is libLLVM linked?** Matched on the library's NAME, not on the line. `grep -i llvm` over
+# `otool -L` output flagged `/opt/homebrew/opt/llvm@18/lib/libunwind.1.dylib` — whose *path*
+# contains `llvm@18` while the library is libunwind — and reported "the binary links libLLVM"
+# about a binary that had libLLVM statically linked correctly.
+#
+# **Does it link anything outside the system?** That is the question the check was always really
+# asking, and it is the one that catches what the first one missed. libunwind from Homebrew is a
+# genuine failure: a user who has never run `brew` does not have `/opt/homebrew` at all. macOS
+# ships its unwinder and libc++ in `/usr/lib`, and a standalone tarball must use those.
+#
+# So: nothing from a package manager's prefix. Anything under /usr/lib, /System or the vdso is
+# the platform and is fine; /opt/homebrew, /usr/local/opt, /opt/local and /home/linuxbrew are not.
+LINKED=$($SHARED_LIBS 2>/dev/null)
+
+if echo "$LINKED" | sed 's|.*/||' | grep -qi '^libllvm'; then
     echo "FAIL: the binary links libLLVM, so it is not standalone" >&2
-    $SHARED_LIBS | grep -i llvm >&2
+    echo "$LINKED" | grep -i llvm >&2
+    exit 1
+fi
+
+if echo "$LINKED" | grep -qE '(/opt/homebrew|/usr/local/opt|/opt/local|/home/linuxbrew)'; then
+    echo "FAIL: the binary links a library from a package manager, so it is not standalone" >&2
+    echo "$LINKED" | grep -E '(/opt/homebrew|/usr/local/opt|/opt/local|/home/linuxbrew)' >&2
     exit 1
 fi
 

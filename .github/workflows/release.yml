@@ -94,7 +94,26 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install --force-bottle llvm@18
-          echo "LLVM_SYS_181_PREFIX=$(brew --prefix llvm@18)" >> "$GITHUB_ENV"
+          P=$(brew --prefix llvm@18)
+          echo "LLVM_SYS_181_PREFIX=$P" >> "$GITHUB_ENV"
+
+          # Move the LINK-TIME symlinks for the C++ runtime out of LLVM's lib directory.
+          #
+          # llvm-sys puts that directory on the linker's search path so it can find the 193 static
+          # `libLLVM*.a` archives, and `-lc++` then resolves to Homebrew's copy rather than the
+          # SDK's — which reexports Homebrew's libunwind, so the finished binary carries
+          # `/opt/homebrew/opt/llvm@18/lib/libunwind.1.dylib`. A machine that has never run `brew`
+          # does not have that path, so the tarball's "no LLVM to install" claim would be false.
+          #
+          # Only the unversioned symlinks go, which is all the linker consults. The real
+          # `libc++.1.dylib` and `libunwind.1.dylib` stay, so Homebrew's own `llc` and `clang` —
+          # which stage-1 shells out to — keep working at runtime.
+          for lib in libc++ libc++abi libunwind; do
+            for f in "$P/lib/$lib.dylib" "$P/lib/$lib.tbd"; do
+              [ -e "$f" ] && mv "$f" "$f.hidden-for-static-link" && echo "moved aside: $f"
+            done
+          done
+          true
 
       - uses: dtolnay/rust-toolchain@stable
 
