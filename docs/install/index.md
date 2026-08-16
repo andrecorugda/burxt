@@ -54,6 +54,17 @@ cd burxt-*
 cp burxt ~/.local/bin/
 ```
 
+## What the tarball needs from your Linux
+
+**glibc 2.39 or newer**, which means **Ubuntu 24.04+, Debian 13+, Fedora 40+, RHEL 10+**.
+
+The Linux binaries are built on Ubuntu 24.04 and link that glibc, so an older distribution answers
+`version GLIBC_2.39 not found` and stops. That is not a helpful message and it is the first thing a
+reader would meet, so it is written here instead.
+
+On an older Linux, use the container below — it is the same binary on a base image that carries the
+right glibc. macOS has no equivalent floor: those binaries link only what the system ships.
+
 ## Windows
 
 There is no native build and that is a decision, not a gap: it would mean an MSVC toolchain in the

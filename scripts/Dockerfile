@@ -32,7 +32,14 @@
 # `TARGETARCH` is set by buildx per platform and selects between the two subdirectories.
 # ---------------------------------------------------------------------------------------
 
-FROM debian:bookworm-slim
+# **trixie and not bookworm, because of glibc.** The Linux tarballs are built on Ubuntu 24.04,
+# whose glibc is 2.39; bookworm ships 2.36, so the image built fine and then failed its own smoke
+# test with `version GLIBC_2.38 not found`. Debian 13 (trixie) is 2.41 and clears it.
+#
+# The base image has to be at least as new as the builder, and that is a constraint worth stating
+# rather than rediscovering: bumping the build runner without bumping this is a release that
+# publishes an image nobody can run.
+FROM debian:trixie-slim
 
 # `gcc` is not optional and it is not a convenience. `burxt build` hands its object file to
 # the system linker by calling `cc` — the compiler owns the triple and the object, and
