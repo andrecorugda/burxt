@@ -13,3 +13,21 @@ path = "src/rust-compiler/main.rs"
 
 [dependencies]
 inkwell = { version = "0.9.0", features = ["llvm18-1"] }
+
+# **macOS only: force llvm-sys to link LLVM statically.**
+#
+# The release tarball's whole claim is "no Rust, no LLVM, no version to match", and `release.sh`
+# enforces it — `otool -L` on the binary, and a hard fail if libLLVM shows up. On macOS it showed
+# up, so the Mac half of the release could never publish.
+#
+# llvm-sys defaults to *prefer* static, which falls back to dynamic without saying so. Homebrew's
+# `llvm@18` bottle reports `llvm-config --shared-mode: shared`, so it fell back — even though the
+# same prefix ships **193 static archives** and `llvm-config --link-static --libs` lists every one
+# of them. Measured on both runners before changing anything; the capability was there and the
+# default was choosing against it.
+#
+# `force-static` is llvm-sys's own feature for exactly this. Scoped to macOS because Linux gets
+# LLVM from apt.llvm.org and already links statically, and a `force` that is not needed is a
+# `force` that will fail confusingly on some future host.
+[target.'cfg(target_os = "macos")'.dependencies]
+llvm-sys = { version = "181", features = ["force-static"] }
