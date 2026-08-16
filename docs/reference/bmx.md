@@ -90,6 +90,8 @@ So BMX lives in `.bmx` files: read at runtime here, read at build time by the ge
 | [`bmx_emit_inline`](#bmx-emit-inline) | function | — |
 | [`bmx_emit_one`](#bmx-emit-one) | function | The expression for one block that is NOT a fence. Fences are statements and are handled by `bmx_emit_stmts`, which is th |
 | [`bmx_emit_stmts`](#bmx-emit-stmts) | function | Statements that push each block into `target`, because a fence is a statement: `for` and `if` bind names, and a binding  |
+| [`bmx_props`](#bmx-props) | function | A `props` block declares the view's own signature, so a component can be invoked by another document without an out-of-b |
+| [`bmx_without_props`](#bmx-without-props) | function | The document without its `props` block, because a declaration is not content and must not become a call to a component n |
 | [`bmx_emit_burxt`](#bmx-emit-burxt) | function | A document and a signature in, a Burxt source file out. |
 
 ## Types
@@ -500,6 +502,37 @@ Statements that push each block into `target`, because a fence is a statement: `
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/bmx.bx#L1169)
 
+### `bmx_props`
+{: #bmx-props}
+
+```burxt
+function bmx_props(blocks: [Block]) -> String
+```
+
+A `props` block declares the view's own signature, so a component can be invoked by another document without an out-of-band agreement about its parameters:
+
+```burxt
+ ::: props title: String, featured: Bool
+ :::
+```
+
+It is not a new construct — `props` is a block name like any other, and its head is captured opaquely exactly like `for`'s. **That is why §7's front-matter row closed as NOT NEEDED rather than as built**: the format already had the general shape, and the answer was to use it on itself.
+
+Answers the head of the first `props` block, or "" if the document declares none.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/bmx.bx#L1249)
+
+### `bmx_without_props`
+{: #bmx-without-props}
+
+```burxt
+function bmx_without_props(blocks: [Block]) -> [Block]
+```
+
+The document without its `props` block, because a declaration is not content and must not become a call to a component nobody wrote.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/bmx.bx#L1269)
+
 ### `bmx_emit_burxt`
 {: #bmx-emit-burxt}
 
@@ -511,7 +544,7 @@ A document and a signature in, a Burxt source file out.
 
 `parameters` is written verbatim into the signature (`"order: Order"`) and `requires` is one clause per entry. Both come from the caller because the FORMAT does not carry them — see the note above about front matter.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/bmx.bx#L1242)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/bmx.bx#L1297)
 
 
 {% endraw %}

@@ -1234,13 +1234,73 @@ function bmx_emit_stmts(blocks: [Block], target: String, tag: String, indent: St
     return Result.Ok(out);
 }
 
+// A `props` block declares the view's own signature, so a component can be invoked by another
+// document without an out-of-band agreement about its parameters:
+//
+//     ::: props title: String, featured: Bool
+//     :::
+//
+// It is not a new construct — `props` is a block name like any other, and its head is captured
+// opaquely exactly like `for`'s. **That is why §7's front-matter row closed as NOT NEEDED rather
+// than as built**: the format already had the general shape, and the answer was to use it on
+// itself.
+//
+// Answers the head of the first `props` block, or "" if the document declares none.
+function bmx_props(blocks: [Block]) -> String {
+    let mutable i: Int = 0;
+    while i < len(blocks) {
+        match blocks[i] {
+            Fenced(fenced) => {
+                if fenced.name == "props" { return fenced.head; }
+            }
+            Heading(h) => { }
+            Paragraph(w) => { }
+            Quote(w) => { }
+            List(l) => { }
+            Code(c) => { }
+        }
+        i += 1;
+    }
+    return "";
+}
+
+// The document without its `props` block, because a declaration is not content and must not
+// become a call to a component nobody wrote.
+function bmx_without_props(blocks: [Block]) -> [Block] {
+    let mutable out: [Block] = [];
+    let mutable i: Int = 0;
+    while i < len(blocks) {
+        let mutable keep: Bool = true;
+        match blocks[i] {
+            Fenced(fenced) => {
+                if fenced.name == "props" { keep = false; }
+            }
+            Heading(h) => { }
+            Paragraph(w) => { }
+            Quote(w) => { }
+            List(l) => { }
+            Code(c) => { }
+        }
+        if keep {
+            let added: Int = push(out, blocks[i]);
+        }
+        i += 1;
+    }
+    return out;
+}
+
 // A document and a signature in, a Burxt source file out.
 //
 // `parameters` is written verbatim into the signature (`"order: Order"`) and `requires` is one
 // clause per entry. Both come from the caller because the FORMAT does not carry them — see the
 // note above about front matter.
 function bmx_emit_burxt(blocks: [Block], source_name: String, name: String, parameters: String, clauses: [String]) -> Result<String, String> {
-    match bmx_emit_stmts(blocks, "kids", "0", "    ") {
+    // The document's own `props` block wins over the caller's argument, because a component that
+    // declares its interface is the one thing that lets another document invoke it.
+    let declared: String = bmx_props(blocks);
+    let mutable signature: String = parameters;
+    if len(declared) > 0 { signature = declared; }
+    match bmx_emit_stmts(bmx_without_props(blocks), "kids", "0", "    ") {
         Error(e) => { return Result.Error(e); }
         Ok(body) => {
             let mutable out: String = "// GENERATED from " + source_name + " by `bmx generate`. Do not edit.\n";
@@ -1249,7 +1309,7 @@ function bmx_emit_burxt(blocks: [Block], source_name: String, name: String, para
             out = out + "// compiler checks it: a missing field is a type error, and a rounding contract\n";
             out = out + "// survives into the tag. That is what the document could not do by itself.\n";
             out = out + "use \"lib/html.bx\";\n\n";
-            out = out + "pure function " + name + "(" + parameters + ") -> Html\n";
+            out = out + "pure function " + name + "(" + signature + ") -> Html\n";
             let mutable i: Int = 0;
             while i < len(clauses) {
                 out = out + "    requires " + clauses[i] + "\n";

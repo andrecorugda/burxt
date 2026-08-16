@@ -2472,6 +2472,20 @@
  },
  {
   "kind": "function",
+  "name": "bmx_props",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-props",
+  "where": "function bmx_props(blocks: [Block]) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_without_props",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-without-props",
+  "where": "function bmx_without_props(blocks: [Block]) -> [Block]"
+ },
+ {
+  "kind": "function",
   "name": "bmx_emit_burxt",
   "text": "lib/bmx.bx",
   "url": "/reference/bmx.html#bmx-emit-burxt",
