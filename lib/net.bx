@@ -65,6 +65,41 @@ external function free(p: CPointer) -> Int;
 // and already had the trick: `getenv` of a name nothing sets answers NULL, guaranteed by POSIX.
 // Spelling it twice would be a fact stored twice, and a fact stored twice disagrees with itself
 // eventually.
+// **Linux and the BSDs do not lay out `sockaddr_in` the same way, and this is measured rather
+// than assumed.**
+//
+//     Linux:      sa_family_t sin_family;   // TWO bytes, little-endian  -> [2, 0, ...]
+//     macOS/BSD:  uint8_t     sin_len;      // ONE byte, the struct size -> [16, 2, ...]
+//                 sa_family_t sin_family;   // ONE byte
+//
+// There is no byte pair that satisfies both: Linux needs `[2, 0]` and macOS needs the `2` in the
+// second slot, and `[2, 2]` reads on Linux as family 514. So the layout has to be decided at
+// runtime, and Burxt has no conditional compilation — a recorded decision, and the right one.
+//
+// **This cost a CI runner an hour.** `lib/net.bx` shipped writing the Linux layout unconditionally.
+// On macOS `bind` then saw family 0, `net_port_of` answered `None`, the fixture connected to port
+// 0, and the parent waited in `accept()` until GitHub cancelled the job at sixty minutes. The
+// library was announced as portable and was tested on one kernel.
+//
+// The probe is a throwaway UDP socket bound to `127.0.0.1:0` — the kernel picks the port, nothing
+// listens, nothing conflicts, and it is three syscalls rather than the subprocess `os_platform`
+// would cost. `SOCK_DGRAM` is 2 and `AF_INET` is 2 on both families, which is why this can ask the
+// question in the first place.
+function net_uses_bsd_sockaddr() -> Bool touches network {
+    let fd: Int = socket(2, 2, 0);                  // AF_INET, SOCK_DGRAM
+    if fd < 0 {
+        return false;
+    }
+    let where: CPointer = malloc(16);
+    let linux_shape: [Int] = [2, 0, 0, 0, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+    let wrote: Int = c_bytes_to(where, linux_shape);
+    let bound: Int = bind(fd, where, 16);
+    let gone: Int = free(where);
+    let shut: Int = close(fd);
+    // A kernel that refuses the Linux layout is telling us it wants the other one.
+    return bound != 0;
+}
+
 // `struct sockaddr_in`, the sixteen bytes every one of these calls is really about.
 //
 //     struct sockaddr_in {
@@ -91,7 +126,7 @@ external function free(p: CPointer) -> Int;
 // function whose parameters are all `Int` carries no caller region, so it may not return `[Int]`:
 // "its storage lives in a region and would not outlive it". Taking the destination pointer is the
 // better API anyway. There is exactly one place that knows this layout, which is the point.
-function write_sockaddr_in(where: CPointer, port: Int, a: Int, b: Int, c: Int, d: Int) -> Int
+function write_sockaddr_in(where: CPointer, port: Int, a: Int, b: Int, c: Int, d: Int) -> Int touches network
     requires port >= 1
     requires port <= 65535
     requires a >= 0
@@ -104,8 +139,14 @@ function write_sockaddr_in(where: CPointer, port: Int, a: Int, b: Int, c: Int, d
     requires d <= 255
 {
     let high: Int = divide_floor(port, 256);
-    let bytes: [Int] = [2, 0, high, port - high * 256, a, b, c, d, 0, 0, 0, 0, 0, 0, 0, 0];
-    return c_bytes_to(where, bytes);
+    let low: Int = port - high * 256;
+    if net_uses_bsd_sockaddr() {
+        // sin_len is the size of the struct, then the family in one byte.
+        let bsd: [Int] = [16, 2, high, low, a, b, c, d, 0, 0, 0, 0, 0, 0, 0, 0];
+        return c_bytes_to(where, bsd);
+    }
+    let linux: [Int] = [2, 0, high, low, a, b, c, d, 0, 0, 0, 0, 0, 0, 0, 0];
+    return c_bytes_to(where, linux);
 }
 
 // A socket bound to `port` on every interface, listening, ready for `net_accept`.
@@ -281,8 +322,12 @@ function net_listen_any_port(backlog: Int) -> Option<Int> touches network, input
     }
     let where: CPointer = malloc(16);
     // Port 0 means "pick one for me", which is exactly what `write_sockaddr_in` refuses — so the
-    // sixteen bytes are written here, and the family and the zero port are all of it.
-    let any: [Int] = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    // sixteen bytes are written here, and the family and the zero port are all of it. Both
+    // layouts, for the reason `net_uses_bsd_sockaddr` gives.
+    let mutable any: [Int] = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    if net_uses_bsd_sockaddr() {
+        any = [16, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    }
     let wrote: Int = c_bytes_to(where, any);
     let bound: Int = bind(fd, where, 16);
     let gone: Int = free(where);
@@ -316,7 +361,13 @@ function net_port_of(fd: Int) -> Option<Int> touches network {
     let head: [Int] = c_bytes_at(where, 4);
     let a: Int = free(where);
     let b: Int = free(size);
-    if head[0] != 2 {
+    // The family lives in byte 0 on Linux and byte 1 on the BSDs, and reading the wrong one is
+    // how this function answered `None` on macOS and sent a fixture to connect to port 0.
+    let mutable family: Int = head[0];
+    if net_uses_bsd_sockaddr() {
+        family = head[1];
+    }
+    if family != 2 {
         return Option.None;            // not AF_INET, so bytes 2 and 3 are not a port
     }
     // Big-endian, the way it went in.

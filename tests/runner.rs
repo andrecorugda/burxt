@@ -67,12 +67,72 @@ fn verdict(dir: &str, program: &Path, why: Option<&str>) {
 /// Run `burxt <cmd> <program>` in a scratch working directory.
 fn burxt(cmd: &str, program: &Path, workdir: &Path) -> Output {
     fs::create_dir_all(workdir).unwrap();
-    Command::new(env!("CARGO_BIN_EXE_burxt"))
-        .arg(cmd)
-        .arg(program)
-        .current_dir(workdir)
-        .output()
-        .expect("failed to spawn burxt")
+    let mut command = Command::new(env!("CARGO_BIN_EXE_burxt"));
+    command.arg(cmd).arg(program).current_dir(workdir);
+    finish_or_kill(command, 180, &format!("burxt {} {}", cmd, program.display()))
+}
+
+/// Run a command and **kill it if it will not finish**, rather than waiting forever.
+///
+/// This exists because a fixture hung a CI runner for a full hour. `tests/pass/net_loopback.bx`
+/// opens a socket and waits for a connection; on macOS the address layout it wrote was wrong, the
+/// connection never came, and the parent sat in `accept()` until GitHub cancelled the job at
+/// sixty minutes. The job that should have gone red in three minutes went red in sixty and said
+/// nothing useful — the only clue was `Terminate orphan process: pid (22819) (net_loopback)` in
+/// the runner's cleanup.
+///
+/// **The fixture's bug was mine; the suite's willingness to wait forever was not new.** `burxt()`
+/// had no deadline from the day it was written, and neither did the backend harness, so ANY
+/// fixture that blocked — on a socket, on stdin, on a lock, on a `read` from a pipe nobody
+/// writes — could do this. It had simply never happened, which is not the same as being safe.
+///
+/// Written with `try_wait` rather than `Command::new("timeout")` deliberately: `timeout(1)` is GNU
+/// coreutils and **macOS does not ship it**, so the obvious one-line fix would have worked on
+/// exactly the platform that did not need it.
+///
+/// The output pipes are read after the wait, so a program that printed more than a pipe buffer
+/// (~64 KB) before blocking would deadlock here. No fixture comes close, and a fixture that did
+/// would be testing the harness rather than the compiler.
+fn finish_or_kill(mut command: Command, seconds: u64, what: &str) -> Output {
+    use std::io::Read;
+    let mut child = command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("failed to spawn {}: {}", what, e));
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    let overran = loop {
+        match child.try_wait().expect("try_wait") {
+            Some(_) => break false,
+            None if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break true;
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(20)),
+        }
+    };
+
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        let _ = pipe.read_to_end(&mut out);
+    }
+    if let Some(mut pipe) = child.stderr.take() {
+        let _ = pipe.read_to_end(&mut err);
+    }
+    let status = child.wait().expect("wait");
+
+    assert!(
+        !overran,
+        "`{}` did not finish within {}s and was killed. A fixture that blocks forever is worse \
+         than one that fails: it turns a three-minute red into a sixty-minute one and reports \
+         nothing. Whatever it is waiting for is not coming.",
+        what, seconds
+    );
+    Output { status, stdout: out, stderr: err }
 }
 
 /// Copy tests/<dir>'s fixture files (anything that is not a program or an
@@ -3136,10 +3196,9 @@ fn the_burxt_backend_compiles_a_growing_share_of_the_suite() {
         }
         // In the scratch directory, because a program under test may WRITE a file —
         // `driver_primitives.bx` does — and it must not land in the repository.
-        let ran = Command::new(&exe)
-            .current_dir(&scratch)
-            .output()
-            .expect("the program");
+        let mut run = Command::new(&exe);
+        run.current_dir(&scratch);
+        let ran = finish_or_kill(run, 60, &format!("{} (through the Burxt backend)", name));
         let expected = fs::read(&expected_path).unwrap();
         if ran.stdout == expected {
             correct += 1;

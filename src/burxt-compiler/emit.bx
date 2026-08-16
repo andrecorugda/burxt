@@ -725,7 +725,7 @@ function (mutable self: Unit) emit_expr(src: String, node: Int) -> String {
                     let holder: Type = Type { kind: 46, scale: 0, contract: 0,
                                           name_start: base_name.start,
                                           name_length: base_name.length };
-                    return self.emit_construction(src, holder, n, n.kind == 14);
+                    return self.emit_construction(src, holder, n, n.kind == 14, node);
                 }
             }
         }
@@ -1716,10 +1716,36 @@ function (mutable self: Unit) variant_index(src: String, holder: Type, name: Tok
 }
 
 // `Enum.Variant` or `Enum.Variant(payload)`: the tag in cell 0, the payload after it.
+//
+// **The storage is sized from the NODE's type, not from `holder`, and that distinction was a stack
+// buffer overflow.** `holder` is synthesised at the call site from the base token alone —
+// `Type { kind: 46, scale: 0, contract: 0, name_start, name_length }` — so it names `Option` with
+// **no type arguments**. `cells_of` then sizes the widest variant with `T` unbound, which is one
+// cell, and `Option<User>` got two cells where it needed three: a tag plus a two-field record.
+//
+// The tag was written, sixteen bytes of payload were memcpy'd past the end of an eight-byte
+// `alloca`, and twenty-four were copied back out — the return path sizes itself from the declared
+// return type and was right all along, so the two disagreed by two cells.
+//
+// **x86-64 survived it for the whole life of the feature.** The overflow landed in stack padding
+// and nothing noticed. On aarch64 it smashed the frame and the program died with SIGILL after
+// printing four of its six lines — and only in the Release workflow, which is the only place this
+// project builds for arm64. Byte-for-byte the same IR on both; one architecture forgave it.
+//
+// This is B18's shape exactly: *the hardware was standing in for a check the compiler never made.*
+// `holder` is still what names the variant, because the variant index needs the declaration and
+// not the instantiation. Only the size comes from the node.
 function (mutable self: Unit) emit_construction(src: String, holder: Type, call: Node,
-                                      has_args: Bool) -> String {
+                                      has_args: Bool, node: Int) -> String {
     let tag: Int = self.variant_index(src, holder, self.tokens[call.token]);
-    let storage: String = self.scratch(self.cells_of(src, holder));
+    // The checker records the applied type here — `Option<User>`, kind 46, three cells. Fall back
+    // to the bare holder only if it did not, which would mean the node was never typed.
+    let mine: Type = self.type_at(node);
+    let mutable cells: Int = self.cells_of(src, holder);
+    if mine.kind == 46 {
+        cells = self.cells_of(src, mine);
+    }
+    let storage: String = self.scratch(cells);
     let stored: Int = self.write_body("  store i64 " + to_string(tag) + ", ptr " + storage + "\n");
 
     if has_args {

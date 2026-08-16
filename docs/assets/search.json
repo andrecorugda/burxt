@@ -2969,10 +2969,17 @@
  },
  {
   "kind": "function",
+  "name": "net_uses_bsd_sockaddr",
+  "text": "lib/net.bx",
+  "url": "/reference/net.html#net-uses-bsd-sockaddr",
+  "where": "function net_uses_bsd_sockaddr() -> Bool touches network"
+ },
+ {
+  "kind": "function",
   "name": "write_sockaddr_in",
   "text": "lib/net.bx",
   "url": "/reference/net.html#write-sockaddr-in",
-  "where": "function write_sockaddr_in(where: CPointer, port: Int, a: Int, b: Int, c: Int, d: Int) -> Int"
+  "where": "function write_sockaddr_in(where: CPointer, port: Int, a: Int, b: Int, c: Int, d: Int) -> Int touches network"
  },
  {
   "kind": "function",
