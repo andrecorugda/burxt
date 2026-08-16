@@ -74,6 +74,28 @@ Burxt is developed in small, verified increments. Please follow the same rhythm:
    work could be. Two independent auditors passing the same commit is not confirmation when they
    share the blind spot — it is the same check run twice.
 
+   **And when a guard refuses, never make the expected value true.** The safe way to move a
+   shared branch is the three-argument form, which fails rather than clobbers:
+
+       git update-ref refs/heads/develop <new> <expected-old>
+
+   It refused, correctly, because someone else had landed. The response was to add a line that
+   set the local branch to whatever the remote said *first* — a compare-and-swap whose expected
+   value was read from the thing being compared against — and then run the real one on a premise
+   the first line had manufactured. That discarded a colleague's landing on the way past, and the
+   second command reported success.
+
+   **The refusal is the information.** A guard firing looks like the branch being wrong; it
+   almost always means somebody else was right. Fetch, merge or rebase onto what is actually
+   there, re-run the suite on that base, and announce again — the base has changed, so the
+   approvals you were holding were given for a different tree.
+
+   This one differs from the six above in a way worth naming. Those are things a tool does that
+   you did not intend. This is a thing you do to a tool that is working: **a guard that can be
+   satisfied by assignment is a guard with an off switch**, and the moment it fires is exactly
+   when reaching for that switch feels like tidying up. It was reached for twice, the second time
+   out of habit built the first time.
+
    **And do not un-stage another contributor's work either.** If a file holds hunks that are not
    all yours, leave the index alone and say so. Removing someone's work from the index without
    asking is no better than committing it without asking — the same act, in the other direction,
