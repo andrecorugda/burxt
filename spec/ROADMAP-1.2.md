@@ -139,6 +139,32 @@ Being built in a parallel session; listed so the release knows what it contains.
 | ☐ | P3c | `lib/bmx.bx` + the conformance suite. Written, uncommitted |
 | ☐ | P3d | BMX's own repo question — **the reference parser is `lib/bmx.bx` today, which is the decision by default if nobody rules.** Andre's |
 
+### P3b · Exact money, all the way to the characters
+
+Not a release of its own — it is a **patch**, because it adds no surface.
+
+| ☐ | # | Item |
+|---|---|---|
+| ☐ | P3b | Render `Decimal` and `Int` to text **in Burxt**, not through the host's `snprintf`. Argument, measurement, cost and the fixture set: [`1.0/N1-BOUNDARY-EXACTNESS.md`](1.0/N1-BOUNDARY-EXACTNESS.md) §7 |
+
+`codegen.rs:2360` builds `format!("%s%llu.%0{}llu", scale)` and hands it to whatever libc the
+target has. **No conforming libc renders that differently**, so this is not a latent defect on any
+platform Burxt ships to — the claim was drafted stronger than that and narrowed before landing.
+
+The exposure is hosts that supply `printf` themselves, which is a surface that did not exist
+before this month and is exactly where the language is going. A wasm island rendered **`$1299.05`
+as `1299.5`** on 2026-08-16 because its varargs walker discarded the width — silently, no crash,
+a factor of ten. Zero-padding is the one detail that corrupts money instead of crashing, and every
+future host author is currently asked to get it right.
+
+**The acceptance test is the version number.** It adds nothing, so it is a patch, so byte-identical
+output against every fixture in §7.4 is the bar — plus stage-0 and stage-1 agreeing with each
+other, because two implementations that both match glibc and not each other is a fixpoint failure
+wearing a passing test.
+
+**Fixtures before implementation.** Getting a zero-pad wrong reintroduces exactly this defect with
+our name on it instead of a shim author's.
+
 ### P4 · The playground itself
 
 | ☐ | # | Item |

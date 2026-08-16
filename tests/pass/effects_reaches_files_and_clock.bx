@@ -1,0 +1,43 @@
+// `burxt effects` — the program's reach, and where each effect entered.
+//
+// Three things this fixture exists to pin, and the third is the one that makes the command worth
+// having at all:
+//
+//   * The chain runs to the LEAF. `load` declares `touches files`, but files did not enter at
+//     `load` — it entered at `fopen`, and `load` had no choice because the checker made it
+//     declare what its callee reaches. `via load` would be true and useless.
+//   * `unused_danger` touches commands and is NEVER reported, because nothing calls it. Totalling
+//     every function in the file would be two lines and would report `commands` for every program
+//     that writes `use "lib/os.bx"`.
+//   * A `pure` function is not a hiding place. `describe` is pure and calls nothing; the effects
+//     come from the two that are not.
+use "../../lib/os.bx";
+use "../../lib/files.bx";
+
+function stamp() -> Int touches clock { return os_now(); }
+
+function load(path: String) -> Option<String> touches files {
+    return file_read_maybe(path);
+}
+
+// Reachable by nobody. Its effect must not appear in the report.
+function unused_danger(cmd: String) -> Int touches commands { return os_run(cmd); }
+
+pure function describe(after_the_epoch: Bool) -> String { return "clock ran: {after_the_epoch}"; }
+
+// **Its stdout is deliberately independent of the clock and the filesystem.** The assertion this
+// fixture carries is what `burxt effects` REPORTS about it, not what it prints — but it lives in
+// `tests/pass` all the same, and a fixture whose output moves is no fixture. So the timestamp is
+// compared, never printed, and the missing file is reported as absence rather than as a length.
+//
+// It earns its place here twice over: `pass_programs_produce_expected_stdout` proves the program
+// actually runs, and `the_two_compilers_report_the_same_reach` proves both compilers say the same
+// thing about it. A separate `tests/effects/` directory was written first and then deleted —
+// `tests/` already had six homes, and a new one is a claim that none of them fits.
+region main {
+    print(describe(stamp() > 0));
+    match load("nothing-here.txt") {
+        None => { print("absent"); }
+        Some(text) => { print("present"); }
+    }
+}
