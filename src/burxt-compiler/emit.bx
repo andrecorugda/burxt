@@ -3062,11 +3062,23 @@ function c_type_of(bound_type: Type) -> String {
 // Stage-0 answers the same collision by REFUSING the name. Skipping is better: the program
 // gets to say what it means, and the only cost is that a program declaring a different
 // signature for one of these would be told so by LLVM rather than by the compiler.
+// **This list is checked against the runtime rather than trusted.**
+// `every_runtime_declaration_is_listed_as_such` in `tests/runner.rs` scans the emitted preamble
+// for `declare ... @name(` and fails if any name is missing here — because a hand-kept list of
+// what the runtime declares can only ever cover what its author remembered, and both of the
+// names it was missing were added by people who did not know this function existed.
+//
+// `getrlimit` came with the stack guard and `dprintf` with the move off `stderr` — that one is
+// the instructive half. `stderr` is a data symbol and Apple's libc calls it `__stderrp`, so
+// stage-1's twenty-four `fprintf(stderr, ...)` sites became `dprintf(2, ...)`, which fixed macOS
+// and quietly planted this: nothing declared `dprintf` in a Burxt program, so nothing collided,
+// until `lib/os.bx` declared `getrlimit` months later and llc refused the duplicate. **A latent
+// defect is one whose trigger has not been written yet.**
 function declared_by_runtime(name: String) -> Bool {
     return name == "printf" || name == "exit" || name == "malloc" || name == "strlen"
         || name == "strcmp" || name == "memcpy" || name == "snprintf" || name == "fprintf"
         || name == "fopen" || name == "fread" || name == "fwrite" || name == "fclose"
-        || name == "fseek" || name == "ftell";
+        || name == "fseek" || name == "ftell" || name == "getrlimit" || name == "dprintf";
 }
 
 function (mutable self: Unit) emit_extern(src: String, index: Int) -> Int {

@@ -1,0 +1,54 @@
+// The rlimit family: a parent runs untrusted work and survives it.
+//
+// **This is the fixture the playground rests on**, and the assertion is the parent's survival
+// rather than the child's output. A submission that spins forever, allocates without end, or
+// forks in a loop must cost the machine a bounded amount and then stop — and the process that
+// started it must still be there to say so.
+//
+// Three things are checked and the third is the one that is easy to get wrong:
+//
+//   * `os_limit_cpu` stops a spinning child. The kernel sends SIGXCPU at the soft limit and
+//     SIGKILL at the hard one; both are set, so ignoring the first does not help.
+//   * `os_limit_memory` makes an endless allocation fail rather than take the machine down.
+//   * **`os_die_after` catches what `RLIMIT_CPU` cannot** — a child that sleeps spends no CPU
+//     time at all, so a CPU limit never fires and the parent waits forever. The two are not
+//     alternatives; a sandbox needs both.
+//
+// The resource NUMBERS are asked of the kernel rather than assumed: `RLIMIT_AS` is 9 on Linux and
+// 5 on the BSDs, `NOFILE` 7 and 8, `NPROC` 6 and 7. Only `RLIMIT_CPU` is 0 on both. See
+// `os_rlimit_as` for how the numbering is detected and why it is detected rather than reasoned
+// about.
+use "../../lib/os.bx";
+
+function bounded_spin() -> Int touches commands, input, clock {
+    if os_fork() == 0 {
+        let capped: Bool = os_limit_cpu(1);
+        let mutable spin: Int = 0;
+        while spin >= 0 {
+            spin += 1;
+        }
+        return 0;
+    }
+    let reaped: Int = os_wait_for_child();
+    return 1;
+}
+
+function bounded_sleep() -> Int touches commands, input, clock {
+    if os_fork() == 0 {
+        // A CPU limit would never fire here — this child spends no CPU at all. The wall-clock
+        // alarm is the only thing that ends it.
+        let capped: Bool = os_limit_cpu(60);
+        let deadline: Int = os_die_after(1);
+        let slept: Bool = os_sleep(30000);
+        return 0;
+    }
+    let reaped: Int = os_wait_for_child();
+    return 1;
+}
+
+region main {
+    print("cpu-limited child reaped: {bounded_spin() == 1}");
+    print("sleeping child reaped:    {bounded_sleep() == 1}");
+    // The parent set no limits on itself and is still here to print this.
+    print("parent survived both");
+}

@@ -3382,6 +3382,69 @@
  },
  {
   "kind": "function",
+  "name": "os_rlimit_as",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-rlimit-as",
+  "where": "function os_rlimit_as() -> Int touches input"
+ },
+ {
+  "kind": "function",
+  "name": "os_rlimit_nofile",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-rlimit-nofile",
+  "where": "function os_rlimit_nofile() -> Int touches input"
+ },
+ {
+  "kind": "function",
+  "name": "os_rlimit_nproc",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-rlimit-nproc",
+  "where": "function os_rlimit_nproc() -> Int touches input"
+ },
+ {
+  "kind": "function",
+  "name": "os_set_limit",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-set-limit",
+  "where": "function os_set_limit(resource: Int, value: Int) -> Bool touches commands"
+ },
+ {
+  "kind": "function",
+  "name": "os_limit_cpu",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-limit-cpu",
+  "where": "function os_limit_cpu(seconds: Int) -> Bool touches commands"
+ },
+ {
+  "kind": "function",
+  "name": "os_limit_memory",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-limit-memory",
+  "where": "function os_limit_memory(bytes: Int) -> Bool touches commands, input"
+ },
+ {
+  "kind": "function",
+  "name": "os_limit_files",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-limit-files",
+  "where": "function os_limit_files(count: Int) -> Bool touches commands, input"
+ },
+ {
+  "kind": "function",
+  "name": "os_limit_processes",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-limit-processes",
+  "where": "function os_limit_processes(count: Int) -> Bool touches commands, input"
+ },
+ {
+  "kind": "function",
+  "name": "os_die_after",
+  "text": "lib/os.bx",
+  "url": "/reference/os.html#os-die-after",
+  "where": "function os_die_after(seconds: Int) -> Int touches clock"
+ },
+ {
+  "kind": "function",
   "name": "net_uses_bsd_sockaddr",
   "text": "lib/net.bx",
   "url": "/reference/net.html#net-uses-bsd-sockaddr",

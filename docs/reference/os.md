@@ -50,6 +50,15 @@ So `os_platform` shelling out to `uname` and `os_sleep` calling `usleep` are no 
 | [`os_wait_for_child`](#os-wait-for-child) | function | Waits for any child to finish and answers its pid, or -1 when there are none left. |
 | [`os_flush`](#os-flush) | function | Empties every output buffer. Answers whether it worked. |
 | [`os_env_missing`](#os-env-missing) | function | A null `CPointer`, for the C calls that want one. |
+| [`os_rlimit_as`](#os-rlimit-as) | function | **The resource NUMBERS differ between Linux and the BSDs, and only `RLIMIT_CPU` agrees.** |
+| [`os_rlimit_nofile`](#os-rlimit-nofile) | function | — |
+| [`os_rlimit_nproc`](#os-rlimit-nproc) | function | — |
+| [`os_set_limit`](#os-set-limit) | function | `struct rlimit { rlim_t rlim_cur; rlim_t rlim_max; }` — two 64-bit values, sixteen bytes, handed over by pointer. Writab |
+| [`os_limit_cpu`](#os-limit-cpu) | function | **CPU seconds. The one limit whose resource number is the same everywhere.** |
+| [`os_limit_memory`](#os-limit-memory) | function | Address space, in bytes. Past it, `malloc` answers null rather than the kernel killing anything. |
+| [`os_limit_files`](#os-limit-files) | function | Open file descriptors, and child processes. Both bound what a runaway can take from the machine rather than from itself  |
+| [`os_limit_processes`](#os-limit-processes) | function | — |
+| [`os_die_after`](#os-die-after) | function | **Wall-clock, which is the one `RLIMIT_CPU` cannot do.** SIGALRM's default action ends the process, so this is a hard ce |
 
 ## Types
 {: #types}
@@ -395,4 +404,123 @@ A null `CPointer`, for the C calls that want one.
 **The header above is the reason this is worth a paragraph.** The absence of a null pointer was written down as a fact and used to justify choosing `usleep` over `nanosleep`. It was never a fact about the language, only about the syntax, and nobody tried the four-line workaround for long enough that it became load-bearing.
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L515)
+
+### `os_rlimit_as`
+{: #os-rlimit-as}
+
+```burxt
+function os_rlimit_as() -> Int touches input
+```
+
+**The resource NUMBERS differ between Linux and the BSDs, and only `RLIMIT_CPU` agrees.**
+
+```burxt
+            Linux   macOS/BSD
+ CPU          0         0      <- the only one that matches
+ FSIZE        1         1
+ DATA         2         2
+ STACK        3         3
+ CORE         4         4
+ AS           9         5
+ NPROC        6         7
+ NOFILE       7         8
+```
+
+Measured from `bits/resource.h` on this machine and from the BSD header, because this is the third time in one week that a small C struct or constant has turned out to differ by platform and the first two were reasoned about wrongly. `lib/net.bx`'s `sockaddr_in` is the same shape: a layout that is obvious, identical-looking, and not the same.
+
+**So the numbering is asked of the kernel rather than assumed.** `RLIM_NLIMITS` is 16 on Linux and 9 on the BSDs, so resource 9 is valid on Linux and out of range everywhere else — `getrlimit(9, ...)` succeeding is the kernel saying "Linux numbering" in its own words. That is a positive answer rather than an inference from a failure, which is the distinction that cost a CI runner two hours when `net_uses_bsd_sockaddr` asked the question the other way round.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L549)
+
+### `os_rlimit_nofile`
+{: #os-rlimit-nofile}
+
+```burxt
+function os_rlimit_nofile() -> Int touches input
+```
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L559)
+
+### `os_rlimit_nproc`
+{: #os-rlimit-nproc}
+
+```burxt
+function os_rlimit_nproc() -> Int touches input
+```
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L569)
+
+### `os_set_limit`
+{: #os-set-limit}
+
+```burxt
+function os_set_limit(resource: Int, value: Int) -> Bool touches commands
+```
+
+`struct rlimit { rlim_t rlim_cur; rlim_t rlim_max; }` — two 64-bit values, sixteen bytes, handed over by pointer. Writable since `c_bytes_to`; before it, none of this file existed.
+
+Both fields are set to the same value, which is deliberate: raising a limit later needs privilege a sandboxed child does not have and should not be given. A limit you can undo is not a limit.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L585)
+
+### `os_limit_cpu`
+{: #os-limit-cpu}
+
+```burxt
+function os_limit_cpu(seconds: Int) -> Bool touches commands
+```
+
+**CPU seconds. The one limit whose resource number is the same everywhere.**
+
+The kernel sends SIGXCPU at the soft limit and SIGKILL at the hard one; both are set here, so a program that ignores the first does not get to ignore the second. It counts CPU time, not wall-clock — a child that sleeps for an hour spends no CPU and this will not stop it. That is what `os_die_after` is for, and the two are not alternatives.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L612)
+
+### `os_limit_memory`
+{: #os-limit-memory}
+
+```burxt
+function os_limit_memory(bytes: Int) -> Bool touches commands, input
+```
+
+Address space, in bytes. Past it, `malloc` answers null rather than the kernel killing anything.
+
+**This is the one that bounds a Burxt program's arena**, which reserves its region up front — so a limit below the reservation means the program fails to start rather than failing partway, and that is the better failure.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L623)
+
+### `os_limit_files`
+{: #os-limit-files}
+
+```burxt
+function os_limit_files(count: Int) -> Bool touches commands, input
+```
+
+Open file descriptors, and child processes. Both bound what a runaway can take from the machine rather than from itself — a program that cannot fork cannot fork-bomb.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L631)
+
+### `os_limit_processes`
+{: #os-limit-processes}
+
+```burxt
+function os_limit_processes(count: Int) -> Bool touches commands, input
+```
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L637)
+
+### `os_die_after`
+{: #os-die-after}
+
+```burxt
+function os_die_after(seconds: Int) -> Int touches clock
+```
+
+**Wall-clock, which is the one `RLIMIT_CPU` cannot do.** SIGALRM's default action ends the process, so this is a hard ceiling on elapsed time whether the program is computing, sleeping, or blocked on a socket that will never answer.
+
+The timer does NOT survive `fork`, so a child that needs one must set its own. That is not a wart to work around — it is what lets a pre-forked server give each worker its own deadline.
+
+`tests/pass/net_loopback.bx` calls this on itself for exactly that reason, after blocking a CI runner for a full hour twice.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L652)
 

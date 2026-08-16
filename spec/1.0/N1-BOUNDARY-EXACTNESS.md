@@ -204,8 +204,14 @@ let f = self.global_str(&format!("%s%llu.%0{}llu", scale), "f_dec");
 **Two call sites, not one, and that is what makes the delegation general rather than incidental.**
 `gen_print_value` is the path a `print` takes; `build_to_string` is the path a value takes when it
 becomes text inside a program — into a view, a log line, a JSON field. A host that mishandles the
-zero-pad corrupts money whether the program prints it or renders it. `:2341` is the same again for
-scale 0. So the arithmetic is
+zero-pad corrupts money whether the program prints it or renders it.
+
+**There is a third site, and naming which one is SAFE is a stronger claim than listing three.**
+`:2341` handles scale 0 with `"%s%llu"` — no `%0N`, because a scale-0 decimal has no fractional
+digits to pad. So it is the one `Decimal` path a non-conforming host cannot corrupt the way
+`1299.05` was corrupted: the defect below needs a width to discard, and that site never supplies
+one. Three sites that all look equally exposed is a weaker section than two that are and one that
+is not. So the arithmetic is
 exact — scaled integers, no float, from literal through every operation — and then **the last
 step, the one that produces the characters a human reads, leaves the language.**
 

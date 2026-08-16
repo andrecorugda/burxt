@@ -2982,6 +2982,72 @@ fn the_two_compilers_report_the_same_reach() {
     let _ = fs::remove_dir_all(&scratch);
 }
 
+/// Every symbol the stage-1 runtime declares is listed in `declared_by_runtime`.
+///
+/// LLVM refuses a symbol declared twice, so when a Burxt program writes `external function
+/// getrlimit(...)` and the emitted runtime already declares it, stage-1 must skip the second
+/// declaration. It decides that from `declared_by_runtime` in `emit.bx` — **a hand-kept list**,
+/// and a hand-kept list of what a runtime declares can only ever cover what its author remembered.
+///
+/// It was missing two, and both were added by people who did not know the function existed.
+/// `getrlimit` arrived with the stack guard. `dprintf` arrived when stage-1's twenty-four
+/// `fprintf(stderr, ...)` sites moved to `dprintf(2, ...)` — because `stderr` is a *data* symbol
+/// that Apple's libc calls `__stderrp`, so every program stage-1 compiled failed to link on macOS.
+/// That fix was right and it planted this: nothing declared `dprintf` in a Burxt program, so
+/// nothing collided, and the defect waited for `lib/os.bx` to declare `getrlimit`.
+///
+/// **A latent defect is one whose trigger has not been written yet**, and a whitelist is exactly
+/// the shape that hides one — it can only find what its author already suspected. So this derives
+/// the expected set from the runtime's own text instead of agreeing with the list.
+#[test]
+fn every_runtime_declaration_is_listed_as_such() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let emit = fs::read_to_string(root.join("src/burxt-compiler/emit.bx")).unwrap();
+
+    // What the runtime actually declares, scraped from the IR it emits.
+    let mut declared: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for line in emit.lines() {
+        // Only lines that EMIT a declaration — `+ "declare i32 @foo(...)`. Matching `declare `
+        // anywhere caught `@llvm.` intrinsics and the phrase in this test's own doc comment, and
+        // a scrape with false positives is a check people switch off.
+        if !line.trim_start().starts_with("+ \"declare ") {
+            continue;
+        }
+        let Some(rest) = line.split_once("declare ") else { continue };
+        let Some(at) = rest.1.split_once('@') else { continue };
+        let name: String =
+            at.1.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+        // `declare void @burxt.xyz` is the runtime's own, never a libc symbol a program can name.
+        if !name.is_empty() && !name.starts_with("burxt") && !name.starts_with("llvm") {
+            declared.insert(name);
+        }
+    }
+    assert!(declared.len() >= 14, "the scrape found only {:?}", declared);
+
+    // What `declared_by_runtime` claims.
+    let body = emit
+        .split_once("fn declared_by_runtime")
+        .and_then(|(_, rest)| rest.split_once("\n}"))
+        .map(|(b, _)| b.to_string())
+        .or_else(|| {
+            emit.split_once("function declared_by_runtime")
+                .and_then(|(_, rest)| rest.split_once("\n}"))
+                .map(|(b, _)| b.to_string())
+        })
+        .expect("declared_by_runtime in emit.bx");
+
+    let missing: Vec<&String> =
+        declared.iter().filter(|n| !body.contains(&format!("\"{}\"", n))).collect();
+    assert!(
+        missing.is_empty(),
+        "the stage-1 runtime declares {:?}, and `declared_by_runtime` in emit.bx does not list \
+         them. A Burxt program writing `external function` for one of these emits a duplicate \
+         declaration and llc refuses the whole module — every fixture that touches the module, \
+         not just the one that declared it.",
+        missing
+    );
+}
+
 /// Every module in `lib/` has a page in the reference, derived from `lib/` rather than from a list.
 ///
 /// This exists because the list won. `scripts/site-reference.py` named seven modules while `lib/`
