@@ -1889,9 +1889,7 @@ function (mutable self: Unit) emit_print_body(src: String, n: Node) -> Int {
 
 function (mutable self: Unit) print_call(format: String, arguments: String) -> Int {
     if self.print_to_stderr == 1 {
-        let stream: String = self.fresh();
-        let loaded: Int = self.write_body("  " + stream + " = load ptr, ptr @stderr\n");
-        return self.write_body("  call i32 (ptr, ptr, ...) @fprintf(ptr " + stream + ", ptr "
+        return self.write_body("  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr "
                       + format + arguments + ")\n");
     }
     return self.write_body("  call i32 (ptr, ...) @printf(ptr " + format + arguments + ")\n");
@@ -1996,12 +1994,8 @@ function (mutable self: Unit) emit_rounded(left: String, right: String, shift: I
     let branched: Int = self.write_body("  br i1 " + same + ", label %" + ok + ", label %"
                                + over + "\n");
     let opened: Int = self.write_body(over + ":\n");
-    // A FRESH register, not "%oerr" glued to one that already carries its sigil — that produced
-    // `%oerr%t7`, which llc reads as an instruction name and refuses.
-    let stream: String = self.fresh();
-    let told: Int = self.write_body("  " + stream + " = load ptr, ptr @stderr\n");
-    let printed: Int = self.write_body("  call i32 (ptr, ptr, ...) @fprintf(ptr " + stream
-                              + ", ptr @burxt.overflow_msg)\n");
+    let printed: Int = self.write_body("  call i32 (i32, ptr, ...) @dprintf(i32 2, "
+                              + "ptr @burxt.overflow_msg)\n");
     let stopped: Int = self.write_body("  call void @exit(i32 70)\n");
     let dead: Int = self.write_body("  unreachable\n");
     let resumed: Int = self.write_body(ok + ":\n");
@@ -4264,10 +4258,24 @@ function runtime_ir() -> String {
         + "declare i32 @strcmp(ptr, ptr)\n"
         + "declare ptr @memcpy(ptr, ptr, i64)\n"
         + "declare i32 @snprintf(ptr, i64, ptr, ...)\n"
+        // **`dprintf` and not `fprintf(stderr, ...)`, and this is a portability fix rather than
+        // a style.** `stderr` is a MACRO in C, not a symbol: glibc exports a global named
+        // `stderr`, and Apple's libc exports `__stderrp`. Stage-1 hand-writes its IR as text, so
+        // it wrote `@stderr` and linked on Linux; on macOS every program it compiled failed with
+        // `Undefined symbols: "_stderr", referenced from: _burxt.checked.add`. Stage-0 was fine
+        // throughout, because inkwell is told the target triple and LLVM picks the right name —
+        // so the two compilers disagreed about a C library detail neither of them is about.
+        //
+        // `dprintf(int fd, const char *fmt, ...)` takes a file DESCRIPTOR, and 2 is stderr on
+        // every POSIX system. No global, nothing to name differently per platform, and one fewer
+        // load at each of the twenty-four sites that used to reach for it. POSIX.1-2008, so
+        // glibc, musl and macOS 10.13+ all have it; Windows has neither this nor a linkable
+        // `stderr`, and links nothing today regardless.
+        + "declare i32 @dprintf(i32, ptr, ...)\n"
         + "declare i32 @fprintf(ptr, ptr, ...)\n"
         // B7. How much stack this process was given.
         + "declare i32 @getrlimit(i32, ptr)\n"
-        + "@stderr = external global ptr\n\n"
+
         // FOUR gigabytes, the same reservation stage-0 makes, and the SAME refusal when it runs
         // out. A bump allocator that does not check its limit does not fail — it writes past the
         // mapping and the program dies with a signal, which is the one outcome this language is
@@ -4315,8 +4323,7 @@ function runtime_ir() -> String {
         + "  %asint = ptrtoint ptr %p to i64\n"
         + "  ret i64 %asint\n"
         + "exhausted:\n"
-        + "  %err = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.region_msg)\n"
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.region_msg)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n\}\n\n"
         // Every String this runtime makes goes through here, and it is the whole of M12: the
@@ -4364,8 +4371,7 @@ function runtime_ir() -> String {
         + "  %bad = or i1 %either, %past\n"
         + "  br i1 %bad, label %oops, label %fits\n"
         + "oops:\n"
-        + "  %err = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.substring_msg, i64 %from, "
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.substring_msg, i64 %from, "
         + "i64 %count, i64 %n)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n"
@@ -4412,9 +4418,8 @@ function runtime_ir() -> String {
         + "  %bad = or i1 %low, %high\n"
         + "  br i1 %bad, label %oops, label %ok\n"
         + "oops:\n"
-        + "  %err = load ptr, ptr @stderr\n"
         + "  %last = sub i64 %n, 1\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.byte_msg, i64 %i, i64 %n, "
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.byte_msg, i64 %i, i64 %n, "
         + "i64 %last)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n"
@@ -4441,8 +4446,7 @@ function runtime_ir() -> String {
         + "  %bad = icmp ugt i64 %n, 255\n"
         + "  br i1 %bad, label %oops, label %ok\n"
         + "oops:\n"
-        + "  %err = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.byte_range_msg, i64 %n)\n"
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.byte_range_msg, i64 %n)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n"
         + "ok:\n"
@@ -4587,8 +4591,7 @@ function runtime_ir() -> String {
         + "  %bad = or i1 %grows, %below\n"
         + "  br i1 %bad, label %oops, label %ok\n"
         + "oops:\n"
-        + "  %err = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.truncate_msg, i64 %n, "
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.truncate_msg, i64 %n, "
         + "i64 %len)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n"
@@ -4731,8 +4734,7 @@ function runtime_ir() -> String {
         + "  %sggone = and i1 %sgset, %sglow\n"
         + "  br i1 %sggone, label %sgfull, label %sgroom\n"
         + "sgfull:\n"
-        + "  %sgerr = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %sgerr, ptr @burxt.deep_msg)\n"
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.deep_msg)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n"
         + "sgroom:\n"
@@ -4769,8 +4771,7 @@ function runtime_ir() -> String {
         + "  %bad = or i1 %low, %high\n"
         + "  br i1 %bad, label %missing, label %present\n"
         + "missing:\n"
-        + "  %err = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.argument_msg, "
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.argument_msg, "
         + "i64 %i, i64 %n)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n"
@@ -4806,8 +4807,7 @@ function runtime_ir() -> String {
         + "  %isnull = icmp eq i64 %p, 0\n"
         + "  br i1 %isnull, label %nothing, label %copy\n"
         + "nothing:\n"
-        + "  %nerr = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %nerr, ptr @burxt.null_ptr_msg)\n"
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.null_ptr_msg)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n"
         + "copy:\n"
@@ -4839,16 +4839,14 @@ function runtime_ir() -> String {
         + "  %isnull = icmp eq i64 %p, 0\n"
         + "  br i1 %isnull, label %nobytes, label %counted\n"
         + "nobytes:\n"
-        + "  %berr = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %berr, ptr @burxt.null_bytes_msg)\n"
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.null_bytes_msg)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n"
         + "counted:\n"
         + "  %negative = icmp slt i64 %n, 0\n"
         + "  br i1 %negative, label %badcount, label %begin\n"
         + "badcount:\n"
-        + "  %nerr2 = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %nerr2, ptr @burxt.neg_bytes_msg)\n"
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.neg_bytes_msg)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n"
         + "begin:\n"
@@ -4889,8 +4887,7 @@ function runtime_ir() -> String {
         + "  %tonull = icmp eq i64 %p, 0\n"
         + "  br i1 %tonull, label %tobad, label %toready\n"
         + "tobad:\n"
-        + "  %toerr = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %toerr, ptr @burxt.null_to_msg)\n"
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.null_to_msg)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n"
         + "toready:\n"
@@ -4919,8 +4916,7 @@ function runtime_ir() -> String {
         + "  %tooff = or i1 %tolow, %tohigh\n"
         + "  br i1 %tooff, label %torange, label %tostore\n"
         + "torange:\n"
-        + "  %torerr = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %torerr, ptr @burxt.range_to_msg)\n"
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.range_to_msg)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n"
         + "tostore:\n"
@@ -5010,9 +5006,8 @@ function runtime_ir() -> String {
         + "  %utrunc = icmp sgt i64 %uleftover, 0\n"
         + "  br i1 %utrunc, label %ubad, label %uok\n"
         + "ubad:\n"
-        + "  %uerr = load ptr, ptr @stderr\n"
         + "  %uwhere = load i64, ptr %uip\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %uerr, ptr @burxt.utf8_msg, ptr %where, "
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.utf8_msg, ptr %where, "
         + "i64 %uwhere)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n"
@@ -5029,8 +5024,7 @@ function runtime_ir() -> String {
         // refused it. The silent version was the more dangerous of the two divergences this file
         // had, because nothing downstream could detect it.
         + "nothing:\n"
-        + "  %rerr = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %rerr, ptr @burxt.no_read_msg)\n"
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.no_read_msg)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n"
         + "read:\n"
@@ -5047,8 +5041,7 @@ function runtime_ir() -> String {
         + "  %rf_bad = or i1 %rf_big, %rf_neg\n"
         + "  br i1 %rf_bad, label %notafile, label %sized\n"
         + "notafile:\n"
-        + "  %rf_err = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %rf_err, ptr @burxt.not_a_file_msg)\n"
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.not_a_file_msg)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n"
         + "sized:\n"
@@ -5176,8 +5169,7 @@ function runtime_ir() -> String {
         // A refusal EXITS rather than answering 0, because stage-0 does: a program that cannot
         // write the file it was told to write has not half-succeeded.
         + "refused:\n"
-        + "  %err = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.no_write_msg)\n"
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.no_write_msg)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n"
         + "opened:\n"
@@ -5191,8 +5183,7 @@ function runtime_ir() -> String {
         + "define void @burxt.contract_failed(i64 %msg) \{\n"
         + "entry:\n"
         + "  %m = inttoptr i64 %msg to ptr\n"
-        + "  %err = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.fmt_str, ptr %m)\n"
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.fmt_str, ptr %m)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n\}\n\n"
         + "define void @burxt.bounds(i64 %i, i64 %limit, i64 %at) \{\n"
@@ -5203,14 +5194,13 @@ function runtime_ir() -> String {
         + "  br i1 %bad, label %oops, label %ok\n"
         + "ok:\n  ret void\n"
         + "oops:\n"
-        + "  %err = load ptr, ptr @stderr\n"
         // The numbers, because "out of bounds" leaves a reader to guess which index and how
         // long the array was — and the two together usually name the bug. The THIRD is the
         // last valid index rather than `%at`, the source byte offset this used to print:
         // `%at` answers "where is the expression" and the reader is asking "what was I
         // allowed to pass". Stage-0 has always printed the latter (B19).
         + "  %last = sub i64 %limit, 1\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.bounds_msg, i64 %i, "
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.bounds_msg, i64 %i, "
         + "i64 %limit, i64 %last)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n\}\n\n"
@@ -5249,8 +5239,7 @@ function divide_guard(prefix: String) -> String {
         + "  %zero = icmp eq i64 %b, 0\n"
         + "  br i1 %zero, label %oops, label %chk\n"
         + "oops:\n"
-        + "  %err = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt." + prefix + "_msg)\n"
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt." + prefix + "_msg)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n"
         + "chk:\n"
@@ -5261,8 +5250,7 @@ function divide_guard(prefix: String) -> String {
         + "  %bad = and i1 %amin, %bneg1\n"
         + "  br i1 %bad, label %over, label %ok\n"
         + "over:\n"
-        + "  %err2 = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err2, ptr @burxt." + prefix + "_over_msg)\n"
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt." + prefix + "_over_msg)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n";
 }
@@ -5288,8 +5276,7 @@ function round_helper(mode: String) -> String {
         + "  %zero = icmp eq i128 %d, 0\n"
         + "  br i1 %zero, label %by_zero, label %divide\n"
         + "by_zero:\n"
-        + "  %err = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.divzero_msg)\n"
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.divzero_msg)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n"
         + "divide:\n"
@@ -5321,8 +5308,7 @@ function overflow_helper(name: String, intrinsic: String) -> String {
         + "  br i1 %o, label %overflowed, label %ok\n"
         + "ok:\n  ret i64 %v\n"
         + "overflowed:\n"
-        + "  %err = load ptr, ptr @stderr\n"
-        + "  call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr @burxt.overflow_msg)\n"
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.overflow_msg)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n\}\n"
         + "declare \{i64, i1\} @llvm." + intrinsic + ".with.overflow.i64(i64, i64)\n\n";
