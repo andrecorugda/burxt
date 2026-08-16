@@ -113,6 +113,27 @@ jobs:
               [ -e "$f" ] && mv "$f" "$f.hidden-for-static-link" && echo "moved aside: $f"
             done
           done
+
+          # And the same for LLVM's own system dependencies. A statically linked LLVM still wants
+          # zstd, zlib, libxml2 and ncurses, and Homebrew supplies dylibs for them — so the binary
+          # came out carrying `/opt/homebrew/opt/zstd/lib/libzstd.1.dylib`, which a machine without
+          # Homebrew does not have. macOS ships zlib, libxml2 and curses in /usr/lib; it does not
+          # ship zstd at all, so that one has to be linked statically or not at all.
+          #
+          # **A dylib is only hidden when its static twin sits beside it**, so this can never leave
+          # the linker with nothing to find. The versioned `.1.dylib` files stay in place, which is
+          # what Homebrew's own `llc` resolves at runtime — and stage-1 shells out to `llc`.
+          for pkg in zstd zlib libxml2 ncurses; do
+            D="$(brew --prefix $pkg 2>/dev/null)/lib"
+            [ -d "$D" ] || continue
+            for a in "$D"/*.a; do
+              [ -e "$a" ] || continue
+              base=$(basename "$a" .a)
+              for f in "$D/$base.dylib" "$D/$base.tbd"; do
+                [ -e "$f" ] && mv "$f" "$f.hidden-for-static-link" && echo "moved aside: $f"
+              done
+            done
+          done
           true
 
       - uses: dtolnay/rust-toolchain@stable
