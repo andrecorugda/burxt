@@ -5,6 +5,7 @@ section: reference
 description: "Files, without writing `external function fopen` yourself."
 ---
 
+{% raw %}
 
 # `lib/files.bx`
 
@@ -445,3 +446,5 @@ A name with no `/` and no NUL, and not `.` or `..` — what a single directory e
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L556)
 
+
+{% endraw %}

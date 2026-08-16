@@ -5,6 +5,7 @@ section: reference
 description: "HTML as a typed tree, escaped at the one point it leaves."
 ---
 
+{% raw %}
 
 # `lib/html.bx`
 
@@ -182,3 +183,5 @@ A whole document, with the doctype every browser needs to stay out of quirks mod
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L194)
 
+
+{% endraw %}

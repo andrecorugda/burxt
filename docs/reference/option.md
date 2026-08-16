@@ -5,6 +5,7 @@ section: reference
 description: "Absence, made explicit."
 ---
 
+{% raw %}
 
 # `lib/option.bx`
 
@@ -76,3 +77,5 @@ function option_is_none<T>(o: Option<T>) -> Bool
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/option.bx#L53)
 
+
+{% endraw %}

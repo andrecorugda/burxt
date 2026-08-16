@@ -5,6 +5,7 @@ section: reference
 description: "Every call the language owns: what it answers, whether it allocates, and what it refuses."
 ---
 
+{% raw %}
 
 # Builtins
 
@@ -470,3 +471,5 @@ Burxt has no entry point: the whole file is the program, and statements at the t
 
 **Answers** nothing — it is not an entry point. **Allocates:** no.
 
+
+{% endraw %}

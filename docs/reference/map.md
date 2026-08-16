@@ -5,6 +5,7 @@ section: reference
 description: "A key-value table, in insertion order."
 ---
 
+{% raw %}
 
 # `lib/map.bx`
 
@@ -315,3 +316,5 @@ Takes `mutable self`, so it changes the value it is called on.
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/map.bx#L388)
 
+
+{% endraw %}

@@ -5,6 +5,7 @@ section: reference
 description: "The request in, the response out, over the interface every web server has."
 ---
 
+{% raw %}
 
 # `lib/cgi.bx`
 
@@ -202,3 +203,5 @@ The pairing this file exists for: a typed tree goes out as a page, and the escap
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/cgi.bx#L237)
 
+
+{% endraw %}

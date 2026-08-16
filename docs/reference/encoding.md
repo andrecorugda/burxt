@@ -5,6 +5,7 @@ section: reference
 description: "Hex, base64 and base64url, and every decoder REFUSES rather than guesses."
 ---
 
+{% raw %}
 
 # `lib/encoding.bx`
 
@@ -292,3 +293,5 @@ function encoding_base64url_decode_text(text: String) -> Option<String>
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/encoding.bx#L472)
 
+
+{% endraw %}

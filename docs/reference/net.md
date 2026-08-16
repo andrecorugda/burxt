@@ -5,6 +5,7 @@ section: reference
 description: "TCP, over the pointer wall."
 ---
 
+{% raw %}
 
 # `lib/net.bx`
 
@@ -214,3 +215,5 @@ The size argument is in-out: it must say how much room the struct has before the
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L374)
 
+
+{% endraw %}

@@ -5,6 +5,7 @@ section: reference
 description: "The helpers a money language is judged on."
 ---
 
+{% raw %}
 
 # `lib/decimal.bx`
 
@@ -312,3 +313,5 @@ Written once, in Int, and shared by every scale — which is the payoff of conve
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/decimal.bx#L453)
 
+
+{% endraw %}

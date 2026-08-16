@@ -5,6 +5,7 @@ section: reference
 description: "Dates and durations, in whole seconds, in UTC."
 ---
 
+{% raw %}
 
 # `lib/time.bx`
 
@@ -499,3 +500,5 @@ Microseconds between two readings. Answers `None` when either reading failed, an
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/time.bx#L604)
 
+
+{% endraw %}

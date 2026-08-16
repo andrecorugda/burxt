@@ -5,6 +5,7 @@ section: reference
 description: "Bytes nobody can predict, and a comparison that does not leak."
 ---
 
+{% raw %}
 
 # `lib/secure.bx`
 
@@ -198,3 +199,5 @@ The same, for bytes. This is the one to use on a digest from `lib/hash.bx`, whic
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/secure.bx#L323)
 
+
+{% endraw %}

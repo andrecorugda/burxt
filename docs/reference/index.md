@@ -5,6 +5,7 @@ section: reference
 description: "Every keyword, builtin, operator and standard-library function — read out of the compiler rather than from memory."
 ---
 
+{% raw %}
 
 # Reference
 
@@ -157,3 +158,5 @@ nothing continues with a wrong value.
 
 Block comments (`/* … */`) — line comments only, so there is no nesting rule to get wrong. Multi-line string literals — a literal spanning lines makes its own indentation part of the data, which is the one thing that surprises everybody about them; use `\n` and `+`. `for i in 0..n` — a range is a second construct, and `while i < n` says it. `for x in text` — a String is bytes, and `byte_at` says BYTE so the byte-versus-character question cannot hide. `x++` — an expression with a side effect. `a ? b : c` — `if` as an expression would make it redundant. Arrow functions — they are closures, and captured state needs an owner.
 
+
+{% endraw %}

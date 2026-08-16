@@ -5,6 +5,7 @@ section: reference
 description: "Every burxt command, including review and mcp-schema."
 ---
 
+{% raw %}
 
 # The command line
 
@@ -36,3 +37,5 @@ Scraped from the same usage block. Flags may be written before or after the file
 
 Arguments after the source file that are not flags go to the linker unchanged, so `burxt run pay.bx cside.o -lm` links the C you call.
 
+
+{% endraw %}

@@ -5,6 +5,7 @@ section: reference
 description: "POSIX paths, taken apart and put back together, lexically."
 ---
 
+{% raw %}
 
 # `lib/path.bx`
 
@@ -299,3 +300,5 @@ It also does not touch the filesystem in the ordinary sense — no component is 
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/path.bx#L422)
 
+
+{% endraw %}

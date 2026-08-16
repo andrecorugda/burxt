@@ -5,6 +5,7 @@ section: reference
 description: "The four interfaces that stand in for a function value."
 ---
 
+{% raw %}
 
 # `lib/fn.bx`
 
@@ -141,3 +142,5 @@ It must be a STRICT order: `before(a, a)` is false, and for distinct elements th
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/fn.bx#L126)
 
+
+{% endraw %}

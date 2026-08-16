@@ -5,6 +5,7 @@ section: reference
 description: "Testing Burxt, in Burxt."
 ---
 
+{% raw %}
 
 # `lib/test.bx`
 
@@ -197,3 +198,5 @@ The summary goes to STDOUT and the failures went to stderr, which is the Unix sh
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/test.bx#L160)
 
+
+{% endraw %}

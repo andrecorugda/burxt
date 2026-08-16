@@ -5,6 +5,7 @@ section: reference
 description: "The machine the program is running on."
 ---
 
+{% raw %}
 
 # `lib/os.bx`
 
@@ -524,3 +525,5 @@ The timer does NOT survive `fork`, so a child that needs one must set its own. T
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L652)
 
+
+{% endraw %}

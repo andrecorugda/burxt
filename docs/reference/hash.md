@@ -5,6 +5,7 @@ section: reference
 description: "Hashes and checksums."
 ---
 
+{% raw %}
 
 # `lib/hash.bx`
 
@@ -397,3 +398,5 @@ function pbkdf2_sha256_text(password: String, salt: String, iterations: Int, len
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/hash.bx#L924)
 
+
+{% endraw %}

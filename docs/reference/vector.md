@@ -5,6 +5,7 @@ section: reference
 description: "Vector similarity, EXACTLY."
 ---
 
+{% raw %}
 
 # `lib/vector.bx`
 
@@ -306,3 +307,5 @@ Append one row without rewriting the file, which is the reason the format is JSO
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/vector.bx#L494)
 
+
+{% endraw %}

@@ -5,6 +5,7 @@ section: reference
 description: "Comma-separated values, read and written, RFC 4180 with the."
 ---
 
+{% raw %}
 
 # `lib/csv.bx`
 
@@ -390,3 +391,5 @@ Takes `mutable self`, so it changes the value it is called on.
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/csv.bx#L235)
 
+
+{% endraw %}

@@ -5,6 +5,7 @@ section: reference
 description: "Strings, beyond the four builtins."
 ---
 
+{% raw %}
 
 # `lib/string.bx`
 
@@ -1037,3 +1038,5 @@ A number already that wide is unchanged — never truncated. Padding that silent
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/string.bx#L2004)
 
+
+{% endraw %}

@@ -5,6 +5,7 @@ section: reference
 description: "Integer arithmetic that does not lie about its edges."
 ---
 
+{% raw %}
 
 # `lib/math.bx`
 
@@ -376,3 +377,5 @@ Divided BEFORE multiplying — `(x / g) * y` and not `(x * y) / g` — and that 
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/math.bx#L524)
 
+
+{% endraw %}

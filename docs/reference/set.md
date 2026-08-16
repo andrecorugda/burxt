@@ -5,6 +5,7 @@ section: reference
 description: "Membership, without a value nobody reads."
 ---
 
+{% raw %}
 
 # `lib/set.bx`
 
@@ -346,3 +347,5 @@ What is in this one and not in the other. Not symmetric, which the name says: `a
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/set.bx#L358)
 
+
+{% endraw %}

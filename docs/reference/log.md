@@ -5,6 +5,7 @@ section: reference
 description: "Four levels, a threshold from the environment, and stderr."
 ---
 
+{% raw %}
 
 # `lib/log.bx`
 
@@ -338,3 +339,5 @@ Something is wrong and the program is not carrying on with it. On by default, an
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/log.bx#L427)
 
+
+{% endraw %}

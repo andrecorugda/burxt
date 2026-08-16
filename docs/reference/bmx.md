@@ -5,6 +5,7 @@ section: reference
 description: "BMX 0.1, parsed into a typed tree."
 ---
 
+{% raw %}
 
 # `lib/bmx.bx`
 
@@ -436,3 +437,5 @@ A document and a signature in, a Burxt source file out.
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/bmx.bx#L992)
 
+
+{% endraw %}

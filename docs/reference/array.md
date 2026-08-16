@@ -5,6 +5,7 @@ section: reference
 description: "The operations on a growable array that every program reaches for."
 ---
 
+{% raw %}
 
 # `lib/array.bx`
 
@@ -537,3 +538,5 @@ Clamped rather than refused, unlike indexing. `xs[i]` out of range is a mistake 
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/array.bx#L832)
 
+
+{% endraw %}

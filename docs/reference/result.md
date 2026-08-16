@@ -5,6 +5,7 @@ section: reference
 description: "Failure, made explicit."
 ---
 
+{% raw %}
 
 # `lib/result.bx`
 
@@ -178,3 +179,5 @@ The commonest honest use is the arm after an exhaustive test that the type syste
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/result.bx#L225)
 
+
+{% endraw %}

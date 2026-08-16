@@ -5,6 +5,7 @@ section: reference
 description: "A SEEDED generator, and the name says seeded."
 ---
 
+{% raw %}
 
 # `lib/random.bx`
 
@@ -231,3 +232,5 @@ Takes `mutable self`, so it changes the value it is called on.
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/random.bx#L222)
 
+
+{% endraw %}

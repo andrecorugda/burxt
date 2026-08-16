@@ -5,6 +5,7 @@ section: reference
 description: "JSON, parsed and rendered, in ordinary Burxt."
 ---
 
+{% raw %}
 
 # `lib/json.bx`
 
@@ -415,3 +416,5 @@ Takes `mutable self`, so it changes the value it is called on.
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L551)
 
+
+{% endraw %}

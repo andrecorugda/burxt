@@ -1138,6 +1138,22 @@ def build():
         pages["%s.md" % m["name"]] = render_module(m)
     pages["index.md"] = render_index(kw, ren, cmds)
 
+    # **Jekyll reads `{{` and `{%` in the page body as Liquid, and a library that DOCUMENTS those
+    # characters takes the whole site build down.** It happened: `lib/bmx.bx`'s header says
+    # `{{ x` is an error, not text` — describing BMX's own slot syntax — and the Pages build died
+    # with `Liquid syntax error (line 13): Variable '{{ x` ... ` on a page nobody had written by
+    # hand. Local `cargo test` cannot see it; there is no Ruby here, so Jekyll only ever runs on
+    # the remote, and the first symptom is a site that silently stops updating.
+    #
+    # Fixed at the EMITTER rather than in the one page, because the next library to mention a
+    # brace would reintroduce it — and because a generated file is the wrong place to keep a fix.
+    # These pages contain no intentional Liquid (checked), so wrapping each body in `{% raw %}`
+    # costs nothing. Front matter must stay outside it, and kramdown still runs inside: `raw`
+    # suppresses Liquid only, so `{: #anchor}` attribute lists are unaffected.
+    for name, text in list(pages.items()):
+        head, _, body = text.partition("---\n\n")
+        pages[name] = head + "---\n\n{% raw %}\n" + body + "\n{% endraw %}\n"
+
     # ---- the search index -------------------------------------------------------------------
     #
     # One row per thing anyone would type. `to_str` has to reach `to_string`, which is the specific
