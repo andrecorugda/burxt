@@ -1,0 +1,34 @@
+// examples/wasm/money-island.bx — the island shape that actually matters, and the one that
+// costs an extra symbol.
+//
+// `island.bx` takes three `String`s, so it needs no integer formatting and its host needs no
+// varargs walker at all. That is a real deployment shape and it is the LESS interesting one:
+// if JavaScript is already formatting the price, the guarantee was given away before the call.
+//
+// This file keeps the money as money all the way to the tag. `total` is a `Decimal<2>`, it
+// crosses from the host as its exact scaled integer — 129905, not 1299.05 — and `to_string`
+// renders it inside the wasm module. The view is where the number becomes text, which is the
+// only place it can be checked.
+//
+// **The cost is one symbol and one trap.** `snprintf` appears, because `to_string` on a
+// `Decimal<2>` renders through `"%s%llu.%02llu"`. A host that walks that format string and
+// ignores the `02` produces `1299.5` from `1299.05` — no crash, no warning, and the money wrong
+// by a factor of ten. `build.sh` renders this island in wasm and natively and diffs them,
+// because that is the only thing that catches it.
+use "../../lib/html.bx";
+
+pure function receipt_view(name: String, total: Decimal<2>) -> Html {
+    return html_element("article", [html_attr("class", "receipt")], [
+        html_element("h1", [], [html_text("Receipt for "), html_text(name)]),
+        html_element("p", [], [html_text("Total: "), html_text(to_string(total))]),
+    ]);
+}
+
+pure function island(name: String, total: Decimal<2>) -> String allocates {
+    return html_render(receipt_view(name, total));
+}
+
+region main {
+    // $1299.05 — the leading zero in the fraction is the whole point of the value chosen.
+    print(island("Grace Hopper", $1299.05));
+}

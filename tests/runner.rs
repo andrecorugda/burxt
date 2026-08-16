@@ -8417,6 +8417,14 @@ fn the_repository_layout_is_declared() {
         ("examples/pos-php", "the same program in PHP, for the comparison"),
         ("examples/pos-python", "the same program in Python"),
         ("examples/pos-rust", "the same program in Rust"),
+        (
+            "examples/wasm",
+            "a Burxt program running in a WebAssembly engine, and the host it needs. It is here \
+             rather than under `tests/` because the whole of it is meant to be READ: the shim is \
+             eleven libc symbols at most and two of them do real work, and `ROADMAP-2.0.md` filed \
+             that as a post-1.0 subsystem beside the Android NDK. `host.mjs` is the measurement \
+             that replaced the estimate",
+        ),
     ];
 
     let mut undeclared: Vec<String> = Vec::new();

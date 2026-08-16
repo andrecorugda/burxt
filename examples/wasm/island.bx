@@ -1,0 +1,44 @@
+// examples/wasm/island.bx — the same view, compiled for a browser instead of a server.
+//
+//     ./build.sh          # native, then wasm32, then run both
+//
+// **This file is not special.** It is an ordinary `pure function` returning a `String`, and
+// that is the entire point: an island is not a new kind of Burxt program, it is a Burxt
+// program with a different `--target`. What `lib/bmx.bx`'s generator emits from a `.bmx`
+// document is exactly this shape, so a generated view needs no change to become an island.
+//
+// The four-line wrapper at the bottom is the only machinery involved, and it earns its place:
+// a view returns `Html`, because a typed tree is what makes escaping have exactly one place to
+// be right. A host reads a `String`. `html_render` is that boundary, and it is the same
+// boundary whether the bytes go to a socket, to stdout, or to `innerHTML`.
+//
+// **The escaping guarantee survives the crossing**, which is the property worth having and the
+// one that would be easy to lose. Pass `One <script> compiler` in from JavaScript and
+// `&lt;script&gt;` comes back. Nothing in the host does that; `html_text` did it before the
+// bytes ever left linear memory, and the host cannot opt out because there is no raw path to
+// opt into.
+use "../../lib/html.bx";
+
+pure function receipt_view(name: String, item: String, total: String) -> Html {
+    return html_element("article", [html_attr("class", "receipt")], [
+        html_element("h1", [], [html_text("Receipt for "), html_text(name)]),
+        html_element("ul", [], [
+            html_element("li", [], [html_text("Item: "), html_text(item)]),
+            html_element("li", [], [html_text("Total: "), html_text(total)]),
+        ]),
+    ]);
+}
+
+// The island boundary: a typed tree becomes bytes. `pure`, so `burxt effects --allow ""`
+// confirms it reaches nothing — a confirmation rather than a discovery, since a view built
+// this way has an empty effect set by construction.
+pure function island(name: String, item: String, total: String) -> String allocates {
+    return html_render(receipt_view(name, item, total));
+}
+
+// Only so the same file runs natively and prints the same bytes. A real island would export
+// `island` and have no `region main` at all — and would then need neither `printf` nor
+// `putchar` in its host, which are here for this `print` and nothing else.
+region main {
+    print(island("Ada Lovelace", "One <script> compiler", "$1,299.00"));
+}

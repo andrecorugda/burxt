@@ -47,9 +47,17 @@ Burxt is developed in small, verified increments. Please follow the same rhythm:
    | `git commit -- <path>` | takes the **working-tree** version of that path, not the staged one |
    | `git add <path>` | stages whatever that path currently holds, including edits that are not yours |
 
-   Use `git commit -- <paths>`, then **read `git show --name-only HEAD` before moving on**. If it
-   lists a file you did not touch, stop: `git reset --soft HEAD~1` puts everything back in the
-   index, losing nothing, provided you have not pushed.
+   Use `git commit -- <paths>`, then **read `git show --stat HEAD` before moving on** — the line
+   counts, not just the names. A filename can look plausible in a commit about something else;
+   `188 +++` beside it cannot, and that is the difference between the two sweeps that were caught
+   and the one that went unnoticed for hours. If it lists a file you did not touch, stop:
+   `git reset --soft HEAD~1` puts everything back in the index, losing nothing, provided you have
+   not pushed.
+
+   **And do not un-stage another contributor's work either.** If a file holds hunks that are not
+   all yours, leave the index alone and say so. Removing someone's work from the index without
+   asking is no better than committing it without asking — the same act, in the other direction,
+   and it is the one nobody thinks to check for.
 
    This is not hypothetical. It fired three times in one day here — twice unnoticed — and each
    time it attached one author's work to another author's commit message, so `git log -- <file>`
