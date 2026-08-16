@@ -406,6 +406,13 @@ pub struct TypeChecker {
     /// function name -> (parameter types, return type); collected up front so
     /// functions may be defined in any order and call each other.
     fns: HashMap<String, (Vec<Type>, Type)>,
+    /// Parameter NAMES, so a rejected argument can be named rather than counted.
+    ///
+    /// `fns` keeps parameter TYPES and drops the names, though `Param::name` has always had them —
+    /// nothing had needed them indexed by callee before. Kept beside `fns` rather than inside it
+    /// because three of that table's five readers are `contains_key` and never touch the tuple;
+    /// widening it would have made them all carry a field they do not use.
+    fn_param_names: HashMap<String, Vec<String>>,
     /// The type parameters of every generic function, by name. Empty for all the
     /// others, so the common path is one `is_empty` away. See spec/1.0/M7-GENERICS.md.
     generics: HashMap<String, Vec<TypeParam>>,
@@ -850,6 +857,7 @@ impl TypeChecker {
             dyn_source: HashMap::new(),
             consts: HashMap::new(),
             fns: HashMap::new(),
+            fn_param_names: HashMap::new(),
             generics: HashMap::new(),
             generic_enums: HashMap::new(),
             generic_records: HashMap::new(),
@@ -2917,6 +2925,8 @@ impl TypeChecker {
             };
             let param_tys: Vec<Type> = e.parameters.iter().map(|p| seen(&p.ty)).collect();
             self.fns.insert(e.name.clone(), (param_tys, seen(&e.ret)));
+            self.fn_param_names
+                .insert(e.name.clone(), e.parameters.iter().map(|p| p.name.clone()).collect());
             self.extern_names.insert(e.name.clone());
             // The boundary is where effects have to be DECLARED: there is no body to reason
             // about, so whatever a C function reaches, only its declaration can say. An extern
@@ -3005,6 +3015,8 @@ impl TypeChecker {
             }
             let param_tys = f.parameters.iter().map(|p| p.ty.clone()).collect();
             self.fns.insert(f.name.clone(), (param_tys, f.ret.clone()));
+            self.fn_param_names
+                .insert(f.name.clone(), f.parameters.iter().map(|p| p.name.clone()).collect());
             self.fn_writable
                 .insert(f.name.clone(), f.parameters.iter().map(|p| p.writable).collect());
             if !f.type_parameters.is_empty() {
@@ -8204,13 +8216,19 @@ impl TypeChecker {
                                 ));
                             }
                         }
+                        // **Name the parameter, do not make the caller count.** "argument 2" is
+                        // an instruction to go and count, and the answer is already in the
+                        // compiler — `Param::name` has always carried it. A rejection in this
+                        // language is supposed to read as advice, and "argument 2" is the weakest
+                        // form of advice available: correct, and useless without the signature
+                        // open beside it.
+                        let which = match self.fn_param_names.get(name.as_str()).and_then(|p| p.get(i)) {
+                            Some(p) => format!("`{}` (argument {})", p, i + 1),
+                            None => format!("argument {}", i + 1),
+                        };
                         return Err(format!(
-                            "in the call to `{}`, argument {} must be {}, \
-                             but it has type {}",
-                            written,
-                            i + 1,
-                            param_ty,
-                            typed.ty
+                            "in the call to `{}`, {} must be {}, but it has type {}",
+                            written, which, param_ty, typed.ty
                         ));
                     }
                     typed_args.push(typed);

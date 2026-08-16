@@ -1,0 +1,50 @@
+// Every shape a `Decimal` can take on its way to text.
+//
+// **This fixture exists BEFORE the change it guards**, which is the whole point of it. Today a
+// `Decimal` is rendered by the host's `snprintf` — `codegen.rs:2360` in `gen_print_value`, `:4223`
+// in `build_to_string`, and `:2341` for scale 0. `spec/1.0/N1-BOUNDARY-EXACTNESS.md` §7 argues for
+// rendering it in Burxt instead, and the acceptance test for that change is that **not one byte
+// here moves**. A formatter written afterwards and blessed by its own output would prove nothing.
+//
+// The cases are chosen for what bites rather than what is easy:
+//
+//   * `$0.05` and `$1299.05` — a fractional part with a LEADING ZERO. This is the exact shape a
+//     wasm host got wrong by discarding the width in `%02llu`, rendering $1299.05 as `1299.5`:
+//     silent, no crash, money wrong by a factor of ten.
+//   * `-$1.00` — negative with a ZERO fraction. It must keep its sign, and it is the neighbour of
+//     the case below, so an over-broad "drop the sign when the fraction is zero" dies here.
+//   * `-$0.00` — **negative zero is unrepresentable.** The sign lives in the scaled integer and
+//     zero has no sign, so `-0.001` at scale 2 is not a small negative that rounds to a signed
+//     zero, it IS zero. `printf` prints `-0.00` for a float because IEEE-754 genuinely has one;
+//     a scaled integer does not, and matching C here would import a floating-point artefact into
+//     the one type in this language that exists to have none.
+//   * scale 1 and scale 7 — the narrowest fraction and the widest scale in use (`N9`).
+//   * `$92233720368547.75` both signs — the largest magnitude a scale-2 `Decimal` holds, where
+//     the whole part meets the width limit.
+//
+// Both paths are covered: `print` goes through `gen_print_value`, `to_string` through
+// `build_to_string`. They are different code today and a formatter must leave them agreeing.
+region main {
+    print($0.05);
+    print($1299.05);
+    print($0.00);
+    print(-$0.05);
+    print(-$1.00);
+    print(-$1.05);
+    print(-$0.00);
+    print($92233720368547.75);
+    print(-$92233720368547.75);
+
+    let one: Decimal<1> = -42.0;
+    print(one);
+    let seven: Decimal<7> = -0.0000001;
+    print(seven);
+    let wide: Decimal<7> = 1234.5678901;
+    print(wide);
+
+    print(to_string($1299.05));
+    print(to_string(-$0.05));
+    print(to_string(-$1.00));
+    print(to_string(-$0.00));
+    print(to_string($0.00));
+}
