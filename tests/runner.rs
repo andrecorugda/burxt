@@ -3048,6 +3048,117 @@ fn every_runtime_declaration_is_listed_as_such() {
     );
 }
 
+/// No page can hand Jekyll a Liquid delimiter it did not mean, because Jekyll only runs remotely.
+///
+/// **`every_front_matter_and_config_is_parseable_yaml` exists because an unquoted colon in a
+/// tagline took the site down. It checks YAML. It has never looked at Liquid** — so it sat green
+/// while the same class of failure happened again, one templating language over:
+///
+/// ```text
+/// Liquid syntax error (line 13): Variable '{{ x` is an error, not text.
+/// ```
+///
+/// `docs/reference/bmx.md` is GENERATED from `lib/bmx.bx`'s header, which documents BMX's slot
+/// syntax and therefore contains a literal `{{`. Jekyll read it as a variable and the whole site
+/// build died — on a page nobody wrote by hand, from a library header that is correct.
+///
+/// A guard that covers only the syntax its author was last burned by is a whitelist wearing a
+/// test's clothes. So this checks two properties, both derived from the files:
+///
+///   * **Every generated page is wrapped in `{% raw %}`.** That is the fix, made at the emitter in
+///     `scripts/site-reference.py` rather than in any page, because the next library header to
+///     mention a brace would reintroduce a page-level repair. Checking the wrapper rather than the
+///     content means a header may contain anything at all.
+///   * **Every other page closes what it opens.** Hand-written pages use Liquid deliberately —
+///     `{{ site.baseurl }}` is on nearly all of them — so banning it is not available. What is
+///     available is that an opened `{{` is closed on the same line, which is precisely the shape
+///     that killed the build and is never what a real variable reference looks like.
+///
+/// **There is no Ruby on the machine this is written on**, so Jekyll never runs before a push and
+/// the first symptom of a bad page is a site that silently stops updating. *A green `cargo test` is
+/// not evidence of the site* — the sibling of the rule about a suite not being evidence of a
+/// commit, and this test is the narrowest honest thing that can be said without a Ruby.
+#[test]
+fn no_page_hands_jekyll_a_liquid_delimiter_it_did_not_mean() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let generated = root.join("docs/reference");
+
+    let mut unwrapped = Vec::new();
+    let mut pages = 0;
+    for entry in fs::read_dir(&generated).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        pages += 1;
+        let text = fs::read_to_string(&path).unwrap();
+        if !text.contains("{% raw %}") || !text.contains("{% endraw %}") {
+            unwrapped.push(path.file_name().unwrap().to_string_lossy().to_string());
+        }
+    }
+    assert!(pages >= 20, "the generated-page sweep found only {}", pages);
+    unwrapped.sort();
+    assert!(
+        unwrapped.is_empty(),
+        "these GENERATED reference pages are not wrapped in `{{% raw %}}`: {:?}\n\
+         They are built from library headers, and a header is free to document a brace — \
+         `lib/bmx.bx` documents `{{{{` because that is BMX's slot syntax. Wrap them in \
+         scripts/site-reference.py, never in the page.",
+        unwrapped
+    );
+
+    // Everything else Jekyll renders: an opened `{{` closes on its own line.
+    let mut malformed = Vec::new();
+    let mut checked = 0;
+    fn walk(dir: &Path, skip: &Path, found: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path == skip {
+                continue;
+            }
+            if path.is_dir() {
+                walk(&path, skip, found);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                found.push(path);
+            }
+        }
+    }
+    let mut hand_written = Vec::new();
+    walk(&root.join("docs"), &generated, &mut hand_written);
+    for path in &hand_written {
+        let text = fs::read_to_string(path).unwrap();
+        if text.contains("{% raw %}") {
+            continue;
+        }
+        checked += 1;
+        for (n, line) in text.lines().enumerate() {
+            // Only an UNCLOSED `{{` is dangerous. A bare `}}` is text to Jekyll, and JSON
+            // examples in the guide end with `...]}}` all the time — counting both delimiters
+            // flagged seven of those and would have been switched off within the week.
+            let opens_unclosed = match line.rfind("{{") {
+                None => false,
+                Some(at) => !line[at + 2..].contains("}}"),
+            };
+            if opens_unclosed {
+                malformed.push(format!(
+                    "{}:{}: {}",
+                    path.strip_prefix(root).unwrap().display(),
+                    n + 1,
+                    line.trim()
+                ));
+            }
+        }
+    }
+    assert!(checked > 20, "the hand-written sweep checked only {} pages", checked);
+    assert!(
+        malformed.is_empty(),
+        "these lines open a Liquid variable and do not close it on the same line:\n{}\n\
+         Jekyll answers `Variable '{{{{ x` is an error, not text` and fails the WHOLE site build, \
+         not the page. If the braces are meant literally, wrap the block in `{{% raw %}}`.",
+        malformed.join("\n")
+    );
+}
+
 /// Every module in `lib/` has a page in the reference, derived from `lib/` rather than from a list.
 ///
 /// This exists because the list won. `scripts/site-reference.py` named seven modules while `lib/`
