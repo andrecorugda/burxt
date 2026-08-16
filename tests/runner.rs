@@ -2817,7 +2817,7 @@ fn burxt_effects_reports_the_reach_and_gates_on_it() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let scratch = scratch_dir("effects");
     fs::create_dir_all(&scratch).unwrap();
-    let program = root.join("tests/effects/reaches_files_and_clock.bx");
+    let program = root.join("tests/pass/effects_reaches_files_and_clock.bx");
 
     let run = |args: &[&str]| -> (String, i32) {
         let mut command = Command::new(env!("CARGO_BIN_EXE_burxt"));
@@ -2836,11 +2836,24 @@ fn burxt_effects_reports_the_reach_and_gates_on_it() {
         "both reachable effects must be reported:\n{}",
         report
     );
+    // The PROPERTY, not a particular C function. The first version asserted `fopen`, and the
+    // tie-break legitimately answers `fclose` — both are leaves of `file_read_maybe` at the same
+    // depth, and the rule picks the lexicographically smaller so the two compilers cannot
+    // disagree. Pinning one name would have made a correct change look like a regression.
     assert!(
-        report.contains("fopen") && report.contains("os_now"),
+        report.contains("os_now -> time"),
         "the chain must run to the leaf that INTRODUCES the effect, not stop at the wrapper that \
          had to declare it:\n{}",
         report
+    );
+    let files_line = report
+        .lines()
+        .find(|l| l.trim_start().starts_with("files"))
+        .unwrap_or_else(|| panic!("no files line in:\n{}", report));
+    assert!(
+        files_line.matches("->").count() >= 2,
+        "files enters through a C call two hops below `load`, so the chain must show them:\n{}",
+        files_line
     );
     assert!(
         !report.contains("commands"),
@@ -2871,6 +2884,100 @@ fn burxt_effects_reports_the_reach_and_gates_on_it() {
         "--json is what a playground consumes:\n{}",
         json
     );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+/// Both compilers report the same reach, byte for byte, and gate on it identically.
+///
+/// **The rule is both compilers or it is not done**, and for this command the rule is not
+/// ceremony. The gate the playground is built on is "refuse a submission before running it"; a
+/// tool only stage-0 carried would mean a Burxt-only toolchain cannot answer what a program
+/// reaches, which is a language that has not really got the property it advertises.
+///
+/// **Writing the second implementation found two defects in the pair, which is the argument for
+/// parity in one paragraph.**
+///
+///   * Stage-1 read an `external function`'s effects from `value`, where every other declaration
+///     keeps them. `parse_item` builds an extern as `add(86, params, ret, reaches, 0, tok)` and
+///     puts them in `c` — `check.bx:2596` reconstructs a flags word with `8 + item.c * 64`. So
+///     every effect that entered through C looked like it entered nowhere, no leaf was ever
+///     reached, and the report fell back to naming the wrapper: `clock via stamp` instead of
+///     `clock via stamp -> os_now -> time`. Plausible, and wrong.
+///   * Stage-0's `{:<9}` did nothing. A width in a format spec is honoured only by a `Display`
+///     that routes through `f.pad()`, and `Effect`'s writes with `f.write_str` — so the spec was
+///     accepted, ignored, and `REFUSED` would have sat four columns out of line the first time
+///     anyone ran the gate.
+///
+/// Neither was reachable from one implementation. The first is stage-1 believing something false
+/// about its own AST; the second is stage-0 believing something false about Rust's formatter.
+///
+/// **The tie-break is why this test can demand byte-equality at all.** Breadth-first finds the
+/// shortest chain, but two leaves at the same depth are separated only by walk order, and the two
+/// walkers need not agree on that. So the rule is explicit in both: shorter wins, and equal length
+/// is settled lexicographically. They disagreed on exactly this before it existed — `fopen` here,
+/// `read_file` there, both true, both three hops.
+#[test]
+fn the_two_compilers_report_the_same_reach() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("effects-agree");
+    fs::create_dir_all(&scratch).unwrap();
+    let bxc = scratch.join("bxc");
+    let mut build = Command::new(env!("CARGO_BIN_EXE_burxt"));
+    build.arg("build").arg(root.join("src/burxt-compiler/main.bx")).arg("-o").arg(&bxc);
+    let built = finish_or_kill(build, 600, "building the Burxt compiler");
+    assert!(
+        built.status.success(),
+        "the Burxt compiler did not build:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let ask = |exe: &Path, program: &Path, args: &[&str]| -> (String, Option<i32>) {
+        let mut command = Command::new(exe);
+        command.arg("effects").arg(program).args(args).current_dir(root);
+        let out = finish_or_kill(command, 120, "effects");
+        (String::from_utf8_lossy(&out.stdout).to_string(), out.status.code())
+    };
+
+    // Every program that reaches anything worth reporting: the effects fixture, plus a library
+    // module and a real example, so the agreement is held over programs nobody wrote for it.
+    let mut programs: Vec<PathBuf> = vec![
+        root.join("tests/pass/effects_reaches_files_and_clock.bx"),
+        root.join("lib/files.bx"),
+        root.join("lib/os.bx"),
+    ];
+    for name in ["tour.bx", "hello.bx"] {
+        let candidate = root.join("examples").join(name);
+        if candidate.exists() {
+            programs.push(candidate);
+        }
+    }
+
+    let modes: [&[&str]; 3] = [&[], &["--allow", "clock"], &["--allow", "files,clock,input,commands,network,model"]];
+    let mut compared = 0;
+    for program in &programs {
+        for mode in modes {
+            let (rust, rust_code) = ask(Path::new(env!("CARGO_BIN_EXE_burxt")), program, mode);
+            let (burxt, burxt_code) = ask(&bxc, program, mode);
+            assert_eq!(
+                rust,
+                burxt,
+                "the two compilers disagree about what {} reaches, with {:?}",
+                program.display(),
+                mode
+            );
+            assert_eq!(
+                rust_code,
+                burxt_code,
+                "the two compilers gate {} differently with {:?} — and an exit code IS the gate, \
+                 so a difference here is the whole feature disagreeing",
+                program.display(),
+                mode
+            );
+            compared += 1;
+        }
+    }
+    assert!(compared >= 9, "the sweep compared only {} runs", compared);
 
     let _ = fs::remove_dir_all(&scratch);
 }
@@ -8360,12 +8467,6 @@ fn the_repository_layout_is_declared() {
         ("tests/pass", "programs that must compile, run, and print their `.stdout`"),
         ("tests/fail", "programs that must be REFUSED, with the reason in `.stderr`"),
         ("tests/panic", "programs that must compile and then die at run time"),
-        (
-            "tests/effects",
-            "programs whose REACH is the assertion, not their output. `burxt effects` reports \
-             what they can touch and where it entered; they cannot live in `tests/pass` because \
-             one of them asks the clock and a fixture whose stdout moves is no fixture",
-        ),
         ("tests/review", "`old.bx`/`new.bx`/`.expect` triples for `burxt review`"),
         (
             "tests/bmx-conformance",
@@ -9005,20 +9106,20 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
         ),
         (
             "effects.rs",
-            &[],
-            Strength::Missing,
-            "NOT YET — and this row is a debt, not a dispensation. `burxt effects` (§Q1) landed \
-             in stage-0 first because the answer it gives rests on the CHECKER having already \
-             refused every under-declaration, and stage-0 is where that refusal is written. \
-             Stage-1's half is `src/burxt-compiler/effects.bx` and it is the remaining work of \
-             1.3: the declared-effect bitmask already exists there (`check.bx`'s `touches: Int`), \
-             so what is missing is the call-graph walk — and `emit.bx`'s `hoist_old` is the \
-             template, including its warning that a node's `a`/`b`/`c` are child indices for SOME \
-             kinds and payload for others, which recursed into node 0 forever the first time \
-             somebody walked all three. **1.3 does not ship until this file exists.** The rule is \
-             both compilers or it is not done, and a tool that only one compiler carries would \
-             mean a Burxt-only toolchain could not answer what a program reaches — which is the \
-             gate the playground is built on",
+            &["src/burxt-compiler/effects.bx"],
+            Strength::Verified,
+            "`burxt effects` (§Q1) — what a program can reach, and where each reach entered. It \
+             rests on one property nothing else has: the checker REFUSES to compile a function \
+             that under-declares, so the declarations are a fact already enforced rather than \
+             documentation. `the_two_compilers_report_the_same_reach` drives both binaries over \
+             the same program and holds the report and the gate's exit code byte for byte. \
+             Writing the second one found two defects in the pair, which is the argument for \
+             parity in one sentence: stage-1 read an extern's effects from `value` when \
+             `parse_item` puts them in `c`, so every effect entering through C looked like it \
+             entered nowhere; and stage-0's `{:<9}` was silently ignored, because a width is only \
+             honoured by a `Display` routed through `f.pad()` and `Effect`'s writes with \
+             `write_str` — `REFUSED` would have sat four columns out of line the first time \
+             anyone used the gate",
         ),
     ];
 

@@ -1,0 +1,580 @@
+// ============================================================================
+// effects.bx — `burxt effects <file.bx>`: what can this program reach, and where did it enter?
+//
+// The Burxt half of §Q1. `src/rust-compiler/effects.rs` is the other, and the two must answer the
+// same question the same way — `the_two_compilers_report_the_same_reach` holds them to it.
+//
+// **Why this can exist at all.** Every other language answers "what does this program touch" by
+// running it and watching. Burxt makes a function declare what it reaches and the checker
+// **refuses to compile one that under-declares** — three wrappers deep, a `main` calling
+// `wrapper` calling `sneaky` calling `system` is still refused until every one of them says
+// `touches commands`. So the declarations are not documentation to be trusted; they are a fact
+// already enforced, and this command only reads and totals them.
+//
+// **Why it had to exist HERE and not only in Rust.** The gate the playground is built on is
+// "refuse a submission before running it". A tool that only stage-0 carries would mean a
+// Burxt-only toolchain cannot answer what a program reaches — and a language that cannot enforce
+// its own safety property without Rust has not really got the property.
+//
+// **The top level is exempt from effects** (§Q2, Andre's decision, verified v0.0.287), so there
+// is no declaration on the top level to read. The reach is computed by walking the call graph
+// from the top-level statements, which is what §Q1 asked for.
+//
+// **Reachability is the whole difficulty.** Totalling every declaration in the file would be ten
+// lines and useless: `use "lib/os.bx"` would report `commands` for a program that only asks the
+// time, because `os_capture` is DEFINED in that module. A gate that cries wolf is a gate everyone
+// passes with `--allow` everything.
+// ============================================================================
+
+// One reachable effect: its bit, and the chain of names that reaches it. The chain runs from a
+// top-level call down to the `external function` that introduces the effect — because `load`
+// declaring `touches files` is not where files entered, `fopen` is, and `load` had no choice.
+class Reach {
+    bit: Int,
+    via: String,
+}
+
+// The walk's state. Parallel arrays rather than a map, because stage-1 has no `lib/` — and a
+// program has hundreds of callables, so a linear scan costs nothing worth naming.
+class Graph {
+    // Every callable, by the name a call site would write.
+    names: [String],
+    // What it declares, as the bitmask `flag_effects` unpacks.
+    masks: [Int],
+    // Its body block, or -1 for an `external function` — which is what makes it a LEAF, and a
+    // leaf is where an effect enters the language.
+    bodies: [Int],
+}
+
+function (self: Graph) graph_find(name: String) -> Int {
+    let mutable i: Int = 0;
+    while i < len(self.names) {
+        if self.names[i] == name {
+            return i;
+        }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+// Every call named anywhere under `node`, pushed onto `out`.
+//
+// **Kind by kind, and it has to be.** A node's `a`/`b`/`c` hold a child index for SOME kinds and
+// payload for others — a scale, a token, a count. `emit.bx`'s `hoist_old` walked all three
+// unconditionally once and recursed into node 0 forever, because 0 is a valid index and `a` is 0
+// for every leaf. It segfaulted, which is the better failure. So this is a whitelist, and a kind
+// that can contain a call and is not listed here makes this command silently under-report — which
+// for a gate is worse than not existing, because it is believed.
+function calls_under(unit: Unit, src: String, node: Int, mutable out: [String]) -> Int {
+    if node < 0 {
+        return 0;
+    }
+    let n: Node = unit.nodes[node];
+
+    if n.kind == 13 {                                // a call
+        let named: Token = unit.tokens[n.token];
+        push(out, substring(src, named.start, named.length));
+        let list: Node = unit.nodes[n.a];
+        let mutable i: Int = 0;
+        while i < list.b {
+            let walked: Int = calls_under(unit, src, unit.children[list.a + i], out);
+            i += 1;
+        }
+        return 1;
+    }
+    if n.kind == 14 {                                // a method call: receiver, then arguments
+        let receiver: Int = calls_under(unit, src, n.a, out);
+        let named: Token = unit.tokens[n.token];
+        // Unqualified, because the receiver's type is not resolved here. The graph carries
+        // `Type.method`, so this lookup misses rather than guesses — and a miss costs one hop,
+        // because whatever a method reaches it had to DECLARE, and the call that introduced the
+        // effect is inside a body this walk still visits.
+        push(out, substring(src, named.start, named.length));
+        let list: Node = unit.nodes[n.b];
+        let mutable i: Int = 0;
+        while i < list.b {
+            let walked: Int = calls_under(unit, src, unit.children[list.a + i], out);
+            i += 1;
+        }
+        return 1;
+    }
+    // Two children: binary, comparison, logic, index.
+    if n.kind == 8 || n.kind == 9 || n.kind == 10 || n.kind == 12 {
+        let left: Int = calls_under(unit, src, n.a, out);
+        let right: Int = calls_under(unit, src, n.b, out);
+        return 1;
+    }
+    // One child: unary not, negate, field access, `e?`.
+    if n.kind == 6 || n.kind == 7 || n.kind == 11 || n.kind == 22 {
+        return calls_under(unit, src, n.a, out);
+    }
+    // A block: every statement in it.
+    if n.kind == 16 {
+        let mutable i: Int = 0;
+        while i < n.b {
+            let walked: Int = calls_under(unit, src, unit.children[n.a + i], out);
+            i += 1;
+        }
+        return 1;
+    }
+    // An interpolated string, a slice literal, a tuple, an argument list — a counted child list.
+    if n.kind == 5 || n.kind == 17 || n.kind == 18 || n.kind == 19 || n.kind == 20 {
+        let mutable i: Int = 0;
+        while i < n.b {
+            let walked: Int = calls_under(unit, src, unit.children[n.a + i], out);
+            i += 1;
+        }
+        return 1;
+    }
+    // The statements. `let`, assignment, `return`, `print`, `push`, `truncate` hold an expression
+    // in `a` and sometimes a second in `b`; the block-carrying ones hold a block in `b` or `c`.
+    if n.kind >= 60 && n.kind <= 74 {
+        let first: Int = calls_under(unit, src, n.a, out);
+        let second: Int = calls_under(unit, src, n.b, out);
+        let third: Int = calls_under(unit, src, n.c, out);
+        return 1;
+    }
+    return 0;
+}
+
+// Build the callables table: what each declares, and where its body is.
+function effects_collect(unit: Unit, src: String, mutable into: Graph) -> Int {
+    let mutable i: Int = 0;
+    while i < len(unit.items) {
+        let index: Int = unit.items[i];
+        let item: Node = unit.nodes[index];
+        // 80 a function, 86 an `external function` — the one that has no body and therefore is
+        // where an effect enters.
+        if item.kind == 80 || item.kind == 86 {
+            let named: Token = unit.tokens[item.token];
+            push(into.names, substring(src, named.start, named.length));
+            if item.kind == 80 {
+                push(into.masks, flag_effects(item.value));
+                push(into.bodies, item.b);
+            } else {
+                // **An extern keeps its effects in `c`, not packed into `value`.** `parse_item`
+                // builds it as `add(86, params, return_type, reaches, 0, name_tok)`, and
+                // `check.bx:2596` reconstructs a flags word from it with `8 + item.c * 64`.
+                // Reading `flag_effects(item.value)` here returned 0 for every `external
+                // function` — so every effect that entered through C looked like it entered
+                // nowhere, the walk never reached a leaf, and the report fell back to naming the
+                // wrapper. `clock via stamp` instead of `clock via stamp -> os_now -> time`.
+                push(into.masks, item.c);
+                push(into.bodies, 0 - 1);
+            }
+        }
+        // 85 an `implement` block: its methods are the callables, keyed `Type.method`.
+        if item.kind == 85 {
+            let mutable j: Int = 0;
+            while j < item.b {
+                let member: Int = unit.children[item.a + j];
+                let method: Node = unit.nodes[member];
+                let named: Token = unit.tokens[method.token];
+                let clauses: Node = unit.nodes[method.c];
+                let owner: Token = unit.tokens[clauses.value];
+                push(into.names, substring(src, owner.start, owner.length) + "."
+                    + substring(src, named.start, named.length));
+                push(into.masks, flag_effects(method.value));
+                push(into.bodies, method.b);
+                j += 1;
+            }
+        }
+        // 81 a method written outside an `implement` block.
+        if item.kind == 81 {
+            let named: Token = unit.tokens[item.token];
+            let clauses: Node = unit.nodes[item.c];
+            let owner: Token = unit.tokens[clauses.value];
+            push(into.names, substring(src, owner.start, owner.length) + "."
+                + substring(src, named.start, named.length));
+            push(into.masks, flag_effects(item.value));
+            push(into.bodies, item.b);
+        }
+        i += 1;
+    }
+
+    // The builtins that carry an effect of their own. `read_file` is not an `external function`
+    // and has no declaration anywhere in the source, so without these a program reaching the
+    // filesystem through the builtin would report NOTHING — the worst failure a gate has.
+    push(into.names, "read_file");
+    push(into.masks, 1);
+    push(into.bodies, 0 - 1);
+    push(into.names, "write_file");
+    push(into.masks, 1);
+    push(into.bodies, 0 - 1);
+    push(into.names, "write_bytes");
+    push(into.masks, 1);
+    push(into.bodies, 0 - 1);
+    push(into.names, "argument");
+    push(into.masks, 8);
+    push(into.bodies, 0 - 1);
+    push(into.names, "argument_count");
+    push(into.masks, 8);
+    push(into.bodies, 0 - 1);
+    return len(into.names);
+}
+
+// The reach, breadth-first from the top level.
+//
+// Breadth-first so the first path found to an effect is the SHORTEST one: a reader asking why a
+// program touches the network wants the short route, not whichever one a depth-first walk fell
+// into. Two answers are kept — the chain down to a leaf, which is where the effect entered, and
+// the first declarer as a fallback for the case where no leaf is reachable, which should not
+// happen and is not worth being silently wrong about if it ever does.
+function effects_walk(unit: Unit, src: String, mutable graph: Graph,
+                      mutable found: [Reach]) -> Int {
+    let mutable frontier: [String] = [];
+    let mutable trails: [String] = [];
+    let mutable seen: [String] = [];
+
+    let mutable i: Int = 0;
+    while i < len(unit.items) {
+        let index: Int = unit.items[i];
+        let item: Node = unit.nodes[index];
+        // The top-level statements, the same range `emit.bx` runs as `main`.
+        if (item.kind >= 60 && item.kind <= 72) || item.kind == 74 {
+            let mutable direct: [String] = [];
+            let walked: Int = calls_under(unit, src, index, direct);
+            let mutable d: Int = 0;
+            while d < len(direct) {
+                push(frontier, direct[d]);
+                push(trails, direct[d]);
+                d += 1;
+            }
+        }
+        i += 1;
+    }
+
+    let mutable entered_bits: [Int] = [];
+    let mutable entered_via: [String] = [];
+    let mutable any_bits: [Int] = [];
+    let mutable any_via: [String] = [];
+
+    let mutable head: Int = 0;
+    while head < len(frontier) {
+        let name: String = frontier[head];
+        let trail: String = trails[head];
+        head += 1;
+
+        let mutable already: Bool = false;
+        let mutable s: Int = 0;
+        while s < len(seen) {
+            if seen[s] == name { already = true; }
+            s += 1;
+        }
+        if !already {
+            push(seen, name);
+            let at: Int = graph.graph_find(name);
+            if at >= 0 {
+                let mask: Int = graph.masks[at];
+                let is_leaf: Bool = graph.bodies[at] < 0;
+                let mutable bit: Int = 1;
+                while bit <= 32 {
+                    if remainder(divide_floor(mask, bit), 2) == 1 {
+                        // **The tie-break is explicit and identical in both compilers.** A
+                        // breadth-first walk finds the shortest path, but when two leaves sit at
+                        // the same depth the winner is whichever the traversal reached first —
+                        // and the two compilers walk a body in orders that need not match. They
+                        // disagreed on exactly this: stage-0 said `file_read_maybe -> fopen` and
+                        // stage-1 said `file_read_maybe -> read_file`, both true, both three
+                        // hops. Shorter first, then lexicographically smaller, decides it without
+                        // either walker having to promise an order.
+                        let a: Int = better_via(any_bits, any_via, bit, trail);
+                        if is_leaf {
+                            let b: Int = better_via(entered_bits, entered_via, bit, trail);
+                        }
+                    }
+                    bit = bit * 2;
+                }
+                if graph.bodies[at] >= 0 {
+                    let mutable next: [String] = [];
+                    let walked: Int = calls_under(unit, src, graph.bodies[at], next);
+                    let mutable k: Int = 0;
+                    while k < len(next) {
+                        push(frontier, next[k]);
+                        push(trails, trail + " -> " + next[k]);
+                        k += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Report in bit order, so the two compilers list them identically. `parse_touches` sorts, and
+    // low-to-high here is the same order for the same reason.
+    let mutable bit: Int = 1;
+    while bit <= 32 {
+        let mutable b: Int = 0;
+        while b < len(any_bits) {
+            if any_bits[b] == bit {
+                let mutable via: String = any_via[b];
+                let mutable e: Int = 0;
+                while e < len(entered_bits) {
+                    if entered_bits[e] == bit { via = entered_via[e]; }
+                    e += 1;
+                }
+                push(found, Reach { bit: bit, via: via });
+            }
+            b += 1;
+        }
+        bit = bit * 2;
+    }
+    return len(found);
+}
+
+// Record `trail` for `bit` if nothing is recorded yet, or if it beats what is.
+//
+// Shorter wins; equal length, the lexicographically smaller string wins. Both halves are needed:
+// depth is the answer a reader wants, and the name settles a tie the walk order would otherwise
+// decide differently in the two compilers.
+function better_via(mutable bits: [Int], mutable vias: [String], bit: Int, trail: String) -> Int {
+    let mutable i: Int = 0;
+    while i < len(bits) {
+        if bits[i] == bit {
+            let held: String = vias[i];
+            let mine: Int = via_depth(trail);
+            let theirs: Int = via_depth(held);
+            if mine < theirs {
+                vias[i] = trail;
+            }
+            if mine == theirs && trail < held {
+                vias[i] = trail;
+            }
+            return 0;
+        }
+        i += 1;
+    }
+    push(bits, bit);
+    push(vias, trail);
+    return 1;
+}
+
+// How many names are in a trail — one more than the number of arrows.
+function via_depth(trail: String) -> Int {
+    let mutable count: Int = 1;
+    let mutable i: Int = 0;
+    while i + 1 < len(trail) {
+        if byte_at(trail, i) == 45 && byte_at(trail, i + 1) == 62 {
+            count += 1;
+        }
+        i += 1;
+    }
+    return count;
+}
+
+function bit_recorded(xs: [Int], bit: Int) -> Bool {
+    let mutable i: Int = 0;
+    while i < len(xs) {
+        if xs[i] == bit {
+            return true;
+        }
+        i += 1;
+    }
+    return false;
+}
+
+// `--allow files,clock` as a bitmask, or -1 when a word in it is not an effect.
+//
+// A typo is an ERROR rather than an empty allowance, because an empty allowance that looks like a
+// pass is the one failure mode of a gate that matters: it reads exactly like success.
+function effects_allowed(list: String) -> Int {
+    let mutable mask: Int = 0;
+    let mutable start: Int = 0;
+    let mutable i: Int = 0;
+    let n: Int = len(list);
+    while i <= n {
+        if i == n || byte_at(list, i) == 44 {
+            let word: String = string_trim_spaces(substring(list, start, i - start));
+            if len(word) > 0 {
+                let bit: Int = effect_bit(word, 0, len(word));
+                if bit == 0 {
+                    return 0 - 1;
+                }
+                mask = mask + bit;
+            }
+            start = i + 1;
+        }
+        i += 1;
+    }
+    return mask;
+}
+
+function string_trim_spaces(text: String) -> String {
+    let mutable from: Int = 0;
+    let mutable to: Int = len(text);
+    while from < to && byte_at(text, from) == 32 {
+        from += 1;
+    }
+    while to > from && byte_at(text, to - 1) == 32 {
+        to = to - 1;
+    }
+    return substring(text, from, to - from);
+}
+
+// `burxt effects <file>` — the whole command. Answers the process exit code.
+function effects_report(path: String, allow: String, gated: Bool, want_json: Bool) -> Int touches files {
+    let src: String = load_program(path);
+    let mutable unit: Unit = Unit { pending_public: 0, package_names: [], package_starts: [], package_ends: [], private_names: [], private_owners: [], tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], consts: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, current_method: 0 - 1, probing: 0, probe_changes: 0, grow_parameters: [], grow_self: [], relay_parameters: [], relay_self: [], relay_method_parameters: [], type_bindings: [], measure_clause: 0 - 1, measure_slot: 0, measure_parameters: 0 - 1, measure_owner: "", old_nodes: [], old_slots: [], ensures_start: 0, ensures_count: 0, ensures_owner: "", bracket_clauses: [], clause_subjects: [], it_token: 0 - 1, it_is_result: 0, used_it: 0, it_seen: 0, result_type_node: 0 - 1, result_slot: 0 - 1, returns_node: 0 - 1, walked_types: [], type_binding_floor: 0, allowed_effects: 63, effects_owner: "", function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], impl_traits: [], typed: [], region_depth: 0, region_token: 0 - 1, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", global_chunks: [], sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], region_marks: [], loop_region_depths: [], block_release: [], placing: 0, rel_frames: [], rel_names: [], in_function: 0, depth: 0, param_depth: 0 - 1, problems: 0, diagnose: 0, problem_start: 0 - 1, problem_length: 0, problem_message: "", position: 0, token_end: 0, no_record_literal: 0, in_extern_signature: 0, range_bounds: 0, in_multiply: 0, print_to_stderr: 0, int_type_node: 0 - 1, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
+    let installed: Int = unit.install_keywords();
+    let total: Int = unit.run(src);
+    if unit.errors > 0 {
+        print_error("error: " + path + " does not lex");
+        return 2;
+    }
+    while !unit.done() {
+        let item: Int = unit.parse_item(src);
+        if item < 0 {
+            print_error("error: " + path + " does not parse");
+            return 2;
+        }
+        push(unit.items, item);
+    }
+    if unit.errors > 0 {
+        print_error("error: " + path + " does not parse");
+        return 2;
+    }
+    // **Typecheck before reporting, and refuse if it fails.** The guarantee this whole command
+    // rests on is that the checker REFUSED every under-declaration. A program that never reached
+    // the checker carries no such guarantee, so an effect report on it is a lie in the most
+    // dangerous direction — it would read as "this reaches nothing".
+    let checked: Int = unit.check(src);
+    if unit.errors > 0 {
+        print_error("error: " + path + " does not typecheck");
+        print_error("(effects are only meaningful for a program that compiles)");
+        return 2;
+    }
+
+    let mutable allowed: Int = 0 - 1;
+    if gated {
+        allowed = effects_allowed(allow);
+        if allowed < 0 {
+            print_error("error: `" + allow + "` names something that is not an effect. The "
+                + "vocabulary is closed on purpose: files, commands, clock, input, network, model");
+            return 2;
+        }
+    }
+
+    let mutable graph: Graph = Graph { names: [], masks: [], bodies: [] };
+    let collected: Int = effects_collect(unit, src, graph);
+    let mutable found: [Reach] = [];
+    let reached: Int = effects_walk(unit, src, graph, found);
+
+    if want_json {
+        let printed: Int = effects_print_json(path, found, allowed, gated);
+    } else {
+        let printed: Int = effects_print_plain(path, found, allowed, gated);
+    }
+
+    if gated {
+        let mutable over: Bool = false;
+        let mutable i: Int = 0;
+        while i < len(found) {
+            if remainder(divide_floor(allowed, found[i].bit), 2) == 0 {
+                over = true;
+            }
+            i += 1;
+        }
+        if over {
+            // Exit 70, the code every named refusal in this language uses, so a caller that
+            // already treats 70 as "Burxt said no" needs no new case.
+            return 70;
+        }
+    }
+    return 0;
+}
+
+function effects_print_plain(path: String, found: [Reach], allowed: Int, gated: Bool) -> Int {
+    if len(found) == 0 {
+        print(path + " reaches nothing outside itself.");
+    } else {
+        print(path + " can reach:");
+        print("");
+        let mutable i: Int = 0;
+        while i < len(found) {
+            let r: Reach = found[i];
+            let mutable mark: String = "       ";
+            if gated {
+                if remainder(divide_floor(allowed, r.bit), 2) == 0 {
+                    mark = "REFUSED";
+                }
+            }
+            print("  " + effects_pad(effect_name(r.bit), 9) + " " + mark + "  via " + r.via);
+            i += 1;
+        }
+    }
+    if gated {
+        let mutable over: String = "";
+        let mutable i: Int = 0;
+        while i < len(found) {
+            if remainder(divide_floor(allowed, found[i].bit), 2) == 0 {
+                if len(over) > 0 { over = over + ", "; }
+                over = over + effect_name(found[i].bit);
+            }
+            i += 1;
+        }
+        print("");
+        if len(over) == 0 {
+            print("allowed: " + effects_words(allowed) + ". Nothing outside it is reachable.");
+        } else {
+            print("REFUSED: " + over + " is outside what was allowed.");
+            print("The compiler enforced these declarations, so this is what the program CAN");
+            print("reach, not what it happens to do on one run.");
+        }
+    }
+    return 0;
+}
+
+function effects_words(mask: Int) -> String {
+    if mask == 0 {
+        return "nothing";
+    }
+    let mutable out: String = "";
+    let mutable bit: Int = 1;
+    while bit <= 32 {
+        if remainder(divide_floor(mask, bit), 2) == 1 {
+            if len(out) > 0 { out = out + ", "; }
+            out = out + effect_name(bit);
+        }
+        bit = bit * 2;
+    }
+    return out;
+}
+
+function effects_pad(text: String, width: Int) -> String {
+    let mutable out: String = text;
+    while len(out) < width {
+        out = out + " ";
+    }
+    return out;
+}
+
+function effects_print_json(path: String, found: [Reach], allowed: Int, gated: Bool) -> Int {
+    print("\{");
+    print("  \"file\": \"" + path + "\",");
+    print("  \"effects\": [");
+    let mutable i: Int = 0;
+    while i < len(found) {
+        let r: Reach = found[i];
+        let mutable line: String = "    \{ \"effect\": \"" + effect_name(r.bit)
+            + "\", \"via\": \"" + r.via + "\" \}";
+        if i + 1 < len(found) {
+            line = line + ",";
+        }
+        print(line);
+        i += 1;
+    }
+    print("  ],");
+    let mutable over: String = "";
+    if gated {
+        let mutable j: Int = 0;
+        while j < len(found) {
+            if remainder(divide_floor(allowed, found[j].bit), 2) == 0 {
+                if len(over) > 0 { over = over + ", "; }
+                over = over + "\"" + effect_name(found[j].bit) + "\"";
+            }
+            j += 1;
+        }
+    }
+    print("  \"refused\": [" + over + "]");
+    print("\}");
+    return 0;
+}

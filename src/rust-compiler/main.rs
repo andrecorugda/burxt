@@ -13,6 +13,7 @@
 //! half of an FFI: the other half is a real object to link against, and Burxt
 //! delegates linking to system tools rather than owning it.
 
+mod effects;
 mod ast;
 mod manifest;
 mod diag;
@@ -235,6 +236,24 @@ fn compile_main() {
             }
         }
         match review::review(&files[0], &files[1]) {
+            Ok(code) => std::process::exit(code),
+            Err(message) => {
+                eprintln!("error: {}", message);
+                std::process::exit(2);
+            }
+        }
+    }
+    // §Q1. What can this program reach, and where did each reach enter? See src/rust-compiler/effects.rs —
+    // it reads declarations the checker already REFUSED to let be incomplete, which is why the
+    // answer is what the program CAN do rather than what one run happened to do.
+    if cmd == "effects" {
+        let json = arguments.iter().any(|a| a == "--json");
+        let allow = arguments
+            .iter()
+            .position(|a| a == "--allow")
+            .and_then(|i| arguments.get(i + 1))
+            .cloned();
+        match effects::report(path, allow.as_deref(), json) {
             Ok(code) => std::process::exit(code),
             Err(message) => {
                 eprintln!("error: {}", message);

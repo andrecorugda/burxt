@@ -43,6 +43,7 @@
 //   parser.bx   tokens in, arena AST out
 //   check.bx    the rules: scales, regions, purity, contracts, exhaustiveness
 //   modules.bx  `use "path";`, resolved before lexing
+//   effects.bx  `burxt effects` — what a program can reach, and where each reach entered
 //   emit.bx     textual LLVM IR, and the runtime emitted with it
 //
 // Build and run it with:
@@ -65,6 +66,7 @@ use "diag.bx";
 use "schema.bx";
 use "lsp.bx";
 use "review.bx";
+use "effects.bx";
 use "layout.bx";
 
 // The shell, for `build` and `run`. Those two have to invoke `llc` and `cc`, and until
@@ -596,6 +598,32 @@ if command == "review" {
     }
     let verdict: Int = review(argument(2), argument(3));
     exit(verdict);
+}
+
+if command == "effects" {
+    // §Q1. What can this program reach, and where did each reach enter? `effects.bx` owns every
+    // byte of the answer, so this subcommand and the Rust one cannot word it differently.
+    if argument_count() < 3 {
+        print_error("burxt effects: needs a file — `burxt effects program.bx [--allow files,clock]`");
+        exit(2);
+    }
+    let mutable allow: String = "";
+    let mutable gated: Bool = false;
+    let mutable want_json: Bool = false;
+    let mutable a: Int = 3;
+    while a < argument_count() {
+        if argument(a) == "--json" {
+            want_json = true;
+        }
+        if argument(a) == "--allow" {
+            gated = true;
+            if a + 1 < argument_count() {
+                allow = argument(a + 1);
+            }
+        }
+        a += 1;
+    }
+    exit(effects_report(argument(2), allow, gated, want_json));
 }
 
 if command == "mcp-schema" {

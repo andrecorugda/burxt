@@ -1,6 +1,13 @@
 # Burxt — Exactness That Survives the Boundary (NOVELTY §1, slice 1)
 
 > Status: **SHIPPED in v0.0.30** (see §6 for the verified acceptance). This is
+>
+> **Corrected 2026-08-16 — see §7.** This document said the one boundary that exists today is
+> the C FFI. That was incomplete from v0.0.28: `to_string` renders a `Decimal` through the host's
+> `snprintf`, so the most-used function in the language is a boundary nobody had counted. **No
+> platform Burxt ships to renders it differently** — `%0Nllu` has one answer in any conforming
+> libc — so this is a narrowing of where the boundary is, not a defect report. A status of
+> SHIPPED is exactly what stops a reader reaching a correction, which is why it is up here.
 > the first slice of `NOVELTY.md` §1 — labelled there as *"the strongest
 > unclaimed territory, and the one I would bet on first"*, novelty high,
 > buildability high.
@@ -176,3 +183,139 @@ a real object to link against, and there was no way to supply one. Arguments
 after the source file now go to the system linker unchanged
 (`burxt run pay.bx cside.o -lm`). Without it the guarantee could only be
 described, not tested against real C.
+
+---
+
+## 7. The boundary nobody was looking at — `to_string` (2026-08-16)
+
+§1 said the one boundary that exists today is the C FFI, and named the encoder and the database
+as the ones still to come. It missed one that had been open since v0.0.28, in the most-used
+function in the language.
+
+**A `Decimal` is rendered to text by the host's `snprintf`.**
+
+```rust
+// src/rust-compiler/codegen.rs:2360
+let fmt_str = format!("%s%llu.%0{}llu", scale);   // sign, whole, zero-padded fraction
+```
+
+`:2341` is the same for scale 0, and `to_string(Int)` is the same shape. So the arithmetic is
+exact — scaled integers, no float, from literal through every operation — and then **the last
+step, the one that produces the characters a human reads, leaves the language.**
+
+**And the narrower claim is the true one, so it is the one this section makes.**
+
+`%llu` with a zero-pad width has exactly one answer in any *conforming* C library. It is
+unsigned-integer-to-decimal-digits: no rounding, no float, no precision question, and integer
+conversion is not locale-sensitive without the `'` flag, which Burxt never emits. On glibc, musl,
+Apple's libc and MSVC the output is identical **by construction rather than by luck**.
+
+So there is no latent defect on any platform Burxt ships to today, and it would be wrong to write
+that the exactness thesis has always had a hole. The first draft of this section said so and it
+was corrected before landing, by the person whose own finding it would have made more impressive.
+
+**The exposure is precisely hosts that implement `printf` themselves** — and that is a surface
+which did not exist before this month and is exactly where the language is going: a wasm island,
+an embedded libc, a freestanding target with no libc at all. Asking every future host author to
+get zero-padding right is asking for the defect below, and zero-padding is the one detail that
+corrupts money silently instead of crashing.
+
+### 7.1 It is not theoretical — measured, 2026-08-16
+
+Found while compiling a BMX view to `wasm32-unknown-unknown` and calling it from JavaScript.
+The host supplied its own `snprintf`, because a wasm island has no libc to borrow one from. Its
+varargs walker read the conversion character and discarded the flags and width, so `%02llu`
+behaved as `%llu`:
+
+```text
+native:  <p>Total: 1299.05</p>
+wasm:    <p>Total: 1299.5</p>
+```
+
+**`$1299.05` rendered as `1299.5`.** A factor of ten, no crash, no warning, and nothing in Burxt
+able to see it happen — by then the value had left the language.
+
+**This was a non-conforming `printf`, not two platforms disagreeing**, and the section is careful
+about that because the stronger reading is the one that would get quoted back for a year. What it
+demonstrates is not that libcs differ; it is what the delegation costs the moment a host has to
+supply the function itself.
+
+The host was fixed within the hour. That is not the point either. The point is the shape: **it
+survived three earlier probes** — a hello world, a `String`-only island and an escaping test —
+because none of them formatted a fraction with a leading zero. A rule right about the case
+someone wrote and silent about the case nobody did.
+
+`DESIGN.md` calls a silent wrong answer worse than a crash. This one was produced by the
+language's own flagship type, at the only boundary a reader ever actually sees.
+
+### 7.2 The fix: render `Decimal` and `Int` in Burxt
+
+A scaled integer to text is a digit loop and a zero-pad. The digit half already exists —
+`lib/hash.bx:253` writes hex digits, and `lib/decimal.bx` already performs exact-integer descent
+for `decimal2_cents`. Nothing here needs a compiler feature; it needs the compiler to stop
+delegating.
+
+**What it buys, in order of weight:**
+
+1. **It removes the most error-prone thing a host shim is asked to do.** Zero-padding is the one
+   detail that corrupts money rather than crashing it, and every future host author is currently
+   asked to get it right. One of them already did not, on the first day anyone tried.
+2. **The guarantee stops being conditional on the host.** Not because any current host breaks it —
+   none does — but because "exact, provided your libc conforms" is a weaker sentence than "exact",
+   and the difference costs nothing to close. It also becomes testable: a formatter written in
+   Burxt is covered by the fixture suite on every target and by the stage-0/stage-1 agreement,
+   where `snprintf` is covered by whoever wrote the host's libc.
+3. **It removes the varargs walker from a wasm island entirely.** `snprintf` is the only reason
+   an island needs one. Without it, a BMX island's whole host shim is `malloc`, `memcpy`, and
+   three symbols that end the program — measured.
+4. **One fewer libc symbol on every target**, and `%llu` against an `i64` is a portability
+   assumption nobody has audited.
+
+### 7.3 The cost, stated rather than discovered
+
+It is compiler work in both stages, it must be byte-identical between them, and **getting a
+zero-pad or a negative-zero case wrong reintroduces exactly this defect with our name on it
+instead of a shim author's.** A formatter the two compilers disagree about is worse than
+`snprintf`, which at least disagrees consistently across a single program.
+
+That argues for the fixtures being written **before** the implementation, not after it.
+
+### 7.4 The bar, which is also the version classification
+
+A formatter written in Burxt **adds no surface** — no new function, no keyword, no flag. Under
+`docs/compatibility.md` that makes it a **patch**, and that classification is the acceptance
+test rather than a technicality:
+
+> **If the output is not byte-identical to what glibc produces today, for every fixture below,
+> it is not a patch and it is not done.**
+
+The set, chosen for the cases that bite rather than the cases that are easy:
+
+| Fixture | Why it is here |
+|---|---|
+| `$0.05` | the leading zero in the fraction — the exact shape that produced `1299.5` |
+| `$1299.05` | the same, with a whole part, as measured |
+| `-$0.05` | sign and leading zero together |
+| `-$0.00` | negative zero: does the sign survive a zero magnitude, and *should* it |
+| scale 0 | the `:2341` path, which has no fraction at all |
+| scale 7 | the widest scale in use (`N9-VECTORS-EXACTLY.md`); scale 8 overflows |
+| `INT_MAX`, `INT_MIN` | the unsigned-cast boundary — `%llu` on a negative `i64` today |
+| largest value at each scale | where whole and fraction meet the width limit |
+
+And per the same bar: **stage-0 and stage-1 must agree over the whole set**, not merely each
+match glibc. Two implementations that both match glibc but not each other is a fixpoint failure
+wearing a passing test.
+
+### 7.5 Where the work is tracked
+
+**This section is a correction, not a plan.** It lives here because §1 is wrong where a reader
+finds it, and a spec wrong about its own boundary is worse than one that is merely out of date —
+nobody re-checks a boundary a document has already located. The *work* is a row in
+[`../ROADMAP-1.2.md`](../ROADMAP-1.2.md), which is where active work lives; `spec/1.0/` holds
+what 1.0 shipped and must not quietly become a plan for what comes after it.
+
+### 7.6 What this does not cover
+
+`to_string(Bool)` and string concatenation do not reach `snprintf` and are unaffected. The
+serializer and database boundaries §4 defers remain deferred — this section narrows §1's
+statement of where the boundary is, and does not widen the milestone.
