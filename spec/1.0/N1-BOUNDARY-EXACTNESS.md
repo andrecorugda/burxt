@@ -195,11 +195,17 @@ function in the language.
 **A `Decimal` is rendered to text by the host's `snprintf`.**
 
 ```rust
-// src/rust-compiler/codegen.rs:2360
+// src/rust-compiler/codegen.rs:2360  in gen_print_value
 let fmt_str = format!("%s%llu.%0{}llu", scale);   // sign, whole, zero-padded fraction
+// src/rust-compiler/codegen.rs:4223  in build_to_string
+let f = self.global_str(&format!("%s%llu.%0{}llu", scale), "f_dec");
 ```
 
-`:2341` is the same for scale 0, and `to_string(Int)` is the same shape. So the arithmetic is
+**Two call sites, not one, and that is what makes the delegation general rather than incidental.**
+`gen_print_value` is the path a `print` takes; `build_to_string` is the path a value takes when it
+becomes text inside a program — into a view, a log line, a JSON field. A host that mishandles the
+zero-pad corrupts money whether the program prints it or renders it. `:2341` is the same again for
+scale 0. So the arithmetic is
 exact — scaled integers, no float, from literal through every operation — and then **the last
 step, the one that produces the characters a human reads, leaves the language.**
 
@@ -239,6 +245,26 @@ able to see it happen — by then the value had left the language.
 about that because the stronger reading is the one that would get quoted back for a year. What it
 demonstrates is not that libcs differ; it is what the delegation costs the moment a host has to
 supply the function itself.
+
+**Confirmed fixed, and re-measured independently rather than quoted.** At `develop` `a173633`,
+built and run with its own compiler binary and its own build directory:
+
+```text
+native: <article class="receipt">...<p>Total: 1299.05</p></article>
+wasm:   <article class="receipt">...<p>Total: 1299.05</p></article>
+        ✓ identical
+```
+
+The author of the fix asked for it to be re-captured rather than cited from their transcript,
+because their own last capture had been taken while a suite was using the same build directory —
+the shared-artifact hazard, caught by the person most careful about it, on the day they were most
+careful. A spec should not rest on evidence whose provenance its own author has told you to doubt.
+
+**The instruction §7.1 exists to leave behind is not "the fix worked".** Fixes usually do. It is
+that **nothing except a native-versus-wasm diff could have detected the defect at all**. So: *for
+any value carrying a `Decimal`, render it on both targets and compare the bytes.* That is why
+`examples/wasm/build.sh` diffs rather than prints, and it is the part that generalises to the third
+target nobody has built yet.
 
 The host was fixed within the hour. That is not the point either. The point is the shape: **it
 survived three earlier probes** — a hello world, a `String`-only island and an escaping test —

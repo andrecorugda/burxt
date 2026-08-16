@@ -54,6 +54,19 @@ Burxt is developed in small, verified increments. Please follow the same rhythm:
    `git reset --soft HEAD~1` puts everything back in the index, losing nothing, provided you have
    not pushed.
 
+   **Read the whole `--stat`, not a list of places you expected trouble.** The sweep that went
+   unnoticed for hours had already been checked — by confirming the commit held nothing under
+   `src/`, `examples/` or one named test directory. All true, and it measured the wrong dimension:
+   the file that carried somebody else's work was `tests/runner.rs`, which was not on the list
+   because nobody thought of it as theirs. **A whitelist of places to check is not a check.** It
+   can only ever find what its author already suspected.
+
+   **Two people cleared that commit independently, by the same method, and both were right and
+   both were wrong.** Each confirmed it held nothing under `src/`, `examples/` or the named test
+   directory; each was correct; neither thought of `tests/runner.rs` as somewhere another person's
+   work could be. Two independent auditors passing the same commit is not confirmation when they
+   share the blind spot — it is the same check run twice.
+
    **And do not un-stage another contributor's work either.** If a file holds hunks that are not
    all yours, leave the index alone and say so. Removing someone's work from the index without
    asking is no better than committing it without asking — the same act, in the other direction,
@@ -70,6 +83,24 @@ Burxt is developed in small, verified increments. Please follow the same rhythm:
    `the_repository_layout_is_declared`. It also does something a shared tree cannot:
    **it builds against the branch you are actually targeting**, which is how a dependency on
    somebody else's uncommitted work gets caught rather than shipped.
+
+6. **A passing suite is not evidence of the commit unless the tree IS the commit.** `cargo test`
+   measures your working directory. If anything is uncommitted — a fix you made after staging, a
+   file you meant to delete, a generated artifact — the result describes a tree that exists on
+   your disk and nowhere else, and you will report it as though it described the branch.
+
+   ```sh
+   git diff --quiet HEAD -- . && cargo test --release
+   ```
+
+   This is the same rule the repository already has about binaries — *a binary is not evidence of
+   the source it came from* — one level up, and it is a different category from the four faces
+   above. Those are about what a **commit contains**; this is about what a **test result
+   describes**. Both are an artifact attributed to a source it did not come from.
+
+   It is not hypothetical either. A green run of 98 was published here, from a tree holding one
+   uncommitted deletion; the same suite against the commit gave 97 and a failure. The number was
+   honest, carefully measured, and about the wrong thing.
 
 ## Getting set up
 
