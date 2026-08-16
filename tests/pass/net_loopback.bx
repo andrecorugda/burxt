@@ -22,7 +22,23 @@
 use "../../lib/net.bx";
 use "../../lib/os.bx";
 
+// **This program cannot run for more than twenty seconds, and that is the point.**
+//
+// It hung a macOS runner for a full hour, twice. The Rust harness now has a deadline, which caught
+// the first path — and missed the second, because `the_suite_also_runs_on_burxt` runs these
+// fixtures through the Burxt-written runner instead, and that one spawns them itself.
+//
+// Chasing the callers was the wrong shape of fix. **The program guarantees its own termination**,
+// so it does not matter who starts it: `alarm(20)` raises SIGALRM, whose default action ends the
+// process, and a fixture that dies at twenty seconds is a red test in three minutes instead of a
+// cancelled job in sixty. Every socket call below can block forever by design; this is the only
+// thing standing between that and a wedged CI runner.
+//
+// Set in the child as well, because the timer does NOT survive `fork`.
+external function alarm(seconds: u32) -> CInt touches clock;
+
 function talk() -> Int touches network, commands, input, clock {
+    let deadline: Int = alarm(20);
     match net_listen_any_port(4) {
         None => {
             print("could not listen");
@@ -37,6 +53,7 @@ function talk() -> Int touches network, commands, input, clock {
                 Some(p) => { port = p; }
             }
             if os_fork() == 0 {
+                let own: Int = alarm(20);
                 // The child is the client, and it prints nothing at all.
                 //
                 // A short wait first: `accept` has to be running before `connect` arrives. The

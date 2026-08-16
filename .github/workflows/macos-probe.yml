@@ -1,0 +1,106 @@
+# A temporary diagnostic. Delete it once macOS is green.
+#
+# `lib/net.bx` was written and tested on one kernel, and the BSD `sockaddr_in` fix that followed
+# was **reasoned about, not measured** — there is no Mac and no Mach-O emulator on the machine it
+# was written on. It shipped, and macOS hung again, which means the reasoning is either wrong or
+# incomplete and no amount of further reasoning will say which.
+#
+# So this asks the platform. It prints what each call actually answers on a real macOS runner, one
+# line at a time, unbuffered, with an alarm so it cannot wedge the job the way the fixture did.
+#
+# This is the same move that found the network wall in the first place: write the program, do not
+# plan the milestone.
+name: macOS probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: probe-${{ matrix.name }}
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: darwin-arm64
+            runs-on: macos-14
+          - name: darwin-x86_64
+            runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 18
+        run: |
+          brew install llvm@18
+          echo "LLVM_SYS_181_PREFIX=$(brew --prefix llvm@18)" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the compiler
+        run: cargo build --release
+
+      - name: What does this kernel actually say
+        run: |
+          cat > probe.bx <<'BX'
+          use "lib/net.bx";
+          use "lib/os.bx";
+
+          external function alarm(seconds: u32) -> CInt touches clock;
+          external function __error() -> CPointer touches input;
+
+          function errno_now() -> Int touches input {
+              let cell: [Int] = c_bytes_at(__error(), 4);
+              return cell[0];
+          }
+
+          function probe() -> Int touches network, commands, input, clock {
+              let guard: Int = alarm(30);
+              print("uname says darwin; net_uses_bsd_sockaddr says {net_uses_bsd_sockaddr()}");
+
+              match net_listen_any_port(4) {
+                  None => { print("net_listen_any_port -> None, errno {errno_now()}"); }
+                  Some(server) => {
+                      print("net_listen_any_port -> fd {server}");
+                      match net_port_of(server) {
+                          None => { print("net_port_of -> None, errno {errno_now()}"); }
+                          Some(p) => {
+                              print("net_port_of -> {p}, sane {p > 1024}");
+                              if os_fork() == 0 {
+                                  let own: Int = alarm(30);
+                                  let waited: Bool = os_sleep(100);
+                                  match net_connect_ipv4(127, 0, 0, 1, p) {
+                                      None => { print("child: connect -> None, errno {errno_now()}"); }
+                                      Some(link) => {
+                                          let sent: Option<Int> = net_write(link, "ping");
+                                          let shut: Bool = net_close(link);
+                                      }
+                                  }
+                                  return 0;
+                              }
+                              match net_accept(server) {
+                                  None => { print("accept -> None, errno {errno_now()}"); }
+                                  Some(client) => {
+                                      match net_read(client, 64) {
+                                          None => { print("read -> None"); }
+                                          Some(text) => { print("server read: {text}"); }
+                                      }
+                                      let c: Bool = net_close(client);
+                                  }
+                              }
+                              let reaped: Int = os_wait_for_child();
+                          }
+                      }
+                      let done: Bool = net_close(server);
+                  }
+              }
+              print("probe finished");
+              return 0;
+          }
+          let r: Int = probe();
+          BX
+          ./target/release/burxt run probe.bx || echo "probe exited $?"
+
+      - name: And the fixture itself, with its own alarm
+        run: ./target/release/burxt run tests/pass/net_loopback.bx || echo "fixture exited $?"
