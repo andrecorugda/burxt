@@ -447,6 +447,68 @@ Left-to-right reading instead of inside-out nesting; interpolation by default,
 no concat or printf-juggling. Neither is novel (F#, Elixir, every modern
 language) — both are proven, cheap eloquence.
 
+#### The delimiters do not move for an embedded format (DECIDED, 2026-08-16)
+
+`{expr}` owns the brace. A literal one is `\{`, a literal close is `\}`, and both
+are diagnosed by name rather than by a parse failure:
+
+```
+error: a literal `{` in a string must be written `\{` — an unescaped `{` starts a
+       `{expr}` interpolation
+error: a literal `}` in a string must be written `\}` — a bare `}` only closes a
+       `{expr}` interpolation
+```
+
+**The question, and it will be asked again.** BMX — the markdown view format — delimits
+its expression slots with `{{ }}`, which collides head-on. A BMX document pasted into a
+Burxt string is either a parse error (`in the interpolation `{{ user.name }}`: expected
+an expression, found `{``) or a document with every brace backslashed.
+
+**Measured before deciding, because the obvious claim was too strong.** "A BMX document
+cannot live in a Burxt string literal" is false. This compiles and prints
+`{{ user.name }}`:
+
+```burxt
+print("escaped slot: \{\{ user.name \}\}");
+```
+
+So it *can*. It is merely unreadable — which is a different argument and a weaker-sounding
+one, and it is the true one.
+
+**And it was already under test, by a fixture written before BMX existed.**
+`tests/pass/interpolation_escapes.bx` has carried `print("nested-looking: \{\{n\}\}")`
+since the escapes landed, alongside `tests/fail/brace_bare_open.bx` and
+`brace_bare_close.bx` for the two refusals. Nothing new was needed to pin this decision,
+and nothing new was added: a second fixture asserting the same fact is the "one fact stored
+twice" defect this file warns about elsewhere, and it disagrees with itself eventually.
+
+**The decision: the interpolation syntax does not change, and no second string form is
+added for embedding.** Not a raw-string literal, not an alternate delimiter, not a
+here-doc. Three reasons, in order of weight:
+
+1. **A format's convenience is not a language's problem.** BMX chose `{{ }}`; the fix for
+   that collision belongs on the side that has a choice left. Moving a delimiter that every
+   existing program depends on, so that a file format can be pasted into a string, inverts
+   which of the two is load-bearing.
+2. **The workaround it forces is the better design anyway.** A view lives in a `.bmx` file
+   read by a generator, not in a string literal — which is where BMX was heading regardless,
+   because a template inside a string is a template no editor can highlight, no formatter can
+   touch, and no conformance suite can address. The collision made a design question urgent;
+   it did not decide it wrongly.
+3. **Every raw-string form is a second escaping rule**, and the reason `\{` is diagnosed by
+   name is that one rule can be taught in one sentence. `M12-STRINGS` earned that message the
+   hard way; a `r"..."` form would mean two answers to "how do I write a brace" and, in this
+   language, two answers to one question is the shape of defect that outlives everyone who
+   remembers why.
+
+**What would reopen it:** a second, independent format wanting braces — not a second request
+from the same one. One collision is a format's choice; two is evidence the delimiter is
+crowded, and that is a different argument with different weight.
+
+Related and already recorded: *no format-spec mini-language in interpolation*. Same instinct
+— the interpolation stays a slot with an expression in it, and grows neither a grammar of its
+own nor an alternative spelling.
+
 ### The permanent tension
 
 Burxt wants both *many guarantees* and *Python-like ease*; these pull against
