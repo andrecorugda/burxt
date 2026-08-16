@@ -933,6 +933,11 @@ def render_index(kw, ren, cmds):
     for name in MODULES:
         out.append('<li><a href="%s.html"><span><code>lib/%s.bx</code></span> '
                    '<span class="what">%s</span></a></li>' % (name, name, MODULE_TITLES[name]))
+    # The formats documented elsewhere, listed after the modules rather than inside them: this is
+    # a list of what Burxt contains, and BMX is a specification Burxt implements.
+    out.append('<li><a href="https://bmx.burxt-lang.org/"><span>BMX</span> '
+               '<span class="what">the markup format — its own guide, spec and conformance '
+               'suite</span></a></li>')
     out.append("</ul>\n")
 
     out.append("## Keywords\n")
@@ -1074,6 +1079,12 @@ def render_module(mod):
     out.append("# `lib/%s.bx`\n" % mod["name"])
     out.append(sentence(mod["title"]) + "\n")
     out.append("```burxt\nuse \"lib/%s.bx\";\n```\n" % mod["name"])
+    # A module that implements a format specified elsewhere points at that documentation FIRST.
+    # This page is generated from the source and answers "what functions are there"; it cannot
+    # answer "how do I write a document", and a reader who lands here looking for the second
+    # should not have to find out that it lives somewhere else.
+    if mod["name"] in HOME:
+        out.append("> **%s** — %s\n" % (HOME[mod["name"]][1], HOME[mod["name"]][0]))
     if mod["blurb"]:
         out.append(mod["blurb"] + "\n")
 
@@ -1109,6 +1120,14 @@ def render_module(mod):
             out.append("[Source](%s/%s#L%d)\n" % (GH, mod["path"], s["line"]))
     return "\n".join(out) + "\n"
 
+
+# Modules that implement a format documented on its own site. The reference page is generated from
+# the source and says what the functions are; the format's own site says how to write a document in
+# it, and a reader who arrives here wanting the second should be sent rather than left.
+HOME = {
+    "bmx": ("BMX is a format with its own specification, guide and conformance suite.",
+            "[Read the BMX documentation at bmx.burxt-lang.org](https://bmx.burxt-lang.org/)"),
+}
 
 MODULE_TITLES = {}
 

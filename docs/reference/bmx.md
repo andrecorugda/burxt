@@ -15,6 +15,8 @@ BMX 0.1, parsed into a typed tree.
 use "lib/bmx.bx";
 ```
 
+> **[Read the BMX documentation at bmx.burxt-lang.org](https://bmx.burxt-lang.org/)** — BMX is a format with its own specification, guide and conformance suite.
+
 BMX is markdown with one unambiguous reading and a typed hole in it. The format is specified in its own repository, independently of this file and of this language: structure, error codes and a conformance suite as data. This is one implementation of it.
 
 ---- The one property that separates BMX from markdown -----------------------------------

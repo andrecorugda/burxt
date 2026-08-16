@@ -12,6 +12,10 @@ examples you can run — because a decision is only worth reading if you can see
 
 What the language refuses is usually the interesting part.
 
+**Writing pages?** BMX — the markup format Burxt renders — has its own guide at
+[bmx.burxt-lang.org](https://bmx.burxt-lang.org/): how to write a document, how to turn it into a
+page, and how a view gets checked before the page exists.
+
 <ul class="pages">
 <li><a href="01-getting-started.html"><span class="n">1</span> <span>Getting started</span> <span class="what">Install, run a file, the editor</span></a></li>
 <li><a href="02-numbers-and-money.html"><span class="n">2</span> <span>Numbers and money</span> <span class="what">Scales, rounding contracts, why <code>+</code> is strict</span></a></li>
