@@ -4535,26 +4535,121 @@ function runtime_ir() -> String {
         // over many transactions; HalfUp is the one people expect from school.
         + round_helper("half_even")
         + round_helper("half_up")
+        // A `Decimal` to text, in Burxt, with no `snprintf` in the path.
+        //
+        // **This is the last inch of the money thesis.** The arithmetic is exact — scaled
+        // integers, no float — and until this existed the final step, the characters a human
+        // reads, was `snprintf("%s%llu.%0<scale>llu")` and therefore whatever libc the target had.
+        // `spec/1.0/N1-BOUNDARY-EXACTNESS.md` §7 has the argument. A wasm host rendered
+        // `$1299.05` as `1299.5` by discarding the width in `%02llu`, silently.
+        //
+        // **Driven by `%pow` rather than by the scale**, which is why the signature did not have
+        // to change and neither call site moved: dividing the power of ten by ten until it reaches
+        // one counts out exactly the fractional digits, so nothing has to be told how many there
+        // are. `%fmt` is now unused and kept only so the two callers stay byte for byte as they
+        // were.
+        //
+        // **Digits are written BACKWARDS into the tail of the buffer and copied to the front
+        // once.** Backwards is what makes the length fall out rather than needing a second loop to
+        // agree with the first about how many digits the integer part has. The widest output is a
+        // sign, twenty digits and a point — 22 bytes into 48 — so the copy never overlaps.
+        //
+        // **u64, not i128, and that is a portability fix as much as a simplification.** The
+        // magnitude of any i64 fits a u64 exactly — `abs(i64::MIN)` is 2^63, and two's-complement
+        // negation already produces those bits, so `udiv`/`urem` reading them unsigned give the
+        // right digits with no widening.
+        //
+        // The first version used i128, inherited from the `snprintf` path it replaces. i128
+        // arithmetic makes LLVM emit `__multi3` and `__udivti3` — compiler-rt builtins that
+        // x86-64 and aarch64 supply invisibly and `wasm32-unknown-unknown` does not. The fixture,
+        // the fixpoint and the two-backend agreement were all green; a wasm host refused to
+        // instantiate with `function import requires a callable`. Found by a consumer on a target
+        // this machine cannot run, which is the only kind of check that could have found it.
         + "define i64 @burxt.to_string_dec(i64 %v, i64 %pow, ptr %fmt) \{\n"
         + "entry:\n"
         + "  %out = call i64 @burxt.alloc_string(i64 48)\n"
-        + "  %p = inttoptr i64 %out to ptr\n"
-        + "  %wide = sext i64 %v to i128\n"
+        + "  %base = inttoptr i64 %out to ptr\n"
         + "  %isneg = icmp slt i64 %v, 0\n"
-        + "  %flip = sub i128 0, %wide\n"
-        + "  %abs = select i1 %isneg, i128 %flip, i128 %wide\n"
-        + "  %sign = select i1 %isneg, ptr getelementptr inbounds (\{ i64, [2 x i8] \}, ptr @burxt.string_minus, i32 0, i32 1), ptr getelementptr inbounds (\{ i64, [1 x i8] \}, ptr @burxt.string_empty, i32 0, i32 1)\n"
-        + "  %poww = sext i64 %pow to i128\n"
-        + "  %iw = udiv i128 %abs, %poww\n"
-        + "  %fw = urem i128 %abs, %poww\n"
-        + "  %ip = trunc i128 %iw to i64\n"
-        + "  %fp = trunc i128 %fw to i64\n"
-        + "  %n = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %p, i64 49, ptr %fmt, "
-        + "ptr %sign, i64 %ip, i64 %fp)\n"
-        + "  %wrote = sext i32 %n to i64\n"
+        + "  %flip = sub i64 0, %v\n"
+        + "  %abs0 = select i1 %isneg, i64 %flip, i64 %v\n"
+        + "  %vp = alloca i64\n"
+        + "  store i64 %abs0, ptr %vp\n"
+        + "  %dp = alloca i64\n"
+        + "  store i64 %pow, ptr %dp\n"
+        + "  %cp = alloca i64\n"
+        + "  store i64 48, ptr %cp\n"
+        + "  br label %frac_test\n"
+        // The fractional digits: exactly as many as the power of ten has zeros, zero-padded by
+        // construction rather than by a width a host has to honour. This is the half that a
+        // non-conforming `printf` got wrong.
+        + "frac_test:\n"
+        + "  %d = load i64, ptr %dp\n"
+        + "  %moref = icmp ugt i64 %d, 1\n"
+        + "  br i1 %moref, label %frac_body, label %point_test\n"
+        + "frac_body:\n"
+        + "  %vf = load i64, ptr %vp\n"
+        + "  %remf = urem i64 %vf, 10\n"
+        + "  %divf = udiv i64 %vf, 10\n"
+        + "  store i64 %divf, ptr %vp\n"
+        + "  %smallf = trunc i64 %remf to i8\n"
+        + "  %chf = add i8 %smallf, 48\n"
+        + "  %curf = load i64, ptr %cp\n"
+        + "  %backf = sub i64 %curf, 1\n"
+        + "  store i64 %backf, ptr %cp\n"
+        + "  %atf = getelementptr i8, ptr %base, i64 %backf\n"
+        + "  store i8 %chf, ptr %atf\n"
+        + "  %dcur = load i64, ptr %dp\n"
+        + "  %dnext = udiv i64 %dcur, 10\n"
+        + "  store i64 %dnext, ptr %dp\n"
+        + "  br label %frac_test\n"
+        + "point_test:\n"
+        + "  %haspoint = icmp ugt i64 %pow, 1\n"
+        + "  br i1 %haspoint, label %put_point, label %int_body\n"
+        + "put_point:\n"
+        + "  %pcurd = load i64, ptr %cp\n"
+        + "  %pbackd = sub i64 %pcurd, 1\n"
+        + "  store i64 %pbackd, ptr %cp\n"
+        + "  %patd = getelementptr i8, ptr %base, i64 %pbackd\n"
+        + "  store i8 46, ptr %patd\n"   // '.'
+        + "  br label %int_body\n"
+        // At least one integer digit, so zero renders as "0" rather than as nothing.
+        + "int_body:\n"
+        + "  %vi = load i64, ptr %vp\n"
+        + "  %remi = urem i64 %vi, 10\n"
+        + "  %divi = udiv i64 %vi, 10\n"
+        + "  store i64 %divi, ptr %vp\n"
+        + "  %smalli = trunc i64 %remi to i8\n"
+        + "  %chi = add i8 %smalli, 48\n"
+        + "  %curi = load i64, ptr %cp\n"
+        + "  %backi = sub i64 %curi, 1\n"
+        + "  store i64 %backi, ptr %cp\n"
+        + "  %ati = getelementptr i8, ptr %base, i64 %backi\n"
+        + "  store i8 %chi, ptr %ati\n"
+        + "  %left = load i64, ptr %vp\n"
+        + "  %morei = icmp ne i64 %left, 0\n"
+        + "  br i1 %morei, label %int_body, label %sign_test\n"
+        // The sign. `%isneg` is false for a zero magnitude because the sign lives in the scaled
+        // integer and zero has no sign — `-$0.00` is `0.00`, which is Andre's ruling and what the
+        // `snprintf` path already did. No special case preserves it; there is nothing to preserve.
+        + "sign_test:\n"
+        + "  br i1 %isneg, label %put_sign, label %finish\n"
+        + "put_sign:\n"
+        + "  %pcurs = load i64, ptr %cp\n"
+        + "  %pbacks = sub i64 %pcurs, 1\n"
+        + "  store i64 %pbacks, ptr %cp\n"
+        + "  %pats = getelementptr i8, ptr %base, i64 %pbacks\n"
+        + "  store i8 45, ptr %pats\n"   // '-'
+        + "  br label %finish\n"
+        + "finish:\n"
+        + "  %start = load i64, ptr %cp\n"
+        + "  %len = sub i64 48, %start\n"
+        + "  %src = getelementptr i8, ptr %base, i64 %start\n"
+        + "  call ptr @memcpy(ptr %base, ptr %src, i64 %len)\n"
         + "  %hdr = sub i64 %out, 8\n"
         + "  %hp = inttoptr i64 %hdr to ptr\n"
-        + "  store i64 %wrote, ptr %hp\n"
+        + "  store i64 %len, ptr %hp\n"
+        + "  %endp = getelementptr i8, ptr %base, i64 %len\n"
+        + "  store i8 0, ptr %endp\n"
         + "  ret i64 %out\n\}\n\n"
         + "define i64 @burxt.new_array(i64 %elem) \{\n"
         + "entry:\n"

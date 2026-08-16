@@ -192,7 +192,44 @@ described, not tested against real C.
 as the ones still to come. It missed one that had been open since v0.0.28, in the most-used
 function in the language.
 
-**A `Decimal` is rendered to text by the host's `snprintf`.**
+**CLOSED.** A `Decimal` is rendered in generated code, and `snprintf: 0` in a money program's
+wasm imports. What follows describes the state that prompted the work; the line numbers below moved
+when it landed. Left as a live claim it would be the hazard this document exists to name — a reader
+in six months believing money still goes through libc, and nobody re-tests what a spec says is
+broken.
+
+**The bug class is closed, not the instance.** The only format spec left near a `Decimal` is `%s`,
+which has **no width**, so the varargs walker that turned `$1299.05` into `1299.5` by discarding
+`%02llu` has nothing left to get wrong. A host had to be *correct*; it now only has to be *present*.
+
+**Two things it did NOT close**, recorded here because they will otherwise be attributed to it:
+
+- **`to_string(Int)` still delegates**, with `"%lld"` — no width and no zero-pad, so the silent
+  money failure cannot happen there; a mishandled `%lld` breaks visibly and everywhere rather than
+  quietly and only in money. A smaller follow-up, not done.
+- **Stage-1 emits its whole runtime preamble unconditionally**, so an object built through it
+  carries `__multi3`, `__divti3`, `__modti3` and `snprintf` from rounding helpers and
+  `to_string_int` that the program never calls. Stage-0 emits only what a program needs, which is
+  why its object is clean. **Both predate this change.**
+
+**And the fix was smaller than the design, which is the part worth carrying forward.** The first
+implementation used i128, inherited from the `snprintf` path — and made LLVM emit `__multi3` and
+`__udivti3`, compiler-rt builtins that x86-64 and aarch64 supply invisibly and
+`wasm32-unknown-unknown` does not. The fixture, the fixpoint and the two-backend agreement were all
+green; a wasm host refused to instantiate. **i128 was never needed**: `abs(i64::MIN)` is exactly
+2^63, which fits a `u64`, and two's-complement negation already produces those bits. The old path
+widened *because it had no choice* — it handed parts to a varargs call and could not do its own
+division. The constraint was real and it belonged to the thing being removed; carrying it into the
+replacement is the ordinary way a rewrite preserves a limitation nobody re-examines.
+
+Verified through wasm against a host with no `printf` of any kind, `native == wasm` byte for byte,
+including `i64::MIN` at scale 2 rendering as `-92233720368547758.08`.
+
+---
+
+*What follows is the finding as it stood before the fix, kept because it is the evidence.*
+
+**A `Decimal` was rendered to text by the host's `snprintf`.**
 
 ```rust
 // src/rust-compiler/codegen.rs:2360  in gen_print_value

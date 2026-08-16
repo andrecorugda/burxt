@@ -2330,39 +2330,15 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_select(is_neg, minus, empty, "sign")
                     .map_err(|e| e.to_string())?;
 
-                let narrow = |b: &Builder<'ctx>, v: IntValue<'ctx>, n: &str| {
-                    b.build_int_truncate(v, i64t, n).map_err(|e| e.to_string())
-                };
-
-                if *scale == 0 {
-                    // Scale 0 has NO fractional digits — printing ".0" would
-                    // show a digit that does not exist.
-                    let int_part = narrow(&self.builder, abs, "int_part")?;
-                    let fmt = self.global_str("%s%llu", "fmt_dec0");
-                    let arguments: Vec<BasicMetadataValueEnum> =
-                        vec![fmt.into(), sign.into(), int_part.into()];
-                    self.emit_print_call(&arguments, "printf_dec")?;
-                } else {
-                    let pow = self.pow10_i128(*scale);
-                    let int_wide = self
-                        .builder
-                        .build_int_unsigned_div(abs, pow, "int_wide")
-                        .map_err(|e| e.to_string())?;
-                    let frac_wide = self
-                        .builder
-                        .build_int_unsigned_rem(abs, pow, "frac_wide")
-                        .map_err(|e| e.to_string())?;
-                    let int_part = narrow(&self.builder, int_wide, "int_part")?;
-                    let frac_part = narrow(&self.builder, frac_wide, "frac_part")?;
-                    let _ = i128t;
-
-                    // "%s%llu.%0<scale>llu\n" — sign, then zero-padded digits.
-                    let fmt_str = format!("%s%llu.%0{}llu", scale);
-                    let fmt = self.global_str(&fmt_str, "fmt_dec");
-                    let arguments: Vec<BasicMetadataValueEnum> =
-                        vec![fmt.into(), sign.into(), int_part.into(), frac_part.into()];
-                    self.emit_print_call(&arguments, "printf_dec")?;
-                }
+                // **Rendered in Burxt, not by the host's `snprintf`.** See `build_decimal_text`
+                // — the arithmetic was always exact and the last step, turning it into the
+                // characters a reader sees, used to be whatever libc the target had. `%s` and
+                // `sign` above are now unused by this path and stay only for the `Int` branch.
+                let _ = (is_neg, abs, sign, i128t, wide);
+                let text = self.build_decimal_text(val, *scale)?;
+                let fmt = self.global_str("%s", "fmt_dec_text");
+                let arguments: Vec<BasicMetadataValueEnum> = vec![fmt.into(), text.into()];
+                self.emit_print_call(&arguments, "printf_dec")?;
             }
         }
         Ok(())
@@ -4197,32 +4173,13 @@ impl<'ctx> CodeGen<'ctx> {
         // dry run before allocating.
         let (fmt, arguments): (PointerValue<'ctx>, Vec<BasicMetadataValueEnum>) = match ty {
             Type::Int => (self.global_str("%lld", "f_int"), vec![val.into()]),
+            // **A Decimal returns here rather than falling through to `snprintf`.** This is the
+            // path a value takes when it becomes text INSIDE a program — into a view, a log line,
+            // a JSON field — and it is the one that matters most for a host that supplies its own
+            // `printf`. `build_decimal_text` does the whole job, so there is no format string to
+            // hand anybody and nothing for a varargs walker to misread.
             Type::Decimal { scale, .. } => {
-                let v = val.into_int_value();
-                let is_neg = self
-                    .builder
-                    .build_int_compare(inkwell::IntPredicate::SLT, v, i64t.const_zero(), "neg")
-                    .map_err(err)?;
-                let wide = self.widen(v)?;
-                let abs = self.build_abs_wide(wide)?;
-                let minus = self.global_str("-", "s_minus");
-                let empty = self.global_str("", "s_empty");
-                let sign = self
-                    .builder
-                    .build_select(is_neg, minus, empty, "sign")
-                    .map_err(err)?;
-                if *scale == 0 {
-                    let whole = self.builder.build_int_truncate(abs, i64t, "whole").map_err(err)?;
-                    (self.global_str("%s%llu", "f_dec0"), vec![sign.into(), whole.into()])
-                } else {
-                    let pow = self.pow10_i128(*scale);
-                    let iw = self.builder.build_int_unsigned_div(abs, pow, "iw").map_err(err)?;
-                    let fw = self.builder.build_int_unsigned_rem(abs, pow, "fw").map_err(err)?;
-                    let ip = self.builder.build_int_truncate(iw, i64t, "ip").map_err(err)?;
-                    let fp = self.builder.build_int_truncate(fw, i64t, "fp").map_err(err)?;
-                    let f = self.global_str(&format!("%s%llu.%0{}llu", scale), "f_dec");
-                    (f, vec![sign.into(), ip.into(), fp.into()])
-                }
+                return self.build_decimal_text(val.into_int_value(), *scale);
             }
             other => return Err(format!("codegen bug: to_string of {}", other)),
         };
@@ -5292,6 +5249,182 @@ impl<'ctx> CodeGen<'ctx> {
     /// Every place that makes a String goes through here, which is the point: a length written in
     /// one place and read in another is exactly the kind of thing that works for the case you
     /// tested.
+    /// A `Decimal` to text, in Burxt, with no libc in the path.
+    ///
+    /// **This is the last inch of the money thesis.** The arithmetic is exact — scaled integers,
+    /// no float, from literal through every operation — and until this existed the final step, the
+    /// one that produces the characters a human reads, was `snprintf("%s%llu.%0<scale>llu")` and
+    /// therefore whatever libc the target happened to have. `N1-BOUNDARY-EXACTNESS.md` §7 has the
+    /// argument; the short form is that no conforming libc renders it differently, and a host that
+    /// supplies its own `printf` is a surface that did not exist before wasm. One did, and it
+    /// rendered `$1299.05` as `1299.5` by discarding the width in `%02llu`.
+    ///
+    /// **Digits are written backwards into a stack buffer and copied forward once.** Writing
+    /// backwards is what makes the length fall out rather than needing to be computed: the number
+    /// of digits in the integer part is not known until the division stops, and computing it up
+    /// front would mean a second loop that has to agree with the first.
+    ///
+    /// **u64, not i128 — and that is a portability fix as much as a simplification.** The
+    /// magnitude of any `i64` fits a `u64` exactly: `abs(i64::MIN)` is 2^63, and two's-complement
+    /// negation already produces those bits, so `udiv`/`urem` reading them unsigned give the right
+    /// digits with no widening at all.
+    ///
+    /// The first version used i128, inherited from the `snprintf` path it replaces — which widened
+    /// for the same overflow reason and had no better option because it was handing the parts to a
+    /// varargs call. **i128 arithmetic makes LLVM emit `__multi3` and `__udivti3`**, compiler-rt
+    /// builtins that x86-64 and aarch64 supply invisibly and `wasm32-unknown-unknown` does not.
+    /// The fixture, the fixpoint and the two-backend agreement were all green; a wasm host refused
+    /// to instantiate with `function import requires a callable`. Found by a consumer on a target
+    /// this machine cannot run — which is the only kind of check that could have found it.
+    ///
+    /// It is also the better trade on its own merits: a host author who has to supply a correct
+    /// 128-bit long division is worse off than one who had to supply a correct width specifier.
+    ///
+    /// 48 bytes is more than twice what is reachable: 20 digits for the magnitude, one point, one
+    /// sign, and a scale capped at 18.
+    fn build_decimal_text(
+        &mut self,
+        unscaled: IntValue<'ctx>,
+        scale: u32,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let err = |e: inkwell::builder::BuilderError| e.to_string();
+        let i64t = self.ctx.i64_type();
+        let i8t = self.ctx.i8_type();
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_parent())
+            .ok_or("codegen bug: decimal text outside a function")?;
+
+        let is_neg = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, unscaled, i64t.const_zero(), "dt_neg")
+            .map_err(err)?;
+        // Two's-complement negation, read unsigned. For `i64::MIN` this yields 2^63, which is
+        // exactly its magnitude — no widening, and therefore no compiler-rt.
+        let flipped = self
+            .builder
+            .build_int_sub(i64t.const_zero(), unscaled, "dt_flip")
+            .map_err(err)?;
+        let magnitude = self
+            .builder
+            .build_select(is_neg, flipped, unscaled, "dt_mag")
+            .map_err(err)?
+            .into_int_value();
+
+        let scratch = self
+            .builder
+            .build_array_alloca(i8t, i64t.const_int(48, false), "dt_scratch")
+            .map_err(err)?;
+        let end = unsafe {
+            self.builder.build_gep(i8t, scratch, &[i64t.const_int(48, false)], "dt_end")
+        }
+        .map_err(err)?;
+
+        let cursor = self.builder.build_alloca(self.ctx.ptr_type(AddressSpace::default()), "dt_p")
+            .map_err(err)?;
+        self.builder.build_store(cursor, end).map_err(err)?;
+        let value = self.builder.build_alloca(i64t, "dt_v").map_err(err)?;
+        self.builder.build_store(value, magnitude).map_err(err)?;
+
+        let ten = i64t.const_int(10, false);
+        let zero_ch = i8t.const_int(48, false); // '0'
+
+        // One digit off the end of `value`, written one byte back from `cursor`.
+        let emit_digit = |me: &mut Self| -> Result<(), String> {
+            let v = me.builder.build_load(i64t, value, "dt_val").map_err(err)?.into_int_value();
+            let rem = me.builder.build_int_unsigned_rem(v, ten, "dt_rem").map_err(err)?;
+            let next = me.builder.build_int_unsigned_div(v, ten, "dt_div").map_err(err)?;
+            me.builder.build_store(value, next).map_err(err)?;
+            let small = me.builder.build_int_truncate(rem, i8t, "dt_small").map_err(err)?;
+            let ch = me.builder.build_int_add(small, zero_ch, "dt_ch").map_err(err)?;
+            let p = me
+                .builder
+                .build_load(me.ctx.ptr_type(AddressSpace::default()), cursor, "dt_cur")
+                .map_err(err)?
+                .into_pointer_value();
+            let back = unsafe {
+                me.builder.build_gep(i8t, p, &[i64t.const_int(u64::MAX, true)], "dt_back")
+            }
+            .map_err(err)?;
+            me.builder.build_store(back, ch).map_err(err)?;
+            me.builder.build_store(cursor, back).map_err(err)?;
+            Ok(())
+        };
+
+        // The fractional digits: exactly `scale` of them, zero-padded by construction rather than
+        // by a width the host has to honour. This is the half a non-conforming `printf` got wrong.
+        for _ in 0..scale {
+            emit_digit(self)?;
+        }
+        if scale > 0 {
+            let p = self
+                .builder
+                .build_load(self.ctx.ptr_type(AddressSpace::default()), cursor, "dt_cur_pt")
+                .map_err(err)?
+                .into_pointer_value();
+            let back = unsafe {
+                self.builder.build_gep(i8t, p, &[i64t.const_int(u64::MAX, true)], "dt_pt")
+            }
+            .map_err(err)?;
+            self.builder.build_store(back, i8t.const_int(46, false)).map_err(err)?; // '.'
+            self.builder.build_store(cursor, back).map_err(err)?;
+        }
+
+        // The integer digits: at least one, so zero renders as "0" rather than as nothing.
+        let body = self.ctx.append_basic_block(function, "dt_int_body");
+        let test = self.ctx.append_basic_block(function, "dt_int_test");
+        let done = self.ctx.append_basic_block(function, "dt_int_done");
+        self.builder.build_unconditional_branch(body).map_err(err)?;
+        self.builder.position_at_end(body);
+        emit_digit(self)?;
+        self.builder.build_unconditional_branch(test).map_err(err)?;
+        self.builder.position_at_end(test);
+        let left = self.builder.build_load(i64t, value, "dt_left").map_err(err)?.into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::NE, left, i64t.const_zero(), "dt_more")
+            .map_err(err)?;
+        self.builder.build_conditional_branch(more, body, done).map_err(err)?;
+        self.builder.position_at_end(done);
+
+        // The sign. `is_neg` is false for a zero magnitude because the sign lives in the scaled
+        // integer and zero has no sign — `-$0.00` is `0.00`, which is Andre's ruling and what the
+        // `snprintf` path already did. No special case is needed to preserve it.
+        let signed = self.ctx.append_basic_block(function, "dt_sign");
+        let after = self.ctx.append_basic_block(function, "dt_after");
+        self.builder.build_conditional_branch(is_neg, signed, after).map_err(err)?;
+        self.builder.position_at_end(signed);
+        let p = self
+            .builder
+            .build_load(self.ctx.ptr_type(AddressSpace::default()), cursor, "dt_cur_sg")
+            .map_err(err)?
+            .into_pointer_value();
+        let back = unsafe {
+            self.builder.build_gep(i8t, p, &[i64t.const_int(u64::MAX, true)], "dt_sg")
+        }
+        .map_err(err)?;
+        self.builder.build_store(back, i8t.const_int(45, false)).map_err(err)?; // '-'
+        self.builder.build_store(cursor, back).map_err(err)?;
+        self.builder.build_unconditional_branch(after).map_err(err)?;
+        self.builder.position_at_end(after);
+
+        let start = self
+            .builder
+            .build_load(self.ctx.ptr_type(AddressSpace::default()), cursor, "dt_start")
+            .map_err(err)?
+            .into_pointer_value();
+        let start_i = self.builder.build_ptr_to_int(start, i64t, "dt_si").map_err(err)?;
+        let end_i = self.builder.build_ptr_to_int(end, i64t, "dt_ei").map_err(err)?;
+        let len = self.builder.build_int_sub(end_i, start_i, "dt_len").map_err(err)?;
+
+        let buf = self.build_alloc_string(len)?;
+        self.builder
+            .build_memcpy(buf, 1, start, 1, len)
+            .map_err(|e| e.to_string())?;
+        Ok(buf)
+    }
+
     fn build_alloc_string(&mut self, len: IntValue<'ctx>) -> Result<PointerValue<'ctx>, String> {
         let err = |e: inkwell::builder::BuilderError| e.to_string();
         let i64t = self.ctx.i64_type();
