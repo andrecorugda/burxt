@@ -218,9 +218,19 @@ return "; LLVM IR written by the Burxt compiler, in Burxt.\n"
     + "@burxt.overflow_msg = private unnamed_addr constant [97 x i8] "
     + "c\"burxt runtime error: arithmetic overflow \\E2\\80\\94 the exact result no "
     + "longer fits in the value range\\0A\\00\"\n"
-    + "@burxt.region_msg = private unnamed_addr constant [87 x i8] "
-    + "c\"burxt runtime error: region memory exhausted — this build "
-    + "reserves 4 GB per process\\0A\\00\"\n"
+    // No longer names a number, because the number is no longer knowable when this text is
+    // written: `burxt.alloc` asks for 4 GB, then 256 MB, then 16 MB, and keeps whichever the
+    // machine granted. Saying "reserves 4 GB" to a process holding 16 MB would be the most
+    // misleading thing this message could say. Word for word what stage-0's `build_panic` emits.
+    + "@burxt.region_msg = private unnamed_addr constant [120 x i8] "
+    + "c\"burxt runtime error: region memory exhausted — this process has used "
+    + "all the region memory the machine would give it\\0A\\00\"\n"
+    // The OTHER region failure, and a different one: not "used it all" but "never got any".
+    // Stage-0 distinguishes them, so stage-1 must too — one message for two causes is how a
+    // runtime error stops being advice.
+    + "@burxt.no_region_msg = private unnamed_addr constant [105 x i8] "
+    + "c\"burxt runtime error: could not reserve any region memory — the machine "
+    + "refused 4 GB, 256 MB and 16 MB\\0A\\00\"\n"
     + "@burxt.divzero_msg = private unnamed_addr constant [39 x i8] "
     + "c\"burxt runtime error: division by zero\\0A\\00\"\n"
     // The third number was the SOURCE BYTE OFFSET, which is a compiler-writer's number: it

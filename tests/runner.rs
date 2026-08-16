@@ -562,6 +562,83 @@ fn money_and_integers_cross_into_c_exactly() {
     );
 }
 
+/// **A `getrlimit` that FAILS must not make every call look like a stack overflow.**
+///
+/// `burxt.set_stack_floor` asks `getrlimit(RLIMIT_STACK)` how much stack the process was given
+/// and places its overflow floor at `base - (size - 128 KB)`. It has never checked the return
+/// value. So when `getrlimit` fails it leaves `rlim_cur` at the zero it was initialised to —
+/// zero passed the `< 2^40` sanity check, gave a size of zero, and `0 - 128 KB` **wrapped** to a
+/// colossal unsigned number. The floor then sat above every real stack pointer, and the guard
+/// fired on the FIRST call of the program. A hundred-deep recursion, on x86-64 Linux, died with
+/// *"this call went too deep and the stack is full"* before doing anything.
+///
+/// **This is a fixture for the failure that is possible everywhere, not the one that is certain
+/// on wasm.** The defect was found on `wasm32-unknown-unknown`, where a linear-memory stack sits
+/// near address zero and the same subtraction wraps unconditionally. It would have been easy to
+/// call it a wasm bug and test it only there — which is a check nobody re-runs on the platform
+/// where it actually bites. The same month, a generic enum built two cells short was forgiven by
+/// x86-64 for the whole life of the feature and killed by aarch64 with SIGILL.
+///
+/// So the failure is arranged rather than found: a C object defining `getrlimit` to return -1
+/// links ahead of libc's, via the same linker pass-through `money_and_integers_cross_into_c_exactly`
+/// exercises. The program must print its answer, not exit 70.
+///
+/// Verified to FAIL before the fix rather than assumed to: reverting both halves in the emitted
+/// IR — the single-ended sanity check and the wrapping subtraction — and linking the result
+/// against the same C object reproduces exit 70 exactly.
+#[test]
+fn a_failing_getrlimit_does_not_make_every_call_look_too_deep() {
+    let scratch = scratch_dir("norlimit");
+    fs::create_dir_all(&scratch).unwrap();
+
+    // Ahead of libc in the link order, so this is the `getrlimit` the runtime calls. It leaves
+    // the caller's `struct rlimit` untouched, which is what a real failure does.
+    fs::write(
+        scratch.join("norlimit.c"),
+        "int getrlimit(int resource, void *rlim) { (void)resource; (void)rlim; return -1; }\n",
+    )
+    .unwrap();
+    let cc = Command::new("cc")
+        .args(["-c", "norlimit.c", "-o", "norlimit.o"])
+        .current_dir(&scratch)
+        .status()
+        .expect("failed to invoke cc");
+    assert!(cc.success(), "could not build the getrlimit override");
+
+    // Deep enough that a real overflow would be absurd, shallow enough that no machine could
+    // honestly run out — the point is that the guard misfires, not that it is too tight.
+    fs::write(
+        scratch.join("deep.bx"),
+        "pure function down(n: Int) -> Int {\n\
+        \x20   if n <= 0 { return 0; }\n\
+        \x20   return 1 + down(n - 1);\n\
+         }\n\
+         print(down(100));\n",
+    )
+    .unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("run")
+        .arg("deep.bx")
+        .arg("norlimit.o")
+        .current_dir(&scratch)
+        .output()
+        .expect("failed to spawn burxt");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let code = out.status.code();
+    let _ = fs::remove_dir_all(&scratch);
+
+    assert!(
+        !stderr.contains("went too deep"),
+        "a failing getrlimit made an ordinary call look like a stack overflow — the floor \
+         subtraction wrapped instead of saturating:\n{}",
+        stderr
+    );
+    assert_eq!(code, Some(0), "the program should run normally, got exit {:?}", code);
+    assert_eq!(stdout, "100\n", "the recursion produced the wrong answer");
+}
+
 /// The editor grammar and the compiler must not drift. A keyword the lexer knows
 /// but the grammar does not is a word that compiles and is not highlighted —
 /// which is how a language starts feeling unfinished. The grammar is also the
@@ -8779,6 +8856,16 @@ enum Strength {
 /// Three tests in this file READ those directories, so the suite would have failed on a fresh
 /// clone while passing here — the worst shape a test failure can have. Found by a `git mv` of
 /// a library file refusing, not by anything looking.
+///
+/// **This is the one invariant here whose answer depends on repository STATE rather than on
+/// file contents, and that has a practical consequence worth knowing before you debug it.**
+/// Every other test in this file reads the tree; this one asks git. So it is the only one that
+/// can change its answer under a long run with nothing in the working tree moving — a commit
+/// or a `git add` in another session or another terminal is enough. Observed 2026-08-16, when
+/// three sessions shared one working directory: this row flipped mid-suite because a colleague
+/// committed by pathspec, and for a few minutes the result was measured against a base that had
+/// moved under it. If it disagrees with what you just saw, re-run it alone before believing
+/// either answer.
 #[test]
 fn every_source_and_document_is_in_version_control() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));

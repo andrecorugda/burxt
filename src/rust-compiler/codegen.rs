@@ -4399,18 +4399,47 @@ impl<'ctx> CodeGen<'ctx> {
         // RLIM_INFINITY, or anything absurd, falls back to 8 MB — the common default, and the
         // point is to have SOME floor rather than the exactly right one. A guard that gives up
         // when the limit is unusual is a guard that is absent precisely where recursion is deepest.
+        //
+        // **The lower bound is not decoration.** `getrlimit` can FAIL, and this code ignores its
+        // return value, so `rlim_cur` stays at the zero it was initialised to. Zero passed the
+        // `< 2^40` test, gave `size = 0`, and then `0 - 128 KB` wrapped to a colossal unsigned
+        // number — making `floor` larger than any real stack pointer, so EVERY call reported
+        // "this call went too deep" and the program exited 70 before running a line. That is a
+        // defect on any platform where `getrlimit` fails, not a wasm one; wasm is merely where it
+        // is guaranteed. So the sanity test now has both ends.
         let eight_mb = i64t.const_int(8 * 1024 * 1024, false);
-        let sane = self
+        let margin = i64t.const_int(128 * 1024, false);
+        let big_enough = self
             .builder
-            .build_int_compare(inkwell::IntPredicate::ULT, cur, i64t.const_int(1 << 40, false), "sane")
+            .build_int_compare(inkwell::IntPredicate::UGT, cur, margin, "big_enough")
             .map_err(err)?;
+        let not_absurd = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::ULT, cur, i64t.const_int(1 << 40, false), "not_absurd")
+            .map_err(err)?;
+        let sane = self.builder.build_and(big_enough, not_absurd, "sane").map_err(err)?;
         let size = self.builder.build_select(sane, cur, eight_mb, "stack_room").map_err(err)?.into_int_value();
 
         // Leave a margin so the guard itself, and `fprintf`, have room to run after it fires.
         // Reporting a full stack by overflowing the stack would be a poor joke.
-        let margin = i64t.const_int(128 * 1024, false);
         let usable = self.builder.build_int_sub(size, margin, "usable").map_err(err)?;
-        let floor = self.builder.build_int_sub(base, usable, "floor").map_err(err)?;
+
+        // And the subtraction that produces the floor SATURATES at zero. On a 64-bit OS the stack
+        // sits at a high address and `base - usable` can never wrap; on wasm32 the linear-memory
+        // stack sits near address zero and it always does. Zero is the right saturation point
+        // because the guard below already treats `floor == 0` as "not set yet" — so a machine
+        // whose stack starts below `usable` gets no guard rather than a guard that fires on every
+        // call, and wasm traps on its own call-stack exhaustion regardless.
+        let would_wrap = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::ULT, base, usable, "would_wrap")
+            .map_err(err)?;
+        let raw_floor = self.builder.build_int_sub(base, usable, "raw_floor").map_err(err)?;
+        let floor = self
+            .builder
+            .build_select(would_wrap, i64t.const_zero(), raw_floor, "floor")
+            .map_err(err)?
+            .into_int_value();
         let g = self.stack_floor_global();
         self.builder.build_store(g.as_pointer_value(), floor).map_err(err)?;
         Ok(())
@@ -4927,6 +4956,22 @@ impl<'ctx> CodeGen<'ctx> {
         let next = self.module.add_global(i64t, None, "burxt.heap.next");
         next.set_initializer(&i64t.const_zero());
         *self.heap.insert((base, next))
+    }
+
+    /// How many bytes the reservation ACTUALLY got, decided at run time by `burxt.alloc`.
+    ///
+    /// This is a global rather than the `CHUNK` constant because the size a machine can give
+    /// is not a property of the program — see the ladder in `alloc_fn`. The exhaustion check
+    /// reads it, so a build that fell back to a smaller rung still reports exhaustion at the
+    /// right boundary instead of running off the end of a chunk it did not get.
+    fn heap_size_global(&mut self) -> inkwell::values::GlobalValue<'ctx> {
+        if let Some(g) = self.module.get_global("burxt.heap.size") {
+            return g;
+        }
+        let i64t = self.ctx.i64_type();
+        let g = self.module.add_global(i64t, None, "burxt.heap.size");
+        g.set_initializer(&i64t.const_zero());
+        g
     }
 
     /// Where `main` stashed its arguments, so `argument_count()` and `argument(n)` can read
@@ -5743,7 +5788,37 @@ impl<'ctx> CodeGen<'ctx> {
         // matters. Another wall that looked like a design constraint and was a number — the ninth
         // time on this project, and the lesson each time is the same: measure the wall before
         // planning around it.
+        //
+        // ---
+        //
+        // **The paragraph above is true on a 64-bit OS and FALSE on wasm32, which is why this is a
+        // ladder now rather than one number.** Measured 2026-08-16, running a Burxt program in
+        // node: `wasm32-unknown-unknown` has a 4 GiB address space in total, so a 4 GiB reservation
+        // cannot be satisfied at all — and `memory.grow` COMMITS, so even a reservation that fit
+        // would be resident rather than virtual. "A program that touches a kilobyte pays for a
+        // kilobyte" is a property of lazy page mapping, and wasm has none.
+        //
+        // Two things were wrong here, and only one of them was about wasm:
+        //
+        //   1. **`malloc`'s answer was never checked.** A failed reservation stored a null base and
+        //      the next allocation wrote through it — a silent crash, on any platform, in the one
+        //      function whose doc comment promises "a named runtime error, never a silent overrun".
+        //   2. The size was a compile-time constant, so no target could disagree with it.
+        //
+        // **Why a run-time ladder and not a target-dependent constant**, which was the obvious fix
+        // and is the wrong one: `the_ir_is_the_same_for_every_target` compares emitted IR across
+        // every supported triple — wasm32 and ARM32 among them — and passes today precisely because
+        // pointer width never reaches the IR. A `CHUNK` that varied by triple would break that test
+        // and the M3 claim underneath it ("the same money math, provably identical on web, desktop
+        // and mobile"). Asking the machine at run time keeps every target's IR byte-identical and
+        // fixes (1) at the same time, which a constant does not.
+        //
+        // The rungs: 4 GiB for a 64-bit OS with overcommit, where this succeeds and nothing about
+        // the old behaviour changes; 256 MiB for a memory-capped container; 16 MiB for wasm and
+        // anything else small. Descending by a large factor on purpose — a ladder with close rungs
+        // spends syscalls to discover a number nobody will notice.
         const CHUNK: u64 = 4 * 1024 * 1024 * 1024;
+        const RUNGS: [u64; 3] = [CHUNK, 256 * 1024 * 1024, 16 * 1024 * 1024];
         let err = |e: inkwell::builder::BuilderError| e.to_string();
         let saved = self.builder.get_insert_block();
         let (base, next) = self.heap_globals();
@@ -5763,6 +5838,11 @@ impl<'ctx> CodeGen<'ctx> {
             .add_function("burxt.alloc", ptr.fn_type(&[i64t.into()], false), None);
         let entry = self.ctx.append_basic_block(f, "entry");
         let init_bb = self.ctx.append_basic_block(f, "init_chunk");
+        // One block per rung after the first, plus the block that gives up.
+        let rung_bb: Vec<_> = (1..RUNGS.len())
+            .map(|i| self.ctx.append_basic_block(f, &format!("smaller_chunk{}", i)))
+            .collect();
+        let no_chunk_bb = self.ctx.append_basic_block(f, "no_chunk");
         let have_bb = self.ctx.append_basic_block(f, "have_chunk");
         let full_bb = self.ctx.append_basic_block(f, "exhausted");
         let ok_bb = self.ctx.append_basic_block(f, "ok");
@@ -5782,18 +5862,49 @@ impl<'ctx> CodeGen<'ctx> {
         let is_null = self.builder.build_is_null(cur_base, "no_chunk").map_err(err)?;
         self.builder.build_conditional_branch(is_null, init_bb, have_bb).map_err(err)?;
 
-        // one chunk, allocated on first use
-        self.builder.position_at_end(init_bb);
-        let chunk = self
-            .builder
-            .build_call(malloc, &[i64t.const_int(CHUNK, false).into()], "chunk")
-            .map_err(err)?;
-        let chunk_ptr = match chunk.try_as_basic_value() {
-            inkwell::values::ValueKind::Basic(v) => v.into_pointer_value(),
-            _ => return Err("malloc returned void".to_string()),
-        };
-        self.builder.build_store(base.as_pointer_value(), chunk_ptr).map_err(err)?;
-        self.builder.build_unconditional_branch(have_bb).map_err(err)?;
+        // One chunk, allocated on first use — the largest rung the machine will give.
+        // Each rung: ask, and if `malloc` said null, drop to the next one. The block a rung
+        // falls through to is the next rung's, and the last rung falls through to giving up.
+        let size_g = self.heap_size_global();
+        for (i, want_bytes) in RUNGS.iter().enumerate() {
+            let this_bb = if i == 0 { init_bb } else { rung_bb[i - 1] };
+            let next_bb = rung_bb.get(i).copied().unwrap_or(no_chunk_bb);
+            self.builder.position_at_end(this_bb);
+            let chunk = self
+                .builder
+                .build_call(malloc, &[i64t.const_int(*want_bytes, false).into()], "chunk")
+                .map_err(err)?;
+            let chunk_ptr = match chunk.try_as_basic_value() {
+                inkwell::values::ValueKind::Basic(v) => v.into_pointer_value(),
+                _ => return Err("malloc returned void".to_string()),
+            };
+            let failed = self.builder.build_is_null(chunk_ptr, "no_room").map_err(err)?;
+            let got_bb = self.ctx.append_basic_block(f, &format!("got_chunk{}", i));
+            self.builder.build_conditional_branch(failed, next_bb, got_bb).map_err(err)?;
+
+            // Record BOTH the base and the size that was actually granted. The exhaustion
+            // check below reads the size, so a fallback rung still reports exhaustion at its
+            // own boundary rather than walking off the end of a chunk it never received.
+            self.builder.position_at_end(got_bb);
+            self.builder.build_store(base.as_pointer_value(), chunk_ptr).map_err(err)?;
+            self.builder
+                .build_store(size_g.as_pointer_value(), i64t.const_int(*want_bytes, false))
+                .map_err(err)?;
+            self.builder.build_unconditional_branch(have_bb).map_err(err)?;
+        }
+
+        // Every rung refused. Naming it is the whole point: the old code stored the null and
+        // let the next write find out, which is the silent overrun this function promises not
+        // to be.
+        self.builder.position_at_end(no_chunk_bb);
+        // Word for word what stage-1 emits — `@burxt.no_region_msg` in `main.bx`. Runtime text
+        // is the blind spot this repo already found once: a program that dies correctly can
+        // still say the wrong thing about why, and nothing compares the two compilers' wording
+        // unless it is kept identical by hand.
+        self.build_panic(
+            "burxt runtime error: could not reserve any region memory — the machine refused \
+             4 GB, 256 MB and 16 MB\n",
+        )?;
 
         self.builder.position_at_end(have_bb);
         let real_base = self
@@ -5807,21 +5918,24 @@ impl<'ctx> CodeGen<'ctx> {
             .map_err(err)?
             .into_int_value();
         let after = self.builder.build_int_add(cursor, size, "after").map_err(err)?;
+        let granted = self
+            .builder
+            .build_load(i64t, size_g.as_pointer_value(), "granted")
+            .map_err(err)?
+            .into_int_value();
         let over = self
             .builder
-            .build_int_compare(
-                inkwell::IntPredicate::UGT,
-                after,
-                i64t.const_int(CHUNK, false),
-                "over",
-            )
+            .build_int_compare(inkwell::IntPredicate::UGT, after, granted, "over")
             .map_err(err)?;
         self.builder.build_conditional_branch(over, full_bb, ok_bb).map_err(err)?;
 
         self.builder.position_at_end(full_bb);
+        // The message no longer names a number, because the number is no longer knowable here:
+        // it is whichever rung the machine granted. Naming "4 GB" when the process is holding
+        // 16 MB would be the most misleading thing this message could say.
         self.build_panic(
-            "burxt runtime error: region memory exhausted — this build reserves 4 GB \
-             per process for region allocation\n",
+            "burxt runtime error: region memory exhausted — this process has used all the \
+             region memory the machine would give it\n",
         )?;
 
         self.builder.position_at_end(ok_bb);

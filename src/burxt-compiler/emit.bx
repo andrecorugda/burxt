@@ -4253,6 +4253,11 @@ function (self: Unit) declaration_node(src: String, start: Int, length: Int) -> 
 function runtime_ir() -> String {
     return "@burxt.arena = global ptr null\n"
         + "@burxt.bump = global i64 0\n"
+        // How many bytes the reservation ACTUALLY got — see the ladder in the `init` block
+        // below. A global rather than a constant because the size a machine can give is not a
+        // property of the program, and the exhaustion check has to compare against what was
+        // granted rather than what was asked for.
+        + "@burxt.arena_size = global i64 0\n"
         + "declare ptr @malloc(i64)\n"
         + "declare i64 @strlen(ptr)\n"
         + "declare i32 @strcmp(ptr, ptr)\n"
@@ -4276,10 +4281,10 @@ function runtime_ir() -> String {
         // B7. How much stack this process was given.
         + "declare i32 @getrlimit(i32, ptr)\n"
 
-        // FOUR gigabytes, the same reservation stage-0 makes, and the SAME refusal when it runs
-        // out. A bump allocator that does not check its limit does not fail — it writes past the
-        // mapping and the program dies with a signal, which is the one outcome this language is
-        // supposed to make impossible. Exit 70 and a named error, like every other runtime failure.
+        // The same reservation LADDER stage-0 makes, and the SAME two refusals. A bump allocator
+        // that does not check its limit does not fail — it writes past the mapping and the program
+        // dies with a signal, which is the one outcome this language is supposed to make
+        // impossible. Exit 70 and a named error, like every other runtime failure.
         //
         // **It said one gigabyte until v0.0.261, and the sentence "the same reservation stage-0
         // makes" was FALSE for thirty-eight versions.** Stage-0 went to 4 GB in v0.0.222 with the
@@ -4302,12 +4307,45 @@ function runtime_ir() -> String {
         + "  %a = load ptr, ptr @burxt.arena\n"
         + "  %isnull = icmp eq ptr %a, null\n"
         + "  br i1 %isnull, label %init, label %go\n"
+        // **A descending ladder, not one number, and this is the half that stage-0 got wrong.**
+        // Measured 2026-08-16 by running a Burxt program in node: `wasm32-unknown-unknown` has a
+        // 4 GiB address space in TOTAL, so a 4 GiB reservation can never be satisfied there — and
+        // `memory.grow` commits, so the "reservation is virtual, raising it costs nothing
+        // resident" argument above is a property of lazy page mapping that wasm does not have.
+        // The comment block above stays true of a 64-bit OS and is false of wasm; both halves are
+        // written down because a stale limitation is worse than a stale DONE.
+        //
+        // Stage-1 was already the safer of the two here — it checked `malloc` for null from the
+        // start, where stage-0 stored the answer unchecked and let the next write find out. What
+        // it did instead was give up on the first refusal, which on wasm means every program dies
+        // before its first allocation. So: ask for 4 GiB, then 256 MB, then 16 MB, and only then
+        // refuse. 64-bit with overcommit takes the first rung and nothing changes for it.
+        //
+        // The rungs are far apart on purpose — a ladder with close rungs spends syscalls
+        // discovering a number nobody will notice.
         + "init:\n"
         + "  %m = call ptr @malloc(i64 4294967296)\n"
         + "  %failed = icmp eq ptr %m, null\n"
-        + "  br i1 %failed, label %exhausted, label %mapped\n"
-        + "mapped:\n"
+        + "  br i1 %failed, label %smaller1, label %mapped4g\n"
+        + "mapped4g:\n"
+        + "  store i64 4294967296, ptr @burxt.arena_size\n"
         + "  store ptr %m, ptr @burxt.arena\n"
+        + "  br label %go\n"
+        + "smaller1:\n"
+        + "  %m2 = call ptr @malloc(i64 268435456)\n"
+        + "  %failed2 = icmp eq ptr %m2, null\n"
+        + "  br i1 %failed2, label %smaller2, label %mapped256m\n"
+        + "mapped256m:\n"
+        + "  store i64 268435456, ptr @burxt.arena_size\n"
+        + "  store ptr %m2, ptr @burxt.arena\n"
+        + "  br label %go\n"
+        + "smaller2:\n"
+        + "  %m3 = call ptr @malloc(i64 16777216)\n"
+        + "  %failed3 = icmp eq ptr %m3, null\n"
+        + "  br i1 %failed3, label %no_region, label %mapped16m\n"
+        + "mapped16m:\n"
+        + "  store i64 16777216, ptr @burxt.arena_size\n"
+        + "  store ptr %m3, ptr @burxt.arena\n"
         + "  br label %go\n"
         + "go:\n"
         + "  %base = load ptr, ptr @burxt.arena\n"
@@ -4315,7 +4353,8 @@ function runtime_ir() -> String {
         + "  %padded = add i64 %n, 7\n"
         + "  %rounded = and i64 %padded, -8\n"
         + "  %next = add i64 %off, %rounded\n"
-        + "  %over = icmp ugt i64 %next, 4294967296\n"
+        + "  %granted = load i64, ptr @burxt.arena_size\n"
+        + "  %over = icmp ugt i64 %next, %granted\n"
         + "  br i1 %over, label %exhausted, label %hand_out\n"
         + "hand_out:\n"
         + "  %p = getelementptr i8, ptr %base, i64 %off\n"
@@ -4324,6 +4363,10 @@ function runtime_ir() -> String {
         + "  ret i64 %asint\n"
         + "exhausted:\n"
         + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.region_msg)\n"
+        + "  call void @exit(i32 70)\n"
+        + "  unreachable\n"
+        + "no_region:\n"
+        + "  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @burxt.no_region_msg)\n"
         + "  call void @exit(i32 70)\n"
         + "  unreachable\n\}\n\n"
         // Every String this runtime makes goes through here, and it is the whole of M12: the
@@ -4749,12 +4792,27 @@ function runtime_ir() -> String {
         + "  store [2 x i64] zeroinitializer, ptr %rl\n"
         + "  %got = call i32 @getrlimit(i32 3, ptr %rl)\n"
         + "  %cur = load i64, ptr %rl\n"
-        + "  %sane = icmp ult i64 %cur, 1099511627776\n"
+        // **The sanity test needs BOTH ends, and the missing lower one is a defect on every
+        // platform.** `%got` is ignored, so when `getrlimit` FAILS the struct keeps the zero it
+        // was initialised to. Zero passed `ult 1099511627776`, gave `%room = 0`, and then
+        // `0 - 131072` wrapped to a colossal unsigned number — putting the floor above every real
+        // stack pointer, so EVERY call reported "this call went too deep" and the program exited
+        // 70 before running a line. wasm32 is merely where that is guaranteed rather than possible.
+        + "  %big_enough = icmp ugt i64 %cur, 131072\n"
+        + "  %not_absurd = icmp ult i64 %cur, 1099511627776\n"
+        + "  %sane = and i1 %big_enough, %not_absurd\n"
         + "  %room = select i1 %sane, i64 %cur, i64 8388608\n"
         // A margin, so the guard and `fprintf` have room after it fires. Reporting a full stack by
         // overflowing the stack would be a poor joke.
         + "  %usable = sub i64 %room, 131072\n"
-        + "  %floor = sub i64 %base, %usable\n"
+        // And the floor SATURATES at zero rather than wrapping. On a 64-bit OS the stack sits at a
+        // high address and this can never trigger; on wasm32 the linear-memory stack sits near
+        // address zero and it always would. Zero is the right saturation point because the guard
+        // already treats `floor == 0` as "not set yet" — so such a machine gets no guard rather
+        // than one that fires on every call, and wasm traps on its own stack exhaustion anyway.
+        + "  %would_wrap = icmp ult i64 %base, %usable\n"
+        + "  %raw_floor = sub i64 %base, %usable\n"
+        + "  %floor = select i1 %would_wrap, i64 0, i64 %raw_floor\n"
         + "  store i64 %floor, ptr @burxt.stack_floor\n"
         + "  ret void\n\}\n\n"
         + "define i64 @burxt.argument_count() \{\n"
