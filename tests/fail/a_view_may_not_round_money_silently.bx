@@ -1,0 +1,15 @@
+// The rounding contract survives into the VIEW, and this is the fixture that proves it does.
+//
+// Every other web stack loses money-correctness at the template boundary: the value becomes a
+// string, or a float, or a locale-formatted number, and whatever rounding happened is invisible
+// to the reviewer scanning the template. Here the multiplication that would round is refused in
+// the view exactly as it is refused anywhere else — the template is not a special place where
+// the type system stops applying, because a view is an ordinary function.
+use "../../lib/html.bx";
+
+pure function price_view(rate: Decimal<2>, balance: Decimal<2>) -> Html {
+    let total: Decimal<2> = balance * rate;
+    return html_element("span", [html_attr("class", "price")], [html_text(to_string(total))]);
+}
+
+print(html_render(price_view(1.01, 1000.00)));

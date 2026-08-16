@@ -35,6 +35,33 @@ Burxt is developed in small, verified increments. Please follow the same rhythm:
 2. **Tests are the product.** Because Burxt's identity is "the compiler refuses to let dangerous things happen," the *rejection* tests matter as much as the acceptance tests. A feature PR should include (a) programs that must compile and produce expected output, and (b) programs that must be *rejected* with a clear, English error message.
 3. **Error messages read as advice.** A rejection should tell the user what to do, not just what went wrong. Match the existing style.
 4. **Match the existing code style** and the design recorded in `DESIGN.md`.
+5. **Commit what you changed, not what your tree holds.** If more than one piece of work is in
+   flight — yours and yours, or yours and a collaborator's — git will quietly commit all of it
+   under whichever message you happened to write. It has four faces, and knowing three of them
+   is not enough:
+
+   | | |
+   |---|---|
+   | `git commit` | takes the **whole index**, whatever is in it |
+   | `git commit --amend` | takes the whole index too — **regardless of any pathspec you used before it.** Fixing a typo in a message can undo a careful commit |
+   | `git commit -- <path>` | takes the **working-tree** version of that path, not the staged one |
+   | `git add <path>` | stages whatever that path currently holds, including edits that are not yours |
+
+   Use `git commit -- <paths>`, then **read `git show --name-only HEAD` before moving on**. If it
+   lists a file you did not touch, stop: `git reset --soft HEAD~1` puts everything back in the
+   index, losing nothing, provided you have not pushed.
+
+   This is not hypothetical. It fired three times in one day here — twice unnoticed — and each
+   time it attached one author's work to another author's commit message, so `git log -- <file>`
+   answered a question about a subject the file has nothing to do with.
+
+   **When two pieces of work genuinely cannot be separated by path**, they are usually in the
+   same file, and the answer is `git worktree add ../burxt-<topic> <branch>`: a second checkout
+   with its own HEAD and index, sharing the object store. Put it **outside** the repository —
+   a worktree inside it is an undeclared directory and fails
+   `the_repository_layout_is_declared`. It also does something a shared tree cannot:
+   **it builds against the branch you are actually targeting**, which is how a dependency on
+   somebody else's uncommitted work gets caught rather than shipped.
 
 ## Getting set up
 

@@ -1,0 +1,52 @@
+// The fixture that stops a retired gap coming back.
+//
+// `spec/FAR-HORIZON-ROADMAP.md` claimed for months that a `pure` function could not build an
+// `Option`, and that `Option.None` could not be built under a type parameter. Both were false,
+// and both survived **three** passes over that document — the original claim, a narrowing that
+// was still wrong, and only then a measurement. Every pass was written by someone who had
+// checked the adjacent case and inferred the rest.
+//
+// The row cost real work: `lib/html.bx` shipped its builders un-`pure` on its authority, and
+// because purity is transitive that would have made every view in every consuming program
+// un-`pure` too.
+//
+// **The methodological point, which is the reason this file exists rather than a corrected
+// sentence:** an uncalled generic body typechecks lazily, so `burxt check` will happily accept
+// a generic nobody instantiates. Checking is not evidence here. Every function below is
+// instantiated and RUN, at a class payload and at a scalar, because those are different paths.
+//
+// A prose correction can rot again. A fixture cannot.
+use "../../lib/option.bx";
+
+class Money { cents: Int }
+
+// The seed exists only to give `T` somewhere to be inferred from — the point is the `None`.
+pure function none_of<T>(seed: T) -> Option<T> {
+    return Option.None;
+}
+
+pure function some_of<T>(value: T) -> Option<T> {
+    return Option.Some(value);
+}
+
+let coin: Money = Money { cents: 7 };
+
+match none_of(coin) {
+    None => { print("pure generic None, class payload"); }
+    Some(found) => { print(found.cents); }
+}
+
+match some_of(coin) {
+    None => { print("unreachable"); }
+    Some(found) => { print(found.cents); }
+}
+
+match none_of(3) {
+    None => { print("pure generic None, scalar payload"); }
+    Some(found) => { print(found); }
+}
+
+match some_of(3) {
+    None => { print("unreachable"); }
+    Some(found) => { print(found); }
+}

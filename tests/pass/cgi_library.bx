@@ -1,0 +1,80 @@
+// lib/cgi.bx — the cases that decide a request parser.
+//
+// `a=1&b=2` splitting into two pairs is not one of them. What decides a request parser is what
+// it does with input no correct client would have sent, because that input is the whole reason
+// the layer exists: `%zz`, a `%` at the end of the string, a parameter with no `=`, the same
+// name twice. Every one of those has a "helpful" reading, and every helpful reading is a
+// silent wrong answer in the place where user input first meets the program.
+//
+// `cgi_request` is not exercised here — it reads the environment and stdin, so its fixture is
+// the server, not this file. Everything it hands on is below.
+use "../../lib/cgi.bx";
+
+// An `Option<String>` with its absence made visible, because "" and None are different answers
+// and a bare print cannot tell them apart.
+function shown(answer: Option<String>) -> String {
+    match answer {
+        None => { return "<refused>"; }
+        Some(value) => { return value; }
+    }
+}
+
+// 1. `+` is a space in a form and an ordinary byte in a path. Reading it as a space in a path
+//    would silently rename a file.
+print(shown(cgi_decode_path("a+b%2Fc")));
+print(shown(cgi_decode_form("a+b%2Fc")));
+
+// 2. The refusals. A `%` needs two hex digits after it — not one, not none, and not `zz`.
+print(shown(cgi_decode_form("%zz")));
+print(shown(cgi_decode_form("%4")));
+print(shown(cgi_decode_form("%")));
+
+// 3. A correctly escaped percent survives as a percent.
+print(shown(cgi_decode_form("100%25")));
+
+// 4. The ordinary case, with both decodings in one string.
+match cgi_params("name=Tom+%26+Jerry&price=19.99") {
+    None => { print("<refused>"); }
+    Some(params) => {
+        print(len(params));
+        print(shown(cgi_param(params, "name")));
+        print(shown(cgi_param(params, "price")));
+        print(shown(cgi_param(params, "absent")));
+    }
+}
+
+// 5. Parameter pollution. `a=1&a=2` is the shape where a server reads one value and a proxy in
+//    front of it reads the other; this file takes FIRST and says so out loud.
+match cgi_params("a=1&a=2") {
+    None => { print("<refused>"); }
+    Some(params) => { print(len(params)); print(shown(cgi_param(params, "a"))); }
+}
+
+// 6. A trailing `&` is what a real form sends, and an empty query is a request with no
+//    parameters — neither is malformed.
+match cgi_params("a=1&") {
+    None => { print("<refused>"); }
+    Some(params) => { print(len(params)); }
+}
+match cgi_params("") {
+    None => { print("<refused>"); }
+    Some(params) => { print(len(params)); }
+}
+
+// 7. A bare `flag` with no `=` IS malformed here. Some frameworks read it as an empty value;
+//    the sender meant something and we cannot know what.
+match cgi_params("flag") {
+    None => { print("<refused>"); }
+    Some(params) => { print(len(params)); }
+}
+
+// 8. A status a caller writes as a number. An unknown one answers its own digits rather than
+//    inventing a reason phrase.
+print(cgi_status_text(404));
+print(cgi_status_text(599));
+
+// 9. The response, whole. **Content-Length is `len(body) + 1`** because `print` appends a
+//    newline and that byte is on the wire — a client reading exactly Content-Length bytes
+//    would otherwise truncate the last character of every page.
+let sent: Int = cgi_respond_html(200, html_element("p", [], [html_text("Rice & <beans>")]));
+print(sent);

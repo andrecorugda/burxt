@@ -1,0 +1,63 @@
+// lib/bmx.bx — the three tests ESCAPING.md demands of any BMX implementation.
+//
+// The format's conformance suite asserts an AST, so escaping is not testable there — it happens
+// after the tree exists. ESCAPING.md therefore names three proofs an implementation must show
+// separately, and this is where Burxt shows them:
+//
+//   1. a slot value containing `<script>` appears as characters;
+//   2. a slot value cannot leave the attribute it is rendered into;
+//   3. a link target with a scheme outside the allowed set is REFUSED, not emitted.
+//
+// The third is the one an implementation written in an afternoon forgets, because it is not a
+// character-escaping problem at all: `javascript:` is a working attack whose danger is the
+// scheme, and escaping every byte of it changes nothing.
+//
+// ---- why the braces are written `\{` ----
+//
+// A BMX slot inside a Burxt string literal collides with Burxt's own `{expr}` interpolation, so
+// `{{` has to be escaped here. That is not a BMX problem and not a bug: it is the reason a
+// document belongs in a `.bmx` file rather than in a literal, measured rather than assumed.
+use "../../lib/bmx.bx";
+
+function shown(answer: Result<String, String>) -> String {
+    match answer {
+        Error(message) => { return message; }
+        Ok(page) => { return page; }
+    }
+}
+
+let hostile: [Binding] = [
+    bmx_bind("user.name", "<script>alert('x')</script>"),
+    bmx_bind("order.total", "$59.97"),
+];
+
+// 1. The slot value is escaped on render, always. There is no BMX syntax that opts out — no
+//    triple brace, deliberately, because three characters is too little to stand between a
+//    correct page and a compromised one.
+print(shown(bmx_to_html("Hi \{\{ user.name \}\}.", hostile)));
+
+// 2. The value cannot leave the element it lands in, in a heading or a list item alike.
+print(shown(bmx_to_html("# \{\{ user.name \}\}", hostile)));
+print(shown(bmx_to_html("- \{\{ user.name \}\}", hostile)));
+
+// 3. Link targets. The allowed schemes pass; anything else is refused rather than rendered.
+print(shown(bmx_to_html("[docs](https://example.com)", hostile)));
+print(shown(bmx_to_html("[mail](mailto:a@b.example)", hostile)));
+print(shown(bmx_to_html("[rel](/page)", hostile)));
+print(shown(bmx_to_html("[bad](javascript:steal)", hostile)));
+
+// 4. A slot with no binding is an ERROR, never an empty string. Every template language in wide
+//    use renders the empty string here, and that is how a page ships with a missing total that
+//    nobody sees — the silent wrong answer, in the layer nobody type-checks.
+print(shown(bmx_to_html("Total: \{\{ order.totl \}\}", hostile)));
+
+// 5. The money case, whole: a Decimal's own text reaches the tag with its scale intact. The
+//    binding is `to_string` of a real `Decimal<2, RoundHalfEven>`, not a typed-in string.
+let price: Decimal<2, RoundHalfEven> = 19.99;
+let total: Decimal<2, RoundHalfEven> = price * 3;
+print(shown(bmx_to_html("# Total \{\{ total \}\}", [bmx_bind("total", to_string(total))])));
+
+// 6. And the format's own refusals still fire through this path — a truncated document is an
+//    error with a code, not a page with a stray brace in it.
+print(shown(bmx_to_html("Hi \{\{ user.name", hostile)));
+print(shown(bmx_to_html("a *b", hostile)));

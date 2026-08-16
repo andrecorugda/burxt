@@ -109,76 +109,76 @@ The HTML void elements, in full. A closing tag for one of these is not merely re
 {: #html-text}
 
 ```burxt
-function html_text(value: String) -> Html
+pure function html_text(value: String) -> Html
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L99)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L107)
 
 ### `html_raw`
 {: #html-raw}
 
 ```burxt
-function html_raw(trusted: String) -> Html
+pure function html_raw(trusted: String) -> Html
 ```
 
 The escape hatch, and it is spelled out. There is no convenience wrapper on this and there will not be one: one way to say "unescaped", so a reviewer greps one word.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L105)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L113)
 
 ### `html_attr`
 {: #html-attr}
 
 ```burxt
-function html_attr(name: String, value: String) -> Attr
+pure function html_attr(name: String, value: String) -> Attr
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L109)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L117)
 
 ### `html_element`
 {: #html-element}
 
 ```burxt
-function html_element(tag: String, attrs: [Attr], children: [Html]) -> Html
+pure function html_element(tag: String, attrs: [Attr], children: [Html]) -> Html
 ```
 
 Answers `Html` rather than `Element` so that nesting is one call deep: the tree is the surface, and `Html.Node(html_element(...))` at every level would be ceremony carrying no promise.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L118)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L126)
 
 ### `html_escape`
 {: #html-escape}
 
 ```burxt
-function html_escape(text: String) -> String
+pure function html_escape(text: String) -> String
 ```
 
 The five entities, and only those. `'` goes out as `&#39;` rather than `&apos;`, which is XML's spelling and not in HTML 4 — the numeric form is read correctly by everything.
 
 Built in RUNS rather than a byte at a time, copied from `json_escape` at lib/json.bx:98 for the reason recorded there: `out = out + one_byte` copies the whole String on every byte, and this project has paid for that shape three times.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L133)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L141)
 
 ### `html_render`
 {: #html-render}
 
 ```burxt
-function html_render(node: Html) -> String
+pure function html_render(node: Html) -> String
 ```
 
 One node as text. Recursive, because the shape is.
 
 Attribute values are escaped and always double-quoted. An unquoted attribute is where a value with a space becomes two attributes, so there is no option to omit them.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L159)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L167)
 
 ### `html_document`
 {: #html-document}
 
 ```burxt
-function html_document(root: Html) -> String
+pure function html_document(root: Html) -> String
 ```
 
 A whole document, with the doctype every browser needs to stay out of quirks mode.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L186)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/html.bx#L194)
 

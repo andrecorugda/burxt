@@ -1,0 +1,58 @@
+// A VIEW IS A FUNCTION WITH A CONTRACT — and it needed no compiler work.
+//
+// This fixture exists because the opposite was assumed. Building views that carry `requires`,
+// `pure` and a rounding contract was scoped as a milestone; measuring it took ten minutes and
+// found the language already does it, which is the seventh time in this repository a wall
+// turned out to be a wall nobody had walked into.
+//
+// What it proves, and each line is the whole claim:
+//
+//   * a view may be `pure` — so it cannot read a file, call C, or print, and the signature
+//     says so rather than a comment;
+//   * a view may carry `requires` — so the data it refuses to render is named on the
+//     declaration, where an agent writing it and a reviewer scanning it both see it;
+//   * **the rounding contract survives into the view.** `Decimal<2, RoundHalfEven>` reaches the
+//     tag with its scale and its tie rule intact, and there is no float between the till and
+//     the page. Every other web stack loses this at the template boundary, because every other
+//     template language is stringly-typed.
+//
+// The two refusals are next door: `tests/fail/a_view_may_not_round_money_silently.bx` and
+// `tests/panic/a_view_contract_names_the_data_it_refuses.bx`.
+use "../../lib/html.bx";
+
+class Line { sku: String, qty: Int, each: Decimal<2, RoundHalfEven> }
+
+pure function line_view(line: Line) -> Html
+    requires line.qty > 0
+    requires len(line.sku) > 0
+{
+    let total: Decimal<2, RoundHalfEven> = line.each * line.qty;
+    return html_element("li", [html_attr("class", "line")], [
+        html_text(line.sku),
+        html_text(" x "),
+        html_text(to_string(line.qty)),
+        html_text(" = "),
+        html_text(to_string(total)),
+    ]);
+}
+
+// A receipt is the flagship example, on a page. The escaping still holds inside it: the second
+// line's name is hostile and comes out as characters.
+pure function receipt_view(lines: [Line]) -> Html
+    requires len(lines) > 0
+{
+    let mutable items: [Html] = [];
+    let mutable i: Int = 0;
+    while i < len(lines) {
+        let added: Int = push(items, line_view(lines[i]));
+        i += 1;
+    }
+    return html_element("ul", [html_attr("class", "receipt")], items);
+}
+
+print(html_render(line_view(Line { sku: "Rice", qty: 3, each: 19.99 })));
+
+print(html_render(receipt_view([
+    Line { sku: "Rice", qty: 3, each: 19.99 },
+    Line { sku: "<script>", qty: 1, each: 0.05 },
+])));

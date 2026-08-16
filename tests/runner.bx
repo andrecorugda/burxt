@@ -1074,6 +1074,7 @@ function declared_home(path: String) -> Bool {
     // undeclared, which is the honest failure — but the lesson is the same one that produced the
     // invented floor: **read the whole list, do not transcribe the part you can see.**
     if path == "examples/inputs" { return true; }
+    if path == "examples/bmx" { return true; }
     if path == "examples/mcp" { return true; }
     if path == "examples/negative" { return true; }
     if path == "examples/pos" { return true; }
@@ -1091,6 +1092,9 @@ function declared_home(path: String) -> Bool {
     if path == "tests/fail" { return true; }
     if path == "tests/panic" { return true; }
     if path == "tests/review" { return true; }
+    // The BMX format's own conformance suite, vendored. Judged by somebody else's rules, which
+    // is why it is neither `tests/support` (harnesses we wrote) nor a verdict directory.
+    if path == "tests/bmx-conformance" { return true; }
     if path == "tests/support" { return true; }
     if path == "src/rust-compiler" { return true; }
     if path == "src/burxt-compiler" { return true; }
