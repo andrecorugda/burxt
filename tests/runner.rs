@@ -562,6 +562,134 @@ fn money_and_integers_cross_into_c_exactly() {
     );
 }
 
+/// **star-burxt hands the compiler an event handler it can judge.**
+///
+/// This is the whole reason star-burxt is a generator rather than a runtime `button()` function.
+/// `lib/bmx.bx` passes a component block's head over as a **runtime String**, so an
+/// `on:click=count + 1` written that way would arrive as text nothing compiles — no typecheck, no
+/// unknown-name error, no `burxt review` surface. A handler that is a string is a handler the
+/// language cannot judge, and judging it is the entire case for writing a framework in Burxt
+/// rather than in something else.
+///
+/// So the generator emits the handler expression into a `pure function _dispatch`, where the
+/// ordinary rules apply. Four claims, and the fourth is the one no other framework can make:
+///
+/// 1. a typo in a slot is `unknown variable`, naming it
+/// 2. a type error in a handler is a type error, at the handler's own expression
+/// 3. **money narrowing inside a handler is refused** — `Decimal<2> * Decimal<2>` has four
+///    decimal places and reaching two means rounding, so it must say how
+/// 4. an event this host cannot wire is refused BY NAME rather than emitted as an inline
+///    handler, which is `SPEC.md` §4a.5 — emitting one would put unchecked script on the page,
+///    the hole the escaping rule exists to close
+#[test]
+fn star_burxt_hands_the_compiler_a_handler_it_can_judge() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("star");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let generator = scratch.join("star-generate");
+    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("examples/star/generate.bx"))
+        .arg("-o")
+        .arg(&generator)
+        .output()
+        .expect("burxt");
+    assert!(built.status.success(), "star generator does not build:\n{}",
+            String::from_utf8_lossy(&built.stderr));
+
+    let generate = |doc: &str| -> Output {
+        let path = scratch.join("doc.bmx");
+        fs::write(&path, doc).unwrap();
+        Command::new(&generator).arg(&path).arg("c").output().expect("star-generate")
+    };
+    let compile = |doc: &str| -> String {
+        let out = generate(doc);
+        let src = String::from_utf8_lossy(&out.stdout)
+            .replace("use \"lib/html.bx\";",
+                     &format!("use \"{}\";", root.join("lib/html.bx").display()));
+        let path = scratch.join("c.bx");
+        fs::write(&path, src).unwrap();
+        let checked = Command::new(env!("CARGO_BIN_EXE_burxt")).arg("check").arg(&path).output().expect("burxt");
+        String::from_utf8_lossy(&checked.stdout).to_string()
+            + &String::from_utf8_lossy(&checked.stderr)
+    };
+
+    // The accepting case first: it must actually work, or every refusal below is
+    // satisfied by a generator that refuses everything.
+    let good = compile("::: props count: Int\n:::\n\nAt {{ to_string(count) }}.\n\n                        ::: button on:click=count + 1\nmore\n:::\n");
+    assert!(good.contains("no errors"), "a correct component must compile:\n{}", good);
+
+    let ok = generate("::: props count: Int\n:::\n\n::: button on:click=count + 1\nmore\n:::\n");
+    let emitted = String::from_utf8_lossy(&ok.stdout);
+    assert!(emitted.contains("data-star-h"), "a handler must reach the page as an index:\n{}", emitted);
+    assert!(!emitted.contains("onclick"), "an INLINE handler was emitted — SPEC.md §4a.5 forbids it:\n{}", emitted);
+    assert!(emitted.contains("if handler == 0 { return count + 1; }"),
+            "the handler expression must reach `dispatch` where the compiler judges it:\n{}", emitted);
+
+    let typo = compile("::: props count: Int\n:::\n\nAt {{ to_string(cuont) }}.\n");
+    assert!(typo.contains("unknown variable: cuont"), "a slot typo must be refused by name:\n{}", typo);
+
+    let wrong = compile("::: props count: Int\n:::\n\n::: button on:click=count + \"one\"\ngo\n:::\n");
+    assert!(wrong.contains("cannot apply `+` to Int and String"),
+            "a handler type error must be refused:\n{}", wrong);
+
+    // The one that matters. A framework whose handlers are closures cannot see this.
+    let money = compile("::: props total: Decimal<2>\n:::\n\n::: button on:click=total * 1.5\nbump\n:::\n");
+    assert!(money.contains("rounding"),
+            "money narrowing inside a handler must be refused:\n{}", money);
+
+    // §4a.5, and the two star-burxt refusals that are the host's own.
+    let unwired = generate("::: props count: Int\n:::\n\n::: button on:hover=count + 1\nhi\n:::\n");
+    let unwired_text = String::from_utf8_lossy(&unwired.stderr);
+    assert!(unwired_text.contains("STAR-E002") && unwired_text.contains("on:hover"),
+            "an event the host cannot wire must be refused by name:\n{}", unwired_text);
+
+    let unknown = generate("::: props count: Int\n:::\n\n::: mystery\nhi\n:::\n");
+    let unknown_text = String::from_utf8_lossy(&unknown.stderr);
+    assert!(unknown_text.contains("STAR-E001") && unknown_text.contains("mystery"),
+            "an unknown block name must be refused by name:\n{}", unknown_text);
+
+    // A void element with a body would violate `html_element`'s own contract
+    // (`requires !html_is_void(tag) || len(children) == 0`) at RUN time, with the
+    // page already open. Refusing at generate time is the same refusal, earlier.
+    let voided = generate("::: props n: Int\n:::\n\n::: input on:input=n\noops\n:::\n");
+    let voided_text = String::from_utf8_lossy(&voided.stderr);
+    assert!(voided_text.contains("STAR-E004"),
+            "a void element with a body must be refused:\n{}", voided_text);
+
+    // Content model, and the reason it is a rule rather than a taste: `<p>` is FLOW
+    // content, `<button>` takes PHRASING, so `<button><p>x</p></button>` is invalid
+    // HTML. A phrasing element unwraps however many paragraphs it has — one or
+    // several — so adding a second line changes the output in quantity, never in
+    // kind. An earlier version unwrapped only a LONE paragraph and had exactly that
+    // seam in it.
+    let one = generate("::: props n: Int\n:::\n\n::: button on:click=n + 1\nonly\n:::\n");
+    let one_text = String::from_utf8_lossy(&one.stdout);
+    let two = generate("::: props n: Int\n:::\n\n::: button on:click=n + 1\nfirst\n\nsecond\n:::\n");
+    let two_text = String::from_utf8_lossy(&two.stdout);
+    assert!(!one_text.contains("html_element(\"p\", [], [html_text(\"only\")])"),
+            "one paragraph in a button must unwrap:\n{}", one_text);
+    assert!(!two_text.contains("html_element(\"p\", [], [html_text(\"first\")])"),
+            "TWO paragraphs in a button must unwrap the same way — no discontinuity:\n{}", two_text);
+    assert!(two_text.contains("html_text(\"first\"), html_text(\"second\")"),
+            "both paragraphs must become phrasing content:\n{}", two_text);
+
+    let flowed = generate("::: props n: Int\n:::\n\n::: button on:click=n + 1\n# nope\n:::\n");
+    let flowed_text = String::from_utf8_lossy(&flowed.stderr);
+    assert!(flowed_text.contains("STAR-E005"),
+            "flow content inside a phrasing element must be refused:\n{}", flowed_text);
+
+    // A `div` is flow content, so its paragraphs STAY — the other half of the rule,
+    // and the one that proves it is a content model rather than "strip paragraphs".
+    let kept = generate("::: props n: Int\n:::\n\n::: div\nkept\n:::\n");
+    let kept_text = String::from_utf8_lossy(&kept.stdout);
+    assert!(kept_text.contains("html_element(\"p\", [], [html_text(\"kept\")])"),
+            "a paragraph inside a div must be kept:\n{}", kept_text);
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
 /// **A `getrlimit` that FAILS must not make every call look like a stack overflow.**
 ///
 /// `burxt.set_stack_floor` asks `getrlimit(RLIMIT_STACK)` how much stack the process was given
@@ -8695,6 +8823,13 @@ fn the_repository_layout_is_declared() {
         ("examples/pos-php", "the same program in PHP, for the comparison"),
         ("examples/pos-python", "the same program in Python"),
         ("examples/pos-rust", "the same program in Rust"),
+        (
+            "examples/star",
+            "star-burxt's generator. A `.bmx` document becomes a `pure function -> Html` AND a \
+             `pure function _dispatch(handler, state) -> state`, so an event handler is an \
+             expression the COMPILER judges — a typo, a wrong type, or money narrowing inside a \
+             handler are all refused before anything reaches a page",
+        ),
         (
             "examples/wasm",
             "a Burxt program running in a WebAssembly engine, and the host it needs. It is here \

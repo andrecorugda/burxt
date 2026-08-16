@@ -87,7 +87,7 @@ GH = "https://github.com/andrecorugda/burxt/blob/main"
 MODULES = [
     "option", "result", "decimal", "string", "array", "set", "map", "math", "fn",
     "json", "csv", "html", "cgi", "bmx", "encoding", "hash", "secure", "vector",
-    "files", "path", "os", "net", "time", "random", "log", "test",
+    "files", "path", "os", "net", "time", "random", "log", "test", "star",
 ]
 
 

@@ -4046,6 +4046,104 @@
   "where": "function test_end(t: Tests) -> Int"
  },
  {
+  "kind": "class",
+  "name": "StarHandler",
+  "text": "lib/star.bx",
+  "url": "/reference/star.html#starhandler",
+  "where": "class StarHandler { event: String, expression: String }"
+ },
+ {
+  "kind": "class",
+  "name": "StarComponent",
+  "text": "lib/star.bx",
+  "url": "/reference/star.html#starcomponent",
+  "where": "class StarComponent"
+ },
+ {
+  "kind": "function",
+  "name": "star_event_part",
+  "text": "lib/star.bx",
+  "url": "/reference/star.html#star-event-part",
+  "where": "pure function star_event_part(head: String) -> Option<String>"
+ },
+ {
+  "kind": "function",
+  "name": "star_event_name",
+  "text": "lib/star.bx",
+  "url": "/reference/star.html#star-event-name",
+  "where": "pure function star_event_name(part: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "star_event_expression",
+  "text": "lib/star.bx",
+  "url": "/reference/star.html#star-event-expression",
+  "where": "pure function star_event_expression(part: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "star_head_without_event",
+  "text": "lib/star.bx",
+  "url": "/reference/star.html#star-head-without-event",
+  "where": "pure function star_head_without_event(head: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "star_event_is_wired",
+  "text": "lib/star.bx",
+  "url": "/reference/star.html#star-event-is-wired",
+  "where": "pure function star_event_is_wired(name: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "star_takes_phrasing",
+  "text": "lib/star.bx",
+  "url": "/reference/star.html#star-takes-phrasing",
+  "where": "pure function star_takes_phrasing(name: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "star_is_element",
+  "text": "lib/star.bx",
+  "url": "/reference/star.html#star-is-element",
+  "where": "pure function star_is_element(name: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "star_emit_stmts",
+  "text": "lib/star.bx",
+  "url": "/reference/star.html#star-emit-stmts",
+  "where": "function star_emit_stmts(blocks: [Block], target: String, tag: String, indent: String,"
+ },
+ {
+  "kind": "function",
+  "name": "star_props",
+  "text": "lib/star.bx",
+  "url": "/reference/star.html#star-props",
+  "where": "pure function star_props(blocks: [Block]) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "star_generate",
+  "text": "lib/star.bx",
+  "url": "/reference/star.html#star-generate",
+  "where": "function star_generate(source: String, name: String) -> Result<StarComponent, String>"
+ },
+ {
+  "kind": "function",
+  "name": "star_first_prop_name",
+  "text": "lib/star.bx",
+  "url": "/reference/star.html#star-first-prop-name",
+  "where": "pure function star_first_prop_name(props: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "star_argument_list",
+  "text": "lib/star.bx",
+  "url": "/reference/star.html#star-argument-list",
+  "where": "pure function star_argument_list(props: String) -> String"
+ },
+ {
   "kind": "keyword",
   "name": "let",
   "text": "",
