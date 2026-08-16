@@ -54,6 +54,13 @@ Burxt is developed in small, verified increments. Please follow the same rhythm:
    `git reset --soft HEAD~1` puts everything back in the index, losing nothing, provided you have
    not pushed.
 
+   **And a diff is against the base you are standing on.** If your checkout is not on the branch
+   you are landing to, `git diff` renders somebody else's later commits as *your* deletions — so
+   the `--stat` looks like your own work and reads as plausible. This is the only one of these
+   the `--stat` habit cannot catch by itself, because nothing in it looks foreign. Compare
+   against the target instead: `git show <target-branch>:<path>` and diff your version against
+   that. It happened here while this very paragraph was being written.
+
    **Read the whole `--stat`, not a list of places you expected trouble.** The sweep that went
    unnoticed for hours had already been checked — by confirming the commit held nothing under
    `src/`, `examples/` or one named test directory. All true, and it measured the wrong dimension:
@@ -75,6 +82,33 @@ Burxt is developed in small, verified increments. Please follow the same rhythm:
    This is not hypothetical. It fired three times in one day here — twice unnoticed — and each
    time it attached one author's work to another author's commit message, so `git log -- <file>`
    answered a question about a subject the file has nothing to do with.
+
+   **And when the work cannot be separated even in the file** — two authors' hunks interleaved in
+   one `runner.rs`, say — every route through the index or the working tree takes both. That is
+   true of porcelain and not of git. You can build a commit from a *known* tree plus one change,
+   touching neither the index nor the checkout:
+
+   ```sh
+   git show HEAD:path/to/file > /tmp/base          # the committed version, nobody else's hunks
+   #   ... apply only your change to /tmp/base ...
+   blob=$(git hash-object -w /tmp/base)
+   GIT_INDEX_FILE=/tmp/ix git read-tree HEAD
+   GIT_INDEX_FILE=/tmp/ix git update-index --cacheinfo 100644,"$blob",path/to/file
+   tree=$(GIT_INDEX_FILE=/tmp/ix git write-tree)
+   commit=$(git commit-tree "$tree" -p HEAD -m "...")
+   git update-ref refs/heads/<branch> "$commit"
+   ```
+
+   The real index is never opened, so other people's staged work is untouched — check it with
+   `git status --porcelain` before and after and compare. **Then verify the result somewhere the
+   contamination is not**: build and test in a throwaway `git worktree add --detach <tmp> <commit>`,
+   because the shared tree cannot tell you whether what you *committed* compiles, only whether what
+   you *have* does. Remove the worktree afterwards.
+
+   This is worth knowing because *"nobody can commit this file"* sounds like a fact and is a
+   property of the tools people reach for first. It was said here about a file that then merged
+   between three authors with no conflict at all — the file was never unsplittable, it was
+   **unattributable**, and those are different problems with different fixes.
 
    **When two pieces of work genuinely cannot be separated by path**, they are usually in the
    same file, and the answer is `git worktree add ../burxt-<topic> <branch>`: a second checkout
