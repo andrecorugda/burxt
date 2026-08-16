@@ -93,20 +93,28 @@ pure function html_is_void(tag: String) -> Bool {
 
 // ---- building ------------------------------------------------------------------
 // Free functions rather than one constructor: the name saying which kind you meant is what a
-// reviewer reads. None of these is `pure` — building an enum variant reads as a method call,
-// and a method may not be `pure` yet.
+// reviewer reads.
+//
+// **Every one of these is `pure`, and that is what makes a contract-first view possible.**
+// This comment said the opposite for one afternoon, on the authority of
+// `FAR-HORIZON-ROADMAP.md`'s *"a `pure` function that builds an Option — no"*. Measured, a
+// `pure` function builds an enum variant carrying a class perfectly well; the row was about
+// `Option.Some` under a type PARAMETER, which is a narrower thing. Because purity is
+// transitive, one missing `pure` here would have made every view in every program that uses
+// this file un-`pure` — so the word on these five declarations is load-bearing for the whole
+// idea, not decoration.
 
-function html_text(value: String) -> Html {
+pure function html_text(value: String) -> Html {
     return Html.Text(value);
 }
 
 // The escape hatch, and it is spelled out. There is no convenience wrapper on this and there
 // will not be one: one way to say "unescaped", so a reviewer greps one word.
-function html_raw(trusted: String) -> Html {
+pure function html_raw(trusted: String) -> Html {
     return Html.Raw(trusted);
 }
 
-function html_attr(name: String, value: String) -> Attr
+pure function html_attr(name: String, value: String) -> Attr
     requires html_is_name(name)
 {
     return Attr { name: name, value: value };
@@ -115,7 +123,7 @@ function html_attr(name: String, value: String) -> Attr
 // Answers `Html` rather than `Element` so that nesting is one call deep: the tree is the
 // surface, and `Html.Node(html_element(...))` at every level would be ceremony carrying no
 // promise.
-function html_element(tag: String, attrs: [Attr], children: [Html]) -> Html
+pure function html_element(tag: String, attrs: [Attr], children: [Html]) -> Html
     requires html_is_name(tag)
     requires !html_is_void(tag) || len(children) == 0
 {
@@ -130,7 +138,7 @@ function html_element(tag: String, attrs: [Attr], children: [Html]) -> Html
 // Built in RUNS rather than a byte at a time, copied from `json_escape` at lib/json.bx:98 for
 // the reason recorded there: `out = out + one_byte` copies the whole String on every byte, and
 // this project has paid for that shape three times.
-function html_escape(text: String) -> String {
+pure function html_escape(text: String) -> String {
     let mutable out: String = "";
     let mutable copied: Int = 0;
     let mutable i: Int = 0;
@@ -156,7 +164,7 @@ function html_escape(text: String) -> String {
 //
 // Attribute values are escaped and always double-quoted. An unquoted attribute is where a
 // value with a space becomes two attributes, so there is no option to omit them.
-function html_render(node: Html) -> String {
+pure function html_render(node: Html) -> String {
     match node {
         Text(s) => { return html_escape(s); }
         Raw(s) => { return s; }
@@ -183,6 +191,6 @@ function html_render(node: Html) -> String {
 }
 
 // A whole document, with the doctype every browser needs to stay out of quirks mode.
-function html_document(root: Html) -> String {
+pure function html_document(root: Html) -> String {
     return "<!DOCTYPE html>" + html_render(root);
 }

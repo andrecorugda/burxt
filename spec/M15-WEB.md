@@ -1,8 +1,28 @@
 # Burxt — the web stack (M15)
 
-> Status: **SPECIFIED. Scheduled for 2.0.** Its socket foundation (W2) shipped early, in 1.1.0 —
-> see [`1.1/M16-NETWORK.md`](1.1/M16-NETWORK.md). Everything above the socket is still unbuilt.
-> 2026-08-01: 1.0 is the real core and comes first. No `.bx` file named in this document exists.
+> Status: **W0 DONE (2026-08-16); the rest SPECIFIED, scheduled for 2.0.** Its socket
+> foundation (W2) shipped early, in 1.1.0 — see [`1.1/M16-NETWORK.md`](1.1/M16-NETWORK.md).
+> 2026-08-01: 1.0 is the real core and comes first.
+>
+> **`lib/html.bx` and `lib/cgi.bx` both exist** and meet W0's bar: both compile under
+> `the_standard_library_compiles_and_works`, stage-1 compiles them and agrees with stage-0, and
+> the escaping test that §W0's own trap-note calls *the test that matters* is
+> `tests/pass/html_library.bx`.
+>
+> **Four refusals came with them that this document did not anticipate**, each argued at the
+> function rather than assumed from a rule: a tag or attribute **name** that is not a name, and a
+> **void element carrying children** (both holes escaping does not cover); **malformed
+> percent-encoding**, refused rather than repaired; and a link target whose **scheme** is not
+> allowed. One defect was found the same way — `Content-Length` was `len(body)`, but `print` is
+> the only way out of a Burxt program and it appends a newline, so every response was one byte
+> short of what it declared.
+>
+> **And one finding outran this whole document: a contract-first view needs no compiler work.**
+> A view is an ordinary `pure function ... -> Html` carrying `requires`; money keeps its scale
+> and rounding contract into the tag; re-rounding inside a view is a compile error; and
+> `burxt review` already diffs a view's promise. `tests/pass/html_view_contract.bx` pins it.
+> That is the seventh time in this repository a wall dissolved under a probe rather than an
+> argument.
 >
 > Written now rather than later because exploring it sent someone back to
 > [`FAR-HORIZON-ROADMAP.md`](FAR-HORIZON-ROADMAP.md) §1 and found **one row genuinely stale** — C
@@ -162,9 +182,26 @@ it immediately. Not a blocker; worth knowing before someone reports it as a bug 
 
 ### Must NOT do
 
-- **No template file format.** A `.bxhtml` dialect with its own parser is a second language inside
-  the first, and it would be the compiler team's forever. The typed tree is the surface; if someone
-  wants Jinja on top, that is their crate.
+- ~~**No template file format.**~~ **SUPERSEDED 2026-08-16, by Andre, and the reasoning changed
+  rather than being waived.** The rule as written was aimed at a `.bxhtml` dialect — *"an
+  unoriginal idea"*, in his words — and against that it still holds: a second HTML dialect is a
+  second language inside the first, buying a syntax and nothing else.
+
+  What supersedes it is **BMX**, which is a different proposition on all three of the original
+  objections. It is markdown-based rather than an HTML dialect; it lives in its **own repository
+  with its own CI and version**, so it is not the compiler team's forever; and its point is not
+  syntax but that a view becomes **a function with a contract** — `requires`, `touches`, `pure`,
+  checked against the template body, with the rounding contract surviving into the view. That last
+  part is the thing no other stack has, and it cannot be had from the typed tree alone.
+
+  **What survives from the old rule, and must:** the typed tree stays the surface underneath — BMX
+  renders *through* `Html`, so escaping still has exactly one place to be right, and W0 is BMX's
+  foundation rather than its competitor. And Burxt ships primitives: BMX is not a framework, and
+  §0 still governs.
+
+- **No template file format inside the compiler.** The rule above moved, it did not vanish. A
+  parser for BMX written in Burxt in `lib/` is fine; a `.bmx` mode wired into the compiler is the
+  thing the original objection was actually about.
 - **No `html_raw` convenience wrappers** that quietly widen the trusted set. One way to say
   "unescaped", and it is spelled out.
 

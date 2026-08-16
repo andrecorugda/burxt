@@ -2062,49 +2062,378 @@
   "name": "html_text",
   "text": "lib/html.bx",
   "url": "/reference/html.html#html-text",
-  "where": "function html_text(value: String) -> Html"
+  "where": "pure function html_text(value: String) -> Html"
  },
  {
   "kind": "function",
   "name": "html_raw",
   "text": "lib/html.bx",
   "url": "/reference/html.html#html-raw",
-  "where": "function html_raw(trusted: String) -> Html"
+  "where": "pure function html_raw(trusted: String) -> Html"
  },
  {
   "kind": "function",
   "name": "html_attr",
   "text": "lib/html.bx",
   "url": "/reference/html.html#html-attr",
-  "where": "function html_attr(name: String, value: String) -> Attr"
+  "where": "pure function html_attr(name: String, value: String) -> Attr"
  },
  {
   "kind": "function",
   "name": "html_element",
   "text": "lib/html.bx",
   "url": "/reference/html.html#html-element",
-  "where": "function html_element(tag: String, attrs: [Attr], children: [Html]) -> Html"
+  "where": "pure function html_element(tag: String, attrs: [Attr], children: [Html]) -> Html"
  },
  {
   "kind": "function",
   "name": "html_escape",
   "text": "lib/html.bx",
   "url": "/reference/html.html#html-escape",
-  "where": "function html_escape(text: String) -> String"
+  "where": "pure function html_escape(text: String) -> String"
  },
  {
   "kind": "function",
   "name": "html_render",
   "text": "lib/html.bx",
   "url": "/reference/html.html#html-render",
-  "where": "function html_render(node: Html) -> String"
+  "where": "pure function html_render(node: Html) -> String"
  },
  {
   "kind": "function",
   "name": "html_document",
   "text": "lib/html.bx",
   "url": "/reference/html.html#html-document",
-  "where": "function html_document(root: Html) -> String"
+  "where": "pure function html_document(root: Html) -> String"
+ },
+ {
+  "kind": "class",
+  "name": "Request",
+  "text": "lib/cgi.bx",
+  "url": "/reference/cgi.html#request",
+  "where": "class Request"
+ },
+ {
+  "kind": "class",
+  "name": "Param",
+  "text": "lib/cgi.bx",
+  "url": "/reference/cgi.html#param",
+  "where": "class Param { name: String, value: String }"
+ },
+ {
+  "kind": "function",
+  "name": "cgi_request",
+  "text": "lib/cgi.bx",
+  "url": "/reference/cgi.html#cgi-request",
+  "where": "function cgi_request() -> Request touches input"
+ },
+ {
+  "kind": "function",
+  "name": "cgi_hex_value",
+  "text": "lib/cgi.bx",
+  "url": "/reference/cgi.html#cgi-hex-value",
+  "where": "pure function cgi_hex_value(b: Int) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "cgi_decode",
+  "text": "lib/cgi.bx",
+  "url": "/reference/cgi.html#cgi-decode",
+  "where": "function cgi_decode(text: String, plus_is_space: Bool) -> Option<String>"
+ },
+ {
+  "kind": "function",
+  "name": "cgi_decode_path",
+  "text": "lib/cgi.bx",
+  "url": "/reference/cgi.html#cgi-decode-path",
+  "where": "function cgi_decode_path(text: String) -> Option<String>"
+ },
+ {
+  "kind": "function",
+  "name": "cgi_decode_form",
+  "text": "lib/cgi.bx",
+  "url": "/reference/cgi.html#cgi-decode-form",
+  "where": "function cgi_decode_form(text: String) -> Option<String>"
+ },
+ {
+  "kind": "function",
+  "name": "cgi_params",
+  "text": "lib/cgi.bx",
+  "url": "/reference/cgi.html#cgi-params",
+  "where": "function cgi_params(encoded: String) -> Option<[Param]>"
+ },
+ {
+  "kind": "function",
+  "name": "cgi_param",
+  "text": "lib/cgi.bx",
+  "url": "/reference/cgi.html#cgi-param",
+  "where": "pure function cgi_param(params: [Param], name: String) -> Option<String>"
+ },
+ {
+  "kind": "function",
+  "name": "cgi_status_text",
+  "text": "lib/cgi.bx",
+  "url": "/reference/cgi.html#cgi-status-text",
+  "where": "pure function cgi_status_text(status: Int) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "cgi_respond",
+  "text": "lib/cgi.bx",
+  "url": "/reference/cgi.html#cgi-respond",
+  "where": "function cgi_respond(status: Int, content_type: String, body: String) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "cgi_respond_html",
+  "text": "lib/cgi.bx",
+  "url": "/reference/cgi.html#cgi-respond-html",
+  "where": "function cgi_respond_html(status: Int, page: Html) -> Int"
+ },
+ {
+  "kind": "class",
+  "name": "BmxSlot",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmxslot",
+  "where": "class BmxSlot { expression: String, offset: Int }"
+ },
+ {
+  "kind": "class",
+  "name": "BmxWrap",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmxwrap",
+  "where": "class BmxWrap { children: [Bmx] }"
+ },
+ {
+  "kind": "class",
+  "name": "BmxLink",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmxlink",
+  "where": "class BmxLink { target: String, children: [Bmx] }"
+ },
+ {
+  "kind": "enum",
+  "name": "Bmx",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx",
+  "where": "enum Bmx"
+ },
+ {
+  "kind": "class",
+  "name": "BmxItem",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmxitem",
+  "where": "class BmxItem { children: [Bmx] }"
+ },
+ {
+  "kind": "class",
+  "name": "BmxHeading",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmxheading",
+  "where": "class BmxHeading { level: Int, children: [Bmx] }"
+ },
+ {
+  "kind": "class",
+  "name": "BmxList",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmxlist",
+  "where": "class BmxList { ordered: Bool, items: [BmxItem] }"
+ },
+ {
+  "kind": "class",
+  "name": "BmxCode",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmxcode",
+  "where": "class BmxCode { info: String, value: String }"
+ },
+ {
+  "kind": "class",
+  "name": "BmxWords",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmxwords",
+  "where": "class BmxWords { children: [Bmx] }"
+ },
+ {
+  "kind": "enum",
+  "name": "Block",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#block",
+  "where": "enum Block"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_error",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-error",
+  "where": "pure function bmx_error(code: String, offset: Int, message: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_is_space",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-is-space",
+  "where": "pure function bmx_is_space(b: Int) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_strip_end",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-strip-end",
+  "where": "pure function bmx_strip_end(text: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_is_blank",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-is-blank",
+  "where": "pure function bmx_is_blank(text: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_starts_with",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-starts-with",
+  "where": "pure function bmx_starts_with(text: String, prefix: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_ordered_marker",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-ordered-marker",
+  "where": "pure function bmx_ordered_marker(text: String) -> Int"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_parse_inline",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-parse-inline",
+  "where": "function bmx_parse_inline(text: String, base: Int) -> Result<[Bmx], String>"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_merge_text",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-merge-text",
+  "where": "function bmx_merge_text(nodes: [Bmx]) -> [Bmx]"
+ },
+ {
+  "kind": "class",
+  "name": "BmxLine",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmxline",
+  "where": "class BmxLine { text: String, offset: Int }"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_lines",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-lines",
+  "where": "function bmx_lines(source: String) -> [BmxLine]"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_parse",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-parse",
+  "where": "function bmx_parse(source: String) -> Result<[Block], String>"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_inline_json",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-inline-json",
+  "where": "function bmx_inline_json(nodes: [Bmx]) -> Json"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_json",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-json",
+  "where": "function bmx_json(blocks: [Block]) -> Json"
+ },
+ {
+  "kind": "class",
+  "name": "Binding",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#binding",
+  "where": "class Binding { name: String, value: String }"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_bind",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-bind",
+  "where": "pure function bmx_bind(name: String, value: String) -> Binding"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_lookup",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-lookup",
+  "where": "pure function bmx_lookup(bindings: [Binding], name: String) -> Option<String>"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_target_allowed",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-target-allowed",
+  "where": "pure function bmx_target_allowed(target: String) -> Bool"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_inline_html",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-inline-html",
+  "where": "function bmx_inline_html(nodes: [Bmx], bindings: [Binding]) -> Result<[Html], String>"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_heading_tag",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-heading-tag",
+  "where": "pure function bmx_heading_tag(level: Int) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_html",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-html",
+  "where": "function bmx_html(blocks: [Block], bindings: [Binding]) -> Result<Html, String>"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_to_html",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-to-html",
+  "where": "function bmx_to_html(source: String, bindings: [Binding]) -> Result<String, String>"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_burxt_string",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-burxt-string",
+  "where": "pure function bmx_burxt_string(text: String) -> String"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_emit_inline",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-emit-inline",
+  "where": "function bmx_emit_inline(nodes: [Bmx]) -> Result<String, String>"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_emit_blocks",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-emit-blocks",
+  "where": "function bmx_emit_blocks(blocks: [Block]) -> Result<String, String>"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_emit_burxt",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-emit-burxt",
+  "where": "function bmx_emit_burxt(blocks: [Block], source_name: String, name: String, parameters: String, clauses: [String]) -> Result<String, String>"
  },
  {
   "kind": "function",

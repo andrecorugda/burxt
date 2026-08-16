@@ -2714,6 +2714,90 @@ fn the_site_and_the_compiler_agree_on_the_version() {
     assert_eq!(series, want, "burxt_series should be {} for version {}", want, declared);
 }
 
+/// `burxt effects` reports what a program can reach, and refuses when it reaches too much.
+///
+/// §Q1. The command exists so a caller can decide **before running a program** whether to run it
+/// at all — a playground taking strangers' code, or a CI gate asserting that the money layer still
+/// touches nothing. It rests on one property no other language has: the checker **refuses to
+/// compile a function that under-declares what it reaches**, so the declarations are not
+/// documentation, they are a fact already enforced.
+///
+/// Four things are checked here and only the first is the happy path.
+///
+///   * **The chain runs to the leaf.** `load` declares `touches files`, and that is not where
+///     files entered — `fopen` is. Reporting the wrapper would be true and useless, which is the
+///     kind of true this project treats as a defect.
+///   * **An unreachable effect is not reported.** `unused_danger` touches `commands` and nothing
+///     calls it. Totalling every declaration in the file would be two lines of code and would
+///     report `commands` for every program that so much as writes `use "lib/os.bx"` — a gate that
+///     cries wolf is a gate everyone passes with `--allow` everything.
+///   * **The gate exits 70**, the same code every named refusal in this language uses, so a caller
+///     that already treats 70 as "Burxt said no" needs no new case.
+///   * **A program reaching nothing says so**, and `--allow ""` accepts it. That is the assertion
+///     a `pure` library wants in CI, and it cannot go stale.
+#[test]
+fn burxt_effects_reports_the_reach_and_gates_on_it() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("effects");
+    fs::create_dir_all(&scratch).unwrap();
+    let program = root.join("tests/effects/reaches_files_and_clock.bx");
+
+    let run = |args: &[&str]| -> (String, i32) {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_burxt"));
+        command.arg("effects").arg(&program).args(args).current_dir(&scratch);
+        let out = finish_or_kill(command, 120, "burxt effects");
+        (
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            out.status.code().unwrap_or(-1),
+        )
+    };
+
+    let (report, code) = run(&[]);
+    assert_eq!(code, 0, "a plain report is not a gate and must not fail:\n{}", report);
+    assert!(
+        report.contains("files") && report.contains("clock"),
+        "both reachable effects must be reported:\n{}",
+        report
+    );
+    assert!(
+        report.contains("fopen") && report.contains("os_now"),
+        "the chain must run to the leaf that INTRODUCES the effect, not stop at the wrapper that \
+         had to declare it:\n{}",
+        report
+    );
+    assert!(
+        !report.contains("commands"),
+        "`unused_danger` touches commands and nothing calls it — an unreachable effect reported is \
+         a gate nobody will trust:\n{}",
+        report
+    );
+
+    let (_, allowed) = run(&["--allow", "files,clock,input"]);
+    assert_eq!(allowed, 0, "everything reachable was allowed, so this must pass");
+
+    let (refused, code) = run(&["--allow", "clock"]);
+    assert_eq!(code, 70, "reaching outside --allow must exit 70:\n{}", refused);
+    assert!(
+        refused.contains("REFUSED"),
+        "the refusal must name what was outside the allowance:\n{}",
+        refused
+    );
+
+    // A typo in the gate is an error, never a silent pass — the failure mode that would matter
+    // most, because it looks exactly like success.
+    let (_, typo) = run(&["--allow", "filez"]);
+    assert_eq!(typo, 2, "an unknown effect name must be an error, not an empty allowance");
+
+    let (json, _) = run(&["--json"]);
+    assert!(
+        json.contains("\"effect\": \"files\"") && json.contains("\"via\""),
+        "--json is what a playground consumes:\n{}",
+        json
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
 /// Every module in `lib/` has a page in the reference, derived from `lib/` rather than from a list.
 ///
 /// This exists because the list won. `scripts/site-reference.py` named seven modules while `lib/`
@@ -3512,6 +3596,226 @@ fn modules_compile_as_one_program_and_report_per_file() {
     let _ = fs::remove_dir_all(&scratch);
 }
 
+/// `lib/bmx.bx` conforms to the BMX format, judged by the format's OWN suite.
+///
+/// The suite is data — `input → expected AST` files vendored in `tests/bmx-conformance/` — and
+/// it is run by the format's thirty-line Python harness rather than by anything written here.
+/// That is deliberate and it is the point: **a format whose conformance suite can only be run
+/// by its reference implementation is not a format, it is that implementation's test suite.**
+/// Rewriting the harness in Rust would pass just as often and would prove something else.
+///
+/// It also catches the drift a hand-written test cannot see. On its first run against a real
+/// parser it found that three cases had been written to three different readings of what a
+/// slot's `offset` means, and the spec sentence they came from was genuinely ambiguous — in a
+/// format whose entire claim is one unambiguous reading.
+#[test]
+fn the_bmx_implementation_passes_the_formats_own_conformance_suite() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("bmx-conformance");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let parser = scratch.join("bmx-parse");
+    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("examples/bmx/parse.bx"))
+        .arg("-o")
+        .arg(&parser)
+        .output()
+        .expect("burxt");
+    assert!(
+        built.status.success(),
+        "examples/bmx/parse.bx does not build:\n{}",
+        String::from_utf8_lossy(&built.stdout)
+    );
+
+    let harness = root.join("tests/bmx-conformance/harness.py");
+    let out = match Command::new("python3").arg(&harness).arg(&parser).output() {
+        Ok(out) => out,
+        Err(e) => {
+            eprintln!("skipping: python3 is not available ({})", e);
+            return;
+        }
+    };
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "the BMX conformance suite failed:\n{}", said);
+    // A harness that finds no cases would "pass" silently, and a harness that silently found
+    // HALF of them would too — the shape of every ratchet failure this project has already had.
+    // So the reported count is checked against the documents actually on disk rather than
+    // against a number written here, which would go stale the first time a case is added.
+    let vendored = ["cases", "errors"]
+        .iter()
+        .map(|which| {
+            fs::read_dir(root.join("tests/bmx-conformance").join(which))
+                .unwrap()
+                .filter(|e| {
+                    e.as_ref().unwrap().path().extension().and_then(|x| x.to_str()) == Some("bmx")
+                })
+                .count()
+        })
+        .sum::<usize>();
+    assert!(vendored >= 39, "the vendored BMX suite has shrunk to {} documents", vendored);
+    assert!(
+        said.contains(&format!("{} cases", vendored)),
+        "the harness ran a different number of cases than the {} vendored documents:\n{}",
+        vendored,
+        said
+    );
+}
+
+/// BMX level 2: a document becomes a view the COMPILER checks.
+///
+/// This is the whole reason the format was worth defining, and it is the one thing a level-1
+/// host cannot copy. A template is the last place in most programs where nothing is checked —
+/// the slot names a field that may not exist, holds a type it cannot state, and escapes by
+/// convention. Below, each of those is a build error.
+///
+/// **None of it is implemented by the generator.** It emits ordinary Burxt and the language does
+/// the rest, which is `BOUNDARY.md` paying off: the format stays dumb enough for anyone to
+/// implement, and the checking lives where it can actually be enforced.
+#[test]
+fn the_bmx_generator_hands_the_compiler_a_view_it_can_check() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("bmx-generate");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let generator = scratch.join("bmx-generate");
+    let built = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("examples/bmx/generate.bx"))
+        .arg("-o")
+        .arg(&generator)
+        .output()
+        .expect("burxt");
+    assert!(
+        built.status.success(),
+        "examples/bmx/generate.bx does not build:\n{}",
+        String::from_utf8_lossy(&built.stdout)
+    );
+
+    // `use` is textual, so the program names its types FIRST and the generated view second —
+    // the view brings `lib/html.bx` with it.
+    fs::write(
+        scratch.join("types.bx"),
+        "class Order { reference: String, customer: String, total: Decimal<2, RoundHalfEven>, \
+         amount: Decimal<2>, rate: Decimal<2> }\n\n\
+         pure function money2(value: Decimal<2>) -> String { return to_string(value); }\n",
+    )
+    .unwrap();
+    // `lib/…` in the generated file resolves relative to it.
+    #[cfg(unix)]
+    let _ = std::os::unix::fs::symlink(root.join("lib"), scratch.join("lib"));
+
+    let generate = |document: &str, body: &str, name: &str| -> (bool, String) {
+        fs::write(scratch.join(document), body).unwrap();
+        let out = Command::new(&generator)
+            .arg(scratch.join(document))
+            .arg(name)
+            .arg("order: Order")
+            .current_dir(&scratch)
+            .output()
+            .expect("generate");
+        (
+            out.status.success(),
+            if out.status.success() {
+                String::from_utf8_lossy(&out.stdout).into_owned()
+            } else {
+                String::from_utf8_lossy(&out.stderr).into_owned()
+            },
+        )
+    };
+
+    let compile = |view: &str, program: &str| -> (bool, String) {
+        fs::write(scratch.join("view.bx"), view).unwrap();
+        fs::write(scratch.join("app.bx"), program).unwrap();
+        let out = burxt("run", &scratch.join("app.bx"), &scratch);
+        (
+            out.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+
+    // 1. A correct document renders, the slot value is escaped, and the money keeps its scale.
+    let (ok, view) = generate(
+        "receipt.bmx",
+        "# Receipt {{ order.reference }}\n\nThanks, **{{ order.customer }}** — {{ to_string(order.total) }}.\n",
+        "receipt_view",
+    );
+    assert!(ok, "generating a valid document failed:\n{}", view);
+    let (ran, said) = compile(
+        &view,
+        "use \"types.bx\";\nuse \"view.bx\";\n\
+         let o: Order = Order { reference: \"R-1\", customer: \"Tom & <Co>\", total: 59.97, \
+         amount: 1.00, rate: 1.00 };\nprint(html_render(receipt_view(o)));\n",
+    );
+    assert!(ran, "the generated view did not compile and run:\n{}", said);
+    assert!(
+        said.contains("<h1>Receipt R-1</h1>") && said.contains("Tom &amp; &lt;Co&gt;")
+            && said.contains("59.97"),
+        "the rendered page was not what the document said:\n{}",
+        said
+    );
+
+    // 2. A slot naming a field that does not exist. THE case: in every other template language
+    //    this renders an empty string and ships.
+    let (ok, view) = generate("typo.bmx", "Hi {{ order.custmer }}.\n", "typo_view");
+    assert!(ok, "{}", view);
+    let (ran, said) = compile(&view, "use \"types.bx\";\nuse \"view.bx\";\n");
+    assert!(!ran, "a slot naming a missing field compiled:\n{}", said);
+    assert!(
+        said.contains("has no field named `custmer`"),
+        "the error did not name the field the document got wrong:\n{}",
+        said
+    );
+
+    // 3. A slot holding something that is not a String. The conversion has to be written in the
+    //    DOCUMENT, where a reviewer sees it — `html_text` takes a String and `to_string` of a
+    //    String is refused, so there is no way to make this implicit.
+    let (ok, view) = generate("raw.bmx", "Total: {{ order.total }}\n", "raw_view");
+    assert!(ok, "{}", view);
+    let (ran, said) = compile(&view, "use \"types.bx\";\nuse \"view.bx\";\n");
+    assert!(!ran, "a Decimal in a String slot compiled:\n{}", said);
+    assert!(
+        said.contains("must be String"),
+        "the error did not say the slot's type was wrong:\n{}",
+        said
+    );
+
+    // 4. Money that would silently re-round, inside a view. This is the thesis reaching the
+    //    template: the exact product has four places and reaching two means rounding, so the
+    //    view is refused until the document says how.
+    let (ok, view) = generate(
+        "money.bmx",
+        "Due: {{ money2(order.amount * order.rate) }}\n",
+        "money_view",
+    );
+    assert!(ok, "{}", view);
+    let (ran, said) = compile(&view, "use \"types.bx\";\nuse \"view.bx\";\n");
+    assert!(!ran, "a view re-rounded money silently:\n{}", said);
+    assert!(
+        said.contains("means rounding it"),
+        "the refusal was not the rounding rule:\n{}",
+        said
+    );
+
+    // 5. A dangerous link target is refused by the GENERATOR, before any page exists. A
+    //    document's targets are static text, so this never needs to reach a render.
+    let (ok, said) = generate("evil.bmx", "[click](javascript:steal)\n", "evil_view");
+    assert!(!ok, "a javascript: target was generated:\n{}", said);
+    assert!(
+        said.starts_with("BMX-G001"),
+        "the generator's refusal did not carry its code:\n{}",
+        said
+    );
+}
+
 /// The standard library compiles, and does what it says. Written in Burxt from the same
 /// builtins any program has — so this test is really asking whether `lib/` is *usable*,
 /// which is the only interesting question about a standard library.
@@ -3525,7 +3829,10 @@ fn the_standard_library_compiles_and_works() {
     let scratch = scratch_dir("stdlib");
     fs::create_dir_all(&scratch).unwrap();
 
-    for module in ["string.bx", "files.bx", "os.bx"] {
+    // Three modules of twenty-four, and the name of this test claims all of them. Widening it to
+    // a glob is its own change; `html.bx` is here because `spec/M15-WEB.md:295` names this test
+    // as W0's bar.
+    for module in ["string.bx", "files.bx", "os.bx", "html.bx", "cgi.bx", "bmx.bx"] {
         let out = burxt("check", &root.join("lib").join(module), &scratch);
         assert!(
             out.status.success(),
@@ -7924,7 +8231,22 @@ fn the_repository_layout_is_declared() {
         ("tests/pass", "programs that must compile, run, and print their `.stdout`"),
         ("tests/fail", "programs that must be REFUSED, with the reason in `.stderr`"),
         ("tests/panic", "programs that must compile and then die at run time"),
+        (
+            "tests/effects",
+            "programs whose REACH is the assertion, not their output. `burxt effects` reports \
+             what they can touch and where it entered; they cannot live in `tests/pass` because \
+             one of them asks the clock and a fixture whose stdout moves is no fixture",
+        ),
         ("tests/review", "`old.bx`/`new.bx`/`.expect` triples for `burxt review`"),
+        (
+            "tests/bmx-conformance",
+            "the BMX format's own conformance suite, VENDORED. Not ours and not organised by \
+             verdict: `input → expected AST` data files plus the format's own Python harness, \
+             copied from the format's repository at a stated version. It is not `tests/support`, \
+             which holds harness programs we wrote, and not `tests/pass`, which holds fixtures \
+             judged by our rules — the whole point is that this corpus is judged by somebody \
+             else's",
+        ),
         (
             "tests/support",
             "Burxt programs a runner invariant DRIVES rather than compares — a harness whose \
@@ -7955,6 +8277,13 @@ fn the_repository_layout_is_declared() {
          compile time, two stopped at run time. See its README"),
         ("examples/negative", "the same, for the site's negative examples"),
         ("examples/mcp", "the MCP manifest example and its fixtures"),
+        (
+            "examples/bmx",
+            "BMX's two programs. `parse.bx` prints a document's AST as JSON — the other half of \
+             the format's conformance harness, and the suite being data is why it can be this \
+             small. `generate.bx` is level 2: a document becomes a `pure function -> Html` whose \
+             slots the COMPILER checks",
+        ),
         ("examples/pos", "the point-of-sale example, in Burxt"),
         ("examples/pos-php", "the same program in PHP, for the comparison"),
         ("examples/pos-python", "the same program in Python"),
@@ -8536,6 +8865,23 @@ fn every_rust_module_has_a_burxt_counterpart_or_a_reason() {
              hover contents byte for byte, MethodNotFound byte for byte, and both exit codes. \
              Wording and column are deliberately not asserted: the two compilers word diagnostics \
              differently and a translation table inside `lsp.bx` would hide that",
+        ),
+        (
+            "effects.rs",
+            &[],
+            Strength::Missing,
+            "NOT YET — and this row is a debt, not a dispensation. `burxt effects` (§Q1) landed \
+             in stage-0 first because the answer it gives rests on the CHECKER having already \
+             refused every under-declaration, and stage-0 is where that refusal is written. \
+             Stage-1's half is `src/burxt-compiler/effects.bx` and it is the remaining work of \
+             1.3: the declared-effect bitmask already exists there (`check.bx`'s `touches: Int`), \
+             so what is missing is the call-graph walk — and `emit.bx`'s `hoist_old` is the \
+             template, including its warning that a node's `a`/`b`/`c` are child indices for SOME \
+             kinds and payload for others, which recursed into node 0 forever the first time \
+             somebody walked all three. **1.3 does not ship until this file exists.** The rule is \
+             both compilers or it is not done, and a tool that only one compiler carries would \
+             mean a Burxt-only toolchain could not answer what a program reaches — which is the \
+             gate the playground is built on",
         ),
     ];
 

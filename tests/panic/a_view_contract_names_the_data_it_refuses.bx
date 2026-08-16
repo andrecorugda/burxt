@@ -1,0 +1,14 @@
+// A view's `requires` is where it says which data it will not render. The clause is on the
+// declaration rather than in an `if` at the top of the body, so an agent writing a caller and a
+// reviewer scanning the signature both learn the rule without reading the template.
+use "../../lib/html.bx";
+
+class Line { sku: String, qty: Int, each: Decimal<2, RoundHalfEven> }
+
+pure function line_view(line: Line) -> Html
+    requires line.qty > 0
+{
+    return html_element("li", [], [html_text(line.sku), html_text(to_string(line.each))]);
+}
+
+print(html_render(line_view(Line { sku: "Rice", qty: 0, each: 19.99 })));

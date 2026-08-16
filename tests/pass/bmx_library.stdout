@@ -1,0 +1,11 @@
+<article class="bmx"><p>Hi &lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;.</p></article>
+<article class="bmx"><h1>&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;</h1></article>
+<article class="bmx"><ul><li>&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;</li></ul></article>
+<article class="bmx"><p><a href="https://example.com">docs</a></p></article>
+<article class="bmx"><p><a href="mailto:a@b.example">mail</a></p></article>
+<article class="bmx"><p><a href="/page">rel</a></p></article>
+BMX-R001: refused a link target whose scheme is not http, https or mailto: javascript:steal
+BMX-R002: no binding for slot `order.totl` at 10
+<article class="bmx"><h1>Total 59.97</h1></article>
+BMX-E001 at 3: unterminated slot: no }} on this line
+BMX-E002 at 2: unterminated emphasis
