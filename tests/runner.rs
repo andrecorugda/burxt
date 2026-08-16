@@ -8390,12 +8390,6 @@ fn the_repository_layout_is_declared() {
         ("tests/pass", "programs that must compile, run, and print their `.stdout`"),
         ("tests/fail", "programs that must be REFUSED, with the reason in `.stderr`"),
         ("tests/panic", "programs that must compile and then die at run time"),
-        (
-            "tests/effects",
-            "programs whose REACH is the assertion, not their output. `burxt effects` reports \
-             what they can touch and where it entered; they cannot live in `tests/pass` because \
-             one of them asks the clock and a fixture whose stdout moves is no fixture",
-        ),
         ("tests/review", "`old.bx`/`new.bx`/`.expect` triples for `burxt review`"),
         (
             "tests/bmx-conformance",
