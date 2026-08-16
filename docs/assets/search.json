@@ -2212,6 +2212,13 @@
   "where": "class BmxLink { target: String, children: [Bmx] }"
  },
  {
+  "kind": "class",
+  "name": "BmxInline",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmxinline",
+  "where": "class BmxInline { name: String, head: String, offset: Int }"
+ },
+ {
   "kind": "enum",
   "name": "Bmx",
   "text": "lib/bmx.bx",
@@ -2252,6 +2259,13 @@
   "text": "lib/bmx.bx",
   "url": "/reference/bmx.html#bmxwords",
   "where": "class BmxWords { children: [Bmx] }"
+ },
+ {
+  "kind": "class",
+  "name": "BmxBlock",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmxblock",
+  "where": "class BmxBlock { name: String, head: String, offset: Int, children: [Block] }"
  },
  {
   "kind": "enum",
@@ -2304,6 +2318,13 @@
  },
  {
   "kind": "function",
+  "name": "bmx_fence",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-fence",
+  "where": "pure function bmx_fence(text: String) -> Int"
+ },
+ {
+  "kind": "function",
   "name": "bmx_parse_inline",
   "text": "lib/bmx.bx",
   "url": "/reference/bmx.html#bmx-parse-inline",
@@ -2339,10 +2360,24 @@
  },
  {
   "kind": "function",
+  "name": "bmx_parse_blocks",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-parse-blocks",
+  "where": "function bmx_parse_blocks(lines: [BmxLine], from: Int, depth: Int, mutable out: [Block]) -> Result<Int, String>"
+ },
+ {
+  "kind": "function",
   "name": "bmx_inline_json",
   "text": "lib/bmx.bx",
   "url": "/reference/bmx.html#bmx-inline-json",
   "where": "function bmx_inline_json(nodes: [Bmx]) -> Json"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_json_children",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-json-children",
+  "where": "function bmx_json_children(blocks: [Block]) -> Json"
  },
  {
   "kind": "function",
@@ -2423,10 +2458,17 @@
  },
  {
   "kind": "function",
-  "name": "bmx_emit_blocks",
+  "name": "bmx_emit_one",
   "text": "lib/bmx.bx",
-  "url": "/reference/bmx.html#bmx-emit-blocks",
-  "where": "function bmx_emit_blocks(blocks: [Block]) -> Result<String, String>"
+  "url": "/reference/bmx.html#bmx-emit-one",
+  "where": "function bmx_emit_one(block: Block) -> Result<String, String>"
+ },
+ {
+  "kind": "function",
+  "name": "bmx_emit_stmts",
+  "text": "lib/bmx.bx",
+  "url": "/reference/bmx.html#bmx-emit-stmts",
+  "where": "function bmx_emit_stmts(blocks: [Block], target: String, tag: String, indent: String) -> Result<String, String>"
  },
  {
   "kind": "function",

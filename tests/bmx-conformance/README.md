@@ -17,4 +17,4 @@ message. The suite IS the format's semver — a case that had to be *edited* rat
 is a major, per its `VERSIONING.md` — so a diff here that touches an existing file is a fact
 worth reading before it is merged.
 
-Vendored at **BMX 0.1**.
+Vendored at **BMX 0.2**.
