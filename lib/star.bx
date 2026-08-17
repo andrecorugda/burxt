@@ -174,6 +174,53 @@ pure function star_is_element(name: String) -> Bool {
         || name == "input" || name == "br" || name == "hr" || name == "img";
 }
 
+
+// ---- keys, which are a prerequisite rather than an optimisation ---------------
+//
+//     ::: for line in order.lines key line.id
+//
+// The trailing `key <expr>` is star-burxt's, parsed out of a head BMX captured and
+// refused to interpret — the same move as `props` and `on:`, and again needing
+// nothing from the format.
+//
+// **Why this is not a list optimisation.** Without a key, children are matched by
+// POSITION, and `items[3]` is not the same item after a splice. That is silent ABA:
+// a row's handler, its focus, and anything it owns quietly transfer to whatever
+// slid into its index. It is merely wasteful until something is async or something
+// is owned; then it is corruption. So keys have to exist before a component can own
+// a resource, not after.
+
+// `line in order.lines key line.id` -> Some("line.id"). The keyword must stand at a
+// token boundary, so a collection named `monkey` does not match.
+pure function star_key_part(head: String) -> Option<String> {
+    let mutable i: Int = 0;
+    while i + 4 <= len(head) {
+        if byte_at(head, i) == 107 && byte_at(head, i + 1) == 101
+            && byte_at(head, i + 2) == 121 && byte_at(head, i + 3) == 32 {
+            if i > 0 && byte_at(head, i - 1) == 32 {
+                return Option.Some(bmx_strip_end(substring(head, i + 4, len(head) - (i + 4))));
+            }
+        }
+        i += 1;
+    }
+    return Option.None;
+}
+
+// The head with the `key` clause removed — what `for` itself gets.
+pure function star_head_without_key(head: String) -> String {
+    let mutable i: Int = 0;
+    while i + 4 <= len(head) {
+        if byte_at(head, i) == 107 && byte_at(head, i + 1) == 101
+            && byte_at(head, i + 2) == 121 && byte_at(head, i + 3) == 32 {
+            if i > 0 && byte_at(head, i - 1) == 32 {
+                return bmx_strip_end(substring(head, 0, i));
+            }
+        }
+        i += 1;
+    }
+    return head;
+}
+
 // ---- emission ----------------------------------------------------------------
 
 // The document's blocks become statements pushing into `target`. This mirrors
@@ -181,8 +228,12 @@ pure function star_is_element(name: String) -> Bool {
 // binding becomes an element with `data-star-h="N"` and its expression is put
 // aside for `dispatch`, where the COMPILER judges it. That divergence is the
 // whole file.
+// `key_here` is the key expression that applies to elements emitted at THIS level —
+// the immediate body of a keyed `for`. It is not passed down: a key identifies the
+// row, and a grandchild of the row is identified by being inside it.
 function star_emit_stmts(blocks: [Block], target: String, tag: String, indent: String,
-                         mutable handlers: [StarHandler]) -> Result<String, String> {
+                         mutable handlers: [StarHandler], key_here: String,
+                         in_loop: Bool) -> Result<String, String> {
     let mutable out: String = "";
     let mutable i: Int = 0;
     while i < len(blocks) {
@@ -199,11 +250,29 @@ function star_emit_stmts(blocks: [Block], target: String, tag: String, indent: S
                     // The head is host CODE and goes through verbatim. Neither
                     // construct produces an element, so the body pushes into the
                     // same list — and the compiler resolves what the head binds.
+                    //
+                    // A `key` clause is stripped off first and becomes an attribute on
+                    // whatever the body pushes, so the reconciler can match a row to a
+                    // row rather than to an index. The key EXPRESSION goes through
+                    // verbatim too, so `key line.idd` is a compile error naming the
+                    // field — a key nobody checked would be worse than no key at all.
+                    let loop_head: String = star_head_without_key(fenced.head);
+                    if fenced.name == "if" && len(loop_head) < len(fenced.head) {
+                        return Result.Error("STAR-E006 at " + to_string(fenced.offset)
+                            + ": `key` belongs on a `for`, not on an `if` — there is one branch"
+                            + " and nothing to tell apart");
+                    }
+                    let mutable keyed: String = "";
+                    match star_key_part(fenced.head) {
+                        None => { }
+                        Some(expr) => { keyed = expr; }
+                    }
                     match star_emit_stmts(fenced.children, target, tag + "_" + to_string(i),
-                                          indent + "    ", handlers) {
+                                          indent + "    ", handlers, keyed,
+                                          in_loop || fenced.name == "for") {
                         Error(e) => { return Result.Error(e); }
                         Ok(body) => {
-                            out = out + indent + fenced.name + " " + fenced.head + " \{\n"
+                            out = out + indent + fenced.name + " " + loop_head + " \{\n"
                                 + body + indent + "\}\n";
                         }
                     }
@@ -227,7 +296,15 @@ function star_emit_stmts(blocks: [Block], target: String, tag: String, indent: S
                         + " Write `::: " + fenced.name + " on:input=...` with nothing between"
                         + " the fences");
                 }
+                // A key becomes an attribute the reconciler can match on. It is emitted
+                // as a real expression, so `key line.idd` is a compile error naming the
+                // field — an unchecked key would be worse than none, because it would
+                // move a row's identity somewhere silently wrong.
                 let mutable attrs: String = "[]";
+                let mutable key_attr: String = "";
+                if len(key_here) > 0 {
+                    key_attr = "html_attr(\"data-star-key\", " + key_here + ")";
+                }
                 match star_event_part(fenced.head) {
                     None => { }
                     Some(part) => {
@@ -240,12 +317,37 @@ function star_emit_stmts(blocks: [Block], target: String, tag: String, indent: S
                                 + ": `on:" + event + "` is not an event this host can wire."
                                 + " Wired events are click, input, change, submit");
                         }
+                        // **A handler inside a `for` is refused, and refusing is the
+                        // honest answer rather than a gap.** `dispatch` is a function of
+                        // (handler, state); the loop variable is bound in the VIEW and does
+                        // not exist there, so emitting the expression produces code that
+                        // names something out of scope. The compiler would catch it — with
+                        // an error about a variable the author never wrote in a function
+                        // they never saw. Refusing here says the true thing instead.
+                        //
+                        // What it needs is for a handler id to carry a PATH INTO STATE
+                        // rather than a captured value, so `dispatch` can re-derive the row
+                        // from the state it is given. That is designed and not built, and
+                        // it is why `key` landed first: a path through a positional index
+                        // is ABA, since `items[3]` is not the same item after a splice.
+                        if in_loop {
+                            return Result.Error("STAR-E007 at " + to_string(fenced.offset)
+                                + ": an `on:` handler inside a `for` is not supported yet."
+                                + " A handler runs in `dispatch`, where the loop variable does"
+                                + " not exist — it needs an identity to re-derive the row from"
+                                + " state, which is designed and unbuilt. Move the handler"
+                                + " outside the loop, or drive the row from the whole state");
+                        }
                         let index: Int = len(handlers);
                         let added: Int = push(handlers, StarHandler {
                             event: event,
                             expression: star_event_expression(part),
                         });
                         attrs = "[html_attr(\"data-star-h\", \"" + to_string(index) + "\")]";
+                        if len(key_attr) > 0 {
+                            attrs = "[html_attr(\"data-star-h\", \"" + to_string(index) + "\"), "
+                                + key_attr + "]";
+                        }
                     }
                 }
                 // **An element that takes phrasing content unwraps its paragraphs**, and
@@ -305,6 +407,7 @@ function star_emit_stmts(blocks: [Block], target: String, tag: String, indent: S
                         }
                         c += 1;
                     }
+                    if len(key_attr) > 0 && attrs == "[]" { attrs = "[" + key_attr + "]"; }
                     out = out + indent + "let " + label + ": Int = push(" + target
                         + ", html_element(\"" + fenced.name + "\", " + attrs
                         + ", [" + phrasing + "]));\n";
@@ -333,9 +436,10 @@ function star_emit_stmts(blocks: [Block], target: String, tag: String, indent: S
                     }
                 }
                 match star_emit_stmts(fenced.children, inner, tag + "_" + to_string(i),
-                                      indent, handlers) {
+                                      indent, handlers, "", in_loop) {
                     Error(e) => { return Result.Error(e); }
                     Ok(body) => {
+                        if len(key_attr) > 0 && attrs == "[]" { attrs = "[" + key_attr + "]"; }
                         out = out + indent + "let mutable " + inner + ": [Html] = [];\n" + body;
                         out = out + indent + "let " + label + ": Int = push(" + target
                             + ", html_element(\"" + fenced.name + "\", " + attrs
@@ -419,7 +523,7 @@ function star_generate(source: String, name: String) -> Result<StarComponent, St
                     + " no signature and nothing can invoke it. Add `::: props name: Type`");
             }
             let mutable handlers: [StarHandler] = [];
-            match star_emit_stmts(blocks, "kids", "0", "    ", handlers) {
+            match star_emit_stmts(blocks, "kids", "0", "    ", handlers, "", false) {
                 Error(e) => { return Result.Error(e); }
                 Ok(body) => {
                     let mutable view: String = "pure function " + name + "(" + props + ") -> Html allocates \{\n";

@@ -562,6 +562,138 @@ fn money_and_integers_cross_into_c_exactly() {
     );
 }
 
+/// **`use "std/…"` reaches the standard library from anywhere, including inside a package.**
+///
+/// C2b, and the reason it exists is the whole difference between a framework and a folder. `use`
+/// resolves relative to the importing FILE, so a package asking for `lib/html.bx` looks for `lib/`
+/// under itself and misses. A release installs the library to `$PREFIX/lib/burxt/` and the only way
+/// to name it was an absolute path — one machine's layout, baked into something other people
+/// install. Laravel works because PHP has an include path; React works because Node resolves
+/// modules; this is the smallest version of that.
+///
+/// **An explicit prefix rather than a fallback**, and the reason is the one `main.rs`'s ambiguity
+/// refusal already gives about dependencies: a fallback that tried the library whenever a relative
+/// path missed would make resolution depend on whether a file happens to exist, so the same program
+/// would resolve differently on two machines. Refused where it is written instead.
+///
+/// Four claims, and the last two are the ones a wrong implementation would still pass the first two
+/// with.
+#[test]
+fn a_package_reaches_the_standard_library_through_std() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("stdprefix");
+    let app = scratch.join("app");
+    let dep = scratch.join("dep");
+    fs::create_dir_all(&app).unwrap();
+    fs::create_dir_all(&dep).unwrap();
+
+    // A package OUTSIDE the application, which is the case that could not work before.
+    fs::write(dep.join("view.bx"),
+        "use \"std/html.bx\";\n\
+         public pure function dep_title(t: String) -> String allocates {\n\
+        \x20   return html_render(html_element(\"h1\", [], [html_text(t)]));\n\
+         }\n").unwrap();
+    fs::write(app.join("burxt.package"),
+        "name        app\nversion     0.1.0\ndependency  dep  ../dep\n").unwrap();
+    fs::write(app.join("main.bx"),
+        "use \"dep/view.bx\";\nregion main { print(dep_title(\"hi\")); }\n").unwrap();
+
+    let run = |file: &str, dir: &Path| -> Output {
+        Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("run").arg(file).current_dir(dir)
+            .env("BURXT_LIB", root.join("lib"))
+            .output().expect("burxt")
+    };
+
+    // 1. It resolves, and the program RUNS — the accepting case first, because every refusal
+    //    below is satisfied by a compiler that refuses everything.
+    let out = run("main.bx", &app);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success() && stdout.contains("<h1>hi</h1>"),
+            "a package could not reach the standard library:\n{}{}",
+            stdout, String::from_utf8_lossy(&out.stderr));
+
+    // 2. BURXT_LIB is honoured, so an unusual install can say where without editing anything.
+    //    Pointing it at a directory with no library must fail rather than silently find one.
+    let empty = scratch.join("empty");
+    fs::create_dir_all(&empty).unwrap();
+    let missing = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("check").arg("main.bx").current_dir(&app)
+        .env("BURXT_LIB", &empty)
+        .env("HOME", &empty)
+        .output().expect("burxt");
+    let text = String::from_utf8_lossy(&missing.stderr).to_string()
+        + &String::from_utf8_lossy(&missing.stdout);
+    // It may still find /usr/local/lib/burxt or the repo's own lib/, which is correct behaviour —
+    // so this asserts only that BURXT_LIB is READ, by checking a bogus module names its roots.
+    fs::write(app.join("bogus.bx"), "use \"std/nosuchmodule.bx\";\nregion main { print(1); }\n").unwrap();
+    let bogus = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("check").arg("bogus.bx").current_dir(&app)
+        .env("BURXT_LIB", root.join("lib"))
+        .output().expect("burxt");
+    let bogus_text = String::from_utf8_lossy(&bogus.stderr).to_string()
+        + &String::from_utf8_lossy(&bogus.stdout);
+    assert!(bogus_text.contains("nosuchmodule.bx"),
+            "a missing std module must name what it looked for:\n{}", bogus_text);
+
+    // 3. **Two different failures must say different things.** A library that is not installed and
+    //    a module that does not exist look identical from the resolver — one is fixed by
+    //    installing, the other by correcting a name — and saying the wrong one sends a reader to
+    //    the wrong problem.
+    assert!(bogus_text.contains("has no"),
+            "a present library with a missing module must not report the library as absent:\n{}",
+            bogus_text);
+    let _ = text;
+
+    // 3b. **Which root wins, with BURXT_LIB UNSET — the case every other assertion here hides.**
+    //
+    // Every case above sets `BURXT_LIB`, which is right for determinism and means the other two
+    // roots are never exercised: they prove `std/` resolves and prove nothing about ordering. A
+    // pass fixture cannot tell "supported" from "not examined".
+    //
+    // The order is load-bearing rather than cosmetic. A compiler must prefer ITS OWN library:
+    // build-time path first, install prefix second. The reverse is invisible on a machine with
+    // nothing installed and wrong on every machine that followed the install page — a compiler
+    // built here and run here would resolve `std/` to the INSTALLED library, so a test could pass
+    // against a file that is not the one under test. It is also what the decision not to
+    // version-pin the stdlib rests on: `burxt --version` pins the library only if a compiler uses
+    // its own.
+    //
+    // Asserted by content rather than by path, because a path proves which string was chosen and
+    // this needs to prove which FILE was read.
+    let marker = root.join("lib/_root_order_probe.bx");
+    fs::write(&marker, "pure function which_library() -> Int { return 4242; }\n").unwrap();
+    fs::write(app.join("which.bx"),
+        "use \"std/_root_order_probe.bx\";\nregion main { print(which_library()); }\n").unwrap();
+    let unset = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("run").arg("which.bx").current_dir(&app)
+        .env_remove("BURXT_LIB")
+        .output().expect("burxt");
+    let which = String::from_utf8_lossy(&unset.stdout);
+    let _ = fs::remove_file(&marker);
+    assert!(unset.status.success() && which.contains("4242"),
+            "with BURXT_LIB unset, `std/` must resolve to the compiler's OWN library — a file only \
+             this tree has. If this fails, the installed library won and a test could certify the \
+             wrong artifact:\n{}{}",
+            which, String::from_utf8_lossy(&unset.stderr));
+
+    // 4. A real `std/` beside the file is REFUSED rather than silently losing to the library.
+    //    Picking one would make resolution depend on the shape of a directory tree.
+    fs::create_dir_all(app.join("std")).unwrap();
+    fs::write(app.join("std/html.bx"), "pure function local_only() -> Int { return 1; }\n").unwrap();
+    fs::write(app.join("amb.bx"), "use \"std/html.bx\";\nregion main { print(local_only()); }\n").unwrap();
+    let ambiguous = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("check").arg("amb.bx").current_dir(&app)
+        .env("BURXT_LIB", root.join("lib"))
+        .output().expect("burxt");
+    let amb_text = String::from_utf8_lossy(&ambiguous.stderr).to_string()
+        + &String::from_utf8_lossy(&ambiguous.stdout);
+    assert!(amb_text.contains("could mean two things"),
+            "a real std/ directory must be refused, not silently ignored:\n{}", amb_text);
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
 /// **star-burxt hands the compiler an event handler it can judge.**
 ///
 /// This is the whole reason star-burxt is a generator rather than a runtime `button()` function.

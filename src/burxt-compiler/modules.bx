@@ -160,7 +160,19 @@ function blank_imports(text: String) -> String {
 // never grew it — because until `burxt check` learned to print a position at all, nothing on this
 // side ever asked which file an offset fell in.
 class Loader { seen: [String], buffer: String, paths: [String], starts: [Int], lengths: [Int],
-               package: Package }
+               package: Package,
+               // C2b. Where `use "std/…"` resolves to, decided ONCE by the caller and carried in
+               // rather than read here.
+               //
+               // **The effects system is what chose this shape.** Calling `getenv` inside the
+               // loader made `Loader.load` touch `input`, and the effect propagated to eight
+               // functions across five files — `file_at_offset`, `mcp_schema`, `review`,
+               // `effects_report`, `layout` — none of which reads anything. The signature was
+               // telling the truth: resolution was reaching the environment, so everything that
+               // resolved a module was too. Resolving once where `touches input` already lives
+               // (`main.bx`, beside `llc_command`) confines it to the one place that genuinely
+               // asks the environment a question.
+               std_root: String }
 
 function (mutable self: Loader) load(path: String) -> Int touches files {
     for seen in self.seen {
@@ -190,6 +202,36 @@ function (mutable self: Loader) load(path: String) -> Int touches files {
                 // import; everything else is what it has always been, a path relative to the file
                 // doing the importing.
                 let relative: String = here + named;
+
+                // C2b. `use "std/…"` is the standard library, wherever it is installed.
+                //
+                // An explicit prefix rather than a fallback that tries the library when a relative
+                // path misses: a fallback makes resolution depend on whether a file happens to
+                // exist, so the same program resolves differently on two machines. That is the
+                // objection the ambiguity refusal below already makes about dependencies, one
+                // layer out.
+                if len(named) > 4 && substring(named, 0, 4) == "std/" {
+                    let rest: String = substring(named, 4, len(named) - 4);
+                    // A real `std/` beside the file means the author wrote one and meant it.
+                    if manifest_readable(relative) {
+                        print_error("error: `use \"" + named + "\"` in " + path
+                                    + " could mean two things: the standard library, or the file at "
+                                    + relative + ". Rename one of them — `std/` is reserved for the "
+                                    + "library that ships with the compiler.");
+                        exit(2);
+                    }
+                    let candidate: String = self.std_root + "/" + rest;
+                    if !manifest_readable(candidate) {
+                        print_error("error: `use \"" + named + "\"` — the standard library has no `"
+                                    + rest + "`. Looked in " + self.std_root
+                                    + ". Set BURXT_LIB to the directory holding its .bx files.");
+                        exit(2);
+                    }
+                    let loaded: Int = self.load(candidate);
+                    at = stop + 1;
+                    continue;
+                }
+
                 let via_package: String = manifest_resolve(self.package, named);
                 let mutable target: String = relative;
                 if len(via_package) > 0 {
@@ -231,13 +273,13 @@ function (mutable self: Loader) load(path: String) -> Int touches files {
 // blemish on it. `Loader.load` reads files; this wraps it and said nothing, so a reader of
 // `load_program`'s signature could not tell that compiling a program touches the disk. Stage-0's
 // effect check never looked at method calls, so nothing caught it for twenty-four versions.
-function load_program(path: String) -> String touches files {
+function load_program(path: String, std_root: String) -> String touches files {
     // C2. Found ONCE, from the root source file, and every package import in the program is
     // answered from it — a dependency of a dependency is resolved by its own manifest, and mixing
     // the two would let a nested package rebind a name its parent had already bound.
     let package: Package = manifest_discover(path);
     let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [],
-                                          package: package };
+                                          package: package, std_root: std_root };
     let done: Int = loader.load(path);
     return loader.buffer;
 }
@@ -257,9 +299,9 @@ function load_program(path: String) -> String touches files {
 // `Loader` is region storage, so `load_program` cannot hand one back, and a second read of a handful
 // of files is cheaper than the machinery to avoid it. Stated rather than hidden, per the region
 // model's own terms.
-function file_at_offset(root: String, offset: Int) -> String touches files {
+function file_at_offset(root: String, offset: Int, std_root: String) -> String touches files {
     let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [],
-                                          package: manifest_discover(root) };
+                                          package: manifest_discover(root), std_root: std_root };
     let done: Int = loader.load(root);
     let mutable i: Int = 0;
     while i < len(loader.paths) {
@@ -272,9 +314,9 @@ function file_at_offset(root: String, offset: Int) -> String touches files {
 }
 
 // The same offset, measured from the start of the file it fell in.
-function offset_within_file(root: String, offset: Int) -> Int touches files {
+function offset_within_file(root: String, offset: Int, std_root: String) -> Int touches files {
     let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [],
-                                          package: manifest_discover(root) };
+                                          package: manifest_discover(root), std_root: std_root };
     let done: Int = loader.load(root);
     let mutable i: Int = 0;
     while i < len(loader.paths) {
@@ -296,13 +338,13 @@ function offset_within_file(root: String, offset: Int) -> Int touches files {
 //
 // Only FOREIGN files are recorded. An offset matching nothing is the root package, which is both
 // the common case and the one worth making free.
-function (mutable self: Unit) note_package_ranges(root: String) -> Int touches files {
+function (mutable self: Unit) note_package_ranges(root: String, std_root: String) -> Int touches files {
     let package: Package = manifest_discover(root);
     if !package.found {
         return 0;
     }
     let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [],
-                                          package: package };
+                                          package: package, std_root: std_root };
     let done: Int = loader.load(root);
     let mutable i: Int = 0;
     let mutable noted: Int = 0;

@@ -107,6 +107,39 @@ external function getchar() -> CInt touches input;
 // modules do not depend on `lib/`, so `lib/os.bx`'s `os_env_or` is not reachable from here.
 external function getenv(name: String) -> CPointer touches input;
 
+// C2b. Where `use "std/…"` resolves to, asked ONCE and carried into the loader as a value.
+//
+// **The effects system chose this shape rather than taste.** Calling `getenv` inside module
+// resolution made `Loader.load` touch `input`, and the effect propagated to eight functions across
+// five files — `file_at_offset`, `mcp_schema`, `review`, `effects_report`, `layout` — none of which
+// reads anything. The signatures were telling the truth: resolution WAS reaching the environment,
+// so everything that resolved a module was too. Asking here, beside `llc_command`, confines
+// `touches input` to the one place that genuinely asks the environment a question, and the loader
+// receives an answer rather than a capability.
+//
+// Three roots, in order: `BURXT_LIB` so a test or an unusual install can say where; then where
+// `install.sh` and `release.sh` put it; then the repository's own `lib/`, so building here needs
+// no install. The first that exists wins, and the loader names it when a module is missing.
+function std_root() -> String touches input, files {
+    let from_env: CPointer = getenv("BURXT_LIB");
+    if !c_is_null(from_env) {
+        let named: String = c_string_at(from_env);
+        if len(named) > 0 {
+            return named;
+        }
+    }
+    // **A compiler prefers its OWN library.** `lib` is relative to where the compiler runs, which
+    // for a source build is this tree; a released binary is run from anywhere and falls through to
+    // the install prefix. Checked in this order because the reverse carries a defect that is
+    // invisible on a machine with nothing installed: with Burxt also installed, a compiler built
+    // here and run here would resolve `std/` to the INSTALLED library — a different file — and a
+    // test could pass against the wrong one.
+    if manifest_readable("lib") {
+        return "lib";
+    }
+    return "/usr/local/lib/burxt";
+}
+
 // `LLVM_SYS_181_PREFIX/bin/llc` when that is set, and Debian's path when it is not.
 function llc_command() -> String touches input {
     let found: CPointer = getenv("LLVM_SYS_181_PREFIX");
@@ -143,7 +176,7 @@ function llc_command() -> String touches input {
 //
 // It reads `problem_start` rather than being told the span, so a caller cannot describe one problem
 // while the checker recorded another.
-function report_problem(mutable unit: Unit, src: String, path: String, shape: Int) -> Int touches files {
+function report_problem(mutable unit: Unit, src: String, path: String, shape: Int) -> Int touches files, input {
     if shape == 0 || unit.problem_start < 0 {
         return 0;
     }
@@ -155,8 +188,8 @@ function report_problem(mutable unit: Unit, src: String, path: String, shape: In
     // So the file is looked up and the offset rebased, exactly as stage-0's `locate_file` does — and
     // the SOURCE handed to the renderer is that file's own text, because a caret block has to echo
     // the line the reader can open.
-    let named: String = file_at_offset(path, unit.problem_start);
-    let start: Int = offset_within_file(path, unit.problem_start);
+    let named: String = file_at_offset(path, unit.problem_start, std_root());
+    let start: Int = offset_within_file(path, unit.problem_start, std_root());
     let stop: Int = start + unit.problem_length;
     let shown: String = read_file(named);
     if shape == 2 {
@@ -264,8 +297,8 @@ return "; LLVM IR written by the Burxt compiler, in Burxt.\n"
 // Given a PATH: the program and everything it uses, in one buffer. The same design stage-0
 // uses, for the same reason — a Span stays a byte range, and only a renderer needs to know
 // which file an offset fell in. See spec/1.0/M6-MODULES.md §1.5.
-function drive(path: String, out_ll: String, loud: Int) -> Int touches files {
-    return drive_source(load_program(path), path, out_ll, loud);
+function drive(path: String, out_ll: String, loud: Int) -> Int touches files, input {
+    return drive_source(load_program(path, std_root()), path, out_ll, loud);
 }
 
 // Given the TEXT, which is what `check -` has: there is no file, so there is nothing to
@@ -282,7 +315,7 @@ function drive(path: String, out_ll: String, loud: Int) -> Int touches files {
 // It also removes a temp file the first version wrote into the current directory — which
 // `the_repository_root_holds_only_what_belongs_there` would have failed on the first time
 // anyone ran `check -` from the repository root.
-function drive_source(src: String, path: String, out_ll: String, loud: Int) -> Int touches files {
+function drive_source(src: String, path: String, out_ll: String, loud: Int) -> Int touches files, input {
     return drive_reporting(src, path, out_ll, loud, 0);
 }
 
@@ -297,7 +330,7 @@ function drive_source(src: String, path: String, out_ll: String, loud: Int) -> I
 // The renderers are `diag.bx`'s, already held byte-for-byte against `diag.rs` since v0.0.222,
 // LSP positions included. So this function chooses; it does not format.
 function drive_reporting(src: String, path: String, out_ll: String, loud: Int,
-                         shape: Int) -> Int touches files {
+                         shape: Int) -> Int touches files, input {
     let mutable unit: Unit = Unit { pending_public: 0, package_names: [], package_starts: [], package_ends: [], private_names: [], private_owners: [], tokens: [], keywords: [], nodes: [], children: [], nested_children: [], items: [], bindings: [], consts: [], functions: [], stack: [], methods: [], types: [], params_in_scope: [], generics: [], type_parameters: [], type_param_bounds: [], pending_bounds: [], current_generic: 0 - 1, current_method: 0 - 1, probing: 0, probe_changes: 0, grow_parameters: [], grow_self: [], relay_parameters: [], relay_self: [], relay_method_parameters: [], type_bindings: [], measure_clause: 0 - 1, measure_slot: 0, measure_parameters: 0 - 1, measure_owner: "", old_nodes: [], old_slots: [], ensures_start: 0, ensures_count: 0, ensures_owner: "", bracket_clauses: [], clause_subjects: [], it_token: 0 - 1, it_is_result: 0, used_it: 0, it_seen: 0, result_type_node: 0 - 1, result_slot: 0 - 1, returns_node: 0 - 1, walked_types: [], type_binding_floor: 0, allowed_effects: 63, effects_owner: "", function_buckets: [], function_chain: [], instances: [], instance_arguments: [], impls: [], impl_traits: [], typed: [], region_depth: 0, region_token: 0 - 1, in_caller_region: 0, in_pure: 0, loop_depth: 0, in_contract: 0, in_ensures: 0, current_function: -1, chunks: [], pending: "", globals: "", global_chunks: [], sret: "", sret_cells: 0, function_entry: "", body_chunks: [], body_pending: "", next_register: 0, next_slot: 0, next_label: 0, slots: [], strings: [], declared: [], loop_condition_labels: [], loop_end_labels: [], region_marks: [], loop_region_depths: [], block_release: [], placing: 0, rel_frames: [], rel_names: [], in_function: 0, depth: 0, param_depth: 0 - 1, problems: 0, diagnose: 0, problem_start: 0 - 1, problem_length: 0, problem_message: "", position: 0, token_end: 0, no_record_literal: 0, in_extern_signature: 0, range_bounds: 0, in_multiply: 0, print_to_stderr: 0, int_type_node: 0 - 1, errors: 0, type_of_calls: 0, find_binding_calls: 0, find_function_calls: 0, show_type_calls: 0, expr_allocates_calls: 0, type_at_calls: 0 };
     if shape > 0 {
         unit.diagnose = 1;
@@ -305,7 +338,7 @@ function drive_reporting(src: String, path: String, out_ll: String, loud: Int,
     let installed: Int = unit.install_keywords();
     // C2. Which bytes of the buffer belong to which dependency, so `public` can be enforced at the
     // point of USE. Costs one extra load of the program's files; see `note_package_ranges`.
-    let ranged: Int = unit.note_package_ranges(path);
+    let ranged: Int = unit.note_package_ranges(path, std_root());
     let total: Int = unit.run(src);
 
     if loud == 1 {
@@ -561,7 +594,7 @@ if command == "check" {
         }
         a += 1;
     }
-    let problems: Int = drive_reporting(load_program(argument(2)), argument(2), "", 0, shape);
+    let problems: Int = drive_reporting(load_program(argument(2), std_root()), argument(2), "", 0, shape);
     if problems == 0 {
         print_error(argument(2) + ": no errors");
         exit(0);

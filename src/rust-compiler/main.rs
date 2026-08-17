@@ -470,6 +470,54 @@ pub fn load_program(path: &str) -> Result<(String, Vec<SourceFile>), String> {
     Ok((buffer, files))
 }
 
+
+/// Where the standard library is, for `use "std/…"`. C2b.
+///
+/// **A package cannot reach the standard library by a relative path, and that is what makes a
+/// framework a separate technology rather than a folder in this repository.** `use` resolves
+/// relative to the importing file, so a dependency asking for `lib/html.bx` looks for `lib/` under
+/// *itself*. A release installs the library to `$PREFIX/lib/burxt/` and the only way to name it was
+/// an absolute path — one machine's layout, baked into something other people install.
+///
+/// Laravel works because PHP has an include path; React works because Node resolves modules. This
+/// is that, and it is the smallest version of it: one prefix, three roots, checked in order.
+///
+///   1. `BURXT_LIB`, so a test or an unusual install can say where without editing anything
+///   2. `$PREFIX/lib/burxt/` — where `scripts/install.sh` and `scripts/release.sh` put it
+///   3. `lib/` beside the compiler's own source, so the repository builds without installing
+///
+/// **The roots are reported when the import misses**, because a path that depends on the
+/// environment has to say which environment answered — that is the same objection this design
+/// raises against a silent fallback, applied to itself.
+fn stdlib_roots() -> Vec<std::path::PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(from_env) = std::env::var("BURXT_LIB") {
+        if !from_env.is_empty() {
+            roots.push(std::path::PathBuf::from(from_env));
+        }
+    }
+    // **A compiler prefers its OWN library, and the order is the whole of that.**
+    //
+    // `CARGO_MANIFEST_DIR` is compile-time, so this is the tree the binary was built from. On a
+    // released binary that directory does not exist on the user's machine and the search falls
+    // through to the install prefix below — so a release behaves exactly as if this entry were
+    // absent. On a source build it is the tree you are working in.
+    //
+    // It was the other way round first, and that ordering carries a defect invisible on a machine
+    // with nothing installed: with Burxt ALSO installed, a compiler built from this repo and run
+    // in this repo resolved `use "std/html.bx"` to the INSTALLED library — a different file. A
+    // test asserting a `pure` view compiles would fail for a reason nowhere in the diff, and a
+    // weaker one would pass against the wrong library. This repository has that lesson already:
+    // a test can certify the wrong artifact.
+    //
+    // It is also what the decision NOT to version-pin the standard library rests on — "the
+    // compiler and the library ship in one tarball, so `burxt --version` already pins it exactly".
+    // That is only true if a compiler uses its own library.
+    roots.push(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("lib"));
+    roots.push(std::path::PathBuf::from("/usr/local/lib/burxt"));
+    roots
+}
+
 fn load_into(
     path: &str,
     buffer: &mut String,
@@ -501,6 +549,63 @@ fn load_into(
             Some(dir) => dir.join(import),
             None => std::path::PathBuf::from(import),
         };
+        // C2b. `use "std/…"` is the STANDARD LIBRARY, wherever it is installed. An explicit
+        // prefix rather than a fallback that tries the library when a relative path misses:
+        // a fallback would make resolution depend on whether a file happens to exist, so the
+        // same program would resolve differently on two machines — which is the objection the
+        // ambiguity refusal below already makes about dependencies, one layer out.
+        if let Some(rest) = import.strip_prefix("std/") {
+            // A directory named `std/` beside the importing file means the author wrote one and
+            // meant it. Refuse rather than pick, exactly as for a dependency.
+            if relative.exists() {
+                return Err(format!(
+                    "`use \"{}\"` in {} could mean two things: the standard library, or the \
+                     file at {}. Rename one of them — `std/` is reserved for the library that \
+                     ships with the compiler.",
+                    import, path, relative.display()
+                ));
+            }
+            let roots = stdlib_roots();
+            match roots.iter().map(|r| r.join(rest)).find(|c| c.exists()) {
+                Some(found) => {
+                    load_into(&found.to_string_lossy(), buffer, files, seen, false, package)
+                        .map_err(|e| format!("{}\n  ...used by {}", e, path))?;
+                    continue;
+                }
+                // **Two different failures, and saying the wrong one sends a reader to the
+                // wrong problem.** A library that is not installed and a module that does not
+                // exist look identical from here — one is fixed by installing, the other by
+                // correcting a name — so the message says which by asking whether any root is
+                // a directory at all.
+                None => {
+                    let present: Vec<&std::path::PathBuf> =
+                        roots.iter().filter(|r| r.is_dir()).collect();
+                    return Err(if present.is_empty() {
+                        format!(
+                            "`use \"{}\"` — no standard library found. Looked in:\n{}\n\
+                             Set BURXT_LIB to the directory holding the library's .bx files.",
+                            import,
+                            roots.iter()
+                                .filter(|r| r.parent().map_or(true, |p| p.exists()))
+                                .map(|r| format!("    {}", r.display()))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        )
+                    } else {
+                        format!(
+                            "`use \"{}\"` — the standard library has no `{}`. Looked in:\n{}",
+                            import,
+                            rest,
+                            present.iter()
+                                .map(|r| format!("    {}", r.join(rest).display()))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        )
+                    })
+                }
+            }
+        }
+
         // C2. An import whose first segment names a declared dependency is a PACKAGE import.
         // Everything else is what it has always been: a path relative to the importing file.
         let from_package = package.and_then(|m| m.resolve_package_import(import));

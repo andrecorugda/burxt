@@ -4110,6 +4110,20 @@
  },
  {
   "kind": "function",
+  "name": "star_key_part",
+  "text": "lib/star.bx",
+  "url": "/reference/star.html#star-key-part",
+  "where": "pure function star_key_part(head: String) -> Option<String>"
+ },
+ {
+  "kind": "function",
+  "name": "star_head_without_key",
+  "text": "lib/star.bx",
+  "url": "/reference/star.html#star-head-without-key",
+  "where": "pure function star_head_without_key(head: String) -> String"
+ },
+ {
+  "kind": "function",
   "name": "star_emit_stmts",
   "text": "lib/star.bx",
   "url": "/reference/star.html#star-emit-stmts",

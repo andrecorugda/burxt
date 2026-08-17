@@ -57,6 +57,8 @@ A handler becomes `data-star-h="0"` — an INDEX, never an inline handler. The d
 | [`star_event_is_wired`](#star-event-is-wired) | function | §4a.5: refuse an event attribute we cannot wire. The list is short on purpose — every entry is one the driver installs a |
 | [`star_takes_phrasing`](#star-takes-phrasing) | function | The block names this host declares, and the refusal for the rest. |
 | [`star_is_element`](#star-is-element) | function | — |
+| [`star_key_part`](#star-key-part) | function | `line in order.lines key line.id` -> Some("line.id"). The keyword must stand at a token boundary, so a collection named  |
+| [`star_head_without_key`](#star-head-without-key) | function | The head with the `key` clause removed — what `for` itself gets. |
 | [`star_emit_stmts`](#star-emit-stmts) | function | The document's blocks become statements pushing into `target`. This mirrors `bmx_emit_stmts` and diverges in exactly one |
 | [`star_props`](#star-props) | function | The `props` head is the component's signature — declared by the component, so an invoker never needs an out-of-band list |
 | [`star_generate`](#star-generate) | function | The whole of it: a document becomes a `pure function ... -> Html` and a `pure function ..._dispatch(handler: Int, <props |
@@ -166,6 +168,28 @@ pure function star_is_element(name: String) -> Bool
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/star.bx#L163)
 
+### `star_key_part`
+{: #star-key-part}
+
+```burxt
+pure function star_key_part(head: String) -> Option<String>
+```
+
+`line in order.lines key line.id` -> Some("line.id"). The keyword must stand at a token boundary, so a collection named `monkey` does not match.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/star.bx#L195)
+
+### `star_head_without_key`
+{: #star-head-without-key}
+
+```burxt
+pure function star_head_without_key(head: String) -> String
+```
+
+The head with the `key` clause removed — what `for` itself gets.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/star.bx#L210)
+
 ### `star_emit_stmts`
 {: #star-emit-stmts}
 
@@ -173,9 +197,9 @@ pure function star_is_element(name: String) -> Bool
 function star_emit_stmts(blocks: [Block], target: String, tag: String, indent: String,
 ```
 
-The document's blocks become statements pushing into `target`. This mirrors `bmx_emit_stmts` and diverges in exactly one place: a block carrying an `on:*` binding becomes an element with `data-star-h="N"` and its expression is put aside for `dispatch`, where the COMPILER judges it. That divergence is the whole file.
+The document's blocks become statements pushing into `target`. This mirrors `bmx_emit_stmts` and diverges in exactly one place: a block carrying an `on:*` binding becomes an element with `data-star-h="N"` and its expression is put aside for `dispatch`, where the COMPILER judges it. That divergence is the whole file. `key_here` is the key expression that applies to elements emitted at THIS level — the immediate body of a keyed `for`. It is not passed down: a key identifies the row, and a grandchild of the row is identified by being inside it.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/star.bx#L184)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/star.bx#L234)
 
 ### `star_props`
 {: #star-props}
@@ -186,7 +210,7 @@ pure function star_props(blocks: [Block]) -> String
 
 The `props` head is the component's signature — declared by the component, so an invoker never needs an out-of-band list. BMX captured it opaquely; reading it is ours, and it goes through verbatim into the function's parameter list, where the compiler judges every name and type in it.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/star.bx#L386)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/star.bx#L490)
 
 ### `star_generate`
 {: #star-generate}
@@ -201,7 +225,7 @@ The whole of it: a document becomes a `pure function ... -> Html` and a `pure fu
 
 Both functions are `pure`, so `burxt effects --allow ""` confirms a component reaches nothing — a confirmation by construction rather than a discovery.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/star.bx#L412)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/star.bx#L516)
 
 ### `star_first_prop_name`
 {: #star-first-prop-name}
@@ -210,7 +234,7 @@ Both functions are `pure`, so `burxt effects --allow ""` confirms a component re
 pure function star_first_prop_name(props: String) -> String
 ```
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/star.bx#L472)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/star.bx#L576)
 
 ### `star_argument_list`
 {: #star-argument-list}
@@ -221,7 +245,7 @@ pure function star_argument_list(props: String) -> String
 
 `count: Int, label: String` -> `count, label`. What the entry point passes on.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/star.bx#L482)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/star.bx#L586)
 
 
 {% endraw %}
