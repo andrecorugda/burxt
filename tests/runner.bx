@@ -1082,7 +1082,6 @@ function declared_home(path: String) -> Bool {
     if path == "examples/pos-python" { return true; }
     if path == "examples/pos-rust" { return true; }
     if path == "examples/refused" { return true; }
-    if path == "examples/star" { return true; }
     if path == "examples/wasm" { return true; }
     if path == "lib" { return true; }
     if path == "scripts" { return true; }

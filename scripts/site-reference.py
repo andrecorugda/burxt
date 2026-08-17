@@ -87,7 +87,7 @@ GH = "https://github.com/andrecorugda/burxt/blob/main"
 MODULES = [
     "option", "result", "decimal", "string", "array", "set", "map", "math", "fn",
     "json", "csv", "html", "cgi", "bmx", "encoding", "hash", "secure", "vector",
-    "files", "path", "os", "net", "time", "random", "log", "test", "star",
+    "files", "path", "os", "net", "time", "random", "log", "test",
 ]
 
 
@@ -963,11 +963,19 @@ def render_index(kw, ren, cmds):
     for name in MODULES:
         out.append('<li><a href="%s.html"><span><code>lib/%s.bx</code></span> '
                    '<span class="what">%s</span></a></li>' % (name, name, MODULE_TITLES[name]))
-    # The formats documented elsewhere, listed after the modules rather than inside them: this is
-    # a list of what Burxt contains, and BMX is a specification Burxt implements.
+    # Documented elsewhere, listed after the modules rather than inside them: this is a list of
+    # what Burxt CONTAINS, and neither of these is contained. BMX is a specification Burxt
+    # implements; star-burxt is a package a program depends on, the same as anybody else's.
+    #
+    # They are here anyway because a reader looking for "how do I build a page" comes to the
+    # reference index first, and a list that answers "not here" by saying nothing is a list that
+    # sends them away.
     out.append('<li><a href="https://bmx.burxt-lang.org/"><span>BMX</span> '
                '<span class="what">the markup format — its own guide, spec and conformance '
                'suite</span></a></li>')
+    out.append('<li><a href="https://star.burxt-lang.org/"><span>star-burxt</span> '
+               '<span class="what">a front-end framework written in Burxt — a package you '
+               'depend on, not part of the library</span></a></li>')
     out.append("</ul>\n")
 
     out.append("## Keywords\n")

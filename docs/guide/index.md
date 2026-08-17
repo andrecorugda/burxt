@@ -14,7 +14,9 @@ What the language refuses is usually the interesting part.
 
 **Writing pages?** BMX — the markup format Burxt renders — has its own guide at
 [bmx.burxt-lang.org](https://bmx.burxt-lang.org/): how to write a document, how to turn it into a
-page, and how a view gets checked before the page exists.
+page, and how a view gets checked before the page exists. To give one of those documents events and
+state, [star-burxt](https://star.burxt-lang.org/) is a front-end framework written in Burxt — a
+package you declare a dependency on, the same as any other.
 
 <ul class="pages">
 <li><a href="01-getting-started.html"><span class="n">1</span> <span>Getting started</span> <span class="what">Install, run a file, the editor</span></a></li>

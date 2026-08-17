@@ -40,8 +40,8 @@ Everything the language has. **Read out of the compiler**, not from memory: the 
 <li><a href="random.html"><span><code>lib/random.bx</code></span> <span class="what">a SEEDED generator, and the name says seeded</span></a></li>
 <li><a href="log.html"><span><code>lib/log.bx</code></span> <span class="what">four levels, a threshold from the environment, and stderr</span></a></li>
 <li><a href="test.html"><span><code>lib/test.bx</code></span> <span class="what">testing Burxt, in Burxt</span></a></li>
-<li><a href="star.html"><span><code>lib/star.bx</code></span> <span class="what">star-burxt: what gives a BMX document life</span></a></li>
 <li><a href="https://bmx.burxt-lang.org/"><span>BMX</span> <span class="what">the markup format — its own guide, spec and conformance suite</span></a></li>
+<li><a href="https://star.burxt-lang.org/"><span>star-burxt</span> <span class="what">a front-end framework written in Burxt — a package you depend on, not part of the library</span></a></li>
 </ul>
 
 ## Keywords
