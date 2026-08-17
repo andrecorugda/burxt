@@ -109,17 +109,31 @@ external function getenv(name: String) -> CPointer touches input;
 
 // C2b. Where `use "std/…"` resolves to, asked ONCE and carried into the loader as a value.
 //
-// **The effects system chose this shape rather than taste.** Calling `getenv` inside module
-// resolution made `Loader.load` touch `input`, and the effect propagated to eight functions across
-// five files — `file_at_offset`, `mcp_schema`, `review`, `effects_report`, `layout` — none of which
-// reads anything. The signatures were telling the truth: resolution WAS reaching the environment,
-// so everything that resolved a module was too. Asking here, beside `llc_command`, confines
-// `touches input` to the one place that genuinely asks the environment a question, and the loader
-// receives an answer rather than a capability.
+// **The effects system chose that shape.** Calling `getenv` inside module resolution made
+// `Loader.load` touch `input`, and the effect propagated to eight functions across five files —
+// none of which reads anything. The signatures were telling the truth: resolution WAS reaching the
+// environment. Asking here confines `touches input` to the one place that asks the environment a
+// question, and the loader receives an answer rather than a capability.
 //
-// Three roots, in order: `BURXT_LIB` so a test or an unusual install can say where; then where
-// `install.sh` and `release.sh` put it; then the repository's own `lib/`, so building here needs
-// no install. The first that exists wins, and the loader names it when a module is missing.
+// **THE STANDARD LIBRARY IS IDENTIFIED BY THE COMPILER'S INSTALLATION, NEVER BY PROXIMITY TO THE
+// PROGRAM.** A `lib/` beside a user's program is the user's directory; it is never evidence about
+// where the language's library lives. Three roots, and this must stay byte-for-byte the same rule
+// as `stdlib_roots` in `main.rs` — the two have already disagreed once and that is an acceptance
+// divergence.
+//
+//   1. BURXT_LIB
+//   2. `../lib/burxt` beside THIS BINARY, from `argument(0)`
+//   3. /usr/local/lib/burxt
+//
+// **This function used to test `manifest_readable("lib")`, and that was worse than a miss.** A
+// relative path means `./lib`, so any directory named `lib` beside the user became the standard
+// library: a program in such a directory compiled against it and reported no errors, while stage-0
+// correctly refused the same program. Replacing it with "walk up from the program" fixed the
+// divergence and moved the same adoption bug into stage-0 — the compiler that ships — so the rule
+// above is what is left once both mistakes are removed.
+//
+// `argument(0)` rather than a build-time constant is the load-bearing choice: it is the only
+// mechanism both stages can mean the same thing by.
 function std_root() -> String touches input, files {
     let from_env: CPointer = getenv("BURXT_LIB");
     if !c_is_null(from_env) {
@@ -128,16 +142,33 @@ function std_root() -> String touches input, files {
             return named;
         }
     }
-    // **A compiler prefers its OWN library.** `lib` is relative to where the compiler runs, which
-    // for a source build is this tree; a released binary is run from anywhere and falls through to
-    // the install prefix. Checked in this order because the reverse carries a defect that is
-    // invisible on a machine with nothing installed: with Burxt also installed, a compiler built
-    // here and run here would resolve `std/` to the INSTALLED library — a different file — and a
-    // test could pass against the wrong one.
-    if manifest_readable("lib") {
-        return "lib";
+    if argument_count() > 0 {
+        let exe: String = argument(0);
+        let bin_cut: Int = last_slash(exe);
+        if bin_cut > 0 {
+            let bin: String = substring(exe, 0, bin_cut);
+            let prefix_cut: Int = last_slash(bin);
+            if prefix_cut > 0 {
+                let prefix: String = substring(bin, 0, prefix_cut);
+                let installed: String = prefix + "/lib/burxt";
+                if manifest_readable(installed + "/option.bx") {
+                    return installed;
+                }
+            }
+        }
     }
     return "/usr/local/lib/burxt";
+}
+
+// The index of the last `/`, or -1. Written here rather than imported: the compiler modules do not
+// depend on `lib/`.
+pure function last_slash(path: String) -> Int {
+    let mutable i: Int = len(path);
+    while i > 0 {
+        i -= 1;
+        if byte_at(path, i) == 47 { return i; }
+    }
+    return 0 - 1;
 }
 
 // `LLVM_SYS_181_PREFIX/bin/llc` when that is set, and Debian's path when it is not.

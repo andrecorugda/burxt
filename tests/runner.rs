@@ -645,37 +645,85 @@ fn a_package_reaches_the_standard_library_through_std() {
             bogus_text);
     let _ = text;
 
-    // 3b. **Which root wins, with BURXT_LIB UNSET — the case every other assertion here hides.**
+    // 3b. **A `lib/` beside the PROGRAM is not the standard library.** This is the case that
+    //     matters most, because getting it wrong is silent: the program compiles, against a file
+    //     somebody else wrote, and reports no errors.
     //
-    // Every case above sets `BURXT_LIB`, which is right for determinism and means the other two
-    // roots are never exercised: they prove `std/` resolves and prove nothing about ordering. A
-    // pass fixture cannot tell "supported" from "not examined".
+    // Two designs failed this before the current one. Stage-1 first tested `manifest_readable("lib")`
+    // — relative, so `./lib`, so any directory named `lib` beside the SHELL became the library.
+    // Replacing that with "walk up from the program" fixed the divergence and moved the identical
+    // adoption bug into stage-0, the compiler that ships: a program inside a directory holding
+    // `lib/option.bx` compiled against it, where the previous release had correctly refused.
     //
-    // The order is load-bearing rather than cosmetic. A compiler must prefer ITS OWN library:
-    // build-time path first, install prefix second. The reverse is invisible on a machine with
-    // nothing installed and wrong on every machine that followed the install page — a compiler
-    // built here and run here would resolve `std/` to the INSTALLED library, so a test could pass
-    // against a file that is not the one under test. It is also what the decision not to
-    // version-pin the stdlib rests on: `burxt --version` pins the library only if a compiler uses
-    // its own.
+    // `option.bx` is a filename any project can have. It is not a signature of the standard
+    // library, and a project vendoring one file would have captured all twenty-seven. So the rule
+    // is: **the standard library is identified by the compiler's installation, never by proximity
+    // to the program.**
     //
-    // Asserted by content rather than by path, because a path proves which string was chosen and
-    // this needs to prove which FILE was read.
-    let marker = root.join("lib/_root_order_probe.bx");
-    fs::write(&marker, "pure function which_library() -> Int { return 4242; }\n").unwrap();
-    fs::write(app.join("which.bx"),
-        "use \"std/_root_order_probe.bx\";\nregion main { print(which_library()); }\n").unwrap();
-    let unset = Command::new(env!("CARGO_BIN_EXE_burxt"))
-        .arg("run").arg("which.bx").current_dir(&app)
+    // The poison holds a name the real library does not, so this can only pass by adopting it.
+    let poisoned = scratch.join("poisoned");
+    fs::create_dir_all(poisoned.join("lib")).unwrap();
+    fs::write(poisoned.join("lib/option.bx"),
+              "function a_name_the_standard_library_does_not_have() -> Int { return 999; }\n").unwrap();
+    fs::write(poisoned.join("prog.bx"),
+        "use \"std/option.bx\";\n\
+         region main { print(a_name_the_standard_library_does_not_have()); }\n").unwrap();
+    let adopted = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("check").arg(poisoned.join("prog.bx")).current_dir(&scratch)
         .env_remove("BURXT_LIB")
         .output().expect("burxt");
-    let which = String::from_utf8_lossy(&unset.stdout);
-    let _ = fs::remove_file(&marker);
-    assert!(unset.status.success() && which.contains("4242"),
-            "with BURXT_LIB unset, `std/` must resolve to the compiler's OWN library — a file only \
-             this tree has. If this fails, the installed library won and a test could certify the \
-             wrong artifact:\n{}{}",
-            which, String::from_utf8_lossy(&unset.stderr));
+    let adopted_out = String::from_utf8_lossy(&adopted.stdout).to_string()
+        + &String::from_utf8_lossy(&adopted.stderr);
+    assert!(!adopted.status.success(),
+            "a `lib/` beside the program was adopted as the standard library — a program compiled \
+             against a file a stranger wrote and reported no errors:\n{}", adopted_out);
+
+    // 3c. **The exe-relative root, with a real prefix layout rather than an assumption.**
+    //
+    // `$PREFIX/bin/burxt` must find `$PREFIX/lib/burxt`. Without this, a custom-`PREFIX` install
+    // cannot find its own library: `scripts/install.sh` honours `PREFIX` and `docs/install/`
+    // advertises `PREFIX=~/.local`, and that user got an error naming `/usr/local/lib/burxt` — the
+    // one directory they deliberately did not use.
+    //
+    // Built by copying the compiler into a prefix shape, because the mechanism under test IS the
+    // binary's own location and nothing else can stand in for it.
+    let prefix = scratch.join("prefix");
+    fs::create_dir_all(prefix.join("bin")).unwrap();
+    fs::create_dir_all(prefix.join("lib/burxt")).unwrap();
+    for entry in fs::read_dir(root.join("lib")).unwrap() {
+        let from = entry.unwrap().path();
+        if from.extension().and_then(|e| e.to_str()) == Some("bx") {
+            let to = prefix.join("lib/burxt").join(from.file_name().unwrap());
+            fs::copy(&from, &to).unwrap();
+        }
+    }
+    // **Copying an executable can fail with `ETXTBSY` if anything still has it running**, and this
+    // test failed exactly once that way — `Text file busy` — which is the worst frequency for a
+    // failure to have: often enough to happen, rare enough to be dismissed as a flake and re-run.
+    // A fresh name per attempt cannot collide with a process holding the previous one, and the
+    // retry covers the window where the copy itself is the thing being executed.
+    let installed_compiler = prefix.join("bin/burxt");
+    let mut copied = Err(std::io::Error::other("not attempted"));
+    for attempt in 0..5 {
+        let _ = fs::remove_file(&installed_compiler);
+        copied = fs::copy(env!("CARGO_BIN_EXE_burxt"), &installed_compiler).map(|_| ());
+        if copied.is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50 * (attempt + 1)));
+    }
+    copied.expect("could not place a compiler at $PREFIX/bin/burxt");
+    fs::write(prefix.join("prog.bx"),
+        "use \"std/option.bx\";\nregion main { print(4242); }\n").unwrap();
+    let by_prefix = Command::new(&installed_compiler)
+        .arg("run").arg(prefix.join("prog.bx")).current_dir(&scratch)
+        .env_remove("BURXT_LIB")
+        .output().expect("burxt");
+    let prefix_out = String::from_utf8_lossy(&by_prefix.stdout).to_string()
+        + &String::from_utf8_lossy(&by_prefix.stderr);
+    assert!(by_prefix.status.success() && prefix_out.contains("4242"),
+            "a compiler at $PREFIX/bin/burxt must find $PREFIX/lib/burxt — without it a custom \
+             PREFIX install cannot find its own standard library:\n{}", prefix_out);
 
     // 4. A real `std/` beside the file is REFUSED rather than silently losing to the library.
     //    Picking one would make resolution depend on the shape of a directory tree.

@@ -476,44 +476,66 @@ pub fn load_program(path: &str) -> Result<(String, Vec<SourceFile>), String> {
 /// **A package cannot reach the standard library by a relative path, and that is what makes a
 /// framework a separate technology rather than a folder in this repository.** `use` resolves
 /// relative to the importing file, so a dependency asking for `lib/html.bx` looks for `lib/` under
-/// *itself*. A release installs the library to `$PREFIX/lib/burxt/` and the only way to name it was
-/// an absolute path — one machine's layout, baked into something other people install.
+/// *itself*. Laravel works because PHP has an include path; React works because Node resolves
+/// modules. This is that, in three roots, first match wins:
 ///
-/// Laravel works because PHP has an include path; React works because Node resolves modules. This
-/// is that, and it is the smallest version of it: one prefix, three roots, checked in order.
+///   1. `BURXT_LIB`, said explicitly
+///   2. `../lib/burxt` **relative to this binary** — the install that owns this compiler
+///   3. `/usr/local/lib/burxt` — the default prefix, for a binary invoked through `PATH`
 ///
-///   1. `BURXT_LIB`, so a test or an unusual install can say where without editing anything
-///   2. `$PREFIX/lib/burxt/` — where `scripts/install.sh` and `scripts/release.sh` put it
-///   3. `lib/` beside the compiler's own source, so the repository builds without installing
+/// **THE STANDARD LIBRARY IS IDENTIFIED BY THE COMPILER'S INSTALLATION, NEVER BY PROXIMITY TO THE
+/// PROGRAM.** A `lib/` beside a user's program is the user's directory; it is never evidence about
+/// where the language's library lives. That sentence is the whole rule and it was learned three
+/// times:
 ///
-/// **The roots are reported when the import misses**, because a path that depends on the
-/// environment has to say which environment answered — that is the same objection this design
-/// raises against a silent fallback, applied to itself.
+/// **First**, stage-0 used `CARGO_MANIFEST_DIR` — the tree the binary was BUILT from — while
+/// stage-1 used `"lib"`, relative to where the compiler RUNS. Same directory only when someone runs
+/// from the repository root, so `cd` elsewhere and the two compilers disagreed about which programs
+/// exist. **A root one compiler cannot implement is a root that will diverge**, so the fix was to
+/// delete it rather than mirror it; `argv[0]` exists in both stages and a build-time constant does
+/// not.
+///
+/// **Second**, stage-1's relative `"lib"` was worse than a miss: any directory named `lib` beside
+/// the user became the standard library, silently, and the program compiled against it.
+///
+/// **Third — and this is why "walk up from the program" is not here** — replacing cwd-proximity
+/// with program-proximity moved that same adoption bug into stage-0, which is the compiler that
+/// ships. A program inside a directory holding `lib/option.bx` compiled against a stranger's file
+/// and reported no errors, where the previous release had correctly refused it. `option.bx` is a
+/// filename any project can have; it is not a signature of the standard library, and a project that
+/// vendors one file would have captured all twenty-seven.
+///
+/// It also produced a false sentence: with a vendored `lib/option.bx` and an import of something
+/// else, the compiler said *"the standard library has no `string.bx`"* — which is untrue. It had
+/// adopted the wrong directory and then reported the real library as incomplete, sending the reader
+/// to look for a missing module when the problem was that their own `lib/` had been mistaken for
+/// the stdlib.
+///
+/// **The cost, stated rather than discovered:** `./target/release/burxt` run in this repository with
+/// `BURXT_LIB` unset will not resolve `std/`, because it walks to `target/lib/burxt`, which does not
+/// exist. That is correct rather than merely tolerable — a build directory has no installed library,
+/// and saying so is honest.
 fn stdlib_roots() -> Vec<std::path::PathBuf> {
     let mut roots = Vec::new();
+
     if let Ok(from_env) = std::env::var("BURXT_LIB") {
         if !from_env.is_empty() {
             roots.push(std::path::PathBuf::from(from_env));
         }
     }
-    // **A compiler prefers its OWN library, and the order is the whole of that.**
-    //
-    // `CARGO_MANIFEST_DIR` is compile-time, so this is the tree the binary was built from. On a
-    // released binary that directory does not exist on the user's machine and the search falls
-    // through to the install prefix below — so a release behaves exactly as if this entry were
-    // absent. On a source build it is the tree you are working in.
-    //
-    // It was the other way round first, and that ordering carries a defect invisible on a machine
-    // with nothing installed: with Burxt ALSO installed, a compiler built from this repo and run
-    // in this repo resolved `use "std/html.bx"` to the INSTALLED library — a different file. A
-    // test asserting a `pure` view compiles would fail for a reason nowhere in the diff, and a
-    // weaker one would pass against the wrong library. This repository has that lesson already:
-    // a test can certify the wrong artifact.
-    //
-    // It is also what the decision NOT to version-pin the standard library rests on — "the
-    // compiler and the library ship in one tarball, so `burxt --version` already pins it exactly".
-    // That is only true if a compiler uses its own library.
-    roots.push(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("lib"));
+
+    // Beside this binary: `$PREFIX/bin/burxt` -> `$PREFIX/lib/burxt`. This is what lets a custom
+    // `PREFIX` install find its own library — `scripts/install.sh` honours `PREFIX` and
+    // `docs/install/` advertises `PREFIX=~/.local`, and nothing derived a root from it, so that
+    // user got an error naming `/usr/local/lib/burxt`: the one directory they did not use.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(bin) = exe.parent() {
+            if let Some(prefix) = bin.parent() {
+                roots.push(prefix.join("lib").join("burxt"));
+            }
+        }
+    }
+
     roots.push(std::path::PathBuf::from("/usr/local/lib/burxt"));
     roots
 }
@@ -585,8 +607,17 @@ fn load_into(
                             "`use \"{}\"` — no standard library found. Looked in:\n{}\n\
                              Set BURXT_LIB to the directory holding the library's .bx files.",
                             import,
+                            // **Every root is named, unfiltered.** A "plausible" filter was here
+                            // and it hid the binary-relative root — the one that exists precisely
+                            // for a custom `PREFIX` install. It tested whether a root's PARENT
+                            // exists, which is a proxy for plausible and wrong for this root: a
+                            // path derived from `current_exe()` is never implausible, because the
+                            // binary provably exists. So a `PREFIX=~/.local` user who had not yet
+                            // installed the library was told to look in `/usr/local/lib/burxt` —
+                            // the one directory they deliberately did not use, which is the exact
+                            // confusion the root was added to end. A missing `$PREFIX/lib` is when
+                            // naming it helps most.
                             roots.iter()
-                                .filter(|r| r.parent().map_or(true, |p| p.exists()))
                                 .map(|r| format!("    {}", r.display()))
                                 .collect::<Vec<_>>()
                                 .join("\n")
