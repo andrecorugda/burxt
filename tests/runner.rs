@@ -4387,6 +4387,148 @@ fn the_library_imports_itself_by_bare_filename() {
     );
 }
 
+/// `lib/` is FLAT, and every file in it is either a `.bx` module or the README.
+///
+/// **Four separate things assume this and not one of them checks it.** Packing globs `lib/*.bx`
+/// (`scripts/release.sh`), installing globs `lib/*.bx` (`scripts/install.sh`), sibling imports are
+/// bare filenames because there is only one directory to be a sibling in
+/// (`the_library_imports_itself_by_bare_filename`), and `use "std/…"` resolution joins the rest of
+/// the import onto a root directory (`stdlib_roots` in `src/rust-compiler/main.rs`).
+///
+/// **The failure is silent and it lands on somebody else's machine.** A subdirectory under `lib/`
+/// works perfectly in this repository, because here `lib/` *is* the source tree and nothing is
+/// copied. It then vanishes at the two flat globs, so the tarball and the installed tree simply do
+/// not contain it — and `use "std/sub/mod.bx"` compiles for the person who wrote it and fails for
+/// everyone who installed. A non-`.bx` data file vanishes the same way, since neither glob carries
+/// one.
+///
+/// This is `A7.0-NAMING.md`'s shape again, one layer out: not a convention nobody wrote down, but a
+/// **packaging assumption nobody wrote down.** `std/` is what raises the cost — it makes the
+/// installed library the documented way in, so the gap between the repo's `lib/` and the installed
+/// one stops being invisible and starts being the thing every package depends on.
+///
+/// Widening this is a deliberate act: teach both globs to recurse, then delete this test and say
+/// why. It is not something to discover by having it break.
+#[test]
+fn the_library_is_flat_because_the_packaging_assumes_it() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut offenders = Vec::new();
+    let mut modules = 0;
+
+    for entry in fs::read_dir(root.join("lib")).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_str().unwrap().to_string();
+        if path.is_dir() {
+            offenders.push(format!(
+                "lib/{name}/ is a directory — `cp lib/*.bx` in scripts/release.sh and \
+                 scripts/install.sh both skip it, so it would work here and be absent everywhere \
+                 the library is installed"
+            ));
+        } else if path.extension().and_then(|e| e.to_str()) == Some("bx") {
+            modules += 1;
+        } else if name != "README.md" {
+            offenders.push(format!(
+                "lib/{name} is neither a .bx module nor README.md — the packaging carries only \
+                 those two, so this file is absent from every installed library"
+            ));
+        }
+    }
+
+    // A sweep that found nothing to check would pass silently, which is the shape of every
+    // ratchet failure this project has already had.
+    assert!(modules >= 25, "the sweep found only {modules} modules in lib/ — it stopped working");
+    assert!(
+        offenders.is_empty(),
+        "lib/ must stay flat, because the packaging is what reads it:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+/// A stranger's `lib/` directory may not become the standard library.
+///
+/// `use "std/…"` exists so a package can reach the standard library by name instead of by a path
+/// that depends on where the package was unpacked. That is only worth having if the name resolves
+/// to the same library everywhere — otherwise it has replaced a visible wrong path with an
+/// invisible one.
+///
+/// **Stage-1 resolved it against the process working directory**, so any directory named `lib`
+/// beside the invocation became the standard library and a program compiled against files a
+/// stranger wrote. Stage-0 was never affected: its root is `CARGO_MANIFEST_DIR`, which is absolute
+/// and fixed when the binary is built.
+///
+/// **Nothing in this suite could see it, and the reason is worth keeping.** Every other case runs
+/// from the repository root — where `./lib` *is* the real standard library — or pins `BURXT_LIB`,
+/// which short-circuits the search before the two stages can disagree. The suite was green on the
+/// commit that introduced the defect. A test that cannot fail on a defect is not evidence about it,
+/// so this one runs from somewhere else on purpose.
+///
+/// It asserts the property that matters rather than which root wins: a search order can be argued
+/// about and depends on what is installed on the machine, but *a file I just wrote must not be
+/// mistaken for the standard library* is true on every machine.
+#[test]
+fn a_strangers_lib_directory_is_not_the_standard_library() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("stdlib-hijack");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let stage1 = scratch.join("stage1");
+    let build = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build")
+        .arg(root.join("src/burxt-compiler/main.bx"))
+        .arg("-o")
+        .arg(&stage1)
+        .current_dir(&scratch)
+        .output()
+        .expect("failed to spawn burxt");
+    assert!(
+        build.status.success(),
+        "stage-1 did not build:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    // An ordinary working directory that happens to contain a `lib/`. Most repositories do.
+    let elsewhere = scratch.join("elsewhere");
+    fs::create_dir_all(elsewhere.join("lib")).unwrap();
+
+    // Not the standard library. `option.bx` is a real stdlib module name, and this file is not it
+    // — so a compiler that accepts the call below read THIS file believing it was the library.
+    fs::write(
+        elsewhere.join("lib/option.bx"),
+        "function a_name_the_standard_library_does_not_have() -> Int {\n    return 999;\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        elsewhere.join("prog.bx"),
+        "use \"std/option.bx\";\n\nfunction probe() -> Int {\n    \
+         return a_name_the_standard_library_does_not_have();\n}\n",
+    )
+    .unwrap();
+
+    for (which, binary) in
+        [("stage-0", PathBuf::from(env!("CARGO_BIN_EXE_burxt"))), ("stage-1", stage1)]
+    {
+        let out = Command::new(&binary)
+            .arg("check")
+            .arg("prog.bx")
+            .current_dir(&elsewhere)
+            .env_remove("BURXT_LIB")
+            .output()
+            .expect("compiler");
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !said.contains("no errors"),
+            "{which} adopted a `lib/` directory in the working directory as the standard library. \
+             `use \"std/option.bx\"` read a file written next to the invocation, so the same \
+             program means different things in different directories — which is the failure \
+             `std/` was introduced to prevent.\n{said}"
+        );
+    }
+}
+
 /// BMX level 2: a document becomes a view the COMPILER checks.
 ///
 /// This is the whole reason the format was worth defining, and it is the one thing a level-1
