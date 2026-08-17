@@ -262,7 +262,7 @@ The work you stop doing is checking for the mistakes on this page.
 </div>
 
 <p style="font-size:14px; margin-top:2.5rem;">
-<strong>Burxt 1.2.0 is released.</strong> This is the first Burxt a package can build on: a
+<strong>Burxt 1.3.0 is released.</strong> This is the release two real packages were built against: a
 dependency can now reach the standard library with <code>use "std/…"</code>, which is what lets a
 library or a framework live in its own repository instead of inside the compiler. Two already do —
 <a href="https://bmx.burxt-lang.org/">BMX</a> and

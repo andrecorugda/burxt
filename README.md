@@ -76,9 +76,16 @@ The same principle generalizes. Burxt's identity is: **the compiler refuses to l
 - **Composition-first OOP** — small interfaces, explicit `implement Trait for Type` conformance, static dispatch by default and runtime dispatch only where you write `dynamic`.
 - **Native, cross-platform by design** — one LLVM backend, many targets: desktop, mobile, and web (WebAssembly). The front end knows nothing about any platform, so reach is a configuration problem rather than a rewrite.
 
-## Status — 1.2.0
+## Status — 1.3.0
 
-**Released.** 1.2 is the first Burxt a package can build on. `use "std/…"` lets a dependency reach
+**Released.** 1.3 is the release that makes 1.2's promise true. 1.2 shipped `use "std/…"` — the
+prefix that lets a dependency reach the standard library — and then the first two packages built on
+it found that they still could not compile: an update function could not hand back the model it was
+given, and a `pure` view could not call the JSON encoder, because 99 library functions that could
+have said `pure` did not. Both are fixed here, along with a use-after-free that freed a String while
+a returned value still pointed at it.
+
+1.2 was the first Burxt a package can build on. `use "std/…"` lets a dependency reach
 the standard library, which sounds small and is the whole difference between a language you can read
 and one you can build on: before it, a library written outside this repository could not use `lib/`
 at all, because `use` resolved relative to the importing file. Two projects moved out of `lib/` to
@@ -104,17 +111,17 @@ The 1.0 bar was written down before the work started and it was not moved:
   and the one command that enforces it.
 
 **Burxt compiles Burxt, and the two compilers agree.** The compiler is written in Burxt — lexer,
-parser, typechecker and an LLVM-IR backend, **23,954 lines** of it — and it compiles its own source.
+parser, typechecker and an LLVM-IR backend, **25,442 lines** of it — and it compiles its own source.
 The compiler *it* produces emits **byte-identical** output for that same source: the fixpoint that
 says the two implementations agree about the whole language, rather than about the programs someone
 thought to test.
 
-**The Burxt compiler compiles all 205 pass programs — 0 refused — and every one prints the same
+**The Burxt compiler compiles all 217 pass programs — 0 refused — and every one prints the same
 bytes as the Rust compiler's build of it.** Decimals, `match`, `return tail`, `external function`,
 interpolation, generics, maps, tuples and generic interfaces included.
 
-The suite is **205 pass · 366 fail · 55 panic fixtures and 101 invariants**, and the standard library
-is 22 modules. A fail fixture exists for every refusal, with the reason in the fixture's comment,
+The suite is **217 pass · 375 fail · 59 panic fixtures and 120 invariants**, and the standard library
+is 25 modules. A fail fixture exists for every refusal, with the reason in the fixture's comment,
 because a passing test cannot tell "supported" from "never examined".
 
 ## Running a Burxt program
