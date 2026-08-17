@@ -1072,7 +1072,45 @@ function (mutable self: Unit) check_extern_return(src: String, at: Int, named: S
         + "boundary as a return — a "
         + self.show_type(src, answered) + " is a Burxt value with an owner, and C cannot say whose "
         + "it is. If the C function returns a pointer, declare `-> CPointer` and read it with "
-        + "`c_string_at`, which copies.");
+        + "`c_string_at`, which copies. (If it returns a 32-bit `int`, declare `-> CInt` or `-> i32` "
+        + "so the sign survives.)");
+    return 1;
+}
+
+// **The parameter half of the boundary admission, and `check_extern_return` above has called it
+// "the mirror of `check_extern_param` below" since it was written. There was no such function.**
+//
+// A comment naming a function nobody wrote, and the effect was not cosmetic: stage-1 admitted ANY
+// type as an extern's parameter. Measured, stage-0 refusing each and stage-1 silent —
+//
+//     external function e(b: Bool) -> CInt;          a Burxt value C cannot hold
+//     external function e(xs: [Int]) -> CInt;        region storage, with an owner
+//     external function e(p: Point) -> CInt;         a class, likewise
+//     external function e(x: Nope) -> CInt;          a type that does not exist at all
+//
+// — four acceptance divergences behind one missing arm, and the last of them is why this was found:
+// closing stage-1's silence about unknown types in a signature left the extern case answering with
+// the wrong sentence, because the right sentence had nowhere to come from.
+//
+// Decimal is admitted here and judged by `check_marshalling`, which asks the different question:
+// not *may this cross* but *has the crossing said how it is encoded*. Keeping them separate is what
+// lets the Decimal message name the fix — `as scaled` — instead of listing what C can hold.
+//
+// Stage-0's sentence to the byte. `typeck.rs` puts this on the same path and the same list, and the
+// widths join it here and nowhere else, which IS the boundary rule (roadmap A7).
+function (mutable self: Unit) check_extern_param(src: String, at: Int, label: String,
+                                                own: String, declared: Type) -> Int {
+    // Int, String, CInt, CDouble, CPointer, a sized width — and a Decimal, whose separate question
+    // `check_marshalling` asks.
+    if declared.kind == 40 || declared.kind == 42 || declared.kind == 43 || declared.kind == 44
+       || declared.kind == 51 || declared.kind == 45 || is_width(declared) {
+        return 0;
+    }
+    let complained: Int = self.complain_at(src, at,
+        "in " + label + ", parameter `" + own + "` has type "
+        + self.show_type(src, declared) + ", but only Int, CInt, a sized width (i32, u8, u32, u64), "
+        + "CDouble, String and a marshalled Decimal may cross the C boundary for now — C has no "
+        + self.show_type(src, declared) + ", and the raw value would silently lose its meaning.");
     return 1;
 }
 
@@ -1105,6 +1143,10 @@ function (mutable self: Unit) check_marshalling(src: String, params: Int, foreig
                     + "`as scaled`.");
             }
         } else {
+            // May this type cross at all — asked before how it is encoded, because "C has no Bool"
+            // and "say how this Decimal is scaled" are answers to different questions and the
+            // second is meaningless for a type that cannot cross.
+            let admitted: Int = self.check_extern_param(src, param.token, label, own, declared);
             if declared.kind == 45 && param.value == 0 {
                 let complained: Int = self.complain_at(src, param.token,
                     "in " + label + ", parameter `" + own + "` is "
@@ -1376,6 +1418,32 @@ function (mutable self: Unit) infer_class_arguments(src: String, node: Int, name
     let application: Int = self.add(46, args_start, declaration.type_param_count, 0, 0,
                                    self.nodes[node].token);
     return self.declared_type(src, application);
+}
+
+// Is this name one somebody's `<T>` introduced?
+//
+// The parser gives a type parameter node kind 50 where it can tell, and where it cannot — a `T`
+// written inside a generic class's field, reached before the enclosing declaration is in scope —
+// it stays kind 46 and looks exactly like a class nobody declared. So the unknown-type refusal in
+// `check_type_shape` has to ask this before it speaks, or `class Holder<T> { one: T }` becomes an
+// error about a missing `class T`.
+//
+// A scan rather than a set, because `type_parameters` is a handful of tokens per program and a
+// program with enough generics for this to matter does not exist yet. It answers about ANY
+// declaration's parameters rather than the enclosing one's, which is deliberately looser than
+// scope: this predicate exists to stop a false refusal, and being too permissive costs a missed
+// refusal in a program stage-0 also has to catch, while being too strict invents an error in a
+// program that is fine. Wrong in the safe direction, said out loud.
+function (self: Unit) names_a_type_parameter(src: String, start: Int, length: Int) -> Bool {
+    let mutable i: Int = 0;
+    while i < len(self.type_parameters) {
+        let named: Token = self.tokens[self.type_parameters[i]];
+        if spans_equal(src, named.start, named.length, start, length) {
+            return true;
+        }
+        i += 1;
+    }
+    return false;
 }
 
 function (self: Unit) generic_named(src: String, start: Int, length: Int) -> Int {
@@ -2529,6 +2597,14 @@ function (mutable self: Unit) collect_declarations(src: String) -> Int {
                     return_type = self.declared_type(src, signature.c);
                 } else {
                     return_type = self.declared_type(src, item.b);   // an external holds it directly
+                    // **NOT asked for an external, deliberately.** `check_marshalling` and
+                    // `check_extern_return` already refuse every type that cannot cross the C
+                    // boundary, which necessarily includes one that does not exist — and their
+                    // message is the better one: *C has no Nope, and the raw value would silently
+                    // lose its meaning* tells an author writing an `external function` what is
+                    // actually wrong, where "declare it with `class Nope`" suggests a fix that
+                    // would not help. Stage-0 orders it the same way, and asking here first would
+                    // have made stage-1 give the worse of the two answers.
                     // CInt and CDouble are C's widths, not Burxt types: a Burxt caller
                     // passes and receives an Int. So an external's signature is recorded
                     // as Burxt sees it, which is why `strcmp(a, b) < 0` compares two
@@ -6124,11 +6200,217 @@ function (mutable self: Unit) bind_interface_arguments(src: String, item: Int,
 // need a layout rule for arrays of arrays that M1 does not have, and a zero-length array
 // describes nothing. A growable array inside a class is fine — stage-1's own Unit is
 // made of them — and what it costs is that the class must be built in a region.
+// ---- every type a DECLARATION names must exist, and this is the pass that asks ---------------
+//
+// Stage-1 validated no type name in a signature at all: `function b(x: Nope) -> Int` compiled here
+// and stage-0 refused it. `parser.bx` recorded the hole in a comment, measured on v0.0.276 and
+// still true four milestones later, and `check_type_shape`'s own comment recorded the other half —
+// that it reached four positions where stage-0's `validate_type` reaches nine. **They were one
+// defect**: a funnel that did not ask, called from places that did not call it.
+//
+// TEN POSITIONS DIVERGED and they are one shape. Measured, stage-0 refusing and stage-1 silent:
+//
+//     function parameter · function return · method parameter · method return
+//     class field · enum payload · [Nope] · extern parameter, in four flavours
+//
+// Return types, `let`s and method returns LOOKED like they agreed and did not. Stage-1 caught them
+// INCIDENTALLY — `this function returns Nope, but the value is Int`, a value mismatch against a
+// type it never confirmed exists. **A declaration position with no value to mismatch against slid
+// straight through**, which is the rule, and why fixing the positions one at a time would have left
+// the next one open.
+//
+// **A PASS OF ITS OWN, AND THE ORDER IS THE RULE.** The first version asked inside
+// `collect_declarations`, which refused `enum Json { List([Json]) }` — a recursive enum naming
+// itself before its own declaration was pushed. Nine tests went red on the standard library, which
+// is the right outcome for that mistake and the reason this is not a line in the collection loop:
+// **a type may name any type the program declares, including itself, so nothing can be judged until
+// every declaration is in.** `check_return_storage` is here for the same reason two versions on.
+//
+// Before the bodies, because `complain_at` keeps the FIRST problem and stage-0 refuses at the
+// declaration — so a program with a bad signature must be told about the signature rather than
+// about the first call that trips over it.
+//
+// **The return type's caret still differs from stage-0's, and that is stage-1's convention rather
+// than this pass's choice.** Stage-0 points a declaration-level message at the declaration's first
+// token; stage-1 points it at the declaration's NAME, because `item.token` is the name and no node
+// carries the `function` keyword. Measured on messages that predate this pass — `this function is
+// declared twice` is 2:1 against 2:10 the same way — so it is one systematic difference across
+// every declaration-level message in both compilers, reported rather than patched here. Fixing it
+// in one pass would make this the odd one out in stage-1 instead of the odd one out against
+// stage-0, which is not an improvement.
+function (mutable self: Unit) check_declared_type_names(src: String) -> Int {
+    let mutable i: Int = 0;
+    while i < len(self.items) {
+        let index: Int = self.items[i];
+        let item: Node = self.nodes[index];
+        // A function or a method: its parameters, each pointing at ITSELF so a signature with six
+        // parameters and one bad type says which one, and its return, pointing at the declaration.
+        //
+        // An `external function` (kind 86) is NOT here. `check_extern_param` and
+        // `check_extern_return` already refuse every type that cannot cross the C boundary, which
+        // necessarily includes one that does not exist, and their message is the better one: *C has
+        // no Nope, and the raw value would silently lose its meaning* tells the author of an
+        // `external function` what is actually wrong, where "declare it with `class Nope`" suggests
+        // a fix that would not help. Stage-0 orders it the same way.
+        if item.kind == 80 || item.kind == 81 {
+            let signature: Node = self.nodes[item.c];
+            let named: Int = self.check_type_names_in(src, item.a, signature.c, item.token);
+        }
+        // The methods inside an `implement Trait for Type { ... }` are declared exactly as
+        // free-standing ones are, so they are asked exactly the same question.
+        if item.kind == 85 {
+            let mutable k: Int = 0;
+            while k < item.b {
+                let inner: Node = self.nodes[self.children[item.a + k]];
+                let signature: Node = self.nodes[inner.c];
+                let named: Int = self.check_type_names_in(src, inner.a, signature.c, inner.token);
+                k += 1;
+            }
+        }
+        if item.kind == 82 {                             // a class: its fields
+            let mutable f: Int = 0;
+            while f < item.b {
+                let field: Node = self.nodes[self.children[item.a + f]];
+                let named: Int = self.check_type_name(src, field.a,
+                                                      self.type_node_token(field.a, field.token));
+                f += 1;
+            }
+        }
+        // An enum's payloads. **The slots are `variant.c` and `nested_children[variant.b + p]`,
+        // and the first version of this used `variant.b` and `children[variant.a + p]` — so the
+        // loop ran zero times and the branch did nothing at all.** It looked correct and was
+        // reported as covering enum payloads; nothing failed, because a walk over no elements
+        // cannot. The tell was measuring it: `enum E { A(Nope) }` was accepted, which the branch
+        // above it would have refused.
+        //
+        // Worth stating because it is the day's shape one more time — a branch asserting work is
+        // not evidence the work happens — and because the mistake is invisible in review: two
+        // plausible field names, no error, no warning, and a green suite.
+        if item.kind == 83 {
+            let mutable v: Int = 0;
+            while v < item.b {
+                let variant: Node = self.nodes[self.children[item.a + v]];
+                let mutable pay: Int = 0;
+                while pay < variant.c {
+                    let payload: Int = self.nested_children[variant.b + pay];
+                    let named: Int = self.check_type_name(src, payload,
+                                                          self.type_node_token(payload, variant.token));
+                    pay += 1;
+                }
+                v += 1;
+            }
+        }
+        i += 1;
+    }
+    return self.problems;
+}
+
+// The token a type node was written at, or the fallback when there is no node.
+function (self: Unit) type_node_token(node: Int, fallback: Int) -> Int {
+    if node < 0 {
+        return fallback;
+    }
+    return self.nodes[node].token;
+}
+
+// A signature's parameters and its return.
+function (mutable self: Unit) check_type_names_in(src: String, params: Int, returned: Int,
+                                                 at: Int) -> Int {
+    if params >= 0 {
+        let list: Node = self.nodes[params];
+        let mutable i: Int = 0;
+        while i < list.b {
+            let parameter: Node = self.nodes[self.children[list.a + i]];
+            let named: Int = self.check_type_name(src, parameter.a,
+                                                  self.type_node_token(parameter.a, parameter.token));
+            i += 1;
+        }
+    }
+    if returned >= 0 {
+        let named: Int = self.check_type_name(src, returned, at);
+    }
+    return self.problems;
+}
+
+// One type, recursively: a slice's element, an array's element, a tuple's members and a generic
+// application's arguments are all types a declaration names, and a name that declares nothing is
+// refused wherever it sits. `[Nope]` was one of the ten.
+//
+// Stage-0's sentence to the byte, so one `.stderr` fixture pins both compilers.
+function (mutable self: Unit) check_type_name(src: String, node: Int, at: Int) -> Int {
+    if node < 0 {
+        return 0;
+    }
+    let n: Node = self.nodes[node];
+    if n.kind == 47 || n.kind == 48 {
+        return self.check_type_name(src, n.a, at);
+    }
+    // `dynamic I` asks a DIFFERENT question and gets a different sentence: not *does this name
+    // exist* but *does it name an interface*. Stage-0 says `unknown interface` for both a name
+    // nobody declared and a name that is a class, because "declare it with `class Point`" would be
+    // useless advice to somebody who already has one.
+    //
+    // It is the fifteenth position and it was found by asking whether the pass was a FUNNEL or
+    // fourteen cases — the answer being that it covered every type node kind it had been tested
+    // against, which is not the same thing. Three acceptance divergences hid here: an unknown name
+    // in a parameter, the same in a field, and `dynamic` naming a class.
+    if n.kind == 49 {
+        let interface_named: Token = self.tokens[n.token];
+        let found: Int = self.find_type(src, interface_named.start, interface_named.length);
+        // 84 is a declared interface. A class or an enum found here is the second case above.
+        if found >= 0 && self.types[found].kind == 84 {
+            return 0;
+        }
+        let name: String = substring(src, interface_named.start, interface_named.length);
+        // The caret goes on `dynamic`, where stage-0 puts it, rather than on the name after it.
+        // The keyword is always the token immediately before — the grammar is `dynamic Name`, with
+        // nothing permitted between — so this is exact rather than a guess, and it is checked
+        // rather than assumed in case a future form puts something there.
+        let mutable caret: Int = at;
+        if n.token > 0 {
+            let before: Token = self.tokens[n.token - 1];
+            if spans_equal(src, before.start, before.length, 0, 0) == false
+                && substring(src, before.start, before.length) == "dynamic" {
+                caret = n.token - 1;
+            }
+        }
+        let complained: Int = self.complain_at(src, caret,
+            "unknown interface `" + name + "` — declare it with `interface " + name + " \{ ... \}`");
+        return 1;
+    }
+    if n.kind != 46 {
+        return 0;
+    }
+    let named: Token = self.tokens[n.token];
+    if self.find_type(src, named.start, named.length) >= 0 {
+        return 0;
+    }
+    // **The caret is the CALLER's to choose, and stage-0 chooses differently by position.** A
+    // parameter or a field points at the type the author wrote — and at the OUTER type, so `[Nope]`
+    // points at the `[` rather than at the element inside it. A return points at the declaration.
+    // Deciding it here instead would get one of the two wrong, and a message that is right with the
+    // caret in the wrong place is the shape that reads as correct in a diff and misleads in a
+    // terminal.
+    // A `<T>` somebody introduced. The parser gives a type parameter node kind 50 where it can
+    // tell, and where it cannot — a `T` in a generic class's field, reached before the enclosing
+    // declaration is in scope — it stays kind 46 and looks exactly like a class nobody declared.
+    if self.generic_named(src, named.start, named.length) >= 0
+        || self.names_a_type_parameter(src, named.start, named.length) {
+        return 0;
+    }
+    let name: String = substring(src, named.start, named.length);
+    let complained: Int = self.complain_at(src, at,
+        "unknown type `" + name + "` — declare it with `class " + name
+        + " \{ ... \}` or `enum " + name + " \{ ... \}`");
+    return 1;
+}
+
 function (mutable self: Unit) check_type_shape(src: String, node: Int, at: Int) -> Int {
-    // C2. A dependency's private class or enum, refused where it is NAMED. Only four callers, which
-    // is fewer than stage-0's single `validate_type` funnel covers — recorded as the one place the
-    // two compilers differ in reach, and the C2 invariant runs both over the same program so a gap
-    // between them would show as a divergence rather than as silence.
+    // C2. A dependency's private class or enum, refused where it is NAMED. This funnel used to have
+    // four callers where stage-0's `validate_type` has nine, and that gap was recorded here as the
+    // one place the two compilers differ in reach. It was not only a C2 gap: the same missing calls
+    // meant no signature type was checked to EXIST either. Both close together, because they were
+    // one hole seen from two sides.
     let private_named: Int = self.refuse_private_type(src, node);
     if node < 0 {
         return 0;
@@ -7420,6 +7702,9 @@ function (mutable self: Unit) check(src: String) -> Int {
     // first name is resolved.
     let folded: Int = self.fold_consts(src);
     let collected: Int = self.collect_declarations(src);
+    // Every type a DECLARATION names must exist, and it can only be asked once every declaration
+    // is in: a type may name any type the program declares, including itself. See the pass.
+    let names: Int = self.check_declared_type_names(src);
     let applications: Int = self.check_applications(src);
     // Before anything is refused: a body may call a function declared 200 lines below it, so
     // the answer has to exist before the first body is read. That ordering is the only reason

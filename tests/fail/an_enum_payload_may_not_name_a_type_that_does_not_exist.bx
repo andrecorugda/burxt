@@ -1,0 +1,32 @@
+// **This one was a CRASH, not a divergence, and it was in the compiler that ships.**
+//
+// `enum E { A(Nope) }` typechecked. Stage-0's enum-payload loop asked whether each payload has a
+// finite width — a real question — and its `Type::Named(_) => {}` arm accepted any name at all,
+// because that check assumed the type existed. Nothing had asked.
+//
+// So the program passed `burxt check`, and then a program that MATCHED on the variant panicked in
+// codegen with `no entry found for key`: the layout pass looking up a type nobody declared. **A
+// checker that accepts a program the backend cannot compile is worse than one that refuses too
+// much** — the error arrives as a Rust backtrace naming a file the author has never opened.
+//
+// Class fields have gone through `validate_type` since B17. Enum payloads never did. Found by
+// asking whether stage-1's new rule was a funnel or a list of cases, which is a question about
+// stage-1 that turned out to be about stage-0.
+//
+// **DECLARING the bad payload was harmless; MATCHING on the enum is what reached the panic.** That
+// is why this fixture matches rather than only declaring — a future reader who tries
+// `enum E { A(Nope) }` on its own will see it run and conclude the bug is gone. It is not: the
+// crash arrives in the first program that actually uses the type, which is the next thing anybody
+// writes after declaring it.
+//
+// **It is in v1.0.0 and v1.1.0**, checked in both tags rather than assumed: the same unvalidated
+// `Type::Named(_) => {}` arm, the same unchecked index in codegen. A defect in shipped software
+// rather than a regression from the week it was found, and it belongs in release notes for the
+// same reason the `pure` limitation did — otherwise it gets reported against the wrong version.
+enum Shipment { Pending, Delivered(Receipt) }
+
+let where_it_is: Shipment = Shipment.Pending;
+match where_it_is {
+    Pending => { print(0); }
+    Delivered(r) => { print(1); }
+}

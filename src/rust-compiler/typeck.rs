@@ -2849,6 +2849,19 @@ impl TypeChecker {
             }
             for v in &e.variants {
                 for (i, t) in v.payload.iter().enumerate() {
+                    // **The same door every other type goes through, and this loop was not using
+                    // it.** `Type::Named(_) => {}` below accepts any name at all, so
+                    // `enum E { A(Nope) }` typechecked — and then `burxt run` on a program that
+                    // MATCHES on it panicked in codegen with `no entry found for key`, because the
+                    // layout pass looked up a type nobody declared. A checker that accepts a
+                    // program the backend cannot compile is worse than one that refuses too much:
+                    // the error arrives as a crash, with a Rust backtrace, naming a file the author
+                    // has never opened.
+                    //
+                    // Struct fields have called `validate_type` since B17. Enum payloads never did,
+                    // and the arms below are about LAYOUT — is this width finite — which is a
+                    // different question that assumed the type existed.
+                    self.validate_type(t)?;
                     match t {
                         Type::Int | Type::Bool | Type::String | Type::Decimal { .. } => {}
                         // An enum payload is fine when its width is FINITE, which is the rule this

@@ -1659,7 +1659,27 @@ impl<'ctx> CodeGen<'ctx> {
             Type::CDouble => self.ctx.f64_type().into(),
             Type::Named(name) => match self.struct_types.get(name) {
                 Some(st) => (*st).into(),
-                None => self.enum_types[name].0.into(),
+                // **Not a bare index, and the reason is a bug this line used to produce.** An enum
+                // payload naming a type nobody declared reached here and the index panicked with
+                // `no entry found for key` — a Rust backtrace naming this file, for a typo in the
+                // author's own `enum`. `typeck.rs` now validates payload types, so the key is
+                // guaranteed; the `expect` says WHY it is guaranteed, and turns a future regression
+                // into a sentence naming the broken invariant rather than into this file again.
+                // Nothing in this compiler should fail anonymously, and an index is the most
+                // anonymous failure there is.
+                None => self
+                    .enum_types
+                    .get(name)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "`{}` reached codegen without being declared — typeck validates every \
+                             type a declaration names, so this is a hole in that validation rather \
+                             than a bad program",
+                            name
+                        )
+                    })
+                    .0
+                    .into(),
             },
             Type::Slice(_) => {
                 let ptr = self.ctx.ptr_type(AddressSpace::default());

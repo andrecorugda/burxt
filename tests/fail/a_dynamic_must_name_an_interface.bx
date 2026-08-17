@@ -1,0 +1,19 @@
+// `dynamic X` asks a different question from every other type position — not *does this name
+// exist* but *does it name an INTERFACE* — and stage-1 asked neither. Three acceptance divergences
+// hid behind that: an unknown name in a parameter, the same in a field, and `dynamic` naming a
+// class, which is the case this fixture pins.
+//
+// A CLASS rather than a missing name on purpose. A name that does not exist is refused for two
+// reasons at once, so a fixture using one cannot say which rule caught it. `Point` exists and is
+// still wrong here, so only the interface rule can produce this message.
+//
+// Stage-0's advice is the same for both — *declare it with `interface Point`* — and that is right
+// rather than lazy: somebody who wrote `dynamic Point` over a class wanted an interface and does
+// not have one.
+class Point { x: Int, y: Int }
+
+function describe(shape: dynamic Point) -> Int {
+    return 1;
+}
+
+print(describe(Point { x: 1, y: 2 }));

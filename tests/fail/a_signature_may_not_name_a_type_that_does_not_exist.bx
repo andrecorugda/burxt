@@ -1,0 +1,16 @@
+// **A type a signature names must exist**, and stage-1 asked this of nothing at all until now.
+//
+// The interesting part is not the rule — stage-0 has had it since `validate_type` existed — but
+// WHERE it was missing. Stage-1 caught an unknown type in a return or a `let` *incidentally*, by a
+// value mismatch: `this function returns Nope, but the value is Int`, which compares against a type
+// it never confirmed exists. **A parameter has no value to mismatch against**, so it slid straight
+// through, and so did a class field, an enum payload and an element inside `[Nope]`.
+//
+// Ten positions diverged, all of them the same shape, and this fixture pins the one that reads
+// most like an ordinary mistake. `.stderr` is stage-0's sentence to the byte, so one file holds
+// both compilers to it — which is the only reason this file can prove they agree.
+function scale(order: Order, by: Int) -> Int {
+    return by;
+}
+
+print(scale(1, 2));

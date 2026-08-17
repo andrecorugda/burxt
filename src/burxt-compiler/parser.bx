@@ -1064,11 +1064,12 @@ function (mutable self: Unit) dynamic_method(src: String, holder: Type, call: No
     // The residual is a method declared with a bad argument and never called, which stage-0
     // refuses and stage-1 lets stand.
     //
-    // **Restricted to interface arguments deliberately.** The same question about any other
-    // unknown type name is a PRE-EXISTING hole and a much wider one: stage-1 refuses no unknown
-    // type in a signature at all, so `function takes(x: Nope) -> Int` compiles here and stage-0
-    // refuses it. Measured on a pristine v0.0.276 stage-1, so it is older than this milestone and
-    // general to it. What A9 owes is that A9 adds no divergence; the wider hole is reported.
+    // **Restricted to interface arguments deliberately**, and the wider hole this used to report is
+    // now closed: `check_type_shape` refuses a signature type that names nothing, from the
+    // declaration walk. The note that stood here — *stage-1 refuses no unknown type in a signature
+    // at all* — was measured on v0.0.276 and was still true four milestones later, because a
+    // limitation written down is a limitation nobody re-tests. Deleted with the fix rather than
+    // left to describe the past.
     let mutable ai: Int = 0;
     while ai < holder.contract {
         let argument: Type = self.declared_type(src, self.nested_children[holder.scale + ai]);

@@ -1,0 +1,1 @@
+unknown type `Receipt` — declare it with `class Receipt { ... }` or `enum Receipt { ... }`

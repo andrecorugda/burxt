@@ -1,0 +1,13 @@
+// **The C boundary has two halves and stage-1 had one.**
+//
+// `check_extern_return` refuses a return C cannot carry, and its comment has called itself "the
+// mirror of `check_extern_param` below" since it was written. **There was no such function.** So
+// stage-1 admitted any type at all as an extern's parameter — `Bool`, `[Int]`, a class, or a type
+// that does not exist — while stage-0 refused each one. Four acceptance divergences behind one
+// missing arm, and a comment naming a function nobody wrote is what pointed at it.
+//
+// A Bool rather than an unknown type on purpose: an unknown type is refused for two reasons at
+// once, and a fixture that cannot tell which rule caught it is not testing the rule it names.
+external function measure(ready: Bool) -> CInt;
+
+print(1);

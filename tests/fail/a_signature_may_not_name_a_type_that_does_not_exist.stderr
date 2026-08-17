@@ -1,0 +1,1 @@
+unknown type `Order` — declare it with `class Order { ... }` or `enum Order { ... }`
