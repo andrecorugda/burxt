@@ -81,27 +81,92 @@ which is a different problem, and a different fix, from:
 error: this handle was never issued by this module.
 ```
 
-## Open — the question the table does not answer
+## Reclamation — and the answer is already in the language's vocabulary
 
-**Nothing is reclaimed.** A UI calls `update` on every keystroke and each one builds a new `Model`.
-The arena is a bump allocator, so a form typed into for a minute allocates a model per character and
-frees none. The table tracks *liveness*; it does not free *arena memory*.
+Nothing is reclaimed. A UI calls `update` on every keystroke, each one builds a new `Model`, and the
+table tracks *liveness* rather than freeing *memory*. A form typed into for a minute allocates a model
+per character and frees none.
 
-This is the real remaining design work, and it is where bmx's instinct was pointing even though the
-obstacle they named turned out to be solved. Three shapes, none chosen:
+**The prior art all answers a question this language declined.** Alpine, Vue and Svelte keep state as
+a JavaScript object and let the garbage collector own its lifetime — they do not have this problem
+because nothing crosses a boundary. Elm has the identical `update : Msg -> Model -> Model` shape and
+also compiles to JS, so also has no boundary. The projects that *do* share our situation —
+`wasm-bindgen` and Emscripten's Embind — both chose **explicit release**, a `.free()` on the host
+side, and both accept the leak when a host forgets.
 
-1. **Explicit `release(h)`.** Simple, and it is a leak the day a host forgets — which is the failure
-   mode this language declines to accept everywhere else.
-2. **`update` consumes its handle.** The old generation dies at the call, so the table always holds
-   exactly one live model and the compiler knows when the previous one became garbage. Safe, and it
-   makes the signature say so. The awkward half is what `view(h)` does — it must borrow without
-   consuming.
-3. **Accept the growth and state a ceiling.** Honest, and wrong for the one application anybody wants
-   to write.
+Every one of those is an answer to *"when is this value dead?"*, which needs tracking. Burxt's memory
+model exists because it refuses that question and asks *"when is this batch of work over?"* instead.
+Importing GC or `free()` imports the premise we rejected.
 
-**(2) is the one worth designing first**, because it is the only one where the language rather than
-the host is responsible — and because a consumed handle is a fact a signature can carry, which is
-this language's answer to every other question of this shape.
+**For a UI, the batch of work has a name: a frame.** One event, one update, one render, done.
+Everything allocated during a frame is dead at its end — except the new model. That is not a new
+concept, it is `allocates`, which already means *the storage belongs to the CALLER's region, so it
+outlives the call*. The host is the caller.
+
+    arena P — the host's. Holds exactly what outlives a call: the model.
+    arena F — the frame's. Scratch, intermediate Html, parsed strings, everything else.
+
+    `update` runs with F open. Everything it builds goes in F, except its result, which
+    `allocates` into P. The frame ends and F resets to zero — O(1), the guarantee a region
+    already makes.
+
+No `free()`, no finalizer, no GC, and **the host cannot forget because it was never the host's job.**
+That is the whole difference from the prior art: `wasm-bindgen` makes lifetime the host's
+responsibility, which is the thing this memory model spent its existence refusing.
+
+### What actually stands in the way, measured
+
+**`allocates` is implemented as "do not free", not as "allocate in the caller's region."** Those are
+the same thing when the caller is a Burxt frame further down the stack — the storage already sits
+below the mark, so declining to free it suffices. They are **different things when the caller is a
+host**, because there is no enclosing Burxt frame for the value to belong to. The semantics name a
+place the runtime does not have.
+
+    codegen.rs:83   "(heap base, bump cursor) globals for region allocation"   — ONE cursor
+    build_region_open                                                          — saves and restores it
+
+So the change is: give `allocates` the second cursor its own definition already implies. Measured
+blast radius in stage-0 — **every allocation funnels through one function**, which is why this is a
+contained change rather than a rewrite:
+
+    heap_globals call sites   3        region_marks references   11
+    alloc_fn call sites       3        region open/close          8
+
+`emit.bx` shows 81 matches, but most are IR text rather than decision points; the real count wants
+measuring before the work is scheduled.
+
+### The tension, which is the same defect one level up
+
+```burxt
+function dispatch(m: Model, message: Message) -> Model {
+    if nothing_changed { return m; }     // returns the OLD model, which already lives in P
+    ...
+}
+```
+
+That branch **relays** its parameter. If P is ever swapped or compacted, the returned handle points at
+the previous contents — which is `dbc9241`'s use-after-free at architecture scale, the same
+substitution of *what a function did* for *what the value is*.
+
+**And the compiler already knows.** `relay_params` records, per function, whether a result may point
+at a parameter; it was corrected on 2026-08-17 and `the_two_compilers_format_the_same_way`'s sibling
+tests hold it. So the boundary can distinguish a fresh value in P from an alias of the one already
+there, and treat them differently rather than guessing.
+
+That fact is why this design suits Burxt specifically and would not transplant. No other language in
+this space has *does this result alias its input* available as a compile-time fact — and it is the
+same asset that makes `burxt review` possible: **the interesting property is in the signature, so a
+tool can read it.**
+
+### Left to decide before code
+
+- Two cursors, or one cursor and a compacting move of the model between frames? The first is simpler
+  and doubles the reservation; the second keeps one arena and has to rewrite interior pointers, which
+  this language has no machinery for. **Two cursors, unless the reservation is the objection.**
+- What the boundary does when `update` relays rather than builds. Refuse it, or detect it and skip the
+  reset for that frame? Refusing is honest and costs the `return m` branch every UI wants to write.
+- Whether `view(h)` borrows without consuming, which it must, and what that means for the generation
+  check.
 
 ## Acceptance
 
