@@ -1,0 +1,18 @@
+// The negative control for `tests/pass/a_scalar_may_leave_a_region_that_allocated.bx`. That fixture
+// permits a scalar out of a region that allocated; this proves the permission did not widen into
+// "anything may leave a region". A String CAN hold region storage, so the block's release would
+// invalidate exactly what the caller was handed.
+//
+// Both fixtures exist because the suite was green — 106 of 106 — while stage-1 still refused the
+// scalar and stage-0 had been fixed. Neither the differential nor the fixpoint could see it: they
+// compare what the two compilers say about programs that EXIST, and no program in the corpus
+// returned a scalar out of a region that allocated.
+function build(text: String) -> String {
+    region r {
+        let mutable copy: String = "";
+        copy = copy + text;
+        return copy;
+    }
+}
+
+print("k");

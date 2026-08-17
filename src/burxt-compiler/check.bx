@@ -4670,7 +4670,16 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
             // closing brace. Outside one there is nothing to escape from — the bytes live in
             // the program's arena and outlive every call. The `in_caller_region` half is gone
             // with the word that fed it.
-            if self.region_depth > 0 {
+            // The TYPE gate, matching stage-0. `region_depth > 0` says a region is open; it does
+            // not say the value being returned lives in it. An `Int` points at nothing, so it
+            // outlives anything — and this refused `let n: Int = measure(text); return n;` where
+            // `measure` builds a String and answers its length, telling the author to "return a
+            // scalar summary", which is exactly what they had written.
+            //
+            // Stage-0 had the same hole and was fixed in the same change. It is the substitution
+            // this project has now made three times in three passes: asking what a function DID
+            // where the question is what the VALUE IS.
+            if self.region_depth > 0 && self.may_be_region_storage(src, self.type_at(n.a)) {
                 // Naming the TYPE, as stage-0 does — `cannot return this String`. Found by
                 // comparing the two compilers' text on the escape fixtures while closing B25:
                 // both refuse, so no fixture and no differential could see it, and one rule

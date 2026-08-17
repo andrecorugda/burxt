@@ -6782,7 +6782,24 @@ impl TypeChecker {
                 // This used to also demand `in_caller_region`, i.e. the `allocates` word. That
                 // half is gone: it asked whether the programmer had declared where the bytes
                 // belong, and nothing releases them now except a region the programmer opened.
-                if self.expr_allocates(&typed) && self.current_region.is_some() {
+                // `may_be_region_storage` on the RETURNED TYPE, because `expr_allocates` answers
+                // a question about the expression's history rather than about the value. A call
+                // that allocated is a call that allocated; if it answered an `Int`, that `Int`
+                // points at nothing and outlives anything.
+                //
+                // Without the gate this refused `let n: Int = measure(text); return n;` inside a
+                // region — where `measure` builds a String and answers its length — and told the
+                // author to "return a scalar summary", which is what they had written. The taint
+                // travelled from the callee to a value that cannot carry it.
+                //
+                // This is the same substitution the escape rule made, one pass over: asking what
+                // a function DID where the question is what the value IS. `record_relay` already
+                // carries this gate for the same reason, and its comment says so — a getter
+                // handing back an `Int` field taints nothing.
+                if self.expr_allocates(&typed)
+                    && self.may_be_region_storage(&typed.ty)
+                    && self.current_region.is_some()
+                {
                     // Probing: this is the SECOND way a function turns out to allocate, and
                     // missing it made the inference silently incomplete rather than wrong.
                     //

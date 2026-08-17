@@ -1,0 +1,36 @@
+// A value whose TYPE cannot hold region storage may leave a `region` block, even when something
+// inside that block allocated. An `Int` points at nothing, so there is nothing for the block's
+// release to invalidate.
+//
+// **The rule tested where the value came from rather than what it is.** `measure` builds a String
+// and answers its length; the length was refused for leaving the region, with the advice to
+// "return a scalar summary" — which is what the program had already done. The taint travelled from
+// the callee to a value that cannot carry it.
+//
+// This is the third pass in this compiler to make the same substitution: asking what a function
+// DID where the question is what the VALUE IS. `record_relay` carries the same gate and its
+// comment gives the same reason — a getter handing back an `Int` field taints nothing.
+//
+// The refusal itself is still right for a value that CAN hold region storage; that half is pinned
+// by `tests/fail/a_string_built_in_a_region_may_not_leave_it.bx`.
+function measure(text: String) -> Int {
+    let mutable copy: String = "";
+    let mutable i: Int = 0;
+    while i < len(text) {
+        copy = copy + byte_as_string(byte_at(text, i));
+        i += 1;
+    }
+    return len(copy);
+}
+
+function counted(text: String) -> Int {
+    region r {
+        let n: Int = measure(text);
+        return n;
+    }
+}
+
+region main {
+    let text: String = "hello there";
+    print("{counted(text)}");
+}
