@@ -4167,6 +4167,11 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
                               bound_type: declared, writable: n.value, depth: self.depth,
                               in_region: declared_in_region,
                               holds_region: given_region_bytes, dyn_owner: borrows });
+        // A `let` bound to relayed storage relays it. The rule is not "a pattern binding relays" —
+        // `json_at` needs both hops in one function, `Object(fields)` and then
+        // `let f: Field = fields[i]`, and teaching only the pattern moves the failure one statement
+        // later rather than fixing it.
+        let bound_from: Int = self.record_relay_aliases(len(self.bindings) - 1, n.b);
         return 1;
     }
 
@@ -4850,7 +4855,12 @@ function (mutable self: Unit) check_stmt_node(src: String, stmt: Int, return_typ
             // subject is — `match wrap(1) { ... }` included, where the subject is a call and never
             // had a name of its own. `n.a` is the subject, typed at the top of this arm.
             let tainted: Int = self.taint_aliased_bindings(src, base, n.a);
+            // The payload names point into the subject's cells, so they RELAY whatever it relays.
+            // Without this a `return Maybe.Just(s)` out of a `match` on a parameter records no
+            // relay, and the release then frees storage the caller still holds.
+            let aliased: Int = self.record_relay_aliases(base, n.a);
             let body: Int = self.check_block_nodes(src, arm.a, return_type);
+            let unaliased: Int = self.drop_relay_aliases(base);
             let dropped: Int = truncate(self.bindings, base);
             i += 1;
         }
@@ -5127,6 +5137,68 @@ function (mutable self: Unit) note_relay_parameter(owner: Int, parameter: Int) -
     return 1;
 }
 
+// Record that every binding added since `base` carries whatever `subject` carries.
+//
+// Called where a construct introduces names bound to storage it did not create — a `match` arm's
+// payloads, a `let`. The SUBJECT NODE is stored rather than a resolved source, so `note_relay_root`
+// recurses on it and the one walk answers for both. A second copy of source resolution is how the
+// two halves of a rule come apart.
+function (mutable self: Unit) record_relay_aliases(base: Int, subject: Int) -> Int {
+    if subject < 0 {
+        return 0;
+    }
+    let mutable i: Int = base;
+    while i < len(self.bindings) {
+        push(self.relay_aliases, RelayAlias { binding: i, subject: subject });
+        i += 1;
+    }
+    return 1;
+}
+
+// Drop the aliases whose binding has left scope. Paired with every `truncate(self.bindings, base)`,
+// for the reason `taint_aliased_bindings` gives about the taint it removes: a second arm may bind
+// the same name to a payload that relays nothing, and it must not inherit this arm's answer.
+function (mutable self: Unit) drop_relay_aliases(base: Int) -> Int {
+    let mutable kept: [RelayAlias] = [];
+    for alias in self.relay_aliases {
+        if alias.binding < base {
+            let added: Int = push(kept, alias);
+        }
+    }
+    self.relay_aliases = kept;
+    return 1;
+}
+
+// The binding for this name that existed BEFORE `ceiling`, or -1.
+//
+// **The ceiling is what makes the alias walk terminate.** An alias's subject was evaluated before
+// its binding existed, so a name inside that subject can only mean an EARLIER binding. Without the
+// bound, a `let` that shadows a name — `let text: String = substring(text, 0, 3)` over a parameter
+// called `text` — resolves the inner `text` to the binding just pushed, whose subject contains
+// `text`, and the walk never ends. It showed up as stage-1 exhausting its stack on four library
+// fixtures rather than as a wrong answer, which is the good direction for it to fail in.
+function (self: Unit) find_binding_below(src: String, start: Int, length: Int, ceiling: Int) -> Int {
+    let mutable i: Int = ceiling - 1;
+    while i >= 0 {
+        let candidate: Binding = self.bindings[i];
+        if spans_equal(src, candidate.start, candidate.length, start, length) {
+            return i;
+        }
+        i -= 1;
+    }
+    return 0 - 1;
+}
+
+// What this bound name carries, if anything — the subject it was bound from.
+function (self: Unit) relay_alias_subject(binding: Int) -> Int {
+    for alias in self.relay_aliases {
+        if alias.binding == binding {
+            return alias.subject;
+        }
+    }
+    return 0 - 1;
+}
+
 function (mutable self: Unit) note_relay_self(method: Int) -> Int {
     if self.relays_self(method) {
         return 0;
@@ -5194,6 +5266,9 @@ function (mutable self: Unit) record_return_relay(src: String, node: Int) -> Int
         || handed.kind == 45 || handed.kind == 51 || handed.kind == 52 {
         return 0;                                    // Int, Bool, CInt, CDouble, Decimal, CPointer
     }
+    // The alias walk starts able to see every binding in scope, and lowers the ceiling as it
+    // follows one — see `find_binding_below` for why it has to decrease.
+    self.relay_ceiling = len(self.bindings);
     return self.note_relay_root(src, node);
 }
 
@@ -5254,6 +5329,23 @@ function (mutable self: Unit) note_relay_root(src: String, node: Int) -> Int {
                 return self.note_relay_parameter(self.current_function, i);
             }
             i += 1;
+        }
+        // Not a parameter. It may still be a name BOUND to storage that came from one — a `match`
+        // payload or a `let` — in which case it relays whatever that subject relays. Recursing on
+        // the stored node reuses this walk instead of resolving sources a second way.
+        let found: Int = self.find_binding_below(src, named.start, named.length, self.relay_ceiling);
+        if found >= 0 {
+            let subject: Int = self.relay_alias_subject(found);
+            if subject >= 0 {
+                // The ceiling drops to this binding for the walk of its subject, and is restored
+                // after. Strictly decreasing, so the recursion is bounded by the number of
+                // bindings in scope.
+                let outer: Int = self.relay_ceiling;
+                self.relay_ceiling = found;
+                let carried: Int = self.note_relay_root(src, subject);
+                self.relay_ceiling = outer;
+                return carried;
+            }
         }
         return 0;
     }

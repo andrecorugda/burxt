@@ -1,0 +1,60 @@
+// A String reached out of a parsed tree, through a `match` payload and a `let`, is still live when
+// the block ends.
+//
+// **This was a use-after-free that ANSWERED rather than crashed**, which is the failure this
+// language exists to refuse. The same expression read twice gave `hello there` and then `l`. In a
+// longer chain the length prefix was overwritten too, so a program read a plausible String of the
+// WRONG length and carried on — one report had `len` of 38 for an eleven-character string, where 38
+// was the length of the previous print statement's own text. A third face was the region reporting
+// itself exhausted, because the allocator's bookkeeping had been overwritten.
+//
+// The cause was one hop in `collect_relayed_sources`. It walks `Field`, `Index`, `Try`, `StructLit`
+// and `VariantLit`, but its `Var` arm resolved only PARAMETERS — so a name introduced by a pattern
+// is not a parameter, the walk stopped, and `json_as_text` was never recorded as relaying its
+// argument. `ReleasePass::allocates` then answered NO for a call to it, `store` did not taint the
+// frame, the frame was judged to keep nothing, and the `Release` freed the tree the returned String
+// still pointed into.
+//
+// **The rule is not "a pattern binding relays" — it is "a name bound to relayed storage relays".**
+// `json_at` needs both hops in one function: `Object(fields)` is a pattern binding and
+// `let f: Field = fields[i]` is a `let`. Teaching only the pattern moved the failure one statement
+// later, which would have looked like a fix.
+//
+// **It uses the real library on purpose.** Three synthetic versions of this fixture passed against
+// the broken compiler before this one — the shape needs a tree allocated inside the function and a
+// value relayed out of it through two different kinds of binding, and each simplification lost the
+// part that mattered. A fixture that cannot fail against the bug it names is worse than none.
+//
+// Two reads on purpose. One read cannot find this: the first read is correct, and it is the
+// allocation the first read performs that lands on the freed storage.
+use "../../lib/json.bx";
+
+class Holder { text: String }
+
+function pull(source: String) -> Holder {
+    let mutable found: String = "";
+    match json_parse(source) {
+        Error(e) => { }
+        Ok(v) => {
+            match json_at(v, "name") {
+                None => { }
+                Some(field) => {
+                    match json_as_text(field) {
+                        None => { }
+                        Some(t) => { found = t; }
+                    }
+                }
+            }
+        }
+    }
+    return Holder { text: found };
+}
+
+region main {
+    let h: Holder = pull("\{\"name\":\"hello there\"\}");
+    // CONCATENATION, not interpolation, and that is load-bearing: it is the allocation the first
+    // print performs that lands on the freed storage. An interpolated version of this fixture
+    // passed against the broken compiler.
+    print("first  len " + to_string(len(h.text)) + " = [" + h.text + "]");
+    print("second len " + to_string(len(h.text)) + " = [" + h.text + "]");
+}

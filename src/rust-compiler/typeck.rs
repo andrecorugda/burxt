@@ -775,6 +775,27 @@ pub struct TypeChecker {
     /// holds only the `mutable` ones. Relaying needs every parameter: `pass(s)` hands back an
     /// immutable one.
     current_param_positions: HashMap<String, usize>,
+    /// A `match` arm's payload name → what the SCRUTINEE could still be pointing at.
+    ///
+    /// **Without this, a relay through a pattern binding is invisible, and the consequence is a
+    /// use-after-free that answers rather than crashes.** `collect_relayed_sources` walks `Field`,
+    /// `Index`, `Try`, `StructLit` and `VariantLit` correctly, but its `Var` arm resolves only
+    /// `current_param_positions` — so a name introduced by a pattern is not a parameter, the walk
+    /// stops, and the function is never recorded as relaying anything:
+    ///
+    ///     pure function json_as_text(field: Json) -> Option<String> {
+    ///         match field { Text(s) => { return Option.Some(s); } … }
+    ///     }
+    ///
+    /// `json_as_text` relays its parameter and nothing knew. So `ReleasePass::allocates` answered
+    /// NO for a call to it, the caller's binding was not marked, `store` did not taint the frame,
+    /// the frame was judged to keep nothing, and the `Release` freed the tree the returned String
+    /// still pointed into. Reading it twice gave two different answers.
+    ///
+    /// Scoped to the arm, and cleared the same way `region_locals` is, for the same reason its
+    /// comment gives: a second arm may bind the same name to an `Int` payload, which relays
+    /// nothing and must not inherit this arm's sources.
+    relay_aliases: HashMap<String, Vec<RelaySource>>,
 }
 
 /// What one run of `infer_allocates` worked out about the call graph.
@@ -938,6 +959,7 @@ impl TypeChecker {
             probe_relay_params: RefCell::new(HashSet::new()),
             probe_relay_methods: RefCell::new(HashSet::new()),
             current_param_positions: HashMap::new(),
+            relay_aliases: HashMap::new(),
             current_self_writable: false,
             probe_fns: RefCell::new(HashSet::new()),
             probe_methods: RefCell::new(HashSet::new()),
@@ -3962,6 +3984,13 @@ impl TypeChecker {
                     found.push(RelaySource::Receiver);
                 } else if let Some(i) = self.current_param_positions.get(name) {
                     found.push(RelaySource::Parameter(*i));
+                } else if let Some(sources) = self.relay_aliases.get(name) {
+                    // A `match` payload name. It is not a parameter, but it points into whatever
+                    // the scrutinee pointed at — so it carries the scrutinee's sources. Without
+                    // this the walk stopped here and the enclosing function was recorded as
+                    // relaying nothing, which is how region storage came to be released while a
+                    // returned value still pointed at it.
+                    found.extend(sources.iter().copied());
                 }
             }
             // Reaching into a value does not copy what it points at.
@@ -5739,6 +5768,12 @@ impl TypeChecker {
                 let saved = self.env.clone();
                 let mut bindings = Vec::new();
                 let mut tainted: Vec<String> = Vec::new();
+                // What the scrutinee could still be pointing at. Asked once per arm rather than
+                // per binding, and only while probing, because that is when `record_relay` reads
+                // the answer. See `relay_aliases`: without it a `return Option.Some(s)` out of a
+                // `match` on a parameter records no relay at all.
+                let scrutinee_sources = self.relayed_sources(&scrutinee);
+                let mut aliased: Vec<String> = Vec::new();
                 for (name, ty) in arm.bindings.iter().zip(payload) {
                     if let Some(message) = self.shadows_a_const(name) {
                         self.env = saved;
@@ -5753,6 +5788,13 @@ impl TypeChecker {
                         ));
                     }
                     self.env.insert(name.clone(), (ty.clone(), false));
+                    if !scrutinee_sources.is_empty() && self.may_be_region_storage(ty) {
+                        // Gated on the TYPE for the same reason `record_relay` is: a payload that
+                        // cannot hold region storage cannot carry a pointer out, so recording it
+                        // would taint every `match` on an enum with an Int payload.
+                        self.relay_aliases.insert(name.clone(), scrutinee_sources.clone());
+                        aliased.push(name.clone());
+                    }
                     if scrutinee_allocates && self.may_be_region_storage(ty) {
                         // Tracked so it can be taken back out below. The taint follows the
                         // NAME, and this name is gone at the arm's closing brace — while a
@@ -5768,6 +5810,9 @@ impl TypeChecker {
                 self.env = saved;
                 for name in tainted.drain(..) {
                     self.region_locals.remove(&name);
+                }
+                for name in aliased.drain(..) {
+                    self.relay_aliases.remove(&name);
                 }
                 typed_arms.push(TypedArm { tag, bindings, body: body? });
             }
@@ -6038,6 +6083,29 @@ impl TypeChecker {
                     _ => {
                         self.dyn_source.remove(name);
                     }
+                }
+                // A local that BINDS relayed storage carries the same sources, exactly as a
+                // `match` payload does — see `relay_aliases`. `json_at` reaches its parameter
+                // through both hops at once:
+                //
+                //     Object(fields) => { let f: Field = fields[i]; return Option.Some(f.value); }
+                //
+                // `fields` is a pattern binding and `f` is a `let`. Teaching only the pattern left
+                // the trail dying one statement later, which is the same defect one hop along —
+                // the rule is not "a pattern binding relays", it is "a name bound to relayed
+                // storage relays".
+                //
+                // `remove` on the empty case rather than leaving it, for the reason `dyn_source`
+                // gives directly above: a name must never inherit a previous block's answer.
+                if self.may_be_region_storage(&bound) {
+                    let sources = self.relayed_sources(&typed);
+                    if sources.is_empty() {
+                        self.relay_aliases.remove(name);
+                    } else {
+                        self.relay_aliases.insert(name.clone(), sources);
+                    }
+                } else {
+                    self.relay_aliases.remove(name);
                 }
                 self.env.insert(name.clone(), (bound.clone(), *mutable));
                 Ok(TypedStmtKind::Let { name: name.clone(), ty: bound, value: typed })

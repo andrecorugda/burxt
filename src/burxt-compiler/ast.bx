@@ -51,6 +51,10 @@ class Token {
 }
 
 class Keyword { word: String, code: Int }
+
+// A name bound to storage that arrived from somewhere else, paired with the NODE it came from.
+// `note_relay_root` recurses on that node when it meets the name — see `relay_aliases` on `Unit`.
+class RelayAlias { binding: Int, subject: Int }
 // ---- the AST -----------------------------------------------------------------
 // Children by INDEX, not by pointer: v0.0.22 proved an arena needs no recursive
 // types, and an index is a number a class field can hold.
@@ -645,6 +649,21 @@ class Unit {
     relay_parameters: [ParameterGrowth],
     relay_self: [Int],
     relay_method_parameters: [ParameterGrowth],
+    // A name bound to storage that came from somewhere else — a `match` payload, a `let` — paired
+    // with the NODE it was bound from. `note_relay_root` recurses on that node when it meets the
+    // name, so the existing walk answers rather than a second copy of source resolution.
+    //
+    // **Without it a relay through a binding is invisible, and the result is a use-after-free that
+    // ANSWERS.** `note_relay_root` resolves a bare name against the parameter list only, so a
+    // pattern payload is not a parameter, the walk stops, and the function is never recorded as
+    // relaying anything — after which the release frees storage a returned value still points at.
+    // Stage-0 had the identical hole in `collect_relayed_sources`.
+    //
+    // Indexed by BINDING position, so it truncates with `self.bindings` and a payload name cannot
+    // outlive its arm.
+    relay_aliases: [RelayAlias],
+    // The bindings an alias walk may look at: everything below this index. See `find_binding_below`.
+    relay_ceiling: Int,
     // ---- A12 / M14 slice 3: WHERE the storage is released ------------------------------------
     //
     // One slot per NODE, like `typed`: 1 when the escape analysis proved that nothing allocated
