@@ -158,6 +158,53 @@ Burxt is developed in small, verified increments. Please follow the same rhythm:
    uncommitted deletion; the same suite against the commit gave 97 and a failure. The number was
    honest, carefully measured, and about the wrong thing.
 
+7. **A name asserting work is not evidence the work happens.** Three of these were found in one
+   day, in three repositories, and none of them was a hard bug to fix — they were hard to *see*,
+   because each one read as proof that somebody had already checked.
+
+   | What it was | What it claimed | What it did |
+   |---|---|---|
+   | a CI step named "BMX is a dependency" | rewrites the dependency line | its `sed` pattern matched nothing, and `sed -i` exits 0 when it misses |
+   | `check_extern_return`'s comment: *"the mirror of `check_extern_param` below"* | a symmetric pair | there is no `check_extern_param`; four acceptance divergences sat behind the absent arm |
+   | `every_library_module_has_a_reference_page` | modules and pages correspond | asked module → page only, so an orphan page survived a module's removal, under `[Source]` links that 404 |
+
+   **The test: ask what the check would say if the thing it names were absent entirely.** If the
+   answer is "nothing", it is not checking. For any correspondence, write the reverse and run it
+   once — it costs minutes, and here it found a dead CI step, a missing compiler pass and a
+   stranded documentation page.
+
+   The one-directional case has a second lesson in it. The direction that *was* asked had the
+   milder failure: a reader who cannot find a page concludes the module does not exist, while a
+   reader who follows a dead link concludes something exists and then cannot tell what. **The
+   unasked direction was also the worse one**, which is the pattern rather than the incident.
+
+8. **A declaration pass cannot judge anything that depends on what it is still collecting.** Two
+   sessions hit this from opposite directions on the same afternoon, and both had a correct
+   instance of the rule open in the same file while making the mistake.
+
+   One judged a type inside `collect_declarations`, so `enum Json { List([Json]) }` was refused for
+   naming itself before its own declaration had been pushed — nine standard-library tests red. A
+   type may name any type the program declares, **including itself**, so nothing can be judged
+   until every declaration is in. `check_return_storage` is a separate pass for exactly that
+   reason.
+
+   The other let a refusal fire during the throwaway probe that infers which functions allocate.
+   The probe runs the whole declaration pass before a single body is read, so an early return
+   abandoned it with nothing learned — and the real pass then blamed an innocent file. `main` is a
+   reserved name, and this is what a program that declared one was told:
+
+   ```
+   error: function `string_split` cannot return [String], because its storage lives in a region
+    --> string.bx:246:48
+   ```
+
+   **If a rule needs the answer to a question the pass is still answering, it belongs in a later
+   pass** — and the fix for the second was not to guard the refusals but to ask, once, whether the
+   probe had died before it learned anything. Guarding checks encodes the rule at every site;
+   detecting the failure encodes it where the failure is.
+
+   Knowing this rule is not the same as recognising the shape. That is why it is written here.
+
 ## Getting set up
 
 See the build instructions in [README.md](README.md). In short: Rust via rustup, LLVM 18 dev libraries, `LLVM_SYS_181_PREFIX` pointed at your LLVM 18 install, then `cargo build` and `cargo test`.
