@@ -54,7 +54,7 @@ class Map<K: Equatable, V> { entries: [MapEntry<K, V>], slots: [Int], live: Int 
 // container that changes has to change through `mutable self`. The API is better for it —
 // `counts.set("k", 1)` rather than `map_set(counts, "k", 1)` — which is the usual way a real
 // constraint turns out to have been pointing at the nicer design.
-function map_new<K: Equatable, V>() -> Map<K, V> {
+pure function map_new<K: Equatable, V>() -> Map<K, V> {
     return Map { entries: [], slots: [], live: 0 };
 }
 

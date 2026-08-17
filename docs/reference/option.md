@@ -50,7 +50,7 @@ One of two things: nothing, or a value. `match` forces both cases to be written,
 {: #option-or}
 
 ```burxt
-function option_or<T>(o: Option<T>, fallback: T) -> T
+pure function option_or<T>(o: Option<T>, fallback: T) -> T
 ```
 
 The value, or the fallback. The one everybody writes first.
@@ -61,7 +61,7 @@ The value, or the fallback. The one everybody writes first.
 {: #option-is-some}
 
 ```burxt
-function option_is_some<T>(o: Option<T>) -> Bool
+pure function option_is_some<T>(o: Option<T>) -> Bool
 ```
 
 Whether there is anything there. Useful in a condition; useless for getting at the value, which is the point — asking is not the same as having.
@@ -72,7 +72,7 @@ Whether there is anything there. Useful in a condition; useless for getting at t
 {: #option-is-none}
 
 ```burxt
-function option_is_none<T>(o: Option<T>) -> Bool
+pure function option_is_none<T>(o: Option<T>) -> Bool
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/option.bx#L53)

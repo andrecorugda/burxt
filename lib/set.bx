@@ -176,7 +176,7 @@ class Set<T: Equatable> { held: Map<T, Bool> }
 // The field literal rather than `map_new()` is the compiler gap described in the header, not a
 // preference. It is also why this is the ONLY free function in the file: no method call in the body
 // means nothing here needs `T` to be a class.
-function set_new<T: Equatable>() -> Set<T> {
+pure function set_new<T: Equatable>() -> Set<T> {
     let held: Map<T, Bool> = Map { entries: [], slots: [], live: 0 };
     return Set { held: held };
 }

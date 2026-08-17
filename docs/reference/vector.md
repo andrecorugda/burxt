@@ -201,7 +201,7 @@ The precondition is the zero vector, which has no direction to point in. `vector
 {: #vector-top-dot}
 
 ```burxt
-function vector_top_dot(rows: [Row], query: [Decimal<7>], count: Int) -> [Scored]
+pure function vector_top_dot(rows: [Row], query: [Decimal<7>], count: Int) -> [Scored]
 ```
 
 The `count` best matches by DOT PRODUCT, highest first.
@@ -216,7 +216,7 @@ Insertion into a kept list rather than sort-then-take, so nothing needs a generi
 {: #component-to-json}
 
 ```burxt
-function component_to_json(value: Decimal<7>) -> Json
+pure function component_to_json(value: Decimal<7>) -> Json
 ```
 
 The digits of a `Decimal<7>` as a JSON string. `to_string` already renders every place, so this is the whole conversion.
@@ -227,7 +227,7 @@ The digits of a `Decimal<7>` as a JSON string. `to_string` already renders every
 {: #component-from-json}
 
 ```burxt
-function component_from_json(value: Json) -> Option<Decimal<7>>
+pure function component_from_json(value: Json) -> Option<Decimal<7>>
 ```
 
 A `Decimal<7>` back from its digits, or None when they are not exactly that.
@@ -242,7 +242,7 @@ The reconstruction is a count of ten-millionths times one ten-millionth, exact b
 {: #vector-to-json}
 
 ```burxt
-function vector_to_json(row: Row) -> Json
+pure function vector_to_json(row: Row) -> Json
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/vector.bx#L393)
@@ -251,7 +251,7 @@ function vector_to_json(row: Row) -> Json
 {: #vector-from-json}
 
 ```burxt
-function vector_from_json(value: Json) -> Result<Row, String>
+pure function vector_from_json(value: Json) -> Result<Row, String>
 ```
 
 A row back from one JSON object. Every failure says which row and why — a store that skips a line it could not read is a store that quietly returns fewer results.
@@ -262,7 +262,7 @@ A row back from one JSON object. Every failure says which row and why — a stor
 {: #vector-store-render}
 
 ```burxt
-function vector_store_render(rows: [Row]) -> String
+pure function vector_store_render(rows: [Row]) -> String
 ```
 
 The whole store as JSONL text. Kept separate from writing it, so a caller can put it anywhere — stdout, a socket once there is one, a test's assertion.

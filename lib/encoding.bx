@@ -182,7 +182,7 @@ pure function encoding_hex_value(byte: Int) -> Int {
 
 // Bytes to lowercase hex. Two characters per byte, always — a leading zero is never dropped,
 // because a hex string whose length is not twice its byte count cannot be decoded back.
-function encoding_hex_encode(bytes: [Int]) -> String
+pure function encoding_hex_encode(bytes: [Int]) -> String
     requires encoding_bytes_in_range(bytes)
 {
     let count: Int = len(bytes);
@@ -206,13 +206,13 @@ function encoding_hex_encode(bytes: [Int]) -> String
 }
 
 // The same, for bytes that arrived as a String.
-function encoding_hex_encode_text(text: String) -> String {
+pure function encoding_hex_encode_text(text: String) -> String {
     return encoding_hex_encode(to_bytes(text));
 }
 
 // Hex back to bytes, or None. Refused: an odd number of characters, and any character that is not
 // a hex digit — which includes a space, a trailing newline and the `0x` a caller might leave on.
-function encoding_hex_decode(text: String) -> Option<[Int]> {
+pure function encoding_hex_decode(text: String) -> Option<[Int]> {
     let count: Int = len(text);
     if remainder(count, 2) != 0 {
         return Option.None;
@@ -233,7 +233,7 @@ function encoding_hex_decode(text: String) -> Option<[Int]> {
 
 // Hex back to a String. `None` for exactly the inputs `encoding_hex_decode` refuses; it makes no
 // UTF-8 promise about what it answers, the same way `from_bytes` does not.
-function encoding_hex_decode_text(text: String) -> Option<String> {
+pure function encoding_hex_decode_text(text: String) -> Option<String> {
     match encoding_hex_decode(text) {
         None => {
             return Option.None;
@@ -277,7 +277,7 @@ pure function encoding_base64_value(byte: Int, sixty_two: Int, sixty_three: Int)
 
 // The shared encoder. `alphabet` must be 64 characters; `pad` decides whether the final quantum is
 // filled out to four characters with `=`.
-function encoding_base64_encode_with(bytes: [Int], alphabet: String, pad: Bool) -> String
+pure function encoding_base64_encode_with(bytes: [Int], alphabet: String, pad: Bool) -> String
     requires len(alphabet) == 64
     requires encoding_bytes_in_range(bytes)
 {
@@ -332,7 +332,7 @@ function encoding_base64_encode_with(bytes: [Int], alphabet: String, pad: Bool) 
 
 // The shared decoder. Every refusal in this module's header is one of the `return Option.None`
 // lines below, and they are in the order the header lists them.
-function encoding_base64_decode_with(text: String,
+pure function encoding_base64_decode_with(text: String,
                                      sixty_two: Int,
                                      sixty_three: Int,
                                      padding_required: Bool) -> Option<[Int]> {
@@ -428,21 +428,21 @@ function encoding_base64_decode_with(text: String,
 // signature a caller reads is this one — it is what `burxt mcp-schema` publishes and what a
 // contract failure names. The second walk of the array costs about 3 ms per megabyte against the
 // encode's 90, which is what a precondition is worth.
-function encoding_base64_encode(bytes: [Int]) -> String
+pure function encoding_base64_encode(bytes: [Int]) -> String
     requires encoding_bytes_in_range(bytes)
 {
     return encoding_base64_encode_with(bytes, ENCODING_BASE64_ALPHABET, true);
 }
 
-function encoding_base64_encode_text(text: String) -> String {
+pure function encoding_base64_encode_text(text: String) -> String {
     return encoding_base64_encode(to_bytes(text));
 }
 
-function encoding_base64_decode(text: String) -> Option<[Int]> {
+pure function encoding_base64_decode(text: String) -> Option<[Int]> {
     return encoding_base64_decode_with(text, ENCODING_PLUS, ENCODING_SLASH, true);
 }
 
-function encoding_base64_decode_text(text: String) -> Option<String> {
+pure function encoding_base64_decode_text(text: String) -> Option<String> {
     match encoding_base64_decode(text) {
         None => {
             return Option.None;
@@ -455,21 +455,21 @@ function encoding_base64_decode_text(text: String) -> Option<String> {
 
 // ---- base64url: `-_`, unpadded out, either way in --------------------------------------------
 
-function encoding_base64url_encode(bytes: [Int]) -> String
+pure function encoding_base64url_encode(bytes: [Int]) -> String
     requires encoding_bytes_in_range(bytes)
 {
     return encoding_base64_encode_with(bytes, ENCODING_BASE64URL_ALPHABET, false);
 }
 
-function encoding_base64url_encode_text(text: String) -> String {
+pure function encoding_base64url_encode_text(text: String) -> String {
     return encoding_base64url_encode(to_bytes(text));
 }
 
-function encoding_base64url_decode(text: String) -> Option<[Int]> {
+pure function encoding_base64url_decode(text: String) -> Option<[Int]> {
     return encoding_base64_decode_with(text, ENCODING_MINUS, ENCODING_UNDERSCORE, false);
 }
 
-function encoding_base64url_decode_text(text: String) -> Option<String> {
+pure function encoding_base64url_decode_text(text: String) -> Option<String> {
     match encoding_base64url_decode(text) {
         None => {
             return Option.None;

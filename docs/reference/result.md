@@ -58,7 +58,7 @@ Either an answer or a reason there is none. `E` is usually a String while a prog
 {: #result-or}
 
 ```burxt
-function result_or<T, E>(r: Result<T, E>, fallback: T) -> T
+pure function result_or<T, E>(r: Result<T, E>, fallback: T) -> T
 ```
 
 The answer, or the fallback. For when a failure has an obvious substitute.
@@ -69,7 +69,7 @@ The answer, or the fallback. For when a failure has an obvious substitute.
 {: #result-is-ok}
 
 ```burxt
-function result_is_ok<T, E>(r: Result<T, E>) -> Bool
+pure function result_is_ok<T, E>(r: Result<T, E>) -> Bool
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/result.bx#L55)
@@ -78,7 +78,7 @@ function result_is_ok<T, E>(r: Result<T, E>) -> Bool
 {: #result-is-error}
 
 ```burxt
-function result_is_error<T, E>(r: Result<T, E>) -> Bool
+pure function result_is_error<T, E>(r: Result<T, E>) -> Bool
 ```
 
 The other half, and it is not `!result_is_ok(r)` at the call site by accident: a condition spelled `if result_is_error(r)` reads the way the reader is thinking, and a `!` in front of a predicate is the single easiest thing to miss in a diff.
@@ -89,7 +89,7 @@ The other half, and it is not `!result_is_ok(r)` at the call site by accident: a
 {: #result-context}
 
 ```burxt
-function result_context<T>(r: Result<T, String>, context: String) -> Result<T, String>
+pure function result_context<T>(r: Result<T, String>, context: String) -> Result<T, String>
 ```
 
 `context` and `": "` in front of the failure, if there is one. An `Ok` passes through untouched.
@@ -108,7 +108,7 @@ Two `+` for one call and no loop, so §D0's chunk rule does not apply — that r
 {: #option-ok-or}
 
 ```burxt
-function option_ok_or<T, E>(o: Option<T>, why: E) -> Result<T, E>
+pure function option_ok_or<T, E>(o: Option<T>, why: E) -> Result<T, E>
 ```
 
 An absence, given a reason. `Option<T>` says there is nothing there; `Result<T, E>` says why, and this is the one-line conversion between them.

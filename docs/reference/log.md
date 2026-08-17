@@ -107,7 +107,7 @@ Matching is **case-insensitive and trims surrounding space**, so `WARN`, `warn` 
 {: #log-level-from-name}
 
 ```burxt
-function log_level_from_name(text: String) -> Int
+pure function log_level_from_name(text: String) -> Int
 ```
 
 The level a `BURXT_LOG` value names.

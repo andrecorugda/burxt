@@ -4427,6 +4427,115 @@ fn the_library_imports_itself_by_bare_filename() {
 ///
 /// Widening this is a deliberate act: teach both globs to recurse, then delete this test and say
 /// why. It is not something to discover by having it break.
+/// A library function that COULD be `pure` says so.
+///
+/// **`pure` is not a comment, it is a checked claim — which is what makes this decidable.** The
+/// compiler already refuses a `pure` function that calls an impure one, so "could this be `pure`"
+/// is answered by writing the word and compiling. Nothing here judges a body; the compiler decides
+/// every case, and a function that prints, aborts or takes a `mutable` parameter fails that
+/// compile on its own.
+///
+/// **It went unnoticed because the cost lands on somebody else.** A library author never writes
+/// `pure` at a call site, so an unmarked constructor works perfectly for them. It fails for the
+/// caller who declared `pure` — and a BMX view is `pure` by construction, so the layer built to use
+/// the language's best property was the layer refused by it. `json.bx` had **zero of eighteen**
+/// marked; `json_text(value) -> Json { return Json.Text(value); }` was among them.
+///
+/// **The marker is transitive, so this must run to a fixpoint.** Marking 66 functions enabled 28
+/// more that had only been blocked by an unmarked dependency — a single pass would have found the
+/// first set and reported itself finished.
+///
+/// Cheap in the steady state, precise when it fires: mark every candidate in a module at once and
+/// compile. That is expected to FAIL, because the remaining candidates genuinely mutate or print.
+/// Only when it succeeds — meaning at least one marker is missing — does this go function by
+/// function to say which.
+#[test]
+fn a_library_function_that_could_be_pure_says_so() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("purity-markers");
+    let mut missing = Vec::new();
+    let mut modules = 0;
+
+    let candidate = |l: &str| l.starts_with("function ") && !l.contains("touches");
+    let compiles = |dir: &Path, name: &str| -> bool {
+        Command::new(env!("CARGO_BIN_EXE_burxt"))
+            .arg("check")
+            .arg(dir.join(name))
+            .output()
+            .map(|o| {
+                let said = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&o.stdout),
+                    String::from_utf8_lossy(&o.stderr)
+                );
+                said.contains("no errors")
+            })
+            .unwrap_or(false)
+    };
+
+    for entry in fs::read_dir(root.join("lib")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("bx") {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_str().unwrap().to_string();
+        let text = fs::read_to_string(&path).unwrap();
+        let lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
+        // Counted for every module READ, not every module with candidates left. Keying the floor
+        // on candidates would make it fall as the library improves — a module with nothing left to
+        // mark is the goal, and a floor that treats the goal as a malfunction fights its own
+        // success. This caught itself on the sweep that created it: 25 modules, only 12 with any
+        // candidate remaining, and the floor read that as the sweep having stopped working.
+        modules += 1;
+        let spots: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| candidate(l)).map(|(i, _)| i).collect();
+        if spots.is_empty() {
+            continue;
+        }
+
+        // A fresh copy each time: `lib/` modules import their siblings by bare filename, so they
+        // only resolve beside each other.
+        let stage = |marked: &[usize]| -> PathBuf {
+            let _ = fs::remove_dir_all(&scratch);
+            fs::create_dir_all(&scratch).unwrap();
+            for e in fs::read_dir(root.join("lib")).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_file() {
+                    fs::copy(&p, scratch.join(p.file_name().unwrap())).unwrap();
+                }
+            }
+            let mut out = lines.clone();
+            for &i in marked {
+                out[i] = format!("pure {}", out[i]);
+            }
+            fs::write(scratch.join(&name), out.join("\n")).unwrap();
+            scratch.clone()
+        };
+
+        // One compile per candidate, and NOT gated on a cheaper all-at-once pass first. That
+        // optimisation was here and it made this test vacuous: marking every candidate in a module
+        // at once fails as soon as ONE of them genuinely mutates or prints, so a single impure
+        // function masked every missing marker beside it. Caught by removing a marker and watching
+        // this test still pass — which is the only reason it is not still here.
+        for &i in &spots {
+            let dir = stage(&[i]);
+            if compiles(&dir, &name) {
+                missing.push(format!("lib/{}:{} — {}", name, i + 1, lines[i].trim()));
+            }
+        }
+    }
+
+    let _ = fs::remove_dir_all(&scratch);
+    // A sweep that examined nothing would pass silently, which is the shape of every ratchet
+    // failure this project has already had.
+    assert!(modules >= 20, "only {modules} library modules were examined — the sweep stopped working");
+    assert!(
+        missing.is_empty(),
+        "these library functions compile with `pure` and do not declare it. A caller that \
+         declares `pure` cannot use them, and a BMX view is `pure` by construction:\n  {}",
+        missing.join("\n  ")
+    );
+}
+
 #[test]
 fn the_library_is_flat_because_the_packaging_assumes_it() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));

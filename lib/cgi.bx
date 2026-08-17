@@ -92,7 +92,7 @@ pure function cgi_hex_value(b: Int) -> Int {
 //
 // `plus_is_space` is a parameter and not two functions because the two callers below name
 // which they meant, and the rule itself is one line different.
-function cgi_decode(text: String, plus_is_space: Bool) -> Option<String> {
+pure function cgi_decode(text: String, plus_is_space: Bool) -> Option<String> {
     let mutable out: String = "";
     let mutable copied: Int = 0;
     let mutable i: Int = 0;
@@ -123,12 +123,12 @@ function cgi_decode(text: String, plus_is_space: Bool) -> Option<String> {
 
 // A path segment. `+` is an ordinary character in a path — only a form encoding gives it a
 // second meaning, and reading it as a space here would silently rename a file.
-function cgi_decode_path(text: String) -> Option<String> {
+pure function cgi_decode_path(text: String) -> Option<String> {
     return cgi_decode(text, false);
 }
 
 // A query or form value, where `+` means space per application/x-www-form-urlencoded.
-function cgi_decode_form(text: String) -> Option<String> {
+pure function cgi_decode_form(text: String) -> Option<String> {
     return cgi_decode(text, true);
 }
 
@@ -139,7 +139,7 @@ function cgi_decode_form(text: String) -> Option<String> {
 // An empty input is an empty list, not a refusal — see the header. A trailing or doubled `&`
 // yields an empty piece, which is skipped for the same reason: `a=1&` is what a form with one
 // field actually sends.
-function cgi_params(encoded: String) -> Option<[Param]> {
+pure function cgi_params(encoded: String) -> Option<[Param]> {
     let mutable out: [Param] = [];
     let pieces: [String] = string_split(encoded, "&");
     let mutable i: Int = 0;

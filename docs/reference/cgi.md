@@ -109,7 +109,7 @@ One hex digit's value, or -1. Upper and lower case both, because clients send bo
 {: #cgi-decode}
 
 ```burxt
-function cgi_decode(text: String, plus_is_space: Bool) -> Option<String>
+pure function cgi_decode(text: String, plus_is_space: Bool) -> Option<String>
 ```
 
 Percent-decoding, in RUNS rather than a byte at a time — the shape recorded at lib/json.bx:98, because `out = out + one_byte` copies the whole String on every byte.
@@ -122,7 +122,7 @@ Percent-decoding, in RUNS rather than a byte at a time — the shape recorded at
 {: #cgi-decode-path}
 
 ```burxt
-function cgi_decode_path(text: String) -> Option<String>
+pure function cgi_decode_path(text: String) -> Option<String>
 ```
 
 A path segment. `+` is an ordinary character in a path — only a form encoding gives it a second meaning, and reading it as a space here would silently rename a file.
@@ -133,7 +133,7 @@ A path segment. `+` is an ordinary character in a path — only a form encoding 
 {: #cgi-decode-form}
 
 ```burxt
-function cgi_decode_form(text: String) -> Option<String>
+pure function cgi_decode_form(text: String) -> Option<String>
 ```
 
 A query or form value, where `+` means space per application/x-www-form-urlencoded.
@@ -144,7 +144,7 @@ A query or form value, where `+` means space per application/x-www-form-urlencod
 {: #cgi-params}
 
 ```burxt
-function cgi_params(encoded: String) -> Option<[Param]>
+pure function cgi_params(encoded: String) -> Option<[Param]>
 ```
 
 `a=1&b=two` decoded into pairs, or `None` if any of it is malformed.

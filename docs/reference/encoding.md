@@ -146,7 +146,7 @@ One hex digit's value, or -1. `-1` rather than an `Option` because this is the i
 {: #encoding-hex-encode}
 
 ```burxt
-function encoding_hex_encode(bytes: [Int]) -> String
+pure function encoding_hex_encode(bytes: [Int]) -> String
 ```
 
 Bytes to lowercase hex. Two characters per byte, always — a leading zero is never dropped, because a hex string whose length is not twice its byte count cannot be decoded back.
@@ -157,7 +157,7 @@ Bytes to lowercase hex. Two characters per byte, always — a leading zero is ne
 {: #encoding-hex-encode-text}
 
 ```burxt
-function encoding_hex_encode_text(text: String) -> String
+pure function encoding_hex_encode_text(text: String) -> String
 ```
 
 The same, for bytes that arrived as a String.
@@ -168,7 +168,7 @@ The same, for bytes that arrived as a String.
 {: #encoding-hex-decode}
 
 ```burxt
-function encoding_hex_decode(text: String) -> Option<[Int]>
+pure function encoding_hex_decode(text: String) -> Option<[Int]>
 ```
 
 Hex back to bytes, or None. Refused: an odd number of characters, and any character that is not a hex digit — which includes a space, a trailing newline and the `0x` a caller might leave on.
@@ -179,7 +179,7 @@ Hex back to bytes, or None. Refused: an odd number of characters, and any charac
 {: #encoding-hex-decode-text}
 
 ```burxt
-function encoding_hex_decode_text(text: String) -> Option<String>
+pure function encoding_hex_decode_text(text: String) -> Option<String>
 ```
 
 Hex back to a String. `None` for exactly the inputs `encoding_hex_decode` refuses; it makes no UTF-8 promise about what it answers, the same way `from_bytes` does not.
@@ -201,7 +201,7 @@ One base64 character's value, or -1. `sixty_two` and `sixty_three` are the alpha
 {: #encoding-base64-encode-with}
 
 ```burxt
-function encoding_base64_encode_with(bytes: [Int], alphabet: String, pad: Bool) -> String
+pure function encoding_base64_encode_with(bytes: [Int], alphabet: String, pad: Bool) -> String
 ```
 
 The shared encoder. `alphabet` must be 64 characters; `pad` decides whether the final quantum is filled out to four characters with `=`.
@@ -212,7 +212,7 @@ The shared encoder. `alphabet` must be 64 characters; `pad` decides whether the 
 {: #encoding-base64-decode-with}
 
 ```burxt
-function encoding_base64_decode_with(text: String,
+pure function encoding_base64_decode_with(text: String,
 ```
 
 The shared decoder. Every refusal in this module's header is one of the `return Option.None` lines below, and they are in the order the header lists them.
@@ -223,7 +223,7 @@ The shared decoder. Every refusal in this module's header is one of the `return 
 {: #encoding-base64-encode}
 
 ```burxt
-function encoding_base64_encode(bytes: [Int]) -> String
+pure function encoding_base64_encode(bytes: [Int]) -> String
 ```
 
 The precondition is repeated on the public wrappers rather than left to the kernel, because the signature a caller reads is this one — it is what `burxt mcp-schema` publishes and what a contract failure names. The second walk of the array costs about 3 ms per megabyte against the encode's 90, which is what a precondition is worth.
@@ -234,7 +234,7 @@ The precondition is repeated on the public wrappers rather than left to the kern
 {: #encoding-base64-encode-text}
 
 ```burxt
-function encoding_base64_encode_text(text: String) -> String
+pure function encoding_base64_encode_text(text: String) -> String
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/encoding.bx#L437)
@@ -243,7 +243,7 @@ function encoding_base64_encode_text(text: String) -> String
 {: #encoding-base64-decode}
 
 ```burxt
-function encoding_base64_decode(text: String) -> Option<[Int]>
+pure function encoding_base64_decode(text: String) -> Option<[Int]>
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/encoding.bx#L441)
@@ -252,7 +252,7 @@ function encoding_base64_decode(text: String) -> Option<[Int]>
 {: #encoding-base64-decode-text}
 
 ```burxt
-function encoding_base64_decode_text(text: String) -> Option<String>
+pure function encoding_base64_decode_text(text: String) -> Option<String>
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/encoding.bx#L445)
@@ -261,7 +261,7 @@ function encoding_base64_decode_text(text: String) -> Option<String>
 {: #encoding-base64url-encode}
 
 ```burxt
-function encoding_base64url_encode(bytes: [Int]) -> String
+pure function encoding_base64url_encode(bytes: [Int]) -> String
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/encoding.bx#L458)
@@ -270,7 +270,7 @@ function encoding_base64url_encode(bytes: [Int]) -> String
 {: #encoding-base64url-encode-text}
 
 ```burxt
-function encoding_base64url_encode_text(text: String) -> String
+pure function encoding_base64url_encode_text(text: String) -> String
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/encoding.bx#L464)
@@ -279,7 +279,7 @@ function encoding_base64url_encode_text(text: String) -> String
 {: #encoding-base64url-decode}
 
 ```burxt
-function encoding_base64url_decode(text: String) -> Option<[Int]>
+pure function encoding_base64url_decode(text: String) -> Option<[Int]>
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/encoding.bx#L468)
@@ -288,7 +288,7 @@ function encoding_base64url_decode(text: String) -> Option<[Int]>
 {: #encoding-base64url-decode-text}
 
 ```burxt
-function encoding_base64url_decode_text(text: String) -> Option<String>
+pure function encoding_base64url_decode_text(text: String) -> Option<String>
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/encoding.bx#L472)

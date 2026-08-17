@@ -109,7 +109,7 @@ Where the parser is. A class with `mutable self` methods, because Burxt has no w
 {: #json-null}
 
 ```burxt
-function json_null() -> Json
+pure function json_null() -> Json
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L58)
@@ -118,7 +118,7 @@ function json_null() -> Json
 {: #json-truth}
 
 ```burxt
-function json_truth(value: Bool) -> Json
+pure function json_truth(value: Bool) -> Json
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L62)
@@ -127,7 +127,7 @@ function json_truth(value: Bool) -> Json
 {: #json-int}
 
 ```burxt
-function json_int(value: Int) -> Json
+pure function json_int(value: Int) -> Json
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L66)
@@ -136,7 +136,7 @@ function json_int(value: Int) -> Json
 {: #json-money}
 
 ```burxt
-function json_money(amount: Decimal<2>) -> Json
+pure function json_money(amount: Decimal<2>) -> Json
 ```
 
 Money, as a quoted string. See the header: this is the position, and it is deliberate.
@@ -147,7 +147,7 @@ Money, as a quoted string. See the header: this is the position, and it is delib
 {: #json-text}
 
 ```burxt
-function json_text(value: String) -> Json
+pure function json_text(value: String) -> Json
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L75)
@@ -156,7 +156,7 @@ function json_text(value: String) -> Json
 {: #json-list}
 
 ```burxt
-function json_list(values: [Json]) -> Json
+pure function json_list(values: [Json]) -> Json
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L79)
@@ -165,7 +165,7 @@ function json_list(values: [Json]) -> Json
 {: #json-object}
 
 ```burxt
-function json_object(fields: [Field]) -> Json
+pure function json_object(fields: [Field]) -> Json
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L83)
@@ -174,7 +174,7 @@ function json_object(fields: [Field]) -> Json
 {: #json-field}
 
 ```burxt
-function json_field(name: String, value: Json) -> Field
+pure function json_field(name: String, value: Json) -> Field
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L87)
@@ -183,7 +183,7 @@ function json_field(name: String, value: Json) -> Field
 {: #json-escape}
 
 ```burxt
-function json_escape(text: String) -> String
+pure function json_escape(text: String) -> String
 ```
 
 A String with the six escapes JSON requires, and nothing else.
@@ -196,7 +196,7 @@ Built in RUNS rather than a byte at a time: `out = out + one_byte` copies the wh
 {: #json-render}
 
 ```burxt
-function json_render(value: Json) -> String
+pure function json_render(value: Json) -> String
 ```
 
 One JSON value as text, with no whitespace. Recursive, because the shape is.
@@ -207,7 +207,7 @@ One JSON value as text, with no whitespace. Recursive, because the shape is.
 {: #json-at}
 
 ```burxt
-function json_at(value: Json, name: String) -> Option<Json>
+pure function json_at(value: Json, name: String) -> Option<Json>
 ```
 
 A member by name, or None. Linear, like every other lookup in this repository at this scale — an MCP request has single-digit field counts, and a map would allocate to save nothing.
@@ -218,7 +218,7 @@ A member by name, or None. Linear, like every other lookup in this repository at
 {: #json-as-text}
 
 ```burxt
-function json_as_text(value: Json) -> Option<String>
+pure function json_as_text(value: Json) -> Option<String>
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L182)
@@ -227,7 +227,7 @@ function json_as_text(value: Json) -> Option<String>
 {: #json-digits}
 
 ```burxt
-function json_digits(value: Json) -> Option<String>
+pure function json_digits(value: Json) -> Option<String>
 ```
 
 The digits of a number, whether it arrived as a JSON number or as a quoted string.
@@ -240,7 +240,7 @@ Both, on purpose: an exact producer sends money as a string (see the header) and
 {: #json-as-int}
 
 ```burxt
-function json_as_int(value: Json) -> Option<Int>
+pure function json_as_int(value: Json) -> Option<Int>
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L209)
@@ -249,7 +249,7 @@ function json_as_int(value: Json) -> Option<Int>
 {: #json-as-truth}
 
 ```burxt
-function json_as_truth(value: Json) -> Option<Bool>
+pure function json_as_truth(value: Json) -> Option<Bool>
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L217)
@@ -258,7 +258,7 @@ function json_as_truth(value: Json) -> Option<Bool>
 {: #json-as-money}
 
 ```burxt
-function json_as_money(value: Json) -> Option<Decimal<2>>
+pure function json_as_money(value: Json) -> Option<Decimal<2>>
 ```
 
 Money, at two places, or None when the digits are not exactly that.
@@ -273,7 +273,7 @@ The reconstruction is a count of pennies times a penny, which is exact by constr
 {: #is-json-digit}
 
 ```burxt
-function is_json_digit(b: Int) -> Bool
+pure function is_json_digit(b: Int) -> Bool
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L389)
@@ -307,7 +307,7 @@ Takes `mutable self`, so it changes the value it is called on.
 {: #peek}
 
 ```burxt
-function (self: Reader) peek() -> Int
+pure function (self: Reader) peek() -> Int
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/json.bx#L295)

@@ -312,21 +312,21 @@
   "name": "option_or",
   "text": "lib/option.bx",
   "url": "/reference/option.html#option-or",
-  "where": "function option_or<T>(o: Option<T>, fallback: T) -> T"
+  "where": "pure function option_or<T>(o: Option<T>, fallback: T) -> T"
  },
  {
   "kind": "function",
   "name": "option_is_some",
   "text": "lib/option.bx",
   "url": "/reference/option.html#option-is-some",
-  "where": "function option_is_some<T>(o: Option<T>) -> Bool"
+  "where": "pure function option_is_some<T>(o: Option<T>) -> Bool"
  },
  {
   "kind": "function",
   "name": "option_is_none",
   "text": "lib/option.bx",
   "url": "/reference/option.html#option-is-none",
-  "where": "function option_is_none<T>(o: Option<T>) -> Bool"
+  "where": "pure function option_is_none<T>(o: Option<T>) -> Bool"
  },
  {
   "kind": "enum",
@@ -340,35 +340,35 @@
   "name": "result_or",
   "text": "lib/result.bx",
   "url": "/reference/result.html#result-or",
-  "where": "function result_or<T, E>(r: Result<T, E>, fallback: T) -> T"
+  "where": "pure function result_or<T, E>(r: Result<T, E>, fallback: T) -> T"
  },
  {
   "kind": "function",
   "name": "result_is_ok",
   "text": "lib/result.bx",
   "url": "/reference/result.html#result-is-ok",
-  "where": "function result_is_ok<T, E>(r: Result<T, E>) -> Bool"
+  "where": "pure function result_is_ok<T, E>(r: Result<T, E>) -> Bool"
  },
  {
   "kind": "function",
   "name": "result_is_error",
   "text": "lib/result.bx",
   "url": "/reference/result.html#result-is-error",
-  "where": "function result_is_error<T, E>(r: Result<T, E>) -> Bool"
+  "where": "pure function result_is_error<T, E>(r: Result<T, E>) -> Bool"
  },
  {
   "kind": "function",
   "name": "result_context",
   "text": "lib/result.bx",
   "url": "/reference/result.html#result-context",
-  "where": "function result_context<T>(r: Result<T, String>, context: String) -> Result<T, String>"
+  "where": "pure function result_context<T>(r: Result<T, String>, context: String) -> Result<T, String>"
  },
  {
   "kind": "function",
   "name": "option_ok_or",
   "text": "lib/result.bx",
   "url": "/reference/result.html#option-ok-or",
-  "where": "function option_ok_or<T, E>(o: Option<T>, why: E) -> Result<T, E>"
+  "where": "pure function option_ok_or<T, E>(o: Option<T>, why: E) -> Result<T, E>"
  },
  {
   "kind": "function",
@@ -452,7 +452,7 @@
   "name": "money_split",
   "text": "lib/decimal.bx",
   "url": "/reference/decimal.html#money-split",
-  "where": "function money_split(total: Decimal<2>, parts: Int) -> [Decimal<2>]"
+  "where": "pure function money_split(total: Decimal<2>, parts: Int) -> [Decimal<2>]"
  },
  {
   "kind": "function",
@@ -606,7 +606,7 @@
   "name": "string_split",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-split",
-  "where": "function string_split(text: String, separator: String) -> [String]"
+  "where": "pure function string_split(text: String, separator: String) -> [String]"
  },
  {
   "kind": "function",
@@ -620,14 +620,14 @@
   "name": "string_lines",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-lines",
-  "where": "function string_lines(text: String) -> [String]"
+  "where": "pure function string_lines(text: String) -> [String]"
  },
  {
   "kind": "function",
   "name": "string_to_int",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-to-int",
-  "where": "function string_to_int(text: String, fallback: Int) -> Int"
+  "where": "pure function string_to_int(text: String, fallback: Int) -> Int"
  },
  {
   "kind": "function",
@@ -641,7 +641,7 @@
   "name": "string_join",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-join",
-  "where": "function string_join(pieces: [String], separator: String) -> String"
+  "where": "pure function string_join(pieces: [String], separator: String) -> String"
  },
  {
   "kind": "function",
@@ -704,7 +704,7 @@
   "name": "char_index",
   "text": "lib/string.bx",
   "url": "/reference/string.html#char-index",
-  "where": "function char_index(text: String, of: String) -> Option<Int>"
+  "where": "pure function char_index(text: String, of: String) -> Option<Int>"
  },
  {
   "kind": "function",
@@ -900,28 +900,28 @@
   "name": "string_split_space",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-split-space",
-  "where": "function string_split_space(text: String) -> [String]"
+  "where": "pure function string_split_space(text: String) -> [String]"
  },
  {
   "kind": "function",
   "name": "string_split_once",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-split-once",
-  "where": "function string_split_once(text: String, separator: String) -> Option<(String, String)>"
+  "where": "pure function string_split_once(text: String, separator: String) -> Option<(String, String)>"
  },
  {
   "kind": "function",
   "name": "string_rsplit",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-rsplit",
-  "where": "function string_rsplit(text: String, separator: String) -> [String]"
+  "where": "pure function string_rsplit(text: String, separator: String) -> [String]"
  },
  {
   "kind": "function",
   "name": "string_split_no_empty",
   "text": "lib/string.bx",
   "url": "/reference/string.html#string-split-no-empty",
-  "where": "function string_split_no_empty(text: String, separator: String) -> [String]"
+  "where": "pure function string_split_no_empty(text: String, separator: String) -> [String]"
  },
  {
   "kind": "function",
@@ -1061,28 +1061,28 @@
   "name": "array_min",
   "text": "lib/array.bx",
   "url": "/reference/array.html#array-min",
-  "where": "function array_min<T: Ordered>(xs: [T]) -> T"
+  "where": "pure function array_min<T: Ordered>(xs: [T]) -> T"
  },
  {
   "kind": "function",
   "name": "array_max",
   "text": "lib/array.bx",
   "url": "/reference/array.html#array-max",
-  "where": "function array_max<T: Ordered>(xs: [T]) -> T"
+  "where": "pure function array_max<T: Ordered>(xs: [T]) -> T"
  },
  {
   "kind": "function",
   "name": "array_first",
   "text": "lib/array.bx",
   "url": "/reference/array.html#array-first",
-  "where": "function array_first<T>(xs: [T]) -> T"
+  "where": "pure function array_first<T>(xs: [T]) -> T"
  },
  {
   "kind": "function",
   "name": "array_last",
   "text": "lib/array.bx",
   "url": "/reference/array.html#array-last",
-  "where": "function array_last<T>(xs: [T]) -> T"
+  "where": "pure function array_last<T>(xs: [T]) -> T"
  },
  {
   "kind": "function",
@@ -1145,21 +1145,21 @@
   "name": "array_copy",
   "text": "lib/array.bx",
   "url": "/reference/array.html#array-copy",
-  "where": "function array_copy<T>(xs: [T]) -> [T]"
+  "where": "pure function array_copy<T>(xs: [T]) -> [T]"
  },
  {
   "kind": "function",
   "name": "array_slice",
   "text": "lib/array.bx",
   "url": "/reference/array.html#array-slice",
-  "where": "function array_slice<T>(xs: [T], from: Int, to: Int) -> [T]"
+  "where": "pure function array_slice<T>(xs: [T], from: Int, to: Int) -> [T]"
  },
  {
   "kind": "function",
   "name": "array_concat",
   "text": "lib/array.bx",
   "url": "/reference/array.html#array-concat",
-  "where": "function array_concat<T>(first: [T], second: [T]) -> [T]"
+  "where": "pure function array_concat<T>(first: [T], second: [T]) -> [T]"
  },
  {
   "kind": "function",
@@ -1201,42 +1201,42 @@
   "name": "array_map",
   "text": "lib/array.bx",
   "url": "/reference/array.html#array-map",
-  "where": "function array_map<T, U>(xs: [T], f: dynamic Mapper<T, U>) -> [U]"
+  "where": "pure function array_map<T, U>(xs: [T], f: dynamic Mapper<T, U>) -> [U]"
  },
  {
   "kind": "function",
   "name": "array_filter",
   "text": "lib/array.bx",
   "url": "/reference/array.html#array-filter",
-  "where": "function array_filter<T>(xs: [T], keep: dynamic Predicate<T>) -> [T]"
+  "where": "pure function array_filter<T>(xs: [T], keep: dynamic Predicate<T>) -> [T]"
  },
  {
   "kind": "function",
   "name": "array_fold",
   "text": "lib/array.bx",
   "url": "/reference/array.html#array-fold",
-  "where": "function array_fold<T, A>(xs: [T], start: A, f: dynamic Folder<T, A>) -> A"
+  "where": "pure function array_fold<T, A>(xs: [T], start: A, f: dynamic Folder<T, A>) -> A"
  },
  {
   "kind": "function",
   "name": "array_any",
   "text": "lib/array.bx",
   "url": "/reference/array.html#array-any",
-  "where": "function array_any<T>(xs: [T], holds: dynamic Predicate<T>) -> Bool"
+  "where": "pure function array_any<T>(xs: [T], holds: dynamic Predicate<T>) -> Bool"
  },
  {
   "kind": "function",
   "name": "array_all",
   "text": "lib/array.bx",
   "url": "/reference/array.html#array-all",
-  "where": "function array_all<T>(xs: [T], holds: dynamic Predicate<T>) -> Bool"
+  "where": "pure function array_all<T>(xs: [T], holds: dynamic Predicate<T>) -> Bool"
  },
  {
   "kind": "function",
   "name": "array_position",
   "text": "lib/array.bx",
   "url": "/reference/array.html#array-position",
-  "where": "function array_position<T>(xs: [T], holds: dynamic Predicate<T>) -> Option<Int>"
+  "where": "pure function array_position<T>(xs: [T], holds: dynamic Predicate<T>) -> Option<Int>"
  },
  {
   "kind": "function",
@@ -1250,7 +1250,7 @@
   "name": "array_partition",
   "text": "lib/array.bx",
   "url": "/reference/array.html#array-partition",
-  "where": "function array_partition<T>(xs: [T], keep: dynamic Predicate<T>) -> ([T], [T])"
+  "where": "pure function array_partition<T>(xs: [T], keep: dynamic Predicate<T>) -> ([T], [T])"
  },
  {
   "kind": "function",
@@ -1264,21 +1264,21 @@
   "name": "array_zip",
   "text": "lib/array.bx",
   "url": "/reference/array.html#array-zip",
-  "where": "function array_zip<A, B>(left: [A], right: [B]) -> [(A, B)]"
+  "where": "pure function array_zip<A, B>(left: [A], right: [B]) -> [(A, B)]"
  },
  {
   "kind": "function",
   "name": "array_enumerate",
   "text": "lib/array.bx",
   "url": "/reference/array.html#array-enumerate",
-  "where": "function array_enumerate<T>(xs: [T]) -> [(Int, T)]"
+  "where": "pure function array_enumerate<T>(xs: [T]) -> [(Int, T)]"
  },
  {
   "kind": "function",
   "name": "array_split_at",
   "text": "lib/array.bx",
   "url": "/reference/array.html#array-split-at",
-  "where": "function array_split_at<T>(xs: [T], at: Int) -> ([T], [T])"
+  "where": "pure function array_split_at<T>(xs: [T], at: Int) -> ([T], [T])"
  },
  {
   "kind": "class",
@@ -1292,7 +1292,7 @@
   "name": "set_new",
   "text": "lib/set.bx",
   "url": "/reference/set.html#set-new",
-  "where": "function set_new<T: Equatable>() -> Set<T>"
+  "where": "pure function set_new<T: Equatable>() -> Set<T>"
  },
  {
   "kind": "method",
@@ -1397,7 +1397,7 @@
   "name": "map_new",
   "text": "lib/map.bx",
   "url": "/reference/map.html#map-new",
-  "where": "function map_new<K: Equatable, V>() -> Map<K, V>"
+  "where": "pure function map_new<K: Equatable, V>() -> Map<K, V>"
  },
  {
   "kind": "method",
@@ -1705,112 +1705,112 @@
   "name": "json_null",
   "text": "lib/json.bx",
   "url": "/reference/json.html#json-null",
-  "where": "function json_null() -> Json"
+  "where": "pure function json_null() -> Json"
  },
  {
   "kind": "function",
   "name": "json_truth",
   "text": "lib/json.bx",
   "url": "/reference/json.html#json-truth",
-  "where": "function json_truth(value: Bool) -> Json"
+  "where": "pure function json_truth(value: Bool) -> Json"
  },
  {
   "kind": "function",
   "name": "json_int",
   "text": "lib/json.bx",
   "url": "/reference/json.html#json-int",
-  "where": "function json_int(value: Int) -> Json"
+  "where": "pure function json_int(value: Int) -> Json"
  },
  {
   "kind": "function",
   "name": "json_money",
   "text": "lib/json.bx",
   "url": "/reference/json.html#json-money",
-  "where": "function json_money(amount: Decimal<2>) -> Json"
+  "where": "pure function json_money(amount: Decimal<2>) -> Json"
  },
  {
   "kind": "function",
   "name": "json_text",
   "text": "lib/json.bx",
   "url": "/reference/json.html#json-text",
-  "where": "function json_text(value: String) -> Json"
+  "where": "pure function json_text(value: String) -> Json"
  },
  {
   "kind": "function",
   "name": "json_list",
   "text": "lib/json.bx",
   "url": "/reference/json.html#json-list",
-  "where": "function json_list(values: [Json]) -> Json"
+  "where": "pure function json_list(values: [Json]) -> Json"
  },
  {
   "kind": "function",
   "name": "json_object",
   "text": "lib/json.bx",
   "url": "/reference/json.html#json-object",
-  "where": "function json_object(fields: [Field]) -> Json"
+  "where": "pure function json_object(fields: [Field]) -> Json"
  },
  {
   "kind": "function",
   "name": "json_field",
   "text": "lib/json.bx",
   "url": "/reference/json.html#json-field",
-  "where": "function json_field(name: String, value: Json) -> Field"
+  "where": "pure function json_field(name: String, value: Json) -> Field"
  },
  {
   "kind": "function",
   "name": "json_escape",
   "text": "lib/json.bx",
   "url": "/reference/json.html#json-escape",
-  "where": "function json_escape(text: String) -> String"
+  "where": "pure function json_escape(text: String) -> String"
  },
  {
   "kind": "function",
   "name": "json_render",
   "text": "lib/json.bx",
   "url": "/reference/json.html#json-render",
-  "where": "function json_render(value: Json) -> String"
+  "where": "pure function json_render(value: Json) -> String"
  },
  {
   "kind": "function",
   "name": "json_at",
   "text": "lib/json.bx",
   "url": "/reference/json.html#json-at",
-  "where": "function json_at(value: Json, name: String) -> Option<Json>"
+  "where": "pure function json_at(value: Json, name: String) -> Option<Json>"
  },
  {
   "kind": "function",
   "name": "json_as_text",
   "text": "lib/json.bx",
   "url": "/reference/json.html#json-as-text",
-  "where": "function json_as_text(value: Json) -> Option<String>"
+  "where": "pure function json_as_text(value: Json) -> Option<String>"
  },
  {
   "kind": "function",
   "name": "json_digits",
   "text": "lib/json.bx",
   "url": "/reference/json.html#json-digits",
-  "where": "function json_digits(value: Json) -> Option<String>"
+  "where": "pure function json_digits(value: Json) -> Option<String>"
  },
  {
   "kind": "function",
   "name": "json_as_int",
   "text": "lib/json.bx",
   "url": "/reference/json.html#json-as-int",
-  "where": "function json_as_int(value: Json) -> Option<Int>"
+  "where": "pure function json_as_int(value: Json) -> Option<Int>"
  },
  {
   "kind": "function",
   "name": "json_as_truth",
   "text": "lib/json.bx",
   "url": "/reference/json.html#json-as-truth",
-  "where": "function json_as_truth(value: Json) -> Option<Bool>"
+  "where": "pure function json_as_truth(value: Json) -> Option<Bool>"
  },
  {
   "kind": "function",
   "name": "json_as_money",
   "text": "lib/json.bx",
   "url": "/reference/json.html#json-as-money",
-  "where": "function json_as_money(value: Json) -> Option<Decimal<2>>"
+  "where": "pure function json_as_money(value: Json) -> Option<Decimal<2>>"
  },
  {
   "kind": "class",
@@ -1831,7 +1831,7 @@
   "name": "peek",
   "text": "lib/json.bx",
   "url": "/reference/json.html#peek",
-  "where": "function (self: Reader) peek() -> Int"
+  "where": "pure function (self: Reader) peek() -> Int"
  },
  {
   "kind": "method",
@@ -1859,7 +1859,7 @@
   "name": "is_json_digit",
   "text": "lib/json.bx",
   "url": "/reference/json.html#is-json-digit",
-  "where": "function is_json_digit(b: Int) -> Bool"
+  "where": "pure function is_json_digit(b: Int) -> Bool"
  },
  {
   "kind": "method",
@@ -1915,14 +1915,14 @@
   "name": "count",
   "text": "lib/csv.bx",
   "url": "/reference/csv.html#count",
-  "where": "function (self: CsvRow) count() -> Int"
+  "where": "pure function (self: CsvRow) count() -> Int"
  },
  {
   "kind": "method",
   "name": "at",
   "text": "lib/csv.bx",
   "url": "/reference/csv.html#at",
-  "where": "function (self: CsvRow) at(index: Int) -> Option<String>"
+  "where": "pure function (self: CsvRow) at(index: Int) -> Option<String>"
  },
  {
   "kind": "class",
@@ -1936,7 +1936,7 @@
   "name": "terminator",
   "text": "lib/csv.bx",
   "url": "/reference/csv.html#terminator",
-  "where": "function (self: CsvReader) terminator() -> Int"
+  "where": "pure function (self: CsvReader) terminator() -> Int"
  },
  {
   "kind": "method",
@@ -1971,7 +1971,7 @@
   "name": "csv_widths_agree",
   "text": "lib/csv.bx",
   "url": "/reference/csv.html#csv-widths-agree",
-  "where": "function csv_widths_agree(rows: [CsvRow]) -> Option<String>"
+  "where": "pure function csv_widths_agree(rows: [CsvRow]) -> Option<String>"
  },
  {
   "kind": "function",
@@ -1992,7 +1992,7 @@
   "name": "csv_column",
   "text": "lib/csv.bx",
   "url": "/reference/csv.html#csv-column",
-  "where": "function csv_column(header: CsvRow, name: String) -> Option<Int>"
+  "where": "pure function csv_column(header: CsvRow, name: String) -> Option<Int>"
  },
  {
   "kind": "function",
@@ -2006,21 +2006,21 @@
   "name": "csv_quote",
   "text": "lib/csv.bx",
   "url": "/reference/csv.html#csv-quote",
-  "where": "function csv_quote(field: String, delimiter: Int) -> String"
+  "where": "pure function csv_quote(field: String, delimiter: Int) -> String"
  },
  {
   "kind": "function",
   "name": "csv_render",
   "text": "lib/csv.bx",
   "url": "/reference/csv.html#csv-render",
-  "where": "function csv_render(rows: [CsvRow]) -> String"
+  "where": "pure function csv_render(rows: [CsvRow]) -> String"
  },
  {
   "kind": "function",
   "name": "csv_render_delimited",
   "text": "lib/csv.bx",
   "url": "/reference/csv.html#csv-render-delimited",
-  "where": "function csv_render_delimited(rows: [CsvRow], delimiter: Int, crlf: Bool) -> String"
+  "where": "pure function csv_render_delimited(rows: [CsvRow], delimiter: Int, crlf: Bool) -> String"
  },
  {
   "kind": "class",
@@ -2139,28 +2139,28 @@
   "name": "cgi_decode",
   "text": "lib/cgi.bx",
   "url": "/reference/cgi.html#cgi-decode",
-  "where": "function cgi_decode(text: String, plus_is_space: Bool) -> Option<String>"
+  "where": "pure function cgi_decode(text: String, plus_is_space: Bool) -> Option<String>"
  },
  {
   "kind": "function",
   "name": "cgi_decode_path",
   "text": "lib/cgi.bx",
   "url": "/reference/cgi.html#cgi-decode-path",
-  "where": "function cgi_decode_path(text: String) -> Option<String>"
+  "where": "pure function cgi_decode_path(text: String) -> Option<String>"
  },
  {
   "kind": "function",
   "name": "cgi_decode_form",
   "text": "lib/cgi.bx",
   "url": "/reference/cgi.html#cgi-decode-form",
-  "where": "function cgi_decode_form(text: String) -> Option<String>"
+  "where": "pure function cgi_decode_form(text: String) -> Option<String>"
  },
  {
   "kind": "function",
   "name": "cgi_params",
   "text": "lib/cgi.bx",
   "url": "/reference/cgi.html#cgi-params",
-  "where": "function cgi_params(encoded: String) -> Option<[Param]>"
+  "where": "pure function cgi_params(encoded: String) -> Option<[Param]>"
  },
  {
   "kind": "function",
@@ -2209,28 +2209,28 @@
   "name": "encoding_hex_encode",
   "text": "lib/encoding.bx",
   "url": "/reference/encoding.html#encoding-hex-encode",
-  "where": "function encoding_hex_encode(bytes: [Int]) -> String"
+  "where": "pure function encoding_hex_encode(bytes: [Int]) -> String"
  },
  {
   "kind": "function",
   "name": "encoding_hex_encode_text",
   "text": "lib/encoding.bx",
   "url": "/reference/encoding.html#encoding-hex-encode-text",
-  "where": "function encoding_hex_encode_text(text: String) -> String"
+  "where": "pure function encoding_hex_encode_text(text: String) -> String"
  },
  {
   "kind": "function",
   "name": "encoding_hex_decode",
   "text": "lib/encoding.bx",
   "url": "/reference/encoding.html#encoding-hex-decode",
-  "where": "function encoding_hex_decode(text: String) -> Option<[Int]>"
+  "where": "pure function encoding_hex_decode(text: String) -> Option<[Int]>"
  },
  {
   "kind": "function",
   "name": "encoding_hex_decode_text",
   "text": "lib/encoding.bx",
   "url": "/reference/encoding.html#encoding-hex-decode-text",
-  "where": "function encoding_hex_decode_text(text: String) -> Option<String>"
+  "where": "pure function encoding_hex_decode_text(text: String) -> Option<String>"
  },
  {
   "kind": "function",
@@ -2244,70 +2244,70 @@
   "name": "encoding_base64_encode_with",
   "text": "lib/encoding.bx",
   "url": "/reference/encoding.html#encoding-base64-encode-with",
-  "where": "function encoding_base64_encode_with(bytes: [Int], alphabet: String, pad: Bool) -> String"
+  "where": "pure function encoding_base64_encode_with(bytes: [Int], alphabet: String, pad: Bool) -> String"
  },
  {
   "kind": "function",
   "name": "encoding_base64_decode_with",
   "text": "lib/encoding.bx",
   "url": "/reference/encoding.html#encoding-base64-decode-with",
-  "where": "function encoding_base64_decode_with(text: String,"
+  "where": "pure function encoding_base64_decode_with(text: String,"
  },
  {
   "kind": "function",
   "name": "encoding_base64_encode",
   "text": "lib/encoding.bx",
   "url": "/reference/encoding.html#encoding-base64-encode",
-  "where": "function encoding_base64_encode(bytes: [Int]) -> String"
+  "where": "pure function encoding_base64_encode(bytes: [Int]) -> String"
  },
  {
   "kind": "function",
   "name": "encoding_base64_encode_text",
   "text": "lib/encoding.bx",
   "url": "/reference/encoding.html#encoding-base64-encode-text",
-  "where": "function encoding_base64_encode_text(text: String) -> String"
+  "where": "pure function encoding_base64_encode_text(text: String) -> String"
  },
  {
   "kind": "function",
   "name": "encoding_base64_decode",
   "text": "lib/encoding.bx",
   "url": "/reference/encoding.html#encoding-base64-decode",
-  "where": "function encoding_base64_decode(text: String) -> Option<[Int]>"
+  "where": "pure function encoding_base64_decode(text: String) -> Option<[Int]>"
  },
  {
   "kind": "function",
   "name": "encoding_base64_decode_text",
   "text": "lib/encoding.bx",
   "url": "/reference/encoding.html#encoding-base64-decode-text",
-  "where": "function encoding_base64_decode_text(text: String) -> Option<String>"
+  "where": "pure function encoding_base64_decode_text(text: String) -> Option<String>"
  },
  {
   "kind": "function",
   "name": "encoding_base64url_encode",
   "text": "lib/encoding.bx",
   "url": "/reference/encoding.html#encoding-base64url-encode",
-  "where": "function encoding_base64url_encode(bytes: [Int]) -> String"
+  "where": "pure function encoding_base64url_encode(bytes: [Int]) -> String"
  },
  {
   "kind": "function",
   "name": "encoding_base64url_encode_text",
   "text": "lib/encoding.bx",
   "url": "/reference/encoding.html#encoding-base64url-encode-text",
-  "where": "function encoding_base64url_encode_text(text: String) -> String"
+  "where": "pure function encoding_base64url_encode_text(text: String) -> String"
  },
  {
   "kind": "function",
   "name": "encoding_base64url_decode",
   "text": "lib/encoding.bx",
   "url": "/reference/encoding.html#encoding-base64url-decode",
-  "where": "function encoding_base64url_decode(text: String) -> Option<[Int]>"
+  "where": "pure function encoding_base64url_decode(text: String) -> Option<[Int]>"
  },
  {
   "kind": "function",
   "name": "encoding_base64url_decode_text",
   "text": "lib/encoding.bx",
   "url": "/reference/encoding.html#encoding-base64url-decode-text",
-  "where": "function encoding_base64url_decode_text(text: String) -> Option<String>"
+  "where": "pure function encoding_base64url_decode_text(text: String) -> Option<String>"
  },
  {
   "kind": "function",
@@ -2636,7 +2636,7 @@
   "name": "vector_top_dot",
   "text": "lib/vector.bx",
   "url": "/reference/vector.html#vector-top-dot",
-  "where": "function vector_top_dot(rows: [Row], query: [Decimal<7>], count: Int) -> [Scored]"
+  "where": "pure function vector_top_dot(rows: [Row], query: [Decimal<7>], count: Int) -> [Scored]"
  },
  {
   "kind": "class",
@@ -2650,35 +2650,35 @@
   "name": "component_to_json",
   "text": "lib/vector.bx",
   "url": "/reference/vector.html#component-to-json",
-  "where": "function component_to_json(value: Decimal<7>) -> Json"
+  "where": "pure function component_to_json(value: Decimal<7>) -> Json"
  },
  {
   "kind": "function",
   "name": "component_from_json",
   "text": "lib/vector.bx",
   "url": "/reference/vector.html#component-from-json",
-  "where": "function component_from_json(value: Json) -> Option<Decimal<7>>"
+  "where": "pure function component_from_json(value: Json) -> Option<Decimal<7>>"
  },
  {
   "kind": "function",
   "name": "vector_to_json",
   "text": "lib/vector.bx",
   "url": "/reference/vector.html#vector-to-json",
-  "where": "function vector_to_json(row: Row) -> Json"
+  "where": "pure function vector_to_json(row: Row) -> Json"
  },
  {
   "kind": "function",
   "name": "vector_from_json",
   "text": "lib/vector.bx",
   "url": "/reference/vector.html#vector-from-json",
-  "where": "function vector_from_json(value: Json) -> Result<Row, String>"
+  "where": "pure function vector_from_json(value: Json) -> Result<Row, String>"
  },
  {
   "kind": "function",
   "name": "vector_store_render",
   "text": "lib/vector.bx",
   "url": "/reference/vector.html#vector-store-render",
-  "where": "function vector_store_render(rows: [Row]) -> String"
+  "where": "pure function vector_store_render(rows: [Row]) -> String"
  },
  {
   "kind": "function",
@@ -2860,28 +2860,28 @@
   "name": "file_split_lines",
   "text": "lib/files.bx",
   "url": "/reference/files.html#file-split-lines",
-  "where": "function file_split_lines(text: String) -> [String]"
+  "where": "pure function file_split_lines(text: String) -> [String]"
  },
  {
   "kind": "function",
   "name": "file_last_slash",
   "text": "lib/files.bx",
   "url": "/reference/files.html#file-last-slash",
-  "where": "function file_last_slash(path: String) -> Int"
+  "where": "pure function file_last_slash(path: String) -> Int"
  },
  {
   "kind": "function",
   "name": "file_starts_with",
   "text": "lib/files.bx",
   "url": "/reference/files.html#file-starts-with",
-  "where": "function file_starts_with(text: String, prefix: String) -> Bool"
+  "where": "pure function file_starts_with(text: String, prefix: String) -> Bool"
  },
  {
   "kind": "function",
   "name": "file_is_plain_name",
   "text": "lib/files.bx",
   "url": "/reference/files.html#file-is-plain-name",
-  "where": "function file_is_plain_name(name: String) -> Bool"
+  "where": "pure function file_is_plain_name(name: String) -> Bool"
  },
  {
   "kind": "function",
@@ -3098,14 +3098,14 @@
   "name": "os_trim_ascii",
   "text": "lib/os.bx",
   "url": "/reference/os.html#os-trim-ascii",
-  "where": "function os_trim_ascii(text: String) -> String"
+  "where": "pure function os_trim_ascii(text: String) -> String"
  },
  {
   "kind": "function",
   "name": "os_is_space",
   "text": "lib/os.bx",
   "url": "/reference/os.html#os-is-space",
-  "where": "function os_is_space(b: Int) -> Bool"
+  "where": "pure function os_is_space(b: Int) -> Bool"
  },
  {
   "kind": "function",
@@ -3448,28 +3448,28 @@
   "name": "time_parse_field",
   "text": "lib/time.bx",
   "url": "/reference/time.html#time-parse-field",
-  "where": "function time_parse_field(text: String, at: Int, width: Int) -> Option<Int>"
+  "where": "pure function time_parse_field(text: String, at: Int, width: Int) -> Option<Int>"
  },
  {
   "kind": "function",
   "name": "time_parse_iso",
   "text": "lib/time.bx",
   "url": "/reference/time.html#time-parse-iso",
-  "where": "function time_parse_iso(text: String) -> Option<DateTime>"
+  "where": "pure function time_parse_iso(text: String) -> Option<DateTime>"
  },
  {
   "kind": "function",
   "name": "time_parse_unix",
   "text": "lib/time.bx",
   "url": "/reference/time.html#time-parse-unix",
-  "where": "function time_parse_unix(text: String) -> Option<Int>"
+  "where": "pure function time_parse_unix(text: String) -> Option<Int>"
  },
  {
   "kind": "function",
   "name": "time_i64_at",
   "text": "lib/time.bx",
   "url": "/reference/time.html#time-i64-at",
-  "where": "function time_i64_at(bytes: [Int], from: Int) -> Int"
+  "where": "pure function time_i64_at(bytes: [Int], from: Int) -> Int"
  },
  {
   "kind": "function",
@@ -3553,7 +3553,7 @@
   "name": "log_level_from_name",
   "text": "lib/log.bx",
   "url": "/reference/log.html#log-level-from-name",
-  "where": "function log_level_from_name(text: String) -> Int"
+  "where": "pure function log_level_from_name(text: String) -> Int"
  },
  {
   "kind": "function",
@@ -3672,7 +3672,7 @@
   "name": "test_begin",
   "text": "lib/test.bx",
   "url": "/reference/test.html#test-begin",
-  "where": "function test_begin(suite: String) -> Tests"
+  "where": "pure function test_begin(suite: String) -> Tests"
  },
  {
   "kind": "function",

@@ -130,7 +130,7 @@ pure function array_is_sorted<T: Ordered>(xs: [T]) -> Bool {
 // method's body never is** — `lib/map.bx`'s `find -> Option<V>` has shipped since v0.0.118 not because
 // methods resolve it correctly but because they never enter the state that broke free functions. There
 // was no working path to copy.)
-function array_min<T: Ordered>(xs: [T]) -> T
+pure function array_min<T: Ordered>(xs: [T]) -> T
     requires len(xs) > 0
 {
     let mutable best: T = xs[0];
@@ -144,7 +144,7 @@ function array_min<T: Ordered>(xs: [T]) -> T
     return best;
 }
 
-function array_max<T: Ordered>(xs: [T]) -> T
+pure function array_max<T: Ordered>(xs: [T]) -> T
     requires len(xs) > 0
 {
     let mutable best: T = xs[0];
@@ -158,13 +158,13 @@ function array_max<T: Ordered>(xs: [T]) -> T
     return best;
 }
 
-function array_first<T>(xs: [T]) -> T
+pure function array_first<T>(xs: [T]) -> T
     requires len(xs) > 0
 {
     return xs[0];
 }
 
-function array_last<T>(xs: [T]) -> T
+pure function array_last<T>(xs: [T]) -> T
     requires len(xs) > 0
 {
     return xs[len(xs) - 1];
@@ -312,7 +312,7 @@ function array_remove_at<T>(mutable xs: [T], at: Int) -> Int
 //
 // It is not a deep copy. If `T` is a class, the elements are still shared; there is no way to write a
 // deep copy generically, because there is no interface saying how to clone a `T`.
-function array_copy<T>(xs: [T]) -> [T] {
+pure function array_copy<T>(xs: [T]) -> [T] {
     let mutable out: [T] = [];
     let mutable i: Int = 0;
     while i < len(xs) {
@@ -332,7 +332,7 @@ function array_copy<T>(xs: [T]) -> [T] {
 // An empty slice is legal — `from == to` answers `[]` — because a loop that narrows a range down to
 // nothing should not have to special-case its last step. `from > to` is not legal, because that is a
 // reversed range rather than an empty one, and answering `[]` would hide the caller's arithmetic bug.
-function array_slice<T>(xs: [T], from: Int, to: Int) -> [T]
+pure function array_slice<T>(xs: [T], from: Int, to: Int) -> [T]
     requires from >= 0
     requires to >= from
     requires to <= len(xs)
@@ -348,7 +348,7 @@ function array_slice<T>(xs: [T], from: Int, to: Int) -> [T]
 
 // Both arrays' elements, in order, as a NEW one. Neither argument changes — which is the difference
 // between this and `array_extend`, and the reason both exist.
-function array_concat<T>(first: [T], second: [T]) -> [T] {
+pure function array_concat<T>(first: [T], second: [T]) -> [T] {
     let mutable out: [T] = [];
     let mutable i: Int = 0;
     while i < len(first) {
@@ -516,7 +516,7 @@ function array_dedup<T: Equatable>(mutable xs: [T]) -> Int {
 
 // Every element through `f`, as a new array. `[T]` in, `[U]` out — so this is the type-changing form,
 // and `Mapper<T, T>` covers the case where it does not change.
-function array_map<T, U>(xs: [T], f: dynamic Mapper<T, U>) -> [U] {
+pure function array_map<T, U>(xs: [T], f: dynamic Mapper<T, U>) -> [U] {
     let mutable out: [U] = [];
     let mutable i: Int = 0;
     while i < len(xs) {
@@ -527,7 +527,7 @@ function array_map<T, U>(xs: [T], f: dynamic Mapper<T, U>) -> [U] {
 }
 
 // The elements that pass, as a new array, in their original order.
-function array_filter<T>(xs: [T], keep: dynamic Predicate<T>) -> [T] {
+pure function array_filter<T>(xs: [T], keep: dynamic Predicate<T>) -> [T] {
     let mutable out: [T] = [];
     let mutable i: Int = 0;
     while i < len(xs) {
@@ -551,7 +551,7 @@ function array_filter<T>(xs: [T], keep: dynamic Predicate<T>) -> [T] {
 //
 // Left rather than right, and only left. A right fold over an array is a left fold over its reverse,
 // and `array_reverse` is right there; shipping both would mean a reader checking which one they have.
-function array_fold<T, A>(xs: [T], start: A, f: dynamic Folder<T, A>) -> A {
+pure function array_fold<T, A>(xs: [T], start: A, f: dynamic Folder<T, A>) -> A {
     let mutable held: A = start;
     let mutable i: Int = 0;
     while i < len(xs) {
@@ -562,7 +562,7 @@ function array_fold<T, A>(xs: [T], start: A, f: dynamic Folder<T, A>) -> A {
 }
 
 // Does any element pass? False for an empty array, and it stops at the first one that does.
-function array_any<T>(xs: [T], holds: dynamic Predicate<T>) -> Bool {
+pure function array_any<T>(xs: [T], holds: dynamic Predicate<T>) -> Bool {
     let mutable i: Int = 0;
     while i < len(xs) {
         if holds.test(xs[i]) {
@@ -577,7 +577,7 @@ function array_any<T>(xs: [T], holds: dynamic Predicate<T>) -> Bool {
 // fails. That answer surprises people often enough to be worth a line: it is what makes
 // `array_all(a, p) && array_all(b, p)` equal `array_all(concat(a, b), p)` for every a and b, and any
 // other choice breaks that. Pinned in the fixture.
-function array_all<T>(xs: [T], holds: dynamic Predicate<T>) -> Bool {
+pure function array_all<T>(xs: [T], holds: dynamic Predicate<T>) -> Bool {
     let mutable i: Int = 0;
     while i < len(xs) {
         if !holds.test(xs[i]) {
@@ -591,7 +591,7 @@ function array_all<T>(xs: [T], holds: dynamic Predicate<T>) -> Bool {
 // The index of the first element that passes, or None. The predicate counterpart of
 // `array_index_of`, and `Option<Int>` for the same reason that one gives: -1 is a usable index and
 // None is not.
-function array_position<T>(xs: [T], holds: dynamic Predicate<T>) -> Option<Int> {
+pure function array_position<T>(xs: [T], holds: dynamic Predicate<T>) -> Option<Int> {
     let mutable i: Int = 0;
     while i < len(xs) {
         if holds.test(xs[i]) {
@@ -644,7 +644,7 @@ function array_retain<T>(mutable xs: [T], keep: dynamic Predicate<T>) -> Int {
 // One pass rather than two calls to `array_filter` with opposite predicates: a caller cannot write
 // the negation of an arbitrary `Predicate` without declaring another class, and calling the predicate
 // twice per element would double the vtable cost for an answer already in hand.
-function array_partition<T>(xs: [T], keep: dynamic Predicate<T>) -> ([T], [T])
+pure function array_partition<T>(xs: [T], keep: dynamic Predicate<T>) -> ([T], [T])
 {
     let mutable passing: [T] = [];
     let mutable failing: [T] = [];
@@ -795,7 +795,7 @@ function array_sort_by<T>(mutable xs: [T], order: dynamic Comparer<T>) -> Int {
 // Stopping at the shorter rather than refusing unequal lengths: the caller who wants them equal has
 // `array_equals` on the lengths and a clearer error than this could give, and the caller who does
 // not want them equal is the common one — walking a list against its first N labels.
-function array_zip<A, B>(left: [A], right: [B]) -> [(A, B)] {
+pure function array_zip<A, B>(left: [A], right: [B]) -> [(A, B)] {
     let mutable out: [(A, B)] = [];
     let mutable i: Int = 0;
     let stop: Int = math_min(len(left), len(right));
@@ -807,7 +807,7 @@ function array_zip<A, B>(left: [A], right: [B]) -> [(A, B)] {
 }
 
 // Every element with its index. `enumerate(["a","b"])` is `[(0,"a"), (1,"b")]`.
-function array_enumerate<T>(xs: [T]) -> [(Int, T)] {
+pure function array_enumerate<T>(xs: [T]) -> [(Int, T)] {
     let mutable out: [(Int, T)] = [];
     let mutable i: Int = 0;
     while i < len(xs) {
@@ -829,7 +829,7 @@ function array_enumerate<T>(xs: [T]) -> [(Int, T)] {
 // and stage-1's emitter let the caller's binding shadow the callee's — so a call whose arguments
 // are two Ints was emitted as the String copy and the program segfaulted. Fixed in `emit.bx`, not
 // here. The function was taken out for one version rather than shipped with a warning.
-function array_split_at<T>(xs: [T], at: Int) -> ([T], [T]) {
+pure function array_split_at<T>(xs: [T], at: Int) -> ([T], [T]) {
     let cut: Int = math_clamp(at, 0, len(xs));
     let mutable front: [T] = [];
     let mutable back: [T] = [];

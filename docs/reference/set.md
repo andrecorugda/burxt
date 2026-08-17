@@ -159,7 +159,7 @@ The one field is a `Map<T, Bool>` whose values are all `true`. `T: Equatable` is
 {: #set-new}
 
 ```burxt
-function set_new<T: Equatable>() -> Set<T>
+pure function set_new<T: Equatable>() -> Set<T>
 ```
 
 An empty set.

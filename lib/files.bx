@@ -512,7 +512,7 @@ function file_quote(path: String) -> String {
 // Split on newlines, dropping the empty piece a trailing newline leaves. Local
 // rather than borrowed from lib/string.bx, so `use "lib/files.bx"` pulls in files and
 // nothing else.
-function file_split_lines(text: String) -> [String] {
+pure function file_split_lines(text: String) -> [String] {
     let size: Int = len(text);
     let mutable lines: [String] = [];
     let mutable from: Int = 0;
@@ -531,7 +531,7 @@ function file_split_lines(text: String) -> [String] {
 
 // The last `/`, or -1. Local for the same reason `file_split_lines` is: `lib/path.bx` has
 // `path_dirname`, and this file does not depend on it.
-function file_last_slash(path: String) -> Int {
+pure function file_last_slash(path: String) -> Int {
     let size: Int = len(path);
     let mutable cut: Int = -1;
     let mutable i: Int = 0;
@@ -544,7 +544,7 @@ function file_last_slash(path: String) -> Int {
     return cut;
 }
 
-function file_starts_with(text: String, prefix: String) -> Bool {
+pure function file_starts_with(text: String, prefix: String) -> Bool {
     let size: Int = len(prefix);
     if len(text) < size {
         return false;
@@ -553,7 +553,7 @@ function file_starts_with(text: String, prefix: String) -> Bool {
 }
 
 // A name with no `/` and no NUL, and not `.` or `..` — what a single directory entry may be called.
-function file_is_plain_name(name: String) -> Bool {
+pure function file_is_plain_name(name: String) -> Bool {
     let size: Int = len(name);
     if size == 0 || name == "." || name == ".." {
         return false;

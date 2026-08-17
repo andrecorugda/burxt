@@ -332,7 +332,7 @@ Every retry loop, every poll of a file that another process is writing, and ever
 {: #os-trim-ascii}
 
 ```burxt
-function os_trim_ascii(text: String) -> String
+pure function os_trim_ascii(text: String) -> String
 ```
 
 Spaces, tabs, carriage returns and newlines off both ends. Local rather than `lib/string.bx`'s `string_trim`, for the reason the whole of this file is: `use "lib/os.bx"` should pull in the operating system and not two thousand lines of string handling.
@@ -343,7 +343,7 @@ Spaces, tabs, carriage returns and newlines off both ends. Local rather than `li
 {: #os-is-space}
 
 ```burxt
-function os_is_space(b: Int) -> Bool
+pure function os_is_space(b: Int) -> Bool
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/os.bx#L427)

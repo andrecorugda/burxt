@@ -81,7 +81,7 @@ The tally. A class rather than three loose variables so it can be threaded throu
 {: #test-begin}
 
 ```burxt
-function test_begin(suite: String) -> Tests
+pure function test_begin(suite: String) -> Tests
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/test.bx#L59)

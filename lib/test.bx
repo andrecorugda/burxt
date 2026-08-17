@@ -56,7 +56,7 @@ class Tests {
     failed: Int,
 }
 
-function test_begin(suite: String) -> Tests {
+pure function test_begin(suite: String) -> Tests {
     return Tests { suite: suite, passed: 0, failed: 0 };
 }
 

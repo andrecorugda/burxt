@@ -397,7 +397,7 @@ Just the date: `2026-08-01`. The other ISO-8601 form a program is handed, and th
 {: #time-parse-field}
 
 ```burxt
-function time_parse_field(text: String, at: Int, width: Int) -> Option<Int>
+pure function time_parse_field(text: String, at: Int, width: Int) -> Option<Int>
 ```
 
 A fixed-width run of digits as a number, or None. The building block the parser needs and `string_parse_int` is not: `string_parse_int` accepts a leading `-`, so it would read `"-1"` out of a month field, and it accepts `"7"` where the format demands `"07"`.
@@ -410,7 +410,7 @@ A fixed-width run of digits as a number, or None. The building block the parser 
 {: #time-parse-iso}
 
 ```burxt
-function time_parse_iso(text: String) -> Option<DateTime>
+pure function time_parse_iso(text: String) -> Option<DateTime>
 ```
 
 * **An offset.** `"2026-08-01T12:34:56+05:00"` answers `None`. Treating it as UTC would be
@@ -456,7 +456,7 @@ A leading `+` or `-` for an expanded year is also refused, which is the same neg
 {: #time-parse-unix}
 
 ```burxt
-function time_parse_unix(text: String) -> Option<Int>
+pure function time_parse_unix(text: String) -> Option<Int>
 ```
 
 Seconds since 1970 straight from ISO-8601 text, or None. The composition a caller reaching for this module usually wants, and the reason `time_parse_iso` returns the DateTime rather than the seconds: one of the two is derivable and the other is not.
@@ -467,7 +467,7 @@ Seconds since 1970 straight from ISO-8601 text, or None. The composition a calle
 {: #time-i64-at}
 
 ```burxt
-function time_i64_at(bytes: [Int], from: Int) -> Int
+pure function time_i64_at(bytes: [Int], from: Int) -> Int
 ```
 
 One little-endian i64 out of a byte array, starting at `from`.

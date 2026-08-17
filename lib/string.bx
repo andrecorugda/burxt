@@ -243,7 +243,7 @@ pure function string_is_space(byte: Int) -> Bool {
 // goes is not a call to make inside a comment.
 //
 // The one thing that would be wrong is silence: looping forever on a zero-width match.
-function string_split(text: String, separator: String) -> [String] {
+pure function string_split(text: String, separator: String) -> [String] {
     let mutable pieces: [String] = [];
     let width: Int = len(separator);
     if width == 0 {
@@ -286,7 +286,7 @@ pure function string_matches_at(text: String, needle: String, at: Int) -> Bool {
 
 // Lines, on either ending. A CRLF file and an LF file split identically, which is the whole reason a
 // multi-character separator had to exist: `"\r\n"` could not be written as a byte.
-function string_lines(text: String) -> [String] {
+pure function string_lines(text: String) -> [String] {
     let mutable out: [String] = [];
     let pieces: [String] = string_split(text, "\n");
     let mutable i: Int = 0;
@@ -319,7 +319,7 @@ function string_lines(text: String) -> [String] {
 // missing count is zero, a missing page number is one.
 //
 //     let port: Int = string_to_int(configured, 8080);
-function string_to_int(text: String, fallback: Int) -> Int {
+pure function string_to_int(text: String, fallback: Int) -> Int {
     match string_parse_int(text) {
         None => { return fallback; }
         Some(n) => { return n; }
@@ -349,7 +349,7 @@ pure function string_parse_int(text: String) -> Option<Int> {
 // The §D0 chunk list. This was `out += separator + pieces[i]` until the D1 work measured it, which
 // made joining a 100 KB document out of its lines cost the square of its length — in the one
 // function a program reaches for precisely because it has a lot of pieces.
-function string_join(pieces: [String], separator: String) -> String {
+pure function string_join(pieces: [String], separator: String) -> String {
     let count: Int = len(pieces);
     if count == 0 {
         return "";
@@ -716,7 +716,7 @@ pure function to_bytes(text: String) -> [Int] {
 //
 // An EMPTY needle answers `Some(0)`, matching `string_find`'s 0 — every string contains the empty
 // string, at the beginning.
-function char_index(text: String, of: String) -> Option<Int> {
+pure function char_index(text: String, of: String) -> Option<Int> {
     if len(of) == 0 {
         return Option.Some(0);
     }
@@ -1587,7 +1587,7 @@ pure function string_count(text: String, needle: String) -> Int {
 // Leading and trailing whitespace therefore produce NO empty piece, and `""` and `"   "` both
 // answer an empty list. This is Python's `.split()` with no argument, and Rust's
 // `split_whitespace` — the one shape everybody agrees on.
-function string_split_space(text: String) -> [String] {
+pure function string_split_space(text: String) -> [String] {
     let stop: Int = len(text);
     let mutable pieces: [String] = [];
     let mutable i: Int = 0;
@@ -1621,7 +1621,7 @@ function string_split_space(text: String) -> [String] {
 //
 // The separator itself is in NEITHER half. An empty separator answers None, agreeing with the rest
 // of the file.
-function string_split_once(text: String, separator: String) -> Option<(String, String)> {
+pure function string_split_once(text: String, separator: String) -> Option<(String, String)> {
     let width: Int = len(separator);
     if width == 0 {
         return Option.None;
@@ -1651,7 +1651,7 @@ function string_split_once(text: String, separator: String) -> Option<(String, S
 // For an ordinary non-overlapping separator this IS `string_split` read backwards, which is the
 // common case and the reason to have it: the last field of a dotted name is
 // `string_rsplit(name, ".")[0]`, with no need to know how many fields there were.
-function string_rsplit(text: String, separator: String) -> [String] {
+pure function string_rsplit(text: String, separator: String) -> [String] {
     let mutable pieces: [String] = [];
     let width: Int = len(separator);
     let stop: Int = len(text);
@@ -1682,7 +1682,7 @@ function string_rsplit(text: String, separator: String) -> [String] {
 // `["a", "b"]`, which is what a reader of a `PATH`-style list wants. Two functions because the two
 // callers need different things and neither can be derived from the other cheaply by hand: a
 // caller who filters `string_split` themselves and forgets is a program that breaks on `"a,,b"`.
-function string_split_no_empty(text: String, separator: String) -> [String] {
+pure function string_split_no_empty(text: String, separator: String) -> [String] {
     let pieces: [String] = string_split(text, separator);
     let count: Int = len(pieces);
     let mutable out: [String] = [];

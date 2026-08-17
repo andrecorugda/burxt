@@ -85,7 +85,7 @@ This is the compact-table shape, and it is the right one here for a reason parti
 {: #map-new}
 
 ```burxt
-function map_new<K: Equatable, V>() -> Map<K, V>
+pure function map_new<K: Equatable, V>() -> Map<K, V>
 ```
 
 An empty map.

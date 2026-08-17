@@ -215,7 +215,7 @@ Ragged records are kept as they are: see `csv_parse_rectangular`.
 {: #csv-widths-agree}
 
 ```burxt
-function csv_widths_agree(rows: [CsvRow]) -> Option<String>
+pure function csv_widths_agree(rows: [CsvRow]) -> Option<String>
 ```
 
 `None` when every record has the same number of fields; otherwise the complaint, naming the first record that disagrees with the first one.
@@ -256,7 +256,7 @@ function csv_parse_rectangular_delimited(text: String, delimiter: Int)
 {: #csv-column}
 
 ```burxt
-function csv_column(header: CsvRow, name: String) -> Option<Int>
+pure function csv_column(header: CsvRow, name: String) -> Option<Int>
 ```
 
 Which column `name` is, or `None`. The header row is a record like any other, so this takes one.
@@ -284,7 +284,7 @@ The minimal set, and minimal on purpose: the delimiter, a quote, CR, or LF. **No
 {: #csv-quote}
 
 ```burxt
-function csv_quote(field: String, delimiter: Int) -> String
+pure function csv_quote(field: String, delimiter: Int) -> String
 ```
 
 `field` as it must appear in the output: itself when nothing forces quotes, otherwise wrapped in quotes with every `"` doubled.
@@ -299,7 +299,7 @@ The unquoted case returns the field itself and allocates nothing, which is the o
 {: #csv-render}
 
 ```burxt
-function csv_render(rows: [CsvRow]) -> String
+pure function csv_render(rows: [CsvRow]) -> String
 ```
 
 `rows` as a CSV document: comma-separated, LF-terminated, every record ending with a newline.
@@ -312,7 +312,7 @@ function csv_render(rows: [CsvRow]) -> String
 {: #csv-render-delimited}
 
 ```burxt
-function csv_render_delimited(rows: [CsvRow], delimiter: Int, crlf: Bool) -> String
+pure function csv_render_delimited(rows: [CsvRow], delimiter: Int, crlf: Bool) -> String
 ```
 
 `rows` as a CSV document, with the delimiter and the line ending chosen.
@@ -332,7 +332,7 @@ Every record ends with a terminator, the last one included. A file whose final l
 {: #count}
 
 ```burxt
-function (self: CsvRow) count() -> Int
+pure function (self: CsvRow) count() -> Int
 ```
 
 How many fields this record has. Not every record in a file has the same number — see `csv_parse_rectangular` — so this is a question worth asking.
@@ -343,7 +343,7 @@ How many fields this record has. Not every record in a file has the same number 
 {: #at}
 
 ```burxt
-function (self: CsvRow) at(index: Int) -> Option<String>
+pure function (self: CsvRow) at(index: Int) -> Option<String>
 ```
 
 Field `index`, or `None` when the record is shorter than that.
@@ -356,7 +356,7 @@ Field `index`, or `None` when the record is shorter than that.
 {: #terminator}
 
 ```burxt
-function (self: CsvReader) terminator() -> Int
+pure function (self: CsvReader) terminator() -> Int
 ```
 
 Is there a record terminator at the cursor, and how many bytes long is it? 0 when there is not. `\r\n` is two, a bare `\n` is one, and a lone `\r` is none — the header says why.

@@ -127,7 +127,7 @@ pure function array_is_sorted<T: Ordered>(xs: [T]) -> Bool
 {: #array-min}
 
 ```burxt
-function array_min<T: Ordered>(xs: [T]) -> T
+pure function array_min<T: Ordered>(xs: [T]) -> T
 ```
 
 The smallest and largest. A PRECONDITION rather than an Option, and the reason is the better one rather than the convenient one: "the largest of nothing" is not a question with a wrong answer, it is a question that should not have been asked — which is exactly what `requires` says. The same call `vector_normalise` makes about the zero vector.
@@ -142,7 +142,7 @@ The cause turned out to be inverted from how it read: it was not that methods ha
 {: #array-max}
 
 ```burxt
-function array_max<T: Ordered>(xs: [T]) -> T
+pure function array_max<T: Ordered>(xs: [T]) -> T
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/array.bx#L147)
@@ -151,7 +151,7 @@ function array_max<T: Ordered>(xs: [T]) -> T
 {: #array-first}
 
 ```burxt
-function array_first<T>(xs: [T]) -> T
+pure function array_first<T>(xs: [T]) -> T
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/array.bx#L161)
@@ -160,7 +160,7 @@ function array_first<T>(xs: [T]) -> T
 {: #array-last}
 
 ```burxt
-function array_last<T>(xs: [T]) -> T
+pure function array_last<T>(xs: [T]) -> T
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/array.bx#L167)
@@ -259,7 +259,7 @@ Remove the element at `at`, closing the gap. Order is preserved, which is why th
 {: #array-copy}
 
 ```burxt
-function array_copy<T>(xs: [T]) -> [T]
+pure function array_copy<T>(xs: [T]) -> [T]
 ```
 
 A NEW array with the same elements.
@@ -281,7 +281,7 @@ It is not a deep copy. If `T` is a class, the elements are still shared; there i
 {: #array-slice}
 
 ```burxt
-function array_slice<T>(xs: [T], from: Int, to: Int) -> [T]
+pure function array_slice<T>(xs: [T], from: Int, to: Int) -> [T]
 ```
 
 The elements from `from` up to but NOT including `to`, as a new array.
@@ -296,7 +296,7 @@ An empty slice is legal — `from == to` answers `[]` — because a loop that na
 {: #array-concat}
 
 ```burxt
-function array_concat<T>(first: [T], second: [T]) -> [T]
+pure function array_concat<T>(first: [T], second: [T]) -> [T]
 ```
 
 Both arrays' elements, in order, as a NEW one. Neither argument changes — which is the difference between this and `array_extend`, and the reason both exist.
@@ -374,7 +374,7 @@ For all-distinct regardless of order: `array_sort` then this, or `lib/set.bx`, w
 {: #array-map}
 
 ```burxt
-function array_map<T, U>(xs: [T], f: dynamic Mapper<T, U>) -> [U]
+pure function array_map<T, U>(xs: [T], f: dynamic Mapper<T, U>) -> [U]
 ```
 
 Every element through `f`, as a new array. `[T]` in, `[U]` out — so this is the type-changing form, and `Mapper<T, T>` covers the case where it does not change.
@@ -385,7 +385,7 @@ Every element through `f`, as a new array. `[T]` in, `[U]` out — so this is th
 {: #array-filter}
 
 ```burxt
-function array_filter<T>(xs: [T], keep: dynamic Predicate<T>) -> [T]
+pure function array_filter<T>(xs: [T], keep: dynamic Predicate<T>) -> [T]
 ```
 
 The elements that pass, as a new array, in their original order.
@@ -396,7 +396,7 @@ The elements that pass, as a new array, in their original order.
 {: #array-fold}
 
 ```burxt
-function array_fold<T, A>(xs: [T], start: A, f: dynamic Folder<T, A>) -> A
+pure function array_fold<T, A>(xs: [T], start: A, f: dynamic Folder<T, A>) -> A
 ```
 
 Left fold: `start`, then one `step` per element, in order.
@@ -411,7 +411,7 @@ Left rather than right, and only left. A right fold over an array is a left fold
 {: #array-any}
 
 ```burxt
-function array_any<T>(xs: [T], holds: dynamic Predicate<T>) -> Bool
+pure function array_any<T>(xs: [T], holds: dynamic Predicate<T>) -> Bool
 ```
 
 Does any element pass? False for an empty array, and it stops at the first one that does.
@@ -422,7 +422,7 @@ Does any element pass? False for an empty array, and it stops at the first one t
 {: #array-all}
 
 ```burxt
-function array_all<T>(xs: [T], holds: dynamic Predicate<T>) -> Bool
+pure function array_all<T>(xs: [T], holds: dynamic Predicate<T>) -> Bool
 ```
 
 Do all of them pass? **True for an empty array** — vacuously, because there is no element that fails. That answer surprises people often enough to be worth a line: it is what makes `array_all(a, p) && array_all(b, p)` equal `array_all(concat(a, b), p)` for every a and b, and any other choice breaks that. Pinned in the fixture.
@@ -433,7 +433,7 @@ Do all of them pass? **True for an empty array** — vacuously, because there is
 {: #array-position}
 
 ```burxt
-function array_position<T>(xs: [T], holds: dynamic Predicate<T>) -> Option<Int>
+pure function array_position<T>(xs: [T], holds: dynamic Predicate<T>) -> Option<Int>
 ```
 
 The index of the first element that passes, or None. The predicate counterpart of `array_index_of`, and `Option<Int>` for the same reason that one gives: -1 is a usable index and None is not.
@@ -459,7 +459,7 @@ Compacting rather than repeated removal: one pass, each survivor moved down to t
 {: #array-partition}
 
 ```burxt
-function array_partition<T>(xs: [T], keep: dynamic Predicate<T>) -> ([T], [T])
+pure function array_partition<T>(xs: [T], keep: dynamic Predicate<T>) -> ([T], [T])
 ```
 
 Split into those that pass and those that do not: `(passing, failing)`, both new arrays, each in original order.
@@ -503,7 +503,7 @@ Insertion sort quadruples for every doubling, which is the O(n²) showing up exa
 {: #array-zip}
 
 ```burxt
-function array_zip<A, B>(left: [A], right: [B]) -> [(A, B)]
+pure function array_zip<A, B>(left: [A], right: [B]) -> [(A, B)]
 ```
 
 The two arrays walked together, stopping at the shorter. `zip([1,2,3], ["a","b"])` has two pairs.
@@ -516,7 +516,7 @@ Stopping at the shorter rather than refusing unequal lengths: the caller who wan
 {: #array-enumerate}
 
 ```burxt
-function array_enumerate<T>(xs: [T]) -> [(Int, T)]
+pure function array_enumerate<T>(xs: [T]) -> [(Int, T)]
 ```
 
 Every element with its index. `enumerate(["a","b"])` is `[(0,"a"), (1,"b")]`.
@@ -527,7 +527,7 @@ Every element with its index. `enumerate(["a","b"])` is `[(0,"a"), (1,"b")]`.
 {: #array-split-at}
 
 ```burxt
-function array_split_at<T>(xs: [T], at: Int) -> ([T], [T])
+pure function array_split_at<T>(xs: [T], at: Int) -> ([T], [T])
 ```
 
 Two arrays: everything before `at`, and everything from `at`. A negative `at` is 0 and one past the end is the whole array, so the answer is always two valid arrays.

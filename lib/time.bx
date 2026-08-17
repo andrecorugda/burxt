@@ -454,7 +454,7 @@ pure function time_format_date(when: DateTime) -> String allocates
 //
 // `all_digits` from `lib/string.bx` is what makes this two lines — every byte a digit, then the
 // ordinary parse. Written after that function existed rather than around its absence.
-function time_parse_field(text: String, at: Int, width: Int) -> Option<Int> {
+pure function time_parse_field(text: String, at: Int, width: Int) -> Option<Int> {
     if at < 0 || at + width > len(text) {
         return Option.None;
     }
@@ -488,7 +488,7 @@ function time_parse_field(text: String, at: Int, width: Int) -> Option<Int> {
 //
 // A leading `+` or `-` for an expanded year is also refused, which is the same negotiation
 // `time_format_iso` declines to guess at.
-function time_parse_iso(text: String) -> Option<DateTime> {
+pure function time_parse_iso(text: String) -> Option<DateTime> {
     if len(text) != 10 && len(text) != 20 {
         return Option.None;
     }
@@ -528,7 +528,7 @@ function time_parse_iso(text: String) -> Option<DateTime> {
 // Seconds since 1970 straight from ISO-8601 text, or None. The composition a caller reaching for
 // this module usually wants, and the reason `time_parse_iso` returns the DateTime rather than the
 // seconds: one of the two is derivable and the other is not.
-function time_parse_unix(text: String) -> Option<Int> {
+pure function time_parse_unix(text: String) -> Option<Int> {
     let when: DateTime = time_parse_iso(text)?;
     return Option.Some(time_to_unix(when));
 }
@@ -565,7 +565,7 @@ external function malloc(size: Int) -> CPointer;
 // Eight bytes reassembled by hand because Burxt reads a C buffer as bytes and has no way to say
 // "the i64 at this offset" — the pointer wall hands over bytes and nothing else, which is what
 // makes it a wall.
-function time_i64_at(bytes: [Int], from: Int) -> Int
+pure function time_i64_at(bytes: [Int], from: Int) -> Int
     requires from >= 0
 {
     let mutable value: Int = 0;

@@ -149,7 +149,7 @@ A `Decimal<4>` for the rate because that is what a percent literal is: `8.25%` i
 {: #money-split}
 
 ```burxt
-function money_split(total: Decimal<2>, parts: Int) -> [Decimal<2>]
+pure function money_split(total: Decimal<2>, parts: Int) -> [Decimal<2>]
 ```
 
 * **`parts` larger than the penny count.** `money_split($0.02, 5)` is

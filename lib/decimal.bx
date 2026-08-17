@@ -256,7 +256,7 @@ pure function decimal2_percent_of(amount: Decimal<2>, rate: Decimal<4>) -> Decim
 //     the remainder of anything by 1 is 0.
 //   * **`parts` of 0** is refused by `requires`. "Split this nought ways" has no answer, and
 //     `lib/array.bx`'s `array_min` records the same call for the same reason.
-function money_split(total: Decimal<2>, parts: Int) -> [Decimal<2>]
+pure function money_split(total: Decimal<2>, parts: Int) -> [Decimal<2>]
     requires parts > 0
 {
     let cents: Int = decimal2_cents(total);

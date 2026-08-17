@@ -55,36 +55,36 @@ class Field { name: String, value: Json }
 // Free functions rather than one overloaded constructor: Burxt has no overloading, and the name
 // saying which kind you meant is what a reviewer reads.
 
-function json_null() -> Json {
+pure function json_null() -> Json {
     return Json.Null;
 }
 
-function json_truth(value: Bool) -> Json {
+pure function json_truth(value: Bool) -> Json {
     return Json.Truth(value);
 }
 
-function json_int(value: Int) -> Json {
+pure function json_int(value: Int) -> Json {
     return Json.Number(to_string(value));
 }
 
 // Money, as a quoted string. See the header: this is the position, and it is deliberate.
-function json_money(amount: Decimal<2>) -> Json {
+pure function json_money(amount: Decimal<2>) -> Json {
     return Json.Text(to_string(amount));
 }
 
-function json_text(value: String) -> Json {
+pure function json_text(value: String) -> Json {
     return Json.Text(value);
 }
 
-function json_list(values: [Json]) -> Json {
+pure function json_list(values: [Json]) -> Json {
     return Json.List(values);
 }
 
-function json_object(fields: [Field]) -> Json {
+pure function json_object(fields: [Field]) -> Json {
     return Json.Object(fields);
 }
 
-function json_field(name: String, value: Json) -> Field {
+pure function json_field(name: String, value: Json) -> Field {
     return Field { name: name, value: value };
 }
 
@@ -95,7 +95,7 @@ function json_field(name: String, value: Json) -> Field {
 // Built in RUNS rather than a byte at a time: `out = out + one_byte` copies the whole String on
 // every byte, which this project has paid for three times — the lexer was quadratic for eleven
 // versions on exactly this shape. Everything from `copied` to here is appended in one slice.
-function json_escape(text: String) -> String {
+pure function json_escape(text: String) -> String {
     let mutable out: String = "";
     let mutable copied: Int = 0;
     let mutable i: Int = 0;
@@ -120,7 +120,7 @@ function json_escape(text: String) -> String {
 }
 
 // One JSON value as text, with no whitespace. Recursive, because the shape is.
-function json_render(value: Json) -> String {
+pure function json_render(value: Json) -> String {
     match value {
         Null => { return "null"; }
         Truth(t) => {
@@ -158,7 +158,7 @@ function json_render(value: Json) -> String {
 
 // A member by name, or None. Linear, like every other lookup in this repository at this scale — an
 // MCP request has single-digit field counts, and a map would allocate to save nothing.
-function json_at(value: Json, name: String) -> Option<Json> {
+pure function json_at(value: Json, name: String) -> Option<Json> {
     match value {
         Null => { return Option.None; }
         Truth(t) => { return Option.None; }
@@ -179,7 +179,7 @@ function json_at(value: Json, name: String) -> Option<Json> {
     }
 }
 
-function json_as_text(value: Json) -> Option<String> {
+pure function json_as_text(value: Json) -> Option<String> {
     match value {
         Null => { return Option.None; }
         Truth(t) => { return Option.None; }
@@ -195,7 +195,7 @@ function json_as_text(value: Json) -> Option<String> {
 // Both, on purpose: an exact producer sends money as a string (see the header) and a careless one
 // sends it as a number, and a server that reads only one of the two rejects half its callers for a
 // difference that carries no information.
-function json_digits(value: Json) -> Option<String> {
+pure function json_digits(value: Json) -> Option<String> {
     match value {
         Null => { return Option.None; }
         Truth(t) => { return Option.None; }
@@ -206,7 +206,7 @@ function json_digits(value: Json) -> Option<String> {
     }
 }
 
-function json_as_int(value: Json) -> Option<Int> {
+pure function json_as_int(value: Json) -> Option<Int> {
     let digits: String = option_or(json_digits(value), "");
     if len(digits) == 0 {
         return Option.None;
@@ -214,7 +214,7 @@ function json_as_int(value: Json) -> Option<Int> {
     return string_parse_int(digits);
 }
 
-function json_as_truth(value: Json) -> Option<Bool> {
+pure function json_as_truth(value: Json) -> Option<Bool> {
     match value {
         Null => { return Option.None; }
         Truth(t) => { return Option.Some(t); }
@@ -234,7 +234,7 @@ function json_as_truth(value: Json) -> Option<Bool> {
 //
 // The reconstruction is a count of pennies times a penny, which is exact by construction and needs
 // no rounding contract, because that is literally what a scaled decimal already is.
-function json_as_money(value: Json) -> Option<Decimal<2>> {
+pure function json_as_money(value: Json) -> Option<Decimal<2>> {
     let digits: String = option_or(json_digits(value), "");
     if len(digits) == 0 {
         return Option.None;
@@ -292,7 +292,7 @@ function (mutable self: Reader) skip_space() -> Int {
     return self.at;
 }
 
-function (self: Reader) peek() -> Int {
+pure function (self: Reader) peek() -> Int {
     if self.at >= len(self.text) {
         return -1;
     }
@@ -386,7 +386,7 @@ function (mutable self: Reader) parse_number() -> Result<Json, String> {
     return Result.Ok(Json.Number(substring(self.text, start, self.at - start)));
 }
 
-function is_json_digit(b: Int) -> Bool {
+pure function is_json_digit(b: Int) -> Bool {
     return b >= 48 && b <= 57;
 }
 

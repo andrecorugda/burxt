@@ -45,14 +45,14 @@ enum Result<T, E> {
 // Both arms are required. That is the whole feature.
 
 // The answer, or the fallback. For when a failure has an obvious substitute.
-function result_or<T, E>(r: Result<T, E>, fallback: T) -> T {
+pure function result_or<T, E>(r: Result<T, E>, fallback: T) -> T {
     match r {
         Ok(value) => { return value; }
         Error(why) => { return fallback; }
     }
 }
 
-function result_is_ok<T, E>(r: Result<T, E>) -> Bool {
+pure function result_is_ok<T, E>(r: Result<T, E>) -> Bool {
     match r {
         Ok(value) => { return true; }
         Error(why) => { return false; }
@@ -62,7 +62,7 @@ function result_is_ok<T, E>(r: Result<T, E>) -> Bool {
 // The other half, and it is not `!result_is_ok(r)` at the call site by accident: a condition
 // spelled `if result_is_error(r)` reads the way the reader is thinking, and a `!` in front of a
 // predicate is the single easiest thing to miss in a diff.
-function result_is_error<T, E>(r: Result<T, E>) -> Bool {
+pure function result_is_error<T, E>(r: Result<T, E>) -> Bool {
     match r {
         Ok(value) => { return false; }
         Error(why) => { return true; }
@@ -89,7 +89,7 @@ function result_is_error<T, E>(r: Result<T, E>) -> Bool {
 //
 // Two `+` for one call and no loop, so §D0's chunk rule does not apply — that rule is about
 // building a String piece by piece in a loop, and this is a single concatenation of three pieces.
-function result_context<T>(r: Result<T, String>, context: String) -> Result<T, String> {
+pure function result_context<T>(r: Result<T, String>, context: String) -> Result<T, String> {
     match r {
         Ok(value) => { return Result.Ok(value); }
         Error(why) => { return Result.Error(context + ": " + why); }
@@ -115,7 +115,7 @@ function result_context<T>(r: Result<T, String>, context: String) -> Result<T, S
 // **This was listed as blocked on A3** — `Option.None` in a free generic — for long enough that the
 // row went stale. A3 had been working since v0.0.241, and the fixture proves it here rather than
 // the roadmap claiming it.
-function option_ok_or<T, E>(o: Option<T>, why: E) -> Result<T, E> {
+pure function option_ok_or<T, E>(o: Option<T>, why: E) -> Result<T, E> {
     match o {
         None => { return Result.Error(why); }
         Some(value) => { return Result.Ok(value); }

@@ -411,7 +411,7 @@ function os_sleep(milliseconds: Int) -> Bool touches clock
 // Spaces, tabs, carriage returns and newlines off both ends. Local rather than `lib/string.bx`'s
 // `string_trim`, for the reason the whole of this file is: `use "lib/os.bx"` should pull in the
 // operating system and not two thousand lines of string handling.
-function os_trim_ascii(text: String) -> String {
+pure function os_trim_ascii(text: String) -> String {
     let size: Int = len(text);
     let mutable from: Int = 0;
     let mutable to: Int = size;
@@ -424,7 +424,7 @@ function os_trim_ascii(text: String) -> String {
     return substring(text, from, to - from);
 }
 
-function os_is_space(b: Int) -> Bool {
+pure function os_is_space(b: Int) -> Bool {
     return b == 32 || b == 9 || b == 10 || b == 13;
 }
 

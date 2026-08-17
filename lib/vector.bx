@@ -277,7 +277,7 @@ class Scored { at: Int, score: Decimal<14> }
 //
 // Insertion into a kept list rather than sort-then-take, so nothing needs a generic `sort` — and
 // `xs[i] = v` does not work through a `[T]` today, which is what a generic sort would need.
-function vector_top_dot(rows: [Row], query: [Decimal<7>], count: Int) -> [Scored]
+pure function vector_top_dot(rows: [Row], query: [Decimal<7>], count: Int) -> [Scored]
     requires count > 0
 {
     let mutable best: [Scored] = [];
@@ -335,7 +335,7 @@ class Row { id: String, values: [Decimal<7>] }
 
 // The digits of a `Decimal<7>` as a JSON string. `to_string` already renders every place, so this is
 // the whole conversion.
-function component_to_json(value: Decimal<7>) -> Json {
+pure function component_to_json(value: Decimal<7>) -> Json {
     return json_text(to_string(value));
 }
 
@@ -347,7 +347,7 @@ function component_to_json(value: Decimal<7>) -> Json {
 //
 // The reconstruction is a count of ten-millionths times one ten-millionth, exact by construction and
 // needing no rounding contract, because that is what a scaled decimal already is.
-function component_from_json(value: Json) -> Option<Decimal<7>> {
+pure function component_from_json(value: Json) -> Option<Decimal<7>> {
     let digits: String = option_or(json_digits(value), "");
     if len(digits) == 0 {
         return Option.None;
@@ -390,7 +390,7 @@ function component_from_json(value: Json) -> Option<Decimal<7>> {
     }
 }
 
-function vector_to_json(row: Row) -> Json {
+pure function vector_to_json(row: Row) -> Json {
     let mutable values: [Json] = [];
     let mutable i: Int = 0;
     while i < len(row.values) {
@@ -405,7 +405,7 @@ function vector_to_json(row: Row) -> Json {
 
 // A row back from one JSON object. Every failure says which row and why — a store that skips a line it
 // could not read is a store that quietly returns fewer results.
-function vector_from_json(value: Json) -> Result<Row, String> {
+pure function vector_from_json(value: Json) -> Result<Row, String> {
     let id: String = option_or(json_as_text(option_or(json_at(value, "id"), json_null())), "");
     if len(id) == 0 {
         return Result.Error("a row needs a non-empty `id`");
@@ -444,7 +444,7 @@ function vector_from_json(value: Json) -> Result<Row, String> {
 
 // The whole store as JSONL text. Kept separate from writing it, so a caller can put it anywhere —
 // stdout, a socket once there is one, a test's assertion.
-function vector_store_render(rows: [Row]) -> String {
+pure function vector_store_render(rows: [Row]) -> String {
     let mutable out: String = "";
     let mutable i: Int = 0;
     while i < len(rows) {

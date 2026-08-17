@@ -34,7 +34,7 @@ enum Option<T> {
 // no closures yet, and a lazy default would need one.
 
 // The value, or the fallback. The one everybody writes first.
-function option_or<T>(o: Option<T>, fallback: T) -> T {
+pure function option_or<T>(o: Option<T>, fallback: T) -> T {
     match o {
         None => { return fallback; }
         Some(value) => { return value; }
@@ -43,14 +43,14 @@ function option_or<T>(o: Option<T>, fallback: T) -> T {
 
 // Whether there is anything there. Useful in a condition; useless for getting at
 // the value, which is the point — asking is not the same as having.
-function option_is_some<T>(o: Option<T>) -> Bool {
+pure function option_is_some<T>(o: Option<T>) -> Bool {
     match o {
         None => { return false; }
         Some(value) => { return true; }
     }
 }
 
-function option_is_none<T>(o: Option<T>) -> Bool {
+pure function option_is_none<T>(o: Option<T>) -> Bool {
     match o {
         None => { return true; }
         Some(value) => { return false; }

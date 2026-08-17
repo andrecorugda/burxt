@@ -408,7 +408,7 @@ Quoting does not stop OPTION parsing: `file_quote("-r")` is a correctly quoted `
 {: #file-split-lines}
 
 ```burxt
-function file_split_lines(text: String) -> [String]
+pure function file_split_lines(text: String) -> [String]
 ```
 
 Split on newlines, dropping the empty piece a trailing newline leaves. Local rather than borrowed from lib/string.bx, so `use "lib/files.bx"` pulls in files and nothing else.
@@ -419,7 +419,7 @@ Split on newlines, dropping the empty piece a trailing newline leaves. Local rat
 {: #file-last-slash}
 
 ```burxt
-function file_last_slash(path: String) -> Int
+pure function file_last_slash(path: String) -> Int
 ```
 
 The last `/`, or -1. Local for the same reason `file_split_lines` is: `lib/path.bx` has `path_dirname`, and this file does not depend on it.
@@ -430,7 +430,7 @@ The last `/`, or -1. Local for the same reason `file_split_lines` is: `lib/path.
 {: #file-starts-with}
 
 ```burxt
-function file_starts_with(text: String, prefix: String) -> Bool
+pure function file_starts_with(text: String, prefix: String) -> Bool
 ```
 
 [Source](https://github.com/andrecorugda/burxt/blob/main/lib/files.bx#L547)
@@ -439,7 +439,7 @@ function file_starts_with(text: String, prefix: String) -> Bool
 {: #file-is-plain-name}
 
 ```burxt
-function file_is_plain_name(name: String) -> Bool
+pure function file_is_plain_name(name: String) -> Bool
 ```
 
 A name with no `/` and no NUL, and not `.` or `..` — what a single directory entry may be called.

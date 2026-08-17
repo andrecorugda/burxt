@@ -163,7 +163,7 @@ class CsvRow { fields: [String], offset: Int }
 
 // How many fields this record has. Not every record in a file has the same number — see
 // `csv_parse_rectangular` — so this is a question worth asking.
-function (self: CsvRow) count() -> Int {
+pure function (self: CsvRow) count() -> Int {
     return len(self.fields);
 }
 
@@ -174,7 +174,7 @@ function (self: CsvRow) count() -> Int {
 // the correct failure and it is a bad one to hit in a loop over a file, so the safe read is here
 // and named. A caller who knows the file is rectangular can check once with
 // `csv_widths_agree` and then subscript directly.
-function (self: CsvRow) at(index: Int) -> Option<String> {
+pure function (self: CsvRow) at(index: Int) -> Option<String> {
     if index < 0 || index >= len(self.fields) {
         return Option.None;
     }
@@ -190,7 +190,7 @@ class CsvReader { text: String, at: Int, delimiter: Int }
 
 // Is there a record terminator at the cursor, and how many bytes long is it? 0 when there is not.
 // `\r\n` is two, a bare `\n` is one, and a lone `\r` is none — the header says why.
-function (self: CsvReader) terminator() -> Int {
+pure function (self: CsvReader) terminator() -> Int {
     if self.at >= len(self.text) {
         return 0;
     }
@@ -343,7 +343,7 @@ function csv_parse_delimited(text: String, delimiter: Int) -> Result<[CsvRow], S
 // on several lines, so a line number here would point at the wrong place in exactly the file where
 // it mattered. The BYTE offset is in the message beside the count, from `CsvRow.offset`, because
 // "record 812" sends a reader counting and a byte offset sends them to the place.
-function csv_widths_agree(rows: [CsvRow]) -> Option<String> {
+pure function csv_widths_agree(rows: [CsvRow]) -> Option<String> {
     if len(rows) == 0 {
         return Option.None;
     }
@@ -407,7 +407,7 @@ function csv_parse_rectangular_delimited(text: String, delimiter: Int)
 // The FIRST match, when a file has two columns with one name. Duplicated headers happen (two
 // `Total` columns from a pivot), and answering the first is the only choice that does not depend
 // on how far the reader looked.
-function csv_column(header: CsvRow, name: String) -> Option<Int> {
+pure function csv_column(header: CsvRow, name: String) -> Option<Int> {
     let mutable i: Int = 0;
     while i < len(header.fields) {
         if header.fields[i] == name {
@@ -449,7 +449,7 @@ pure function csv_needs_quoting(field: String, delimiter: Int) -> Bool {
 // The unquoted case returns the field itself and allocates nothing, which is the overwhelmingly
 // common one. The quoted case is a chunk list of the runs between quotes, so a field with no
 // doubled quote is three pieces regardless of its length.
-function csv_quote(field: String, delimiter: Int) -> String {
+pure function csv_quote(field: String, delimiter: Int) -> String {
     if !csv_needs_quoting(field, delimiter) {
         return field;
     }
@@ -476,7 +476,7 @@ function csv_quote(field: String, delimiter: Int) -> String {
 // **LF and not CRLF**, though RFC 4180 says CRLF. Every reader accepts LF, every other file this
 // repository writes uses it, and a CR in a Unix pipeline shows up as `^M` in the middle of a
 // `diff`. `csv_render_delimited(rows, CSV_COMMA, true)` writes CRLF for the tools that want it.
-function csv_render(rows: [CsvRow]) -> String {
+pure function csv_render(rows: [CsvRow]) -> String {
     return csv_render_delimited(rows, CSV_COMMA, false);
 }
 
@@ -496,7 +496,7 @@ function csv_render(rows: [CsvRow]) -> String {
 //
 // §D0 throughout: a pending piece flushed into a `[String]` at `CSV_CHUNK`, joined pairwise. Never
 // `out = out + row`.
-function csv_render_delimited(rows: [CsvRow], delimiter: Int, crlf: Bool) -> String
+pure function csv_render_delimited(rows: [CsvRow], delimiter: Int, crlf: Bool) -> String
     requires delimiter > 0
     requires delimiter < 128
     requires delimiter != CSV_QUOTE

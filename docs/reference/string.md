@@ -174,7 +174,7 @@ pure function string_is_space(byte: Int) -> Bool
 {: #string-split}
 
 ```burxt
-function string_split(text: String, separator: String) -> [String]
+pure function string_split(text: String, separator: String) -> [String]
 ```
 
 Split on a separator STRING. Answers a growable array, so the pieces are new Strings and they have to live somewhere.
@@ -210,7 +210,7 @@ Does `needle` sit at `at` in `text`? Compared in place, because `substring` woul
 {: #string-lines}
 
 ```burxt
-function string_lines(text: String) -> [String]
+pure function string_lines(text: String) -> [String]
 ```
 
 Lines, on either ending. A CRLF file and an LF file split identically, which is the whole reason a multi-character separator had to exist: `"\r\n"` could not be written as a byte.
@@ -221,7 +221,7 @@ Lines, on either ending. A CRLF file and an LF file split identically, which is 
 {: #string-to-int}
 
 ```burxt
-function string_to_int(text: String, fallback: Int) -> Int
+pure function string_to_int(text: String, fallback: Int) -> Int
 ```
 
 The number, or the fallback you chose. Use this when a default is genuinely right — a missing count is zero, a missing page number is one.
@@ -256,7 +256,7 @@ The number, or nothing — for when there is no sensible default and the program
 {: #string-join}
 
 ```burxt
-function string_join(pieces: [String], separator: String) -> String
+pure function string_join(pieces: [String], separator: String) -> String
 ```
 
 The separator between each piece. The join a program would write, written once.
@@ -396,7 +396,7 @@ Every byte, as numbers. §D1p asks for it, and `from_bytes` at the bottom of thi
 {: #char-index}
 
 ```burxt
-function char_index(text: String, of: String) -> Option<Int>
+pure function char_index(text: String, of: String) -> Option<Int>
 ```
 
 The CODEPOINT index of `of`, or None. The companion to `string_find`, which answers a BYTE offset.
@@ -779,7 +779,7 @@ Non-overlapping because that is what `string_replace` does, and a `count` that d
 {: #string-split-space}
 
 ```burxt
-function string_split_space(text: String) -> [String]
+pure function string_split_space(text: String) -> [String]
 ```
 
 Split on RUNS of whitespace, dropping empty pieces. What `split` on a single space cannot do.
@@ -794,7 +794,7 @@ Leading and trailing whitespace therefore produce NO empty piece, and `""` and `
 {: #string-split-once}
 
 ```burxt
-function string_split_once(text: String, separator: String) -> Option<(String, String)>
+pure function string_split_once(text: String, separator: String) -> Option<(String, String)>
 ```
 
 The text cut at the FIRST separator, as a `(before, after)` pair — or None if the separator is not there.
@@ -816,7 +816,7 @@ The separator itself is in NEITHER half. An empty separator answers None, agreei
 {: #string-rsplit}
 
 ```burxt
-function string_rsplit(text: String, separator: String) -> [String]
+pure function string_rsplit(text: String, separator: String) -> [String]
 ```
 
 `string_split`, scanned from the RIGHT, pieces answered last-first.
@@ -839,7 +839,7 @@ For an ordinary non-overlapping separator this IS `string_split` read backwards,
 {: #string-split-no-empty}
 
 ```burxt
-function string_split_no_empty(text: String, separator: String) -> [String]
+pure function string_split_no_empty(text: String, separator: String) -> [String]
 ```
 
 `string_split`, with the empty pieces dropped.
