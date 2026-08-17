@@ -365,6 +365,45 @@ them likewise. That arm was missing for four versions and let a second use-after
 is why it walks fields and elements now. Both refusals with the compiler's exact words are in
 [`examples/regions.bx`](https://github.com/andrecorugda/burxt/blob/main/examples/regions.bx).
 
+## What you *may* hand back
+{: #what-you-may-hand-back}
+
+The rule refuses storage built inside a `region` block. It does **not** refuse storage that arrived
+from outside — and the distinction is the one your update functions live on:
+
+```burxt
+class Model { route: Route, items: [Item], draft: String }
+
+function dispatch(m: Model, message: Message) -> Model {
+    if nothing_changed { return m; }        // handing back what you were given
+    ...
+}
+```
+
+`m` is a parameter. Its storage belongs to the **caller**, who still owns it after the call returns,
+so handing it back extends nothing's life. Every branch of an update function needs this, including
+the branch where nothing changed — and that is the shape a front end is written in.
+
+The same holds for anything reached *through* a parameter: a field of it, an element of it, a value
+pulled out of it by a `match`. If it came in, it can go out.
+
+```burxt
+class Envelope { subject: String, body: String }
+
+pure function subject_of(e: Envelope) -> String { return e.subject; }
+```
+
+**This is worth stating because the compiler used to get it wrong**, and the way it was wrong is
+instructive. The check asked *"does this function allocate?"* as a stand-in for *"does the returned
+storage outlive the call?"* — and those are different questions. A function that only hands back its
+parameter allocates nothing, so it was **refused**; the same function with a junk line that built
+something unrelated was **accepted**, because the stand-in was satisfied by a line the answer never
+touched. A reader who deleted the dead line broke the build.
+
+What the compiler tracks now is where the returned storage came from, not what the function happened
+to do on the way. It has always known: the same fact is what stops a call site from smuggling a
+region value out through an argument.
+
 ## Why it is built this way
 {: #why-it-is-built-this-way}
 

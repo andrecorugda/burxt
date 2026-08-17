@@ -99,9 +99,11 @@ function write_sockaddr_in(where: CPointer, port: Int, a: Int, b: Int, c: Int, d
 
 `requires` rather than a `Result`: a port outside 1..=65535 is not a condition a caller handles, it is a caller that has made a mistake — and this is the load-bearing/partition line the guide draws. Port 0 is excluded deliberately even though the kernel accepts it as "pick one for me", because a caller who wanted that wanted `net_listen_any_port`, which does not exist yet and would say so in its name.
 
-**It writes the struct rather than answering it**, and that shape was chosen by the region model rather than by taste — the same way `sha256_k` fills an array instead of returning one. A function whose parameters are all `Int` carries no caller region, so it may not return `[Int]`: "its storage lives in a region and would not outlive it". Taking the destination pointer is the better API anyway. There is exactly one place that knows this layout, which is the point.
+**It writes the struct rather than answering it**, and taking the destination pointer is the better API for it — one place knows this layout, which is the point.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L153)
+The reason recorded here used to be a region rule: *"a function whose parameters are all `Int` carries no caller region, so it may not return `[Int]`"*. **That is no longer true, and it was stated more strongly than it ever was.** A function that builds an array is inferred to allocate, its allocation goes in the CALLER's region, and it may answer `[Int]` — measured: `function fill(n: Int) -> [Int] { let mutable out: [Int] = []; push(out, n); return out; }` compiles. What the region model refuses is returning storage built inside a `region` BLOCK, which is a different rule. The shape here stands on its own merits; the constraint it was attributed to does not exist.
+
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L159)
 
 ### `net_listen`
 {: #net-listen}
@@ -116,7 +118,7 @@ A socket bound to `port` on every interface, listening, ready for `net_accept`.
 
 Answers `None` when the socket cannot be made, bound or listened on. The commonest reason by a long way is that something else already has the port.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L186)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L192)
 
 ### `net_accept`
 {: #net-accept}
@@ -129,7 +131,7 @@ Waits for a connection and answers the socket that talks to it. **Blocks until o
 
 The peer's address is discarded — `accept` will fill a struct with it if given one, and there is nothing in this module that reads a `sockaddr` back into an address yet. `None` is a real failure (the listening socket was closed, or a signal interrupted the wait), not "nobody came".
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L223)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L229)
 
 ### `net_connect_ipv4`
 {: #net-connect-ipv4}
@@ -142,7 +144,7 @@ Connects to an IPv4 address given as four octets. **No hostname**, and the name 
 
 `net_connect_ipv4(93, 184, 216, 34, 80)` is `93.184.216.34:80`. Resolving a name needs `getaddrinfo`, which answers a chain of structs and hands back a pointer buried in one of them; reading a pointer out of C's memory is a door that is still shut, and a function called `net_connect` that only worked for addresses would be a promise this cannot keep.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L237)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L243)
 
 ### `net_read`
 {: #net-read}
@@ -157,7 +159,7 @@ Reads up to `limit` bytes. Answers `None` on error and `Some("")` when the peer 
 
 **One `recv` is not a message.** TCP is a stream: a 4 KB request can arrive as three reads, and a caller that treats one `net_read` as the whole request works perfectly on localhost and fails against a real client. Reading until a terminator is the caller's job, and it is a real job.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L274)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L280)
 
 ### `net_write`
 {: #net-write}
@@ -172,7 +174,7 @@ Writes every byte of `text`, or answers `None`.
 
 `MSG_NOSIGNAL` (0x4000) is passed for a reason worth naming: writing to a socket the peer has closed raises SIGPIPE, whose default action **kills the process**. A server that dies because a browser closed a tab is not a server, and Burxt has no signal handlers to install instead. With this flag the call answers EPIPE like any other error and the program stays alive.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L302)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L308)
 
 ### `net_close`
 {: #net-close}
@@ -183,7 +185,7 @@ function net_close(fd: Int) -> Bool touches network
 
 Closes a socket. Answers whether the close itself succeeded — worth checking on a socket, where a failing close can mean data the kernel never managed to send.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L321)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L327)
 
 ### `net_listen_any_port`
 {: #net-listen-any-port}
@@ -200,7 +202,7 @@ A socket on a port the KERNEL picks, and the port it picked.
 
 The fixture that made this necessary is the honest story: `tests/pass/net_loopback.bx` bound a fixed 18099, passed alone, and failed the moment two of the suite's tests ran it at once. The comment in that fixture predicted it and the fixed port was kept anyway, because the alternative looked bigger than the test. It was about twenty lines.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L340)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L346)
 
 ### `net_port_of`
 {: #net-port-of}
@@ -213,7 +215,7 @@ The port a socket is actually bound to. `None` if it is not bound, or is not an 
 
 The size argument is in-out: it must say how much room the struct has before the call, and the kernel writes back how much it used. Sixteen goes in as four little-endian bytes; a smaller number coming back would mean this is not the address family assumed here.
 
-[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L374)
+[Source](https://github.com/andrecorugda/burxt/blob/main/lib/net.bx#L380)
 
 
 {% endraw %}

@@ -164,6 +164,8 @@
           id: a-step-closer
         - name: "In code"
           id: in-code
+        - name: "What you may hand back"
+          id: what-you-may-hand-back
         - name: "Why it is built this way"
           id: why-it-is-built-this-way
         - name: "What it costs"

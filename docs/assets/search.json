@@ -4355,6 +4355,13 @@
  },
  {
   "kind": "guide",
+  "name": "What you may hand back",
+  "text": "",
+  "url": "/guide/04-memory.html#what-you-may-hand-back",
+  "where": "4. Memory"
+ },
+ {
+  "kind": "guide",
   "name": "Why it is built this way",
   "text": "",
   "url": "/guide/04-memory.html#why-it-is-built-this-way",

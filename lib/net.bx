@@ -145,11 +145,17 @@ function net_uses_bsd_sockaddr() -> Bool touches network {
 // because a caller who wanted that wanted `net_listen_any_port`, which does not exist yet and
 // would say so in its name.
 //
-// **It writes the struct rather than answering it**, and that shape was chosen by the region model
-// rather than by taste — the same way `sha256_k` fills an array instead of returning one. A
-// function whose parameters are all `Int` carries no caller region, so it may not return `[Int]`:
-// "its storage lives in a region and would not outlive it". Taking the destination pointer is the
-// better API anyway. There is exactly one place that knows this layout, which is the point.
+// **It writes the struct rather than answering it**, and taking the destination pointer is the
+// better API for it — one place knows this layout, which is the point.
+//
+// The reason recorded here used to be a region rule: *"a function whose parameters are all `Int`
+// carries no caller region, so it may not return `[Int]`"*. **That is no longer true, and it was
+// stated more strongly than it ever was.** A function that builds an array is inferred to allocate,
+// its allocation goes in the CALLER's region, and it may answer `[Int]` — measured:
+// `function fill(n: Int) -> [Int] { let mutable out: [Int] = []; push(out, n); return out; }`
+// compiles. What the region model refuses is returning storage built inside a `region` BLOCK, which
+// is a different rule. The shape here stands on its own merits; the constraint it was attributed to
+// does not exist.
 function write_sockaddr_in(where: CPointer, port: Int, a: Int, b: Int, c: Int, d: Int) -> Int touches network
     requires port >= 1
     requires port <= 65535
