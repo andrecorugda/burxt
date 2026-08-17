@@ -134,12 +134,36 @@ external function getenv(name: String) -> CPointer touches input;
 //
 // `argument(0)` rather than a build-time constant is the load-bearing choice: it is the only
 // mechanism both stages can mean the same thing by.
-function std_root() -> String touches input, files {
+//
+// ---- why this returns THREE roots and not one, and why they arrive joined by a newline --------
+//
+// **It returned one, and that was a resolution divergence rather than a cosmetic one.** Choosing
+// eagerly here means a module absent from the first root is never looked for in the second, while
+// stage-0 tries each in turn and takes the first that answers. Set `BURXT_LIB` to a partial library
+// and the two compilers disagree about which programs exist — the exact class of bug the "must stay
+// byte-for-byte the same rule" note above was written about, reintroduced one layer down.
+//
+// It also made the two messages impossible to agree. Stage-0 distinguishes *no library installed*
+// from *this library has no such module* by asking whether ANY root is a directory, and names every
+// root it looked in. With one root already chosen, neither question can be asked.
+//
+// A newline-joined String rather than `[String]`, because a function cannot return an array — its
+// storage lives in a region and would not outlive it. The alternative is a caller-owned array
+// threaded through five signatures for three constants, which is machinery; `modules.bx` already
+// accepts this trade explicitly for the source map. A path containing a newline would be
+// misread, and no such path exists on any system this compiler runs on.
+//
+// The binary-relative root is pushed WITHOUT probing for a file inside it. It used to require
+// `option.bx` to be present, which is the vendored-directory mistake wearing a different hat: a
+// filename is not a signature of the standard library. Stage-0 pushes it unconditionally and lets
+// first-match-wins decide, so this does too.
+function std_roots() -> String touches input, files {
+    let mutable roots: String = "";
     let from_env: CPointer = getenv("BURXT_LIB");
     if !c_is_null(from_env) {
         let named: String = c_string_at(from_env);
         if len(named) > 0 {
-            return named;
+            roots = named;
         }
     }
     if argument_count() > 0 {
@@ -150,14 +174,13 @@ function std_root() -> String touches input, files {
             let prefix_cut: Int = last_slash(bin);
             if prefix_cut > 0 {
                 let prefix: String = substring(bin, 0, prefix_cut);
-                let installed: String = prefix + "/lib/burxt";
-                if manifest_readable(installed + "/option.bx") {
-                    return installed;
-                }
+                if len(roots) > 0 { roots = roots + "\n"; }
+                roots = roots + prefix + "/lib/burxt";
             }
         }
     }
-    return "/usr/local/lib/burxt";
+    if len(roots) > 0 { roots = roots + "\n"; }
+    return roots + "/usr/local/lib/burxt";
 }
 
 // The index of the last `/`, or -1. Written here rather than imported: the compiler modules do not
@@ -219,8 +242,8 @@ function report_problem(mutable unit: Unit, src: String, path: String, shape: In
     // So the file is looked up and the offset rebased, exactly as stage-0's `locate_file` does — and
     // the SOURCE handed to the renderer is that file's own text, because a caret block has to echo
     // the line the reader can open.
-    let named: String = file_at_offset(path, unit.problem_start, std_root());
-    let start: Int = offset_within_file(path, unit.problem_start, std_root());
+    let named: String = file_at_offset(path, unit.problem_start, std_roots());
+    let start: Int = offset_within_file(path, unit.problem_start, std_roots());
     let stop: Int = start + unit.problem_length;
     let shown: String = read_file(named);
     if shape == 2 {
@@ -329,7 +352,7 @@ return "; LLVM IR written by the Burxt compiler, in Burxt.\n"
 // uses, for the same reason — a Span stays a byte range, and only a renderer needs to know
 // which file an offset fell in. See spec/1.0/M6-MODULES.md §1.5.
 function drive(path: String, out_ll: String, loud: Int) -> Int touches files, input {
-    return drive_source(load_program(path, std_root()), path, out_ll, loud);
+    return drive_source(load_program(path, std_roots()), path, out_ll, loud);
 }
 
 // Given the TEXT, which is what `check -` has: there is no file, so there is nothing to
@@ -369,7 +392,7 @@ function drive_reporting(src: String, path: String, out_ll: String, loud: Int,
     let installed: Int = unit.install_keywords();
     // C2. Which bytes of the buffer belong to which dependency, so `public` can be enforced at the
     // point of USE. Costs one extra load of the program's files; see `note_package_ranges`.
-    let ranged: Int = unit.note_package_ranges(path, std_root());
+    let ranged: Int = unit.note_package_ranges(path, std_roots());
     let total: Int = unit.run(src);
 
     if loud == 1 {
@@ -625,7 +648,7 @@ if command == "check" {
         }
         a += 1;
     }
-    let problems: Int = drive_reporting(load_program(argument(2), std_root()), argument(2), "", 0, shape);
+    let problems: Int = drive_reporting(load_program(argument(2), std_roots()), argument(2), "", 0, shape);
     if problems == 0 {
         print_error(argument(2) + ": no errors");
         exit(0);

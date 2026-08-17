@@ -172,7 +172,7 @@ class Loader { seen: [String], buffer: String, paths: [String], starts: [Int], l
                // resolved a module was too. Resolving once where `touches input` already lives
                // (`main.bx`, beside `llc_command`) confines it to the one place that genuinely
                // asks the environment a question.
-               std_root: String }
+               std_roots: String }
 
 function (mutable self: Loader) load(path: String) -> Int touches files {
     for seen in self.seen {
@@ -220,14 +220,55 @@ function (mutable self: Loader) load(path: String) -> Int touches files {
                                     + "library that ships with the compiler.");
                         exit(2);
                     }
-                    let candidate: String = self.std_root + "/" + rest;
-                    if !manifest_readable(candidate) {
-                        print_error("error: `use \"" + named + "\"` — the standard library has no `"
-                                    + rest + "`. Looked in " + self.std_root
-                                    + ". Set BURXT_LIB to the directory holding its .bx files.");
+                    // First match wins, across every root — the same walk as `stdlib_roots` in
+                    // `main.rs`, and it has to be a walk: stopping at the first root that EXISTS
+                    // would make a partial `BURXT_LIB` hide the installed library from stage-1
+                    // while stage-0 fell through to it.
+                    //
+                    // Three strings rather than one, because the two failure messages name
+                    // DIFFERENT things and which one is right is not known until the walk is over:
+                    // with no library it is the roots that were tried, and with a library present
+                    // it is the files that were not there. Appending to a single list as we go
+                    // would label the early entries by a `present` that had not been decided yet.
+                    let mutable found: String = "";
+                    let mutable every_root: String = "";
+                    let mutable present_files: String = "";
+                    let roots_width: Int = len(self.std_roots);
+                    let mutable scan: Int = 0;
+                    while scan < roots_width {
+                        let line_end: Int = end_of_line(self.std_roots, scan, roots_width);
+                        let root: String = substring(self.std_roots, scan, line_end - scan);
+                        let candidate: String = root + "/" + rest;
+                        if len(found) == 0 && manifest_readable(candidate) {
+                            found = candidate;
+                        }
+                        if len(every_root) > 0 { every_root = every_root + "\n"; }
+                        every_root = every_root + "    " + root;
+                        // `root/.` resolves only when `root` is a directory — `is_dir()` on the
+                        // stage-0 side, spelled with the one file predicate this compiler has.
+                        if manifest_readable(root + "/.") {
+                            if len(present_files) > 0 { present_files = present_files + "\n"; }
+                            present_files = present_files + "    " + candidate;
+                        }
+                        scan = line_end + 1;
+                    }
+                    // **Two different failures, and saying the wrong one sends a reader to the
+                    // wrong problem.** A library that is not installed and a module that does not
+                    // exist look identical from here — one is fixed by installing, the other by
+                    // correcting a name — so the message says which by asking whether any root is
+                    // a directory at all.
+                    if len(found) == 0 {
+                        if len(present_files) > 0 {
+                            print_error("error: `use \"" + named + "\"` — the standard library has no `"
+                                        + rest + "`. Looked in:\n" + present_files);
+                        } else {
+                            print_error("error: `use \"" + named + "\"` — no standard library found. "
+                                        + "Looked in:\n" + every_root + "\nSet BURXT_LIB to the "
+                                        + "directory holding the library's .bx files.");
+                        }
                         exit(2);
                     }
-                    let loaded: Int = self.load(candidate);
+                    let loaded: Int = self.load(found);
                     at = stop + 1;
                     continue;
                 }
@@ -273,13 +314,13 @@ function (mutable self: Loader) load(path: String) -> Int touches files {
 // blemish on it. `Loader.load` reads files; this wraps it and said nothing, so a reader of
 // `load_program`'s signature could not tell that compiling a program touches the disk. Stage-0's
 // effect check never looked at method calls, so nothing caught it for twenty-four versions.
-function load_program(path: String, std_root: String) -> String touches files {
+function load_program(path: String, std_roots: String) -> String touches files {
     // C2. Found ONCE, from the root source file, and every package import in the program is
     // answered from it — a dependency of a dependency is resolved by its own manifest, and mixing
     // the two would let a nested package rebind a name its parent had already bound.
     let package: Package = manifest_discover(path);
     let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [],
-                                          package: package, std_root: std_root };
+                                          package: package, std_roots: std_roots };
     let done: Int = loader.load(path);
     return loader.buffer;
 }
@@ -299,9 +340,9 @@ function load_program(path: String, std_root: String) -> String touches files {
 // `Loader` is region storage, so `load_program` cannot hand one back, and a second read of a handful
 // of files is cheaper than the machinery to avoid it. Stated rather than hidden, per the region
 // model's own terms.
-function file_at_offset(root: String, offset: Int, std_root: String) -> String touches files {
+function file_at_offset(root: String, offset: Int, std_roots: String) -> String touches files {
     let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [],
-                                          package: manifest_discover(root), std_root: std_root };
+                                          package: manifest_discover(root), std_roots: std_roots };
     let done: Int = loader.load(root);
     let mutable i: Int = 0;
     while i < len(loader.paths) {
@@ -314,9 +355,9 @@ function file_at_offset(root: String, offset: Int, std_root: String) -> String t
 }
 
 // The same offset, measured from the start of the file it fell in.
-function offset_within_file(root: String, offset: Int, std_root: String) -> Int touches files {
+function offset_within_file(root: String, offset: Int, std_roots: String) -> Int touches files {
     let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [],
-                                          package: manifest_discover(root), std_root: std_root };
+                                          package: manifest_discover(root), std_roots: std_roots };
     let done: Int = loader.load(root);
     let mutable i: Int = 0;
     while i < len(loader.paths) {
@@ -338,13 +379,13 @@ function offset_within_file(root: String, offset: Int, std_root: String) -> Int 
 //
 // Only FOREIGN files are recorded. An offset matching nothing is the root package, which is both
 // the common case and the one worth making free.
-function (mutable self: Unit) note_package_ranges(root: String, std_root: String) -> Int touches files {
+function (mutable self: Unit) note_package_ranges(root: String, std_roots: String) -> Int touches files {
     let package: Package = manifest_discover(root);
     if !package.found {
         return 0;
     }
     let mutable loader: Loader = Loader { seen: [], buffer: "", paths: [], starts: [], lengths: [],
-                                          package: package, std_root: std_root };
+                                          package: package, std_roots: std_roots };
     let done: Int = loader.load(root);
     let mutable i: Int = 0;
     let mutable noted: Int = 0;

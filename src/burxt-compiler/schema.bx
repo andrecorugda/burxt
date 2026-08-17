@@ -576,7 +576,7 @@ function schema_note(count: Int) -> String {
 // manifest is derived from the SIGNATURES, and a file whose bodies do not check still has
 // signatures that say what they require. `burxt check` is the tool for the other question.
 function mcp_schema(path: String) -> Int touches files, input {
-    let src: String = load_program(path, std_root());
+    let src: String = load_program(path, std_roots());
     // `own`, by length rather than by canonicalising a path — see difference 1 in the header.
     // The second read of the same file is the whole cost, and it buys an exact answer.
     let own_length: Int = len(read_file(path));

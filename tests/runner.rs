@@ -149,6 +149,52 @@ fn install_fixtures(dir: &str, workdir: &Path) {
     }
 }
 
+/// Place a compiler at `destination` and run it — **retrying `ETXTBSY` on BOTH halves**, because it
+/// can strike either and only one of them was ever guarded.
+///
+/// `Text file busy` on the COPY is the obvious one: something still has the previous binary running.
+/// `ETXTBSY` on the EXEC is the one that took a suite failure to find, and it is not the same cause.
+/// A test process is multithreaded; `fs::copy` holds the destination open for writing for a moment,
+/// and if any other thread `fork`s in that window — which every `Command::spawn` in every test
+/// running in parallel does — the child inherits that write descriptor. The kernel then refuses to
+/// exec a file some process has open for writing, and the error surfaces on the RUN, pointing at a
+/// binary that was copied successfully and is closed by then.
+///
+/// It appeared the moment a second test started copying compilers around, which is the tell: the
+/// window was always there and nothing had been forking into it. Retrying the copy alone would not
+/// have helped, because the copy succeeds.
+fn place_and_run(source: &Path, destination: &Path, args: &[&std::ffi::OsStr], cwd: &Path,
+                 lib: Option<&Path>) -> Output {
+    let busy = |e: &std::io::Error| e.kind() == std::io::ErrorKind::ExecutableFileBusy;
+    let mut last = None;
+    for attempt in 0..6 {
+        let _ = fs::remove_file(destination);
+        match fs::copy(source, destination) {
+            Ok(_) => {}
+            Err(e) if busy(&e) => {
+                std::thread::sleep(std::time::Duration::from_millis(50 * (attempt + 1)));
+                continue;
+            }
+            Err(e) => panic!("could not place a compiler at {}: {}", destination.display(), e),
+        }
+        let mut cmd = Command::new(destination);
+        cmd.args(args).current_dir(cwd);
+        match lib {
+            Some(dir) => { cmd.env("BURXT_LIB", dir); }
+            None => { cmd.env_remove("BURXT_LIB"); }
+        }
+        match cmd.output() {
+            Ok(out) => return out,
+            Err(e) if busy(&e) => {
+                std::thread::sleep(std::time::Duration::from_millis(50 * (attempt + 1)));
+                last = Some(e);
+            }
+            Err(e) => panic!("could not run {}: {}", destination.display(), e),
+        }
+    }
+    panic!("{} stayed busy across six attempts: {:?}", destination.display(), last)
+}
+
 fn scratch_dir(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("burxt-tests-{}-{}", std::process::id(), tag))
 }
@@ -697,28 +743,16 @@ fn a_package_reaches_the_standard_library_through_std() {
             fs::copy(&from, &to).unwrap();
         }
     }
-    // **Copying an executable can fail with `ETXTBSY` if anything still has it running**, and this
-    // test failed exactly once that way — `Text file busy` — which is the worst frequency for a
-    // failure to have: often enough to happen, rare enough to be dismissed as a flake and re-run.
-    // A fresh name per attempt cannot collide with a process holding the previous one, and the
-    // retry covers the window where the copy itself is the thing being executed.
+    // **`ETXTBSY` strikes both the copy and the exec**, and this test only ever guarded the copy —
+    // it failed on the RUN once a second test started placing compilers of its own. `place_and_run`
+    // holds both halves; its comment has the cause.
     let installed_compiler = prefix.join("bin/burxt");
-    let mut copied = Err(std::io::Error::other("not attempted"));
-    for attempt in 0..5 {
-        let _ = fs::remove_file(&installed_compiler);
-        copied = fs::copy(env!("CARGO_BIN_EXE_burxt"), &installed_compiler).map(|_| ());
-        if copied.is_ok() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50 * (attempt + 1)));
-    }
-    copied.expect("could not place a compiler at $PREFIX/bin/burxt");
     fs::write(prefix.join("prog.bx"),
         "use \"std/option.bx\";\nregion main { print(4242); }\n").unwrap();
-    let by_prefix = Command::new(&installed_compiler)
-        .arg("run").arg(prefix.join("prog.bx")).current_dir(&scratch)
-        .env_remove("BURXT_LIB")
-        .output().expect("burxt");
+    let program = prefix.join("prog.bx");
+    let by_prefix = place_and_run(
+        Path::new(env!("CARGO_BIN_EXE_burxt")), &installed_compiler,
+        &["run".as_ref(), program.as_os_str()], &scratch, None);
     let prefix_out = String::from_utf8_lossy(&by_prefix.stdout).to_string()
         + &String::from_utf8_lossy(&by_prefix.stderr);
     assert!(by_prefix.status.success() && prefix_out.contains("4242"),
@@ -752,6 +786,123 @@ fn a_package_reaches_the_standard_library_through_std() {
 // click handler are all compile errors — plus star-burxt's own refusals for an undeclared block, an
 // event it cannot wire, a void element with a body, flow content in a phrasing element, and a
 // handler inside a `for`. Fifteen assertions, accepting case first.
+
+/// **THE TWO COMPILERS MUST SAY THE SAME THING ABOUT `std/`, WORD FOR WORD.**
+///
+/// Not "each stage says something sensible" — that is what the tests above check, and all three of
+/// the defects this test exists for survived them:
+///
+/// 1. stage-1 reported *the standard library has no `option.bx`* when nothing was installed, which
+///    is the message for the OTHER failure. It sends a reader to correct a name when their real
+///    problem is that they have no library.
+/// 2. stage-1 named ONE root where stage-0 named every root it tried, so a `PREFIX=~/.local` user
+///    was pointed at the one directory they deliberately did not use.
+/// 3. stage-1 chose a root EAGERLY and stage-0 walks them in order, so a partial `BURXT_LIB` hid
+///    the installed library from one compiler and not the other. That is a resolution divergence,
+///    not a wording one: the same program compiles under one compiler and fails under the other.
+///
+/// **A test per compiler cannot catch any of them, because each stage is self-consistent.** The
+/// property is a relation between the two, so the assertion has to be one as well — the same
+/// lesson as the differential test, applied to diagnostics instead of acceptance.
+///
+/// The exe-relative root is the one line that legitimately differs, because the two binaries live
+/// in different directories. It is normalised out rather than skipped, so everything else still has
+/// to match exactly.
+#[test]
+fn both_compilers_say_the_same_thing_about_the_standard_library() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = scratch_dir("std-messages");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let stage1 = scratch.join("stage1");
+    let build = Command::new(env!("CARGO_BIN_EXE_burxt"))
+        .arg("build").arg(root.join("src/burxt-compiler/main.bx"))
+        .arg("-o").arg(&stage1)
+        .current_dir(&scratch)
+        .output().expect("burxt");
+    assert!(build.status.success(), "stage-1 did not compile:\n{}",
+            String::from_utf8_lossy(&build.stderr));
+
+    // Every root a message may name, replaced by a fixed token. `BURXT_LIB` and `/usr/local` are
+    // identical across the two runs and stay; only the binary-relative root is allowed to differ,
+    // and it is the ONE line that legitimately does.
+    let normalise = |text: &str| -> String {
+        text.lines()
+            .map(|line| {
+                if line.trim_end().ends_with("/lib/burxt") && !line.contains("/usr/local") {
+                    "    <the compiler's own prefix>/lib/burxt".to_string()
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let both = |file: &str, lib: Option<&Path>| -> (String, String) {
+        let run = |exe: &Path| -> String {
+            let mut cmd = Command::new(exe);
+            cmd.arg("check").arg(file).current_dir(&scratch);
+            match lib {
+                Some(dir) => { cmd.env("BURXT_LIB", dir); }
+                None => { cmd.env_remove("BURXT_LIB"); }
+            }
+            let out = cmd.output().expect("compiler");
+            normalise(&(String::from_utf8_lossy(&out.stdout).to_string()
+                        + &String::from_utf8_lossy(&out.stderr)))
+        };
+        (run(Path::new(env!("CARGO_BIN_EXE_burxt"))), run(&stage1))
+    };
+
+    // 1. No library anywhere. Both must say NO LIBRARY FOUND and name every root.
+    fs::write(scratch.join("missing.bx"), "use \"std/option.bx\";\nprint(1);\n").unwrap();
+    let (zero, one) = both("missing.bx", None);
+    assert_eq!(zero, one,
+               "the two compilers disagree about a missing standard library:\n\
+                --- stage-0 ---\n{}\n--- stage-1 ---\n{}", zero, one);
+    assert!(zero.contains("no standard library found"),
+            "with nothing installed the message must be about the LIBRARY, not a module:\n{}", zero);
+
+    // 2. A library that exists and does not hold the module. The other message, and it must name
+    //    the FILE it looked for rather than the directory.
+    let partial = scratch.join("partial");
+    fs::create_dir_all(&partial).unwrap();
+    fs::write(partial.join("option.bx"), "pure function only_this() -> Int { return 1; }\n").unwrap();
+    fs::write(scratch.join("wrongname.bx"), "use \"std/nosuch.bx\";\nprint(1);\n").unwrap();
+    let (zero, one) = both("wrongname.bx", Some(&partial));
+    assert_eq!(zero, one,
+               "the two compilers disagree about a module missing from a library that IS there:\n\
+                --- stage-0 ---\n{}\n--- stage-1 ---\n{}", zero, one);
+    assert!(zero.contains("the standard library has no `nosuch.bx`"),
+            "with a library present the message must be about the MODULE:\n{}", zero);
+
+    // 3. **First match wins, and it must be a WALK.** `BURXT_LIB` holds a library missing the
+    //    module, so both compilers have to fall through to the next root — where the real one is.
+    //    Stage-1 used to stop at the first root and report the module missing; stage-0 fell
+    //    through and compiled it. Same input, two answers, and no per-stage test could see it.
+    let installed = scratch.join("prefix");
+    fs::create_dir_all(installed.join("bin")).unwrap();
+    fs::create_dir_all(installed.join("lib/burxt")).unwrap();
+    for entry in fs::read_dir(root.join("lib")).unwrap() {
+        let from = entry.unwrap().path();
+        if from.extension().is_some_and(|e| e == "bx") {
+            fs::copy(&from, installed.join("lib/burxt").join(from.file_name().unwrap())).unwrap();
+        }
+    }
+    let program = scratch.join("missing.bx");
+    let fallthrough = |exe: &Path, name: &str| -> String {
+        let out = place_and_run(exe, &installed.join("bin").join(name),
+                                &["check".as_ref(), program.as_os_str()], &scratch, Some(&partial));
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr)
+    };
+    let zero = fallthrough(Path::new(env!("CARGO_BIN_EXE_burxt")), "burxt0");
+    let one = fallthrough(&stage1, "burxt1");
+    assert!(zero.contains("no errors") && one.contains("no errors"),
+            "a root that does not hold the module must fall through to the next one, in BOTH \
+             compilers — otherwise a partial BURXT_LIB makes them disagree about which programs \
+             exist:\n--- stage-0 ---\n{}\n--- stage-1 ---\n{}", zero, one);
+
+    let _ = fs::remove_dir_all(&scratch);
+}
 
 /// **A `getrlimit` that FAILS must not make every call look like a stack overflow.**
 ///
